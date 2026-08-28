@@ -7,7 +7,16 @@ all-features = true
 feature-depth = 1
 
 [advisories]
-ignore = []
+ignore = [
+  # `paste` is archived, not vulnerable: the advisory is `unmaintained`, there
+  # is no CVE, and the crate is a proc-macro that concatenates identifiers at
+  # compile time — nothing of it reaches the binary. It arrives through
+  # utoipa-axum, whose newest release (0.2.0, the one pinned in the workspace)
+  # still depends on it, which is why the advisory itself says no safe upgrade
+  # exists. Drop this entry the day utoipa-axum publishes without `paste`; do
+  # not grow the list to keep a red build quiet.
+  { id = "RUSTSEC-2024-0436", reason = "paste is unmaintained; utoipa-axum 0.2.0 is the newest release and still pulls it" },
+]
 
 [licenses]
 allow = [
@@ -22,6 +31,19 @@ allow = [
   "MPL-2.0",
 ]
 confidence-threshold = 0.8
+
+# The Mozilla CA root store, redistributed as data rather than as code.
+# CDLA-Permissive-2.0 is the licence that data carries, and it is permissive
+# with no attribution or reciprocity obligation — but it is a *data* licence,
+# so it is granted to these crates by name instead of being added to the list
+# above, where it would silently cover a future code dependency too.
+[[licenses.exceptions]]
+name = "webpki-roots"
+allow = ["CDLA-Permissive-2.0"]
+
+[[licenses.exceptions]]
+name = "webpki-root-certs"
+allow = ["CDLA-Permissive-2.0"]
 
 [bans]
 multiple-versions = "warn"
