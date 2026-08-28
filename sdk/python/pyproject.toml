@@ -1,9 +1,24 @@
 [project]
 name = "aiwatcher-sdk"
 version = "0.1.0"
-description = "Publish agent-run telemetry to aiwatcher."
+description = "Publish agent-run telemetry to aiwatcher, and read its prompt registry."
+readme = "README.md"
 requires-python = ">=3.11"
+license = "Apache-2.0"
+# Deliberately empty, and worth keeping that way. This is imported into agent
+# processes that already have opinions about httpx, pydantic and their
+# versions; a telemetry library that forces one of those is a library people
+# vendor around. Everything here is `urllib`, `json` and `dataclasses`.
 dependencies = []
+
+[project.optional-dependencies]
+# The DeepEval bridge does not import deepeval — it reads the report
+# structurally, so this extra exists for a caller that wants both installed by
+# one name, not because the bridge needs it.
+deepeval = ["deepeval>=4.1,<5"]
+
+[project.urls]
+Homepage = "https://github.com/ai-spirit/aiwatcher"
 
 [build-system]
 requires = ["hatchling"]
@@ -11,3 +26,56 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["aiwatcher_sdk"]
+
+[dependency-groups]
+dev = [
+  "mypy>=1.18,<2",
+  "pytest>=8.4,<9",
+  "ruff>=0.16.5,<0.17",
+]
+
+[tool.uv]
+# `uv` reads this and refuses to run under an older one, which is what keeps a
+# lock produced here resolvable everywhere else. Pinned to a minor range
+# rather than exactly: uv moves quickly and a patch release is not a decision.
+required-version = ">=0.12.7,<0.13"
+
+[tool.ruff]
+# The floor of `requires-python`, not the version this happens to be developed
+# on: `UP` rewrites to syntax the oldest supported interpreter must accept.
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+  "E",     # pycodestyle
+  "F",     # pyflakes
+  "I",     # import order
+  "UP",    # pyupgrade
+  "B",     # bugbear
+  "C4",    # comprehensions
+  "SIM",   # simplify
+  "RUF",   # ruff's own
+  "ASYNC",
+  "PTH",   # pathlib over os.path
+  "BLE",   # no bare `except Exception`
+  "N",     # naming
+  "S",     # bandit
+]
+# The same base set `planner` selects, deliberately: these two repositories are
+# worked on together, and a lint that fires in one and not the other is a lint
+# people learn to ignore. `D` is left out with them — the docstrings here say
+# what a thing *is* rather than what it does, which pydocstyle's imperative
+# mood check would turn into a file of "Return the version.".
+
+[tool.ruff.lint.per-file-ignores]
+# Tests assert, hard-code throwaway secrets, and bind to localhost.
+"tests/*" = ["S101", "S105", "S106", "S104"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["aiwatcher_sdk", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

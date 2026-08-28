@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { GetEvaluationData, GetEvaluationErrors, GetEvaluationResponses, GetMetricsData, GetMetricsResponses, GetRunData, GetRunErrors, GetRunEventsData, GetRunEventsErrors, GetRunEventsResponses, GetRunResponses, IngestData, IngestErrors, IngestResponses, ListConversationsData, ListConversationsResponses, ListDimensionData, ListDimensionErrors, ListDimensionResponses, ListEvaluationsData, ListEvaluationsResponses, ListEvaluationSuitesData, ListEvaluationSuitesResponses, ListRunsData, ListRunsResponses, ListSpansData, ListSpansResponses, LiveWebsocketData, LivezData, LivezResponses, ReadyzData, ReadyzErrors, ReadyzResponses, StreamRunData, StreamRunResponses } from './types.gen';
+import type { GetEvaluationData, GetEvaluationErrors, GetEvaluationResponses, GetMetricsData, GetMetricsResponses, GetOptimizationData, GetOptimizationErrors, GetOptimizationResponses, GetPromptData, GetPromptErrors, GetPromptResponses, GetPromptVersionData, GetPromptVersionErrors, GetPromptVersionResponses, GetRunData, GetRunErrors, GetRunEventsData, GetRunEventsErrors, GetRunEventsResponses, GetRunResponses, IngestData, IngestErrors, IngestResponses, ListConversationsData, ListConversationsResponses, ListDimensionData, ListDimensionErrors, ListDimensionResponses, ListEvaluationsData, ListEvaluationsResponses, ListEvaluationSuitesData, ListEvaluationSuitesResponses, ListPromptsData, ListPromptsErrors, ListPromptsResponses, ListRunsData, ListRunsResponses, ListSpansData, ListSpansResponses, LiveWebsocketData, LivezData, LivezResponses, PublishPromptData, PublishPromptErrors, PublishPromptResponses, ReadyzData, ReadyzErrors, ReadyzResponses, RebuildPromptData, RebuildPromptErrors, RebuildPromptResponses, RecordOptimizationData, RecordOptimizationErrors, RecordOptimizationResponses, SetPromptLabelData, SetPromptLabelErrors, SetPromptLabelResponses, StreamRunData, StreamRunResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -95,6 +95,84 @@ export const liveWebsocket = <ThrowOnError extends boolean = false>(options?: Op
  * a caller whether it is looking at everything or at a truncated tail.
  */
 export const getMetrics = <ThrowOnError extends boolean = false>(options?: Options<GetMetricsData, ThrowOnError>): RequestResult<GetMetricsResponses, unknown, ThrowOnError> => (options?.client ?? client).get<GetMetricsResponses, unknown, ThrowOnError>({ url: '/api/v1/metrics', ...options });
+
+/**
+ * Every prompt in the registry.
+ */
+export const listPrompts = <ThrowOnError extends boolean = false>(options?: Options<ListPromptsData, ThrowOnError>): RequestResult<ListPromptsResponses, ListPromptsErrors, ThrowOnError> => (options?.client ?? client).get<ListPromptsResponses, ListPromptsErrors, ThrowOnError>({ url: '/api/v1/prompts', ...options });
+
+/**
+ * Publish a version.
+ *
+ * Idempotent on the text: `created` is `false` when this exact prompt was
+ * already stored, and the version that comes back is the one that was there,
+ * with its original author and notes intact.
+ */
+export const publishPrompt = <ThrowOnError extends boolean = false>(options: Options<PublishPromptData, ThrowOnError>): RequestResult<PublishPromptResponses, PublishPromptErrors, ThrowOnError> => (options.client ?? client).post<PublishPromptResponses, PublishPromptErrors, ThrowOnError>({
+    url: '/api/v1/prompts',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * One prompt: its labels, its versions, and what happened to it lately.
+ */
+export const getPrompt = <ThrowOnError extends boolean = false>(options: Options<GetPromptData, ThrowOnError>): RequestResult<GetPromptResponses, GetPromptErrors, ThrowOnError> => (options.client ?? client).get<GetPromptResponses, GetPromptErrors, ThrowOnError>({ url: '/api/v1/prompts/{name}', ...options });
+
+/**
+ * Point a label at a version. `production` is the one an SDK reads.
+ *
+ * A `PUT`, because moving a label twice to the same version is the same
+ * world as moving it once.
+ */
+export const setPromptLabel = <ThrowOnError extends boolean = false>(options: Options<SetPromptLabelData, ThrowOnError>): RequestResult<SetPromptLabelResponses, SetPromptLabelErrors, ThrowOnError> => (options.client ?? client).put<SetPromptLabelResponses, SetPromptLabelErrors, ThrowOnError>({
+    url: '/api/v1/prompts/{name}/labels/{label}',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Record an optimisation and store its candidate.
+ *
+ * The verdict in the response is computed here from the held-out scores and
+ * from what the candidate did to the baseline's variables — it is not read
+ * from the request. An optimiser selected its candidate by maximising the
+ * number it is reporting, which makes it the last thing that should grade it.
+ */
+export const recordOptimization = <ThrowOnError extends boolean = false>(options: Options<RecordOptimizationData, ThrowOnError>): RequestResult<RecordOptimizationResponses, RecordOptimizationErrors, ThrowOnError> => (options.client ?? client).post<RecordOptimizationResponses, RecordOptimizationErrors, ThrowOnError>({
+    url: '/api/v1/prompts/{name}/optimizations',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * One optimisation, with the report the optimiser attached.
+ */
+export const getOptimization = <ThrowOnError extends boolean = false>(options: Options<GetOptimizationData, ThrowOnError>): RequestResult<GetOptimizationResponses, GetOptimizationErrors, ThrowOnError> => (options.client ?? client).get<GetOptimizationResponses, GetOptimizationErrors, ThrowOnError>({ url: '/api/v1/prompts/{name}/optimizations/{optimization_id}', ...options });
+
+/**
+ * Re-derive the prompt's index from the objects that are stored.
+ *
+ * The repair path, exposed because the thing it repairs — a head that lost a
+ * concurrent write — is invisible until somebody notices a version missing
+ * from a list. Labels survive it; a label pointing at a version that is gone
+ * does not.
+ */
+export const rebuildPrompt = <ThrowOnError extends boolean = false>(options: Options<RebuildPromptData, ThrowOnError>): RequestResult<RebuildPromptResponses, RebuildPromptErrors, ThrowOnError> => (options.client ?? client).post<RebuildPromptResponses, RebuildPromptErrors, ThrowOnError>({ url: '/api/v1/prompts/{name}/rebuild', ...options });
+
+/**
+ * One version, with its text.
+ */
+export const getPromptVersion = <ThrowOnError extends boolean = false>(options: Options<GetPromptVersionData, ThrowOnError>): RequestResult<GetPromptVersionResponses, GetPromptVersionErrors, ThrowOnError> => (options.client ?? client).get<GetPromptVersionResponses, GetPromptVersionErrors, ThrowOnError>({ url: '/api/v1/prompts/{name}/versions/{version_id}', ...options });
 
 /**
  * List runs, newest first.

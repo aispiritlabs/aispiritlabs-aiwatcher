@@ -18,8 +18,14 @@ vendor/
 # Caches
 __pycache__/
 .mypy_cache/
+.pytest_cache/
 .ruff_cache/
 .phpunit.cache/
+# `uv sync` puts the SDK's virtualenv here. `uv.lock` beside it IS committed:
+# the package has no runtime dependencies, so the lock only pins the dev
+# toolchain, and pinning that is the point.
+sdk/python/.venv/
+sdk/python/dist/
 .DS_Store
 
 # Runtime state. The write-ahead log and the dead-letter queue from `just run`.

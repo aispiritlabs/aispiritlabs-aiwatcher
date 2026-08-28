@@ -1,0 +1,29 @@
+[package]
+name = "aiwatcher-prompts"
+description = "The prompt registry: content-addressed versions and optimisation records, over an object store."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+aiwatcher-core.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+hex.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio = { workspace = true, features = ["fs", "sync"] }
+tracing.workspace = true
+utoipa.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

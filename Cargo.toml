@@ -5,6 +5,7 @@
 #   aiwatcher-core       domain types: ids, envelope, correlation, catalog, ports
 #   aiwatcher-bus        MessageSource / MessageSink / Checkpointer + adapters
 #   aiwatcher-trace      span assembly + OTLP/JSON exporters
+#   aiwatcher-prompts    the prompt registry, over an object store
 #   aiwatcher-projector  the consumer pipeline + live hub + read model
 #   aiwatcher-api        axum router (REST + SSE + WS) + OpenAPI
 #   aiwatcher-server     the deployable binary: config, wiring, shutdown
@@ -26,6 +27,7 @@ repository = "https://github.com/ai-spirit/aiwatcher"
 aiwatcher-core = { path = "crates/aiwatcher-core", version = "0.1.0" }
 aiwatcher-bus = { path = "crates/aiwatcher-bus", version = "0.1.0" }
 aiwatcher-trace = { path = "crates/aiwatcher-trace", version = "0.1.0" }
+aiwatcher-prompts = { path = "crates/aiwatcher-prompts", version = "0.1.0" }
 aiwatcher-projector = { path = "crates/aiwatcher-projector", version = "0.1.0" }
 aiwatcher-api = { path = "crates/aiwatcher-api", version = "0.1.0" }
 
@@ -34,6 +36,7 @@ async-trait = "0.1.92"
 axum = { version = "0.8.9", features = ["ws", "macros"] }
 bytes = "1.10"
 futures = "0.3"
+hex = "0.4.3"
 # The real Laser SDK, over Apache Iggy. Optional: the default build (and every
 # test that does not need a broker) stays free of it, and of the ~360 crates
 # beneath it.
@@ -50,6 +53,11 @@ reqwest = { version = "0.13", default-features = false, features = [
 ] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+# SHA-256 for content-addressed prompt versions and for SigV4. Both have to
+# agree byte for byte with `hashlib.sha256` on the producer side, which is not
+# something to hand-roll — unlike the FNV derivation in `core::ids`, where the
+# requirement is only that every aiwatcher agrees with every other one.
+sha2 = "0.11.0"
 thiserror = "2.0.20"
 time = { version = "0.3", features = ["formatting", "parsing", "serde-well-known", "macros"] }
 tokio = { version = "1.53", features = ["full"] }

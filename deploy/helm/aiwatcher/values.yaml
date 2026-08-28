@@ -238,6 +238,77 @@ victoriametrics:
     limits:
       memory: 1Gi
 
+# ── Prompt registry ──────────────────────────────────────────────────────────
+#
+# Where prompts are kept. The one store in this chart whose contents cannot be
+# reconstructed: runs, spans and metrics are a fold over a log that can be
+# replayed, and a prompt was written by a person. The version a run used has to
+# outlive every trace of that run, so this is not on the server's volume beside
+# the write-ahead log — that log is a rolling window a retention policy may
+# delete.
+#
+# RustFS because it is one Rust binary with no JVM and no external metadata
+# service. The adapter speaks S3, so `external` reaches MinIO, Ceph or AWS with
+# no code change.
+promptStore:
+  # install | external | none.
+  #
+  # `none` is a real choice, not a failure: the panel's Prompts tab then says
+  # which variable is unset rather than showing an empty list, and every
+  # `/api/v1/prompts` route answers 501.
+  mode: install
+
+  # Key prefix inside the bucket, so one bucket can hold this registry beside
+  # whatever else a cluster keeps in it.
+  prefix: prompts
+  bucket: aiwatcher-prompts
+
+  # Credentials. With `mode: install` and no name here, the chart generates a
+  # Secret on first install and reuses it on every upgrade — see
+  # templates/rustfs.yaml for why that lookup matters. With `mode: external`
+  # this is required: the chart cannot invent credentials for somebody else's
+  # bucket.
+  credentialsSecret:
+    name: ""
+    accessKeyKey: accessKey
+    secretKeyKey: secretKey
+
+  external:
+    # Base URL of an S3 endpoint, e.g. http://minio.storage.svc:9000
+    endpoint: ""
+    # Filled in by the detection script when it finds an S3 endpoint. Used only
+    # by the NetworkPolicy below, to add an ingress rule to pods this chart does
+    # not own — the same mechanism the Collector uses to reach a fenced
+    # VictoriaMetrics.
+    podSelector: {}
+    namespace: ""
+    # Signed into every request. Any S3 implementation other than AWS ignores
+    # the value and only needs both sides to agree.
+    region: us-east-1
+    # Whether the server may create the bucket when it is missing. Off for an
+    # external store: credentials scoped to one bucket usually may not, and the
+    # failure is clearer at start-up than at the first publish.
+    createBucket: false
+
+  image:
+    repository: rustfs/rustfs
+    tag: 1.0.0-rc.3
+    pullPolicy: IfNotPresent
+
+  persistence:
+    # On by default, unlike everywhere else in this chart that offers the
+    # choice. A lost span is in the trace store; a lost prompt is gone.
+    enabled: true
+    size: 5Gi
+    storageClassName: ""
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
 # ── Grafana wiring ───────────────────────────────────────────────────────────
 #
 # This chart never installs Grafana — every cluster that wants one already has
@@ -300,3 +371,8 @@ networkPolicy:
   # victoriametrics.external.podSelector, which the detection script fills in.
   allowEgressToExternalVictoriaMetrics: false
   allowEgressToExternalVictoriaTraces: false
+  # The same thing for an external object store. Off by default and only ever
+  # correct when that store is *already* fenced: a policy attached to pods no
+  # policy selects narrows them from "accepts everything" to "accepts aiwatcher
+  # only", which would cut off whoever else was using the bucket.
+  allowEgressToExternalPromptStore: false

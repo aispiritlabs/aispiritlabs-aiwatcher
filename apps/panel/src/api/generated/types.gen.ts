@@ -424,6 +424,10 @@ export type IngestResponse = {
     last_checkpoint: Checkpoint;
 };
 
+export type LabelRequest = {
+    version_id: PromptVersionId;
+};
+
 export type Latency = {
     /**
      * Per LLM call.
@@ -557,6 +561,176 @@ export type ModelBreakdown = {
 };
 
 /**
+ * What the registry decided about an optimisation.
+ *
+ * Never taken from the client. An optimiser is the last thing that should
+ * grade its own output: it selected the candidate by maximising the number it
+ * is now reporting.
+ *
+ * Two flat variants with the reason beside them rather than inside them, so
+ * the JSON is `{"outcome":"rejected","reason":"variables_lost"}` and the
+ * generated TypeScript is a string union. An enum carrying its payload would
+ * serialise a level deeper and make every reader unwrap it.
+ */
+export const OptimizationOutcome = { ADMITTED: 'admitted', REJECTED: 'rejected' } as const;
+
+/**
+ * What the registry decided about an optimisation.
+ *
+ * Never taken from the client. An optimiser is the last thing that should
+ * grade its own output: it selected the candidate by maximising the number it
+ * is now reporting.
+ *
+ * Two flat variants with the reason beside them rather than inside them, so
+ * the JSON is `{"outcome":"rejected","reason":"variables_lost"}` and the
+ * generated TypeScript is a string union. An enum carrying its payload would
+ * serialise a level deeper and make every reader unwrap it.
+ */
+export type OptimizationOutcome = typeof OptimizationOutcome[keyof typeof OptimizationOutcome];
+
+/**
+ * One optimisation run against one prompt.
+ *
+ * Written by whoever ran the optimiser — `deepeval`'s `PromptOptimizer` is
+ * the case this was built for — and read by the panel as "what happened to
+ * this prompt lately".
+ */
+export type OptimizationRecord = {
+    /**
+     * What produced the candidate, e.g. `deepeval/SIMBA`. Free text: the
+     * registry does not have opinions about optimisers, only about evidence.
+     */
+    algorithm: string;
+    baseline: PromptVersionId;
+    candidate: PromptVersionId;
+    /**
+     * Which cases each split was drawn from, ideally versioned. Two scores on
+     * different cases are two facts, not a comparison — the same rule
+     * `baseline_for` applies to evaluation reports.
+     */
+    dataset?: string | null;
+    /**
+     * What the optimiser optimised against. Guides the search; proves nothing.
+     */
+    dev?: Array<Score>;
+    duration_ms?: number | null;
+    ended_at?: string | null;
+    /**
+     * The evaluation report this optimisation published, where it published
+     * one. The join between the registry and the log.
+     */
+    evaluation_id?: string | null;
+    iterations?: number | null;
+    optimization_id: string;
+    outcome: OptimizationOutcome;
+    /**
+     * The metric the verdict is decided on. Every other metric is reported
+     * and none of them promotes anything — a gate with several thresholds is
+     * a gate somebody will tune until it opens.
+     */
+    primary_metric: string;
+    prompt: PromptName;
+    reason?: null | RejectionReason;
+    /**
+     * Whatever the optimiser produced — `deepeval`'s serialised
+     * `OptimizationReport`, an iteration trace, anything. Bounded by the
+     * registry, not by this type.
+     */
+    report?: {
+        [key: string]: unknown;
+    };
+    started_at: string;
+    /**
+     * The held-out split. The only evidence that admits a candidate.
+     */
+    test?: Array<Score>;
+    /**
+     * Variables the baseline declared and the candidate does not. Computed by
+     * the registry from both texts.
+     */
+    variables_lost?: Array<string>;
+};
+
+/**
+ * Record what an optimiser did to a prompt.
+ */
+export type OptimizationRequest = {
+    /**
+     * What produced the candidate, e.g. `deepeval/SIMBA`.
+     */
+    algorithm: string;
+    /**
+     * The version it started from. Must already be in the registry: an
+     * optimisation against a prompt nobody stored is a claim with no subject.
+     */
+    baseline: PromptVersionId;
+    /**
+     * The candidate's text. Published as a version as part of recording, so
+     * the record cannot name a prompt that does not exist.
+     */
+    candidate_text: string;
+    dataset?: string | null;
+    /**
+     * What the optimiser optimised against. Guides the search, proves
+     * nothing.
+     */
+    dev?: Array<Score>;
+    duration_ms?: number | null;
+    /**
+     * The evaluation report this run published, where it published one.
+     */
+    evaluation_id?: string | null;
+    iterations?: number | null;
+    /**
+     * The optimiser's own id where it has one — `deepeval` supplies
+     * `OptimizationReport.optimization_id`. Derived from the request when
+     * absent, so recording the same result twice writes one record.
+     */
+    optimization_id?: string | null;
+    /**
+     * The metric the verdict is decided on.
+     */
+    primary_metric: string;
+    /**
+     * Move `production` to the candidate if — and only if — it is admitted.
+     *
+     * Off by default. An admitted optimisation has cleared the evidence bar;
+     * deploying it is still somebody's decision, and a registry that promotes
+     * on its own makes every CI run a release.
+     */
+    promote?: boolean;
+    report?: unknown;
+    started_at?: string | null;
+    /**
+     * The held-out split. The only evidence that admits a candidate.
+     */
+    test?: Array<Score>;
+};
+
+/**
+ * An optimisation without its report document.
+ */
+export type OptimizationSummary = {
+    algorithm: string;
+    baseline: PromptVersionId;
+    candidate: PromptVersionId;
+    dataset?: string | null;
+    dev_delta?: number | null;
+    duration_ms?: number | null;
+    evaluation_id?: string | null;
+    iterations?: number | null;
+    optimization_id: string;
+    outcome: OptimizationOutcome;
+    overfit_gap?: number | null;
+    primary_metric: string;
+    reason?: null | RejectionReason;
+    started_at: string;
+    test_delta?: number | null;
+    test_score?: number | null;
+    variables_lost?: Array<string>;
+};
+
+/**
  * Nearest-rank percentiles, in milliseconds.
  */
 export type Percentiles = {
@@ -564,6 +738,197 @@ export type Percentiles = {
     p50: number;
     p95: number;
     p99: number;
+};
+
+/**
+ * One prompt, with enough to render its page in one request.
+ */
+export type PromptDetail = {
+    current?: null | PromptVersion;
+    head: PromptHead;
+};
+
+/**
+ * A prompt's mutable head: the labels, the description, and the index of what
+ * is stored under it.
+ *
+ * **Derived, not authoritative.** The versions and the optimisation records
+ * are the truth; this is what makes listing them one request instead of one
+ * request per object. It can be rebuilt from the store at any time, which is
+ * what makes a lost concurrent write survivable rather than a corruption.
+ * The exception is [`Self::labels`], which exists nowhere else — a label is a
+ * pointer somebody moved, not a fact about an object.
+ */
+export type PromptHead = {
+    created_at: string;
+    description?: string | null;
+    /**
+     * `production` → the version a deployment should read. Any other label a
+     * team wants (`staging`, `canary`) works the same way.
+     */
+    labels?: {
+        [key: string]: PromptVersionId;
+    };
+    name: PromptName;
+    /**
+     * Newest first, and capped — see `aiwatcher_prompts::RegistryConfig`.
+     */
+    optimizations?: Array<OptimizationSummary>;
+    tags?: Array<string>;
+    updated_at: string;
+    /**
+     * Newest first.
+     */
+    versions?: Array<PromptVersionSummary>;
+};
+
+/**
+ * A prompt's identity.
+ *
+ * Deliberately without `/`. A name is a path segment in
+ * `/api/v1/prompts/{name}/versions/{version_id}`, and a name that can contain
+ * a separator makes that route ambiguous with every route below it. Namespace
+ * with `-` or `.` instead: `planner.floor-plan.system`.
+ */
+export type PromptName = string;
+
+export type PromptPage = {
+    /**
+     * Pass as `after` for the next page. Absent on the last one.
+     */
+    next_cursor?: string | null;
+    prompts: Array<PromptSummary>;
+    /**
+     * Prompts in the store, before the filter. The difference between this
+     * and `prompts.len()` is what the filter removed.
+     */
+    total: number;
+};
+
+/**
+ * One row in the prompts list.
+ */
+export type PromptSummary = {
+    admitted_optimizations: number;
+    created_at: string;
+    current?: null | PromptVersionId;
+    description?: string | null;
+    labels?: {
+        [key: string]: PromptVersionId;
+    };
+    last_optimization?: null | OptimizationSummary;
+    name: PromptName;
+    optimizations: number;
+    tags?: Array<string>;
+    updated_at: string;
+    versions: number;
+};
+
+/**
+ * One immutable version of a prompt.
+ */
+export type PromptVersion = VersionOrigin & {
+    author?: string | null;
+    created_at: string;
+    /**
+     * Anything the producer wants to carry: a git sha, a ticket, a locale.
+     */
+    metadata?: {
+        [key: string]: string;
+    };
+    /**
+     * What it was written for. A prompt tuned on one model is not evidence
+     * about another, and this is what says which.
+     */
+    model?: string | null;
+    name: PromptName;
+    /**
+     * Why this version exists. The commit message of a prompt.
+     */
+    notes?: string | null;
+    parent?: null | PromptVersionId;
+    text: string;
+    /**
+     * The `{{ placeholders }}` the text interpolates, sorted. Derived from
+     * the text by [`variables_of`], never supplied — a declared list that
+     * disagrees with the text is worse than no list.
+     */
+    variables?: Array<string>;
+    version_id: PromptVersionId;
+};
+
+/**
+ * `sha256(text)`, lowercase hex.
+ *
+ * Content addressing is what makes publishing idempotent: a redelivered
+ * publish, a CI job that runs twice, and a producer that hashes its own
+ * prompt before sending it all land on one version.
+ */
+export type PromptVersionId = string;
+
+/**
+ * A version without its text.
+ *
+ * The list view's row. Kept separate so listing a prompt with two hundred
+ * versions does not transfer two hundred prompts.
+ */
+export type PromptVersionSummary = VersionOrigin & {
+    author?: string | null;
+    created_at: string;
+    model?: string | null;
+    notes?: string | null;
+    parent?: null | PromptVersionId;
+    size_bytes: number;
+    variables?: Array<string>;
+    version_id: PromptVersionId;
+};
+
+/**
+ * Publish a version, and optionally update the prompt around it.
+ */
+export type PublishRequest = {
+    author?: string | null;
+    /**
+     * Replaces the prompt's description when present.
+     */
+    description?: string | null;
+    /**
+     * Move this label to the new version — `production` to make it live.
+     *
+     * Optional, and separate from publishing, because storing a prompt and
+     * deploying it are different decisions. A publish with no label is a
+     * draft that everything can read and nothing is using.
+     */
+    label?: string | null;
+    metadata?: {
+        [key: string]: string;
+    };
+    model?: string | null;
+    name: PromptName;
+    /**
+     * Why this version exists. The commit message of a prompt.
+     */
+    notes?: string | null;
+    parent?: null | PromptVersionId;
+    /**
+     * Replaces the prompt's tags when present.
+     */
+    tags?: Array<string> | null;
+    text: string;
+};
+
+/**
+ * What a publish did.
+ */
+export type Published = {
+    /**
+     * `false` when this exact text was already stored. Publishing is
+     * content-addressed, so a re-run of the same job is not a new version —
+     * and the caller usually wants to know which of the two happened.
+     */
+    created: boolean;
+    head: PromptHead;
+    version: PromptVersion;
 };
 
 /**
@@ -609,6 +974,15 @@ export type RecordedMetadata = {
     trace_id: TraceId;
     workflow_id?: string | null;
 };
+
+export const RejectionReason = {
+    NO_HELD_OUT_IMPROVEMENT: 'no_held_out_improvement',
+    NO_HELD_OUT_MEASUREMENT: 'no_held_out_measurement',
+    VARIABLES_LOST: 'variables_lost',
+    NO_CHANGE: 'no_change'
+} as const;
+
+export type RejectionReason = typeof RejectionReason[keyof typeof RejectionReason];
 
 /**
  * A run plus what is needed to draw it.
@@ -676,6 +1050,15 @@ export type RunSummary = {
      * The orchestration this run executes, when the producer names one.
      */
     workflow?: string | null;
+};
+
+/**
+ * One metric, on the baseline and on the candidate.
+ */
+export type Score = {
+    baseline?: number | null;
+    candidate?: number | null;
+    metric: string;
 };
 
 /**
@@ -855,6 +1238,21 @@ export type Totals = {
  * Lowercase hex trace id
  */
 export type TraceId = string;
+
+/**
+ * Where a version came from.
+ *
+ * The distinction the panel needs to answer "did a person write this, or did
+ * an optimiser?" — which is the first question asked about a prompt that is
+ * behaving strangely.
+ */
+export type VersionOrigin = {
+    origin: 'authored';
+} | {
+    algorithm: string;
+    optimization_id: string;
+    origin: 'optimized';
+};
 
 export type ListConversationsData = {
     body?: never;
@@ -1040,6 +1438,234 @@ export type GetMetricsResponses = {
 };
 
 export type GetMetricsResponse = GetMetricsResponses[keyof GetMetricsResponses];
+
+export type ListPromptsData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * Case-insensitive substring over the name, the description and the tags.
+         */
+        search?: string | null;
+        tag?: string | null;
+        /**
+         * Cursor: the last name on the previous page. Exclusive.
+         */
+        after?: string | null;
+        limit?: number | null;
+    };
+    url: '/api/v1/prompts';
+};
+
+export type ListPromptsErrors = {
+    501: ErrorBody;
+};
+
+export type ListPromptsError = ListPromptsErrors[keyof ListPromptsErrors];
+
+export type ListPromptsResponses = {
+    200: PromptPage;
+};
+
+export type ListPromptsResponse = ListPromptsResponses[keyof ListPromptsResponses];
+
+export type PublishPromptData = {
+    body: PublishRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/prompts';
+};
+
+export type PublishPromptErrors = {
+    400: ErrorBody;
+    413: ErrorBody;
+    501: ErrorBody;
+};
+
+export type PublishPromptError = PublishPromptErrors[keyof PublishPromptErrors];
+
+export type PublishPromptResponses = {
+    /**
+     * This text was already stored
+     */
+    200: Published;
+    /**
+     * A new version was stored
+     */
+    201: Published;
+};
+
+export type PublishPromptResponse = PublishPromptResponses[keyof PublishPromptResponses];
+
+export type GetPromptData = {
+    body?: never;
+    path: {
+        /**
+         * The prompt to fetch
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/prompts/{name}';
+};
+
+export type GetPromptErrors = {
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type GetPromptError = GetPromptErrors[keyof GetPromptErrors];
+
+export type GetPromptResponses = {
+    200: PromptDetail;
+};
+
+export type GetPromptResponse = GetPromptResponses[keyof GetPromptResponses];
+
+export type SetPromptLabelData = {
+    body: LabelRequest;
+    path: {
+        /**
+         * The prompt
+         */
+        name: string;
+        /**
+         * The label to move, e.g. production
+         */
+        label: string;
+    };
+    query?: never;
+    url: '/api/v1/prompts/{name}/labels/{label}';
+};
+
+export type SetPromptLabelErrors = {
+    /**
+     * No such prompt, or no such version
+     */
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type SetPromptLabelError = SetPromptLabelErrors[keyof SetPromptLabelErrors];
+
+export type SetPromptLabelResponses = {
+    200: PromptHead;
+};
+
+export type SetPromptLabelResponse = SetPromptLabelResponses[keyof SetPromptLabelResponses];
+
+export type RecordOptimizationData = {
+    body: OptimizationRequest;
+    path: {
+        /**
+         * The prompt that was optimised
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/prompts/{name}/optimizations';
+};
+
+export type RecordOptimizationErrors = {
+    400: ErrorBody;
+    /**
+     * The baseline version is not in the registry
+     */
+    404: ErrorBody;
+    413: ErrorBody;
+    501: ErrorBody;
+};
+
+export type RecordOptimizationError = RecordOptimizationErrors[keyof RecordOptimizationErrors];
+
+export type RecordOptimizationResponses = {
+    201: OptimizationRecord;
+};
+
+export type RecordOptimizationResponse = RecordOptimizationResponses[keyof RecordOptimizationResponses];
+
+export type GetOptimizationData = {
+    body?: never;
+    path: {
+        /**
+         * The prompt
+         */
+        name: string;
+        /**
+         * The optimisation to fetch
+         */
+        optimization_id: string;
+    };
+    query?: never;
+    url: '/api/v1/prompts/{name}/optimizations/{optimization_id}';
+};
+
+export type GetOptimizationErrors = {
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type GetOptimizationError = GetOptimizationErrors[keyof GetOptimizationErrors];
+
+export type GetOptimizationResponses = {
+    200: OptimizationRecord;
+};
+
+export type GetOptimizationResponse = GetOptimizationResponses[keyof GetOptimizationResponses];
+
+export type RebuildPromptData = {
+    body?: never;
+    path: {
+        /**
+         * The prompt to re-index
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/prompts/{name}/rebuild';
+};
+
+export type RebuildPromptErrors = {
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type RebuildPromptError = RebuildPromptErrors[keyof RebuildPromptErrors];
+
+export type RebuildPromptResponses = {
+    200: PromptHead;
+};
+
+export type RebuildPromptResponse = RebuildPromptResponses[keyof RebuildPromptResponses];
+
+export type GetPromptVersionData = {
+    body?: never;
+    path: {
+        /**
+         * The prompt
+         */
+        name: string;
+        /**
+         * sha256 of the prompt text
+         */
+        version_id: string;
+    };
+    query?: never;
+    url: '/api/v1/prompts/{name}/versions/{version_id}';
+};
+
+export type GetPromptVersionErrors = {
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type GetPromptVersionError = GetPromptVersionErrors[keyof GetPromptVersionErrors];
+
+export type GetPromptVersionResponses = {
+    200: PromptVersion;
+};
+
+export type GetPromptVersionResponse = GetPromptVersionResponses[keyof GetPromptVersionResponses];
 
 export type ListRunsData = {
     body?: never;

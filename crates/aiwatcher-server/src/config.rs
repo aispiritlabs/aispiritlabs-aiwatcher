@@ -25,6 +25,12 @@ pub enum ConfigError {
         name: &'static str,
         bus: &'static str,
     },
+
+    #[error("{name} is required when {because}")]
+    Required {
+        name: &'static str,
+        because: &'static str,
+    },
 }
 
 /// Which durable log to run against.
@@ -51,6 +57,49 @@ impl FromStr for BackendKind {
                 name: "AIWATCHER_BUS",
                 value: other.to_owned(),
                 expected: "one of memory, wal, laser",
+            }),
+        }
+    }
+}
+
+/// Where prompts are kept.
+///
+/// Its own setting rather than a flag on the bus, because it answers a
+/// different question. The bus decides what happens to events, which are
+/// bounded by retention; this decides what happens to prompts, which are not.
+/// A deployment can perfectly well run Laser and keep prompts on a disk, or
+/// run the write-ahead log and keep prompts in RustFS.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PromptStoreKind {
+    /// No registry. Every `/api/v1/prompts` route answers 501.
+    None,
+    /// In process. Nothing survives a restart; for `just dev` and demos.
+    Memory,
+    /// A directory under `AIWATCHER_DATA_DIR`. The default, for the same
+    /// reason the write-ahead log is: `cargo run --bin aiwatcher` has to be a
+    /// working instance with nothing else running.
+    #[default]
+    File,
+    /// An S3-compatible object store — RustFS in this stack, but MinIO, Ceph
+    /// or AWS work unchanged. What a deployment runs.
+    S3,
+}
+
+impl FromStr for PromptStoreKind {
+    type Err = ConfigError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "none" | "off" | "disabled" => Ok(Self::None),
+            "memory" | "in-memory" => Ok(Self::Memory),
+            "file" | "fs" | "disk" => Ok(Self::File),
+            // `rustfs` is accepted because that is what the service is called
+            // in the compose file; it is an S3 endpoint either way.
+            "s3" | "rustfs" | "minio" => Ok(Self::S3),
+            other => Err(ConfigError::Invalid {
+                name: "AIWATCHER_PROMPT_STORE",
+                value: other.to_owned(),
+                expected: "one of none, memory, file, s3",
             }),
         }
     }
@@ -92,6 +141,20 @@ pub struct Config {
     /// Scored cases kept across all evaluations. What
     /// `max_evaluations × max_cases_per_evaluation` is not — a bound.
     pub max_evaluation_cases_total: usize,
+    /// Where the prompt registry keeps its objects.
+    pub prompt_store: PromptStoreKind,
+    /// Key prefix inside the bucket or directory, so one bucket can hold this
+    /// registry beside whatever else a cluster keeps in it.
+    pub prompt_prefix: String,
+    /// Base URL of the S3 endpoint. Required when `prompt_store = S3`.
+    pub prompt_s3_endpoint: Option<String>,
+    pub prompt_s3_bucket: String,
+    pub prompt_s3_access_key: Option<String>,
+    pub prompt_s3_secret_key: Option<String>,
+    pub prompt_s3_session_token: Option<String>,
+    pub prompt_s3_region: String,
+    /// Create the bucket at start-up when it is missing.
+    pub prompt_s3_create_bucket: bool,
     pub log_format: LogFormat,
 }
 
@@ -125,6 +188,15 @@ impl Default for Config {
             max_spans_total: 60_000,
             max_evaluations: 500,
             max_evaluation_cases_total: 20_000,
+            prompt_store: PromptStoreKind::default(),
+            prompt_prefix: "prompts".to_owned(),
+            prompt_s3_endpoint: None,
+            prompt_s3_bucket: "aiwatcher-prompts".to_owned(),
+            prompt_s3_access_key: None,
+            prompt_s3_secret_key: None,
+            prompt_s3_session_token: None,
+            prompt_s3_region: "us-east-1".to_owned(),
+            prompt_s3_create_bucket: true,
             log_format: LogFormat::default(),
         }
     }
@@ -222,6 +294,33 @@ impl Config {
                 expected: "whole number of cases",
             })?;
         }
+        if let Some(raw) = var("AIWATCHER_PROMPT_STORE") {
+            config.prompt_store = raw.parse()?;
+        }
+        if let Some(raw) = var("AIWATCHER_PROMPT_PREFIX") {
+            config.prompt_prefix = raw.trim_matches('/').to_owned();
+        }
+        if let Some(raw) = var("AIWATCHER_PROMPT_S3_ENDPOINT") {
+            config.prompt_s3_endpoint = Some(raw);
+        }
+        if let Some(raw) = var("AIWATCHER_PROMPT_S3_BUCKET") {
+            config.prompt_s3_bucket = raw;
+        }
+        // The `AWS_*` fallbacks are what an IRSA or a mounted-secret setup
+        // already sets. A deployment that has them should not need a second,
+        // aiwatcher-specific copy of the same credential.
+        config.prompt_s3_access_key =
+            var("AIWATCHER_PROMPT_S3_ACCESS_KEY").or_else(|| var("AWS_ACCESS_KEY_ID"));
+        config.prompt_s3_secret_key =
+            var("AIWATCHER_PROMPT_S3_SECRET_KEY").or_else(|| var("AWS_SECRET_ACCESS_KEY"));
+        config.prompt_s3_session_token =
+            var("AIWATCHER_PROMPT_S3_SESSION_TOKEN").or_else(|| var("AWS_SESSION_TOKEN"));
+        if let Some(raw) = var("AIWATCHER_PROMPT_S3_REGION").or_else(|| var("AWS_REGION")) {
+            config.prompt_s3_region = raw;
+        }
+        if let Some(raw) = var("AIWATCHER_PROMPT_S3_CREATE_BUCKET") {
+            config.prompt_s3_create_bucket = parse_bool("AIWATCHER_PROMPT_S3_CREATE_BUCKET", &raw)?;
+        }
         if let Some(raw) = var("AIWATCHER_LOG_FORMAT") {
             config.log_format = match raw.to_ascii_lowercase().as_str() {
                 "json" => LogFormat::Json,
@@ -243,6 +342,31 @@ impl Config {
             });
         }
 
+        // Refused at start-up rather than at the first publish. An
+        // unauthenticated S3 endpoint answers 403 to every request, and
+        // finding that out when somebody saves a prompt means the failure
+        // surfaces to whoever was writing rather than to whoever deployed.
+        if config.prompt_store == PromptStoreKind::S3 {
+            for (name, value) in [
+                ("AIWATCHER_PROMPT_S3_ENDPOINT", &config.prompt_s3_endpoint),
+                (
+                    "AIWATCHER_PROMPT_S3_ACCESS_KEY",
+                    &config.prompt_s3_access_key,
+                ),
+                (
+                    "AIWATCHER_PROMPT_S3_SECRET_KEY",
+                    &config.prompt_s3_secret_key,
+                ),
+            ] {
+                if value.is_none() {
+                    return Err(ConfigError::Required {
+                        name,
+                        because: "AIWATCHER_PROMPT_STORE=s3",
+                    });
+                }
+            }
+        }
+
         Ok(config)
     }
 
@@ -254,6 +378,16 @@ impl Config {
     #[must_use]
     pub fn dead_letter_path(&self) -> String {
         format!("{}/dead-letters.jsonl", self.data_dir.trim_end_matches('/'))
+    }
+
+    /// Where `AIWATCHER_PROMPT_STORE=file` keeps the registry.
+    ///
+    /// Beside the write-ahead log rather than inside it: the log is a rolling
+    /// window that a retention policy is allowed to delete, and the registry
+    /// is the one directory here that must survive that.
+    #[must_use]
+    pub fn prompt_dir(&self) -> String {
+        format!("{}/prompts", self.data_dir.trim_end_matches('/'))
     }
 }
 
@@ -292,6 +426,81 @@ mod tests {
             config.otlp_endpoint.is_none(),
             "no exporter configured means spans stay local rather than erroring"
         );
+    }
+
+    #[test]
+    fn a_prompt_registry_works_with_no_configuration_at_all() {
+        let config = Config::default();
+        assert_eq!(
+            config.prompt_store,
+            PromptStoreKind::File,
+            "the default has to be durable and need nothing running"
+        );
+        assert_eq!(config.prompt_dir(), "./.data/prompts");
+    }
+
+    #[test]
+    fn prompt_store_names_accept_their_common_spellings() {
+        for (raw, expected) in [
+            ("none", PromptStoreKind::None),
+            ("off", PromptStoreKind::None),
+            ("memory", PromptStoreKind::Memory),
+            ("FILE", PromptStoreKind::File),
+            ("fs", PromptStoreKind::File),
+            ("s3", PromptStoreKind::S3),
+            // What the compose service is called.
+            ("rustfs", PromptStoreKind::S3),
+            ("minio", PromptStoreKind::S3),
+        ] {
+            assert_eq!(
+                raw.parse::<PromptStoreKind>().expect(raw),
+                expected,
+                "{raw}"
+            );
+        }
+        assert!("gcs".parse::<PromptStoreKind>().is_err());
+    }
+
+    #[test]
+    fn an_s3_registry_without_credentials_is_refused_at_start_up() {
+        // Rather than at the first publish, where the 403 would reach whoever
+        // was saving a prompt instead of whoever deployed the instance.
+        let base = Config {
+            prompt_store: PromptStoreKind::S3,
+            prompt_s3_endpoint: Some("http://rustfs:9000".to_owned()),
+            prompt_s3_access_key: Some("key".to_owned()),
+            prompt_s3_secret_key: Some("secret".to_owned()),
+            ..Config::default()
+        };
+        for missing in [
+            Config {
+                prompt_s3_endpoint: None,
+                ..base.clone()
+            },
+            Config {
+                prompt_s3_access_key: None,
+                ..base.clone()
+            },
+            Config {
+                prompt_s3_secret_key: None,
+                ..base.clone()
+            },
+        ] {
+            assert!(
+                required_field_is_missing(&missing),
+                "an incomplete S3 configuration must not start"
+            );
+        }
+        assert!(!required_field_is_missing(&base));
+    }
+
+    /// The validation `from_env` applies, without touching the environment —
+    /// which no test may do, because they share one process.
+    fn required_field_is_missing(config: &Config) -> bool {
+        config.prompt_store == PromptStoreKind::S3
+            && (config.prompt_s3_endpoint.is_none()
+                || config.prompt_s3_access_key.is_none()
+                || config.prompt_s3_secret_key.is_none())
     }
 
     #[test]

@@ -66,11 +66,39 @@ grafana:
     # the trace-to-metric links land somewhere real.
     metricsDatasourceUid: victoria-metrics
 
+promptStore:
+  # planner already runs RustFS in this namespace — `planner-rustfs-svc`, which
+  # planner-web, planner-import-api and planner-mlflow all write to. Installing
+  # a second object store beside it would be a second thing to back up holding
+  # data nothing else can read, so aiwatcher keeps its prompts in planner's.
+  #
+  # This is the one borrowing detection deliberately does *not* derive: it can
+  # see the store, and it cannot see which credentials aiwatcher may use or
+  # whether it may create a bucket. Both of those are known here.
+  mode: external
+  bucket: aiwatcher-prompts
+  external:
+    endpoint: http://planner-rustfs-svc:9000
+    # planner's RustFS runs with its root credentials, so the server can create
+    # the bucket on first start rather than needing one provisioned by hand.
+    createBucket: true
+  credentialsSecret:
+    # planner's own Secret, consumed under planner's own key names.
+    name: planner-rustfs-secrets
+    accessKeyKey: RUSTFS_ACCESS_KEY
+    secretKeyKey: RUSTFS_SECRET_KEY
+
 networkPolicy:
   # planner fences its observability pods (planner-observability-ingress) and
   # runs NetworkPolicies for everything else, so aiwatcher's own pods should be
   # fenced too rather than being the one open thing in the namespace.
   enabled: true
+  # Deliberately off, even though the server now reaches a pod this chart does
+  # not own. No policy selects `planner-rustfs` today, so attaching an ingress
+  # rule to it would narrow it from "accepts everything" to "accepts aiwatcher
+  # only" and cut off planner-web, planner-import-api and planner-mlflow. Turn
+  # this on only if planner fences that pod itself.
+  allowEgressToExternalPromptStore: false
 
 ingress:
   # Set AIWATCHER_DOMAIN and install.sh fills in the host. Left empty here so a

@@ -19,6 +19,8 @@ import { Route as ObservabilityExploreRouteImport } from './routes/observability
 import { Route as ObservabilityMetricsRouteImport } from './routes/observability.metrics'
 import { Route as ObservabilityQueryRouteImport } from './routes/observability.query'
 import { Route as ObservabilityRunsRouteImport } from './routes/observability.runs'
+import { Route as PromptsIndexRouteImport } from './routes/prompts.index'
+import { Route as PromptsNameRouteImport } from './routes/prompts.$name'
 import { Route as RunsRunIdRouteImport } from './routes/runs.$runId'
 
 const IndexRoute = IndexRouteImport.update({
@@ -71,6 +73,16 @@ const ObservabilityRunsRoute = ObservabilityRunsRouteImport.update({
   path: '/runs',
   getParentRoute: () => ObservabilityRoute,
 } as any)
+const PromptsIndexRoute = PromptsIndexRouteImport.update({
+  id: '/prompts/',
+  path: '/prompts/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PromptsNameRoute = PromptsNameRouteImport.update({
+  id: '/prompts/$name',
+  path: '/prompts/$name',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const RunsRunIdRoute = RunsRunIdRouteImport.update({
   id: '/runs/$runId',
   path: '/runs/$runId',
@@ -87,8 +99,10 @@ export interface FileRoutesByFullPath {
   '/observability/metrics': typeof ObservabilityMetricsRoute
   '/observability/query': typeof ObservabilityQueryRoute
   '/observability/runs': typeof ObservabilityRunsRoute
+  '/prompts/$name': typeof PromptsNameRoute
   '/runs/$runId': typeof RunsRunIdRoute
   '/observability/': typeof ObservabilityIndexRoute
+  '/prompts/': typeof PromptsIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -99,8 +113,10 @@ export interface FileRoutesByTo {
   '/observability/metrics': typeof ObservabilityMetricsRoute
   '/observability/query': typeof ObservabilityQueryRoute
   '/observability/runs': typeof ObservabilityRunsRoute
+  '/prompts/$name': typeof PromptsNameRoute
   '/runs/$runId': typeof RunsRunIdRoute
   '/observability': typeof ObservabilityIndexRoute
+  '/prompts': typeof PromptsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -113,8 +129,10 @@ export interface FileRoutesById {
   '/observability/metrics': typeof ObservabilityMetricsRoute
   '/observability/query': typeof ObservabilityQueryRoute
   '/observability/runs': typeof ObservabilityRunsRoute
+  '/prompts/$name': typeof PromptsNameRoute
   '/runs/$runId': typeof RunsRunIdRoute
   '/observability/': typeof ObservabilityIndexRoute
+  '/prompts/': typeof PromptsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -128,8 +146,10 @@ export interface FileRouteTypes {
     | '/observability/metrics'
     | '/observability/query'
     | '/observability/runs'
+    | '/prompts/$name'
     | '/runs/$runId'
     | '/observability/'
+    | '/prompts/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -140,8 +160,10 @@ export interface FileRouteTypes {
     | '/observability/metrics'
     | '/observability/query'
     | '/observability/runs'
+    | '/prompts/$name'
     | '/runs/$runId'
     | '/observability'
+    | '/prompts'
   id:
     | '__root__'
     | '/'
@@ -153,8 +175,10 @@ export interface FileRouteTypes {
     | '/observability/metrics'
     | '/observability/query'
     | '/observability/runs'
+    | '/prompts/$name'
     | '/runs/$runId'
     | '/observability/'
+    | '/prompts/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -163,7 +187,9 @@ export interface RootRouteChildren {
   EvaluationRoute: typeof EvaluationRoute
   ExperimentsRoute: typeof ExperimentsRoute
   ObservabilityRoute: typeof ObservabilityRouteWithChildren
+  PromptsNameRoute: typeof PromptsNameRoute
   RunsRunIdRoute: typeof RunsRunIdRoute
+  PromptsIndexRoute: typeof PromptsIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -238,6 +264,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ObservabilityRunsRouteImport
       parentRoute: typeof ObservabilityRoute
     }
+    '/prompts/': {
+      id: '/prompts/'
+      path: '/prompts'
+      fullPath: '/prompts/'
+      preLoaderRoute: typeof PromptsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/prompts/$name': {
+      id: '/prompts/$name'
+      path: '/prompts/$name'
+      fullPath: '/prompts/$name'
+      preLoaderRoute: typeof PromptsNameRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/runs/$runId': {
       id: '/runs/$runId'
       path: '/runs/$runId'
@@ -274,7 +314,9 @@ const rootRouteChildren: RootRouteChildren = {
   EvaluationRoute: EvaluationRoute,
   ExperimentsRoute: ExperimentsRoute,
   ObservabilityRoute: ObservabilityRouteWithChildren,
+  PromptsNameRoute: PromptsNameRoute,
   RunsRunIdRoute: RunsRunIdRoute,
+  PromptsIndexRoute: PromptsIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

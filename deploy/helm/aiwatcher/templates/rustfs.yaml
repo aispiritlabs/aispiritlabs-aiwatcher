@@ -1,0 +1,155 @@
+{{- if eq .Values.promptStore.mode "install" }}
+{{- $fullname := include "aiwatcher.fullname" . -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-rustfs
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rustfs
+spec:
+  selector:
+    {{- include "aiwatcher.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: rustfs
+  ports:
+    - { name: s3, port: 9000, targetPort: s3, protocol: TCP }
+---
+{{- if not .Values.promptStore.credentialsSecret.name }}
+# The credentials this release generates for itself.
+#
+# `lookup` first, then generate: without it every `helm upgrade` would mint a
+# new secret, the Deployment below would restart with credentials the data on
+# its volume was not written under, and every prompt in the store would answer
+# 403. A rendered-only run (`helm template`, `--dry-run`) has no cluster to look
+# in and falls back to a fixed placeholder, so a diff shows configuration
+# changes rather than a new random string every time.
+{{- $existing := lookup "v1" "Secret" .Release.Namespace (printf "%s-rustfs" $fullname) }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $fullname }}-rustfs
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rustfs
+type: Opaque
+data:
+  {{- if $existing }}
+  accessKey: {{ index $existing.data "accessKey" }}
+  secretKey: {{ index $existing.data "secretKey" }}
+  {{- else if .Release.IsInstall }}
+  accessKey: {{ "aiwatcher" | b64enc | quote }}
+  secretKey: {{ randAlphaNum 40 | b64enc | quote }}
+  {{- else }}
+  accessKey: {{ "aiwatcher" | b64enc | quote }}
+  secretKey: {{ "rendered-without-a-cluster" | b64enc | quote }}
+  {{- end }}
+---
+{{- end }}
+{{- if .Values.promptStore.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fullname }}-rustfs-data
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rustfs
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.promptStore.persistence.size }}
+  {{- include "aiwatcher.storageClass" .Values.promptStore.persistence | nindent 2 }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-rustfs
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rustfs
+  annotations:
+    # The one store in this chart whose contents are not reconstructible. Runs,
+    # spans and metrics are a fold over a log that can be replayed; a prompt was
+    # written by a person and exists nowhere else.
+    aiwatcher.dev/retention: "prompts outlive every run that used them"
+spec:
+  replicas: 1
+  # Recreate rather than RollingUpdate: one volume, ReadWriteOnce, and two
+  # replicas over one object store would each serve half a bucket.
+  strategy: { type: Recreate }
+  selector:
+    matchLabels:
+      {{- include "aiwatcher.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: rustfs
+  template:
+    metadata:
+      labels:
+        {{- include "aiwatcher.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/part-of: aiwatcher
+        app.kubernetes.io/component: rustfs
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: rustfs
+          image: "{{ .Values.promptStore.image.repository }}:{{ .Values.promptStore.image.tag }}"
+          imagePullPolicy: {{ .Values.promptStore.image.pullPolicy }}
+          env:
+            - name: RUSTFS_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  {{- include "aiwatcher.promptStoreSecretRef" . | nindent 18 }}
+                  key: {{ .Values.promptStore.credentialsSecret.accessKeyKey }}
+            - name: RUSTFS_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  {{- include "aiwatcher.promptStoreSecretRef" . | nindent 18 }}
+                  key: {{ .Values.promptStore.credentialsSecret.secretKeyKey }}
+            # The console is a second surface with its own auth story, on a
+            # store whose only client is one Rust process. Off.
+            - { name: RUSTFS_CONSOLE_ENABLE, value: "false" }
+          ports:
+            - { name: s3, containerPort: 9000, protocol: TCP }
+          # A TCP probe, not an HTTP one. An unauthenticated `GET /` against a
+          # healthy S3 endpoint is answered `403 AccessDenied` — which is the
+          # correct answer and which `httpGet` counts as a failure. A probe
+          # that has to be wrong to pass is worse than a coarser one.
+          readinessProbe:
+            tcpSocket: { port: s3 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            tcpSocket: { port: s3 }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.promptStore.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: data, mountPath: /data }
+            - { name: logs, mountPath: /logs }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: data
+          {{- if .Values.promptStore.persistence.enabled }}
+          persistentVolumeClaim: { claimName: {{ $fullname }}-rustfs-data }
+          {{- else }}
+          # Every prompt is lost on a restart. Only ever right for a scratch
+          # cluster, which is why persistence defaults to on.
+          emptyDir: {}
+          {{- end }}
+        - name: logs
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+{{- end }}

@@ -1,0 +1,80 @@
+# The prompt registry's object store, for the local test stack.
+#
+# An S3 endpoint. The adapter in `aiwatcher-prompts` speaks S3, so this is
+# interchangeable with MinIO or a real bucket — RustFS is here because it is one
+# Rust binary that starts in a second and needs no external metadata service.
+#
+# Like everything else in this stack: `emptyDir`, one replica, credentials in
+# plain text. Fine for a scratch cluster, and the reason `deploy/helm` is what
+# an installation uses.
+apiVersion: v1
+kind: Service
+metadata:
+  name: rustfs
+spec:
+  selector:
+    app: rustfs
+  ports:
+    - name: s3
+      port: 9000
+      targetPort: 9000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rustfs
+spec:
+  replicas: 1
+  # One volume, one bucket: two replicas over it would each serve half a store.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: rustfs
+  template:
+    metadata:
+      labels:
+        app: rustfs
+    spec:
+      containers:
+        - name: rustfs
+          image: rustfs/rustfs:1.0.0-rc.3
+          env:
+            - name: RUSTFS_ACCESS_KEY
+              value: aiwatcher
+            - name: RUSTFS_SECRET_KEY
+              value: aiwatcher-local-only
+            - name: RUSTFS_CONSOLE_ENABLE
+              value: 'false'
+          ports:
+            - name: s3
+              containerPort: 9000
+          # TCP, not HTTP. An unauthenticated `GET /` against a healthy S3
+          # endpoint is `403 AccessDenied` — the correct answer, and one
+          # `httpGet` counts as a failure.
+          readinessProbe:
+            tcpSocket:
+              port: s3
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: s3
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: logs
+              mountPath: /logs
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: logs
+          emptyDir: {}

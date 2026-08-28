@@ -97,6 +97,49 @@ http://{{ include "aiwatcher.fullname" . }}-collector:4318
 {{- end -}}
 {{- end -}}
 
+{{/*
+Where prompts are kept.
+
+The same three modes as every backend, and the mode that matters most is
+`none`: a deployment without a prompt store answers 501 on every
+`/api/v1/prompts` route, which is a legitimate choice and is not the same thing
+as an empty registry. The other two produce an S3 endpoint.
+
+`install` points at this release's RustFS; `external` at any S3 — MinIO, Ceph,
+AWS — because the adapter speaks S3 and nothing above it knows the difference.
+*/}}
+{{- define "aiwatcher.promptStoreEndpoint" -}}
+{{- $ps := .Values.promptStore -}}
+{{- if eq $ps.mode "install" -}}
+http://{{ include "aiwatcher.fullname" . }}-rustfs:9000
+{{- else if eq $ps.mode "external" -}}
+{{- if not $ps.external.endpoint -}}
+{{- fail "promptStore.mode is \"external\" but promptStore.external.endpoint is empty. Set the S3 endpoint, or set mode to \"install\" or \"none\"." -}}
+{{- end -}}
+{{- $ps.external.endpoint | trimSuffix "/" -}}
+{{- else if ne $ps.mode "none" -}}
+{{- fail (printf "promptStore.mode is %q; it must be one of install, external, none." $ps.mode) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+The Secret holding the object store's credentials.
+
+An `external` store must name one: this chart has no way to invent credentials
+for a bucket somebody else owns, and defaulting to the release's own Secret
+would produce a 403 at the first publish rather than a failure at render time.
+*/}}
+{{- define "aiwatcher.promptStoreSecretRef" -}}
+{{- $ps := .Values.promptStore -}}
+{{- if $ps.credentialsSecret.name -}}
+name: {{ $ps.credentialsSecret.name }}
+{{- else if eq $ps.mode "external" -}}
+{{- fail "promptStore.mode is \"external\" but promptStore.credentialsSecret.name is empty. An external bucket needs credentials this chart cannot generate." -}}
+{{- else -}}
+name: {{ include "aiwatcher.fullname" . }}-rustfs
+{{- end -}}
+{{- end -}}
+
 {{- define "aiwatcher.imagePullSecrets" -}}
 {{- with .Values.imagePullSecrets }}
 imagePullSecrets:

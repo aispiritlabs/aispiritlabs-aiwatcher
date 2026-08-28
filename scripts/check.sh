@@ -66,6 +66,14 @@ else
   skip "typescript sdk typecheck" "run 'just install' first"
 fi
 
+# ── Python SDK ───────────────────────────────────────────────────────────────
+# `uv` manages its own interpreter, so this needs nothing but uv on PATH.
+if have uv; then
+  run "python sdk" just sdk-check
+else
+  skip "python sdk" "https://docs.astral.sh/uv/getting-started/installation/"
+fi
+
 # ── Kubernetes manifests ─────────────────────────────────────────────────────
 # Client-side only: no cluster is contacted, so this is safe to run anywhere.
 if have kubectl; then

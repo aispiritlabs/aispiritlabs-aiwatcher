@@ -210,6 +210,18 @@ else
   "${helmfile[@]}" ${sets[@]+"${sets[@]}"} sync
 fi
 
+# Planner's Grafana init container copies the optional datasource ConfigMap at
+# pod startup. On a first install that ConfigMap appears after the existing pod
+# started, so restart it once to run provisioning with the new source. This
+# touches only the selected planner environment and only when it exists.
+if [[ $environment == planner ]] \
+  && kubectl --context "$context" -n "$namespace" get deployment/planner-grafana >/dev/null 2>&1 \
+  && kubectl --context "$context" -n "$namespace" get configmap/aiwatcher-grafana-datasources >/dev/null 2>&1; then
+  printf '\n%s▶ reloading planner Grafana datasource provisioning%s\n' "$B" "$NC"
+  kubectl --context "$context" -n "$namespace" rollout restart deployment/planner-grafana
+  kubectl --context "$context" -n "$namespace" rollout status deployment/planner-grafana --timeout=10m
+fi
+
 printf '\n%s✓ aiwatcher is installed%s\n' "$GRN" "$NC"
 kubectl --context "$context" -n "$namespace" get deploy,svc -l app.kubernetes.io/part-of=aiwatcher
 printf '\n  panel:  kubectl -n %s port-forward svc/%s-panel 8080:80\n' "$namespace" "$release"

@@ -173,7 +173,9 @@ One volume and one mount in `deploy/helm/planner/templates/observability.yaml`:
 The datasource is a Jaeger one: VictoriaTraces answers the Jaeger query API, so
 Grafana reads it with no plugin. Its trace-to-metrics link points at uid
 `victoria-metrics`, which is what planner's own VictoriaMetrics datasource
-already uses.
+already uses. The planner environment installer restarts `planner-grafana`
+after the ConfigMap appears, so its init container can copy the newly available
+datasource into Grafana's provisioning directory.
 
 ### Publishing the panel
 
@@ -195,9 +197,10 @@ that does not resolve.
 
 ## Replacing MLflow
 
-The install above puts aiwatcher next to MLflow rather than in place of it —
-deliberately, so the two can be compared on the same traffic before anything is
-removed. `docs/mlflow-comparison.md` has the measurements.
+Install aiwatcher before deploying the Planner cutover. Planner no longer runs
+both systems in parallel: once its workloads point at the server ingest URL,
+the old tracking stack is removed in the same release. The measurements that
+justified that decision remain in `docs/mlflow-comparison.md`.
 
 What actually moves is in `planner-mlplatform`, which uses MLflow two ways:
 
@@ -254,15 +257,16 @@ What actually moves is in `planner-mlplatform`, which uses MLflow two ways:
    as it is scored, which is what fills the regression view — the cases that
    passed on the previous gate and fail on this one.
 
-So the honest order is: install, run both, compare, move (1), move (2), then
-remove MLflow. What comes out of planner is the `planner-mlflow` Deployment and
-Service in `templates/ml-platform.yaml`, the `mlflow` entries in `storage`,
-`resources`, `domains` and `objectStorage.buckets` in `values.yaml`, the MLflow
-ingress, and the `mlflow*` fields in `app/config.py`.
+The release order is therefore: install aiwatcher, deploy the Planner cutover,
+run one traced inference and one evaluation, then verify both in the panel.
+Planner removes the complete old tracking surface: its Deployment and Service,
+ingress, dependency, runtime configuration, authentication application, object
+bucket and persistent-volume settings. No artifact store or registry from that
+stack remains wired into Planner.
 
-What stays behind: MLflow's artifact store and registry, and DeepEval itself.
-aiwatcher records the *result* of an evaluation and has no opinion about how it
-was produced — no scorers, no judges, no suite runner.
+DeepEval stays because it is the evaluation harness, not a tracking backend.
+aiwatcher records the *result* and has no opinion about how it was produced —
+no scorers, no judges, no suite runner.
 
 ---
 

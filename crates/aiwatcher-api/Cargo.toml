@@ -11,6 +11,7 @@ repository.workspace = true
 aiwatcher-core.workspace = true
 aiwatcher-bus.workspace = true
 aiwatcher-projector.workspace = true
+aiwatcher-prompts.workspace = true
 async-trait.workspace = true
 axum.workspace = true
 futures.workspace = true

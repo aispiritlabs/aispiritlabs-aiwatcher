@@ -45,6 +45,9 @@ pub fn router(state: AppState) -> Router {
         .route("/livez", get(livez))
         .route("/healthz", get(livez))
         .route("/readyz", get(readyz))
+        // Its own module: the registry is a different store with a different
+        // lifetime, and keeping its routes beside the log's would hide that.
+        .merge(crate::prompts::router())
         .with_state(state)
 }
 

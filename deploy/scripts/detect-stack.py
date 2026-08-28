@@ -79,6 +79,18 @@ TARGETS: tuple[Target, ...] = (
     Target(key="victoriatraces", images=("victoria-traces", "vtsingle"), port=10428),
     Target(key="collector", images=("opentelemetry-collector",), port=4318),
     Target(key="grafana", images=("grafana/grafana",), port=3000),
+    # Reported, never derived — see `as_helm_values`. An object store is found
+    # by its image; the credentials that would make it usable are not
+    # discoverable from here, and neither is whether aiwatcher may create a
+    # bucket in it.
+    Target(
+        key="objectstore",
+        images=("minio/minio", "rustfs/rustfs", "chrislusf/seaweedfs", "quay.io/minio/minio"),
+        port=9000,
+        # The MinIO operator manages MinIO; it is not one. `mc` is the client.
+        not_images=("minio-operator", "operator:", "minio/mc", "minio/console"),
+        note="an S3 endpoint is reported, never reused: its credentials are not discoverable",
+    ),
 )
 
 
@@ -368,6 +380,35 @@ def as_helm_values(findings: dict[str, Finding], reachable: bool, namespace: str
     if findings["grafana"].found:
         lines.append(f"# Grafana found at {findings['grafana'].url}. The datasource ConfigMap is")
         lines.append("# emitted; wiring it in is a change on Grafana's side — see docs/INSTALL.md.")
+
+    # The same rule as the Collector, for a different reason. There, reuse is
+    # unsafe; here it is undecidable: nothing in the cluster says which
+    # credentials aiwatcher may use, which bucket it may write, or whether it
+    # may create one. So this release installs its own store and says what it
+    # found.
+    store = findings["objectstore"]
+    if store.found:
+        lines.append(f"# An S3-compatible store is running at {store.url}, and this release")
+        lines.append("# still installs its own RustFS for the prompt registry. To use that one instead,")
+        lines.append("# set promptStore.mode=external plus the endpoint and a credentials Secret —")
+        lines.append("# neither is discoverable from here, which is why this is not derived:")
+        lines.append("#")
+        lines.append("#   promptStore:")
+        lines.append("#     mode: external")
+        lines.append("#     external:")
+        lines.append(f"#       endpoint: {store.url}")
+        if store.pod_selector:
+            lines.append(f"#       namespace: {json.dumps(store.namespace)}")
+            lines.append("#       podSelector:")
+            for label, value in sorted(store.pod_selector.items()):
+                lines.append(f"#         {json.dumps(label)}: {json.dumps(value)}")
+        lines.append("#     credentialsSecret: { name: <secret>, accessKeyKey: ..., secretKeyKey: ... }")
+        if store.fenced:
+            lines.append(f"# It is fenced by NetworkPolicy {store.fenced_by}, so that also needs")
+            lines.append("# networkPolicy.allowEgressToExternalPromptStore=true.")
+        else:
+            lines.append("# Nothing fences it, so leave networkPolicy.allowEgressToExternalPromptStore")
+            lines.append("# off: a rule attached to unfenced pods would cut off its existing clients.")
 
     return "\n".join(lines) + "\n"
 

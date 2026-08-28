@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use aiwatcher_bus::{MessageSink, MessageSource};
 use aiwatcher_projector::{LiveHub, ReadModel};
+use aiwatcher_prompts::Registry;
 
 /// Shared application state.
 ///
@@ -19,6 +20,12 @@ pub struct AppState {
     /// all publish to Laser directly should leave it off rather than expose a
     /// second write path.
     pub sink: Option<Arc<dyn MessageSink>>,
+    /// `None` when no prompt store is configured, which makes every
+    /// `/api/v1/prompts` route answer 501 rather than 404. The registry is the
+    /// one thing here that outlives retention, so running without it is a
+    /// deliberate choice and the API says so instead of pretending the routes
+    /// do not exist.
+    pub prompts: Option<Arc<Registry>>,
     pub health: HealthState,
 }
 
@@ -27,6 +34,7 @@ impl std::fmt::Debug for AppState {
         f.debug_struct("AppState")
             .field("source", &self.source)
             .field("ingest_enabled", &self.sink.is_some())
+            .field("prompt_registry", &self.prompts.is_some())
             .finish_non_exhaustive()
     }
 }

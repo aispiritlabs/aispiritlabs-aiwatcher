@@ -1,16 +1,16 @@
 import { Link, Outlet, createRootRouteWithContext } from '@tanstack/react-router';
 import type { QueryClient } from '@tanstack/react-query';
-import { Activity, Database, FlaskConical, LineChart, Sparkles } from 'lucide-react';
+import { Activity, Database, FlaskConical, LineChart, ScrollText, Sparkles } from 'lucide-react';
 
 /**
- * Four areas, not eleven pages.
+ * Five areas, not eleven pages.
  *
  * The header used to list every route side by side, which worked while there
- * was one product area. There are four now — watching runs, judging them,
- * curating what they are judged against, and changing the thing being run —
- * and they are different jobs done at different times. So the top level is the
- * area, and the pages inside one area are its own concern (see
- * `observability.tsx`).
+ * was one product area. There are five now — watching runs, judging them,
+ * keeping the prompts they run on, curating what they are judged against, and
+ * changing the thing being run — and they are different jobs done at different
+ * times. So the top level is the area, and the pages inside one area are its
+ * own concern (see `observability.tsx`).
  */
 
 export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
@@ -29,6 +29,9 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 const AREAS = [
   { to: '/observability', label: 'Observability', icon: LineChart },
   { to: '/evaluation', label: 'Evaluation', icon: FlaskConical },
+  // Between judging and curating: a prompt is the thing an evaluation is
+  // evidence about and the thing a dataset is used to change.
+  { to: '/prompts', label: 'Prompts', icon: ScrollText },
   { to: '/datasets', label: 'Datasets', icon: Database },
   { to: '/experiments', label: 'Experiments', icon: Sparkles },
 ] as const;

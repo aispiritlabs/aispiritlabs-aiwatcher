@@ -20,6 +20,8 @@ Python / TypeScript agents
                    ├─► finished spans ─► VictoriaTraces
                    ├─► aggregates ─────► VictoriaMetrics
                    └─► read model ─────► REST reads
+
+   prompt registry ──► RustFS (S3)   authored, and outside retention entirely
 ```
 
 ## Commands
@@ -34,6 +36,7 @@ just run           # server on :8080, write-ahead log in ./.data
 just dev           # server (in-memory bus) + panel dev server on :5173
 just seed          # publish a demo run into a running server
 just seed-evaluation  # publish two comparable evaluation reports
+just seed-prompts  # publish a prompt plus three optimisations, one admitted
 just stack-up      # docker compose: VictoriaTraces, VictoriaMetrics, Collector, Grafana
 just tilt-up       # the same stack on a local Kubernetes, rebuilt on save
 ```
@@ -55,6 +58,21 @@ just run-laser     # server on the Laser backend
 just test-laser    # six integration tests against the real broker
 ```
 
+With an object store, for the prompt registry:
+
+```bash
+just rustfs-up     # RustFS on :9010
+just run-rustfs    # server with the registry in the object store
+just test-rustfs   # five integration tests against it — this is what verifies the SigV4 signer
+```
+
+The Python SDK is a `uv` project of its own:
+
+```bash
+just sdk-install   # uv sync --all-groups
+just sdk-check     # ruff format --check, ruff check, mypy --strict, pytest
+```
+
 Run a single Rust test: `just test-one two_parallel`.
 Panel: `cd apps/panel && npm run build` (vite build followed by a full `tsc`
 project check).
@@ -68,6 +86,7 @@ Crates, in dependency order. A crate may only depend on ones above it.
 | `aiwatcher-core` | Domain: ids, envelope, correlation, event catalog, ports. Knows nothing about Laser, HTTP or OTLP. |
 | `aiwatcher-bus` | `MessageSource` / `MessageSink` / `Checkpointer` + memory, write-ahead-log, Laser and generic-broker adapters |
 | `aiwatcher-trace` | `SpanAssembler` and the OTLP/JSON exporters |
+| `aiwatcher-prompts` | The prompt registry: content-addressed versions, optimisation records, and the RustFS/S3 and filesystem adapters behind `ObjectStore`. Includes a hand-written SigV4 signer. |
 | `aiwatcher-projector` | The pipeline, live hub, read model, dimension, span and evaluation folds, dedup, retry, dead letters |
 | `aiwatcher-api` | axum router: REST, SSE, WebSocket, OpenAPI |
 | `aiwatcher-server` | Config, wiring, graceful shutdown. The only crate that knows every implementation exists. |
@@ -135,7 +154,19 @@ area.
    `log_metrics` / `log_dict` block: `record_evaluation` in both SDKs is the
    same four pieces on the client that is already there for tracing.
 
-9. **A Flow PHP query is parsed, never executed**
+9. **A prompt is authored, not observed** ([ADR_0011](docs/ADR/ADR_0011_PROMPT_REGISTRY.md)).
+   Everything else here is a fold over the log, and everything else is
+   therefore bounded by retention. A prompt is not: the version a run used has
+   to be readable after that run has been evicted. So the registry is an object
+   store — RustFS in a deployment, a directory under `just run` — behind
+   `core::prompts::ObjectStore`, and `aiwatcher-prompts` owns the key layout.
+   Three rules carry it: a version id is `sha256(text)` so publishing is
+   idempotent; the version object is written before the head that indexes it;
+   and `OptimizationRecord::verdict` decides whether a candidate was an
+   improvement, from the held-out split, because the optimiser picked it by
+   maximising the number it is reporting.
+
+10. **A Flow PHP query is parsed, never executed**
    ([ADR_0008](docs/ADR/ADR_0008_FLOW_QUERY_SURFACE.md)). The Query tab accepts
    a `data_frame()->…` pipeline, which `services/flow` lexes with
    `token_get_all()`, checks against a whitelist, and turns into Flow objects
@@ -175,6 +206,25 @@ TypeScript client is generated from it. After changing any route or any type
 that appears in one, run `just openapi` and commit both the contract and
 `apps/panel/src/api/generated`. CI fails if either is stale.
 
+### Python SDK
+
+`sdk/python` is a `uv` project with its own `pyproject.toml`, and it has **no
+runtime dependencies** — it is imported into agent processes that already have
+opinions about `httpx` and `pydantic` versions. `uv.lock` is committed because
+it pins only the dev toolchain. `just sdk-check` runs `ruff format --check`,
+`ruff check`, `mypy --strict` and `pytest`; CI runs the same on Python 3.11,
+which is the floor `requires-python` claims. The lint set is the one `planner`
+selects, deliberately: the two repositories are worked on together, and a lint
+that fires in one and not the other is a lint people learn to ignore.
+
+The telemetry client and the registry client have **opposite** failure
+policies, and that is the design: telemetry must never take an agent down, so
+`HttpTransport` swallows and counts; reading the prompt a service is about to
+run on is the work, so every `PromptRegistry` method raises.
+`aiwatcher_sdk/integrations/deepeval.py` never imports deepeval — it reads the
+report structurally, so the SDK stays dependency-free and a DeepEval release is
+not an SDK release.
+
 ### Panel
 
 - `apps/panel/src/api/generated` is generated. Never edit it by hand. It and
@@ -187,9 +237,13 @@ that appears in one, run `just openapi` and commit both the contract and
   lands the reader on the same view. That includes the search boxes: the input
   holds a draft, a 250 ms debounce commits it to the search params.
 - Routes are grouped by product area. `observability.*` is a layout route with
-  its own sub-navigation; `evaluation`, `datasets` and `experiments` are the
-  other three areas. `/` and `/observability` redirect rather than render, so
-  old links keep working.
+  its own sub-navigation; `evaluation`, `prompts`, `datasets` and `experiments`
+  are the other four areas. `/` and `/observability` redirect rather than
+  render, so old links keep working.
+- `prompts` is the one area that reads something other than the log, and the
+  one that writes. It answers 501 rather than 404 when no store is configured,
+  and `RegistryDisabled` says which variable is unset — an empty list would be
+  a different problem with a different fix.
 - Any list that can grow with retention is a `useInfiniteQuery` feeding
   `VirtualList` (`src/components/virtual-list.tsx`). A `.map` over a full
   response is only correct for a list with a fixed ceiling.
@@ -221,6 +275,32 @@ that appears in one, run `just openapi` and commit both the contract and
   span, so nothing strips `data.report`. A producer that puts model output there
   is putting it in the durable log and in memory — a retention decision, made
   deliberately or not at all.
+- **Never let a client decide whether an optimisation was an improvement.**
+  `OptimizationRecord::verdict` computes it in `aiwatcher-prompts`, from the
+  held-out scores and from `variables_lost`, and the API returns what it
+  decided rather than what was sent. An optimiser selected its candidate by
+  maximising the number it then reports; a registry that took its word is a
+  filing cabinet.
+- **Never admit a candidate on a dev score.** The dev split is what the search
+  ran against — a gain there is a hypothesis. An optimisation with no held-out
+  measurement is recorded and refused a promotion, which is the outcome the
+  split exists to produce. `overfit_gap` is the number worth watching across a
+  series.
+- **Never promote a candidate that dropped a variable.** An optimiser rewrites
+  prompt text freely, and one that has stopped interpolating `{{ page }}` can
+  score arbitrarily well on a harness that fed it fixed inputs. The bar is
+  checked *before* the scores in `verdict`, so the reason says "it stopped
+  reading its input" rather than inviting somebody to raise the iteration
+  count.
+- **Never write a prompt's head before the version it indexes.** Same ordering
+  as the pipeline's checkpoint, same reason: an index naming an object that was
+  never stored is a list whose rows 404, while an unindexed object is waiting
+  for `Registry::rebuild`. The head is derived; the versions are the truth —
+  except the labels, which exist nowhere else and survive a rebuild.
+- **Prompt text is not redacted.** The Collector strips `gen_ai.prompt` and
+  `gen_ai.completion` from spans; the registry stores prompt text verbatim,
+  because storing it is the point. A producer that puts a secret in a prompt is
+  putting it in an object store nothing evicts.
 - **Never remove the `data.workflow` fallback in `EventEnvelope::workflow`.**
   The `agentic` integration sent the workflow name in the payload before
   `workflow_id` existed. Dropping the fallback empties the workflow dimension
@@ -267,7 +347,16 @@ that appears in one, run `just openapi` and commit both the contract and
   redaction guardrail above is the whole reason the Collector is in the path.
   Detection reports one; `collector.mode: external` stays a human decision.
 - **`aiwatcher-core` gains no dependency on a transport or a store.** If
-  something needs one, it belongs in an adapter behind a port.
+  something needs one, it belongs in an adapter behind a port. `sha2` and `hex`
+  are the exception and are not one: `PromptVersionId::of` has to agree byte for
+  byte with `hashlib.sha256` on the producer side, unlike `ids::derive`, whose
+  only requirement is that every aiwatcher agrees with every other one.
+- **Never attach a NetworkPolicy ingress rule to an object store nothing else
+  fences.** The general rule below applies with a sharper edge here: planner's
+  RustFS serves `planner-web`, `planner-import-api` and `planner-mlflow`, and a
+  rule saying "aiwatcher only" would cut all three off. `detect-stack.py`
+  reports whether it is fenced; only that turns
+  `allowEgressToExternalPromptStore` on.
 - **Never point Tilt at a non-local cluster.** The guard is in two places
   (`Tiltfile` and `just _assert-local-context`); do not weaken either. A typo in
   a context name must not be the only thing between a keystroke and production.

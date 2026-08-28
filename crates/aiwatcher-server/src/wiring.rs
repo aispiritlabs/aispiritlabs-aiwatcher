@@ -14,10 +14,11 @@ use aiwatcher_core::ports::{
 };
 use aiwatcher_projector::pipeline::Outputs;
 use aiwatcher_projector::{FileDeadLetters, LiveHub, Projector, ProjectorConfig, ReadModel};
+use aiwatcher_prompts::{Registry, RegistryConfig};
 use aiwatcher_trace::AssemblerConfig;
 use aiwatcher_trace::otlp::{OtlpConfig, OtlpMetricSink, OtlpTraceStore};
 
-use crate::config::{BackendKind, Config};
+use crate::config::{BackendKind, Config, PromptStoreKind};
 
 /// Discards what it is given, loudly enough to notice at startup and quietly
 /// enough not to fill a log.
@@ -45,6 +46,67 @@ impl MetricSink for NullExporter {
         tracing::trace!(samples = samples.len(), "no OTLP endpoint configured");
         Ok(())
     }
+}
+
+/// The prompt registry, or `None` when this deployment has none.
+///
+/// Built before the server starts listening, and allowed to fail the start-up:
+/// an object store that is misconfigured answers 403 to everything, and
+/// discovering that when somebody saves a prompt puts the failure in front of
+/// the wrong person. `AIWATCHER_PROMPT_STORE=none` is how a deployment says it
+/// does not want one.
+async fn build_prompt_registry(config: &Config) -> Result<Option<Arc<Registry>>> {
+    let registry_config = RegistryConfig {
+        prefix: config.prompt_prefix.clone(),
+        ..RegistryConfig::default()
+    };
+
+    let store: Arc<dyn aiwatcher_core::prompts::ObjectStore> = match config.prompt_store {
+        PromptStoreKind::None => {
+            tracing::info!("AIWATCHER_PROMPT_STORE=none; the prompt registry is disabled");
+            return Ok(None);
+        }
+        PromptStoreKind::Memory => {
+            tracing::warn!("the prompt registry is in memory; prompts will not survive a restart");
+            Arc::new(aiwatcher_prompts::adapters::memory::MemoryObjectStore::new())
+        }
+        PromptStoreKind::File => {
+            let directory = config.prompt_dir();
+            tracing::info!(%directory, "the prompt registry is on disk");
+            Arc::new(
+                aiwatcher_prompts::adapters::fs::FileObjectStore::open(directory)
+                    .await
+                    .context("opening the prompt directory")?,
+            )
+        }
+        PromptStoreKind::S3 => {
+            use aiwatcher_prompts::adapters::s3::{S3Config, S3ObjectStore};
+            use aiwatcher_prompts::sigv4::Credentials;
+
+            let endpoint = config.prompt_s3_endpoint.clone().context(
+                "AIWATCHER_PROMPT_S3_ENDPOINT is required for AIWATCHER_PROMPT_STORE=s3",
+            )?;
+            tracing::info!(%endpoint, bucket = %config.prompt_s3_bucket, "the prompt registry is in an object store");
+            Arc::new(
+                S3ObjectStore::connect(S3Config {
+                    endpoint,
+                    bucket: config.prompt_s3_bucket.clone(),
+                    credentials: Credentials {
+                        access_key_id: config.prompt_s3_access_key.clone().unwrap_or_default(),
+                        secret_access_key: config.prompt_s3_secret_key.clone().unwrap_or_default(),
+                        session_token: config.prompt_s3_session_token.clone(),
+                        region: config.prompt_s3_region.clone(),
+                    },
+                    timeout: std::time::Duration::from_secs(10),
+                    create_bucket: config.prompt_s3_create_bucket,
+                })
+                .await
+                .context("connecting to the prompt object store")?,
+            )
+        }
+    };
+
+    Ok(Some(Arc::new(Registry::new(store, registry_config))))
 }
 
 /// A fully wired instance, ready to serve and to consume.
@@ -260,6 +322,7 @@ pub async fn build(config: Config) -> Result<Runtime> {
         live,
         source,
         sink: config.ingest_enabled.then_some(sink),
+        prompts: build_prompt_registry(&config).await?,
         health,
     };
 

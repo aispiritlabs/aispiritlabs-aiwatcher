@@ -22,7 +22,14 @@ Python / TypeScript agents
                    ├─► finished spans ─► VictoriaTraces
                    ├─► aggregates ─────► VictoriaMetrics
                    └─► read model ─────► REST reads
+
+   prompt registry ──► RustFS (S3)   authored, and outside retention entirely
 ```
+
+The registry is the one exception to the paragraph above, and it is a
+deliberate one: a prompt is written by a person, not observed, and the version
+a run used has to be readable after that run has been evicted from the log. See
+[ADR_0011](docs/ADR/ADR_0011_PROMPT_REGISTRY.md).
 
 ## Powered by
 
@@ -36,6 +43,17 @@ Python / TypeScript agents
 message streaming behind the Laser backend. It is the durable log the projector
 reads from, under the <code>laser</code> cargo feature; a plain build uses the
 built-in write-ahead log instead and needs no broker.
+</td>
+</tr>
+<tr>
+<td width="90" align="center" valign="middle">
+<a href="https://github.com/rustfs/rustfs"><img src="https://avatars.githubusercontent.com/rustfs" height="44" alt="RustFS"></a>
+</td>
+<td valign="middle">
+<a href="https://github.com/rustfs/rustfs"><b>RustFS</b></a> — the S3-compatible
+object store behind the prompt registry: one Rust binary, no JVM, no external
+metadata service. The adapter speaks S3 rather than RustFS, so MinIO, Ceph or a
+real bucket work by changing one environment variable.
 </td>
 </tr>
 <tr>
@@ -102,6 +120,7 @@ client.record_evaluation(
     metrics={"mean_score": 0.88},
     report={"scorer": "catalog-contract-v2"},
 )
+client.flush()  # delivery boundary for a short-lived evaluation CLI
 ```
 
 That is the same four pieces as an MLflow `start_run` block, on the client that
@@ -114,9 +133,56 @@ recognise is **not** rejected: it is stored and streamed live, and simply takes
 part in no span, which is what lets a producer run ahead of the backend. See
 [docs/event-catalog.md](docs/event-catalog.md).
 
+## Prompts, and what an optimiser did to them
+
+A prompt is the thing an evaluation is usually *about*, and it is the one
+artifact here that is authored rather than observed. So it lives in an object
+store rather than in the read model — the version a run used has to outlive
+every trace of that run.
+
+```python
+registry = client.prompts
+prompt = registry.resolve("planner.floor-plan")   # what `production` points at
+system = prompt.render(page=page_json, language="pl")
+```
+
+`version_id` is `sha256(text)`, so publishing the same prompt twice is one
+version and a deploy job can publish on every start. `render` refuses a partial
+substitution: a missing value would ship a prompt with a literal `{{ page }}` in
+it, which the model reads as an instruction.
+
+An optimiser records what it did, and **the server decides whether it counts**:
+
+```python
+from aiwatcher_sdk.integrations.deepeval import record_optimization
+
+record = record_optimization(
+    registry, "planner.floor-plan",
+    report=PromptOptimizer(...).optimize(...),
+    baseline=baseline.version_id,
+    dev=scores(dev_before, dev_after),      # what the search ran against
+    test=scores(test_before, test_after),   # cases it never saw
+    promote=True,
+)
+record.outcome      # "admitted" | "rejected"
+record.reason       # "no_held_out_improvement" | "variables_lost" | ...
+record.overfit_gap  # how far dev outran the held-out split
+```
+
+A candidate is admitted only when it improves the **held-out** score and still
+interpolates every variable the baseline declared. Both refusals matter: an
+optimiser selected its candidate by maximising the dev number it then reports,
+and one that has quietly stopped mentioning `{{ page }}` scores well on a
+harness that fed it fixed inputs. Neither is visible in the score.
+
+The Prompts tab shows the version history, a diff against whatever a version
+was derived from, and every optimisation with its dev gain beside its held-out
+gain.
+
 ## The panel
 
-Four views, all served from aiwatcher's own read model:
+Five views, all served from aiwatcher's own read model — except Prompts, which
+reads the registry:
 
 - **Runs** — the flat list, filterable.
 - **Explore** — one page for every level. The tree pivots on **session, agent,
@@ -129,6 +195,10 @@ Four views, all served from aiwatcher's own read model:
 - **Evaluation** — suites, reports, per-case scores, and each report against the
   previous one on the same dataset. A mean that improved while a case regressed
   is the thing this view exists to show.
+- **Prompts** — versions, the text, a diff against the parent, and every
+  optimisation with its verdict. Editable: publishing a new version and moving
+  the `production` label are two separate acts, because storing a prompt and
+  deploying it are two decisions.
 
 Datasets and Experiments are still placeholders, and say what they are waiting
 on rather than rendering plausible fake rows.
@@ -165,6 +235,7 @@ In dependency order. A crate may only depend on ones above it.
 | `aiwatcher-core` | Domain: ids, envelope, correlation, event catalog, ports. Knows nothing about Laser, HTTP or OTLP. |
 | `aiwatcher-bus` | `MessageSource` / `MessageSink` / `Checkpointer` + memory, write-ahead-log, Laser and generic-broker adapters |
 | `aiwatcher-trace` | `SpanAssembler` and the OTLP/JSON exporters |
+| `aiwatcher-prompts` | The prompt registry over an `ObjectStore` port: content-addressed versions, optimisation verdicts, RustFS/S3 and filesystem adapters, and a hand-written SigV4 signer |
 | `aiwatcher-projector` | The pipeline, live hub, read model, dimension and span folds, dedup, retry, dead letters |
 | `aiwatcher-api` | axum router: REST, SSE, WebSocket, OpenAPI |
 | `aiwatcher-server` | Config, wiring, graceful shutdown. The only crate that knows every implementation exists. |

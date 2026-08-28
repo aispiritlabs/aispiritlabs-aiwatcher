@@ -16,5 +16,6 @@ decision is made rather than reconstructed afterwards. The value is in the
 | [0008](ADR_0008_FLOW_QUERY_SURFACE.md) | Flow PHP is a query surface over the API, parsed rather than executed |
 | [0009](ADR_0009_INSTALL_BY_DETECTION.md) | Installation reads the cluster to decide what to install |
 | [0010](ADR_0010_EVALUATION_REPORTS.md) | An evaluation report rides the event log and forms no span |
+| [0011](ADR_0011_PROMPT_REGISTRY.md) | A prompt is authored, not observed, and lives in an object store |
 
 Use [template.md](template.md) for a new one.

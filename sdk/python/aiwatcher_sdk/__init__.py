@@ -28,9 +28,14 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
-from typing import Any, Iterator, Protocol
+from datetime import UTC, datetime, timedelta
+from typing import Any, Protocol
+
+# Re-exported so `from aiwatcher_sdk import PromptRegistry` works and
+# `AiwatcherClient.prompts` has something to hand back.
+from aiwatcher_sdk.prompts import PromptRegistry
 
 SCHEMA_VERSION = 1
 
@@ -38,10 +43,11 @@ __all__ = [
     "SCHEMA_VERSION",
     "AiwatcherClient",
     "EvaluationContext",
-    "RunContext",
-    "Transport",
     "HttpTransport",
     "NullTransport",
+    "PromptRegistry",
+    "RunContext",
+    "Transport",
 ]
 
 
@@ -51,7 +57,7 @@ def _iso(moment: datetime) -> str:
 
 
 def _now() -> str:
-    return _iso(datetime.now(timezone.utc))
+    return _iso(datetime.now(UTC))
 
 
 def _new_id() -> str:
@@ -69,11 +75,31 @@ class Transport(Protocol):
 class NullTransport:
     """Drops everything. The default, so importing this never breaks a test."""
 
-    def send(self, batch: list[dict[str, Any]]) -> None:  # noqa: D102
+    def send(self, batch: list[dict[str, Any]]) -> None:
         del batch
 
-    def close(self) -> None:  # noqa: D102
+    def flush(self) -> None:
         return None
+
+    def close(self) -> None:
+        return None
+
+
+@dataclass
+class _FlushRequest:
+    done: threading.Event
+
+
+class _Tick:
+    """The timer fired with nothing queued.
+
+    A type of its own rather than `...`: the queue holds four different things,
+    and a sentinel the type checker can see is the difference between a `match`
+    that is exhaustive and one that has a `type: ignore` on it.
+    """
+
+
+_TICK = _Tick()
 
 
 class HttpTransport:
@@ -103,7 +129,9 @@ class HttpTransport:
         # 50k is roughly 40 MB of held events and covers a burst no real agent
         # produces — a synthetic firehose of 126k events in 1.5s still overflows
         # it, which is the point at which raising it is a deliberate choice.
-        self._queue: queue.Queue[dict[str, Any] | None] = queue.Queue(maxsize=queue_size)
+        self._queue: queue.Queue[dict[str, Any] | _FlushRequest | None] = queue.Queue(
+            maxsize=queue_size
+        )
         self._dropped = 0
         self._next_drop_warning = 1
         self._worker = threading.Thread(target=self._run, name="aiwatcher", daemon=True)
@@ -142,7 +170,26 @@ class HttpTransport:
         )
         self._next_drop_warning = max(self._dropped * 10, 1)
 
+    def flush(self) -> None:
+        """Wait until everything queued before this call has been posted.
+
+        A finished evaluation is often the last thing a short-lived CLI emits.
+        Relying on the daemon worker at interpreter shutdown loses that report,
+        so callers that need a delivery boundary can request one explicitly.
+        Failures still follow the transport policy: they are counted and
+        reported, never raised into the agent or evaluation gate.
+        """
+        request = _FlushRequest(threading.Event())
+        try:
+            self._queue.put(request, timeout=self._timeout)
+        except queue.Full:
+            print("[aiwatcher] flush timed out waiting for queue space", file=sys.stderr)
+            return
+        if not request.done.wait(timeout=self._timeout + self._flush_interval):
+            print("[aiwatcher] flush timed out waiting for the worker", file=sys.stderr)
+
     def close(self) -> None:
+        self.flush()
         self._queue.put(None)
         self._worker.join(timeout=self._timeout + self._flush_interval)
 
@@ -151,15 +198,22 @@ class HttpTransport:
         deadline = time.monotonic() + self._flush_interval
         while True:
             timeout = max(deadline - time.monotonic(), 0.0)
+            item: dict[str, Any] | _FlushRequest | _Tick | None
             try:
                 item = self._queue.get(timeout=timeout)
             except queue.Empty:
-                item = ...  # type: ignore[assignment]  # sentinel: the timer fired
+                item = _TICK
             if item is None:
                 self._post(pending)
                 return
-            if item is not ...:
-                pending.append(item)  # type: ignore[arg-type]
+            if isinstance(item, _FlushRequest):
+                self._post(pending)
+                pending = []
+                deadline = time.monotonic() + self._flush_interval
+                item.done.set()
+                continue
+            if not isinstance(item, _Tick):
+                pending.append(item)
             if len(pending) >= self._batch_size or time.monotonic() >= deadline:
                 self._post(pending)
                 pending = []
@@ -169,14 +223,17 @@ class HttpTransport:
         if not batch:
             return
         payload = json.dumps({"events": batch}).encode()
-        request = urllib.request.Request(
+        # The URL is the caller's own aiwatcher, from configuration, and the
+        # scheme is whatever they set — the same trust boundary as the rest of
+        # this client.
+        request = urllib.request.Request(  # noqa: S310
             self._url,
             data=payload,
             headers={"content-type": "application/json"},
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=self._timeout):
+            with urllib.request.urlopen(request, timeout=self._timeout):  # noqa: S310
                 pass
         except (urllib.error.URLError, OSError) as error:
             # Telemetry must never take the agent down with it.
@@ -217,6 +274,8 @@ class AiwatcherClient:
         base_url: str | None = None,
     ) -> None:
         resolved = base_url or os.environ.get("AIWATCHER_URL")
+        self._base_url = resolved
+        self._prompts: PromptRegistry | None = None
         self._transport = transport or (HttpTransport(resolved) if resolved else NullTransport())
         self._source = {
             "service": service,
@@ -281,7 +340,7 @@ class AiwatcherClient:
         conversation_id: str | None = None,
         workflow_id: str | None = None,
         correlation_id: str | None = None,
-    ) -> Iterator["RunContext"]:
+    ) -> Iterator[RunContext]:
         """One execution of an agent. Becomes one trace.
 
         `conversation_id` groups runs by who is talking; `workflow_id` groups
@@ -317,7 +376,7 @@ class AiwatcherClient:
         dataset: str | None = None,
         variant: str | None = None,
         params: dict[str, Any] | None = None,
-    ) -> Iterator["EvaluationContext"]:
+    ) -> Iterator[EvaluationContext]:
         """One execution of an evaluation suite. Becomes a report, not a trace.
 
         `eval.*` events ride the same log as everything else and are folded
@@ -396,9 +455,7 @@ class AiwatcherClient:
 
         started_at = None
         if duration_ms is not None:
-            started_at = _iso(
-                datetime.now(timezone.utc) - timedelta(milliseconds=max(duration_ms, 0.0))
-            )
+            started_at = _iso(datetime.now(UTC) - timedelta(milliseconds=max(duration_ms, 0.0)))
         self.emit("eval.started", context, base, occurred_at=started_at)
 
         payload: dict[str, Any] = dict(base)
@@ -415,8 +472,34 @@ class AiwatcherClient:
         self.emit("eval.completed", context, payload)
         return context.run_id
 
+    # ── Prompts ──────────────────────────────────────────────────────────
+
+    @property
+    def prompts(self) -> PromptRegistry:
+        """The prompt registry on the same instance.
+
+        Deliberately not the same object as the transport. Telemetry is
+        fire-and-forget and swallows its failures; reading the prompt a service
+        is about to run on is the work, and every method on the registry
+        raises. Sharing a transport would have to pick one policy for both.
+        """
+        if self._base_url is None:
+            raise RuntimeError(
+                "no aiwatcher URL: pass base_url= or set AIWATCHER_URL. "
+                "The registry has no offline mode — reading a prompt is not telemetry."
+            )
+        if self._prompts is None:
+            self._prompts = PromptRegistry(self._base_url)
+        return self._prompts
+
     def close(self) -> None:
         self._transport.close()
+
+    def flush(self) -> None:
+        """Drain a transport that supports an explicit delivery boundary."""
+        flush = getattr(self._transport, "flush", None)
+        if callable(flush):
+            flush()
 
 
 class EvaluationContext:
@@ -430,7 +513,7 @@ class EvaluationContext:
 
     def __init__(
         self,
-        client: "AiwatcherClient",
+        client: AiwatcherClient,
         context: _Context,
         base: dict[str, Any],
     ) -> None:
@@ -511,7 +594,7 @@ class _Scope:
 
 class RunContext(_Scope):
     @contextlib.contextmanager
-    def agent(self, agent_id: str) -> Iterator["AgentContext"]:
+    def agent(self, agent_id: str) -> Iterator[AgentContext]:
         context = _Context(
             run_id=self._context.run_id,
             conversation_id=self._context.conversation_id,
@@ -540,7 +623,7 @@ class AgentContext(_Scope):
         provider: str | None = None,
         call_id: str | None = None,
         **request: Any,
-    ) -> Iterator["LlmCall"]:
+    ) -> Iterator[LlmCall]:
         # `call_id` is what separates two concurrent calls. Generated when
         # omitted, but pass your provider's request id where you have one — it
         # makes the span joinable with the provider's own logs.

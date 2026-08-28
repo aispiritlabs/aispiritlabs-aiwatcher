@@ -18,6 +18,7 @@ pub mod envelope;
 pub mod error;
 pub mod ids;
 pub mod ports;
+pub mod prompts;
 pub mod stream;
 
 pub use catalog::{EventType, Phase, Subject};
@@ -28,4 +29,9 @@ pub use envelope::{
 };
 pub use error::{CoreError, Result};
 pub use ids::{CausationId, CorrelationId, MessageId, SpanId, TraceId};
+pub use prompts::{
+    ObjectEntry, ObjectStore, OptimizationOutcome, OptimizationRecord, OptimizationSummary,
+    PromptError, PromptHead, PromptName, PromptSummary, PromptVersion, PromptVersionId,
+    PromptVersionSummary, RejectionReason, Score, Verdict, VersionOrigin,
+};
 pub use stream::{GlobalPosition, StreamName, StreamPosition};

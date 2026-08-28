@@ -1,5 +1,6 @@
 {{- $fullname := include "aiwatcher.fullname" . -}}
 {{- $otlp := include "aiwatcher.otlpEndpoint" . -}}
+{{- $promptStore := include "aiwatcher.promptStoreEndpoint" . -}}
 {{- if and (eq .Values.server.bus "laser") (not .Values.server.laser.connectionStringSecret.name) -}}
 {{- fail "server.bus is \"laser\" but server.laser.connectionStringSecret.name is empty. The connection string carries a password, so it comes from a Secret." -}}
 {{- end -}}
@@ -92,6 +93,29 @@ spec:
             {{- end }}
             {{- if $otlp }}
             - { name: AIWATCHER_OTLP_ENDPOINT, value: {{ $otlp | quote }} }
+            {{- end }}
+            {{- if $promptStore }}
+            - { name: AIWATCHER_PROMPT_STORE, value: "s3" }
+            - { name: AIWATCHER_PROMPT_S3_ENDPOINT, value: {{ $promptStore | quote }} }
+            - { name: AIWATCHER_PROMPT_S3_BUCKET, value: {{ .Values.promptStore.bucket | quote }} }
+            - { name: AIWATCHER_PROMPT_PREFIX, value: {{ .Values.promptStore.prefix | quote }} }
+            - { name: AIWATCHER_PROMPT_S3_REGION, value: {{ .Values.promptStore.external.region | quote }} }
+            - name: AIWATCHER_PROMPT_S3_CREATE_BUCKET
+              value: {{ eq .Values.promptStore.mode "install" | ternary "true" (.Values.promptStore.external.createBucket | toString) | quote }}
+            - name: AIWATCHER_PROMPT_S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  {{- include "aiwatcher.promptStoreSecretRef" . | nindent 18 }}
+                  key: {{ .Values.promptStore.credentialsSecret.accessKeyKey }}
+            - name: AIWATCHER_PROMPT_S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  {{- include "aiwatcher.promptStoreSecretRef" . | nindent 18 }}
+                  key: {{ .Values.promptStore.credentialsSecret.secretKeyKey }}
+            {{- else }}
+            # No store: every /api/v1/prompts route answers 501, and the panel
+            # says which variable is unset rather than showing an empty list.
+            - { name: AIWATCHER_PROMPT_STORE, value: "none" }
             {{- end }}
             {{- if eq .Values.server.bus "laser" }}
             - name: AIWATCHER_LASER_CONNECTION_STRING

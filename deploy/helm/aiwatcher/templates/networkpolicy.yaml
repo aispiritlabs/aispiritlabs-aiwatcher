@@ -50,6 +50,32 @@ spec:
         - { protocol: TCP, port: 4318 }
         - { protocol: TCP, port: 4317 }
 {{- end }}
+{{- if eq .Values.promptStore.mode "install" }}
+---
+# Narrow, unlike the server's rule above, and it can be: the object store has
+# exactly one client. It also holds the one thing in this namespace that is not
+# reconstructible from a log, which is the case for spending the rule.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-rustfs-ingress
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "aiwatcher.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: rustfs
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "aiwatcher.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: server
+      ports:
+        - { protocol: TCP, port: 9000 }
+{{- end }}
 {{- end }}
 
 {{- /*
@@ -64,9 +90,19 @@ editing that chart, and without either side having to know about the other.
 The selector comes from the detected Service, which is exactly the label set
 that picks those pods.
 */}}
+{{/*
+`client` is which of this release's pods needs the path, and it is not the same
+one every time: the Collector writes spans and metrics, and the server reads
+and writes prompts. A single hard-coded component would render a policy that
+looks right and refuses the traffic it was added for.
+
+`name` is separate from `key` because a Kubernetes object name is RFC 1123 —
+lowercase — and `promptStore` is not.
+*/}}
 {{- $attachments := list
-  (dict "key" "victoriametrics" "port" 8428 "flag" $.Values.networkPolicy.allowEgressToExternalVictoriaMetrics "cfg" $.Values.victoriametrics)
-  (dict "key" "victoriatraces"  "port" 10428 "flag" $.Values.networkPolicy.allowEgressToExternalVictoriaTraces "cfg" $.Values.victoriatraces)
+  (dict "key" "victoriametrics" "name" "victoriametrics" "port" 8428 "client" "collector" "flag" $.Values.networkPolicy.allowEgressToExternalVictoriaMetrics "cfg" $.Values.victoriametrics)
+  (dict "key" "victoriatraces"  "name" "victoriatraces"  "port" 10428 "client" "collector" "flag" $.Values.networkPolicy.allowEgressToExternalVictoriaTraces "cfg" $.Values.victoriatraces)
+  (dict "key" "promptStore"     "name" "prompt-store"    "port" 9000  "client" "server"    "flag" $.Values.networkPolicy.allowEgressToExternalPromptStore "cfg" $.Values.promptStore)
 }}
 {{- range $a := $attachments }}
 {{- if and $a.flag (eq $a.cfg.mode "external") }}
@@ -80,7 +116,7 @@ that picks those pods.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ printf "%s-allow-%s" $fullname $a.key }}
+  name: {{ printf "%s-allow-%s" $fullname $a.name }}
   labels:
     {{- include "aiwatcher.labels" $ | nindent 4 }}
   annotations:
@@ -97,7 +133,7 @@ spec:
         - podSelector:
             matchLabels:
               {{- include "aiwatcher.selectorLabels" $ | nindent 14 }}
-              app.kubernetes.io/component: collector
+              app.kubernetes.io/component: {{ $a.client }}
       ports:
         - { protocol: TCP, port: {{ $a.port }} }
 {{- end }}

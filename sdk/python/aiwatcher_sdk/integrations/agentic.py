@@ -17,7 +17,8 @@ does not depend on the agent, and the agent does not depend on aiwatcher's types
 | `step(span_type=…)`               | a step span, kind carried in the payload |
 
 `session_id` becomes `conversation_id`, the workflow name becomes
-`workflow_id`, and each `workflow` gets a fresh `run_id`. That is deliberate: one chat session usually runs the agent several
+`workflow_id`, and each `workflow` gets a fresh `run_id`. That is deliberate:
+one chat session usually runs the agent several
 times, and a trace that spanned the whole session would never close.
 
 ## Nesting is sent, not inferred
@@ -77,7 +78,7 @@ from typing import Any
 
 from aiwatcher_sdk import AiwatcherClient, NullTransport, Transport, _Context
 
-__all__ = ["AiwatcherTracer", "aiwatcher_tracer", "tee", "TeeTracer"]
+__all__ = ["AiwatcherTracer", "TeeTracer", "aiwatcher_tracer", "tee"]
 
 # `span_type` the agentic toolset uses for a tool call.
 _TOOL_SPAN_TYPE = "TOOL"
@@ -210,7 +211,7 @@ class AiwatcherTracer:
         user_id: str = "",
         metadata: Mapping[str, Any] | None = None,
         tags: Mapping[str, str] | None = None,
-        input: Any | None = None,  # noqa: A002 - the interface names it this
+        input: Any | None = None,
         tracing_context: Any | None = None,
     ) -> Iterator[_NoopSpan]:
         del input, tracing_context
@@ -235,9 +236,7 @@ class AiwatcherTracer:
 
         self._runs.append(context)
         with self._scoped_span() as (span_id, parent_span):
-            self._emit(
-                "run.started", context, payload, span_id=span_id, parent_span_id=parent_span
-            )
+            self._emit("run.started", context, payload, span_id=span_id, parent_span_id=parent_span)
             try:
                 yield _NoopSpan()
             except BaseException as error:
@@ -267,7 +266,7 @@ class AiwatcherTracer:
         *,
         name: str,
         agent_id: str = "",
-        input: Any | None = None,  # noqa: A002
+        input: Any | None = None,
         attributes: Mapping[str, Any] | None = None,
     ) -> Iterator[_NoopSpan]:
         del input
@@ -316,7 +315,7 @@ class AiwatcherTracer:
         self,
         *,
         name: str,
-        input: Any | None = None,  # noqa: A002
+        input: Any | None = None,
         attributes: Mapping[str, Any] | None = None,
         span_type: str = "CHAIN",
     ) -> Iterator[_NoopSpan]:
@@ -345,9 +344,7 @@ class AiwatcherTracer:
             }
         # Anything else the caller attached rides along; the backend reads the
         # retrieval-shaped keys and stores the rest.
-        payload.update(
-            {str(key): value for key, value in attributes.items() if key != "tool_name"}
-        )
+        payload.update({str(key): value for key, value in attributes.items() if key != "tool_name"})
 
         context = self._scope()
         started = time.monotonic()
@@ -401,9 +398,7 @@ class AiwatcherTracer:
         # a model nests, and that is exactly the shape backend inference cannot
         # see.
         with self._scoped_span() as (span_id, parent_span):
-            self._emit(
-                "llm.started", context, payload, span_id=span_id, parent_span_id=parent_span
-            )
+            self._emit("llm.started", context, payload, span_id=span_id, parent_span_id=parent_span)
             try:
                 response = invoke(**kwargs)
             except BaseException as error:
@@ -419,7 +414,7 @@ class AiwatcherTracer:
             # module deliberately has no dependency on the agent's packages, and
             # anything carrying these fields works.
             completed = {
-            **payload,
+                **payload,
                 "duration_ms": getattr(response, "latency_ms", None) or _elapsed_ms(started),
                 "prompt_tokens": _int_or_zero(getattr(response, "prompt_tokens", 0)),
                 "completion_tokens": _int_or_zero(getattr(response, "completion_tokens", 0)),
@@ -529,15 +524,18 @@ class TeeTracer:
 
     @property
     def current_trace_id(self) -> str | None:
+        # `str(...)` rather than a cast: these come out of a third-party tracer
+        # whose own annotations are `Any`, and a trace id that is not a string
+        # would fail later, in the middle of a request, instead of here.
         for tracer in self._tracers:
             if (trace_id := tracer.current_trace_id) is not None:
-                return trace_id
+                return str(trace_id)
         return None
 
     def get_trace_url(self) -> str | None:
         for tracer in self._tracers:
             if (url := tracer.get_trace_url()) is not None:
-                return url
+                return str(url)
         return None
 
     def flush(self) -> None:

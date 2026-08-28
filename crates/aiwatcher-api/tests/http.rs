@@ -16,6 +16,8 @@ use aiwatcher_bus::adapters::memory::InMemoryBus;
 use aiwatcher_core::ports::LivePublisher;
 use aiwatcher_core::{Checkpoint, EventEnvelope, EventType, MessageId, Sdk, Source};
 use aiwatcher_projector::{LiveHub, ReadModel};
+use aiwatcher_prompts::adapters::memory::MemoryObjectStore;
+use aiwatcher_prompts::{Registry, RegistryConfig};
 
 use aiwatcher_api::state::{AppState, HealthState};
 
@@ -28,6 +30,16 @@ struct Fixture {
 
 impl Fixture {
     fn new(ingest_enabled: bool) -> Self {
+        Self::build(ingest_enabled, true)
+    }
+
+    /// An instance configured without a prompt store, which is what
+    /// `AIWATCHER_PROMPT_STORE=none` produces.
+    fn without_registry() -> Self {
+        Self::build(false, false)
+    }
+
+    fn build(ingest_enabled: bool, registry_enabled: bool) -> Self {
         let bus = Arc::new(InMemoryBus::new());
         let read_model = Arc::new(ReadModel::default());
         let live = Arc::new(LiveHub::default());
@@ -37,6 +49,12 @@ impl Fixture {
             live: Arc::clone(&live),
             source: Arc::clone(&bus) as _,
             sink: ingest_enabled.then(|| Arc::clone(&bus) as Arc<dyn MessageSink>),
+            prompts: registry_enabled.then(|| {
+                Arc::new(Registry::new(
+                    Arc::new(MemoryObjectStore::new()),
+                    RegistryConfig::default(),
+                ))
+            }),
             health,
         };
         Self {
@@ -45,6 +63,26 @@ impl Fixture {
             read_model,
             live,
         }
+    }
+
+    async fn post(&self, uri: &str, body: Value) -> (StatusCode, Value) {
+        self.with_body("POST", uri, body).await
+    }
+
+    async fn put(&self, uri: &str, body: Value) -> (StatusCode, Value) {
+        self.with_body("PUT", uri, body).await
+    }
+
+    async fn with_body(&self, method: &str, uri: &str, body: Value) -> (StatusCode, Value) {
+        self.request(
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.to_string()))
+                .expect("request"),
+        )
+        .await
     }
 
     fn router(&self) -> axum::Router {
@@ -629,4 +667,266 @@ async fn suites_are_the_level_above_a_report() {
             .abs()
             < 1e-9
     );
+}
+
+// ── The prompt registry ─────────────────────────────────────────────────────
+
+const BASELINE: &str = "Describe the floor plan on {{ page }} in {{ language }}.";
+const CANDIDATE: &str = "Read {{ page }} closely; describe every room in {{ language }}.";
+
+async fn publish(fixture: &Fixture, text: &str) -> Value {
+    let (status, body) = fixture
+        .post(
+            "/api/v1/prompts",
+            json!({
+                "name": "planner.floor-plan",
+                "text": text,
+                "author": "mkubaszek",
+                "model": "qwen/qwen3-vl-235b",
+                "description": "Floor plan extraction",
+                "tags": ["planner"],
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    body
+}
+
+#[tokio::test]
+async fn publishing_a_prompt_returns_the_version_its_text_hashes_to() {
+    let fixture = Fixture::new(false);
+    let body = publish(&fixture, BASELINE).await;
+
+    // sha256 of the text, which is what a producer computes locally before it
+    // ever calls this — `planner` already does.
+    let version_id = body["version"]["version_id"].as_str().expect("an id");
+    assert_eq!(version_id.len(), 64);
+    assert_eq!(body["created"], true);
+    assert_eq!(
+        body["version"]["variables"],
+        json!(["language", "page"]),
+        "variables are read from the text, not declared"
+    );
+    assert_eq!(body["version"]["origin"], "authored");
+}
+
+#[tokio::test]
+async fn republishing_the_same_text_is_a_200_rather_than_a_second_version() {
+    let fixture = Fixture::new(false);
+    publish(&fixture, BASELINE).await;
+
+    let (status, body) = fixture
+        .post(
+            "/api/v1/prompts",
+            json!({ "name": "planner.floor-plan", "text": BASELINE }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "not created: it was already there");
+    assert_eq!(body["created"], false);
+    assert_eq!(
+        body["head"]["versions"].as_array().expect("a list").len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn a_prompt_detail_carries_the_text_that_is_live() {
+    let fixture = Fixture::new(false);
+    publish(&fixture, BASELINE).await;
+    publish(&fixture, CANDIDATE).await;
+
+    let (status, body) = fixture.get("/api/v1/prompts/planner.floor-plan").await;
+    assert_eq!(status, StatusCode::OK);
+    // Nothing promoted yet, so `current` is the newest — the registry is
+    // readable from the first publish rather than after a promotion ceremony.
+    assert_eq!(body["current"]["text"], CANDIDATE);
+    assert_eq!(
+        body["head"]["versions"].as_array().expect("a list").len(),
+        2
+    );
+    assert_eq!(body["head"]["description"], "Floor plan extraction");
+}
+
+#[tokio::test]
+async fn moving_a_label_changes_which_version_is_current() {
+    let fixture = Fixture::new(false);
+    let baseline = publish(&fixture, BASELINE).await["version"]["version_id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+    publish(&fixture, CANDIDATE).await;
+
+    let (status, _) = fixture
+        .put(
+            "/api/v1/prompts/planner.floor-plan/labels/production",
+            json!({ "version_id": baseline }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (_, body) = fixture.get("/api/v1/prompts/planner.floor-plan").await;
+    assert_eq!(
+        body["current"]["text"], BASELINE,
+        "a moved label wins over recency"
+    );
+}
+
+#[tokio::test]
+async fn a_label_pointing_at_a_version_that_is_not_stored_is_a_404() {
+    let fixture = Fixture::new(false);
+    publish(&fixture, BASELINE).await;
+    let (status, body) = fixture
+        .put(
+            "/api/v1/prompts/planner.floor-plan/labels/production",
+            json!({ "version_id": "0".repeat(64) }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["code"], "not_found");
+}
+
+#[tokio::test]
+async fn an_optimisation_is_graded_by_the_server_rather_than_by_its_optimiser() {
+    let fixture = Fixture::new(false);
+    let baseline = publish(&fixture, BASELINE).await["version"]["version_id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+
+    let (status, body) = fixture
+        .post(
+            "/api/v1/prompts/planner.floor-plan/optimizations",
+            json!({
+                "algorithm": "deepeval/SIMBA",
+                "baseline": baseline,
+                "candidate_text": CANDIDATE,
+                "primary_metric": "mean_score",
+                "dev": [{ "metric": "mean_score", "baseline": 0.61, "candidate": 0.79 }],
+                "test": [{ "metric": "mean_score", "baseline": 0.60, "candidate": 0.67 }],
+                "dataset": "catalog@1",
+                "evaluation_id": "eval-7",
+                "iterations": 8,
+                "promote": true,
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["outcome"], "admitted");
+    assert_eq!(body["variables_lost"], json!([]));
+
+    // The candidate is now a version of the prompt, and it says who wrote it.
+    let (_, detail) = fixture.get("/api/v1/prompts/planner.floor-plan").await;
+    assert_eq!(detail["current"]["text"], CANDIDATE);
+    assert_eq!(detail["current"]["origin"], "optimized");
+    assert_eq!(detail["current"]["algorithm"], "deepeval/SIMBA");
+
+    // And the prompt page can answer "what happened lately" in one request.
+    let last = &detail["head"]["optimizations"][0];
+    assert_eq!(last["outcome"], "admitted");
+    assert_eq!(last["test_score"], 0.67);
+    assert_eq!(last["evaluation_id"], "eval-7");
+}
+
+#[tokio::test]
+async fn a_dev_only_gain_is_recorded_and_refused_a_promotion() {
+    // The exact shape of an overfit: the optimiser maximised the dev score and
+    // has nothing held out to show for it.
+    let fixture = Fixture::new(false);
+    let baseline = publish(&fixture, BASELINE).await["version"]["version_id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+
+    let (status, body) = fixture
+        .post(
+            "/api/v1/prompts/planner.floor-plan/optimizations",
+            json!({
+                "algorithm": "deepeval/SIMBA",
+                "baseline": baseline,
+                "candidate_text": CANDIDATE,
+                "primary_metric": "mean_score",
+                "dev": [{ "metric": "mean_score", "baseline": 0.60, "candidate": 0.95 }],
+                "promote": true,
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(body["outcome"], "rejected");
+    assert_eq!(body["reason"], "no_held_out_measurement");
+
+    let (_, detail) = fixture.get("/api/v1/prompts/planner.floor-plan").await;
+    assert_eq!(
+        detail["current"]["text"], CANDIDATE,
+        "the candidate is still stored and still the newest"
+    );
+    assert!(
+        detail["head"]["labels"].get("production").is_none(),
+        "but nothing was promoted"
+    );
+}
+
+#[tokio::test]
+async fn an_optimisation_against_an_unknown_baseline_is_a_404() {
+    let fixture = Fixture::new(false);
+    publish(&fixture, BASELINE).await;
+    let (status, body) = fixture
+        .post(
+            "/api/v1/prompts/planner.floor-plan/optimizations",
+            json!({
+                "algorithm": "deepeval/SIMBA",
+                "baseline": "0".repeat(64),
+                "candidate_text": CANDIDATE,
+                "primary_metric": "mean_score",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["code"], "not_found");
+}
+
+#[tokio::test]
+async fn a_prompt_name_that_could_be_a_path_never_reaches_the_store() {
+    let fixture = Fixture::new(false);
+    let (status, body) = fixture
+        .post(
+            "/api/v1/prompts",
+            json!({ "name": "../../etc/passwd", "text": "x" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+}
+
+#[tokio::test]
+async fn listing_prompts_searches_on_the_server() {
+    let fixture = Fixture::new(false);
+    publish(&fixture, BASELINE).await;
+    fixture
+        .post(
+            "/api/v1/prompts",
+            json!({ "name": "market.search", "text": "Search for {{ query }}." }),
+        )
+        .await;
+
+    let (status, body) = fixture.get("/api/v1/prompts").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["total"], 2);
+
+    let (_, filtered) = fixture.get("/api/v1/prompts?search=market").await;
+    assert_eq!(filtered["prompts"].as_array().expect("a list").len(), 1);
+    assert_eq!(filtered["prompts"][0]["name"], "market.search");
+    assert_eq!(
+        filtered["total"], 2,
+        "total is what is stored, not what matched"
+    );
+}
+
+#[tokio::test]
+async fn an_instance_without_a_prompt_store_says_so_rather_than_404ing() {
+    // 501 and not 404: the route exists in the contract, and this deployment
+    // chose not to wire a store behind it. A client can tell a missing prompt
+    // from a missing feature.
+    let fixture = Fixture::without_registry();
+    let (status, body) = fixture.get("/api/v1/prompts").await;
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+    assert_eq!(body["code"], "registry_disabled");
 }

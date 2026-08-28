@@ -507,6 +507,538 @@
         }
       }
     },
+    "/api/v1/prompts": {
+      "get": {
+        "tags": [
+          "prompts"
+        ],
+        "summary": "Every prompt in the registry.",
+        "operationId": "list_prompts",
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Case-insensitive substring over the name, the description and the tags.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "tag",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Cursor: the last name on the previous page. Exclusive.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromptPage"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "prompts"
+        ],
+        "summary": "Publish a version.",
+        "description": "Idempotent on the text: `created` is `false` when this exact prompt was\nalready stored, and the version that comes back is the one that was there,\nwith its original author and notes intact.",
+        "operationId": "publish_prompt",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "This text was already stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Published"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "A new version was stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Published"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/prompts/{name}": {
+      "get": {
+        "tags": [
+          "prompts"
+        ],
+        "summary": "One prompt: its labels, its versions, and what happened to it lately.",
+        "operationId": "get_prompt",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The prompt to fetch",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromptDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/prompts/{name}/labels/{label}": {
+      "put": {
+        "tags": [
+          "prompts"
+        ],
+        "summary": "Point a label at a version. `production` is the one an SDK reads.",
+        "description": "A `PUT`, because moving a label twice to the same version is the same\nworld as moving it once.",
+        "operationId": "set_prompt_label",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The prompt",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "label",
+            "in": "path",
+            "description": "The label to move, e.g. production",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LabelRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromptHead"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such prompt, or no such version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/prompts/{name}/optimizations": {
+      "post": {
+        "tags": [
+          "prompts"
+        ],
+        "summary": "Record an optimisation and store its candidate.",
+        "description": "The verdict in the response is computed here from the held-out scores and\nfrom what the candidate did to the baseline's variables — it is not read\nfrom the request. An optimiser selected its candidate by maximising the\nnumber it is reporting, which makes it the last thing that should grade it.",
+        "operationId": "record_optimization",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The prompt that was optimised",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OptimizationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptimizationRecord"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The baseline version is not in the registry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/prompts/{name}/optimizations/{optimization_id}": {
+      "get": {
+        "tags": [
+          "prompts"
+        ],
+        "summary": "One optimisation, with the report the optimiser attached.",
+        "operationId": "get_optimization",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The prompt",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "optimization_id",
+            "in": "path",
+            "description": "The optimisation to fetch",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OptimizationRecord"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/prompts/{name}/rebuild": {
+      "post": {
+        "tags": [
+          "prompts"
+        ],
+        "summary": "Re-derive the prompt's index from the objects that are stored.",
+        "description": "The repair path, exposed because the thing it repairs — a head that lost a\nconcurrent write — is invisible until somebody notices a version missing\nfrom a list. Labels survive it; a label pointing at a version that is gone\ndoes not.",
+        "operationId": "rebuild_prompt",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The prompt to re-index",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromptHead"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/prompts/{name}/versions/{version_id}": {
+      "get": {
+        "tags": [
+          "prompts"
+        ],
+        "summary": "One version, with its text.",
+        "operationId": "get_prompt_version",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The prompt",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version_id",
+            "in": "path",
+            "description": "sha256 of the prompt text",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromptVersion"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/runs": {
       "get": {
         "tags": [
@@ -2062,6 +2594,17 @@
           }
         }
       },
+      "LabelRequest": {
+        "type": "object",
+        "required": [
+          "version_id"
+        ],
+        "properties": {
+          "version_id": {
+            "$ref": "#/components/schemas/PromptVersionId"
+          }
+        }
+      },
       "Latency": {
         "type": "object",
         "required": [
@@ -2395,6 +2938,326 @@
           }
         }
       },
+      "OptimizationOutcome": {
+        "type": "string",
+        "description": "What the registry decided about an optimisation.\n\nNever taken from the client. An optimiser is the last thing that should\ngrade its own output: it selected the candidate by maximising the number it\nis now reporting.\n\nTwo flat variants with the reason beside them rather than inside them, so\nthe JSON is `{\"outcome\":\"rejected\",\"reason\":\"variables_lost\"}` and the\ngenerated TypeScript is a string union. An enum carrying its payload would\nserialise a level deeper and make every reader unwrap it.",
+        "enum": [
+          "admitted",
+          "rejected"
+        ]
+      },
+      "OptimizationRecord": {
+        "type": "object",
+        "description": "One optimisation run against one prompt.\n\nWritten by whoever ran the optimiser — `deepeval`'s `PromptOptimizer` is\nthe case this was built for — and read by the panel as \"what happened to\nthis prompt lately\".",
+        "required": [
+          "optimization_id",
+          "prompt",
+          "algorithm",
+          "baseline",
+          "candidate",
+          "primary_metric",
+          "outcome",
+          "started_at"
+        ],
+        "properties": {
+          "algorithm": {
+            "type": "string",
+            "description": "What produced the candidate, e.g. `deepeval/SIMBA`. Free text: the\nregistry does not have opinions about optimisers, only about evidence."
+          },
+          "baseline": {
+            "$ref": "#/components/schemas/PromptVersionId"
+          },
+          "candidate": {
+            "$ref": "#/components/schemas/PromptVersionId"
+          },
+          "dataset": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Which cases each split was drawn from, ideally versioned. Two scores on\ndifferent cases are two facts, not a comparison — the same rule\n`baseline_for` applies to evaluation reports."
+          },
+          "dev": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Score"
+            },
+            "description": "What the optimiser optimised against. Guides the search; proves nothing."
+          },
+          "duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "ended_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "evaluation_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The evaluation report this optimisation published, where it published\none. The join between the registry and the log."
+          },
+          "iterations": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "optimization_id": {
+            "type": "string"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/OptimizationOutcome"
+          },
+          "primary_metric": {
+            "type": "string",
+            "description": "The metric the verdict is decided on. Every other metric is reported\nand none of them promotes anything — a gate with several thresholds is\na gate somebody will tune until it opens."
+          },
+          "prompt": {
+            "$ref": "#/components/schemas/PromptName"
+          },
+          "reason": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RejectionReason",
+                "description": "Why it was rejected. Absent on an admission."
+              }
+            ]
+          },
+          "report": {
+            "type": "object",
+            "description": "Whatever the optimiser produced — `deepeval`'s serialised\n`OptimizationReport`, an iteration trace, anything. Bounded by the\nregistry, not by this type."
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "test": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Score"
+            },
+            "description": "The held-out split. The only evidence that admits a candidate."
+          },
+          "variables_lost": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Variables the baseline declared and the candidate does not. Computed by\nthe registry from both texts."
+          }
+        }
+      },
+      "OptimizationRequest": {
+        "type": "object",
+        "description": "Record what an optimiser did to a prompt.",
+        "required": [
+          "algorithm",
+          "baseline",
+          "candidate_text",
+          "primary_metric"
+        ],
+        "properties": {
+          "algorithm": {
+            "type": "string",
+            "description": "What produced the candidate, e.g. `deepeval/SIMBA`."
+          },
+          "baseline": {
+            "$ref": "#/components/schemas/PromptVersionId",
+            "description": "The version it started from. Must already be in the registry: an\noptimisation against a prompt nobody stored is a claim with no subject."
+          },
+          "candidate_text": {
+            "type": "string",
+            "description": "The candidate's text. Published as a version as part of recording, so\nthe record cannot name a prompt that does not exist."
+          },
+          "dataset": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dev": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Score"
+            },
+            "description": "What the optimiser optimised against. Guides the search, proves\nnothing."
+          },
+          "duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "evaluation_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The evaluation report this run published, where it published one."
+          },
+          "iterations": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "optimization_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The optimiser's own id where it has one — `deepeval` supplies\n`OptimizationReport.optimization_id`. Derived from the request when\nabsent, so recording the same result twice writes one record."
+          },
+          "primary_metric": {
+            "type": "string",
+            "description": "The metric the verdict is decided on."
+          },
+          "promote": {
+            "type": "boolean",
+            "description": "Move `production` to the candidate if — and only if — it is admitted.\n\nOff by default. An admitted optimisation has cleared the evidence bar;\ndeploying it is still somebody's decision, and a registry that promotes\non its own makes every CI run a release."
+          },
+          "report": {},
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "test": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Score"
+            },
+            "description": "The held-out split. The only evidence that admits a candidate."
+          }
+        }
+      },
+      "OptimizationSummary": {
+        "type": "object",
+        "description": "An optimisation without its report document.",
+        "required": [
+          "optimization_id",
+          "algorithm",
+          "baseline",
+          "candidate",
+          "primary_metric",
+          "outcome",
+          "started_at"
+        ],
+        "properties": {
+          "algorithm": {
+            "type": "string"
+          },
+          "baseline": {
+            "$ref": "#/components/schemas/PromptVersionId"
+          },
+          "candidate": {
+            "$ref": "#/components/schemas/PromptVersionId"
+          },
+          "dataset": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dev_delta": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "evaluation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "iterations": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "optimization_id": {
+            "type": "string"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/OptimizationOutcome"
+          },
+          "overfit_gap": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "primary_metric": {
+            "type": "string"
+          },
+          "reason": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RejectionReason"
+              }
+            ]
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "test_delta": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "test_score": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "variables_lost": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "Percentiles": {
         "type": "object",
         "description": "Nearest-rank percentiles, in milliseconds.",
@@ -2421,6 +3284,445 @@
           "p99": {
             "type": "number",
             "format": "double"
+          }
+        }
+      },
+      "PromptDetail": {
+        "type": "object",
+        "description": "One prompt, with enough to render its page in one request.",
+        "required": [
+          "head"
+        ],
+        "properties": {
+          "current": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PromptVersion",
+                "description": "The version `production` points at, or the newest when no label has\nbeen moved. Carried with its text so the page paints without a second\nround trip — the text is the thing being looked at."
+              }
+            ]
+          },
+          "head": {
+            "$ref": "#/components/schemas/PromptHead"
+          }
+        }
+      },
+      "PromptHead": {
+        "type": "object",
+        "description": "A prompt's mutable head: the labels, the description, and the index of what\nis stored under it.\n\n**Derived, not authoritative.** The versions and the optimisation records\nare the truth; this is what makes listing them one request instead of one\nrequest per object. It can be rebuilt from the store at any time, which is\nwhat makes a lost concurrent write survivable rather than a corruption.\nThe exception is [`Self::labels`], which exists nowhere else — a label is a\npointer somebody moved, not a fact about an object.",
+        "required": [
+          "name",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "labels": {
+            "type": "object",
+            "description": "`production` → the version a deployment should read. Any other label a\nteam wants (`staging`, `canary`) works the same way.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PromptVersionId"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "name": {
+            "$ref": "#/components/schemas/PromptName"
+          },
+          "optimizations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OptimizationSummary"
+            },
+            "description": "Newest first, and capped — see `aiwatcher_prompts::RegistryConfig`."
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "versions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PromptVersionSummary"
+            },
+            "description": "Newest first."
+          }
+        }
+      },
+      "PromptName": {
+        "type": "string",
+        "description": "A prompt's identity.\n\nDeliberately without `/`. A name is a path segment in\n`/api/v1/prompts/{name}/versions/{version_id}`, and a name that can contain\na separator makes that route ambiguous with every route below it. Namespace\nwith `-` or `.` instead: `planner.floor-plan.system`.",
+        "example": "planner.floor-plan.system"
+      },
+      "PromptPage": {
+        "type": "object",
+        "required": [
+          "prompts",
+          "total"
+        ],
+        "properties": {
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `after` for the next page. Absent on the last one."
+          },
+          "prompts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PromptSummary"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "description": "Prompts in the store, before the filter. The difference between this\nand `prompts.len()` is what the filter removed.",
+            "minimum": 0
+          }
+        }
+      },
+      "PromptSummary": {
+        "type": "object",
+        "description": "One row in the prompts list.",
+        "required": [
+          "name",
+          "versions",
+          "optimizations",
+          "created_at",
+          "updated_at",
+          "admitted_optimizations"
+        ],
+        "properties": {
+          "admitted_optimizations": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "current": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PromptVersionId"
+              }
+            ]
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "labels": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PromptVersionId"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "last_optimization": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/OptimizationSummary",
+                "description": "The most recent one, so the list answers \"what happened to this prompt\"\nwithout a second request per row."
+              }
+            ]
+          },
+          "name": {
+            "$ref": "#/components/schemas/PromptName"
+          },
+          "optimizations": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "versions": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "PromptVersion": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/VersionOrigin"
+          },
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "version_id",
+              "text",
+              "created_at"
+            ],
+            "properties": {
+              "author": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "created_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "metadata": {
+                "type": "object",
+                "description": "Anything the producer wants to carry: a git sha, a ticket, a locale.",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "model": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "What it was written for. A prompt tuned on one model is not evidence\nabout another, and this is what says which."
+              },
+              "name": {
+                "$ref": "#/components/schemas/PromptName"
+              },
+              "notes": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Why this version exists. The commit message of a prompt."
+              },
+              "parent": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/PromptVersionId",
+                    "description": "The version this one was derived from, where there is one."
+                  }
+                ]
+              },
+              "text": {
+                "type": "string"
+              },
+              "variables": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The `{{ placeholders }}` the text interpolates, sorted. Derived from\nthe text by [`variables_of`], never supplied — a declared list that\ndisagrees with the text is worse than no list."
+              },
+              "version_id": {
+                "$ref": "#/components/schemas/PromptVersionId"
+              }
+            }
+          }
+        ],
+        "description": "One immutable version of a prompt."
+      },
+      "PromptVersionId": {
+        "type": "string",
+        "description": "`sha256(text)`, lowercase hex.\n\nContent addressing is what makes publishing idempotent: a redelivered\npublish, a CI job that runs twice, and a producer that hashes its own\nprompt before sending it all land on one version."
+      },
+      "PromptVersionSummary": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/VersionOrigin"
+          },
+          {
+            "type": "object",
+            "required": [
+              "version_id",
+              "created_at",
+              "size_bytes"
+            ],
+            "properties": {
+              "author": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "created_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "model": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "notes": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "parent": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/PromptVersionId"
+                  }
+                ]
+              },
+              "size_bytes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "variables": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "version_id": {
+                "$ref": "#/components/schemas/PromptVersionId"
+              }
+            }
+          }
+        ],
+        "description": "A version without its text.\n\nThe list view's row. Kept separate so listing a prompt with two hundred\nversions does not transfer two hundred prompts."
+      },
+      "PublishRequest": {
+        "type": "object",
+        "description": "Publish a version, and optionally update the prompt around it.",
+        "required": [
+          "name",
+          "text"
+        ],
+        "properties": {
+          "author": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Replaces the prompt's description when present."
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Move this label to the new version — `production` to make it live.\n\nOptional, and separate from publishing, because storing a prompt and\ndeploying it are different decisions. A publish with no label is a\ndraft that everything can read and nothing is using."
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "$ref": "#/components/schemas/PromptName"
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why this version exists. The commit message of a prompt."
+          },
+          "parent": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PromptVersionId",
+                "description": "The version this was edited from, where the caller knows."
+              }
+            ]
+          },
+          "tags": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Replaces the prompt's tags when present."
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "Published": {
+        "type": "object",
+        "description": "What a publish did.",
+        "required": [
+          "version",
+          "created",
+          "head"
+        ],
+        "properties": {
+          "created": {
+            "type": "boolean",
+            "description": "`false` when this exact text was already stored. Publishing is\ncontent-addressed, so a re-run of the same job is not a new version —\nand the caller usually wants to know which of the two happened."
+          },
+          "head": {
+            "$ref": "#/components/schemas/PromptHead"
+          },
+          "version": {
+            "$ref": "#/components/schemas/PromptVersion"
           }
         }
       },
@@ -2560,6 +3862,15 @@
             ]
           }
         }
+      },
+      "RejectionReason": {
+        "type": "string",
+        "enum": [
+          "no_held_out_improvement",
+          "no_held_out_measurement",
+          "variables_lost",
+          "no_change"
+        ]
       },
       "RunDetail": {
         "type": "object",
@@ -2722,6 +4033,32 @@
               "null"
             ],
             "description": "The orchestration this run executes, when the producer names one."
+          }
+        }
+      },
+      "Score": {
+        "type": "object",
+        "description": "One metric, on the baseline and on the candidate.",
+        "required": [
+          "metric"
+        ],
+        "properties": {
+          "baseline": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "candidate": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "metric": {
+            "type": "string"
           }
         }
       },
@@ -3220,6 +4557,49 @@
       "TraceId": {
         "type": "string",
         "description": "Lowercase hex trace id"
+      },
+      "VersionOrigin": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A person wrote it, or it was imported from a repository.",
+            "required": [
+              "origin"
+            ],
+            "properties": {
+              "origin": {
+                "type": "string",
+                "enum": [
+                  "authored"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "An optimiser produced it. `optimization_id` is the record that says\nwhat it was measured against.",
+            "required": [
+              "optimization_id",
+              "algorithm",
+              "origin"
+            ],
+            "properties": {
+              "algorithm": {
+                "type": "string"
+              },
+              "optimization_id": {
+                "type": "string"
+              },
+              "origin": {
+                "type": "string",
+                "enum": [
+                  "optimized"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Where a version came from.\n\nThe distinction the panel needs to answer \"did a person write this, or did\nan optimiser?\" — which is the first question asked about a prompt that is\nbehaving strangely."
       }
     }
   },
@@ -3235,6 +4615,10 @@
     {
       "name": "evaluation",
       "description": "Evaluation reports: suites, scores, regressions"
+    },
+    {
+      "name": "prompts",
+      "description": "The prompt registry: versions, labels and optimisations"
     },
     {
       "name": "live",

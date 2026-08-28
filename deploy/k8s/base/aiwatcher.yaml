@@ -63,6 +63,17 @@ spec:
               value: 'info,aiwatcher=debug'
             - name: AIWATCHER_LOG_FORMAT
               value: json
+            # The prompt registry, in the object store rather than on this
+            # pod's disk. Prompts have to outlive the runs that used them, and
+            # this pod's storage is an emptyDir.
+            - name: AIWATCHER_PROMPT_STORE
+              value: s3
+            - name: AIWATCHER_PROMPT_S3_ENDPOINT
+              value: 'http://rustfs:9000'
+            - name: AIWATCHER_PROMPT_S3_ACCESS_KEY
+              value: aiwatcher
+            - name: AIWATCHER_PROMPT_S3_SECRET_KEY
+              value: aiwatcher-local-only
           ports:
             - name: http
               containerPort: 8080

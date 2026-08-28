@@ -7,8 +7,9 @@
 # Not a production deployment: single replicas, emptyDir volumes, no resource
 # quotas worth the name, anonymous Grafana. It exists so Tilt can stand the
 # whole thing up on save and so the wiring — aiwatcher → Collector →
-# VictoriaTraces/VictoriaMetrics, and aiwatcher → Iggy — is exercised the way it
-# will be in a cluster rather than only through docker compose.
+# VictoriaTraces/VictoriaMetrics, aiwatcher → Iggy, and aiwatcher → RustFS for
+# the prompt registry — is exercised the way it will be in a cluster rather than
+# only through docker compose.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
@@ -20,6 +21,7 @@ resources:
   - victoriatraces.yaml
   - victoriametrics.yaml
   - otel-collector.yaml
+  - rustfs.yaml
   - grafana.yaml
   - aiwatcher.yaml
 

@@ -13,6 +13,12 @@ contract := "contracts/openapi.json"
 # line is protocol-matched to the `iggy` 0.11 client under `laser_sdk` 0.3, and
 # a 0.8 server accepts the connection and then never answers the login.
 iggy_image := "apache/iggy:0.9.0-edge.5"
+
+# The object store the prompt registry is tested against. RustFS speaks S3, so
+# `just test-rustfs` is really a test of the SigV4 signer — see
+# `crates/aiwatcher-prompts/src/sigv4.rs`.
+rustfs_image := "rustfs/rustfs:1.0.0-rc.3"
+rustfs_endpoint := env_var_or_default("AIWATCHER_PROMPT_S3_ENDPOINT", "http://127.0.0.1:9010")
 laser_connection := env_var_or_default("AIWATCHER_LASER_CONNECTION_STRING", "iggy:iggy@127.0.0.1:8090")
 
 # Clusters Tilt is allowed to touch. A remote context is a hard stop, not a
@@ -57,6 +63,11 @@ test-laser:
       cargo test -p aiwatcher-bus --features laser --test laser_integration \
       -- --ignored --test-threads=1
 
+# Five integration tests against a real object store. Run `just rustfs-up` first.
+test-rustfs:
+    AIWATCHER_PROMPT_S3_ENDPOINT={{rustfs_endpoint}} \
+      cargo test -p aiwatcher-prompts --test rustfs -- --ignored --test-threads=1
+
 audit:
     cargo deny check
 
@@ -96,10 +107,24 @@ panel-build:
 
 # ── Running locally ──────────────────────────────────────────────────────────
 
+# The prompt registry defaults to ./.data/prompts, so this needs nothing
+# running. `just run-rustfs` is the same server against the object store.
+
 # Server on :8080, durable write-ahead log in ./.data.
 run:
     AIWATCHER_BUS=wal \
     AIWATCHER_INGEST_ENABLED=true \
+    AIWATCHER_LOG=info,aiwatcher=debug \
+    cargo run --bin aiwatcher
+
+# Server on :8080 with the prompt registry in RustFS. Run `just rustfs-up` first.
+run-rustfs:
+    AIWATCHER_BUS=wal \
+    AIWATCHER_INGEST_ENABLED=true \
+    AIWATCHER_PROMPT_STORE=s3 \
+    AIWATCHER_PROMPT_S3_ENDPOINT={{rustfs_endpoint}} \
+    AIWATCHER_PROMPT_S3_ACCESS_KEY=rustfsadmin \
+    AIWATCHER_PROMPT_S3_SECRET_KEY=rustfsadmin \
     AIWATCHER_LOG=info,aiwatcher=debug \
     cargo run --bin aiwatcher
 
@@ -127,9 +152,34 @@ dev:
 seed run_id="":
     ./scripts/seed-demo-run.sh {{run_id}}
 
+# Publish a prompt plus two optimisations — one admitted, one not.
+seed-prompts:
+    ./scripts/seed-demo-prompts.sh
+
 # Publish two comparable evaluation reports into a running server.
 seed-evaluation:
     ./scripts/seed-demo-evaluation.sh
+
+# ── Python SDK ───────────────────────────────────────────────────────────────
+
+sdk_python := "sdk/python"
+
+# Install the SDK's dev toolchain into sdk/python/.venv.
+sdk-install:
+    cd {{sdk_python}} && uv sync --all-groups
+
+sdk-fmt:
+    cd {{sdk_python}} && uv run ruff format .
+
+# Format, lint, type-check and test the Python SDK.
+sdk-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd {{sdk_python}}
+    uv run ruff format --check .
+    uv run ruff check .
+    uv run mypy .
+    uv run pytest -q
 
 # ── Flow query service (PHP) ─────────────────────────────────────────────────
 #
@@ -216,6 +266,42 @@ iggy-down:
 
 iggy-logs:
     docker logs -f --tail=100 aiwatcher-iggy
+
+# ── RustFS (for the prompt registry) ─────────────────────────────────────────
+
+# On :9010 rather than :9000, which is what a MinIO somebody already runs would
+# be holding — the point of a local store is that starting it does not break
+# whatever else is on the machine.
+
+# A local object store for `just run-rustfs` and `just test-rustfs`.
+rustfs-up:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    docker rm -f aiwatcher-rustfs >/dev/null 2>&1 || true
+    docker run -d --name aiwatcher-rustfs \
+      -e RUSTFS_ACCESS_KEY=rustfsadmin \
+      -e RUSTFS_SECRET_KEY=rustfsadmin \
+      -e RUSTFS_CONSOLE_ENABLE=false \
+      -p 9010:9000 {{rustfs_image}}
+    echo "waiting for the object store …"
+    for _ in $(seq 1 30); do
+      # 403 is the success condition: the S3 endpoint is up and is refusing an
+      # unsigned request. A 200 would mean it is not authenticating at all.
+      if [[ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9010/ || true)" == "403" ]]; then
+        echo "✓ rustfs on :9010"
+        exit 0
+      fi
+      sleep 1
+    done
+    echo "✗ rustfs did not come up:" >&2
+    docker logs aiwatcher-rustfs 2>&1 | tail -20 >&2
+    exit 1
+
+rustfs-down:
+    -docker rm -f aiwatcher-rustfs
+
+rustfs-logs:
+    docker logs -f --tail=100 aiwatcher-rustfs
 
 # ── docker compose stack ─────────────────────────────────────────────────────
 

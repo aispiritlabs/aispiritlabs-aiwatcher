@@ -64,6 +64,7 @@ dependencies = [
  "aiwatcher-bus",
  "aiwatcher-core",
  "aiwatcher-projector",
+ "aiwatcher-prompts",
  "async-trait",
  "axum",
  "futures",
@@ -104,8 +105,10 @@ name = "aiwatcher-core"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "hex",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
  "time",
  "utoipa",
@@ -133,6 +136,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "aiwatcher-prompts"
+version = "0.1.0"
+dependencies = [
+ "aiwatcher-core",
+ "async-trait",
+ "futures",
+ "hex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "time",
+ "tokio",
+ "tracing",
+ "utoipa",
+]
+
+[[package]]
 name = "aiwatcher-server"
 version = "0.1.0"
 dependencies = [
@@ -140,6 +162,7 @@ dependencies = [
  "aiwatcher-bus",
  "aiwatcher-core",
  "aiwatcher-projector",
+ "aiwatcher-prompts",
  "aiwatcher-trace",
  "anyhow",
  "async-trait",

@@ -3,7 +3,8 @@
 #   Python / TypeScript agents
 #            │
 #            ▼
-#     aiwatcher (Rust)  ── write-ahead log on disk
+#     aiwatcher (Rust)  ─┬─ write-ahead log on disk    events, bounded by retention
+#            │        └─ RustFS (S3)               prompts, bounded by nothing
 #            │
 #            ├──► otel-collector ──┬──► victoriatraces   full spans
 #            │                     └──► victoriametrics  aggregates
@@ -55,6 +56,36 @@ services:
       timeout: 3s
       retries: 6
 
+  # The prompt registry's store. An S3 endpoint, so the same adapter reaches
+  # MinIO, Ceph or AWS unchanged — RustFS is here because it is one Rust binary
+  # with no JVM and no external metadata service.
+  #
+  # Separate from `aiwatcher-data` on purpose: the write-ahead log is a rolling
+  # window a retention policy may delete, and a prompt has to outlive every run
+  # that used it.
+  rustfs:
+    image: rustfs/rustfs:1.0.0-rc.3
+    environment:
+      # Local only. A deployment sets real credentials — see deploy/helm.
+      RUSTFS_ACCESS_KEY: rustfsadmin
+      RUSTFS_SECRET_KEY: rustfsadmin
+      RUSTFS_CONSOLE_ENABLE: 'false'
+    volumes:
+      - rustfs-data:/data
+    ports:
+      - '9010:9000'
+    healthcheck:
+      # An unsigned request is answered with 403 AccessDenied, which is proof
+      # the S3 endpoint is up. A 200 here would mean it is not authenticating.
+      test:
+        [
+          'CMD-SHELL',
+          'wget -q -S -O /dev/null http://127.0.0.1:9000/ 2>&1 | grep -q "403 Forbidden"',
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.121.0
     command: ['--config=/etc/otel/config.yaml']
@@ -84,12 +115,22 @@ services:
       AIWATCHER_INGEST_ENABLED: 'true'
       AIWATCHER_LOG: 'info,aiwatcher=debug'
       AIWATCHER_LOG_FORMAT: pretty
+      # The prompt registry, in the object store rather than on the container's
+      # disk. The bucket is created at start-up if it is not there.
+      AIWATCHER_PROMPT_STORE: s3
+      AIWATCHER_PROMPT_S3_ENDPOINT: 'http://rustfs:9000'
+      AIWATCHER_PROMPT_S3_BUCKET: aiwatcher-prompts
+      AIWATCHER_PROMPT_S3_ACCESS_KEY: rustfsadmin
+      AIWATCHER_PROMPT_S3_SECRET_KEY: rustfsadmin
     volumes:
       - aiwatcher-data:/var/lib/aiwatcher
     ports:
       - '8080:8080'
     depends_on:
-      - otel-collector
+      otel-collector:
+        condition: service_started
+      rustfs:
+        condition: service_healthy
     # The read-model caps in ReadModelConfig are sized for this ceiling. Raising
     # the limit without raising AIWATCHER_MAX_SPANS_TOTAL just leaves headroom
     # unused; lowering it without lowering them risks an OOMKill.
@@ -120,6 +161,7 @@ services:
       - victoriametrics
 
 volumes:
+  rustfs-data:
   victoriatraces-data:
   victoriametrics-data:
   aiwatcher-data:

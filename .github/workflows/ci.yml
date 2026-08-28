@@ -167,9 +167,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - uses: actions/setup-python@v5
+      # No `setup-python`: uv installs the interpreter, and `--python 3.11`
+      # below runs the suite on the floor `requires-python` claims rather than
+      # on whatever the runner ships.
+      - uses: astral-sh/setup-uv@v6
         with:
-          python-version: '3.12'
+          version: '0.12.7'
+          enable-cache: true
+          cache-dependency-glob: sdk/python/uv.lock
 
       - name: typescript sdk typecheck
         working-directory: sdk/typescript
@@ -177,12 +182,14 @@ jobs:
           npm install --no-audit --no-fund
           npx tsc --noEmit
 
-      - name: python sdk imports and type-checks
+      - name: python sdk
         working-directory: sdk/python
         run: |
-          python -m pip install --quiet mypy
-          python -c "import aiwatcher_sdk; print(aiwatcher_sdk.SCHEMA_VERSION)"
-          python -m mypy aiwatcher_sdk --ignore-missing-imports
+          uv sync --all-groups --frozen --python 3.11
+          uv run ruff format --check .
+          uv run ruff check .
+          uv run mypy .
+          uv run pytest -q
 
   hygiene:
     name: Hygiene
