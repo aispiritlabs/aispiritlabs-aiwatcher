@@ -46,6 +46,15 @@ RUN set -eux; \
     # with a message. php.ini-production's own 30 would land on the same second
     # as a fatal, so the service's limit is the one that fires.
     printf 'max_execution_time = 60\nexpose_php = Off\n' > "$PHP_INI_DIR/conf.d/99-aiwatcher.ini"; \
+    # The image ships the binary with cap_net_bind_service, for binding :80 as a
+    # non-root user. This one binds 8081, so it never needed it — and keeping it
+    # makes the container unstartable under the pod's security context: with
+    # `allowPrivilegeEscalation: false` the kernel sets no_new_privs, and an
+    # execve of a file whose capabilities are not already in the process's
+    # permitted set is refused. With `capabilities: drop: ["ALL"]` that set is
+    # empty, so the exec fails with a bare "Operation not permitted" from the
+    # entrypoint and no other explanation.
+    /usr/sbin/setcap -r /usr/local/bin/frankenphp; \
     # Caddy's data and config directories. Named here so the chart knows which
     # two paths need an emptyDir under a read-only root filesystem.
     mkdir -p /data /config; \
