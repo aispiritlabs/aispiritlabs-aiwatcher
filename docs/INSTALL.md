@@ -161,9 +161,14 @@ cd deploy
 AIWATCHER_IMAGE=ghcr.io/you/aiwatcher \
 AIWATCHER_PANEL_IMAGE=ghcr.io/you/aiwatcher-panel \
 AIWATCHER_IMAGE_TAG=v0.1.0 \
-  ./scripts/install.sh -e planner -n planner --plan     # look first
-  ./scripts/install.sh -e planner -n planner            # then apply
+AIWATCHER_IMAGE_PULL_SECRET=ghcr-pull \
+./scripts/install.sh -e planner -n planner --plan     # look first
+./scripts/install.sh -e planner -n planner            # then apply
 ```
+
+For Planner, the installer also accepts its existing `IMAGE_PULL_SECRET`
+variable as a fallback, so sourcing `deploy/.env.k3s` is enough for private
+GHCR packages. The Secret itself must already exist in the target namespace.
 
 What that install decides, on the cluster as it stands today:
 

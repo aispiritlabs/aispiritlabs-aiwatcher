@@ -81,6 +81,8 @@ just dev        # server on :8080 with an in-memory bus, panel on :5173
 just seed       # publish a demo run into it
 ```
 
+What that gets you, screen by screen: [EXAMPLES.md](EXAMPLES.md).
+
 `just dev` keeps nothing across a restart, which is what makes it fast to
 iterate against. For a server whose data survives one:
 
@@ -180,6 +182,9 @@ was derived from, and every optimisation with its dev gain beside its held-out
 gain.
 
 ## The panel
+
+Every view below, with screenshots of it against real data and what each one is
+for: [EXAMPLES.md](EXAMPLES.md).
 
 Five views, all served from aiwatcher's own read model — except Prompts, which
 reads the registry:

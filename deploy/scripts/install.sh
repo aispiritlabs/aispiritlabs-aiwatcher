@@ -46,6 +46,8 @@ Options:
 Environment:
   AIWATCHER_IMAGE, AIWATCHER_IMAGE_TAG      override the server image
   AIWATCHER_PANEL_IMAGE                     override the panel image
+  AIWATCHER_IMAGE_PULL_SECRET               pull Secret for private images
+  IMAGE_PULL_SECRET                         planner-compatible fallback
   AIWATCHER_DOMAIN                          publish an ingress on this host
   AIWATCHER_VICTORIAMETRICS_URL=<url|none>  force detection's answer
   AIWATCHER_VICTORIATRACES_URL=<url|none>
@@ -164,6 +166,12 @@ if [[ -n ${AIWATCHER_IMAGE_TAG:-} ]]; then
 fi
 if [[ -n ${AIWATCHER_PANEL_IMAGE:-} ]]; then
   sets+=(--set "panel.image.repository=$AIWATCHER_PANEL_IMAGE")
+fi
+image_pull_secret="${AIWATCHER_IMAGE_PULL_SECRET:-${IMAGE_PULL_SECRET:-}}"
+if [[ -n $image_pull_secret ]]; then
+  [[ $image_pull_secret =~ ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$ ]] \
+    || fail "image pull Secret is not a valid Kubernetes name: $image_pull_secret"
+  sets+=(--set "imagePullSecrets[0].name=$image_pull_secret")
 fi
 if [[ -n ${AIWATCHER_DOMAIN:-} ]]; then
   [[ $AIWATCHER_DOMAIN =~ ^[A-Za-z0-9.-]+$ ]] || fail "AIWATCHER_DOMAIN is not a hostname: $AIWATCHER_DOMAIN"
