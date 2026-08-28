@@ -1,0 +1,23 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aiwatcher
+spec:
+  template:
+    spec:
+      containers:
+        - name: aiwatcher
+          env:
+            - name: AIWATCHER_BUS
+              value: laser
+            - name: AIWATCHER_LASER_CONNECTION_STRING
+              value: 'iggy:iggy@iggy:8090'
+            - name: AIWATCHER_LASER_STREAM
+              value: aiwatcher
+            - name: AIWATCHER_LASER_TOPIC
+              value: events
+            # One partition. A scalar checkpoint has no total order across
+            # partitions, so raising this silently breaks live-stream resume.
+            # See aiwatcher_bus::adapters::laser.
+            - name: AIWATCHER_LASER_PARTITIONS
+              value: '1'

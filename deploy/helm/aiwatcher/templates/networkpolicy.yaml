@@ -1,0 +1,104 @@
+{{- $fullname := include "aiwatcher.fullname" . -}}
+{{- if .Values.networkPolicy.enabled }}
+# Coarse by design. The server's ingest route is how every SDK publishes, and
+# the pods that call it are not known to this chart — they are whatever the
+# namespace runs. A policy narrow enough to enumerate them would break the
+# integration path the moment a new workload appeared, so the rule is
+# "same namespace, plus whatever `allowIngressFrom` names".
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-server-ingress
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "aiwatcher.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: server
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector: {}
+        {{- with .Values.networkPolicy.allowIngressFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      ports:
+        - { protocol: TCP, port: 8080 }
+{{- if eq .Values.collector.mode "install" }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-collector-ingress
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "aiwatcher.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: collector
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        # Only the server posts OTLP here.
+        - podSelector:
+            matchLabels:
+              {{- include "aiwatcher.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: server
+      ports:
+        - { protocol: TCP, port: 4318 }
+        - { protocol: TCP, port: 4317 }
+{{- end }}
+{{- end }}
+
+{{- /*
+Ingress rules attached to pods this release does not own.
+
+NetworkPolicies are additive: a pod selected by two policies accepts the union
+of their rules. So when the chart that owns VictoriaMetrics has fenced it off —
+planner's `planner-observability-ingress` allows port 8428 only from its own
+observability components — aiwatcher can grant its Collector a path without
+editing that chart, and without either side having to know about the other.
+
+The selector comes from the detected Service, which is exactly the label set
+that picks those pods.
+*/}}
+{{- $attachments := list
+  (dict "key" "victoriametrics" "port" 8428 "flag" $.Values.networkPolicy.allowEgressToExternalVictoriaMetrics "cfg" $.Values.victoriametrics)
+  (dict "key" "victoriatraces"  "port" 10428 "flag" $.Values.networkPolicy.allowEgressToExternalVictoriaTraces "cfg" $.Values.victoriatraces)
+}}
+{{- range $a := $attachments }}
+{{- if and $a.flag (eq $a.cfg.mode "external") }}
+{{- if not $a.cfg.external.podSelector }}
+{{- fail (printf "networkPolicy allows egress to the external %s but %s.external.podSelector is empty — there is nothing to attach the rule to. The detection script fills this in; set it by hand when installing without the helmfile." $a.key $a.key) }}
+{{- end }}
+{{- if and $a.cfg.external.namespace (ne $a.cfg.external.namespace $.Release.Namespace) }}
+{{- fail (printf "%s runs in namespace %q but this release is in %q. A NetworkPolicy only applies in its own namespace, so this rule has to be added there by whoever owns it — see docs/INSTALL.md." $a.key $a.cfg.external.namespace $.Release.Namespace) }}
+{{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ printf "%s-allow-%s" $fullname $a.key }}
+  labels:
+    {{- include "aiwatcher.labels" $ | nindent 4 }}
+  annotations:
+    # Selects pods owned by another release. Additive, so deleting this policy
+    # restores that release's own rules exactly.
+    aiwatcher.dev/attached-to: {{ $a.key }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- toYaml $a.cfg.external.podSelector | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "aiwatcher.selectorLabels" $ | nindent 14 }}
+              app.kubernetes.io/component: collector
+      ports:
+        - { protocol: TCP, port: {{ $a.port }} }
+{{- end }}
+{{- end }}

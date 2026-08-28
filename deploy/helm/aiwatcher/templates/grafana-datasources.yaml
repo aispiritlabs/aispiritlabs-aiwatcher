@@ -1,0 +1,36 @@
+{{- if .Values.grafana.datasources.enabled }}
+{{- $traces := include "aiwatcher.tracesBaseUrl" . -}}
+{{- if $traces }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "aiwatcher.fullname" . }}-grafana-datasources
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+    app.kubernetes.io/component: grafana-datasources
+    {{- with .Values.grafana.datasources.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+data:
+  aiwatcher-datasources.yaml: |-
+    apiVersion: 1
+    datasources:
+      # VictoriaTraces speaks the Jaeger query API, so Grafana's built-in Jaeger
+      # datasource reads it with no plugin. This is the historical view;
+      # aiwatcher's own panel draws runs that are still in flight, which a trace
+      # store cannot show.
+      - name: aiwatcher Traces
+        uid: {{ .Values.grafana.datasources.tracesDatasourceUid | quote }}
+        type: jaeger
+        access: proxy
+        url: {{ printf "%s/select/jaeger" $traces | quote }}
+        isDefault: false
+        editable: false
+        jsonData:
+          tracesToMetrics:
+            datasourceUid: {{ .Values.grafana.datasources.metricsDatasourceUid | quote }}
+            tags:
+              - key: gen_ai.request.model
+                value: model
+{{- end }}
+{{- end }}

@@ -1,0 +1,103 @@
+{{- if eq .Values.victoriametrics.mode "install" }}
+{{- $fullname := include "aiwatcher.fullname" . -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-victoriametrics
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+    app.kubernetes.io/component: victoriametrics
+spec:
+  selector:
+    {{- include "aiwatcher.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: victoriametrics
+  ports:
+    - { name: http, port: 8428, targetPort: http, protocol: TCP }
+{{- if .Values.victoriametrics.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fullname }}-victoriametrics-data
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+    app.kubernetes.io/component: victoriametrics
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.victoriametrics.persistence.size }}
+  {{- include "aiwatcher.storageClass" .Values.victoriametrics.persistence | nindent 2 }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-victoriametrics
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+    app.kubernetes.io/component: victoriametrics
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels:
+      {{- include "aiwatcher.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: victoriametrics
+  template:
+    metadata:
+      labels:
+        {{- include "aiwatcher.selectorLabels" . | nindent 8 }}
+        # Not in the selector — the selector is immutable, and this is here so
+        # deploy/scripts/detect-stack.py can tell aiwatcher's own pods from the
+        # ones it is looking for. See that script.
+        app.kubernetes.io/part-of: aiwatcher
+        app.kubernetes.io/component: victoriametrics
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: victoriametrics
+          image: "{{ .Values.victoriametrics.image.repository }}:{{ .Values.victoriametrics.image.tag }}"
+          imagePullPolicy: {{ .Values.victoriametrics.image.pullPolicy }}
+          args:
+            - -storageDataPath=/vmdata
+            - -retentionPeriod={{ .Values.victoriametrics.retentionPeriod }}
+            # Names OTLP metrics the way a Prometheus datasource expects, so the
+            # same dashboard reads scraped and pushed series alike.
+            - -opentelemetry.usePrometheusNaming=true
+            - -httpListenAddr=:8428
+          ports:
+            - { name: http, containerPort: 8428, protocol: TCP }
+          readinessProbe:
+            httpGet: { path: /-/ready, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /-/healthy, port: http }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.victoriametrics.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: data, mountPath: /vmdata }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: data
+          {{- if .Values.victoriametrics.persistence.enabled }}
+          persistentVolumeClaim: { claimName: {{ $fullname }}-victoriametrics-data }
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: tmp
+          emptyDir: {}
+{{- end }}

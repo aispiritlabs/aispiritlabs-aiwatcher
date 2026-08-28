@@ -1,0 +1,90 @@
+{{- if .Values.ingress.enabled }}
+{{- $fullname := include "aiwatcher.fullname" . -}}
+{{- if not .Values.ingress.host -}}
+{{- fail "ingress.enabled is true but ingress.host is empty." -}}
+{{- end -}}
+{{- if not .Values.panel.enabled -}}
+{{- fail "ingress.enabled is true but panel.enabled is false. The ingress fronts the panel, which is what proxies /api to the server; without it the host would serve nothing." -}}
+{{- end -}}
+# One host, one backend. /api is not a second ingress path: the panel proxies it
+# to the server in-process, so the browser sees a single origin and SSE and
+# WebSocket need no CORS and no per-path annotations.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ $fullname }}
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts: [{{ .Values.ingress.host | quote }}]
+      secretName: {{ .Values.ingress.tls.secretName | default (printf "%s-tls" .Values.ingress.host) | quote }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $fullname }}-panel
+                port: { number: 80 }
+{{- /*
+Extra routes on the same host, each its own Ingress so each can carry its own
+annotations.
+
+This exists for one shape in particular: a forward-auth proxy needs its callback
+path routed past the very middleware that guards everything else, on a higher
+priority, to a different backend. Putting it in the panel's nginx would not work
+— the panel would answer the callback with index.html. So it is a separate
+Ingress, and the chart stays ignorant of which proxy it is: what goes here is
+whatever the cluster's ingress controller needs, named by the operator. See
+environments/planner.yaml for the authentik case.
+*/}}
+{{- range $route := .Values.ingress.extraRoutes }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ printf "%s-%s" $fullname (required "each ingress.extraRoutes entry needs a name" $route.name) }}
+  labels:
+    {{- include "aiwatcher.labels" $ | nindent 4 }}
+  {{- with $route.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with $.Values.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  {{- if $.Values.ingress.tls.enabled }}
+  tls:
+    - hosts: [{{ $.Values.ingress.host | quote }}]
+      secretName: {{ $.Values.ingress.tls.secretName | default (printf "%s-tls" $.Values.ingress.host) | quote }}
+  {{- end }}
+  rules:
+    - host: {{ $.Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: {{ required "each ingress.extraRoutes entry needs a path" $route.path }}
+            pathType: {{ $route.pathType | default "Prefix" }}
+            backend:
+              service:
+                name: {{ required "each ingress.extraRoutes entry needs service.name" $route.service.name }}
+                port:
+                  {{- if $route.service.portName }}
+                  name: {{ $route.service.portName | quote }}
+                  {{- else }}
+                  number: {{ required "each ingress.extraRoutes entry needs service.portName or service.port" $route.service.port }}
+                  {{- end }}
+{{- end }}
+{{- end }}

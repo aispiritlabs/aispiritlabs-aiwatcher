@@ -1,0 +1,54 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: victoriatraces
+spec:
+  selector:
+    app: victoriatraces
+  ports:
+    - name: http
+      port: 10428
+      targetPort: 10428
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: victoriatraces
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: victoriatraces
+  template:
+    metadata:
+      labels:
+        app: victoriatraces
+    spec:
+      containers:
+        - name: victoriatraces
+          image: victoriametrics/victoria-traces:v0.11.0
+          args:
+            - -storageDataPath=/vtdata
+            - -retentionPeriod=7d
+            - -httpListenAddr=:10428
+          ports:
+            - name: http
+              containerPort: 10428
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 10428
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          volumeMounts:
+            - name: data
+              mountPath: /vtdata
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+      volumes:
+        - name: data
+          emptyDir: {}

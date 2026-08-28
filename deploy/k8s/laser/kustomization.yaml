@@ -1,0 +1,24 @@
+# Overlay: run aiwatcher on the Laser backend instead of the write-ahead log.
+#
+#     AIWATCHER_K8S_OVERLAY=laser just tilt-up
+#
+# Separate from the base because it needs two things the base does not: an
+# `aiwatcher` image built with the `laser` cargo feature (the Tiltfile passes it
+# when this overlay is selected), and a running Iggy. The base stays the default
+# so the stack comes up on a machine with neither.
+#
+# Iggy's three required settings are in `../base/iggy.yaml`, each with the
+# symptom it prevents. See docs/ADR/ADR_0002_EVENT_BUS_PORT.md.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: aiwatcher
+
+resources:
+  - ../base
+
+patches:
+  - path: aiwatcher-laser.yaml
+    target:
+      kind: Deployment
+      name: aiwatcher

@@ -1,0 +1,87 @@
+@import 'tailwindcss';
+
+/*
+ * shadcn/ui design tokens, Tailwind v4 style. Dark first: this is a console
+ * people leave open next to a terminal, and a light default would be the thing
+ * they change immediately.
+ */
+@theme {
+  --color-background: oklch(0.15 0.005 285);
+  --color-foreground: oklch(0.97 0.002 285);
+  --color-card: oklch(0.19 0.006 285);
+  --color-card-foreground: oklch(0.97 0.002 285);
+  --color-muted: oklch(0.25 0.006 285);
+  --color-muted-foreground: oklch(0.68 0.01 285);
+  --color-border: oklch(0.28 0.008 285);
+  --color-input: oklch(0.28 0.008 285);
+  --color-primary: oklch(0.72 0.15 250);
+  --color-primary-foreground: oklch(0.15 0.005 285);
+  --color-accent: oklch(0.28 0.02 285);
+  --color-accent-foreground: oklch(0.97 0.002 285);
+
+  /* Run and span status. Also the waterfall bar colours. */
+  --color-success: oklch(0.72 0.16 155);
+  --color-warning: oklch(0.8 0.15 85);
+  --color-danger: oklch(0.65 0.2 25);
+  --color-running: oklch(0.72 0.15 250);
+
+  /*
+   * Chart series. A fixed order, assigned by identity and never cycled — a
+   * filter that drops a series must not repaint the survivors.
+   *
+   * Validated against this panel's card surface (#131316) for the lightness
+   * band, chroma floor, colour-vision separation and contrast. Worst adjacent
+   * pair is yellow↔aqua at ΔE 8.4 under protanopia, above the floor; every
+   * chart here also direct-labels its series, which is the secondary encoding
+   * that makes identity readable without colour at all.
+   */
+  --color-series-1: #3987e5;
+  --color-series-2: #d95926;
+  --color-series-3: #199e70;
+  --color-series-4: #c98500;
+
+  /*
+   * Status. Deliberately outside the series lightness band so a status colour
+   * never reads as "series 5", and never used alone — always with a label.
+   */
+  --color-status-good: #0ca30c;
+  --color-status-warning: #fab219;
+  --color-status-critical: #d03b3b;
+
+  /* Recessive chart furniture. */
+  --color-gridline: oklch(0.26 0.006 285);
+  --color-axis: oklch(0.32 0.007 285);
+
+  /* One hue per span subject, so the waterfall reads without a legend. */
+  --color-span-run: oklch(0.62 0.1 285);
+  --color-span-agent: oklch(0.7 0.13 250);
+  --color-span-llm: oklch(0.75 0.15 190);
+  --color-span-tool: oklch(0.78 0.14 105);
+  /* Steps: retrieval, embedding, rerank, parse, guardrail. One hue for the
+     family — the specific kind is on the row as a label, not as a colour, so
+     a new step type needs no new token. */
+  --color-span-step: oklch(0.7 0.12 320);
+
+  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Ids are read character by character; a tabular monospace makes a changed
+     digit obvious rather than something you have to diff by eye. */
+  .id {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 0.75rem;
+  }
+}

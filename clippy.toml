@@ -1,0 +1,5 @@
+# The workspace denies `unwrap`/`expect`/`panic` in production code; tests are
+# exactly where those are the clearest way to assert.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true

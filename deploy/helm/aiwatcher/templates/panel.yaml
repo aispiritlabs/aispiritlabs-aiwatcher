@@ -1,0 +1,160 @@
+{{- if .Values.panel.enabled }}
+{{- $fullname := include "aiwatcher.fullname" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-panel
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+    app.kubernetes.io/component: panel
+data:
+  # The panel calls /api on its own origin, so nginx proxies it to the server
+  # rather than the browser reaching the API directly. That keeps SSE and
+  # WebSocket free of CORS and means one ingress host, not two.
+  default.conf: |-
+    server {
+      listen 8080;
+      server_name _;
+      root /usr/share/nginx/html;
+
+      location /healthz {
+        access_log off;
+        return 200 "ok\n";
+      }
+
+      location /api/ {
+        proxy_pass http://{{ $fullname }}-server:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # SSE and WebSocket. Buffering on would hold live frames until the
+        # buffer filled, which reads as a stream that has stopped; the long read
+        # timeout stops nginx from closing an idle run's stream at 60s.
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Upgrade $http_upgrade;
+      }
+
+      location /flow {
+      {{- if .Values.panel.flowUpstream }}
+        proxy_pass {{ .Values.panel.flowUpstream | trimSuffix "/" }};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_read_timeout 120s;
+      {{- else }}
+        # No Flow service in this deployment. 503 is what the Query tab reads as
+        # "not running"; a 404 would surface as a failed query instead.
+        return 503;
+      {{- end }}
+      }
+
+      location / {
+        try_files $uri $uri/ /index.html;
+      }
+
+      # Hashed asset filenames, so these can be cached indefinitely. index.html
+      # cannot: it is what points at the current hashes.
+      location /assets/ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+      }
+    }
+  # `map` belongs at http scope, and everything in /etc/nginx/conf.d is included
+  # there, so it goes in its own file rather than inside the server block. The
+  # 00- prefix orders it before default.conf, which uses the variable it defines.
+  00-upgrade.conf: |-
+    map $http_upgrade $connection_upgrade {
+      default upgrade;
+      ''      close;
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-panel
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+    app.kubernetes.io/component: panel
+spec:
+  selector:
+    {{- include "aiwatcher.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: panel
+  ports:
+    - { name: http, port: 80, targetPort: http, protocol: TCP }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-panel
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+    app.kubernetes.io/component: panel
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "aiwatcher.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: panel
+  template:
+    metadata:
+      annotations:
+        # nginx does not watch its own config, and a ConfigMap edit restarts
+        # nothing on its own.
+        checksum/config: {{ toYaml .Values.panel | sha256sum | trunc 32 }}
+      labels:
+        {{- include "aiwatcher.selectorLabels" . | nindent 8 }}
+        # Not in the selector — the selector is immutable, and this is here so
+        # deploy/scripts/detect-stack.py can tell aiwatcher's own pods from the
+        # ones it is looking for. See that script.
+        app.kubernetes.io/part-of: aiwatcher
+        app.kubernetes.io/component: panel
+    spec:
+      automountServiceAccountToken: false
+      {{- include "aiwatcher.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        # 101 is nginx in the unprivileged image. fsGroup so the emptyDirs below
+        # are writable by it: with a read-only root filesystem, nginx's temp and
+        # cache paths are the only places it can write, and it creates them at
+        # startup.
+        runAsUser: 101
+        runAsGroup: 101
+        fsGroup: 101
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: panel
+          image: "{{ .Values.panel.image.repository }}:{{ .Values.panel.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.panel.image.pullPolicy }}
+          ports:
+            - { name: http, containerPort: 8080, protocol: TCP }
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.panel.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: config, mountPath: /etc/nginx/conf.d, readOnly: true }
+            # nginx writes here even when it serves nothing but static files.
+            - { name: cache, mountPath: /var/cache/nginx }
+            - { name: run, mountPath: /tmp }
+      volumes:
+        - name: config
+          configMap: { name: {{ $fullname }}-panel }
+        - name: cache
+          emptyDir: {}
+        - name: run
+          emptyDir: {}
+{{- end }}

@@ -1,0 +1,100 @@
+{{- if eq .Values.victoriatraces.mode "install" }}
+{{- $fullname := include "aiwatcher.fullname" . -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-victoriatraces
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+    app.kubernetes.io/component: victoriatraces
+spec:
+  selector:
+    {{- include "aiwatcher.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: victoriatraces
+  ports:
+    - { name: http, port: 10428, targetPort: http, protocol: TCP }
+{{- if .Values.victoriatraces.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fullname }}-victoriatraces-data
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+    app.kubernetes.io/component: victoriatraces
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.victoriatraces.persistence.size }}
+  {{- include "aiwatcher.storageClass" .Values.victoriatraces.persistence | nindent 2 }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-victoriatraces
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+    app.kubernetes.io/component: victoriatraces
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels:
+      {{- include "aiwatcher.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: victoriatraces
+  template:
+    metadata:
+      labels:
+        {{- include "aiwatcher.selectorLabels" . | nindent 8 }}
+        # Not in the selector — the selector is immutable, and this is here so
+        # deploy/scripts/detect-stack.py can tell aiwatcher's own pods from the
+        # ones it is looking for. See that script.
+        app.kubernetes.io/part-of: aiwatcher
+        app.kubernetes.io/component: victoriatraces
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: victoriatraces
+          image: "{{ .Values.victoriatraces.image.repository }}:{{ .Values.victoriatraces.image.tag }}"
+          imagePullPolicy: {{ .Values.victoriatraces.image.pullPolicy }}
+          args:
+            - -storageDataPath=/vtdata
+            - -retentionPeriod={{ .Values.victoriatraces.retentionPeriod }}
+            - -httpListenAddr=:10428
+          ports:
+            - { name: http, containerPort: 10428, protocol: TCP }
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.victoriatraces.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: data, mountPath: /vtdata }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: data
+          {{- if .Values.victoriatraces.persistence.enabled }}
+          persistentVolumeClaim: { claimName: {{ $fullname }}-victoriatraces-data }
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: tmp
+          emptyDir: {}
+{{- end }}

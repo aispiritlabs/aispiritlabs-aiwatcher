@@ -1,0 +1,107 @@
+# aiwatcher inside planner's namespace, on planner's k3s.
+#
+#   AIWATCHER_NAMESPACE=planner ./scripts/install.sh -e planner
+#
+# What this environment is really saying: aiwatcher is a guest here. planner
+# owns the namespace, the ingress, the identity provider and the metrics store;
+# aiwatcher brings the projector, the panel and a trace store, and borrows the
+# rest. Detection handles the borrowing — this file handles the things detection
+# cannot know, which are all about fitting into planner's conventions.
+#
+# It replaces MLflow, which planner runs for the same job and does differently:
+# see docs/mlflow-comparison.md for the measurements and docs/INSTALL.md for
+# what to take out on planner's side afterwards.
+
+image:
+  # Set by install.sh from AIWATCHER_IMAGE / AIWATCHER_IMAGE_TAG when those are
+  # in the environment, the same way planner's deploy.sh takes its images.
+  repository: ghcr.io/example/aiwatcher
+  tag: latest
+  pullPolicy: IfNotPresent
+
+panel:
+  image:
+    repository: ghcr.io/example/aiwatcher-panel
+    tag: latest
+    pullPolicy: IfNotPresent
+
+server:
+  # Durable, single node, no broker — which matches how planner runs everything
+  # else on this cluster. Moving to Laser is a later decision and only changes
+  # this field and the Secret beside it.
+  bus: wal
+  logLevel: "info,aiwatcher=info"
+  logFormat: json
+  ingestEnabled: true
+  persistence:
+    enabled: true
+    size: 10Gi
+    # planner's k3s provisions with local-path and leaves storageClassName
+    # empty everywhere else; matching that keeps one storage story.
+    storageClassName: ""
+
+victoriatraces:
+  # planner has VictoriaMetrics and VictoriaLogs but no trace store, so this is
+  # the one backend aiwatcher actually adds to the cluster.
+  retentionPeriod: 30d
+  persistence:
+    enabled: true
+    size: 20Gi
+
+collector:
+  environment: production
+  # planner's node is not large. The Collector batches and forwards; it does not
+  # hold a queue worth much memory.
+  resources:
+    requests: { cpu: 50m, memory: 96Mi }
+    limits: { memory: 256Mi }
+
+grafana:
+  datasources:
+    enabled: true
+    # planner's Grafana provisions from a fixed ConfigMap rather than from a
+    # sidecar, so no label makes it pick this up on its own. The ConfigMap is
+    # still emitted, and docs/INSTALL.md has the one-line change on planner's
+    # side. The uid below is the one planner's own datasource already uses, so
+    # the trace-to-metric links land somewhere real.
+    metricsDatasourceUid: victoria-metrics
+
+networkPolicy:
+  # planner fences its observability pods (planner-observability-ingress) and
+  # runs NetworkPolicies for everything else, so aiwatcher's own pods should be
+  # fenced too rather than being the one open thing in the namespace.
+  enabled: true
+
+ingress:
+  # Set AIWATCHER_DOMAIN and install.sh fills in the host. Left empty here so a
+  # first install goes in reachable only by port-forward, which is the right
+  # default for a service that has no authentication of its own.
+  enabled: false
+  className: traefik
+  host: ""
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    # planner's two middlewares, in planner's namespace. Same pair every
+    # authenticated planner route uses; without the second one the panel would
+    # be on the public internet with no login at all.
+    traefik.ingress.kubernetes.io/router.middlewares: "planner-planner-security@kubernetescrd,planner-planner-authentik@kubernetescrd"
+    traefik.ingress.kubernetes.io/router.priority: "10"
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  tls:
+    enabled: true
+  extraRoutes:
+    # The forward-auth callback. It has to reach authentik rather than the
+    # panel, and it has to skip the authentik middleware — a route that requires
+    # a session in order to establish a session never completes. Higher priority
+    # so it wins over the `/` rule above.
+    - name: authentik-outpost
+      path: /outpost.goauthentik.io/
+      annotations:
+        traefik.ingress.kubernetes.io/router.entrypoints: websecure
+        traefik.ingress.kubernetes.io/router.middlewares: "planner-planner-security@kubernetescrd"
+        traefik.ingress.kubernetes.io/router.priority: "100"
+      service:
+        # An ExternalName Service planner already defines in this namespace,
+        # pointing at the embedded outpost inside authentik-server.
+        name: planner-authentik-outpost
+        portName: http

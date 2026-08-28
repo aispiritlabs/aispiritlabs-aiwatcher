@@ -1,0 +1,16 @@
+apiVersion: 1
+
+providers:
+  - name: aiwatcher
+    orgId: 1
+    folder: aiwatcher
+    type: file
+    disableDeletion: false
+    # The dashboard is a file in the repo, not something edited in the UI and
+    # lost on the next container rebuild. Edits made in Grafana should be
+    # exported back into deploy/grafana/dashboards/.
+    allowUiUpdates: false
+    updateIntervalSeconds: 10
+    options:
+      path: /etc/grafana/dashboards
+      foldersFromFilesStructure: false

@@ -1,0 +1,36 @@
+# An empty namespace on a cluster of your own — the shape `just tilt-up` gives
+# you, but installed rather than watched.
+#
+# Nothing is overridden except the images and the log level: the chart defaults
+# already install the whole stack, and detection turns off whatever the cluster
+# turns out to have.
+
+image:
+  repository: aiwatcher
+  tag: dev
+  pullPolicy: IfNotPresent
+
+panel:
+  image:
+    repository: aiwatcher-panel
+    tag: dev
+    pullPolicy: IfNotPresent
+
+server:
+  logLevel: "info,aiwatcher=debug"
+  # A local cluster's default StorageClass usually has no dynamic provisioner
+  # worth waiting for, and losing a test stack's log on restart costs nothing.
+  persistence:
+    enabled: false
+
+victoriatraces:
+  persistence:
+    enabled: false
+  retentionPeriod: 7d
+
+victoriametrics:
+  persistence:
+    enabled: false
+
+collector:
+  environment: local

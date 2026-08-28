@@ -1,0 +1,211 @@
+name: CI
+
+on:
+  merge_group:
+  workflow_dispatch:
+  pull_request:
+    types: [opened, reopened, synchronize]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # A CI machine gains nothing from incremental compilation and pays for it in
+  # cache size.
+  CARGO_INCREMENTAL: '0'
+  RUSTFLAGS: '-D warnings'
+
+jobs:
+  rust:
+    name: Rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      # rust-toolchain.toml pins the version, so fmt and clippy output here
+      # matches what a developer sees locally.
+      # rust-toolchain.toml pins 1.98.0; `@master` honours it rather than
+      # pulling whatever `stable` happens to be that week.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.98.0'
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt
+        run: cargo fmt --all --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -Dwarnings
+
+      - name: cargo test
+        run: cargo test --workspace --all-targets
+
+      # The Laser adapter is feature-gated, so the default suite never compiles
+      # it. Type-check it here so a change to the SDK's API is a red build
+      # rather than a surprise the next time someone turns the feature on.
+      - name: cargo clippy (laser feature)
+        run: cargo clippy -p aiwatcher-bus -p aiwatcher-server --features aiwatcher-server/laser --all-targets -- -Dwarnings
+
+  contract:
+    name: OpenAPI contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.98.0'
+      - uses: Swatinem/rust-cache@v2
+      - uses: extractions/setup-just@v3
+
+      # The panel's TypeScript client is generated from this file. If it is
+      # stale, the client and the routes have silently diverged — which is the
+      # whole failure mode the codegen exists to prevent.
+      - name: contract is current
+        run: just openapi-check
+
+  laser:
+    name: Laser integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      iggy:
+        image: apache/iggy:0.9.0-edge.5
+        ports:
+          - 8090:8090
+        env:
+          IGGY_TCP_ADDRESS: 0.0.0.0:8090
+        # Iggy's runtime is io_uring, which the default seccomp profile blocks.
+        # A GitHub-hosted runner permits the NUMA memory binding that Docker
+        # Desktop's VM does not, which is why this suite runs here and is
+        # `#[ignore]`d locally.
+        options: >-
+          --security-opt seccomp=unconfined
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.98.0'
+      - uses: Swatinem/rust-cache@v2
+
+      - name: wait for the broker
+        run: |
+          for _ in $(seq 1 60); do
+            if nc -z 127.0.0.1 8090; then echo "iggy is up"; exit 0; fi
+            sleep 1
+          done
+          echo "iggy never came up" >&2
+          exit 1
+
+      - name: laser integration tests
+        env:
+          AIWATCHER_LASER_CONNECTION_STRING: iggy:iggy@127.0.0.1:8090
+        run: |
+          cargo test -p aiwatcher-bus --features laser --test laser_integration \
+            -- --ignored --test-threads=1
+
+  k8s:
+    name: Kubernetes manifests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: extractions/setup-just@v3
+
+      # Client-side only. Rendering and validating catches a broken
+      # kustomization without needing a cluster.
+      - name: manifests are valid
+        run: just k8s-validate
+
+  panel:
+    name: Panel
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/panel/package-lock.json
+
+      - name: install
+        run: npm ci
+        working-directory: apps/panel
+
+      # `npm run build` is vite build followed by a full tsc project check, so
+      # a type error in the panel fails here.
+      - name: build and typecheck
+        run: npm run build
+        working-directory: apps/panel
+
+      - name: generated client matches the contract
+        working-directory: apps/panel
+        run: |
+          npm run generate:api
+          if ! git diff --quiet -- src/api/generated; then
+            echo "✗ src/api/generated is stale — run 'make openapi' and commit the result"
+            git diff --stat -- src/api/generated
+            exit 1
+          fi
+
+  sdks:
+    name: SDKs
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: typescript sdk typecheck
+        working-directory: sdk/typescript
+        run: |
+          npm install --no-audit --no-fund
+          npx tsc --noEmit
+
+      - name: python sdk imports and type-checks
+        working-directory: sdk/python
+        run: |
+          python -m pip install --quiet mypy
+          python -c "import aiwatcher_sdk; print(aiwatcher_sdk.SCHEMA_VERSION)"
+          python -m mypy aiwatcher_sdk --ignore-missing-imports
+
+  hygiene:
+    name: Hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.98.0'
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: typos-cli,taplo-cli,cargo-deny
+
+      - name: typos
+        run: typos
+
+      - name: toml formatting
+        run: taplo fmt --check
+
+      # Licences and advisories. A dependency that changes licence is easier to
+      # deal with the day it lands than a year later.
+      - name: cargo deny
+        run: cargo deny check

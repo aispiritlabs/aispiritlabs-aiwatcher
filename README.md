@@ -1,0 +1,255 @@
+# aiwatcher
+
+Observability for AI agent runs. Python and TypeScript agents publish events to
+a durable log; a Rust backend consumes them, assembles OpenTelemetry traces,
+exports to VictoriaTraces and VictoriaMetrics, and serves a live view over
+SSE/WebSocket to a React panel.
+
+The log is what is true. Spans are derived from it rather than written
+alongside it, by pure functions of the event stream — so a redelivered event
+lands on the span it already wrote instead of a duplicate, and a backend that
+learns something new about an old event type can be pointed at the same log
+again. Most of the design below follows from that one commitment.
+
+```
+Python / TypeScript agents
+         │  events
+         ▼
+   durable log  (Laser, or the built-in write-ahead log)
+         │
+         ▼
+   Rust projector ─┬─► live events ──► Axum SSE/WebSocket ──► panel
+                   ├─► finished spans ─► VictoriaTraces
+                   ├─► aggregates ─────► VictoriaMetrics
+                   └─► read model ─────► REST reads
+```
+
+## Powered by
+
+<table>
+<tr>
+<td width="90" align="center" valign="middle">
+<a href="https://github.com/apache/iggy"><img src="https://raw.githubusercontent.com/apache/iggy/master/assets/logo/SVG/iggy-apache-sygnet-color-lightbg.svg" height="44" alt="Apache Iggy"></a>
+</td>
+<td valign="middle">
+<a href="https://github.com/apache/iggy"><b>Apache Iggy</b></a> — the persistent
+message streaming behind the Laser backend. It is the durable log the projector
+reads from, under the <code>laser</code> cargo feature; a plain build uses the
+built-in write-ahead log instead and needs no broker.
+</td>
+</tr>
+<tr>
+<td width="90" align="center" valign="middle">
+<a href="https://github.com/flow-php/flow"><img src="https://raw.githubusercontent.com/flow-php/flow/1.x/web/landing/assets/images/elephant.svg" height="44" alt="Flow PHP"></a>
+</td>
+<td valign="middle">
+<a href="https://github.com/flow-php/flow"><b>Flow PHP</b></a> — the strongly
+typed data processing framework behind <code>services/flow</code>, the optional
+service serving the panel's Query tab. A query is lexed, whitelisted and turned
+into Flow objects through an explicit <code>match</code> — parsed, never
+executed.
+</td>
+</tr>
+</table>
+
+## Quick start
+
+Rust 1.98 (pinned in `rust-toolchain.toml`, installed on demand by rustup) and
+Node for the panel. No broker, no cluster, no Docker.
+
+```bash
+just install    # panel and TypeScript SDK dependencies
+just dev        # server on :8080 with an in-memory bus, panel on :5173
+just seed       # publish a demo run into it
+```
+
+`just dev` keeps nothing across a restart, which is what makes it fast to
+iterate against. For a server whose data survives one:
+
+```bash
+just run        # :8080, durable write-ahead log in ./.data
+```
+
+## Sending events
+
+The contract is the envelope in
+[`contracts/envelope.schema.json`](contracts/envelope.schema.json), not the
+client libraries — anything that can produce that JSON and get it onto the log
+is a valid producer. The SDKs exist so the common case is three lines, and so
+that the two things easy to get wrong by hand are not: event ids that let the
+backend deduplicate a redelivery, and a `call_id` that keeps two concurrent LLM
+calls inside one agent from collapsing into a single span.
+
+```python
+from aiwatcher_sdk import AiwatcherClient  # AIWATCHER_URL picks the transport
+
+client = AiwatcherClient(service="research-service")
+with client.run("run-123", conversation_id="conv-1") as run:
+    with run.agent("researcher") as agent:
+        with agent.llm(model="claude-opus-5", provider="anthropic") as call:
+            call.first_token()
+            call.usage(prompt_tokens=812, completion_tokens=193)
+```
+
+An evaluation is the other thing a producer reports, and it is deliberately not
+a trace — no span, no row in the runs list, its own projection:
+
+```python
+client.record_evaluation(
+    suite="catalog-floor-plan",
+    dataset="house-catalog@3",     # what makes two reports comparable
+    params={"model": "gpt-5-mini", "threshold": 0.9},
+    metrics={"mean_score": 0.88},
+    report={"scorer": "catalog-contract-v2"},
+)
+```
+
+That is the same four pieces as an MLflow `start_run` block, on the client that
+is already imported for tracing. `client.evaluation(...)` is the scope form, for
+a suite that publishes each case as it scores it.
+
+`sdk/typescript` mirrors it. Unset `AIWATCHER_URL` and both drop everything, so
+importing either never breaks a test. An event type the backend does not
+recognise is **not** rejected: it is stored and streamed live, and simply takes
+part in no span, which is what lets a producer run ahead of the backend. See
+[docs/event-catalog.md](docs/event-catalog.md).
+
+## The panel
+
+Four views, all served from aiwatcher's own read model:
+
+- **Runs** — the flat list, filterable.
+- **Explore** — one page for every level. The tree pivots on **session, agent,
+  model or tool**; below the root it is always run → span → messages, so
+  switching what the top level *is* costs no relearning. Selecting a span
+  narrows the messages without collapsing the levels above it, and every
+  selection is in the URL. Messages group by span, agent or event type.
+- **Metrics** — tokens, latency percentiles, cache hit rate, and ranked
+  breakdowns by model, agent and tool.
+- **Evaluation** — suites, reports, per-case scores, and each report against the
+  previous one on the same dataset. A mean that improved while a case regressed
+  is the thing this view exists to show.
+
+Datasets and Experiments are still placeholders, and say what they are waiting
+on rather than rendering plausible fake rows.
+
+## The Laser backend
+
+`adapters::laser` runs against the real `laser_sdk` 0.3 over Apache Iggy, behind
+the `laser` cargo feature so a plain build needs neither the SDK nor a broker:
+
+```bash
+just iggy-up      # Apache Iggy in Docker, with the three flags it needs
+just run-laser
+just test-laser   # six integration tests, ~2s against the real broker
+```
+
+Running Iggy takes three settings, and each one fails in a way that does not
+name its cause. `just iggy-up` and the Kubernetes manifests set all three:
+
+| Setting | What happens without it |
+|---------|-------------------------|
+| `seccomp=unconfined` | `Cannot create runtime: Operation not permitted`. Iggy's runtime is io_uring; the default seccomp profiles block it. |
+| `IGGY_SYSTEM_SHARDING_CPU_ALLOCATION` | `MemoryAffinityFailed`. The default `numa:auto` binds shard memory to a NUMA node, which fails in a container VM. |
+| `IGGY_ROOT_USERNAME` / `_PASSWORD` | The server accepts the connection and closes it mid-login. The client reports a VSR header error and then reconnects forever — it looks like a protocol mismatch and is not. |
+
+Pin an Iggy **0.9.x** server: a 0.8.x one never answers the `iggy` 0.11 client's
+login regardless of the above.
+
+## The crates
+
+In dependency order. A crate may only depend on ones above it.
+
+| Crate | Holds |
+|-------|-------|
+| `aiwatcher-core` | Domain: ids, envelope, correlation, event catalog, ports. Knows nothing about Laser, HTTP or OTLP. |
+| `aiwatcher-bus` | `MessageSource` / `MessageSink` / `Checkpointer` + memory, write-ahead-log, Laser and generic-broker adapters |
+| `aiwatcher-trace` | `SpanAssembler` and the OTLP/JSON exporters |
+| `aiwatcher-projector` | The pipeline, live hub, read model, dimension and span folds, dedup, retry, dead letters |
+| `aiwatcher-api` | axum router: REST, SSE, WebSocket, OpenAPI |
+| `aiwatcher-server` | Config, wiring, graceful shutdown. The only crate that knows every implementation exists. |
+
+Around them: `apps/panel` (React), `sdk/python`, `sdk/typescript`, `contracts/`,
+`deploy/`, `docs/ADR/`, and `services/flow` — an optional PHP service serving
+the panel's Query tab, outside the Cargo workspace and unknown to the Rust
+binary.
+
+## The decisions that explain most of the code
+
+Each has an ADR. Read the relevant one before changing that area; the section
+that matters in every one of them is what would make the decision wrong.
+
+- **Ids are derived, not generated**
+  ([0001](docs/ADR/ADR_0001_EVENT_ENVELOPE.md)). Delivery is at-least-once, so
+  `TraceId::derive` and `SpanId::derive` are pure functions of the run id and a
+  stable span key. A redelivery lands on the same span rather than a duplicate.
+- **An event is not a span** ([0003](docs/ADR/ADR_0003_SPAN_ASSEMBLY.md)).
+  Hundreds of events fold into a handful of spans. `llm.chunk` is counted, never
+  stored per chunk — streaming a 2000-token reply would otherwise write 2000
+  trace records for one call.
+- **A reconnect closes its own gap**
+  ([0004](docs/ADR/ADR_0004_LIVE_STREAM_RESUME.md)). Every SSE frame carries its
+  checkpoint as the `id:`, so the browser resumes through `Last-Event-ID` with
+  no application code on either side.
+- **Laser sits behind a port, feature-gated**
+  ([0002](docs/ADR/ADR_0002_EVENT_BUS_PORT.md)). Nothing above `aiwatcher-bus`
+  names it; the default backend is the built-in write-ahead log.
+- **One fold slices runs every way, and every list is a cursor page**
+  ([0007](docs/ADR/ADR_0007_EXPLORER_DIMENSIONS.md)). Nothing loads a whole run,
+  and search runs on the server.
+- **An evaluation report is not a trace**
+  ([0010](docs/ADR/ADR_0010_EVALUATION_REPORTS.md)). `eval.*` events ride the
+  same log and form no span: a report is parameters, metrics and a document,
+  folded into its own bounded projection. It is what a producer needs to stop
+  running MLflow for four fields.
+- **A Flow PHP query is parsed, never executed**
+  ([0008](docs/ADR/ADR_0008_FLOW_QUERY_SURFACE.md)). The Query tab's pipeline is
+  lexed, whitelisted and turned into objects through an explicit `match` — no
+  `eval`, and no name from a query ever becomes a callable.
+
+The full index, including trace storage and the local-Kubernetes guards, is in
+[docs/ADR/README.md](docs/ADR/README.md).
+
+## Deploying
+
+```bash
+just detect NS         # what that cluster already runs — reads only
+just install-plan      # render and diff; change nothing
+just install-cluster   # apply, after asking on any non-local context
+```
+
+Installation reads the cluster instead of trusting a flag
+([0009](docs/ADR/ADR_0009_INSTALL_BY_DETECTION.md)). A second VictoriaMetrics
+beside an existing one splits one workload's metrics across two stores with no
+error anywhere — just a gap in a graph. So every backend is
+`install | external | none`, never a boolean, and a Collector that detection
+merely *found* is never reused: a foreign one almost certainly lacks the
+processor that redacts prompt and completion text.
+
+Full walkthrough, including installing beside an existing stack:
+[docs/INSTALL.md](docs/INSTALL.md).
+
+## Commands
+
+```bash
+just               # every recipe, with what each one is for
+just check         # everything CI runs; green here means green there
+just test          # cargo test --workspace --all-targets
+just test-one PAT  # one test by name, e.g. `just test-one two_parallel`
+just openapi       # regenerate contracts/openapi.json and the panel's client
+just stack-up      # docker compose: VictoriaTraces, VictoriaMetrics, Collector, Grafana
+just tilt-up       # the same stack on a local Kubernetes, rebuilt on save
+just flow-check    # the PHP query service's own gate — `just check` excludes it
+```
+
+`contracts/openapi.json` is generated from the axum routes and the panel's
+client is generated from it, so `just openapi` after any route change and commit
+both — CI fails on a stale contract, because a stale client is a runtime
+`undefined` rather than a compile error.
+
+Before opening a PR, and what else is expected of a change:
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Licence
+
+Proprietary and confidential. No licence is granted — see [LICENSE](LICENSE).

@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ai-spirit/aiwatcher/contracts/envelope.schema.json",
+  "title": "aiwatcher event envelope",
+  "description": "What a producer publishes. This is the contract between Python/TypeScript agents and the Rust backend; an SDK is a convenience, this file is the agreement. The backend fills in everything a producer leaves out — see RecordedMetadata in the OpenAPI document for the recorded form.",
+  "type": "object",
+  "required": ["event_type", "occurred_at", "run_id", "source"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1,
+      "description": "Contract version. An envelope from a newer contract is rejected rather than half-read."
+    },
+    "kind": {
+      "enum": ["Event", "Command"],
+      "default": "Event",
+      "description": "Only events are ingested today. The discriminator is on the wire from day one so adding control commands later is not a breaking change."
+    },
+    "event_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Deduplication key; a UUIDv7 or ULID. OMITTING THIS DISABLES DEDUPLICATION for the event: the backend generates one, so a redelivery looks like a new event and double-counts its tokens."
+    },
+    "event_type": {
+      "type": "string",
+      "minLength": 1,
+      "description": "See docs/event-catalog.md. An unrecognised type is stored and streamed live rather than rejected; it simply takes part in no span. So does every eval.* type, deliberately: an evaluation report is a record, not a trace.",
+      "examples": ["run.started", "llm.completed", "tool.failed", "eval.completed"]
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the producer observed it, RFC 3339. Distinct from the backend's ingested_at; the gap between them is producer lag."
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "One execution of an agent. This is what a trace is scoped to, and what the log partitions by. For an eval.* event it is the evaluation id: an evaluation is an execution too, so it gets its own stream and its own partition, and it never appears in the runs list."
+    },
+    "conversation_id": {
+      "type": "string",
+      "description": "Groups several runs a user would think of as one conversation. NOT the partition key: one conversation can fan out into parallel runs, and partitioning by it would serialise them."
+    },
+    "workflow_id": {
+      "type": "string",
+      "description": "Which orchestration this run is an execution of. A conversation groups runs by who is talking; a workflow groups them by what is being executed, so the same graph is comparable across sessions. Read from data.workflow as a fallback, for producers that predate this field."
+    },
+    "agent_id": { "type": "string" },
+    "sequence": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Producer-side counter within the run. Gaps here are the only way to notice a producer that dropped a batch."
+    },
+    "trace_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$",
+      "description": "W3C Trace Context trace id. Derived from run_id when omitted, deterministically, so a replay reproduces it."
+    },
+    "span_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{16}$",
+      "description": "Derived from (trace_id, span key) when omitted. A start and its end must resolve to the same span id — which they do automatically when both carry the same data.call_id and agent_id."
+    },
+    "parent_span_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{16}$",
+      "description": "Explicit parenting. When omitted the backend parents onto the innermost open container span (agent, else run) of the same run."
+    },
+    "correlation_id": {
+      "type": "string",
+      "description": "Groups an entire flow; inherited unchanged by everything the flow causes."
+    },
+    "causation_id": {
+      "type": "string",
+      "description": "The direct cause. Roots itself on correlation_id when nothing seeded it, so 'what caused this' always has an answer."
+    },
+    "source": {
+      "type": "object",
+      "required": ["service", "sdk"],
+      "additionalProperties": false,
+      "properties": {
+        "service": { "type": "string", "minLength": 1 },
+        "instance": { "type": "string" },
+        "sdk": { "type": "string", "examples": ["python", "typescript", "rust"] }
+      }
+    },
+    "data": {
+      "type": "object",
+      "description": "Type-specific payload. Free-form so an SDK can add a field without a backend release. Fields the backend reads are listed below; anything else is stored and shown but not interpreted.",
+      "properties": {
+        "call_id": {
+          "type": "string",
+          "description": "Distinguishes concurrent LLM or tool calls inside one agent. Without it, two parallel calls collapse into one span."
+        },
+        "tool_call_id": { "type": "string", "description": "Accepted as an alias for call_id." },
+        "provider": { "type": "string", "examples": ["anthropic", "openai"] },
+        "model": { "type": "string" },
+        "response_model": { "type": "string" },
+        "response_id": { "type": "string" },
+        "prompt_tokens": { "type": "integer", "minimum": 0 },
+        "input_tokens": { "type": "integer", "minimum": 0, "description": "Alias for prompt_tokens." },
+        "completion_tokens": { "type": "integer", "minimum": 0 },
+        "output_tokens": { "type": "integer", "minimum": 0, "description": "Alias for completion_tokens." },
+        "cached_tokens": { "type": "integer", "minimum": 0 },
+        "finish_reason": { "type": "string" },
+        "temperature": { "type": "number" },
+        "max_tokens": { "type": "integer", "minimum": 0 },
+        "tool_name": { "type": "string" },
+        "duration_ms": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Used to back-date the span start when only an end event was ever sent."
+        },
+        "status": { "type": "string" },
+        "error": { "type": "string" },
+        "text": { "type": "string", "description": "A streamed fragment, on llm.chunk." }
+      }
+    }
+  },
+  "examples": [
+    {
+      "schema_version": 1,
+      "event_id": "01J8ZK3QW4T5V6X7Y8Z9A0B1C2",
+      "event_type": "llm.completed",
+      "occurred_at": "2026-08-27T18:20:11.123Z",
+      "run_id": "run_456",
+      "conversation_id": "conv_123",
+      "agent_id": "research-agent",
+      "sequence": 17,
+      "source": { "service": "python-agent-service", "instance": "agent-07", "sdk": "python" },
+      "data": {
+        "call_id": "call-7",
+        "provider": "anthropic",
+        "model": "claude-opus-5",
+        "prompt_tokens": 812,
+        "completion_tokens": 193,
+        "cached_tokens": 400,
+        "finish_reason": "stop",
+        "duration_ms": 1240
+      }
+    }
+  ]
+}

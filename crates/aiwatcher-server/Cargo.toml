@@ -1,0 +1,45 @@
+[package]
+name = "aiwatcher-server"
+description = "The deployable binary: configuration, wiring and graceful shutdown."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "aiwatcher"
+path = "src/bin/aiwatcher.rs"
+
+[[bin]]
+name = "aiwatcher-openapi"
+path = "src/bin/aiwatcher-openapi.rs"
+
+[features]
+default = []
+# Wires the real Laser backend. Off by default so a plain `cargo build` needs
+# neither the SDK nor a broker.
+laser = ["aiwatcher-bus/laser"]
+
+[dependencies]
+aiwatcher-core.workspace = true
+aiwatcher-bus.workspace = true
+aiwatcher-trace.workspace = true
+aiwatcher-projector.workspace = true
+aiwatcher-api.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+axum.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+utoipa.workspace = true
+
+[lints]
+workspace = true

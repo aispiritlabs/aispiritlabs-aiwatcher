@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Runs the same checks CI does. Bypass with `git push --no-verify`.
+set -euo pipefail
+exec just check

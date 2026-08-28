@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: aiwatcher
+  labels:
+    # Everything here runs unprivileged except Iggy, which needs an unconfined
+    # seccomp profile for io_uring. `privileged` on the namespace keeps the
+    # admission controller from rejecting that pod; on a shared cluster this
+    # would be a dedicated namespace with a targeted exception instead.
+    pod-security.kubernetes.io/enforce: privileged

@@ -1,0 +1,81 @@
+# aiwatcher — Rust backend workspace.
+#
+# Layering (a crate may only depend on crates above it in this list):
+#
+#   aiwatcher-core       domain types: ids, envelope, correlation, catalog, ports
+#   aiwatcher-bus        MessageSource / MessageSink / Checkpointer + adapters
+#   aiwatcher-trace      span assembly + OTLP/JSON exporters
+#   aiwatcher-projector  the consumer pipeline + live hub + read model
+#   aiwatcher-api        axum router (REST + SSE + WS) + OpenAPI
+#   aiwatcher-server     the deployable binary: config, wiring, shutdown
+#
+# Nothing below `core` knows about Laser, VictoriaTraces or HTTP. Storage and
+# transport are adapters behind the ports declared in `aiwatcher-core::ports`.
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98.0"
+license = "Apache-2.0"
+repository = "https://github.com/ai-spirit/aiwatcher"
+
+[workspace.dependencies]
+aiwatcher-core = { path = "crates/aiwatcher-core", version = "0.1.0" }
+aiwatcher-bus = { path = "crates/aiwatcher-bus", version = "0.1.0" }
+aiwatcher-trace = { path = "crates/aiwatcher-trace", version = "0.1.0" }
+aiwatcher-projector = { path = "crates/aiwatcher-projector", version = "0.1.0" }
+aiwatcher-api = { path = "crates/aiwatcher-api", version = "0.1.0" }
+
+anyhow = "1.0.104"
+async-trait = "0.1.92"
+axum = { version = "0.8.9", features = ["ws", "macros"] }
+bytes = "1.10"
+futures = "0.3"
+# The real Laser SDK, over Apache Iggy. Optional: the default build (and every
+# test that does not need a broker) stays free of it, and of the ~360 crates
+# beneath it.
+# The crate is published as `laser-sdk`; its lib target is `laser_sdk`, which is
+# what `use laser_sdk::prelude::*` names. Optional, and with default features
+# off: the agent/memory/graph layers are a different product surface from the
+# streaming primitives this adapter needs, and they are most of the ~360 crates.
+laser-sdk = { version = "0.3.0", default-features = false, features = ["streaming"] }
+# reqwest 0.13 renamed the TLS features: `rustls-tls` became `rustls`.
+reqwest = { version = "0.13", default-features = false, features = [
+  "json",
+  "http2",
+  "rustls",
+] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.20"
+time = { version = "0.3", features = ["formatting", "parsing", "serde-well-known", "macros"] }
+tokio = { version = "1.53", features = ["full"] }
+tokio-stream = { version = "0.1.19", features = ["sync"] }
+tokio-util = "0.7"
+tower = "0.5.3"
+tower-http = { version = "0.6", features = ["cors", "trace", "fs"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+utoipa = { version = "5.5.0", features = ["axum_extras", "time"] }
+utoipa-axum = "0.2.0"
+uuid = { version = "1.26.0", features = ["v7", "serde"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+# Denied in CI via `-Dwarnings`; kept here so `cargo clippy` without flags is
+# already representative of what the gate will say.
+todo = "warn"
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"

@@ -1,0 +1,49 @@
+aiwatcher {{ .Chart.AppVersion }} is installed as {{ .Release.Name }} in {{ .Release.Namespace }}.
+
+What this release owns and what it borrowed:
+
+  server           {{ include "aiwatcher.fullname" . }}-server:8080   (bus: {{ .Values.server.bus }}{{ if not .Values.server.persistence.enabled }}, NO persistent volume{{ end }})
+  panel            {{ if .Values.panel.enabled }}{{ include "aiwatcher.fullname" . }}-panel:80{{ else }}not installed{{ end }}
+  collector        {{ .Values.collector.mode }}{{ if eq .Values.collector.mode "external" }} → {{ .Values.collector.external.endpoint }}{{ end }}
+  VictoriaTraces   {{ .Values.victoriatraces.mode }}{{ if eq .Values.victoriatraces.mode "external" }} → {{ .Values.victoriatraces.external.url }}{{ end }}
+  VictoriaMetrics  {{ .Values.victoriametrics.mode }}{{ if eq .Values.victoriametrics.mode "external" }} → {{ .Values.victoriametrics.external.url }}{{ end }}
+
+Reach the panel:
+{{- if .Values.ingress.enabled }}
+
+  http{{ if .Values.ingress.tls.enabled }}s{{ end }}://{{ .Values.ingress.host }}
+{{- else if .Values.panel.enabled }}
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "aiwatcher.fullname" . }}-panel 8080:80
+  open http://127.0.0.1:8080
+{{- else }}
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "aiwatcher.fullname" . }}-server 8080:8080
+{{- end }}
+
+Point an SDK at it, from inside the cluster:
+
+  AIWATCHER_URL=http://{{ include "aiwatcher.fullname" . }}-server.{{ .Release.Namespace }}.svc.cluster.local:8080
+{{- if not .Values.server.ingestEnabled }}
+
+  ⚠ server.ingestEnabled is false, so POST /api/v1/events is closed. An SDK can
+    only publish to the durable log directly.
+{{- end }}
+{{- if and (eq .Values.collector.mode "none") (include "aiwatcher.otlpEndpoint" .) }}
+
+⚠ collector.mode is "none" and the server exports OTLP directly. Prompt and
+  completion text is redacted in the Collector, so nothing is redacting it on
+  this path. That needs a retention policy, not just this note.
+{{- end }}
+{{- if eq .Values.victoriatraces.mode "none" }}
+
+⚠ victoriatraces.mode is "none": no trace history is kept. The panel still shows
+  live runs — it reads the read model, not the trace store — but a run scrolls
+  out of memory once {{ .Values.server.maxRuns }} newer ones have arrived.
+{{- end }}
+{{- if .Values.grafana.datasources.enabled }}
+
+The Grafana datasource is in ConfigMap {{ include "aiwatcher.fullname" . }}-grafana-datasources.
+A Grafana running the provisioning sidecar picks it up from its label. One
+provisioned from a fixed ConfigMap does not — see docs/INSTALL.md.
+{{- end }}

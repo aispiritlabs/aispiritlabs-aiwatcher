@@ -1,0 +1,183 @@
+{{- if eq .Values.collector.mode "install" }}
+{{- $fullname := include "aiwatcher.fullname" . -}}
+{{- $traces := include "aiwatcher.tracesBaseUrl" . -}}
+{{- $metrics := include "aiwatcher.metricsBaseUrl" . -}}
+{{- if and (not $traces) (not $metrics) -}}
+{{- fail "collector.mode is \"install\" but both victoriatraces.mode and victoriametrics.mode are \"none\" — the Collector would have nowhere to send anything." -}}
+{{- end -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-collector
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+    app.kubernetes.io/component: collector
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          http:
+            endpoint: 0.0.0.0:4318
+          grpc:
+            endpoint: 0.0.0.0:4317
+
+    processors:
+      # Back-pressure to aiwatcher beats an OOMKill in the Collector.
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 75
+        spike_limit_percentage: 15
+
+      batch:
+        timeout: 5s
+        send_batch_size: 1024
+        send_batch_max_size: 2048
+
+      {{- if .Values.collector.redactPrompts }}
+      # Prompt and response text never leaves this process. See values.yaml.
+      attributes/redact:
+        actions:
+          - key: gen_ai.prompt
+            action: delete
+          - key: gen_ai.completion
+            action: delete
+          - key: gen_ai.input.messages
+            action: delete
+          - key: gen_ai.output.messages
+            action: delete
+      {{- end }}
+
+      resource:
+        attributes:
+          - key: deployment.environment
+            value: {{ .Values.collector.environment | quote }}
+            action: upsert
+
+    exporters:
+      {{- if $traces }}
+      otlphttp/victoriatraces:
+        traces_endpoint: {{ printf "%s/insert/opentelemetry/v1/traces" $traces | quote }}
+        tls:
+          insecure: true
+        retry_on_failure:
+          enabled: true
+          initial_interval: 1s
+          max_interval: 30s
+        sending_queue:
+          enabled: true
+          queue_size: 5000
+      {{- end }}
+      {{- if $metrics }}
+      otlphttp/victoriametrics:
+        metrics_endpoint: {{ printf "%s/opentelemetry/v1/metrics" $metrics | quote }}
+        tls:
+          insecure: true
+        retry_on_failure:
+          enabled: true
+      {{- end }}
+
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+
+    service:
+      extensions: [health_check]
+      pipelines:
+        {{- if $traces }}
+        # Traces and metrics take different exits. Sending spans to a metrics
+        # database or the reverse produces a 200 and no data.
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter{{ if .Values.collector.redactPrompts }}, attributes/redact{{ end }}, resource, batch]
+          exporters: [otlphttp/victoriatraces]
+        {{- end }}
+        {{- if $metrics }}
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, resource, batch]
+          exporters: [otlphttp/victoriametrics]
+        {{- end }}
+      telemetry:
+        logs:
+          level: info
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-collector
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+    app.kubernetes.io/component: collector
+spec:
+  selector:
+    {{- include "aiwatcher.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: collector
+  ports:
+    - { name: otlp-http, port: 4318, targetPort: 4318, protocol: TCP }
+    - { name: otlp-grpc, port: 4317, targetPort: 4317, protocol: TCP }
+    - { name: health, port: 13133, targetPort: 13133, protocol: TCP }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-collector
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+    app.kubernetes.io/component: collector
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "aiwatcher.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: collector
+  template:
+    metadata:
+      annotations:
+        # The Collector does not watch its own file; without this a ConfigMap
+        # edit changes nothing until something else restarts the pod.
+        checksum/config: {{ toYaml .Values.collector | sha256sum | trunc 32 }}
+      labels:
+        {{- include "aiwatcher.selectorLabels" . | nindent 8 }}
+        # Not in the selector — the selector is immutable, and this is here so
+        # deploy/scripts/detect-stack.py can tell aiwatcher's own pods from the
+        # ones it is looking for. See that script.
+        app.kubernetes.io/part-of: aiwatcher
+        app.kubernetes.io/component: collector
+    spec:
+      automountServiceAccountToken: false
+      {{- include "aiwatcher.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: collector
+          image: "{{ .Values.collector.image.repository }}:{{ .Values.collector.image.tag }}"
+          imagePullPolicy: {{ .Values.collector.image.pullPolicy }}
+          args: ["--config=/etc/otel/config.yaml"]
+          ports:
+            - { name: otlp-http, containerPort: 4318, protocol: TCP }
+            - { name: otlp-grpc, containerPort: 4317, protocol: TCP }
+            - { name: health, containerPort: 13133, protocol: TCP }
+          readinessProbe:
+            httpGet: { path: /, port: health }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /, port: health }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.collector.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: config, mountPath: /etc/otel, readOnly: true }
+      volumes:
+        - name: config
+          configMap: { name: {{ $fullname }}-collector }
+{{- end }}

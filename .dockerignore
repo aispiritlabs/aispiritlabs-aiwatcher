@@ -1,0 +1,10 @@
+# The build context is already narrowed by Tilt's `only=`, but a plain
+# `docker build .` should not ship the world either.
+target/
+apps/panel/node_modules/
+apps/panel/dist/
+sdk/typescript/node_modules/
+.data/
+.git/
+docs/
+*.md

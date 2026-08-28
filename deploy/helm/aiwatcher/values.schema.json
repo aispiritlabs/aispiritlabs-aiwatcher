@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "aiwatcher chart values",
+  "description": "Deliberately partial. It pins the fields where a typo produces a plausible-looking deployment that quietly does the wrong thing — the three-way modes, the bus, the log format — and leaves the rest to the templates, which fail with their own messages.",
+  "type": "object",
+  "properties": {
+    "server": {
+      "type": "object",
+      "properties": {
+        "bus": { "enum": ["memory", "wal", "laser"] },
+        "logFormat": { "enum": ["json", "pretty"] },
+        "ingestEnabled": { "type": "boolean" },
+        "maxRuns": { "type": "integer", "minimum": 1 },
+        "maxSpansTotal": { "type": "integer", "minimum": 1 },
+        "orphanTimeoutSeconds": { "type": "integer", "minimum": 1 },
+        "corsOrigins": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "collector": {
+      "type": "object",
+      "properties": {
+        "mode": { "enum": ["install", "external", "none"] },
+        "redactPrompts": { "type": "boolean" }
+      }
+    },
+    "victoriatraces": {
+      "type": "object",
+      "properties": { "mode": { "enum": ["install", "external", "none"] } }
+    },
+    "victoriametrics": {
+      "type": "object",
+      "properties": { "mode": { "enum": ["install", "external", "none"] } }
+    },
+    "panel": {
+      "type": "object",
+      "properties": { "enabled": { "type": "boolean" } }
+    },
+    "ingress": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "host": { "type": "string" }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "allowIngressFrom": { "type": "array" },
+        "allowEgressToExternalVictoriaMetrics": { "type": "boolean" },
+        "allowEgressToExternalVictoriaTraces": { "type": "boolean" }
+      }
+    }
+  }
+}

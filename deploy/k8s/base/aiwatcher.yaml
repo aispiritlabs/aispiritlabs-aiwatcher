@@ -1,0 +1,107 @@
+# aiwatcher itself, on the Laser backend.
+#
+# One process runs both the projector and the API. They are separate crates and
+# could be separate Deployments — the projector scales by consumer group, the
+# API by replica — but splitting them turns the live hub from an in-process
+# channel into another network hop. See ADR_0004.
+#
+# `replicas: 1` is therefore not a placeholder: a second replica would give each
+# one its own live hub and its own read model, so which one a browser reached
+# would decide what it saw.
+apiVersion: v1
+kind: Service
+metadata:
+  name: aiwatcher
+spec:
+  selector:
+    app: aiwatcher
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aiwatcher
+spec:
+  replicas: 1
+  strategy:
+    # Recreate, not RollingUpdate: two projectors in the same consumer group
+    # would both consume during the overlap, and the one being torn down would
+    # commit offsets for events the new one never saw.
+    type: Recreate
+  selector:
+    matchLabels:
+      app: aiwatcher
+  template:
+    metadata:
+      labels:
+        app: aiwatcher
+    spec:
+      containers:
+        - name: aiwatcher
+          image: aiwatcher
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: AIWATCHER_LISTEN
+              value: '0.0.0.0:8080'
+            # The write-ahead log, so this stack comes up green without a
+            # broker. `deploy/k8s/laser` overlays the Laser backend on top —
+            # see that kustomization for what it needs and what it costs.
+            - name: AIWATCHER_BUS
+              value: wal
+            - name: AIWATCHER_OTLP_ENDPOINT
+              value: 'http://otel-collector:4318'
+            - name: AIWATCHER_SERVICE_NAME
+              value: aiwatcher
+            # On here so `just seed` and the browser can publish. Off in
+            # production, where producers reach Laser directly.
+            - name: AIWATCHER_INGEST_ENABLED
+              value: 'true'
+            - name: AIWATCHER_LOG
+              value: 'info,aiwatcher=debug'
+            - name: AIWATCHER_LOG_FORMAT
+              value: json
+          ports:
+            - name: http
+              containerPort: 8080
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            # Distinct from liveness: a projector replaying a backlog is alive
+            # but not ready, and restarting it would make the replay start over.
+            httpGet:
+              path: /readyz
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          # 512Mi is the target the read-model caps are sized for: measured at
+          # ~150Mi resident on a debug build at full retention with a realistic
+          # workload. AIWATCHER_MAX_RUNS and AIWATCHER_MAX_SPANS_TOTAL move that
+          # budget; change them together with this limit, never one alone.
+          resources:
+            requests:
+              cpu: 200m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ['ALL']
+          volumeMounts:
+            # The write-ahead log lives here. emptyDir: a restart starting from
+            # an empty log is right for a test stack.
+            - name: data
+              mountPath: /var/lib/aiwatcher
+      volumes:
+        - name: data
+          emptyDir: {}

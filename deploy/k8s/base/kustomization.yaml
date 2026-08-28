@@ -1,0 +1,30 @@
+# The aiwatcher test stack for a local Kubernetes — write-ahead-log backend.
+#
+# `deploy/k8s/laser` is an overlay that switches aiwatcher onto the Laser
+# backend. It is separate rather than the default so this stack comes up green
+# on any machine; see that kustomization.
+#
+# Not a production deployment: single replicas, emptyDir volumes, no resource
+# quotas worth the name, anonymous Grafana. It exists so Tilt can stand the
+# whole thing up on save and so the wiring — aiwatcher → Collector →
+# VictoriaTraces/VictoriaMetrics, and aiwatcher → Iggy — is exercised the way it
+# will be in a cluster rather than only through docker compose.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: aiwatcher
+
+resources:
+  - namespace.yaml
+  - iggy.yaml
+  - victoriatraces.yaml
+  - victoriametrics.yaml
+  - otel-collector.yaml
+  - grafana.yaml
+  - aiwatcher.yaml
+
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/part-of: aiwatcher
+      app.kubernetes.io/managed-by: kustomize

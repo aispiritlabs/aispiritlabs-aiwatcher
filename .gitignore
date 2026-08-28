@@ -1,0 +1,66 @@
+# Build output
+/target
+**/*.rs.bk
+dist/
+.vite/
+*.tsbuildinfo
+# TanStack Router's generated route tree cache. routeTree.gen.ts itself IS
+# committed — the build needs it and CI does not run the generator.
+.tanstack/
+
+# Dependencies. Every lockfile beside them is committed: this repository ships
+# binaries and a deployed service, not libraries, so a reproducible resolve
+# matters more than a loose one.
+node_modules/
+vendor/
+*.egg-info/
+
+# Caches
+__pycache__/
+.mypy_cache/
+.ruff_cache/
+.phpunit.cache/
+.DS_Store
+
+# Runtime state. The write-ahead log and the dead-letter queue from `just run`.
+/.data/
+/.tilt-data/
+
+# ── Secrets ──────────────────────────────────────────────────────────────────
+#
+# `just` has `set dotenv-load := true`, so a .env here is loaded into every
+# recipe. That makes it the natural place for a Laser connection string or a
+# registry token, and the one file that must never be committed.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+# A kubeconfig names a cluster and carries a credential for it. The install
+# scripts read $KUBECONFIG rather than a file in the tree, so one appearing here
+# is an accident.
+kubeconfig
+kubeconfig.yaml
+*.kubeconfig
+
+# ── Helm ─────────────────────────────────────────────────────────────────────
+#
+# Packaged charts and fetched dependencies. deploy/helm/aiwatcher has no chart
+# dependencies today; this keeps a `helm dependency update` from committing one
+# as a tarball if it ever does.
+deploy/helm/**/charts/
+*.tgz
+
+# Local detection output, if anyone redirects it to a file rather than piping
+# it. It is a picture of one cluster at one moment and belongs to nobody else.
+detected.yaml
+detected-*.yaml
+
+# ── Editor and agent ─────────────────────────────────────────────────────────
+#
+# .claude/launch.json is committed: it tells the preview which dev server to
+# start, which is a property of the repository. Local overrides are not.
+.claude/settings.local.json
+.idea/
+.vscode/
+!.vscode/extensions.json

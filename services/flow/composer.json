@@ -1,0 +1,30 @@
+{
+  "name": "aiwatcher/flow",
+  "description": "The Flow PHP query surface for aiwatcher: a DataFrame pipeline over the aiwatcher API, parsed rather than executed.",
+  "type": "project",
+  "license": "MIT",
+  "require": {
+    "php": "~8.3.0 || ~8.4.0 || ~8.5.0",
+    "flow-php/etl": "^0.43",
+    "flow-php/etl-adapter-http": "^0.43",
+    "nyholm/psr7": "^1.8",
+    "symfony/http-client": "^7.0 || ^8.0"
+  },
+  "require-dev": {
+    "carthage-software/mago": "^1.47",
+    "phpunit/phpunit": "^11.0 || ^12.0"
+  },
+  "autoload": {
+    "psr-4": { "Aiwatcher\\Flow\\": "src/" }
+  },
+  "autoload-dev": {
+    "psr-4": { "Aiwatcher\\Flow\\Tests\\": "tests/" }
+  },
+  "config": {
+    "sort-packages": true,
+    "allow-plugins": { "*": false }
+  },
+  "scripts": {
+    "test": "phpunit"
+  }
+}

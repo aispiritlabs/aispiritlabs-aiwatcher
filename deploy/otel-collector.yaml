@@ -1,0 +1,91 @@
+# Collector config for the local stack.
+#
+# Two things worth understanding here:
+#
+# * Traces and metrics take different exits. VictoriaTraces stores spans;
+#   VictoriaMetrics stores aggregates. Sending spans to a metrics database or
+#   the reverse produces a 200 and no data.
+# * Prompts and responses are redacted before export. They are the highest-risk
+#   field in the whole system and the one most likely to be regretted; the place
+#   to make that decision is here, once, not in every SDK.
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  # Bounded queueing: back-pressure to aiwatcher beats an OOM in the Collector.
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 75
+    spike_limit_percentage: 15
+
+  batch:
+    timeout: 5s
+    send_batch_size: 1024
+    send_batch_max_size: 2048
+
+  # Prompt and response text never leaves this process. Turn it off knowingly,
+  # with a retention policy and an access story, not by default.
+  attributes/redact:
+    actions:
+      - key: gen_ai.prompt
+        action: delete
+      - key: gen_ai.completion
+        action: delete
+      - key: gen_ai.input.messages
+        action: delete
+      - key: gen_ai.output.messages
+        action: delete
+
+  resource:
+    attributes:
+      - key: deployment.environment
+        value: local
+        action: upsert
+
+exporters:
+  otlphttp/victoriatraces:
+    traces_endpoint: http://victoriatraces:10428/insert/opentelemetry/v1/traces
+    tls:
+      insecure: true
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 30s
+    sending_queue:
+      enabled: true
+      queue_size: 5000
+
+  otlphttp/victoriametrics:
+    metrics_endpoint: http://victoriametrics:8428/opentelemetry/v1/metrics
+    tls:
+      insecure: true
+    retry_on_failure:
+      enabled: true
+
+  debug:
+    verbosity: basic
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, attributes/redact, resource, batch]
+      exporters: [otlphttp/victoriatraces]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resource, batch]
+      exporters: [otlphttp/victoriametrics]
+  telemetry:
+    logs:
+      level: info

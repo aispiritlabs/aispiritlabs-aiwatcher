@@ -1,0 +1,47 @@
+Copyright (c) 2026 AI Spirit Labs. All rights reserved.
+
+PROPRIETARY AND CONFIDENTIAL
+
+This software and its source code, documentation, configuration and related
+materials (together, the "Software") are the confidential and proprietary
+property of AI Spirit Labs.
+
+No licence is granted. Being able to read this repository — because it was made
+visible, shared, forked, mirrored, indexed or cached — does not grant any
+right to the Software. In particular, no person or organisation may, without
+prior written permission from AI Spirit Labs:
+
+  1. use, run or deploy the Software, in whole or in part;
+  2. copy, reproduce, publish, distribute, sublicense, sell or otherwise make
+     the Software available to any third party;
+  3. modify the Software or create derivative works from it;
+  4. reverse engineer, decompile or disassemble any compiled form of it;
+  5. use the Software, or any part of it, to train or fine-tune a machine
+     learning model;
+  6. remove or alter this notice, or any copyright or attribution notice, in
+     any copy of the Software.
+
+Permission granted to one person or for one purpose extends no further. Any
+permission is revocable, non-exclusive and non-transferable unless a separate
+written agreement says otherwise.
+
+THIRD-PARTY COMPONENTS
+
+The Software depends on third-party components that remain under their own
+licences. Those licences govern those components and nothing in this file
+restricts rights granted by them. The dependency manifests are the record:
+Cargo.toml and Cargo.lock, apps/panel/package.json, sdk/typescript/package.json,
+sdk/python/pyproject.toml, and services/flow/composer.json.
+
+NO WARRANTY
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+CONTACT
+
+Licensing enquiries: https://github.com/aispiritlabs

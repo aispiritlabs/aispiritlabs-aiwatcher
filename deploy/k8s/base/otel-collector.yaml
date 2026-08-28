@@ -1,0 +1,149 @@
+# The Collector is in the path even though aiwatcher can post OTLP straight to
+# VictoriaTraces. It is where sampling, redaction and a second destination get
+# added later, and having it here from the start makes those a ConfigMap edit
+# rather than a redeploy.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          http:
+            endpoint: 0.0.0.0:4318
+          grpc:
+            endpoint: 0.0.0.0:4317
+
+    processors:
+      # Back-pressure to aiwatcher beats an OOMKill in the Collector.
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 75
+        spike_limit_percentage: 15
+
+      batch:
+        timeout: 5s
+        send_batch_size: 1024
+        send_batch_max_size: 2048
+
+      # Prompt and response text never leaves this process. Turning it off is a
+      # decision that needs a retention policy attached, not a config tweak.
+      attributes/redact:
+        actions:
+          - key: gen_ai.prompt
+            action: delete
+          - key: gen_ai.completion
+            action: delete
+          - key: gen_ai.input.messages
+            action: delete
+          - key: gen_ai.output.messages
+            action: delete
+
+      resource:
+        attributes:
+          - key: deployment.environment
+            value: tilt
+            action: upsert
+
+    exporters:
+      otlphttp/victoriatraces:
+        traces_endpoint: http://victoriatraces:10428/insert/opentelemetry/v1/traces
+        tls:
+          insecure: true
+        retry_on_failure:
+          enabled: true
+        sending_queue:
+          enabled: true
+          queue_size: 5000
+
+      otlphttp/victoriametrics:
+        metrics_endpoint: http://victoriametrics:8428/opentelemetry/v1/metrics
+        tls:
+          insecure: true
+        retry_on_failure:
+          enabled: true
+
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+
+    service:
+      extensions: [health_check]
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, attributes/redact, resource, batch]
+          exporters: [otlphttp/victoriatraces]
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, resource, batch]
+          exporters: [otlphttp/victoriametrics]
+      telemetry:
+        logs:
+          level: info
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+spec:
+  selector:
+    app: otel-collector
+  ports:
+    - name: otlp-http
+      port: 4318
+      targetPort: 4318
+    - name: otlp-grpc
+      port: 4317
+      targetPort: 4317
+    - name: health
+      port: 13133
+      targetPort: 13133
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: otel-collector
+  template:
+    metadata:
+      labels:
+        app: otel-collector
+      annotations:
+        # Roll the pod when the config changes; a ConfigMap edit alone does not
+        # restart anything, and the Collector does not watch its own file.
+        checksum/config: tilt-managed
+    spec:
+      containers:
+        - name: otel-collector
+          image: otel/opentelemetry-collector-contrib:0.121.0
+          args: ['--config=/etc/otel/config.yaml']
+          ports:
+            - containerPort: 4318
+            - containerPort: 4317
+            - containerPort: 13133
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 13133
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otel
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+      volumes:
+        - name: config
+          configMap:
+            name: otel-collector

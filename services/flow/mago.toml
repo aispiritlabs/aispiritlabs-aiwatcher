@@ -1,0 +1,48 @@
+# Mago: the PHP half of what `cargo clippy -Dwarnings` does for the Rust crates.
+#
+# This service is small and security-sensitive — a stray unused variable or a
+# loose comparison in the parser is exactly the kind of thing that turns a
+# whitelist into a sieve — so the linter runs at its defaults and the build
+# fails on warnings.
+#
+# Note it is NOT used on incoming queries. Mago is a PHP parser, and the query
+# language deliberately is not PHP: `->read(default)` uses a PHP keyword as a
+# dataset name, which Mago rejects as "Unexpected token `Default`". Queries are
+# checked by `src/Dsl`, which knows the actual grammar. See ADR_0008.
+
+php-version = "8.3"
+
+[source]
+paths = ["src", "tests"]
+includes = ["vendor"]
+
+[formatter]
+print-width = 120
+
+[linter]
+# Warnings are failures here, as they are for the Rust crates.
+minimum-fail-level = "warning"
+
+[linter.rules]
+# Named arguments with literal values are the clearest thing in the dataset
+# catalog — `grain: 'one row per run'` beats a positional string every time.
+# Mago's default position is the opposite; this is a considered disagreement.
+literal-named-argument = { enabled = false }
+
+# `isset()` on a token-stream lookahead reads better than the `??`-based
+# alternatives, and the parser does a lot of lookahead.
+no-isset = { enabled = false }
+
+# Complexity metrics, disabled with the same reasoning in each case: a
+# recursive-descent parser and an explicit `match` over every allowed function
+# are *supposed* to be branchy. The `match` in particular is the security
+# boundary — collapsing it into something a metric likes would mean dynamic
+# dispatch, which is the one thing this service must not do.
+cyclomatic-complexity = { enabled = false }
+kan-defect = { enabled = false }
+halstead = { enabled = false }
+too-many-methods = { enabled = false }
+
+# `Dataset` is a value object describing an API route; its constructor has one
+# parameter per thing worth knowing about that route.
+excessive-parameter-list = { enabled = false }

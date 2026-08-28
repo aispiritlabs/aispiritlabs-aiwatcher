@@ -1,0 +1,146 @@
+{{- $fullname := include "aiwatcher.fullname" . -}}
+{{- $otlp := include "aiwatcher.otlpEndpoint" . -}}
+{{- if and (eq .Values.server.bus "laser") (not .Values.server.laser.connectionStringSecret.name) -}}
+{{- fail "server.bus is \"laser\" but server.laser.connectionStringSecret.name is empty. The connection string carries a password, so it comes from a Secret." -}}
+{{- end -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-server
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  selector:
+    {{- include "aiwatcher.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+  ports:
+    - { name: http, port: 8080, targetPort: http, protocol: TCP }
+{{- if .Values.server.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fullname }}-server-data
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.server.persistence.size }}
+  {{- include "aiwatcher.storageClass" .Values.server.persistence | nindent 2 }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-server
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  # Not a placeholder. See the comment on `server` in values.yaml: a second
+  # replica gets its own live hub and its own read model.
+  replicas: 1
+  strategy:
+    # Recreate, not RollingUpdate: two projectors in the same consumer group
+    # would both consume during the overlap, and the one being torn down would
+    # commit offsets for events the new one never saw.
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "aiwatcher.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: server
+  template:
+    metadata:
+      labels:
+        {{- include "aiwatcher.selectorLabels" . | nindent 8 }}
+        # Not in the selector — the selector is immutable, and this is here so
+        # deploy/scripts/detect-stack.py can tell aiwatcher's own pods from the
+        # ones it is looking for. See that script.
+        app.kubernetes.io/part-of: aiwatcher
+        app.kubernetes.io/component: server
+    spec:
+      automountServiceAccountToken: false
+      {{- include "aiwatcher.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: aiwatcher
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - { name: AIWATCHER_LISTEN, value: "0.0.0.0:8080" }
+            - { name: AIWATCHER_BUS, value: {{ .Values.server.bus | quote }} }
+            - { name: AIWATCHER_DATA_DIR, value: /var/lib/aiwatcher }
+            - { name: AIWATCHER_SERVICE_NAME, value: {{ .Values.server.serviceName | quote }} }
+            - { name: AIWATCHER_PROCESSOR_ID, value: {{ .Values.server.processorId | quote }} }
+            - { name: AIWATCHER_INGEST_ENABLED, value: {{ .Values.server.ingestEnabled | quote }} }
+            - { name: AIWATCHER_LOG, value: {{ .Values.server.logLevel | quote }} }
+            - { name: AIWATCHER_LOG_FORMAT, value: {{ .Values.server.logFormat | quote }} }
+            - { name: AIWATCHER_MAX_RUNS, value: {{ .Values.server.maxRuns | quote }} }
+            - { name: AIWATCHER_MAX_SPANS_TOTAL, value: {{ .Values.server.maxSpansTotal | quote }} }
+            - { name: AIWATCHER_ORPHAN_TIMEOUT_SECONDS, value: {{ .Values.server.orphanTimeoutSeconds | quote }} }
+            {{- with .Values.server.corsOrigins }}
+            - { name: AIWATCHER_CORS_ORIGINS, value: {{ join "," . | quote }} }
+            {{- end }}
+            {{- if $otlp }}
+            - { name: AIWATCHER_OTLP_ENDPOINT, value: {{ $otlp | quote }} }
+            {{- end }}
+            {{- if eq .Values.server.bus "laser" }}
+            - name: AIWATCHER_LASER_CONNECTION_STRING
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.server.laser.connectionStringSecret.name }}
+                  key: {{ .Values.server.laser.connectionStringSecret.key }}
+            - { name: AIWATCHER_LASER_STREAM, value: {{ .Values.server.laser.stream | quote }} }
+            - { name: AIWATCHER_LASER_TOPIC, value: {{ .Values.server.laser.topic | quote }} }
+            {{- end }}
+          ports:
+            - { name: http, containerPort: 8080, protocol: TCP }
+          livenessProbe:
+            httpGet: { path: /livez, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            # Distinct from liveness: a projector replaying a backlog is alive
+            # but not ready, and restarting it would make the replay start over.
+            httpGet: { path: /readyz, port: http }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.server.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/aiwatcher }
+            - { name: tmp, mountPath: /tmp }
+      {{- with .Values.server.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.server.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.server.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        - name: data
+          {{- if .Values.server.persistence.enabled }}
+          persistentVolumeClaim: { claimName: {{ $fullname }}-server-data }
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: tmp
+          emptyDir: {}

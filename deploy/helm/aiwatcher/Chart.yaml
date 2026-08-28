@@ -1,0 +1,15 @@
+apiVersion: v2
+name: aiwatcher
+description: >-
+  Observability for AI agent runs: the projector/API, the panel, and the
+  telemetry backends it needs — installing only the ones the cluster does not
+  already have.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/example/aiwatcher
+keywords:
+  - observability
+  - opentelemetry
+  - llm
+  - tracing

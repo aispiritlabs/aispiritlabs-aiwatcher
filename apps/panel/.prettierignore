@@ -1,0 +1,6 @@
+# Both of these are written by generators that emit their own formatting.
+# Formatting them here would make `just fmt` and `just openapi` fight, and the
+# contract check would fail on whichever ran second.
+src/api/generated
+src/routeTree.gen.ts
+dist

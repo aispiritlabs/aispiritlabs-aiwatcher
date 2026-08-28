@@ -1,0 +1,18 @@
+[files]
+extend-exclude = [
+  "*.lock",
+  "package-lock.json",
+  "target/",
+  "node_modules/",
+  # Build output and generated clients: not ours to spell-check, and the
+  # minified bundle is full of two-letter identifiers the dictionary dislikes.
+  "dist/",
+  "apps/panel/src/api/generated/",
+  ".data/",
+  # Composer dependencies for services/flow, same reasoning as node_modules.
+  "vendor/",
+]
+
+[default.extend-words]
+# OTLP / OpenTelemetry vocabulary the dictionary trips on.
+Ser = "Ser"

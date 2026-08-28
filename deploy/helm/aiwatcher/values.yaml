@@ -1,0 +1,302 @@
+# aiwatcher — default values.
+#
+# The defaults install a complete, self-contained stack: the server, the panel,
+# an OpenTelemetry Collector, VictoriaTraces and VictoriaMetrics. That is the
+# right shape for an empty namespace and the wrong shape for a cluster that
+# already runs half of it, which is what `deploy/helmfile.yaml` is for — it
+# looks at the cluster first and flips the `mode` fields below to `external`
+# for everything it finds.
+#
+# Every backend is a three-way `mode`, never a boolean:
+#
+#   install    this release owns it
+#   external   something else owns it; point at that instead
+#   none       this deployment does without it, deliberately
+#
+# A boolean cannot tell "do not install it, it already exists" apart from "do
+# not install it, we do not want it", and those need different wiring.
+
+nameOverride: ""
+# Resource names are `aiwatcher-*` rather than `<release>-*`; see _helpers.tpl.
+fullnameOverride: aiwatcher
+
+image:
+  repository: ghcr.io/example/aiwatcher
+  # Empty means .Chart.AppVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# ── Server ───────────────────────────────────────────────────────────────────
+#
+# The projector and the API in one process. They are separate crates and could
+# be separate Deployments, but splitting them turns the live hub from an
+# in-process channel into another network hop (ADR_0004).
+#
+# There is deliberately no `replicas` here. A second replica would get its own
+# live hub and its own read model, so which one a browser reached would decide
+# what it saw; and two projectors in one consumer group would both consume
+# during a rollout, with the one being torn down committing offsets for events
+# the new one never saw. The Deployment is `replicas: 1`, `strategy: Recreate`.
+server:
+  # memory | wal | laser. `wal` is an append-only file on the volume below:
+  # durable, single node, no broker. `laser` needs an image built with the
+  # `laser` cargo feature — a default image will refuse to start on it.
+  bus: wal
+
+  # POST /api/v1/events. On, because it is how an SDK that cannot reach the
+  # broker publishes — which is the whole integration path for a Python or
+  # TypeScript agent. Turn it off where every producer writes to Laser directly.
+  ingestEnabled: true
+
+  # Reported as service.name on every exported span.
+  serviceName: aiwatcher
+  processorId: aiwatcher-projector
+
+  logLevel: "info,aiwatcher=warn"
+  # json | pretty
+  logFormat: json
+
+  # The read model's caps. These and the memory limit below are one decision:
+  # `max_runs x max_spans_per_run` is not a bound, `maxSpansTotal` is. Raising
+  # either without raising the limit risks an OOMKill; raising the limit alone
+  # just leaves headroom unused. Re-run `just load-test` after changing them.
+  maxRuns: 5000
+  maxSpansTotal: 60000
+
+  # How long a span with no end event waits before it is closed as orphaned.
+  orphanTimeoutSeconds: 900
+
+  # Only needed when the panel is served from a different origin than the API.
+  # The bundled panel proxies /api, so same-origin, so this stays empty.
+  corsOrigins: []
+
+  # Used only when collector.mode is "none": the OTLP base URL the server posts
+  # to itself. The server appends /v1/traces and /v1/metrics.
+  otlpEndpoint: ""
+
+  persistence:
+    # The write-ahead log and the dead-letter queue. With `bus: memory` this can
+    # be false; with `bus: wal` and false, a restart starts from an empty log —
+    # fine for a test stack, data loss anywhere else.
+    enabled: true
+    size: 10Gi
+    storageClassName: ""
+
+  # Set when bus is "laser". The connection string is `user:pass@host:port`, so
+  # it comes from a Secret rather than from values.
+  laser:
+    connectionStringSecret:
+      name: ""
+      key: AIWATCHER_LASER_CONNECTION_STRING
+    stream: aiwatcher
+    topic: events
+    # Partition count is not configurable on purpose: the checkpoint is a
+    # scalar, which has no total order across partitions, so more than one
+    # would silently skip events on live-stream resume.
+
+  resources:
+    requests:
+      cpu: 200m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# ── Panel ────────────────────────────────────────────────────────────────────
+#
+# nginx serving the built React app and proxying /api to the server, so the
+# browser talks to one origin and SSE and WebSocket need no CORS at all.
+panel:
+  enabled: true
+
+  image:
+    repository: ghcr.io/example/aiwatcher-panel
+    tag: ""
+    pullPolicy: IfNotPresent
+
+  # The optional Flow query service (services/flow), which backs the panel's
+  # Query tab. Empty means nginx answers 503 there, which the tab reads as
+  # "the service is not running" rather than as a failed query.
+  flowUpstream: ""
+
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      memory: 128Mi
+
+# ── Collector ────────────────────────────────────────────────────────────────
+#
+# In the path even though the server can post OTLP straight at a store: it is
+# where sampling, redaction and a second destination live, and having it here
+# from the start makes those a ConfigMap edit rather than a redeploy.
+collector:
+  # install | external | none.
+  #
+  # The helmfile does NOT flip this to "external" when it finds a Collector in
+  # the cluster, and that is on purpose: a foreign Collector almost certainly
+  # has neither the VictoriaTraces exporter nor the redaction processor below.
+  # Reusing one is a decision with a blast radius, so it stays explicit.
+  mode: install
+
+  external:
+    # OTLP base URL, no /v1 suffix — the server appends the signal.
+    endpoint: ""
+
+  image:
+    repository: otel/opentelemetry-collector-contrib
+    tag: 0.121.0
+    pullPolicy: IfNotPresent
+
+  # Drops gen_ai.prompt / completion / input.messages / output.messages before
+  # anything is exported. Turning this off is a decision that needs a retention
+  # policy and an access story attached, not a config tweak — which is why it
+  # is one flag here rather than a per-SDK setting.
+  redactPrompts: true
+
+  # Written to every span as deployment.environment.
+  environment: production
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
+# ── VictoriaTraces ───────────────────────────────────────────────────────────
+#
+# Where finished spans go. The only store that takes OTLP natively and answers
+# the Jaeger query API, which is what lets Grafana read it with no plugin
+# (ADR_0005).
+victoriatraces:
+  # install | external | none
+  mode: install
+
+  external:
+    # Base URL of an existing VictoriaTraces, e.g.
+    # http://victoriatraces.observability.svc.cluster.local:10428
+    url: ""
+
+  image:
+    repository: victoriametrics/victoria-traces
+    tag: v0.11.0
+    pullPolicy: IfNotPresent
+
+  retentionPeriod: 30d
+
+  persistence:
+    enabled: true
+    size: 20Gi
+    storageClassName: ""
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+
+# ── VictoriaMetrics ──────────────────────────────────────────────────────────
+#
+# Where the aggregates go. Most clusters that would install aiwatcher already
+# have one — the helmfile finds it and sets mode to "external".
+victoriametrics:
+  # install | external | none
+  mode: install
+
+  external:
+    url: ""
+    # Filled in by the detection script. Used only by the NetworkPolicy below,
+    # to add an ingress rule to pods this chart does not own.
+    podSelector: {}
+    namespace: ""
+
+  image:
+    repository: victoriametrics/victoria-metrics
+    tag: v1.150.0
+    pullPolicy: IfNotPresent
+
+  # VictoriaMetrics reads this as months when it is a bare number.
+  retentionPeriod: "12"
+
+  persistence:
+    enabled: true
+    size: 20Gi
+    storageClassName: ""
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+
+# ── Grafana wiring ───────────────────────────────────────────────────────────
+#
+# This chart never installs Grafana — every cluster that wants one already has
+# one, and a second would be a second thing to authenticate. It emits the
+# datasource provisioning instead.
+grafana:
+  datasources:
+    enabled: true
+    # A Grafana whose chart runs the provisioning sidecar picks the ConfigMap up
+    # from this label alone. Grafana provisioned from a fixed ConfigMap (which
+    # is how planner does it) does not — see docs/INSTALL.md for the one-line
+    # change on that side.
+    labels:
+      grafana_datasource: "1"
+    # The uid the traces-to-metrics link points at. Must match the uid of the
+    # metrics datasource that Grafana already has, or the link lands nowhere.
+    metricsDatasourceUid: victoriametrics
+    tracesDatasourceUid: victoriatraces
+
+# ── Ingress ──────────────────────────────────────────────────────────────────
+#
+# One host for the panel; /api goes to the same host and is proxied by the panel
+# to the server, so there is one origin and no CORS.
+ingress:
+  enabled: false
+  className: ""
+  host: ""
+  annotations: {}
+  tls:
+    enabled: true
+    # Empty means <host>-tls.
+    secretName: ""
+
+  # Extra routes on the same host, each rendered as its own Ingress so each can
+  # carry its own annotations. What this is for: a forward-auth callback path
+  # that has to bypass the middleware guarding everything else and reach a
+  # different backend. See environments/planner.yaml.
+  #
+  #   - name: authentik-outpost
+  #     path: /outpost.goauthentik.io/
+  #     annotations: {...}
+  #     service: { name: planner-authentik-outpost, portName: http }
+  extraRoutes: []
+
+# ── NetworkPolicy ────────────────────────────────────────────────────────────
+networkPolicy:
+  # Ingress rules for this release's own pods. Coarse: the server's ingest route
+  # is how every SDK publishes, and this chart does not know which workloads
+  # those are, so the rule is "any pod in this namespace" plus the selectors
+  # below. See templates/networkpolicy.yaml.
+  enabled: false
+
+  # Extra `from` entries appended to the server's ingress rule — a
+  # namespaceSelector for agents that run elsewhere, for instance.
+  allowIngressFrom: []
+
+  # An ingress rule attached to pods this release does not own, so the Collector
+  # can reach a VictoriaMetrics that a stricter chart has fenced off. Policies
+  # are additive, so this grants a path without editing the other chart. Needs
+  # victoriametrics.external.podSelector, which the detection script fills in.
+  allowEgressToExternalVictoriaMetrics: false
+  allowEgressToExternalVictoriaTraces: false

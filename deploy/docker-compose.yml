@@ -1,0 +1,126 @@
+# The local stack.
+#
+#   Python / TypeScript agents
+#            │
+#            ▼
+#     aiwatcher (Rust)  ── write-ahead log on disk
+#            │
+#            ├──► otel-collector ──┬──► victoriatraces   full spans
+#            │                     └──► victoriametrics  aggregates
+#            └──► SSE / WebSocket ────► panel
+#
+# The Collector is in the path on purpose even though aiwatcher can post OTLP
+# straight to VictoriaTraces: it is where sampling, redaction and a second
+# destination get added later, and putting it in from the start means doing so
+# is a config change rather than a redeploy.
+#
+# Bring it up with `make stack-up` from the repo root.
+
+name: aiwatcher
+
+services:
+  victoriatraces:
+    # Young, but the only one of these that takes OTLP spans natively and
+    # exposes a Jaeger-compatible API for Grafana to read.
+    image: victoriametrics/victoria-traces:v0.11.0
+    command:
+      - -storageDataPath=/vtdata
+      - -retentionPeriod=30d
+      - -httpListenAddr=:10428
+    volumes:
+      - victoriatraces-data:/vtdata
+    ports:
+      - '10428:10428'
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q -O- http://127.0.0.1:10428/health || exit 1']
+      interval: 10s
+      timeout: 3s
+      retries: 6
+
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:v1.150.0
+    command:
+      - -storageDataPath=/vmdata
+      - -retentionPeriod=12
+      # OTLP ingestion is off unless asked for.
+      - -opentelemetry.usePrometheusNaming=true
+      - -httpListenAddr=:8428
+    volumes:
+      - victoriametrics-data:/vmdata
+    ports:
+      - '8428:8428'
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q -O- http://127.0.0.1:8428/health || exit 1']
+      interval: 10s
+      timeout: 3s
+      retries: 6
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.121.0
+    command: ['--config=/etc/otel/config.yaml']
+    volumes:
+      - ./otel-collector.yaml:/etc/otel/config.yaml:ro
+    ports:
+      - '4318:4318' # OTLP/HTTP — what aiwatcher posts to
+      - '13133:13133' # health
+    depends_on:
+      victoriatraces:
+        condition: service_healthy
+      victoriametrics:
+        condition: service_healthy
+
+  aiwatcher:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    environment:
+      AIWATCHER_LISTEN: '0.0.0.0:8080'
+      AIWATCHER_BUS: wal
+      AIWATCHER_DATA_DIR: /var/lib/aiwatcher
+      AIWATCHER_OTLP_ENDPOINT: 'http://otel-collector:4318'
+      AIWATCHER_SERVICE_NAME: aiwatcher
+      # On in the local stack so `curl` and the browser can publish. Leave it
+      # off in production, where producers reach Laser directly.
+      AIWATCHER_INGEST_ENABLED: 'true'
+      AIWATCHER_LOG: 'info,aiwatcher=debug'
+      AIWATCHER_LOG_FORMAT: pretty
+    volumes:
+      - aiwatcher-data:/var/lib/aiwatcher
+    ports:
+      - '8080:8080'
+    depends_on:
+      - otel-collector
+    # The read-model caps in ReadModelConfig are sized for this ceiling. Raising
+    # the limit without raising AIWATCHER_MAX_SPANS_TOTAL just leaves headroom
+    # unused; lowering it without lowering them risks an OOMKill.
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q -O- http://127.0.0.1:8080/livez || exit 1']
+      interval: 10s
+      timeout: 3s
+      retries: 6
+
+  grafana:
+    image: grafana/grafana:11.6.0
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: 'true'
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_SECURITY_ALLOW_EMBEDDING: 'true'
+      GF_INSTALL_PLUGINS: ''
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - '3000:3000'
+    depends_on:
+      - victoriatraces
+      - victoriametrics
+
+volumes:
+  victoriatraces-data:
+  victoriametrics-data:
+  aiwatcher-data:
+  grafana-data:

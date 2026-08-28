@@ -1,0 +1,92 @@
+# aiwatcher — installation.
+#
+# The `.gotmpl` extension is load-bearing: helmfile v1 renders a file as a Go
+# template only when it carries it, and parses a plain `helmfile.yaml` as YAML.
+# The `exec` calls below are the whole point of this file, so it cannot be one.
+#
+#   ./scripts/install.sh                    into an empty namespace, environment "default"
+#   ./scripts/install.sh -e planner         alongside planner, on its k3s
+#   ./scripts/install.sh -e planner --plan  render and diff, change nothing
+#
+# The point of this file rather than a plain `helm upgrade --install`:
+#
+#   It looks at the cluster before it decides what to install. VictoriaTraces,
+#   VictoriaMetrics and an OpenTelemetry Collector are all things a cluster may
+#   already run, and a second VictoriaMetrics beside an existing one is not a
+#   harmless duplicate — it splits one workload's metrics across two stores, and
+#   every dashboard reading either one quietly stops covering half the data.
+#   There is no error; there is a gap in a graph. See ADR_0009.
+#
+# scripts/detect-stack.py is called twice per environment, and the two calls do
+# different jobs:
+#
+#   (no --format)          `detected.*` — the raw findings, so `helmfile
+#                          template` and the install script's plan can show what
+#                          was found and why
+#   --format=helm-values   the same findings translated into chart values
+#
+# The translation lives in that script, never here, so this file stays a thin
+# orchestrator and `helm upgrade -f <(detect-stack.py --format helm-values)`
+# reaches the same result. There is no second copy of the decision to drift.
+#
+# Every path here — the environment files, the chart, the detection script — is
+# relative to the process's working directory rather than to this file, so
+# install.sh changes into deploy/ before it calls helmfile. Running helmfile by
+# hand from anywhere else needs the same.
+#
+# The namespace is an environment variable rather than a per-environment value
+# because detection needs it during the first template pass, before environment
+# values exist. install.sh sets it; set it yourself when calling helmfile
+# directly.
+
+{{- $namespace := env "AIWATCHER_NAMESPACE" | default "aiwatcher" }}
+{{- $release := env "AIWATCHER_RELEASE" | default "aiwatcher" }}
+{{- $detect := list "--namespace" $namespace }}
+
+environments:
+  # An empty namespace on a cluster of your own: install everything detection
+  # does not find.
+  default:
+    values:
+      - environments/default.yaml
+      -
+{{ exec "./scripts/detect-stack.py" $detect | indent 8 }}
+      - detectedValues:
+{{ exec "./scripts/detect-stack.py" (append $detect "--format=helm-values") | indent 10 }}
+
+  # Beside planner on its k3s, where VictoriaMetrics and Grafana already exist.
+  planner:
+    values:
+      - environments/planner.yaml
+      -
+{{ exec "./scripts/detect-stack.py" $detect | indent 8 }}
+      - detectedValues:
+{{ exec "./scripts/detect-stack.py" (append $detect "--format=helm-values") | indent 10 }}
+
+---
+
+{{/*
+Repeated rather than inherited: helmfile splits this file on `---` and renders
+each part as its own template, so a variable defined above is not in scope here.
+*/}}
+{{- $namespace := env "AIWATCHER_NAMESPACE" | default "aiwatcher" }}
+{{- $release := env "AIWATCHER_RELEASE" | default "aiwatcher" }}
+
+releases:
+  - name: {{ $release }}
+    namespace: {{ $namespace }}
+    createNamespace: true
+    chart: ./helm/aiwatcher
+    # Long enough for the images to pull onto a cold node, short enough that a
+    # wedged rollout is reported rather than waited on.
+    wait: true
+    timeout: 600
+    values:
+      # Order is precedence, and it is deliberate: what the cluster has beats
+      # the chart's defaults, and what the environment file asks for beats both.
+      # Forcing a single answer is AIWATCHER_VICTORIAMETRICS_URL=… — the
+      # detection script honours it and reports it as `source: override`.
+      -
+{{ toYaml .Values.detectedValues | indent 8 }}
+      -
+{{ toYaml (omit .Values "detectedValues" "detected") | indent 8 }}

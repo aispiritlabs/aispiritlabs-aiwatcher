@@ -1,0 +1,34 @@
+[package]
+name = "aiwatcher-bus"
+description = "Ports and adapters for the durable event log: MessageSource, MessageSink, Checkpointer."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+aiwatcher-core.workspace = true
+async-trait.workspace = true
+bytes = { workspace = true, optional = true }
+laser-sdk = { workspace = true, optional = true }
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
+
+[features]
+default = []
+# Wires the real `laser_sdk`. Off by default so `cargo test` needs no broker
+# and the dependency tree stays small; `just test-laser` turns it on.
+laser = ["dep:laser-sdk", "dep:bytes"]
+
+[lints]
+workspace = true

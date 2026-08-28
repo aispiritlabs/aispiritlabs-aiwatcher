@@ -1,0 +1,3252 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "aiwatcher",
+    "description": "Observability for agent runs: events in, traces and live streams out.",
+    "license": {
+      "name": "Apache-2.0",
+      "identifier": "Apache-2.0"
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/v1/conversations": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "Sessions, each grouping the runs it produced.",
+        "description": "The level above a run, so the panel can start from \"which session\" and walk\ndown to a single LLM call without going back to a flat list and re-filtering.",
+        "operationId": "list_conversations",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Substring match on the conversation id. The one control that turns a\nlong list into the session someone is actually looking for.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationPage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dimensions/{kind}": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "One dimension's rows: the explorer's top level, whatever it is rooted on.",
+        "description": "`session`, `agent`, `runtime`, `workflow`, `trace`, `model` and `tool` all\nreturn the same row shape, so the panel's tree has one renderer rather than\none per pivot. See `aiwatcher_projector::dimensions`.",
+        "operationId": "list_dimension",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "path",
+            "description": "What to group runs by",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/DimensionKind"
+            }
+          },
+          {
+            "name": "agent_id",
+            "in": "query",
+            "description": "Narrow to runs that ran this agent, whatever the dimension is. Lets the\ntree stay scoped when someone arrives from an agent-filtered view.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Substring match on the key. The one control that turns a long list into\nthe row someone is looking for.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Cursor: return rows after this key in the current sort order. Keyed\nrather than offset, because the list reorders as runs arrive.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DimensionPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/evaluation-suites": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Suites: the level above a report, and what MLflow calls an experiment.",
+        "description": "A separate resource rather than `/evaluations/suites`, so an evaluation\nthat happens to be called `suites` is still reachable.",
+        "operationId": "list_evaluation_suites",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuitePage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/evaluations": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Evaluation reports, newest first.",
+        "description": "The other half of the loop the traces come from: a trace says what one run\ndid, an evaluation says whether the thing producing those runs is getting\nbetter. They arrive on the same log and are folded apart — an `eval.*`\nevent produces no span and no row in the runs list. See\n`aiwatcher_projector::evaluations`.",
+        "operationId": "list_evaluations",
+        "parameters": [
+          {
+            "name": "suite",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "dataset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "variant",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/EvaluationStatus"
+                }
+              ]
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Substring over the id, the suite, the dataset, the variant and the\nparameter values.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Cursor: the last evaluation id on the previous page. Exclusive.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvaluationPage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/evaluations/{evaluation_id}": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "One evaluation: its parameters, its metrics, its cases, the document the\nproducer attached, and the previous evaluation of the same suite on the\nsame dataset.",
+        "operationId": "get_evaluation",
+        "parameters": [
+          {
+            "name": "evaluation_id",
+            "in": "path",
+            "description": "The evaluation to fetch",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvaluationDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/events": {
+      "post": {
+        "tags": [
+          "ingest"
+        ],
+        "summary": "Publish events over HTTP.",
+        "description": "The fallback path for clients that cannot reach Laser. Returns 403 when the\ninstance is configured without a sink.",
+        "operationId": "ingest",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/live": {
+      "get": {
+        "tags": [
+          "live"
+        ],
+        "summary": "A WebSocket for the whole system, or one run.",
+        "description": "Prefer SSE where the traffic is one-way — it reconnects on its own and\nsurvives proxies better. Use this when the panel needs to send *up* as well:\ncancelling a run, approving a tool call, submitting human feedback.",
+        "operationId": "live_websocket",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "query",
+            "description": "Follow one run only. Omit to follow everything.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "WebSocket upgrade"
+          }
+        }
+      }
+    },
+    "/api/v1/metrics": {
+      "get": {
+        "tags": [
+          "metrics"
+        ],
+        "summary": "Aggregates over the runs the projector still holds.",
+        "description": "Served from the read model rather than from a metrics backend: the numbers\nare a fold over data already in memory, so the page renders with no PromQL\nand no dependency on VictoriaMetrics being reachable. The window is bounded\nby retention — `window.runs_retained` against `window.retention_limit` tells\na caller whether it is looking at everything or at a truncated tail.",
+        "operationId": "get_metrics",
+        "parameters": [
+          {
+            "name": "window_seconds",
+            "in": "query",
+            "description": "Only runs that started within this many seconds of now.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "agent_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "model",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "conversation_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "buckets",
+            "in": "query",
+            "description": "Buckets in the timeline. Clamped to 6..=200.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricsSummary"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runs": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "List runs, newest first.",
+        "operationId": "list_runs",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "agent_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "runtime",
+            "in": "query",
+            "description": "Runs produced by this service. See `RunSummary::runtimes`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "workflow",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "trace_id",
+            "in": "query",
+            "description": "Runs sharing one trace. Normally one run, but a producer that supplies\nits own `trace_id` can span several — the only view that shows it.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "model",
+            "in": "query",
+            "description": "Runs that made at least one call to this model.\n\nMatched against the run's spans rather than its summary, because a run\ndoes not carry the models it used — the LLM spans do. Same for `tool`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "tool",
+            "in": "query",
+            "description": "Runs that invoked this tool.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/RunStatus"
+                }
+              ]
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "description": "Cursor: return runs older than this one. Keyset pagination, because an\noffset shifts under a list that is actively growing.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunPage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{run_id}": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "One run with the spans finished so far.",
+        "operationId": "get_run",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "description": "The run to fetch",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{run_id}/events": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "Read from the durable log rather than the read model: this is the audit\nview, and it must show what was actually recorded.",
+        "operationId": "get_run_events",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "description": "The run to fetch",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Cursor: the `stream_position` of the last event already seen. Exclusive.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Case-insensitive substring over the event type, agent, span key and the\nserialised payload.\n\nApplied to the page that was read, not to the whole run: the cost of a\nsearch stays the cost of a page. A search that finds nothing on this\npage but has `has_more` set means \"keep paging\", which is what the\npanel does.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "span_id",
+            "in": "query",
+            "description": "Only events on one span.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "event_type",
+            "in": "query",
+            "description": "Only events of one type, e.g. `llm.completed`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventPage"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/runs/{run_id}/stream": {
+      "get": {
+        "tags": [
+          "live"
+        ],
+        "summary": "Server-sent events for one run: history, a catch-up marker, then live.",
+        "operationId": "stream_run",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "description": "The run to follow",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Resume point. Usually unnecessary for SSE — the browser sends\n`Last-Event-ID` on its own — but explicit here for non-browser clients.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "text/event-stream of LiveFrame"
+          }
+        }
+      }
+    },
+    "/api/v1/spans": {
+      "get": {
+        "tags": [
+          "runs"
+        ],
+        "summary": "Every retained span, flat and filterable.",
+        "description": "The waterfall answers \"show me this run\". This answers \"show me every tool\ncall slower than two seconds\", which is the question asked when the run to\nlook at is not yet known.",
+        "operationId": "list_spans",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "trace_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "agent_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "model",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "tool",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "step_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "operation",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/SpanOutcome"
+                }
+              ]
+            }
+          },
+          {
+            "name": "min_duration_ms",
+            "in": "query",
+            "description": "The filter that turns this list into a hunt for a problem: everything\nslower than a threshold, whatever it is.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Substring over the span name and the lifted attributes.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Cursor: `run_id:span_id`, from a previous page's `next_cursor`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpanPage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/livez": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "The process is running.",
+        "operationId": "livez",
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "The process can serve traffic.",
+        "description": "Distinct from liveness: a projector replaying a backlog is alive but not\nready, and restarting it would make the replay start over.",
+        "operationId": "readyz",
+        "responses": {
+          "200": {
+            "description": ""
+          },
+          "503": {
+            "description": ""
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AgentBreakdown": {
+        "type": "object",
+        "required": [
+          "agent_id",
+          "runs",
+          "llm_calls",
+          "tool_calls",
+          "input_tokens",
+          "output_tokens",
+          "cached_tokens",
+          "failures",
+          "llm_latency"
+        ],
+        "properties": {
+          "agent_id": {
+            "type": "string"
+          },
+          "cached_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "failures": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "input_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "llm_calls": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "llm_latency": {
+            "$ref": "#/components/schemas/Percentiles"
+          },
+          "output_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "runs": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "tool_calls": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "Bucket": {
+        "type": "object",
+        "description": "One point on the timeline.",
+        "required": [
+          "at",
+          "runs",
+          "failed",
+          "llm_calls",
+          "tool_calls",
+          "input_tokens",
+          "output_tokens",
+          "cached_tokens"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "cached_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "input_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "llm_calls": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "output_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "runs": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "tool_calls": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "CaseDelta": {
+        "type": "object",
+        "required": [
+          "case_id"
+        ],
+        "properties": {
+          "baseline_score": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "case_id": {
+            "type": "string"
+          },
+          "current_score": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        }
+      },
+      "CausationId": {
+        "type": "string",
+        "description": "Names the *direct* cause of this event. Roots itself on the correlation id\nwhen nothing seeded it — the same rule Emmett's scope applies."
+      },
+      "Checkpoint": {
+        "type": "string",
+        "description": "An opaque resume position in the log."
+      },
+      "ConversationPage": {
+        "type": "object",
+        "required": [
+          "conversations",
+          "total",
+          "ungrouped_runs"
+        ],
+        "properties": {
+          "conversations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConversationSummary"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "ungrouped_runs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Runs with no `conversation_id`. They are reachable from the runs list\nbut have no session to sit under, and silently dropping them would make\nthe two views disagree about how much exists.",
+            "minimum": 0
+          }
+        }
+      },
+      "ConversationSummary": {
+        "type": "object",
+        "required": [
+          "conversation_id",
+          "runs",
+          "succeeded",
+          "failed",
+          "running",
+          "agents",
+          "llm_calls",
+          "tool_calls",
+          "input_tokens",
+          "output_tokens",
+          "cached_tokens",
+          "started_at",
+          "last_activity_at"
+        ],
+        "properties": {
+          "agents": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every agent seen across the conversation's runs, in first-seen order."
+          },
+          "cached_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "conversation_id": {
+            "type": "string"
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "input_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "last_activity_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The newest run's start. What the list sorts by, so an active session\nstays at the top."
+          },
+          "llm_calls": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "output_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "running": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "runs": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "succeeded": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "tool_calls": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "CorrelationId": {
+        "type": "string",
+        "description": "Groups an entire flow. Inherited unchanged by everything the flow causes."
+      },
+      "DimensionKind": {
+        "type": "string",
+        "description": "What the tree is rooted on.",
+        "enum": [
+          "session",
+          "agent",
+          "runtime",
+          "workflow",
+          "trace",
+          "model",
+          "tool"
+        ]
+      },
+      "DimensionPage": {
+        "type": "object",
+        "required": [
+          "kind",
+          "rows",
+          "total",
+          "ungrouped_runs"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/DimensionKind"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `after` to fetch the next page. Absent on the last page."
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DimensionSummary"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "description": "Rows matching the filter, before the page limit.",
+            "minimum": 0
+          },
+          "ungrouped_runs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Runs that carry no key for this dimension. They are reachable from the\nruns list but have no row to sit under, and silently dropping them would\nmake the two views disagree about how much exists.",
+            "minimum": 0
+          }
+        }
+      },
+      "DimensionSummary": {
+        "type": "object",
+        "description": "One row of the tree's top level, whatever the dimension is.",
+        "required": [
+          "key",
+          "runs",
+          "succeeded",
+          "failed",
+          "running",
+          "agents",
+          "llm_calls",
+          "tool_calls",
+          "input_tokens",
+          "output_tokens",
+          "cached_tokens",
+          "started_at",
+          "last_activity_at"
+        ],
+        "properties": {
+          "agents": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every agent seen across the row's runs, in first-seen order."
+          },
+          "cached_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "input_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "key": {
+            "type": "string"
+          },
+          "last_activity_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The newest run's start. What the list sorts by, so an active row stays\nat the top."
+          },
+          "llm_calls": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "output_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "running": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "runs": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "succeeded": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "tool_calls": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "ErrorBody": {
+        "type": "object",
+        "description": "The body every error response carries.",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable discriminator. Switch on this, not on `message`."
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "EvaluationCase": {
+        "type": "object",
+        "description": "One scored case.",
+        "required": [
+          "case_id"
+        ],
+        "properties": {
+          "case_id": {
+            "type": "string"
+          },
+          "duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "passed": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the scorer said what it said. A score without its rationale is not\nreviewable, which is the whole complaint about opaque eval numbers."
+          },
+          "score": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        }
+      },
+      "EvaluationComparison": {
+        "type": "object",
+        "description": "This evaluation against the one before it.",
+        "required": [
+          "baseline_id",
+          "baseline_started_at",
+          "metrics",
+          "regressed",
+          "fixed"
+        ],
+        "properties": {
+          "baseline_id": {
+            "type": "string"
+          },
+          "baseline_started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "fixed": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CaseDelta"
+            },
+            "description": "Failed on the baseline, passes now."
+          },
+          "metrics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MetricDelta"
+            },
+            "description": "Every metric either side reported, so one that appeared or disappeared\nis visible rather than silently absent."
+          },
+          "regressed": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CaseDelta"
+            },
+            "description": "Passed on the baseline, fails now. The view that has to be read before\na release."
+          }
+        }
+      },
+      "EvaluationDetail": {
+        "type": "object",
+        "description": "One evaluation, with everything retained for it.",
+        "required": [
+          "summary",
+          "cases",
+          "cases_truncated"
+        ],
+        "properties": {
+          "cases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EvaluationCase"
+            }
+          },
+          "cases_truncated": {
+            "type": "boolean",
+            "description": "More cases were scored than are listed. `summary.cases_total` is still\nthe true count."
+          },
+          "comparison": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/EvaluationComparison",
+                "description": "Against the previous evaluation of the same suite on the same dataset."
+              }
+            ]
+          },
+          "report": {
+            "type": "object",
+            "description": "Whatever the producer put in `data.report` — the free-form half, and\nthe reason `log_dict` had nowhere to go before this existed."
+          },
+          "summary": {
+            "$ref": "#/components/schemas/EvaluationSummary"
+          }
+        }
+      },
+      "EvaluationPage": {
+        "type": "object",
+        "required": [
+          "evaluations",
+          "total_known"
+        ],
+        "properties": {
+          "evaluations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EvaluationSummary"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `after` to fetch the next page. Absent on the last page."
+          },
+          "total_known": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "EvaluationStatus": {
+        "type": "string",
+        "description": "Where an evaluation got to.\n\nThe same three states a run has, for the same reason: a report that never\narrived and a report that failed are different facts.",
+        "enum": [
+          "running",
+          "succeeded",
+          "failed"
+        ]
+      },
+      "EvaluationSummary": {
+        "type": "object",
+        "description": "One row in the evaluations list.",
+        "required": [
+          "evaluation_id",
+          "suite",
+          "status",
+          "started_at",
+          "params",
+          "metrics",
+          "cases_total",
+          "cases_passed",
+          "cases_failed",
+          "runtime",
+          "report_bytes",
+          "report_dropped",
+          "last_checkpoint"
+        ],
+        "properties": {
+          "cases_failed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "cases_passed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "cases_total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "dataset": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The cases it was measured on, ideally versioned. Without this a\ncomparison is not one; see [`EvaluationDetail::comparison`]."
+          },
+          "duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "ended_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "evaluation_id": {
+            "type": "string",
+            "description": "The producer's `run_id`. An evaluation is an execution too, so it gets\nits own stream in the log and its own partition — which is what keeps a\nreport's events in order without serialising it behind agent traffic."
+          },
+          "last_checkpoint": {
+            "$ref": "#/components/schemas/Checkpoint"
+          },
+          "metrics": {
+            "type": "object",
+            "description": "Everything that was measured. MLflow's `log_metrics`.",
+            "additionalProperties": {
+              "type": "number",
+              "format": "double"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "params": {
+            "type": "object",
+            "description": "Everything that was held fixed, stringified. MLflow's `log_params`.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "pass_rate": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "From the cases where there are any, from `metrics.pass_rate` where the\nproducer only reported the aggregate."
+          },
+          "report_bytes": {
+            "type": "integer",
+            "description": "Size of the report document as it arrived, whether or not it was kept.",
+            "minimum": 0
+          },
+          "report_dropped": {
+            "type": "boolean",
+            "description": "The document is not held. Either it was over\n[`EvaluationConfig::max_report_bytes`] — half a JSON document is not a\nJSON document, so it is dropped rather than cut — or it was shed to\nkeep the projection inside its budget. `report_bytes` still says how\nbig it was."
+          },
+          "runtime": {
+            "type": "string",
+            "description": "The service that produced it."
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "$ref": "#/components/schemas/EvaluationStatus"
+          },
+          "suite": {
+            "type": "string",
+            "description": "What was measured. Falls back through `suite`, `suite_name`, `run_name`\n— MLflow's word — and finally the evaluation id, so a producer porting\na `start_run(run_name=…)` call lands somewhere sensible without\nrenaming anything."
+          },
+          "variant": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What was under test: a prompt version, a model, a checkout. The join to\nthe experiments side."
+          }
+        }
+      },
+      "EventEnvelope": {
+        "type": "object",
+        "description": "What a producer publishes.",
+        "required": [
+          "event_type",
+          "occurred_at",
+          "run_id",
+          "source"
+        ],
+        "properties": {
+          "agent_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "causation_id": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CausationId"
+              }
+            ]
+          },
+          "conversation_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Groups several runs a user would think of as one conversation."
+          },
+          "correlation_id": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CorrelationId"
+              }
+            ]
+          },
+          "data": {
+            "type": "object",
+            "description": "Type-specific payload. Kept as free-form JSON so an SDK can add a field\nwithout a backend release."
+          },
+          "event_id": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MessageId",
+                "description": "Deduplication key. Generated by the ingest edge when absent, which\nmeans a producer that omits it gets at-least-once *without*\ndeduplication — say so in the SDK docs."
+              }
+            ]
+          },
+          "event_type": {
+            "$ref": "#/components/schemas/EventType",
+            "description": "e.g. `llm.completed`. See [`crate::catalog`]."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/MessageKind"
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the producer observed it. Distinct from `ingested_at`, which the\ningest edge stamps — the gap between them is producer lag."
+          },
+          "parent_span_id": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SpanId"
+              }
+            ]
+          },
+          "run_id": {
+            "type": "string",
+            "description": "One execution of an agent. This is what a trace is scoped to."
+          },
+          "schema_version": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Contract version. An envelope from the future is rejected rather than\nsilently half-read.",
+            "minimum": 0
+          },
+          "sequence": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Producer-side counter within the run. Gaps here mean lost events; it is\nthe only way to notice a producer that dropped a batch.",
+            "minimum": 0
+          },
+          "source": {
+            "$ref": "#/components/schemas/Source"
+          },
+          "span_id": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SpanId"
+              }
+            ]
+          },
+          "trace_id": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TraceId"
+              }
+            ]
+          },
+          "workflow_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Which orchestration this run is an execution of.\n\nA conversation groups runs by *who* is talking; a workflow groups them\nby *what* is being executed. The same workflow runs across many\nsessions, which is the comparison — this graph, before and after a\nchange — that `conversation_id` cannot express."
+          }
+        }
+      },
+      "EventPage": {
+        "type": "object",
+        "description": "One page of a run's history, filtered.",
+        "required": [
+          "events",
+          "has_more",
+          "scanned"
+        ],
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecordedEvent"
+            }
+          },
+          "has_more": {
+            "type": "boolean"
+          },
+          "next_cursor": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Pass as `after` to fetch the next page. Absent at the end of the run.",
+            "minimum": 0
+          },
+          "scanned": {
+            "type": "integer",
+            "description": "Events read before filtering. With a `q`, the difference between this\nand `events.len()` is what the filter removed — without it the panel\ncannot tell \"nothing matched\" from \"nothing left\".",
+            "minimum": 0
+          }
+        }
+      },
+      "EventType": {
+        "oneOf": [
+          {
+            "type": "string",
+            "enum": [
+              "RunStarted"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "RunCompleted"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "RunFailed"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "AgentStarted"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "AgentCompleted"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "AgentFailed"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "LlmStarted"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "LlmFirstToken"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "LlmChunk"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "LlmCompleted"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "LlmFailed"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "ToolStarted"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "ToolCompleted"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "ToolFailed"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "StepStarted"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "StepCompleted"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "StepFailed"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "EvalStarted"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "EvalCase"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "EvalCompleted"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "EvalFailed"
+            ]
+          },
+          {
+            "type": "object",
+            "required": [
+              "Unknown"
+            ],
+            "properties": {
+              "Unknown": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "Every event type aiwatcher understands, plus a passthrough for the\nones it does not.\n\n[`EventType::Unknown`] is deliberate: a producer running a newer SDK\nmust not have its events rejected. They are stored and streamed\nlive, they simply take part in no span."
+      },
+      "IngestRequest": {
+        "type": "object",
+        "required": [
+          "events"
+        ],
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventEnvelope"
+            },
+            "description": "A batch. Publishing several events in one call is what keeps a chatty\nproducer from paying a round trip per token."
+          }
+        }
+      },
+      "IngestResponse": {
+        "type": "object",
+        "required": [
+          "accepted",
+          "last_checkpoint"
+        ],
+        "properties": {
+          "accepted": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "last_checkpoint": {
+            "$ref": "#/components/schemas/Checkpoint",
+            "description": "The checkpoint of the last event written. A client can hand this to the\nlive stream to pick up exactly where its own write landed."
+          }
+        }
+      },
+      "Latency": {
+        "type": "object",
+        "required": [
+          "run",
+          "llm",
+          "tool",
+          "step",
+          "time_to_first_token"
+        ],
+        "properties": {
+          "llm": {
+            "$ref": "#/components/schemas/Percentiles",
+            "description": "Per LLM call."
+          },
+          "run": {
+            "$ref": "#/components/schemas/Percentiles",
+            "description": "End-to-end, per run."
+          },
+          "step": {
+            "$ref": "#/components/schemas/Percentiles",
+            "description": "Per step — retrieval, embedding, rerank and the rest."
+          },
+          "time_to_first_token": {
+            "$ref": "#/components/schemas/Percentiles",
+            "description": "Time to first token, from the `gen_ai.first_token` span event."
+          },
+          "tool": {
+            "$ref": "#/components/schemas/Percentiles",
+            "description": "Per tool call."
+          }
+        }
+      },
+      "LiveEvent": {
+        "type": "object",
+        "description": "What a browser receives over SSE or WebSocket.\n\nKept small on purpose: the panel gets the event as it happened, not a\nre-derived projection, and `checkpoint` is what a reconnecting client sends\nback as `Last-Event-ID`.",
+        "required": [
+          "checkpoint",
+          "run_id",
+          "trace_id",
+          "span_id",
+          "event_type",
+          "occurred_at",
+          "data"
+        ],
+        "properties": {
+          "checkpoint": {
+            "$ref": "#/components/schemas/Checkpoint"
+          },
+          "conversation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "data": {
+            "type": "object"
+          },
+          "event_type": {
+            "$ref": "#/components/schemas/EventType"
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "sequence": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "span_id": {
+            "$ref": "#/components/schemas/SpanId"
+          },
+          "trace_id": {
+            "$ref": "#/components/schemas/TraceId"
+          }
+        }
+      },
+      "LiveFrame": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LiveEvent",
+                "description": "A replayed or live event."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "frame"
+                ],
+                "properties": {
+                  "frame": {
+                    "type": "string",
+                    "enum": [
+                      "event"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "A replayed or live event."
+          },
+          {
+            "type": "object",
+            "description": "The replay is finished; everything after this is live.",
+            "required": [
+              "checkpoint",
+              "frame"
+            ],
+            "properties": {
+              "checkpoint": {
+                "$ref": "#/components/schemas/Checkpoint"
+              },
+              "frame": {
+                "type": "string",
+                "enum": [
+                  "caught"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The requested cursor was too old to replay from memory and the log was\nread instead. Surfaced so the panel can say so rather than pretend the\nstream was continuous.",
+            "required": [
+              "from",
+              "frame"
+            ],
+            "properties": {
+              "frame": {
+                "type": "string",
+                "enum": [
+                  "resynced"
+                ]
+              },
+              "from": {
+                "$ref": "#/components/schemas/Checkpoint"
+              }
+            }
+          }
+        ],
+        "description": "A frame in the live stream.\n\n`Caught` is not decoration: it is what lets the panel switch from \"loading\nhistory\" to \"live\" at the right moment, instead of guessing from a timeout.\nIt mirrors Emmett's `MessageSourceCaughtUp` control message."
+      },
+      "MessageId": {
+        "type": "string",
+        "description": "Unique id of a single event, used for deduplication.\n\nGenerated as a UUIDv7 when the producer does not supply one; ULIDs and any\nother sortable opaque string are accepted on the wire."
+      },
+      "MessageKind": {
+        "type": "string",
+        "description": "Emmett splits messages into commands and events; aiwatcher only ingests\nevents today, but the discriminator is on the wire from day one so adding\ncontrol commands later is not a breaking change.",
+        "enum": [
+          "Event",
+          "Command"
+        ]
+      },
+      "MetricDelta": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "baseline": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "current": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "delta": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "`current - baseline`, and `None` when either side is missing — a\nmissing metric is not a delta of zero."
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "MetricsSummary": {
+        "type": "object",
+        "required": [
+          "window",
+          "totals",
+          "latency",
+          "by_agent",
+          "by_model",
+          "by_tool",
+          "by_step",
+          "timeline"
+        ],
+        "properties": {
+          "by_agent": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentBreakdown"
+            }
+          },
+          "by_model": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModelBreakdown"
+            }
+          },
+          "by_step": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StepBreakdown"
+            }
+          },
+          "by_tool": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ToolBreakdown"
+            }
+          },
+          "latency": {
+            "$ref": "#/components/schemas/Latency"
+          },
+          "timeline": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Bucket"
+            }
+          },
+          "totals": {
+            "$ref": "#/components/schemas/Totals"
+          },
+          "window": {
+            "$ref": "#/components/schemas/MetricsWindow"
+          }
+        }
+      },
+      "MetricsWindow": {
+        "type": "object",
+        "required": [
+          "from",
+          "to",
+          "runs_considered",
+          "runs_retained",
+          "retention_limit"
+        ],
+        "properties": {
+          "from": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "retention_limit": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "runs_considered": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Runs matched after filtering.",
+            "minimum": 0
+          },
+          "runs_retained": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Runs the read model holds in total. A `runs_considered` well below this\nmeans the filter is narrow; the two being equal *and* at the retention\ncap means older runs have been evicted and the window is truncated.",
+            "minimum": 0
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ModelBreakdown": {
+        "type": "object",
+        "required": [
+          "model",
+          "calls",
+          "failures",
+          "input_tokens",
+          "output_tokens",
+          "cached_tokens",
+          "latency"
+        ],
+        "properties": {
+          "cached_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "calls": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "failures": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "input_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "latency": {
+            "$ref": "#/components/schemas/Percentiles"
+          },
+          "model": {
+            "type": "string"
+          },
+          "output_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "provider": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "Percentiles": {
+        "type": "object",
+        "description": "Nearest-rank percentiles, in milliseconds.",
+        "required": [
+          "count",
+          "p50",
+          "p95",
+          "p99"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "p50": {
+            "type": "number",
+            "format": "double"
+          },
+          "p95": {
+            "type": "number",
+            "format": "double"
+          },
+          "p99": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "RecordedEvent": {
+        "type": "object",
+        "description": "An event as a consumer sees it.",
+        "required": [
+          "kind",
+          "event_type",
+          "data",
+          "metadata"
+        ],
+        "properties": {
+          "data": {
+            "type": "object"
+          },
+          "event_type": {
+            "$ref": "#/components/schemas/EventType"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/MessageKind"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/RecordedMetadata"
+          }
+        }
+      },
+      "RecordedMetadata": {
+        "type": "object",
+        "description": "What the store fills in. Emmett's `RecordedMessageMetadata`, plus the\naiwatcher-specific identity fields a projector would otherwise dig out of\n`data` on every event.",
+        "required": [
+          "message_id",
+          "stream_name",
+          "stream_position",
+          "global_position",
+          "checkpoint",
+          "trace_id",
+          "span_id",
+          "correlation_id",
+          "causation_id",
+          "run_id",
+          "span_key",
+          "schema_version",
+          "source",
+          "occurred_at",
+          "ingested_at"
+        ],
+        "properties": {
+          "agent_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "causation_id": {
+            "$ref": "#/components/schemas/CausationId"
+          },
+          "checkpoint": {
+            "$ref": "#/components/schemas/Checkpoint"
+          },
+          "conversation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "correlation_id": {
+            "$ref": "#/components/schemas/CorrelationId"
+          },
+          "global_position": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "ingested_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "message_id": {
+            "$ref": "#/components/schemas/MessageId"
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "parent_span_id": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SpanId"
+              }
+            ]
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "sequence": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "source": {
+            "$ref": "#/components/schemas/Source"
+          },
+          "span_id": {
+            "$ref": "#/components/schemas/SpanId"
+          },
+          "span_key": {
+            "type": "string",
+            "description": "The key `span_id` derived from. Carried so a projector can group a\nstart and its end without re-deriving it."
+          },
+          "stream_name": {
+            "$ref": "#/components/schemas/StreamName"
+          },
+          "stream_position": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "trace_id": {
+            "$ref": "#/components/schemas/TraceId"
+          },
+          "workflow_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "RunDetail": {
+        "type": "object",
+        "description": "A run plus what is needed to draw it.",
+        "required": [
+          "summary",
+          "spans"
+        ],
+        "properties": {
+          "spans": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Spans finished so far, in completion order. A running run has fewer\nspans than it eventually will — that is the point of a live view."
+          },
+          "summary": {
+            "$ref": "#/components/schemas/RunSummary"
+          }
+        }
+      },
+      "RunPage": {
+        "type": "object",
+        "required": [
+          "runs",
+          "total_known"
+        ],
+        "properties": {
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as `before` to fetch the next page. Absent on the last page."
+          },
+          "runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunSummary"
+            }
+          },
+          "total_known": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "RunStatus": {
+        "type": "string",
+        "enum": [
+          "running",
+          "succeeded",
+          "failed"
+        ]
+      },
+      "RunSummary": {
+        "type": "object",
+        "description": "One row in the runs table.",
+        "required": [
+          "run_id",
+          "trace_id",
+          "status",
+          "agents",
+          "started_at",
+          "event_count",
+          "llm_calls",
+          "tool_calls",
+          "input_tokens",
+          "output_tokens",
+          "cached_tokens",
+          "last_checkpoint"
+        ],
+        "properties": {
+          "agents": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "cached_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "conversation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "ended_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "event_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "input_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "last_checkpoint": {
+            "$ref": "#/components/schemas/Checkpoint",
+            "description": "The newest checkpoint folded into this row. A client can resume the\nlive stream from here without re-reading the run."
+          },
+          "llm_calls": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "output_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "runtimes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every producing service seen on this run, in first-seen order.\n\nA run is normally one process, but a handoff between two services keeps\nthe same `run_id`, and that is exactly the case worth being able to see."
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunStatus"
+          },
+          "tool_calls": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "trace_id": {
+            "$ref": "#/components/schemas/TraceId"
+          },
+          "workflow": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The orchestration this run executes, when the producer names one."
+          }
+        }
+      },
+      "Sdk": {
+        "oneOf": [
+          {
+            "type": "string",
+            "enum": [
+              "Python"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "Typescript"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "Rust"
+            ]
+          },
+          {
+            "type": "object",
+            "required": [
+              "Other"
+            ],
+            "properties": {
+              "Other": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "Which SDK produced an event.\n\nSerialised as a plain string with an unknown value passing through: an SDK\nthis backend has never heard of must still be able to publish."
+      },
+      "Source": {
+        "type": "object",
+        "description": "Who sent the event. Enough to find the process that produced a bad batch.",
+        "required": [
+          "service",
+          "sdk"
+        ],
+        "properties": {
+          "instance": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sdk": {
+            "$ref": "#/components/schemas/Sdk"
+          },
+          "service": {
+            "type": "string"
+          }
+        }
+      },
+      "SpanId": {
+        "type": "string",
+        "description": "Lowercase hex span id"
+      },
+      "SpanKind": {
+        "type": "string",
+        "enum": [
+          "internal",
+          "server",
+          "client",
+          "producer",
+          "consumer"
+        ]
+      },
+      "SpanOutcome": {
+        "type": "string",
+        "enum": [
+          "ok",
+          "error"
+        ]
+      },
+      "SpanPage": {
+        "type": "object",
+        "required": [
+          "spans",
+          "total_known"
+        ],
+        "properties": {
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "spans": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SpanRow"
+            }
+          },
+          "total_known": {
+            "type": "integer",
+            "description": "Spans matching the filter, before the page limit.",
+            "minimum": 0
+          }
+        }
+      },
+      "SpanRow": {
+        "type": "object",
+        "description": "One span, flattened for a list rather than for a tree.",
+        "required": [
+          "run_id",
+          "trace_id",
+          "span_id",
+          "name",
+          "kind",
+          "start",
+          "end",
+          "duration_ms",
+          "status"
+        ],
+        "properties": {
+          "agent_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "duration_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "end": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SpanKind"
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "operation": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The four attributes worth filtering on, lifted out of `attributes` so\nthe panel does not have to walk the list to render a row."
+          },
+          "parent_span_id": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SpanId"
+              }
+            ]
+          },
+          "run_id": {
+            "type": "string",
+            "description": "From the map key: a `CompletedSpan` carries no run id of its own."
+          },
+          "span_id": {
+            "$ref": "#/components/schemas/SpanId"
+          },
+          "start": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SpanStatus"
+          },
+          "step_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tool": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "trace_id": {
+            "$ref": "#/components/schemas/TraceId"
+          }
+        }
+      },
+      "SpanStatus": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "status"
+            ],
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "unset"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "status"
+            ],
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "ok"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "message",
+              "status"
+            ],
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "error"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "StepBreakdown": {
+        "type": "object",
+        "description": "Retrieval, embedding, rerank, guardrail — grouped by kind, then by name.\n\nRetrieval latency is the number a slow RAG turn gets debugged against, and\nit is invisible in the LLM and tool breakdowns.",
+        "required": [
+          "step_type",
+          "name",
+          "calls",
+          "failures",
+          "latency"
+        ],
+        "properties": {
+          "calls": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "failures": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "latency": {
+            "$ref": "#/components/schemas/Percentiles"
+          },
+          "name": {
+            "type": "string"
+          },
+          "step_type": {
+            "type": "string"
+          }
+        }
+      },
+      "StreamName": {
+        "type": "object",
+        "description": "The stream a run's events live on.\n\nOne stream per **run**, not per conversation: a conversation can fan out\ninto several agent runs at once, and partitioning the log by conversation\nwould serialise runs that have no reason to wait for each other.",
+        "required": [
+          "stream_type",
+          "stream_id"
+        ],
+        "properties": {
+          "stream_id": {
+            "type": "string"
+          },
+          "stream_type": {
+            "type": "string"
+          }
+        }
+      },
+      "SuitePage": {
+        "type": "object",
+        "required": [
+          "suites",
+          "total"
+        ],
+        "properties": {
+          "suites": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SuiteSummary"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "SuiteSummary": {
+        "type": "object",
+        "description": "A suite on a dataset, across every evaluation of it that is retained.\n\nThe level above a report, and the one MLflow calls an experiment.",
+        "required": [
+          "suite",
+          "evaluations",
+          "succeeded",
+          "failed",
+          "running",
+          "last_evaluation_id",
+          "last_status",
+          "last_started_at",
+          "latest_metrics",
+          "metric_deltas"
+        ],
+        "properties": {
+          "dataset": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "evaluations": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "last_evaluation_id": {
+            "type": "string"
+          },
+          "last_started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_status": {
+            "$ref": "#/components/schemas/EvaluationStatus"
+          },
+          "latest_metrics": {
+            "type": "object",
+            "description": "The newest finished evaluation's metrics, and the change from the one\nbefore it. A number with no direction is the thing an evaluation page\nis usually accused of being.",
+            "additionalProperties": {
+              "type": "number",
+              "format": "double"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "metric_deltas": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number",
+              "format": "double"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "pass_rate": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "running": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "succeeded": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "suite": {
+            "type": "string"
+          }
+        }
+      },
+      "ToolBreakdown": {
+        "type": "object",
+        "required": [
+          "tool_name",
+          "calls",
+          "failures",
+          "latency"
+        ],
+        "properties": {
+          "calls": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "failures": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "latency": {
+            "$ref": "#/components/schemas/Percentiles"
+          },
+          "tool_name": {
+            "type": "string"
+          }
+        }
+      },
+      "Totals": {
+        "type": "object",
+        "required": [
+          "runs",
+          "succeeded",
+          "failed",
+          "running",
+          "llm_calls",
+          "tool_calls",
+          "step_calls",
+          "input_tokens",
+          "output_tokens",
+          "cached_tokens",
+          "cache_hit_ratio"
+        ],
+        "properties": {
+          "cache_hit_ratio": {
+            "type": "number",
+            "format": "double",
+            "description": "Cached as a share of input. The one number that says whether prompt\ncaching is doing anything."
+          },
+          "cached_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "input_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "llm_calls": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "output_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "running": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "runs": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "step_calls": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Retrievals, embeddings, reranks, guardrails — everything traced as a\nstep rather than as an LLM or tool call.",
+            "minimum": 0
+          },
+          "succeeded": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "tool_calls": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "TraceId": {
+        "type": "string",
+        "description": "Lowercase hex trace id"
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "metrics",
+      "description": "Aggregates over retained runs"
+    },
+    {
+      "name": "runs",
+      "description": "History and projections"
+    },
+    {
+      "name": "evaluation",
+      "description": "Evaluation reports: suites, scores, regressions"
+    },
+    {
+      "name": "live",
+      "description": "SSE and WebSocket streams"
+    },
+    {
+      "name": "ingest",
+      "description": "HTTP fallback for publishing events"
+    },
+    {
+      "name": "health",
+      "description": "Kubernetes probes"
+    }
+  ]
+}

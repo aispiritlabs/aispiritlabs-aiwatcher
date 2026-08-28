@@ -1,0 +1,31 @@
+//! Domain model for aiwatcher.
+//!
+//! This crate holds everything that is true regardless of transport or
+//! storage: what an event looks like on the wire, how the four correlation ids
+//! relate to each other, which event types exist, and the ports the outer
+//! layers implement. It has no knowledge of Laser, HTTP, OTLP or axum.
+//!
+//! The correlation model is lifted from Emmett's `RecordedMessageMetadata`
+//! (`messageId` / `streamName` / `streamPosition` / `globalPosition` /
+//! `checkpoint` / `correlationId` / `causationId` / `traceId` / `spanId`) and
+//! from its scope resolution rule, see [`context`].
+
+pub mod attrs;
+pub mod catalog;
+pub mod checkpoint;
+pub mod context;
+pub mod envelope;
+pub mod error;
+pub mod ids;
+pub mod ports;
+pub mod stream;
+
+pub use catalog::{EventType, Phase, Subject};
+pub use checkpoint::Checkpoint;
+pub use context::{ContextGenerator, ObservabilityContext, SeedContext, SystemContextGenerator};
+pub use envelope::{
+    EventEnvelope, MessageKind, RecordedEvent, RecordedMetadata, SCHEMA_VERSION, Sdk, Source,
+};
+pub use error::{CoreError, Result};
+pub use ids::{CausationId, CorrelationId, MessageId, SpanId, TraceId};
+pub use stream::{GlobalPosition, StreamName, StreamPosition};

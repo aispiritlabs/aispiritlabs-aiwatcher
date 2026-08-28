@@ -1,0 +1,70 @@
+import { Link, Outlet, createRootRouteWithContext } from '@tanstack/react-router';
+import type { QueryClient } from '@tanstack/react-query';
+import { Activity, Database, FlaskConical, LineChart, Sparkles } from 'lucide-react';
+
+/**
+ * Four areas, not eleven pages.
+ *
+ * The header used to list every route side by side, which worked while there
+ * was one product area. There are four now — watching runs, judging them,
+ * curating what they are judged against, and changing the thing being run —
+ * and they are different jobs done at different times. So the top level is the
+ * area, and the pages inside one area are its own concern (see
+ * `observability.tsx`).
+ */
+
+export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
+  component: RootLayout,
+  notFoundComponent: () => (
+    <div className="p-10 text-center text-sm text-muted-foreground">
+      No such page.{' '}
+      <Link to="/observability/explore" className="text-primary underline">
+        Back to the explorer
+      </Link>
+      .
+    </div>
+  ),
+});
+
+const AREAS = [
+  { to: '/observability', label: 'Observability', icon: LineChart },
+  { to: '/evaluation', label: 'Evaluation', icon: FlaskConical },
+  { to: '/datasets', label: 'Datasets', icon: Database },
+  { to: '/experiments', label: 'Experiments', icon: Sparkles },
+] as const;
+
+function RootLayout() {
+  return (
+    <div className="min-h-screen">
+      <header className="sticky top-0 z-10 border-b border-border bg-background/80 backdrop-blur">
+        <div className="mx-auto flex max-w-[100rem] items-center gap-6 px-6">
+          <Link
+            to="/observability/explore"
+            className="flex shrink-0 items-center gap-2 py-3 font-semibold"
+          >
+            <Activity className="h-4 w-4 text-primary" />
+            aiwatcher
+          </Link>
+          <nav className="flex items-center gap-1">
+            {AREAS.map(({ to, label, icon: Icon }) => (
+              <Link
+                key={to}
+                to={to}
+                // The tab is active for anything below it, so a run detail
+                // three levels deep still shows which area it belongs to.
+                activeOptions={{ exact: false }}
+                className="flex items-center gap-1.5 border-b-2 border-transparent px-3 py-3 text-sm text-muted-foreground transition-colors hover:text-foreground [&.active]:border-primary [&.active]:text-foreground"
+              >
+                <Icon className="h-3.5 w-3.5" />
+                {label}
+              </Link>
+            ))}
+          </nav>
+        </div>
+      </header>
+      <main className="mx-auto max-w-[100rem] px-6 py-6">
+        <Outlet />
+      </main>
+    </div>
+  );
+}

@@ -1,0 +1,40 @@
+# The panel, as a container.
+#
+# The server's Dockerfile says the panel "is built separately and served by
+# whatever fronts this" — this is that. nginx rather than a Node runtime: the
+# build is static files, and the only dynamic thing the panel needs is a proxy
+# from /api to the server, which is what makes the browser see one origin and
+# lets SSE and WebSocket work with no CORS configuration at all.
+#
+# The nginx config is NOT in this image. It comes from a ConfigMap in the chart,
+# because it has to name the server's Service, which is a deployment-time fact.
+# That also keeps the image immutable across environments.
+#
+#   docker build -f deploy/Dockerfile.panel -t aiwatcher-panel:dev .
+#
+# Build context is the repo root, not deploy/ — the panel's package-lock.json
+# has to come from apps/panel.
+
+FROM node:22-alpine AS build
+WORKDIR /src
+
+# Manifests first, so a source-only change reuses the install layer.
+COPY apps/panel/package.json apps/panel/package-lock.json ./
+RUN npm ci
+
+COPY apps/panel/ ./
+# `npm run build` is vite followed by a full `tsc -b` project check, so a type
+# error fails the image rather than shipping.
+RUN npm run build
+
+FROM nginxinc/nginx-unprivileged:1.27-alpine AS runtime
+
+# Nothing from the base image's default site survives: the chart mounts the
+# whole of conf.d, and a leftover default.conf would collide with it.
+RUN rm -f /etc/nginx/conf.d/default.conf
+
+COPY --from=build /src/dist /usr/share/nginx/html
+
+# 8080, not 80: the unprivileged image runs as uid 101 and cannot bind a
+# privileged port. The chart's Service maps 80 to this.
+EXPOSE 8080

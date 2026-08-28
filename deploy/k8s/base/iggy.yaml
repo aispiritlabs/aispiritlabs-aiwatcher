@@ -1,0 +1,103 @@
+# Apache Iggy — the log behind the Laser SDK.
+#
+# Two things here are not boilerplate:
+#
+#   1. `seccompProfile: Unconfined`. Iggy's runtime is io_uring, and the default
+#      seccomp profile blocks io_uring_setup/enter/register. Without this the
+#      pod crash-loops with "Cannot create runtime: Operation not permitted".
+#      The server's own error message names this fix.
+#
+#   2. The pinned tag. The 0.9 line is protocol-matched to the `iggy` 0.11
+#      client that `laser_sdk` 0.3 builds on; a 0.8 server accepts the TCP
+#      connection and then never answers the login, which looks like a hang
+#      rather than a version error. It also needs a kernel that permits NUMA
+#      memory binding — see docs/ADR/ADR_0002_EVENT_BUS_PORT.md.
+apiVersion: v1
+kind: Service
+metadata:
+  name: iggy
+spec:
+  selector:
+    app: iggy
+  ports:
+    - name: tcp
+      port: 8090
+      targetPort: 8090
+    - name: http
+      port: 3000
+      targetPort: 3000
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: iggy
+spec:
+  serviceName: iggy
+  replicas: 1
+  selector:
+    matchLabels:
+      app: iggy
+  template:
+    metadata:
+      labels:
+        app: iggy
+    spec:
+      securityContext:
+        seccompProfile:
+          type: Unconfined
+      containers:
+        - name: iggy
+          image: apache/iggy:0.9.0-edge.5
+          env:
+            # The image binds to loopback by default, which is unreachable from
+            # another pod even with a Service in front of it.
+            - name: IGGY_TCP_ADDRESS
+              value: '0.0.0.0:8090'
+            - name: IGGY_HTTP_ADDRESS
+              value: '0.0.0.0:3000'
+            # Iggy defaults to `cpu_allocation = "numa:auto"`, which binds each
+            # shard's memory to a NUMA node at startup. That fails outright in a
+            # container VM (`MemoryAffinityFailed`), taking the whole server
+            # down. A fixed shard count skips the NUMA path; unpinned threads
+            # let the scheduler place them, which is what you want when the
+            # node is shared anyway.
+            - name: IGGY_SYSTEM_SHARDING_CPU_ALLOCATION
+              value: '2'
+            - name: IGGY_SYSTEM_SHARDING_PIN_CORES
+              value: 'false'
+            # Without root credentials the server accepts the TCP connection
+            # and then closes it part-way through the login, which on the
+            # client side reads as a hang rather than an auth failure.
+            - name: IGGY_ROOT_USERNAME
+              value: iggy
+            - name: IGGY_ROOT_PASSWORD
+              value: iggy
+          ports:
+            - name: tcp
+              containerPort: 8090
+            - name: http
+              containerPort: 3000
+          readinessProbe:
+            tcpSocket:
+              port: 8090
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 8090
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          volumeMounts:
+            - name: data
+              mountPath: /app/local_data
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              memory: 2Gi
+      volumes:
+        # emptyDir: this is a test stack, and a restart starting from an empty
+        # log is a feature here rather than a loss.
+        - name: data
+          emptyDir: {}
