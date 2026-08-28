@@ -35,8 +35,22 @@ fn endpoint() -> String {
         .unwrap_or_else(|_| "http://127.0.0.1:9010".to_owned())
 }
 
-/// A bucket per test, so the tests are order-independent and can run together.
+/// A bucket per test, emptied first.
+///
+/// Both halves matter. A bucket per test lets these run together; emptying it
+/// makes a run independent of every run before it — including one made against
+/// an older build, whose objects may no longer parse. Without this the suite
+/// passes on a fresh container and fails on a developer's, which is the worst
+/// way for a test to be wrong.
 async fn store(bucket: &str) -> S3ObjectStore {
+    let store = connect(bucket).await;
+    for entry in store.list("").await.expect("lists") {
+        store.delete(&entry.key).await.expect("deletes");
+    }
+    store
+}
+
+async fn connect(bucket: &str) -> S3ObjectStore {
     S3ObjectStore::connect(S3Config {
         endpoint: endpoint(),
         bucket: bucket.to_owned(),
@@ -227,7 +241,7 @@ async fn wrong_credentials_are_refused_without_a_retry_loop() {
     // rejected identically forever, and treating it as retryable spins.
     let store = S3ObjectStore::connect(S3Config {
         endpoint: endpoint(),
-        bucket: "aiwatcher-test-roundtrip".to_owned(),
+        bucket: "aiwatcher-test-credentials".to_owned(),
         credentials: Credentials {
             access_key_id: "rustfsadmin".to_owned(),
             secret_access_key: "definitely-not-the-secret".to_owned(),

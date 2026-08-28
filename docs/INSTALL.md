@@ -15,8 +15,8 @@ is left for you.
 
 ## What gets installed, and what does not
 
-The chart can install five things. Three of them are things a cluster may
-already run:
+The chart can install six things. Four of them are things a cluster may already
+run:
 
 | Component | Default | Detected? |
 |---|---|---|
@@ -25,6 +25,7 @@ already run:
 | OpenTelemetry Collector | installed | detected, but **never** reused automatically |
 | VictoriaTraces | installed | yes → `mode: external` |
 | VictoriaMetrics | installed | yes → `mode: external` |
+| RustFS (the prompt registry's store) | installed | detected, but **never** reused automatically |
 | Grafana | never installed | yes → the datasource ConfigMap is emitted |
 
 Detection is `deploy/scripts/detect-stack.py`. Run it on its own to see what a
@@ -41,6 +42,7 @@ cluster: vps
   victoriatraces   absent    no pod runs a matching image
   collector        absent    no pod runs a matching image
   grafana          present   http://planner-grafana.planner.svc.cluster.local:3000
+  objectstore      present   http://planner-rustfs-svc.planner.svc.cluster.local:9000
 ```
 
 ### Why this is not just a set of flags
@@ -100,13 +102,59 @@ collector:
     endpoint: http://otel-collector.observability.svc.cluster.local:4318
 ```
 
+### The object store is never reused automatically either
+
+For a different reason from the Collector's. There, reuse is unsafe; here it is
+**undecidable**: nothing in the cluster says which credentials aiwatcher may
+use, which bucket it may write, or whether it may create one. Detection reports
+the store and prints the block you would need, with the pod selector already
+filled in.
+
+Reusing one deliberately:
+
+```yaml
+promptStore:
+  mode: external
+  bucket: aiwatcher-prompts
+  external:
+    endpoint: http://minio.storage.svc.cluster.local:9000
+    createBucket: false   # true only if these credentials may create one
+  credentialsSecret:
+    name: minio-credentials
+    accessKeyKey: MINIO_ROOT_USER
+    secretKeyKey: MINIO_ROOT_PASSWORD
+```
+
+`mode: none` is also a real answer: every `/api/v1/prompts` route then answers
+501 and the panel's Prompts tab says which variable is unset, rather than
+showing an empty registry. What is *not* a good answer is leaving prompts on
+the server's own volume in a cluster — that volume holds the write-ahead log,
+which is a rolling window a retention policy may delete, and a prompt has to
+outlive every run that used it.
+
+**A NetworkPolicy for an external store is off by default and usually should
+stay off.** Policies are additive, so an ingress rule attached to a store that
+*no* policy currently selects narrows it from "accepts everything" to "accepts
+aiwatcher only" — which would cut off whoever else was writing to that bucket.
+`detect-stack.py` reports whether the store is fenced; only then does
+`networkPolicy.allowEgressToExternalPromptStore: true` grant a path rather than
+take three away.
+
 ---
 
 ## Installing beside planner
 
-planner runs VictoriaMetrics, VictoriaLogs and Grafana on its k3s, behind
-authentik, with a NetworkPolicy per component. aiwatcher goes into the same
-namespace as a guest.
+planner runs VictoriaMetrics, VictoriaLogs, Grafana and a RustFS on its k3s,
+behind authentik, with a NetworkPolicy per component. aiwatcher goes into the
+same namespace as a guest.
+
+Two of those it borrows. VictoriaMetrics is derived by detection.
+`planner-rustfs-svc` is not — `deploy/environments/planner.yaml` sets
+`promptStore.mode: external` by hand, because the credentials Secret
+(`planner-rustfs-secrets`, under planner's own `RUSTFS_ACCESS_KEY` /
+`RUSTFS_SECRET_KEY` key names) is a thing a person knows and detection cannot.
+`planner-web`, `planner-import-api` and `planner-mlflow` already write to that
+store, which is also why no NetworkPolicy is attached to it: see above.
 
 ```bash
 cd deploy

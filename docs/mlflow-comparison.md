@@ -101,14 +101,43 @@ background thread and a separate process.
 
 ## What MLflow does that aiwatcher does not, and should not
 
-1. **Prompts and completions.** aiwatcher's Collector deletes `gen_ai.prompt`
-   and `gen_ai.completion` before export by design. Debugging *what the model
-   said* is MLflow's job, and the `evaluation` package already depends on it.
+1. **Completions.** aiwatcher's Collector deletes `gen_ai.prompt` and
+   `gen_ai.completion` from spans before export by design. Debugging *what the
+   model said* is MLflow's job. (The *prompt* is a different matter now — see
+   below.)
 2. **Artifacts and the model registry.** Storing a model, versioning it,
    promoting it. There is no artifact store here and none planned.
 3. **Running an evaluation.** `deepeval`, the metric classes, the benchmark
    harness — aiwatcher takes the *result* of these and has no opinion about how
    it was produced. Scoring is the producer's job.
+
+## The prompt registry
+
+The second thing that moved, after the evaluation report, and for the same
+reason: it is a small, well-shaped record that was living in the wrong place.
+
+`planner-mlplatform` versions its floor-plan prompt with
+`FLOOR_PLAN_PROMPT_VERSION` (a hand-incremented integer),
+`FLOOR_PLAN_PROMPT_SHA256` (computed at import) and a file under `artifacts/`
+for whatever `PromptOptimizer` last produced. MLflow 3 has a prompt registry
+that would hold all three, and taking it means keeping the server, the Postgres
+and the MinIO for a feature whose entire data model is "a string, its hash, and
+what it scored".
+
+aiwatcher's version is 200 lines over an object store, and it differs from
+MLflow's in one way that is the point rather than a detail: **it has an
+opinion**. MLflow's registry stores a prompt and its aliases. aiwatcher's
+refuses to move `production` onto a candidate that did not improve a held-out
+score, or that stopped interpolating a variable the baseline used. That is the
+discipline `prompt_optimization.py` already implements in one Python file with
+`DEV_CATALOG_IDS` and `TEST_CATALOG_IDS` — moved somewhere it applies to every
+run, in every service, and survives the file being rewritten.
+
+The hash matches: `PromptVersionId::of` is a plain `sha256` of the text, so
+`FLOOR_PLAN_PROMPT_SHA256` and the registry's version id are the same string.
+That is what lets planner publish its checked-in prompt on start-up without
+inventing a second identity for it. See
+[ADR_0011](ADR/ADR_0011_PROMPT_REGISTRY.md).
 
 ## What this integration cannot see
 
@@ -159,13 +188,20 @@ those are load-bearing, MLflow stays for them and the report can still move.
 Keep both, teed, as `create_tracer` now does — but for a narrower reason than
 before.
 
-- **MLflow** for what it alone does: prompt content, artifacts, the registry,
-  and the evaluation harness itself.
+- **MLflow** for what it alone does: completions, model artifacts, the model
+  registry, and the evaluation harness itself.
 - **aiwatcher** for the online loop — is it running, what is it costing, what
-  broke — and now for the **evaluation report**, which is the piece that had to
-  live beside the traces to be worth anything.
+  broke — for the **evaluation report**, which had to live beside the traces to
+  be worth anything, and for the **prompt registry**, which had to live
+  somewhere with an opinion about held-out scores.
 
-The one thing worth deciding deliberately is **prompt content**. Right now
-MLflow holds it and aiwatcher does not. That is a defensible split — one system
-with the sensitive data and a retention policy, one without — and it is worth
-being the split you chose rather than the one that happened.
+The one thing worth deciding deliberately is **completion content**. MLflow
+holds what the model said and aiwatcher does not. That is a defensible split —
+one system with the sensitive data and a retention policy, one without — and it
+is worth being the split you chose rather than the one that happened.
+
+The prompt side of that split has now moved, and it moved with a caveat worth
+repeating: **the registry does not redact.** Storing the prompt verbatim is the
+whole point of it, so a prompt that embeds a key or a customer's data is in an
+object store that nothing evicts. The Collector's redaction covers spans; it
+does not cover this.

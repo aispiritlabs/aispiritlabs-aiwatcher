@@ -26,6 +26,12 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["aiwatcher_sdk"]
+# PEP 561. The package is `mypy --strict` clean, and without this marker every
+# consumer sees `Any` — which makes the typing here decoration rather than a
+# contract. It also means a consumer's `# type: ignore[import-untyped]` on an
+# aiwatcher import becomes unused, which under their own `strict` is an error:
+# the fix is to delete the comment.
+artifacts = ["aiwatcher_sdk/py.typed"]
 
 [dependency-groups]
 dev = [
