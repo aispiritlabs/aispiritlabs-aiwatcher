@@ -34,11 +34,7 @@ packages = ["aiwatcher_sdk"]
 artifacts = ["aiwatcher_sdk/py.typed"]
 
 [dependency-groups]
-dev = [
-  "mypy>=1.18,<2",
-  "pytest>=8.4,<9",
-  "ruff>=0.16.5,<0.17",
-]
+dev = ["mypy>=1.18,<2", "pytest>=8.4,<9", "ruff>=0.16.5,<0.17"]
 
 [tool.uv]
 # `uv` reads this and refuses to run under an older one, which is what keeps a

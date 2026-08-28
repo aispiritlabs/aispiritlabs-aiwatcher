@@ -13,6 +13,10 @@ contract := "contracts/openapi.json"
 # line is protocol-matched to the `iggy` 0.11 client under `laser_sdk` 0.3, and
 # a 0.8 server accepts the connection and then never answers the login.
 iggy_image := "apache/iggy:0.9.0-edge.5"
+# The API version the rendered manifests are validated against. Pinned rather
+# than kubeconform's default of "master", so a schema change upstream is a
+# decision here and not a build that went red overnight.
+kubeconform_k8s_version := "1.33.0"
 
 # The object store the prompt registry is tested against. RustFS speaks S3, so
 # `just test-rustfs` is really a test of the SigV4 signer — see
@@ -241,9 +245,9 @@ iggy-up:
     #   SHARDING_CPU_ALLOCATION       the default "numa:auto" binds shard memory
     #                                 to a NUMA node, which fails in a container
     #                                 VM and takes the server down
-    #   ROOT_USERNAME / ROOT_PASSWORD without them the server accepts the TCP
-    #                                 connection and then closes it mid-login,
-    #                                 which reads as a client hang
+    #   ROOT_USERNAME / ROOT_PASSWORD without them the server generates a random
+    #                                 root password and only logs it, so every
+    #                                 login is "Invalid credentials"
     docker run -d --name aiwatcher-iggy \
       --security-opt seccomp=unconfined \
       -e IGGY_TCP_ADDRESS=0.0.0.0:8090 \
@@ -341,13 +345,32 @@ k8s-render overlay=k8s_overlay:
     kubectl kustomize deploy/k8s/{{overlay}}
 
 # Client-side validation of both overlays. No cluster contact, safe anywhere.
+#
+# The schemas come from kubeconform rather than from `kubectl apply
+# --dry-run=client`, which is not client-side in the sense that matters here: it
+# downloads the OpenAPI document from an apiserver to validate against, and
+# needs a second round trip to map kinds to resources even with
+# `--validate=false`. On a machine with no cluster — a CI runner — both are a
+# refused connection to :8080 rather than a verdict on the manifests.
 k8s-validate:
     #!/usr/bin/env bash
     set -euo pipefail
+    just _assert-kubeconform
     for overlay in base laser; do
-      kubectl kustomize "deploy/k8s/$overlay" | kubectl apply --dry-run=client -f - >/dev/null
+      kubectl kustomize "deploy/k8s/$overlay" \
+        | kubeconform -strict -summary -kubernetes-version {{kubeconform_k8s_version}} -
       echo "✓ deploy/k8s/$overlay is valid"
     done
+
+[private]
+_assert-kubeconform:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v kubeconform >/dev/null 2>&1; then
+      echo "✗ kubeconform is not installed — brew install kubeconform" >&2
+      echo "  (or see https://github.com/yannh/kubeconform#installation)" >&2
+      exit 1
+    fi
 
 # Refuse to run against anything that is not a known-local cluster.
 #
@@ -420,12 +443,13 @@ chart-render namespace="aiwatcher" values="deploy/environments/default.yaml":
 chart-check:
     #!/usr/bin/env bash
     set -euo pipefail
+    just _assert-kubeconform
     helm lint deploy/helm/aiwatcher
     for env in default planner; do
       ns=$([[ $env == planner ]] && echo planner || echo aiwatcher)
       helm template aiwatcher deploy/helm/aiwatcher --namespace "$ns" \
         --values "deploy/environments/$env.yaml" \
-        | kubectl apply --dry-run=client -f - >/dev/null
+        | kubeconform -strict -summary -kubernetes-version {{kubeconform_k8s_version}} -
       echo "✓ deploy/environments/$env.yaml renders and validates"
     done
 

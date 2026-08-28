@@ -1,8 +1,19 @@
 include = ["**/*.toml"]
 
+# Two settings carry this file, and both exist to agree with how the repository
+# is already written rather than with taplo's defaults:
+#
+#   compact_arrays   omits the padding inside a single-line array, so a feature
+#                    list reads ["ws", "macros"] and not [ "ws", "macros" ].
+#                    It was false here, which is why every Cargo.toml in the
+#                    workspace failed `taplo fmt --check`.
+#   column_width     100, the `max_width` in rustfmt.toml. One width for the
+#                    repository means a manifest wraps where its crate's source
+#                    wraps.
 [formatting]
 align_entries = false
 array_auto_expand = true
-compact_arrays = false
+column_width = 100
+compact_arrays = true
 indent_string = "  "
 reorder_keys = false

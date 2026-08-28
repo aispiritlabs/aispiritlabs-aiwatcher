@@ -46,11 +46,7 @@ hex = "0.4.3"
 # streaming primitives this adapter needs, and they are most of the ~360 crates.
 laser-sdk = { version = "0.3.0", default-features = false, features = ["streaming"] }
 # reqwest 0.13 renamed the TLS features: `rustls-tls` became `rustls`.
-reqwest = { version = "0.13", default-features = false, features = [
-  "json",
-  "http2",
-  "rustls",
-] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "http2", "rustls"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 # SHA-256 for content-addressed prompt versions and for SigV4. Both have to

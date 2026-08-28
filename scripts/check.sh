@@ -75,19 +75,20 @@ else
 fi
 
 # ── Kubernetes manifests ─────────────────────────────────────────────────────
-# Client-side only: no cluster is contacted, so this is safe to run anywhere.
-if have kubectl; then
+# kubectl renders the overlays, kubeconform validates them against published
+# schemas. No cluster is contacted, so this is safe to run anywhere.
+if have kubectl && have kubeconform; then
   run "k8s manifests" just k8s-validate
 else
-  skip "k8s manifests" "kubectl is not installed"
+  skip "k8s manifests" "kubectl and kubeconform are needed"
 fi
 
-# The install chart. Rendering plus a client-side apply --dry-run; no cluster is
+# The install chart. Rendering plus the same schema validation; no cluster is
 # contacted for either environment.
-if have helm && have kubectl; then
+if have helm && have kubeconform; then
   run "helm chart" just chart-check
 else
-  skip "helm chart" "helm and kubectl are needed"
+  skip "helm chart" "helm and kubeconform are needed"
 fi
 
 if have tilt; then

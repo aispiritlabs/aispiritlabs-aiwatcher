@@ -65,9 +65,9 @@ spec:
               value: '2'
             - name: IGGY_SYSTEM_SHARDING_PIN_CORES
               value: 'false'
-            # Without root credentials the server accepts the TCP connection
-            # and then closes it part-way through the login, which on the
-            # client side reads as a hang rather than an auth failure.
+            # Without these the server generates a random root password and
+            # only writes it to its own log, so the connection string every
+            # client here uses is rejected as "Invalid credentials".
             - name: IGGY_ROOT_USERNAME
               value: iggy
             - name: IGGY_ROOT_PASSWORD
