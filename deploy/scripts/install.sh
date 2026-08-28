@@ -105,7 +105,9 @@ Environment:
   AIWATCHER_FLOW=true                       install the optional query service
   AIWATCHER_IMAGE_PULL_SECRET               pull Secret for private images
   IMAGE_PULL_SECRET                         planner-compatible fallback
-  AIWATCHER_DOMAIN                          publish an ingress on this host
+  AIWATCHER_DOMAIN                          publish an ingress on this host;
+                                            otherwise detection derives one from
+                                            the cluster's other ingress hosts
   AIWATCHER_VICTORIAMETRICS_URL=<url|none>  force detection's answer
   AIWATCHER_VICTORIATRACES_URL=<url|none>
   AIWATCHER_DETECT=off                      skip detection entirely
@@ -258,6 +260,11 @@ if [[ -n $image_pull_secret ]]; then
     || fail "image pull Secret is not a valid Kubernetes name: $image_pull_secret"
   sets+=(--set "imagePullSecrets[0].name=$image_pull_secret")
 fi
+# Naming a host is also asking to publish on it, which is why this sets both.
+# Leaving it unset is the normal path: detect-stack.py derives the host from the
+# cluster's other ingresses, and the environment file decides whether to use it
+# — planner's does, because the same file attaches the middlewares that
+# authenticate it. Both read this variable; neither invents a second answer.
 if [[ -n ${AIWATCHER_DOMAIN:-} ]]; then
   [[ $AIWATCHER_DOMAIN =~ ^[A-Za-z0-9.-]+$ ]] || fail "AIWATCHER_DOMAIN is not a hostname: $AIWATCHER_DOMAIN"
   sets+=(--set "ingress.enabled=true" --set "ingress.host=$AIWATCHER_DOMAIN")

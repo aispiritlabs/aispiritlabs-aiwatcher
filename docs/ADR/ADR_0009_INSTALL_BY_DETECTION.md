@@ -49,7 +49,16 @@ points the Collector somewhere, the other removes a pipeline.
 logic of its own, so `helm upgrade -f <(detect-stack.py --format helm-values)`
 reaches the same result and there is no second copy to drift.
 
-Two things are deliberately *not* derived:
+**The domain is read the same way.** A cluster already serving
+`planner.example.com` and `grafana.example.com` is saying where a sibling
+belongs, so detection derives `aiwatcher.example.com` and passes it in as
+`ingress.host`. Two-label hosts stay whole (`example.com` yields
+`aiwatcher.example.com`, never `aiwatcher.com`), wildcard and host-less rules
+are ignored, aiwatcher's own ingress is skipped so a second run does not derive
+from the first, and more than one domain in use is reported rather than settled
+by sort order.
+
+Three things are deliberately *not* derived:
 
 * **The Collector is never reused automatically.** It is detected, reported, and
   the install still creates its own. A foreign Collector almost certainly has
@@ -64,6 +73,15 @@ Two things are deliberately *not* derived:
   from "accepts everything" to "accepts aiwatcher only", cutting off whoever was
   already talking to them. So the script reports whether a matching ingress
   policy exists, and only then is the rule attached.
+* **Whether to publish is not derived, only where.** An ingress in front of
+  aiwatcher is safe exactly where something authenticates it, and no ingress in
+  a cluster says whether the route it describes is guarded. So the host is a
+  finding and the switch is not: `environments/planner.yaml` turns
+  `ingress.enabled` on in the same file that attaches planner's authentik
+  middlewares, and the default environment leaves it off. An environment that
+  asks for an ingress and gets no host fails to render — which is the loud form
+  of the failure this pairing exists to prevent, a release that installs
+  cleanly and answers 404 on the host the SSO app points at.
 
 Detection always exits 0. An unreachable cluster is a result (`reachable:
 false`), not a crash, so `helmfile template` works on a laptop with no cluster.

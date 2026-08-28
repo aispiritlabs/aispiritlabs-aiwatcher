@@ -118,12 +118,22 @@ networkPolicy:
   allowEgressToExternalPromptStore: false
 
 ingress:
-  # Set AIWATCHER_DOMAIN and install.sh fills in the host. Left empty here so a
-  # first install goes in reachable only by port-forward, which is the right
-  # default for a service that has no authentication of its own.
-  enabled: false
+  # On, because this is also the file that authenticates it: the two middlewares
+  # below are planner's own, and an ingress without them would put a service
+  # with no login of its own on the public internet. That pairing is the whole
+  # decision, and it is why it lives here rather than in detection — nothing in
+  # a cluster says whether a route is guarded.
+  enabled: true
   className: traefik
-  host: ""
+  # Deliberately absent. detect-stack.py derives the host from what planner
+  # already publishes — planner.<domain>, grafana.<domain>, so
+  # aiwatcher.<domain> — and passes it in underneath this file, which is why
+  # naming it here would break that. AIWATCHER_DOMAIN overrides both.
+  #
+  # Enabled with no host is not a way to install without an ingress: the chart
+  # fails on an empty host. Failing to render is the loud version of the
+  # failure this replaces, which was a release that installed cleanly, answered
+  # 404 on the host authentik was pointing at, and said nothing.
   annotations:
     traefik.ingress.kubernetes.io/router.entrypoints: websecure
     # planner's two middlewares, in planner's namespace. Same pair every

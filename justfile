@@ -447,8 +447,14 @@ chart-check:
     helm lint deploy/helm/aiwatcher
     for env in default planner; do
       ns=$([[ $env == planner ]] && echo planner || echo aiwatcher)
+      # The planner environment publishes an ingress whose host detection reads
+      # off the cluster, and this render deliberately reads no cluster. A
+      # placeholder stands in so the ingress is validated here rather than
+      # skipped; the chart refuses to render an empty host.
+      host=()
+      if [[ $env == planner ]]; then host=(--set ingress.host=aiwatcher.example.test); fi
       helm template aiwatcher deploy/helm/aiwatcher --namespace "$ns" \
-        --values "deploy/environments/$env.yaml" \
+        --values "deploy/environments/$env.yaml" ${host[@]+"${host[@]}"} \
         | kubeconform -strict -summary -kubernetes-version {{kubeconform_k8s_version}} -
       echo "✓ deploy/environments/$env.yaml renders and validates"
     done

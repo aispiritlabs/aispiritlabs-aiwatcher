@@ -35,6 +35,15 @@ Overrides, because detection is a convenience and never the last word:
     AIWATCHER_COLLECTOR_URL=http://…
     AIWATCHER_GRAFANA_URL=http://…
     AIWATCHER_<NAME>_URL=none                force "not present" for one target
+    AIWATCHER_DOMAIN=aiwatcher.example.com   publish on this host, do not derive one
+    AIWATCHER_DOMAIN=none                    derive nothing
+
+The last two are about the other thing this reads: the domain the cluster
+already publishes under. `planner.example.com` and `grafana.example.com` say
+that a sibling belongs at `aiwatcher.example.com`, and a host that has to be
+typed once per install is a host that ends up not typed at all — which installs
+a release with no ingress at all, reachable only by port-forward, and says
+nothing about it.
 """
 
 from __future__ import annotations
@@ -108,6 +117,33 @@ class Finding:
     pod_labels: dict[str, str] = field(default_factory=dict)
     fenced: bool = False
     fenced_by: str = ""
+
+
+# The label an aiwatcher release is published under, in front of whatever domain
+# the cluster turns out to use.
+SUBDOMAIN = "aiwatcher"
+
+
+@dataclass
+class Domain:
+    """The host aiwatcher would be published on.
+
+    Not a Finding: there is no image to match and no Service to point at. What
+    is read here is a convention rather than a component — every other ingress
+    in the namespace, agreeing on a domain.
+
+    It carries the host and nothing else on purpose. Whether to publish at all
+    is not discoverable: an ingress in front of aiwatcher is safe exactly where
+    something authenticates it, and no ingress in the cluster says whether this
+    one would be. That decision stays in the environment file, beside the
+    middlewares that make it true. See ADR_0009.
+    """
+
+    host: str = ""
+    base: str = ""
+    source: str = "detected"
+    reason: str = ""
+    derived_from: tuple[str, ...] = ()
 
 
 def kubectl(args: list[str], context: str | None) -> tuple[bool, str]:
@@ -241,6 +277,74 @@ def find(target: Target, pods: list[dict], services: list[dict], prefer_namespac
     )
 
 
+def base_of(host: str) -> str:
+    """The domain a sibling of `host` would live under.
+
+    `planner.example.com` → `example.com`. A two-label host is already the
+    domain, so `example.com` → `example.com` and the sibling is
+    `aiwatcher.example.com` — never `aiwatcher.com`, which is somebody else's.
+    """
+    labels = host.split(".")
+    return ".".join(labels[1:]) if len(labels) > 2 else host
+
+
+def derive_domain(ingresses: list[dict], namespace: str) -> Domain:
+    """Where a sibling of the cluster's existing ingresses would go."""
+    hosts: list[tuple[str, str]] = []
+    for ingress in ingresses:
+        meta = ingress.get("metadata", {})
+        labels = meta.get("labels") or {}
+        # Our own ingress from a previous install is not evidence: deriving from
+        # it would make the answer depend on whether this ran before. Same
+        # reason the pod list drops part-of: aiwatcher.
+        if labels.get("app.kubernetes.io/part-of") == "aiwatcher":
+            continue
+        for rule in ingress.get("spec", {}).get("rules") or []:
+            host = str(rule.get("host") or "")
+            # A rule with no host matches every name and a wildcard names no
+            # single one. Neither says where a sibling belongs.
+            if not host or "*" in host:
+                continue
+            hosts.append((host, f"{meta.get('namespace')}/{meta.get('name')}"))
+
+    if not hosts:
+        return Domain(reason="no Ingress in the cluster names a host")
+
+    # An ingress in the namespace being installed into is the strongest evidence
+    # there is: it is the convention of the thing aiwatcher is going in beside.
+    same = [entry for entry in hosts if entry[1].split("/", 1)[0] == namespace]
+    considered = same or hosts
+
+    tally: dict[str, list[str]] = {}
+    for host, ref in considered:
+        tally.setdefault(base_of(host), []).append(f"{host} ({ref})")
+
+    ranked = sorted(tally.items(), key=lambda item: (-len(item[1]), item[0]))
+    # A tie is not a majority, and picking one alphabetically would publish on
+    # whichever domain sorts first — a coin toss nobody would read as one.
+    if len(ranked) > 1 and len(ranked[0][1]) == len(ranked[1][1]):
+        names = ", ".join(base for base, _ in ranked)
+        return Domain(reason=f"more than one domain in use ({names}); set AIWATCHER_DOMAIN")
+
+    base, evidence = ranked[0]
+    where = "in this namespace" if same else "in the cluster"
+    return Domain(
+        host=f"{SUBDOMAIN}.{base}",
+        base=base,
+        derived_from=tuple(sorted(evidence)),
+        reason=f"{len(evidence)} ingress host(s) {where} are under {base}",
+    )
+
+
+def domain_override() -> Domain | None:
+    raw = os.environ.get("AIWATCHER_DOMAIN", "").strip()
+    if not raw:
+        return None
+    if raw.lower() in {"none", "off", "false"}:
+        return Domain(reason="forced off by AIWATCHER_DOMAIN", source="override")
+    return Domain(host=raw, base=base_of(raw), source="override", reason="set by AIWATCHER_DOMAIN")
+
+
 def override_for(target: Target) -> Finding | None:
     raw = os.environ.get(f"AIWATCHER_{target.key.upper()}_URL", "").strip()
     if not raw:
@@ -251,7 +355,7 @@ def override_for(target: Target) -> Finding | None:
                    reason="set by AIWATCHER_%s_URL" % target.key.upper())
 
 
-def as_yaml(findings: dict[str, Finding], reachable: bool, reason: str, context: str) -> str:
+def as_yaml(findings: dict[str, Finding], domain: Domain, reachable: bool, reason: str, context: str) -> str:
     def scalar(value: object) -> str:
         if isinstance(value, bool):
             return "true" if value else "false"
@@ -280,10 +384,20 @@ def as_yaml(findings: dict[str, Finding], reachable: bool, reason: str, context:
             lines.append(f"      {scalar(label)}: {scalar(value)}")
         if not finding.pod_selector:
             lines[-1] = "    podSelector: {}"
+    lines.append("  domain:")
+    lines.append(f"    host: {scalar(domain.host)}")
+    lines.append(f"    base: {scalar(domain.base)}")
+    lines.append(f"    source: {scalar(domain.source)}")
+    lines.append(f"    reason: {scalar(domain.reason)}")
+    lines.append("    derivedFrom:")
+    for evidence in domain.derived_from:
+        lines.append(f"      - {scalar(evidence)}")
+    if not domain.derived_from:
+        lines[-1] = "    derivedFrom: []"
     return "\n".join(lines) + "\n"
 
 
-def as_text(findings: dict[str, Finding], reachable: bool, reason: str, context: str) -> str:
+def as_text(findings: dict[str, Finding], domain: Domain, reachable: bool, reason: str, context: str) -> str:
     lines = []
     if reason == "detection disabled":
         lines.append("cluster: not consulted (AIWATCHER_DETECT=off)")
@@ -302,10 +416,18 @@ def as_text(findings: dict[str, Finding], reachable: bool, reason: str, context:
                 lines.append(f"  {' ' * width}            fenced by NetworkPolicy {finding.fenced_by}")
         else:
             lines.append(f"  {key.ljust(width)}  absent    {finding.reason}")
+    label = "domain".ljust(width)
+    if domain.host:
+        forced = "   (forced)" if domain.source == "override" else ""
+        lines.append(f"  {label}  derived   {domain.host}{forced}")
+        if domain.source != "override":
+            lines.append(f"  {' ' * width}            {domain.reason}")
+    else:
+        lines.append(f"  {label}  unknown   {domain.reason}")
     return "\n".join(lines) + "\n"
 
 
-def as_helm_values(findings: dict[str, Finding], reachable: bool, namespace: str) -> str:
+def as_helm_values(findings: dict[str, Finding], domain: Domain, reachable: bool, namespace: str) -> str:
     """The findings, translated into chart values.
 
     This is the only place that decides "found means external". The helmfile
@@ -320,7 +442,8 @@ def as_helm_values(findings: dict[str, Finding], reachable: bool, namespace: str
 
     # An override is knowledge whether or not the cluster answered, so it still
     # produces values. Nothing known at all does not.
-    if not reachable and not any(f.source == "override" for f in findings.values()):
+    forced = any(f.source == "override" for f in findings.values()) or domain.source == "override"
+    if not reachable and not forced:
         # Every mode stays at its chart default, which installs the lot. Said
         # out loud rather than implied, because "the cluster was not read, so we
         # assumed it was empty" is exactly the sentence that produces a second
@@ -329,6 +452,20 @@ def as_helm_values(findings: dict[str, Finding], reachable: bool, namespace: str
         lines.append("# AIWATCHER_*_URL set. Nothing is overridden here, so the chart defaults")
         lines.append("# apply and this release would install a full stack of its own.")
         return "\n".join(lines) + "\n{}\n"
+
+    # The host, and only the host. Whether to publish is not a finding — see
+    # the Domain docstring — so this never writes ingress.enabled. An
+    # environment that asks for an ingress and gets no host here does not
+    # quietly install without one: the chart fails on the empty host, which is
+    # the loud version of the failure this derivation exists to prevent.
+    if domain.host:
+        lines.append("ingress:")
+        lines.append(f"  host: {json.dumps(domain.host)}")
+        lines.append(f"  # {domain.reason}")
+    else:
+        lines.append(f"# No ingress host: {domain.reason}.")
+        lines.append("# An environment with ingress.enabled will fail to render rather than")
+        lines.append("# publish on an empty host. Set AIWATCHER_DOMAIN to name one.")
 
     for key in ("victoriametrics", "victoriatraces"):
         finding = findings[key]
@@ -413,13 +550,13 @@ def as_helm_values(findings: dict[str, Finding], reachable: bool, namespace: str
     return "\n".join(lines) + "\n"
 
 
-def render(fmt: str, findings: dict[str, Finding], reachable: bool, reason: str, context: str,
-           namespace: str) -> str:
+def render(fmt: str, findings: dict[str, Finding], domain: Domain, reachable: bool, reason: str,
+           context: str, namespace: str) -> str:
     if fmt == "helm-values":
-        return as_helm_values(findings, reachable, namespace)
+        return as_helm_values(findings, domain, reachable, namespace)
     if fmt == "text":
-        return as_text(findings, reachable, reason, context)
-    return as_yaml(findings, reachable, reason, context)
+        return as_text(findings, domain, reachable, reason, context)
+    return as_yaml(findings, domain, reachable, reason, context)
 
 
 def main() -> int:
@@ -438,7 +575,8 @@ def main() -> int:
         for target in TARGETS:
             findings[target.key] = override_for(target) or Finding(reason="detection disabled (AIWATCHER_DETECT=off)",
                                                                    source="override")
-        sys.stdout.write(render(args.format, findings, False, "detection disabled", context, args.namespace))
+        off = domain_override() or Domain(reason="detection disabled (AIWATCHER_DETECT=off)", source="override")
+        sys.stdout.write(render(args.format, findings, off, False, "detection disabled", context, args.namespace))
         return 0
 
     ok_pods, pods_raw = kubectl(["get", "pods", "--all-namespaces", "-o", "json"], args.context)
@@ -446,18 +584,22 @@ def main() -> int:
     reachable = ok_pods and ok_services
     reason = "" if reachable else (pods_raw if not ok_pods else services_raw)
 
-    # Not required: a token that may not list NetworkPolicies still gets a
-    # usable answer, it just never offers to attach an ingress rule.
+    # Neither of these is required: a token that may not list NetworkPolicies
+    # still gets a usable answer, it just never offers to attach an ingress
+    # rule, and one that may not list Ingresses gets one without a host.
     ok_policies, policies_raw = kubectl(["get", "networkpolicies", "--all-namespaces", "-o", "json"], args.context)
+    ok_ingresses, ingresses_raw = kubectl(["get", "ingresses", "--all-namespaces", "-o", "json"], args.context)
 
     pods: list[dict] = []
     services: list[dict] = []
     policies: list[dict] = []
+    ingresses: list[dict] = []
     if reachable:
         try:
             pods = json.loads(pods_raw).get("items", [])
             services = json.loads(services_raw).get("items", [])
             policies = json.loads(policies_raw).get("items", []) if ok_policies else []
+            ingresses = json.loads(ingresses_raw).get("items", []) if ok_ingresses else []
         except json.JSONDecodeError as error:
             reachable, reason = False, f"kubectl returned something that is not JSON: {error}"
 
@@ -484,7 +626,12 @@ def main() -> int:
                 finding.fenced = bool(finding.fenced_by)
             findings[target.key] = finding
 
-    sys.stdout.write(render(args.format, findings, reachable, reason, context, args.namespace))
+    domain = domain_override() or (
+        derive_domain(ingresses, args.namespace) if reachable
+        else Domain(reason="cluster not reached")
+    )
+
+    sys.stdout.write(render(args.format, findings, domain, reachable, reason, context, args.namespace))
     return 0
 
 

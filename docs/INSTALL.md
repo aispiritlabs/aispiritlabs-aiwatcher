@@ -233,19 +233,35 @@ datasource into Grafana's provisioning directory.
 
 ### Publishing the panel
 
-Left off by default. aiwatcher has no authentication of its own, so an ingress
-without planner's authentik middlewares would put it on the public internet.
-`environments/planner.yaml` carries the same two middlewares every authenticated
+aiwatcher has no authentication of its own, so an ingress without planner's
+authentik middlewares would put it on the public internet. That is why the
+switch and the middlewares live in the same file: `environments/planner.yaml`
+turns the ingress on and carries the same two middlewares every authenticated
 planner route uses, plus the `/outpost.goauthentik.io/` route the forward-auth
 callback needs — that path must skip the authentik middleware, because a route
-that requires a session in order to establish one never completes.
+that requires a session in order to establish one never completes. The default
+environment leaves the ingress off, and a cluster with no such middleware to
+attach should keep it off and reach the panel by port-forward.
+
+The host is not in that file. Detection reads it off the cluster: planner
+already publishes `planner.<domain>` and `grafana.<domain>`, so aiwatcher goes
+to `aiwatcher.<domain>`, and installing needs no host at all.
+
+```bash
+./scripts/install.sh -e planner -n planner
+```
+
+`just detect planner` prints what it derived, on the `domain` line. To name one
+by hand instead — a different domain, or a cluster publishing under several:
 
 ```bash
 AIWATCHER_DOMAIN=aiwatcher.example.com ./scripts/install.sh -e planner -n planner
 ```
 
 Add a DNS record for the host first; cert-manager will not issue against a name
-that does not resolve.
+that does not resolve. Nothing is published on a host nobody derived and nobody
+named: an environment with `ingress.enabled` and no host fails to render, rather
+than installing a release that answers 404 on the host the SSO app points at.
 
 ---
 
