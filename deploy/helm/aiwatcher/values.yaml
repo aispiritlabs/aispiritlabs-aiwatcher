@@ -119,9 +119,15 @@ panel:
     tag: ""
     pullPolicy: IfNotPresent
 
-  # The optional Flow query service (services/flow), which backs the panel's
-  # Query tab. Empty means nginx answers 503 there, which the tab reads as
-  # "the service is not running" rather than as a failed query.
+  # Where nginx proxies /flow. Leave it empty and set `flow.enabled` below to
+  # run the query service in this release — the upstream is then this release's
+  # own Service. This field is for the other case: a Flow service that already
+  # runs somewhere this chart does not manage. It wins over `flow.enabled` when
+  # both are set.
+  #
+  # Empty with `flow.enabled` false means nginx answers 503 there, which the
+  # Query tab reads as "the service is not running" rather than as a failed
+  # query.
   flowUpstream: ""
 
   resources:
@@ -130,6 +136,51 @@ panel:
       memory: 32Mi
     limits:
       memory: 128Mi
+
+# ── Flow query service ───────────────────────────────────────────────────────
+#
+# The PHP service behind the panel's Query tab (services/flow, ADR_0008). Off
+# by default, and separate from the binary on purpose: aiwatcher has no idea it
+# exists, so a deployment without it answers 503 on /flow — which that tab reads
+# as "the service is not running" — while the other three observability views
+# are unaffected.
+#
+# It has no authentication of its own; the parser bounds what a query may *say*,
+# not who may ask. So the panel's nginx is the only thing that reaches it, which
+# is what puts it behind whatever guards the panel's host. The Service is
+# ClusterIP, it gets no ingress path, and with networkPolicy.enabled the only
+# pod allowed in is the panel's.
+#
+# Turning this on is enough — the panel derives the upstream from it, and
+# panel.flowUpstream stays for the case where the service runs somewhere this
+# chart does not manage.
+flow:
+  enabled: false
+
+  image:
+    repository: ghcr.io/example/aiwatcher-flow
+    # Empty means .Chart.AppVersion.
+    tag: ""
+    pullPolicy: IfNotPresent
+
+  # A second replica would work — the service keeps nothing between requests —
+  # but this backs one tab that a person opens now and then, and each replica is
+  # a PHP runtime sitting idle the rest of the time.
+  replicas: 1
+
+  # ADR_0008 measured a query at 17 MB peak and ~210 ms. The requests are the
+  # runtime's floor rather than the query's cost; the limit is headroom for the
+  # 1000-row ceiling the service enforces.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 96Mi
+    limits:
+      memory: 384Mi
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
 
 # ── Collector ────────────────────────────────────────────────────────────────
 #

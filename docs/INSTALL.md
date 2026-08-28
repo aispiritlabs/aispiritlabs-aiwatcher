@@ -15,13 +15,14 @@ is left for you.
 
 ## What gets installed, and what does not
 
-The chart can install six things. Four of them are things a cluster may already
-run:
+The chart can install seven things. Four of them are things a cluster may
+already run:
 
 | Component | Default | Detected? |
 |---|---|---|
 | aiwatcher server (projector + API) | always | — |
 | panel (nginx + the React build) | always | — |
+| Flow query service (the panel's Query tab) | **off** | — |
 | OpenTelemetry Collector | installed | detected, but **never** reused automatically |
 | VictoriaTraces | installed | yes → `mode: external` |
 | VictoriaMetrics | installed | yes → `mode: external` |
@@ -248,6 +249,50 @@ that does not resolve.
 
 ---
 
+## The Query tab
+
+Off by default, and a deployment without it is a supported state rather than a
+broken one: the tab says the service is not running and names what starts it,
+and the other three observability views do not know the difference.
+
+```bash
+helm upgrade aiwatcher deploy/helm/aiwatcher -n planner \
+  -f deploy/environments/planner.yaml \
+  --set flow.enabled=true
+```
+
+or, through the install script:
+
+```bash
+AIWATCHER_FLOW=true AIWATCHER_FLOW_IMAGE=ghcr.io/you/aiwatcher-flow \
+  deploy/scripts/install.sh -e planner
+```
+
+What that gets you is `services/flow` — a PHP service that answers the questions
+the explorer tree was not built for, by parsing a Flow DataFrame pipeline and
+running it against the API's own routes. ADR_0008 has the reasoning and the
+measurements; what matters at install time is three things.
+
+**It is not part of the binary.** aiwatcher has no idea it exists. The panel
+calls it directly, `flow.enabled` only decides what the panel's nginx proxies
+`/flow` to, and turning it off later leaves nothing behind.
+
+**It has no authentication of its own.** The parser bounds what a query can
+*say*, not who may ask, so the only thing that may reach it is the panel's
+nginx — which puts it behind whatever guards the panel's host. The chart keeps
+it that way: a ClusterIP Service, no ingress path, and with
+`networkPolicy.enabled` a policy that admits the panel's pod and nothing else.
+Do not give it an Ingress of its own.
+
+**A query only sees the retention window.** It reads the read model through the
+API, so a result is as current as the runs list and no older than it. The panel
+says so above every table, because a partial result read as "all time" is worse
+than no result.
+
+If the service already runs somewhere this chart does not manage, point at it
+with `panel.flowUpstream` instead and leave `flow.enabled` off. That field wins
+over `flow.enabled` when both are set.
+
 ## Replacing MLflow
 
 Install aiwatcher before deploying the Planner cutover. Planner no longer runs
@@ -329,6 +374,39 @@ no scorers, no judges, no suite runner.
 ./scripts/install.sh [-e ENV] [-n NAMESPACE] [--plan] [-y]
 ```
 
+### Its defaults live in .env
+
+With a `.env` at the repo root, the script takes no arguments. Copy
+`.env.example` and fill in the three image lines:
+
+```env
+AIWATCHER_ENV=planner
+AIWATCHER_IMAGE=ghcr.io/<owner>/aiwatcher
+AIWATCHER_PANEL_IMAGE=ghcr.io/<owner>/aiwatcher-panel
+AIWATCHER_FLOW_IMAGE=ghcr.io/<owner>/aiwatcher-flow
+AIWATCHER_IMAGE_PULL_SECRET=ghcr-pull
+```
+
+```bash
+deploy/scripts/install.sh
+```
+
+The justfile has loaded that file into every recipe from the start
+(`set dotenv-load := true`); the script reads it too, so `just install-cluster`
+and a bare `./install.sh` now resolve to the same install. A variable already
+exported in your shell wins over the file, and a flag wins over both. The file
+is parsed rather than sourced — this script applies manifests to a cluster, and
+`source` on a file of settings runs whatever is in it.
+
+Leave `AIWATCHER_IMAGE_TAG` out. CI publishes each image under the commit SHA
+and nothing else, so when a registry is named and a tag is not, the tag is the
+checkout's own commit — the one whose build produced those images. The
+environment files say `tag: latest`, which no build ever pushes; that is why
+naming a registry without a tag used to be a pull of something that does not
+exist.
+
+### The preflight
+
 It refuses to go further than a preflight when:
 
 * `kubectl`, `helm`, `helmfile` or `python3` is missing — with the install line
@@ -370,8 +448,11 @@ helm plugin install https://github.com/databus23/helm-diff
 REGISTRY=ghcr.io/you TAG=v0.1.0 deploy/scripts/build-images.sh --push
 ```
 
-Two images: `aiwatcher` (the Rust binary) and `aiwatcher-panel` (nginx plus the
-built React app). Separate, so a panel change does not rebuild the Rust binary.
+Three images: `aiwatcher` (the Rust binary), `aiwatcher-panel` (nginx plus the
+built React app) and `aiwatcher-flow` (the optional query service). Separate, so
+a panel change does not rebuild the Rust binary and neither rebuilds the PHP.
+`--no-flow` skips the third for a deployment that will not run it.
+
 The panel's nginx config is not in its image — it comes from a ConfigMap in the
 chart, because it has to name the server's Service, which is a deployment-time
 fact.

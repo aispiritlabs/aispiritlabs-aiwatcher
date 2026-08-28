@@ -1,0 +1,64 @@
+# The Flow query service, as a container.
+#
+# A third image rather than a second stage of the panel's: the two are deployed
+# together but they are not the same lifecycle. The panel is static files and
+# ships on every UI change; this is PHP and ships when `services/flow` changes,
+# which by ADR_0008 is rarely and for different reasons.
+#
+#   docker build -f deploy/Dockerfile.flow -t aiwatcher-flow:dev .
+#
+# Build context is the repo root, to match the other two.
+
+FROM php:8.4-cli-alpine AS vendor
+
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+WORKDIR /src
+
+# Manifests first, so a source-only change reuses the install layer.
+COPY services/flow/composer.json services/flow/composer.lock ./
+
+# `--no-dev` leaves Mago out, and ADR_0008 names that a supported state: the
+# parser still catches syntax errors, `/flow/check` reports its diagnostics
+# alone and `/flow/healthz` says `linter: none`. Build with
+# `--build-arg COMPOSER_DEV=` to ship the linter's wording instead.
+ARG COMPOSER_DEV=--no-dev
+RUN composer install ${COMPOSER_DEV} --no-scripts --no-interaction --no-progress --prefer-dist
+
+COPY services/flow/src ./src
+COPY services/flow/public ./public
+RUN composer dump-autoload ${COMPOSER_DEV} --optimize --no-interaction
+
+FROM dunglas/frankenphp:1-php8.4-alpine AS runtime
+
+# Not `php -S`, which is what `just flow-serve` runs and which PHP's own manual
+# says is not a production server: it is single-threaded, so a `/flow/check`
+# fired while someone types would queue behind a 30-second `/flow/query` on the
+# same tab. Caddy in front of PHP handles both at once.
+
+WORKDIR /app
+COPY --from=vendor /src/vendor ./vendor
+COPY --from=vendor /src/src ./src
+COPY --from=vendor /src/public ./public
+
+RUN set -eux; \
+    mv "$PHP_INI_DIR/php.ini-production" "$PHP_INI_DIR/php.ini"; \
+    # QueryRunner::TIMEOUT_SECONDS is 30 and reports a timeout as a query error
+    # with a message. php.ini-production's own 30 would land on the same second
+    # as a fatal, so the service's limit is the one that fires.
+    printf 'max_execution_time = 60\nexpose_php = Off\n' > "$PHP_INI_DIR/conf.d/99-aiwatcher.ini"; \
+    # Caddy's data and config directories. Named here so the chart knows which
+    # two paths need an emptyDir under a read-only root filesystem.
+    mkdir -p /data /config; \
+    adduser -D -u 10001 -H flow; \
+    chown -R 10001:10001 /data /config
+
+# 8081 to match `just flow-serve`, and above 1024 so an unprivileged user can
+# bind it. A bare port means no hostname, so Caddy serves plain HTTP and does
+# not try to provision a certificate — TLS terminates at the ingress.
+ENV SERVER_NAME=:8081 \
+    XDG_DATA_HOME=/data \
+    XDG_CONFIG_HOME=/config \
+    AIWATCHER_URL=http://aiwatcher-server:8080
+
+USER 10001
+EXPOSE 8081

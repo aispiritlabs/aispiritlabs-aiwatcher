@@ -428,7 +428,7 @@ install-status namespace="aiwatcher":
 uninstall-cluster env=install_env:
     ./deploy/scripts/uninstall.sh --environment {{env}}
 
-# The two images the chart deploys.
+# The three images the chart deploys.
 images:
     ./deploy/scripts/build-images.sh
 

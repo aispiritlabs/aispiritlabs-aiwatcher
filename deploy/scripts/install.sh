@@ -20,8 +20,58 @@ set -Eeuo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEPLOY="$(cd "$HERE/.." && pwd)"
+ROOT="$(cd "$DEPLOY/.." && pwd)"
 
-environment=default
+# ── Defaults from .env ───────────────────────────────────────────────────────
+#
+# The justfile has loaded this file into every recipe from the start
+# (`set dotenv-load := true`), so `just install-cluster` has always had these and
+# `./install.sh` never did. Reading it here is what makes the two agree — and
+# what lets a machine keep its registry, its tag and its environment in one
+# gitignored file instead of in a command line nobody remembers.
+#
+# Parsed rather than sourced. This script applies manifests to a cluster, and
+# `source` on a file of settings runs whatever is in it. A real environment
+# variable still wins over the file, which is `just`'s precedence too.
+load_dotenv() {
+  local file="$1" line key value
+  if [[ ! -f $file ]]; then
+    return 0
+  fi
+  while IFS= read -r line || [[ -n $line ]]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    if [[ -z $line || $line == '#'* ]]; then
+      continue
+    fi
+    line="${line#export }"
+    if [[ $line != *=* ]]; then
+      continue
+    fi
+    key="${line%%=*}"
+    value="${line#*=}"
+    key="${key%"${key##*[![:space:]]}"}"
+    if [[ ! $key =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+      continue
+    fi
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    # One layer of matching quotes, the way dotenv does it.
+    if [[ ${#value} -ge 2 && ( ( $value == \"*\" ) || ( $value == \'*\' ) ) ]]; then
+      value="${value:1:${#value}-2}"
+    fi
+    # Already set in the real environment: leave it alone.
+    if [[ -n ${!key+x} ]]; then
+      continue
+    fi
+    export "$key=$value"
+  done < "$file"
+}
+load_dotenv "$ROOT/.env"
+
+# AIWATCHER_ENV is what the justfile already defaults its recipes from; honouring
+# it here means `./install.sh` on its own and `just install-cluster` pick the
+# same environment.
+environment="${AIWATCHER_ENV:-default}"
 namespace="${AIWATCHER_NAMESPACE:-}"
 release="${AIWATCHER_RELEASE:-aiwatcher}"
 context="${AIWATCHER_K8S_CONTEXT:-}"
@@ -35,7 +85,7 @@ usage() {
   cat <<'USAGE'
 
 Options:
-  -e, --environment NAME   helmfile environment: default | planner   (default: default)
+  -e, --environment NAME   helmfile environment: default | planner   (default: $AIWATCHER_ENV, or default)
   -n, --namespace NAME     namespace to install into                 (default: per environment)
   -r, --release NAME       helm release name                         (default: aiwatcher)
       --context NAME       kube context                              (default: current)
@@ -44,8 +94,15 @@ Options:
   -h, --help
 
 Environment:
+  Read from ./.env first, if there is one; a real environment variable wins.
+  With the image lines in there, this script needs no arguments at all.
+
+  AIWATCHER_ENV                             environment to install (default: default)
   AIWATCHER_IMAGE, AIWATCHER_IMAGE_TAG      override the server image
+                                            (tag defaults to the checkout's commit)
   AIWATCHER_PANEL_IMAGE                     override the panel image
+  AIWATCHER_FLOW_IMAGE                      override the query service image
+  AIWATCHER_FLOW=true                       install the optional query service
   AIWATCHER_IMAGE_PULL_SECRET               pull Secret for private images
   IMAGE_PULL_SECRET                         planner-compatible fallback
   AIWATCHER_DOMAIN                          publish an ingress on this host
@@ -158,14 +215,42 @@ fi
 # `A && B` rather than `if` would exit here under `set -e` the moment one of
 # these variables was unset, which is the normal case.
 sets=()
+
+# CI publishes each image under the commit SHA and nothing else — see
+# .github/workflows/release-images.yml — while the environment files say
+# `tag: latest`, which is a tag no build ever pushes. So when a real registry has
+# been named and a tag has not, the tag is this checkout's own commit: the one
+# whose build produced those images.
+if [[ -n ${AIWATCHER_IMAGE:-} && -z ${AIWATCHER_IMAGE_TAG:-} ]]; then
+  if AIWATCHER_IMAGE_TAG="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null)"; then
+    printf '  tag from this checkout: %s' "${AIWATCHER_IMAGE_TAG:0:12}"
+    if [[ -n "$(git -C "$ROOT" status --porcelain 2>/dev/null)" ]]; then
+      printf ' %s(uncommitted changes are not in it)%s' "$DIM" "$NC"
+    fi
+    printf '\n\n'
+  else
+    unset AIWATCHER_IMAGE_TAG
+  fi
+fi
+
 if [[ -n ${AIWATCHER_IMAGE:-} ]]; then
   sets+=(--set "image.repository=$AIWATCHER_IMAGE")
 fi
 if [[ -n ${AIWATCHER_IMAGE_TAG:-} ]]; then
-  sets+=(--set "image.tag=$AIWATCHER_IMAGE_TAG" --set "panel.image.tag=$AIWATCHER_IMAGE_TAG")
+  sets+=(--set "image.tag=$AIWATCHER_IMAGE_TAG" --set "panel.image.tag=$AIWATCHER_IMAGE_TAG" \
+    --set "flow.image.tag=$AIWATCHER_IMAGE_TAG")
 fi
 if [[ -n ${AIWATCHER_PANEL_IMAGE:-} ]]; then
   sets+=(--set "panel.image.repository=$AIWATCHER_PANEL_IMAGE")
+fi
+if [[ -n ${AIWATCHER_FLOW_IMAGE:-} ]]; then
+  sets+=(--set "flow.image.repository=$AIWATCHER_FLOW_IMAGE")
+fi
+# Naming the image is not the same as asking for the service: a build script
+# that exports all three should not turn the Query tab on by itself. The chart
+# defaults to off and this is the one switch.
+if [[ ${AIWATCHER_FLOW:-} == "true" ]]; then
+  sets+=(--set "flow.enabled=true")
 fi
 image_pull_secret="${AIWATCHER_IMAGE_PULL_SECRET:-${IMAGE_PULL_SECRET:-}}"
 if [[ -n $image_pull_secret ]]; then

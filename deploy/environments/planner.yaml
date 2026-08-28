@@ -25,6 +25,23 @@ panel:
     tag: latest
     pullPolicy: IfNotPresent
 
+flow:
+  # The Query tab's backend. On here because planner is where the ad-hoc
+  # questions get asked — the ones the explorer tree cannot answer, and the ones
+  # MLflow's UI answered by letting you write them out.
+  #
+  # Safe to turn on *in this environment specifically*: the service has no
+  # authentication of its own, and here it is only ever reached through the
+  # panel's nginx, which sits behind planner's authentik middleware (see the
+  # ingress annotations at the bottom of this file). It gets no ingress path and
+  # no Service anyone else calls, and the networkPolicy block below fences it to
+  # the panel's pod.
+  enabled: true
+  image:
+    repository: ghcr.io/example/aiwatcher-flow
+    tag: latest
+    pullPolicy: IfNotPresent
+
 server:
   # Durable, single node, no broker — which matches how planner runs everything
   # else on this cluster. Moving to Laser is a later decision and only changes

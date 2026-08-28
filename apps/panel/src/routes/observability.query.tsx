@@ -210,11 +210,30 @@ function ServiceMissing() {
         title="The query service is not running"
         hint="It is a separate PHP service, optional and outside the Rust binary — everything else on this page works without it."
       />
+      {/*
+        Both, because this screen cannot tell which one you are looking at: the
+        panel is the same build on a laptop and in a cluster, and the answer is
+        a different one in each. Showing only the `just` commands sent anyone
+        reading this from a deployment looking for a checkout that is not there.
+      */}
       <Card className="p-4">
-        <p className="mb-2 text-xs text-muted-foreground">Start it with:</p>
+        <p className="mb-2 text-xs text-muted-foreground">Locally, from a checkout:</p>
         <pre className="id overflow-x-auto rounded bg-muted p-3 text-muted-foreground">
           just flow-install{'\n'}just flow-serve
         </pre>
+      </Card>
+      <Card className="p-4">
+        <p className="mb-2 text-xs text-muted-foreground">
+          In a cluster, it is off in the chart until you ask for it:
+        </p>
+        <pre className="id overflow-x-auto rounded bg-muted p-3 text-muted-foreground">
+          helm upgrade … --set flow.enabled=true
+        </pre>
+        <p className="mt-2 text-xs text-muted-foreground">
+          Needs the <span className="font-mono">aiwatcher-flow</span> image, which{' '}
+          <span className="font-mono">deploy/scripts/build-images.sh</span> builds beside the other
+          two.
+        </p>
       </Card>
     </div>
   );

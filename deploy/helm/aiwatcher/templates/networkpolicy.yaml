@@ -50,6 +50,33 @@ spec:
         - { protocol: TCP, port: 4318 }
         - { protocol: TCP, port: 4317 }
 {{- end }}
+{{- if .Values.flow.enabled }}
+---
+# Narrow, like RustFS's rule below and unlike the server's. It can be, and it
+# has to be: the query service has one client — the panel's nginx — and no
+# authentication of its own, so "any pod in the namespace" would be a namespace
+# in which anything can query the read model without passing the ingress.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-flow-ingress
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "aiwatcher.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: flow
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "aiwatcher.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: panel
+      ports:
+        - { protocol: TCP, port: 8081 }
+{{- end }}
 {{- if eq .Values.promptStore.mode "install" }}
 ---
 # Narrow, unlike the server's rule above, and it can be: the object store has

@@ -90,6 +90,18 @@
         }
       }
     },
+    "flow": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "replicas": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
     "promptStore": {
       "type": "object",
       "properties": {

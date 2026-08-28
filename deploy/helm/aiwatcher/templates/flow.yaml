@@ -1,0 +1,113 @@
+{{- if .Values.flow.enabled }}
+{{- $fullname := include "aiwatcher.fullname" . -}}
+{{- if not .Values.panel.enabled -}}
+{{- fail "flow.enabled is true but panel.enabled is false. The panel's nginx is the only client this service has and the only thing that puts it behind authentication; on its own it would be an unauthenticated query endpoint with nothing calling it." -}}
+{{- end -}}
+# The Flow query service (services/flow, ADR_0008).
+#
+# ClusterIP and no ingress path, deliberately. The service has no
+# authentication of its own — the parser bounds what a query can *say*, not who
+# may ask — so the only thing that may reach it is the panel's nginx, which is
+# behind whatever guards the panel's host.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-flow
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+    app.kubernetes.io/component: flow
+spec:
+  selector:
+    {{- include "aiwatcher.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: flow
+  ports:
+    - { name: http, port: 8081, targetPort: http, protocol: TCP }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-flow
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+    app.kubernetes.io/component: flow
+spec:
+  replicas: {{ .Values.flow.replicas }}
+  selector:
+    matchLabels:
+      {{- include "aiwatcher.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: flow
+  template:
+    metadata:
+      labels:
+        {{- include "aiwatcher.selectorLabels" . | nindent 8 }}
+        # Not in the selector — the selector is immutable, and this is here so
+        # deploy/scripts/detect-stack.py can tell aiwatcher's own pods from the
+        # ones it is looking for. See that script.
+        app.kubernetes.io/part-of: aiwatcher
+        app.kubernetes.io/component: flow
+    spec:
+      automountServiceAccountToken: false
+      {{- include "aiwatcher.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        # 10001 is the user deploy/Dockerfile.flow creates. fsGroup so the
+        # emptyDirs below are writable by it: Caddy writes its local CA and its
+        # config on startup, and with a read-only root filesystem those two
+        # paths plus /tmp are the only places it can.
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: flow
+          image: "{{ .Values.flow.image.repository }}:{{ .Values.flow.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.flow.image.pullPolicy }}
+          ports:
+            - { name: http, containerPort: 8081, protocol: TCP }
+          env:
+            # Which API a query reads. A dataset is a named route on this
+            # server, not a copy of the data, so this is the whole of the
+            # service's configuration.
+            - { name: AIWATCHER_URL, value: "http://{{ $fullname }}-server:8080" }
+          # /flow/healthz answers 200 whether or not it can reach the server,
+          # and reports which it is in the body. That is the right shape for a
+          # probe: this service is up or down on its own terms, and a server
+          # restart should not take the Query tab's pods out of rotation.
+          readinessProbe:
+            httpGet: { path: /flow/healthz, port: http }
+            initialDelaySeconds: 3
+            periodSeconds: 20
+          livenessProbe:
+            httpGet: { path: /flow/healthz, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            {{- toYaml .Values.flow.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: caddy-data, mountPath: /data }
+            - { name: caddy-config, mountPath: /config }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: caddy-data
+          emptyDir: {}
+        - name: caddy-config
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.flow.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.flow.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.flow.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

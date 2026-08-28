@@ -1,5 +1,6 @@
 {{- if .Values.panel.enabled }}
 {{- $fullname := include "aiwatcher.fullname" . -}}
+{{- $flowUpstream := include "aiwatcher.flowUpstream" . -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -40,10 +41,14 @@ data:
       }
 
       location /flow {
-      {{- if .Values.panel.flowUpstream }}
-        proxy_pass {{ .Values.panel.flowUpstream | trimSuffix "/" }};
+      {{- if $flowUpstream }}
+        # No trailing URI on proxy_pass, so the whole path is passed through:
+        # the service routes on /flow/* itself.
+        proxy_pass {{ $flowUpstream }};
         proxy_http_version 1.1;
         proxy_set_header Host $host;
+        # Above the 30s a query is allowed to take, so a query that hits its own
+        # limit answers with the service's message rather than nginx's 504.
         proxy_read_timeout 120s;
       {{- else }}
         # No Flow service in this deployment. 503 is what the Query tab reads as
@@ -104,7 +109,7 @@ spec:
       annotations:
         # nginx does not watch its own config, and a ConfigMap edit restarts
         # nothing on its own.
-        checksum/config: {{ toYaml .Values.panel | sha256sum | trunc 32 }}
+        checksum/config: {{ printf "%s|%s" (toYaml .Values.panel) $flowUpstream | sha256sum | trunc 32 }}
       labels:
         {{- include "aiwatcher.selectorLabels" . | nindent 8 }}
         # Not in the selector — the selector is immutable, and this is here so

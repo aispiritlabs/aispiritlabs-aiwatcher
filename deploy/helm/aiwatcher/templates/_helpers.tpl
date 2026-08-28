@@ -140,6 +140,26 @@ name: {{ include "aiwatcher.fullname" . }}-rustfs
 {{- end -}}
 {{- end -}}
 
+{{/*
+What the panel's nginx proxies /flow to, or empty for "there is none".
+
+Empty is a first-class answer, not a missing value: nginx returns 503 there and
+the Query tab reads that as "the service is not running" and says so, which is
+the degradation ADR_0008 designed for.
+
+`flow.enabled` is the normal way in and needs no URL — the Service is this
+release's. `panel.flowUpstream` stays for the other case: a Flow service running
+somewhere this chart does not manage. It wins when both are set, because an
+explicit URL is not something to silently ignore.
+*/}}
+{{- define "aiwatcher.flowUpstream" -}}
+{{- if .Values.panel.flowUpstream -}}
+{{- .Values.panel.flowUpstream | trimSuffix "/" -}}
+{{- else if .Values.flow.enabled -}}
+http://{{ include "aiwatcher.fullname" . }}-flow:8081
+{{- end -}}
+{{- end -}}
+
 {{- define "aiwatcher.imagePullSecrets" -}}
 {{- with .Values.imagePullSecrets }}
 imagePullSecrets:
