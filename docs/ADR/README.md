@@ -17,5 +17,6 @@ decision is made rather than reconstructed afterwards. The value is in the
 | [0009](ADR_0009_INSTALL_BY_DETECTION.md) | Installation reads the cluster to decide what to install |
 | [0010](ADR_0010_EVALUATION_REPORTS.md) | An evaluation report rides the event log and forms no span |
 | [0011](ADR_0011_PROMPT_REGISTRY.md) | A prompt is authored, not observed, and lives in an object store |
+| [0012](ADR_0012_WORKFLOW_GRAPH.md) | A workflow graph is declared on the log and folded like everything else |
 
 Use [template.md](template.md) for a new one.

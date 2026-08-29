@@ -17,6 +17,49 @@ export type AgentBreakdown = {
 };
 
 /**
+ * One agent addressing another.
+ */
+export type AgentMessage = {
+    at: string;
+    /**
+     * The channel it went over, when there is one worth naming: a queue, a
+     * topic, a shared file.
+     */
+    channel?: string | null;
+    from: string;
+    /**
+     * `handoff`, `request`, `response`, `broadcast` — or whatever else a
+     * producer coins. Free text for the same reason `step_type` is.
+     */
+    kind?: string | null;
+    /**
+     * The node it was sent from, when the sender was inside one.
+     */
+    node?: string | null;
+    to: string;
+};
+
+/**
+ * Something a node produced, by reference.
+ *
+ * The bytes stay wherever the producer put them. aiwatcher keeps the pointer
+ * because a pointer is bounded and a floor-plan PDF is not — see the
+ * artifact guardrail in `CLAUDE.md`.
+ */
+export type Artifact = {
+    /**
+     * Content hash, when the producer computed one. What makes "the same
+     * artifact as last time" a checkable claim rather than a guess.
+     */
+    digest?: string | null;
+    media_type?: string | null;
+    name: string;
+    produced_at: string;
+    size_bytes?: number | null;
+    uri: string;
+};
+
+/**
  * One point on the timeline.
  */
 export type Bucket = {
@@ -375,6 +418,19 @@ export type EventEnvelope = {
      * change — that `conversation_id` cannot express.
      */
     workflow_id?: string | null;
+    /**
+     * One execution of that orchestration.
+     *
+     * `workflow_id` names the graph; this names the traversal of it. They are
+     * separate because an execution can outlive a run: a stage-per-pod
+     * orchestrator gives every stage its own process and therefore its own
+     * `run_id`, and without this field there is nothing joining the four runs
+     * of one import back into one graph.
+     *
+     * Defaulted rather than required — see [`Self::workflow_run`]. A producer
+     * that runs a whole workflow in one process never has to set it.
+     */
+    workflow_run_id?: string | null;
 };
 
 /**
@@ -403,8 +459,89 @@ export type EventPage = {
  * must not have its events rejected. They are stored and streamed
  * live, they simply take part in no span.
  */
-export type EventType = 'RunStarted' | 'RunCompleted' | 'RunFailed' | 'AgentStarted' | 'AgentCompleted' | 'AgentFailed' | 'LlmStarted' | 'LlmFirstToken' | 'LlmChunk' | 'LlmCompleted' | 'LlmFailed' | 'ToolStarted' | 'ToolCompleted' | 'ToolFailed' | 'StepStarted' | 'StepCompleted' | 'StepFailed' | 'EvalStarted' | 'EvalCase' | 'EvalCompleted' | 'EvalFailed' | {
+export type EventType = 'RunStarted' | 'RunCompleted' | 'RunFailed' | 'AgentStarted' | 'AgentCompleted' | 'AgentFailed' | 'AgentMessage' | 'LlmStarted' | 'LlmFirstToken' | 'LlmChunk' | 'LlmCompleted' | 'LlmFailed' | 'ToolStarted' | 'ToolCompleted' | 'ToolFailed' | 'StepStarted' | 'StepCompleted' | 'StepFailed' | 'EvalStarted' | 'EvalCase' | 'EvalCompleted' | 'EvalFailed' | 'WorkflowDeclared' | 'ArtifactProduced' | {
     Unknown: string;
+};
+
+/**
+ * One execution, with everything needed to draw it.
+ */
+export type ExecutionDetail = {
+    /**
+     * The declared edges of the workflow this executes.
+     */
+    edges: Array<WorkflowEdge>;
+    /**
+     * Messages actually observed. Never merged with `edges`: sequence is not
+     * communication, and a view that conflated them would claim a handoff
+     * that nothing recorded.
+     */
+    messages: Array<AgentMessage>;
+    /**
+     * Older messages were shed under memory pressure. The count in
+     * `summary.messages` is still complete.
+     */
+    messages_truncated: boolean;
+    /**
+     * In declaration order where declared, then first-seen order for the rest.
+     */
+    nodes: Array<NodeState>;
+    summary: ExecutionSummary;
+};
+
+export type ExecutionPage = {
+    executions: Array<ExecutionSummary>;
+    next_cursor?: string | null;
+    total_known: number;
+};
+
+/**
+ * Where a whole traversal got to.
+ */
+export const ExecutionStatus = {
+    RUNNING: 'running',
+    SUCCEEDED: 'succeeded',
+    FAILED: 'failed'
+} as const;
+
+/**
+ * Where a whole traversal got to.
+ */
+export type ExecutionStatus = typeof ExecutionStatus[keyof typeof ExecutionStatus];
+
+/**
+ * One row in the executions list.
+ */
+export type ExecutionSummary = {
+    /**
+     * Every agent seen anywhere in the traversal, in first-seen order.
+     */
+    agents: Array<string>;
+    artifacts: number;
+    duration_ms?: number | null;
+    ended_at?: string | null;
+    error?: string | null;
+    /**
+     * The newest checkpoint folded into this row, so a client can resume the
+     * live stream from here without re-reading the execution.
+     */
+    last_checkpoint: Checkpoint;
+    messages: number;
+    nodes_failed: number;
+    nodes_pending: number;
+    nodes_running: number;
+    nodes_succeeded: number;
+    nodes_total: number;
+    /**
+     * The runs this traversal is made of. One for a single-process workflow,
+     * one per stage for a stage-per-pod one.
+     */
+    runs: Array<string>;
+    started_at: string;
+    status: ExecutionStatus;
+    version?: string | null;
+    workflow_id: string;
+    workflow_run_id: string;
 };
 
 export type IngestRequest = {
@@ -470,6 +607,15 @@ export type LiveEvent = {
     sequence?: number | null;
     span_id: SpanId;
     trace_id: TraceId;
+    /**
+     * Carried for the same reason `conversation_id` is: the live channel is
+     * filtered server-side, and a subscriber watching one workflow execution
+     * cannot be served by resolving it to a set of run ids at subscribe time —
+     * a stage that starts *after* the browser connected would be filtered out
+     * by the set it was given.
+     */
+    workflow_id?: string | null;
+    workflow_run_id?: string | null;
 };
 
 /**
@@ -559,6 +705,63 @@ export type ModelBreakdown = {
     output_tokens: number;
     provider?: string | null;
 };
+
+/**
+ * One node of one execution.
+ */
+export type NodeState = {
+    agents: Array<string>;
+    artifacts: Array<Artifact>;
+    /**
+     * How many times this node was started.
+     *
+     * Counted by distinct span key, not by event, so a redelivery does not
+     * invent a retry that never happened.
+     */
+    attempts: number;
+    /**
+     * Whether the declared graph mentions this node.
+     *
+     * `false` means something ran that the declaration does not know about,
+     * which is a stale declaration and worth seeing rather than hiding.
+     */
+    declared: boolean;
+    duration_ms?: number | null;
+    ended_at?: string | null;
+    error?: string | null;
+    kind?: string | null;
+    name: string;
+    node_id: string;
+    /**
+     * The run the node executed in. A stage-per-pod orchestrator gives every
+     * node a different one; this is what links a node back to its trace.
+     */
+    run_id?: string | null;
+    span_id?: null | SpanId;
+    started_at?: string | null;
+    status: NodeStatus;
+};
+
+/**
+ * Where one node of one execution got to.
+ *
+ * Four states rather than three, and the extra one is the point: `Pending` is
+ * a node the graph declares and nothing has started.
+ */
+export const NodeStatus = {
+    PENDING: 'pending',
+    RUNNING: 'running',
+    SUCCEEDED: 'succeeded',
+    FAILED: 'failed'
+} as const;
+
+/**
+ * Where one node of one execution got to.
+ *
+ * Four states rather than three, and the extra one is the point: `Pending` is
+ * a node the graph declares and nothing has started.
+ */
+export type NodeStatus = typeof NodeStatus[keyof typeof NodeStatus];
 
 /**
  * What the registry decided about an optimisation.
@@ -973,6 +1176,11 @@ export type RecordedMetadata = {
     stream_position: number;
     trace_id: TraceId;
     workflow_id?: string | null;
+    /**
+     * Resolved by [`EventEnvelope::workflow_run`]. `Some` exactly when
+     * `workflow_id` is.
+     */
+    workflow_run_id?: string | null;
 };
 
 export const RejectionReason = {
@@ -983,6 +1191,82 @@ export const RejectionReason = {
 } as const;
 
 export type RejectionReason = typeof RejectionReason[keyof typeof RejectionReason];
+
+/**
+ * What came back. Not a result — the work has not happened yet.
+ *
+ * A rerun is accepted, not completed: the evidence that it ran is the events
+ * it publishes, on the same log as everything else. `reference` is whatever
+ * the orchestrator calls the thing it just queued, so a caller can find it in
+ * that orchestrator's own console.
+ */
+export type RerunAccepted = {
+    reference?: string | null;
+    /**
+     * Where to watch it, if the orchestrator said.
+     */
+    url?: string | null;
+};
+
+/**
+ * What a caller may ask for.
+ *
+ * Note what is *not* here: an endpoint. The orchestrator to talk to comes
+ * from this deployment's configuration, never from the request and never from
+ * the log. aiwatcher runs inside the cluster, so a caller-supplied URL is a
+ * request to reach the cluster's network on that caller's behalf.
+ */
+export type RerunBody = {
+    /**
+     * Resume from this node. Advisory — whether an orchestrator can start
+     * mid-graph is its business, and aiwatcher cannot verify that it did.
+     */
+    from_node?: string | null;
+    /**
+     * Passed through untouched.
+     */
+    inputs?: {
+        [key: string]: unknown;
+    };
+    /**
+     * The execution to repeat. Omit for a fresh run of the workflow.
+     */
+    workflow_run_id?: string | null;
+};
+
+/**
+ * What is asked of the orchestrator.
+ *
+ * Deliberately thin, and deliberately not a description of *how* to run
+ * anything: aiwatcher knows the shape of a graph because a producer declared
+ * it, not because it can execute one. Everything here is a name the producer
+ * already chose.
+ */
+export type RerunRequest = {
+    /**
+     * Resume from this node rather than from the start.
+     *
+     * Advisory: whether an orchestrator can resume mid-graph is its business,
+     * and one that cannot is free to start over. aiwatcher cannot verify the
+     * difference and does not claim to.
+     */
+    from_node?: string | null;
+    /**
+     * Passed through untouched.
+     */
+    inputs?: {
+        [key: string]: unknown;
+    };
+    /**
+     * The orchestration to run. Always present.
+     */
+    workflow_id: string;
+    /**
+     * The execution being repeated, when there is one. `None` asks for a
+     * fresh execution rather than a repeat of a particular traversal.
+     */
+    workflow_run_id?: string | null;
+};
 
 /**
  * A run plus what is needed to draw it.
@@ -1252,6 +1536,64 @@ export type VersionOrigin = {
     algorithm: string;
     optimization_id: string;
     origin: 'optimized';
+};
+
+/**
+ * A workflow as the catalog holds it.
+ */
+export type WorkflowDefinition = {
+    declared_at: string;
+    edges: Array<WorkflowEdge>;
+    executions: number;
+    failed: number;
+    last_activity_at: string;
+    name: string;
+    nodes: Array<WorkflowNode>;
+    running: number;
+    succeeded: number;
+    /**
+     * Content hash of the declared topology, chosen by the producer.
+     *
+     * Not interpreted here beyond equality: a changed version replaces the
+     * stored shape. It exists so re-declaring on every execution — which is
+     * what keeps the catalog alive across retention eviction — costs nothing
+     * when the shape has not moved.
+     */
+    version?: string | null;
+    workflow_id: string;
+};
+
+/**
+ * One declared edge. Direction is `from → to`.
+ */
+export type WorkflowEdge = {
+    from: string;
+    label?: string | null;
+    to: string;
+};
+
+/**
+ * One node of a declared graph.
+ */
+export type WorkflowNode = {
+    /**
+     * The agent expected to run it, when the graph names one.
+     */
+    agent?: string | null;
+    id: string;
+    /**
+     * What kind of work it is — `chain`, `retriever`, `agent`, whatever the
+     * producer calls it. Free text on purpose: the same reason
+     * `data.step_type` is free text, so a new kind is not a backend release.
+     */
+    kind?: string | null;
+    name: string;
+};
+
+export type WorkflowPage = {
+    next_cursor?: string | null;
+    total_known: number;
+    workflows: Array<WorkflowDefinition>;
 };
 
 export type ListConversationsData = {
@@ -1843,6 +2185,153 @@ export type ListSpansResponses = {
 };
 
 export type ListSpansResponse = ListSpansResponses[keyof ListSpansResponses];
+
+export type ListWorkflowExecutionsData = {
+    body?: never;
+    path?: never;
+    query?: {
+        workflow_id?: string | null;
+        status?: null | ExecutionStatus;
+        /**
+         * Substring over the execution id, the workflow id and the agents.
+         */
+        search?: string | null;
+        /**
+         * Cursor: the last execution id on the previous page. Exclusive.
+         */
+        after?: string | null;
+        limit?: number | null;
+    };
+    url: '/api/v1/workflow-executions';
+};
+
+export type ListWorkflowExecutionsResponses = {
+    200: ExecutionPage;
+};
+
+export type ListWorkflowExecutionsResponse = ListWorkflowExecutionsResponses[keyof ListWorkflowExecutionsResponses];
+
+export type GetWorkflowExecutionData = {
+    body?: never;
+    path: {
+        /**
+         * The execution to fetch
+         */
+        workflow_run_id: string;
+    };
+    query?: never;
+    url: '/api/v1/workflow-executions/{workflow_run_id}';
+};
+
+export type GetWorkflowExecutionErrors = {
+    404: ErrorBody;
+};
+
+export type GetWorkflowExecutionError = GetWorkflowExecutionErrors[keyof GetWorkflowExecutionErrors];
+
+export type GetWorkflowExecutionResponses = {
+    200: ExecutionDetail;
+};
+
+export type GetWorkflowExecutionResponse = GetWorkflowExecutionResponses[keyof GetWorkflowExecutionResponses];
+
+export type StreamWorkflowExecutionData = {
+    body?: never;
+    path: {
+        /**
+         * The execution to follow
+         */
+        workflow_run_id: string;
+    };
+    query?: {
+        /**
+         * Resume point. Usually unnecessary for SSE — the browser sends
+         * `Last-Event-ID` on its own — but explicit here for non-browser clients.
+         */
+        from?: string | null;
+    };
+    url: '/api/v1/workflow-executions/{workflow_run_id}/stream';
+};
+
+export type StreamWorkflowExecutionResponses = {
+    /**
+     * text/event-stream of LiveFrame
+     */
+    200: unknown;
+};
+
+export type ListWorkflowsData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * Substring over the id and the name.
+         */
+        search?: string | null;
+        /**
+         * Cursor: the last workflow id on the previous page. Exclusive.
+         */
+        after?: string | null;
+        limit?: number | null;
+    };
+    url: '/api/v1/workflows';
+};
+
+export type ListWorkflowsResponses = {
+    200: WorkflowPage;
+};
+
+export type ListWorkflowsResponse = ListWorkflowsResponses[keyof ListWorkflowsResponses];
+
+export type GetWorkflowData = {
+    body?: never;
+    path: {
+        /**
+         * The workflow to fetch
+         */
+        workflow_id: string;
+    };
+    query?: never;
+    url: '/api/v1/workflows/{workflow_id}';
+};
+
+export type GetWorkflowErrors = {
+    404: ErrorBody;
+};
+
+export type GetWorkflowError = GetWorkflowErrors[keyof GetWorkflowErrors];
+
+export type GetWorkflowResponses = {
+    200: WorkflowDefinition;
+};
+
+export type GetWorkflowResponse = GetWorkflowResponses[keyof GetWorkflowResponses];
+
+export type RerunWorkflowData = {
+    body: RerunBody;
+    path: {
+        /**
+         * The workflow to run again
+         */
+        workflow_id: string;
+    };
+    query?: never;
+    url: '/api/v1/workflows/{workflow_id}/rerun';
+};
+
+export type RerunWorkflowErrors = {
+    501: ErrorBody;
+    502: ErrorBody;
+    503: ErrorBody;
+};
+
+export type RerunWorkflowError = RerunWorkflowErrors[keyof RerunWorkflowErrors];
+
+export type RerunWorkflowResponses = {
+    202: RerunAccepted;
+};
+
+export type RerunWorkflowResponse = RerunWorkflowResponses[keyof RerunWorkflowResponses];
 
 export type LivezData = {
     body?: never;

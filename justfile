@@ -164,6 +164,10 @@ seed-prompts:
 seed-evaluation:
     ./scripts/seed-demo-evaluation.sh
 
+# Publish two executions of one declared workflow: one finished, one running.
+seed-workflow stamp="":
+    ./scripts/seed-demo-workflow.sh {{stamp}}
+
 # ── Python SDK ───────────────────────────────────────────────────────────────
 
 sdk_python := "sdk/python"

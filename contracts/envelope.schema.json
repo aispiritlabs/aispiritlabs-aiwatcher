@@ -2,9 +2,14 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/ai-spirit/aiwatcher/contracts/envelope.schema.json",
   "title": "aiwatcher event envelope",
-  "description": "What a producer publishes. This is the contract between Python/TypeScript agents and the Rust backend; an SDK is a convenience, this file is the agreement. The backend fills in everything a producer leaves out — see RecordedMetadata in the OpenAPI document for the recorded form.",
+  "description": "What a producer publishes. This is the contract between Python/TypeScript agents and the Rust backend; an SDK is a convenience, this file is the agreement. The backend fills in everything a producer leaves out \u2014 see RecordedMetadata in the OpenAPI document for the recorded form.",
   "type": "object",
-  "required": ["event_type", "occurred_at", "run_id", "source"],
+  "required": [
+    "event_type",
+    "occurred_at",
+    "run_id",
+    "source"
+  ],
   "additionalProperties": false,
   "properties": {
     "schema_version": {
@@ -14,7 +19,10 @@
       "description": "Contract version. An envelope from a newer contract is rejected rather than half-read."
     },
     "kind": {
-      "enum": ["Event", "Command"],
+      "enum": [
+        "Event",
+        "Command"
+      ],
       "default": "Event",
       "description": "Only events are ingested today. The discriminator is on the wire from day one so adding control commands later is not a breaking change."
     },
@@ -27,7 +35,12 @@
       "type": "string",
       "minLength": 1,
       "description": "See docs/event-catalog.md. An unrecognised type is stored and streamed live rather than rejected; it simply takes part in no span. So does every eval.* type, deliberately: an evaluation report is a record, not a trace.",
-      "examples": ["run.started", "llm.completed", "tool.failed", "eval.completed"]
+      "examples": [
+        "run.started",
+        "llm.completed",
+        "tool.failed",
+        "eval.completed"
+      ]
     },
     "occurred_at": {
       "type": "string",
@@ -47,7 +60,13 @@
       "type": "string",
       "description": "Which orchestration this run is an execution of. A conversation groups runs by who is talking; a workflow groups them by what is being executed, so the same graph is comparable across sessions. Read from data.workflow as a fallback, for producers that predate this field."
     },
-    "agent_id": { "type": "string" },
+    "workflow_run_id": {
+      "type": "string",
+      "description": "One execution of that orchestration. workflow_id names the graph; this names the traversal of it. They are separate because an execution can outlive a run: a stage-per-pod orchestrator gives every stage its own process and therefore its own run_id, and this is what joins them back into one graph. Omit it and the run is its own execution, which is right for a workflow that runs start to finish in one process. Read from data.workflow_run_id as a fallback."
+    },
+    "agent_id": {
+      "type": "string"
+    },
     "sequence": {
       "type": "integer",
       "minimum": 0,
@@ -61,7 +80,7 @@
     "span_id": {
       "type": "string",
       "pattern": "^[0-9a-f]{16}$",
-      "description": "Derived from (trace_id, span key) when omitted. A start and its end must resolve to the same span id — which they do automatically when both carry the same data.call_id and agent_id."
+      "description": "Derived from (trace_id, span key) when omitted. A start and its end must resolve to the same span id \u2014 which they do automatically when both carry the same data.call_id and agent_id."
     },
     "parent_span_id": {
       "type": "string",
@@ -78,12 +97,27 @@
     },
     "source": {
       "type": "object",
-      "required": ["service", "sdk"],
+      "required": [
+        "service",
+        "sdk"
+      ],
       "additionalProperties": false,
       "properties": {
-        "service": { "type": "string", "minLength": 1 },
-        "instance": { "type": "string" },
-        "sdk": { "type": "string", "examples": ["python", "typescript", "rust"] }
+        "service": {
+          "type": "string",
+          "minLength": 1
+        },
+        "instance": {
+          "type": "string"
+        },
+        "sdk": {
+          "type": "string",
+          "examples": [
+            "python",
+            "typescript",
+            "rust"
+          ]
+        }
       }
     },
     "data": {
@@ -94,28 +128,125 @@
           "type": "string",
           "description": "Distinguishes concurrent LLM or tool calls inside one agent. Without it, two parallel calls collapse into one span."
         },
-        "tool_call_id": { "type": "string", "description": "Accepted as an alias for call_id." },
-        "provider": { "type": "string", "examples": ["anthropic", "openai"] },
-        "model": { "type": "string" },
-        "response_model": { "type": "string" },
-        "response_id": { "type": "string" },
-        "prompt_tokens": { "type": "integer", "minimum": 0 },
-        "input_tokens": { "type": "integer", "minimum": 0, "description": "Alias for prompt_tokens." },
-        "completion_tokens": { "type": "integer", "minimum": 0 },
-        "output_tokens": { "type": "integer", "minimum": 0, "description": "Alias for completion_tokens." },
-        "cached_tokens": { "type": "integer", "minimum": 0 },
-        "finish_reason": { "type": "string" },
-        "temperature": { "type": "number" },
-        "max_tokens": { "type": "integer", "minimum": 0 },
-        "tool_name": { "type": "string" },
+        "tool_call_id": {
+          "type": "string",
+          "description": "Accepted as an alias for call_id."
+        },
+        "provider": {
+          "type": "string",
+          "examples": [
+            "anthropic",
+            "openai"
+          ]
+        },
+        "model": {
+          "type": "string"
+        },
+        "response_model": {
+          "type": "string"
+        },
+        "response_id": {
+          "type": "string"
+        },
+        "prompt_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "input_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Alias for prompt_tokens."
+        },
+        "completion_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Alias for completion_tokens."
+        },
+        "cached_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "finish_reason": {
+          "type": "string"
+        },
+        "temperature": {
+          "type": "number"
+        },
+        "max_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tool_name": {
+          "type": "string"
+        },
         "duration_ms": {
           "type": "number",
           "minimum": 0,
           "description": "Used to back-date the span start when only an end event was ever sent."
         },
-        "status": { "type": "string" },
-        "error": { "type": "string" },
-        "text": { "type": "string", "description": "A streamed fragment, on llm.chunk." }
+        "status": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string",
+          "description": "A streamed fragment, on llm.chunk."
+        },
+        "node": {
+          "type": "string",
+          "description": "Which node of the declared graph a step.* event belongs to. node_id, stage, task and name are accepted as aliases; call_id is the last resort, and a poor first choice because two attempts of one node carry different call ids."
+        },
+        "version": {
+          "type": "string",
+          "description": "On workflow.declared: a content hash of the topology, chosen by the producer. Not interpreted beyond equality \u2014 it exists so re-declaring on every execution costs nothing."
+        },
+        "nodes": {
+          "type": "array",
+          "description": "On workflow.declared: the graph's nodes. Each is an object with an id (name and kind optional), or a bare string, which is the same thing with no metadata."
+        },
+        "edges": {
+          "type": "array",
+          "description": "On workflow.declared: the graph's edges, as {from, to, label?} objects or [from, to] pairs. Declared edges are the shape; they are never merged with observed agent.message edges, because sequence is not communication."
+        },
+        "uri": {
+          "type": "string",
+          "description": "On artifact.produced: where the bytes are. url and path are accepted as aliases. An artifact with no reference is dropped \u2014 a row nobody can open claims something was produced and gives no way to check. The bytes themselves are never sent: aiwatcher keeps the pointer because a pointer is bounded and a floor-plan PDF is not."
+        },
+        "media_type": {
+          "type": "string",
+          "description": "On artifact.produced. content_type is accepted as an alias."
+        },
+        "size_bytes": {
+          "type": "integer",
+          "description": "On artifact.produced.",
+          "minimum": 0
+        },
+        "digest": {
+          "type": "string",
+          "description": "On artifact.produced: a content hash, when the producer computed one. What makes 'the same artifact as last time' checkable rather than a guess. sha256 is accepted as an alias."
+        },
+        "to": {
+          "type": "string",
+          "description": "On agent.message: the receiving agent. The sender is the envelope's agent_id, or data.from. A message missing either end is dropped rather than drawn pointing at nothing."
+        },
+        "from": {
+          "type": "string",
+          "description": "On agent.message: the sending agent, when it is not the envelope's agent_id."
+        },
+        "kind": {
+          "type": "string",
+          "description": "On agent.message: handoff, request, response, broadcast \u2014 or whatever else a producer coins. Free text for the same reason step_type is."
+        },
+        "channel": {
+          "type": "string",
+          "description": "On agent.message: the queue, topic or file it went over, when there is one worth naming."
+        }
       }
     }
   },
@@ -129,7 +260,11 @@
       "conversation_id": "conv_123",
       "agent_id": "research-agent",
       "sequence": 17,
-      "source": { "service": "python-agent-service", "instance": "agent-07", "sdk": "python" },
+      "source": {
+        "service": "python-agent-service",
+        "instance": "agent-07",
+        "sdk": "python"
+      },
       "data": {
         "call_id": "call-7",
         "provider": "anthropic",

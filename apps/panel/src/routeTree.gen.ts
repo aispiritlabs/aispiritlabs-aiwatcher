@@ -14,6 +14,7 @@ import { Route as DatasetsRouteImport } from './routes/datasets'
 import { Route as EvaluationRouteImport } from './routes/evaluation'
 import { Route as ExperimentsRouteImport } from './routes/experiments'
 import { Route as ObservabilityRouteImport } from './routes/observability'
+import { Route as WorkflowsRouteImport } from './routes/workflows'
 import { Route as ObservabilityIndexRouteImport } from './routes/observability.index'
 import { Route as ObservabilityExploreRouteImport } from './routes/observability.explore'
 import { Route as ObservabilityMetricsRouteImport } from './routes/observability.metrics'
@@ -46,6 +47,11 @@ const ExperimentsRoute = ExperimentsRouteImport.update({
 const ObservabilityRoute = ObservabilityRouteImport.update({
   id: '/observability',
   path: '/observability',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const WorkflowsRoute = WorkflowsRouteImport.update({
+  id: '/workflows',
+  path: '/workflows',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ObservabilityIndexRoute = ObservabilityIndexRouteImport.update({
@@ -95,6 +101,7 @@ export interface FileRoutesByFullPath {
   '/evaluation': typeof EvaluationRoute
   '/experiments': typeof ExperimentsRoute
   '/observability': typeof ObservabilityRouteWithChildren
+  '/workflows': typeof WorkflowsRoute
   '/observability/explore': typeof ObservabilityExploreRoute
   '/observability/metrics': typeof ObservabilityMetricsRoute
   '/observability/query': typeof ObservabilityQueryRoute
@@ -109,6 +116,7 @@ export interface FileRoutesByTo {
   '/datasets': typeof DatasetsRoute
   '/evaluation': typeof EvaluationRoute
   '/experiments': typeof ExperimentsRoute
+  '/workflows': typeof WorkflowsRoute
   '/observability/explore': typeof ObservabilityExploreRoute
   '/observability/metrics': typeof ObservabilityMetricsRoute
   '/observability/query': typeof ObservabilityQueryRoute
@@ -125,6 +133,7 @@ export interface FileRoutesById {
   '/evaluation': typeof EvaluationRoute
   '/experiments': typeof ExperimentsRoute
   '/observability': typeof ObservabilityRouteWithChildren
+  '/workflows': typeof WorkflowsRoute
   '/observability/explore': typeof ObservabilityExploreRoute
   '/observability/metrics': typeof ObservabilityMetricsRoute
   '/observability/query': typeof ObservabilityQueryRoute
@@ -142,6 +151,7 @@ export interface FileRouteTypes {
     | '/evaluation'
     | '/experiments'
     | '/observability'
+    | '/workflows'
     | '/observability/explore'
     | '/observability/metrics'
     | '/observability/query'
@@ -156,6 +166,7 @@ export interface FileRouteTypes {
     | '/datasets'
     | '/evaluation'
     | '/experiments'
+    | '/workflows'
     | '/observability/explore'
     | '/observability/metrics'
     | '/observability/query'
@@ -171,6 +182,7 @@ export interface FileRouteTypes {
     | '/evaluation'
     | '/experiments'
     | '/observability'
+    | '/workflows'
     | '/observability/explore'
     | '/observability/metrics'
     | '/observability/query'
@@ -187,6 +199,7 @@ export interface RootRouteChildren {
   EvaluationRoute: typeof EvaluationRoute
   ExperimentsRoute: typeof ExperimentsRoute
   ObservabilityRoute: typeof ObservabilityRouteWithChildren
+  WorkflowsRoute: typeof WorkflowsRoute
   PromptsNameRoute: typeof PromptsNameRoute
   RunsRunIdRoute: typeof RunsRunIdRoute
   PromptsIndexRoute: typeof PromptsIndexRoute
@@ -227,6 +240,13 @@ declare module '@tanstack/react-router' {
       path: '/observability'
       fullPath: '/observability'
       preLoaderRoute: typeof ObservabilityRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/workflows': {
+      id: '/workflows'
+      path: '/workflows'
+      fullPath: '/workflows'
+      preLoaderRoute: typeof WorkflowsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/observability/': {
@@ -314,6 +334,7 @@ const rootRouteChildren: RootRouteChildren = {
   EvaluationRoute: EvaluationRoute,
   ExperimentsRoute: ExperimentsRoute,
   ObservabilityRoute: ObservabilityRouteWithChildren,
+  WorkflowsRoute: WorkflowsRoute,
   PromptsNameRoute: PromptsNameRoute,
   RunsRunIdRoute: RunsRunIdRoute,
   PromptsIndexRoute: PromptsIndexRoute,

@@ -774,3 +774,59 @@ fn an_evaluation_report_produces_no_spans_and_no_metrics() {
         "and nothing is left open for the sweeper to close"
     );
 }
+
+/// A declared topology and an artifact ride the same log and produce no trace.
+///
+/// The node executions between them do. That is the whole shape of the
+/// workflow feature: the graph is a document, the traversal is a set of spans.
+#[test]
+fn a_declared_workflow_produces_no_spans_but_its_nodes_do() {
+    let mut assembler = SpanAssembler::default();
+    let mut run = Run::new("house-import-7");
+
+    let events = vec![
+        run.emit(
+            EventType::WorkflowDeclared,
+            None,
+            json!({
+                "workflow_id": "house-import",
+                "version": "f00d",
+                "nodes": [{ "id": "acquire" }, { "id": "normalize" }],
+                "edges": [{ "from": "acquire", "to": "normalize" }],
+            }),
+        ),
+        run.after(10).emit(
+            EventType::StepStarted,
+            Some("importer"),
+            json!({ "call_id": "acquire", "node": "acquire", "step_type": "chain" }),
+        ),
+        run.after(400).emit(
+            EventType::ArtifactProduced,
+            Some("importer"),
+            json!({
+                "node": "acquire",
+                "name": "acquisition.json",
+                "uri": "s3://planner-flyte/house/acquire.json",
+                "size_bytes": 4096,
+            }),
+        ),
+        run.after(10).emit(
+            EventType::StepCompleted,
+            Some("importer"),
+            json!({ "call_id": "acquire", "node": "acquire", "step_type": "chain" }),
+        ),
+    ];
+
+    let assembled = collect(&mut assembler, &events);
+
+    assert_eq!(
+        names(&assembled.spans),
+        vec!["chain"],
+        "only the node execution is a span; the shape and the artifact are not"
+    );
+    assert_eq!(
+        assembler.open_span_count(),
+        0,
+        "and neither leaves anything open for the sweeper to close"
+    );
+}

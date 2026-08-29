@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { GetEvaluationData, GetEvaluationErrors, GetEvaluationResponses, GetMetricsData, GetMetricsResponses, GetOptimizationData, GetOptimizationErrors, GetOptimizationResponses, GetPromptData, GetPromptErrors, GetPromptResponses, GetPromptVersionData, GetPromptVersionErrors, GetPromptVersionResponses, GetRunData, GetRunErrors, GetRunEventsData, GetRunEventsErrors, GetRunEventsResponses, GetRunResponses, IngestData, IngestErrors, IngestResponses, ListConversationsData, ListConversationsResponses, ListDimensionData, ListDimensionErrors, ListDimensionResponses, ListEvaluationsData, ListEvaluationsResponses, ListEvaluationSuitesData, ListEvaluationSuitesResponses, ListPromptsData, ListPromptsErrors, ListPromptsResponses, ListRunsData, ListRunsResponses, ListSpansData, ListSpansResponses, LiveWebsocketData, LivezData, LivezResponses, PublishPromptData, PublishPromptErrors, PublishPromptResponses, ReadyzData, ReadyzErrors, ReadyzResponses, RebuildPromptData, RebuildPromptErrors, RebuildPromptResponses, RecordOptimizationData, RecordOptimizationErrors, RecordOptimizationResponses, SetPromptLabelData, SetPromptLabelErrors, SetPromptLabelResponses, StreamRunData, StreamRunResponses } from './types.gen';
+import type { GetEvaluationData, GetEvaluationErrors, GetEvaluationResponses, GetMetricsData, GetMetricsResponses, GetOptimizationData, GetOptimizationErrors, GetOptimizationResponses, GetPromptData, GetPromptErrors, GetPromptResponses, GetPromptVersionData, GetPromptVersionErrors, GetPromptVersionResponses, GetRunData, GetRunErrors, GetRunEventsData, GetRunEventsErrors, GetRunEventsResponses, GetRunResponses, GetWorkflowData, GetWorkflowErrors, GetWorkflowExecutionData, GetWorkflowExecutionErrors, GetWorkflowExecutionResponses, GetWorkflowResponses, IngestData, IngestErrors, IngestResponses, ListConversationsData, ListConversationsResponses, ListDimensionData, ListDimensionErrors, ListDimensionResponses, ListEvaluationsData, ListEvaluationsResponses, ListEvaluationSuitesData, ListEvaluationSuitesResponses, ListPromptsData, ListPromptsErrors, ListPromptsResponses, ListRunsData, ListRunsResponses, ListSpansData, ListSpansResponses, ListWorkflowExecutionsData, ListWorkflowExecutionsResponses, ListWorkflowsData, ListWorkflowsResponses, LiveWebsocketData, LivezData, LivezResponses, PublishPromptData, PublishPromptErrors, PublishPromptResponses, ReadyzData, ReadyzErrors, ReadyzResponses, RebuildPromptData, RebuildPromptErrors, RebuildPromptResponses, RecordOptimizationData, RecordOptimizationErrors, RecordOptimizationResponses, RerunWorkflowData, RerunWorkflowErrors, RerunWorkflowResponses, SetPromptLabelData, SetPromptLabelErrors, SetPromptLabelResponses, StreamRunData, StreamRunResponses, StreamWorkflowExecutionData, StreamWorkflowExecutionResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -203,6 +203,56 @@ export const streamRun = <ThrowOnError extends boolean = false>(options: Options
  * look at is not yet known.
  */
 export const listSpans = <ThrowOnError extends boolean = false>(options?: Options<ListSpansData, ThrowOnError>): RequestResult<ListSpansResponses, unknown, ThrowOnError> => (options?.client ?? client).get<ListSpansResponses, unknown, ThrowOnError>({ url: '/api/v1/spans', ...options });
+
+/**
+ * Executions, newest first.
+ */
+export const listWorkflowExecutions = <ThrowOnError extends boolean = false>(options?: Options<ListWorkflowExecutionsData, ThrowOnError>): RequestResult<ListWorkflowExecutionsResponses, unknown, ThrowOnError> => (options?.client ?? client).get<ListWorkflowExecutionsResponses, unknown, ThrowOnError>({ url: '/api/v1/workflow-executions', ...options });
+
+/**
+ * One execution: its nodes, its declared edges, and the messages observed.
+ */
+export const getWorkflowExecution = <ThrowOnError extends boolean = false>(options: Options<GetWorkflowExecutionData, ThrowOnError>): RequestResult<GetWorkflowExecutionResponses, GetWorkflowExecutionErrors, ThrowOnError> => (options.client ?? client).get<GetWorkflowExecutionResponses, GetWorkflowExecutionErrors, ThrowOnError>({ url: '/api/v1/workflow-executions/{workflow_run_id}', ...options });
+
+/**
+ * Server-sent events for one execution: history, a catch-up marker, then live.
+ *
+ * Scoped by `workflow_run_id` rather than by run, which is what makes a
+ * stage-per-pod workflow watchable: the pod that has not started yet is the
+ * interesting one, and a subscription resolved to today's run ids would never
+ * see it.
+ */
+export const streamWorkflowExecution = <ThrowOnError extends boolean = false>(options: Options<StreamWorkflowExecutionData, ThrowOnError>): RequestResult<StreamWorkflowExecutionResponses, unknown, ThrowOnError> => (options.client ?? client).get<StreamWorkflowExecutionResponses, unknown, ThrowOnError>({ url: '/api/v1/workflow-executions/{workflow_run_id}/stream', ...options });
+
+/**
+ * Every workflow the projection knows, most recently active first.
+ *
+ * Includes workflows nothing ever declared: a producer that has been setting
+ * `workflow_id` since before there was a graph to draw still belongs in the
+ * picker, with whatever shape its runs revealed.
+ */
+export const listWorkflows = <ThrowOnError extends boolean = false>(options?: Options<ListWorkflowsData, ThrowOnError>): RequestResult<ListWorkflowsResponses, unknown, ThrowOnError> => (options?.client ?? client).get<ListWorkflowsResponses, unknown, ThrowOnError>({ url: '/api/v1/workflows', ...options });
+
+/**
+ * One workflow's declared shape.
+ */
+export const getWorkflow = <ThrowOnError extends boolean = false>(options: Options<GetWorkflowData, ThrowOnError>): RequestResult<GetWorkflowResponses, GetWorkflowErrors, ThrowOnError> => (options.client ?? client).get<GetWorkflowResponses, GetWorkflowErrors, ThrowOnError>({ url: '/api/v1/workflows/{workflow_id}', ...options });
+
+/**
+ * Ask the configured orchestrator to run this workflow again.
+ *
+ * `202`, not `200`: nothing has run yet. What comes back is an
+ * acknowledgement, and the evidence that the rerun happened is the events it
+ * publishes onto the same log as everything else.
+ */
+export const rerunWorkflow = <ThrowOnError extends boolean = false>(options: Options<RerunWorkflowData, ThrowOnError>): RequestResult<RerunWorkflowResponses, RerunWorkflowErrors, ThrowOnError> => (options.client ?? client).post<RerunWorkflowResponses, RerunWorkflowErrors, ThrowOnError>({
+    url: '/api/v1/workflows/{workflow_id}/rerun',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
 
 /**
  * The process is running.

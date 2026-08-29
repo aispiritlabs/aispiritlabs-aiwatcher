@@ -4,12 +4,13 @@ Every screenshot below is the panel against a running server — no mockups. The
 data behind them comes from the seed scripts in `scripts/`, so all of it is
 reproducible in about a minute; the commands are at the [bottom](#reproducing-these).
 
-The panel is five areas, not eleven pages: watching runs, judging them, keeping
-the prompts they run on, curating what they are judged against, and changing
-the thing being run. Two of those five are not built yet, and say so rather
-than rendering plausible rows.
+The panel is six areas, not eleven pages: watching runs, watching the pipelines
+those runs are stages of, judging them, keeping the prompts they run on,
+curating what they are judged against, and changing the thing being run. Two of
+those six are not built yet, and say so rather than rendering plausible rows.
 
 - [Observability](#observability) — [Runs](#runs) · [A run's trace](#a-runs-trace) · [The same run, still running](#the-same-run-still-running) · [Explore](#explore) · [Metrics](#metrics) · [Query](#query)
+- [Workflows](#workflows)
 - [Evaluation](#evaluation)
 - [Prompts](#prompts)
 - [What is not built yet](#what-is-not-built-yet)
@@ -101,6 +102,44 @@ Grain is what decides this, not transport: this question is 210 ms in Flow
 against 5 ms for the Rust dimension route, which is why the live path stays in
 Rust and there is no export.
 
+## Workflows
+
+![One execution of a declared workflow](docs/screenshots/workflows.png)
+
+The level above a run. Pick an orchestration on the left, pick one of its
+executions, and the graph is that execution: stage statuses, durations, the
+agents that did the work, and the artifacts each one handed on.
+
+**`Render thumbnails` says "not run", and that is the point.** A projection
+over observed events can say what has happened and can never say what has not,
+because a stage that never started emits nothing. So the topology rides the log
+as `workflow.declared` and the graph is drawn against it
+([ADR_0012](docs/ADR/ADR_0012_WORKFLOW_GRAPH.md)). The `if public` branch was
+not taken here; the same rendering is what shows you a pipeline halfway
+through.
+
+**`Analyze floor plans` carries a `2`.** It failed once and was retried.
+Attempts are counted by span key rather than by event, so a redelivery does not
+invent a retry that never happened.
+
+**Five runs, one execution.** Flyte gives every stage its own pod and therefore
+its own `run_id`; `workflow_run_id` is what joins them, and it is why this is a
+view of its own rather than a filter on the runs list. The live stream is
+scoped the same way, so the pod that has not started yet still arrives.
+
+The dashed edges across the top are the other half: `agent.message` records one
+agent addressing another, which is the one thing nesting cannot show — two
+agents exchanging work through a queue nest inside nothing at all. They are
+drawn as a different kind of edge from the declared ones and never merged with
+them, because sequence is not communication.
+
+**Rerun** asks a configured orchestrator to run the workflow again, optionally
+from the selected stage. aiwatcher runs nothing itself: it posts to one
+endpoint from its own configuration — never a URL from an event — and answers
+`202`, because nothing has happened yet. The evidence that the rerun ran is the
+events it publishes. With no runner configured the button is replaced by a card
+naming the variable to set.
+
 ## Evaluation
 
 ![An evaluation report against its baseline](docs/screenshots/evaluation.png)
@@ -177,6 +216,7 @@ Then, against the running server:
 just seed             # one run: ~35 events in, 5 spans out
 just seed-evaluation  # two comparable reports of one suite on one dataset
 just seed-prompts     # a prompt, three optimisations, one of them admitted
+just seed-workflow    # two executions of one declared graph: one done, one live
 ```
 
 The Query tab needs the optional PHP service; without it that tab says so and

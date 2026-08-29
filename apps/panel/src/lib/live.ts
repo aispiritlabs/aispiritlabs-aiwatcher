@@ -21,6 +21,8 @@ export const liveEventSchema = z.object({
   checkpoint,
   run_id: z.string(),
   conversation_id: z.string().optional(),
+  workflow_id: z.string().optional(),
+  workflow_run_id: z.string().optional(),
   trace_id: z.string(),
   span_id: z.string(),
   event_type: z.string(),
@@ -69,10 +71,33 @@ export function openRunStream(
   from: string | undefined,
   handlers: LiveHandlers,
 ): () => void {
-  const query = from ? `?from=${encodeURIComponent(from)}` : '';
-  const source = new EventSource(
-    `${import.meta.env.VITE_API_BASE_URL ?? ''}/api/v1/runs/${encodeURIComponent(runId)}/stream${query}`,
+  return open(`/api/v1/runs/${encodeURIComponent(runId)}/stream`, from, handlers);
+}
+
+/**
+ * Open a workflow execution's stream. Returns a function that closes it.
+ *
+ * Scoped to the *execution*, not to a run, and that is the whole difference: a
+ * stage-per-pod orchestrator publishes each stage from a different run, so a
+ * run-scoped stream would go quiet at exactly the moment the next stage
+ * started. The server filters on `workflow_run_id` for the same reason.
+ */
+export function openWorkflowStream(
+  workflowRunId: string,
+  from: string | undefined,
+  handlers: LiveHandlers,
+): () => void {
+  return open(
+    `/api/v1/workflow-executions/${encodeURIComponent(workflowRunId)}/stream`,
+    from,
+    handlers,
   );
+}
+
+/** The mechanics both streams share. Only the path differs. */
+function open(path: string, from: string | undefined, handlers: LiveHandlers): () => void {
+  const query = from ? `?from=${encodeURIComponent(from)}` : '';
+  const source = new EventSource(`${import.meta.env.VITE_API_BASE_URL ?? ''}${path}${query}`);
 
   handlers.onPhase('catching-up');
 

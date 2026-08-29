@@ -23,6 +23,10 @@ use crate::evaluations::{
     EvaluationConfig, EvaluationDetail, EvaluationFilter, EvaluationPage, EvaluationState,
     SuitePage,
 };
+use crate::workflows::{
+    ExecutionDetail, ExecutionFilter, ExecutionPage, WorkflowConfig, WorkflowDefinition,
+    WorkflowFilter, WorkflowPage, WorkflowState,
+};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -253,6 +257,9 @@ pub struct ReadModelConfig {
     /// What the evaluation projection may hold. Separate caps because a report
     /// is a producer-supplied document and a run is not.
     pub evaluations: EvaluationConfig,
+    /// What the workflow projection may hold. Separate again, because a graph
+    /// is held per *execution* and an execution can outlive several runs.
+    pub workflows: WorkflowConfig,
 }
 
 impl Default for ReadModelConfig {
@@ -262,6 +269,7 @@ impl Default for ReadModelConfig {
             max_spans_per_run: 500,
             max_spans_total: 60_000,
             evaluations: EvaluationConfig::default(),
+            workflows: WorkflowConfig::default(),
         }
     }
 }
@@ -296,6 +304,9 @@ struct State {
     span_count: usize,
     /// Evaluations. Folded apart from runs — see [`crate::evaluations`].
     evaluations: EvaluationState,
+    /// Workflow graphs. Folded *alongside* runs rather than apart from them —
+    /// see [`ReadModel::apply`].
+    workflows: WorkflowState,
 }
 
 /// The panel's projection of the log.
@@ -328,7 +339,10 @@ impl ReadModel {
             // An evaluation is an execution, but it is not an agent run: no
             // agents, no LLM calls, no tokens. Folding it into the runs list
             // would put an empty row in the view people scan for what their
-            // agents did, so it gets its own projection.
+            // agents did, so it gets its own projection. It is also not a
+            // workflow node, and `workflow_id` on an `eval.*` event is the
+            // suite's fallback name — folding it below would invent an
+            // execution out of a report.
             state.evaluations.apply(event, &self.config.evaluations);
             return;
         }
@@ -340,6 +354,11 @@ impl ReadModel {
         if let Some(summary) = state.runs.get_mut(&run_id) {
             summary.apply(event);
         }
+        // Alongside the runs fold, not instead of it. A workflow event is
+        // still an event on a real run — the graph is a second way of reading
+        // the same stream, not a separate stream. Everything without a
+        // `workflow_run_id` returns immediately inside `apply`.
+        state.workflows.apply(event, &self.config.workflows);
         Self::evict(&mut state, self.config.max_runs);
     }
 
@@ -521,6 +540,23 @@ impl ReadModel {
     }
 
     /// Suites: the level above an evaluation report.
+    /// The workflow catalog: every declared graph, and the ones only observed.
+    pub async fn workflows(&self, filter: &WorkflowFilter) -> WorkflowPage {
+        self.state.read().await.workflows.workflows(filter)
+    }
+
+    pub async fn workflow(&self, workflow_id: &str) -> Option<WorkflowDefinition> {
+        self.state.read().await.workflows.workflow(workflow_id)
+    }
+
+    pub async fn workflow_executions(&self, filter: &ExecutionFilter) -> ExecutionPage {
+        self.state.read().await.workflows.executions(filter)
+    }
+
+    pub async fn workflow_execution(&self, workflow_run_id: &str) -> Option<ExecutionDetail> {
+        self.state.read().await.workflows.execution(workflow_run_id)
+    }
+
     pub async fn evaluation_suites(&self) -> SuitePage {
         self.state.read().await.evaluations.suites()
     }

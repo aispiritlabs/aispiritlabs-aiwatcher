@@ -1530,6 +1530,346 @@
         }
       }
     },
+    "/api/v1/workflow-executions": {
+      "get": {
+        "tags": [
+          "workflow"
+        ],
+        "summary": "Executions, newest first.",
+        "operationId": "list_workflow_executions",
+        "parameters": [
+          {
+            "name": "workflow_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/ExecutionStatus"
+                }
+              ]
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Substring over the execution id, the workflow id and the agents.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Cursor: the last execution id on the previous page. Exclusive.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionPage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workflow-executions/{workflow_run_id}": {
+      "get": {
+        "tags": [
+          "workflow"
+        ],
+        "summary": "One execution: its nodes, its declared edges, and the messages observed.",
+        "operationId": "get_workflow_execution",
+        "parameters": [
+          {
+            "name": "workflow_run_id",
+            "in": "path",
+            "description": "The execution to fetch",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workflow-executions/{workflow_run_id}/stream": {
+      "get": {
+        "tags": [
+          "live"
+        ],
+        "summary": "Server-sent events for one execution: history, a catch-up marker, then live.",
+        "description": "Scoped by `workflow_run_id` rather than by run, which is what makes a\nstage-per-pod workflow watchable: the pod that has not started yet is the\ninteresting one, and a subscription resolved to today's run ids would never\nsee it.",
+        "operationId": "stream_workflow_execution",
+        "parameters": [
+          {
+            "name": "workflow_run_id",
+            "in": "path",
+            "description": "The execution to follow",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Resume point. Usually unnecessary for SSE — the browser sends\n`Last-Event-ID` on its own — but explicit here for non-browser clients.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "text/event-stream of LiveFrame"
+          }
+        }
+      }
+    },
+    "/api/v1/workflows": {
+      "get": {
+        "tags": [
+          "workflow"
+        ],
+        "summary": "Every workflow the projection knows, most recently active first.",
+        "description": "Includes workflows nothing ever declared: a producer that has been setting\n`workflow_id` since before there was a graph to draw still belongs in the\npicker, with whatever shape its runs revealed.",
+        "operationId": "list_workflows",
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Substring over the id and the name.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Cursor: the last workflow id on the previous page. Exclusive.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowPage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workflows/{workflow_id}": {
+      "get": {
+        "tags": [
+          "workflow"
+        ],
+        "summary": "One workflow's declared shape.",
+        "operationId": "get_workflow",
+        "parameters": [
+          {
+            "name": "workflow_id",
+            "in": "path",
+            "description": "The workflow to fetch",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowDefinition"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workflows/{workflow_id}/rerun": {
+      "post": {
+        "tags": [
+          "workflow"
+        ],
+        "summary": "Ask the configured orchestrator to run this workflow again.",
+        "description": "`202`, not `200`: nothing has run yet. What comes back is an\nacknowledgement, and the evidence that the rerun happened is the events it\npublishes onto the same log as everything else.",
+        "operationId": "rerun_workflow",
+        "parameters": [
+          {
+            "name": "workflow_id",
+            "in": "path",
+            "description": "The workflow to run again",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RerunBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RerunAccepted"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/livez": {
       "get": {
         "tags": [
@@ -1616,6 +1956,89 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          }
+        }
+      },
+      "AgentMessage": {
+        "type": "object",
+        "description": "One agent addressing another.",
+        "required": [
+          "from",
+          "to",
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "channel": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The channel it went over, when there is one worth naming: a queue, a\ntopic, a shared file."
+          },
+          "from": {
+            "type": "string"
+          },
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`handoff`, `request`, `response`, `broadcast` — or whatever else a\nproducer coins. Free text for the same reason `step_type` is."
+          },
+          "node": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The node it was sent from, when the sender was inside one."
+          },
+          "to": {
+            "type": "string"
+          }
+        }
+      },
+      "Artifact": {
+        "type": "object",
+        "description": "Something a node produced, by reference.\n\nThe bytes stay wherever the producer put them. aiwatcher keeps the pointer\nbecause a pointer is bounded and a floor-plan PDF is not — see the\nartifact guardrail in `CLAUDE.md`.",
+        "required": [
+          "name",
+          "uri",
+          "produced_at"
+        ],
+        "properties": {
+          "digest": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Content hash, when the producer computed one. What makes \"the same\nartifact as last time\" a checkable claim rather than a guess."
+          },
+          "media_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "produced_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "size_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "uri": {
+            "type": "string"
           }
         }
       },
@@ -2383,6 +2806,13 @@
               "null"
             ],
             "description": "Which orchestration this run is an execution of.\n\nA conversation groups runs by *who* is talking; a workflow groups them\nby *what* is being executed. The same workflow runs across many\nsessions, which is the comparison — this graph, before and after a\nchange — that `conversation_id` cannot express."
+          },
+          "workflow_run_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "One execution of that orchestration.\n\n`workflow_id` names the graph; this names the traversal of it. They are\nseparate because an execution can outlive a run: a stage-per-pod\norchestrator gives every stage its own process and therefore its own\n`run_id`, and without this field there is nothing joining the four runs\nof one import back into one graph.\n\nDefaulted rather than required — see [`Self::workflow_run`]. A producer\nthat runs a whole workflow in one process never has to set it."
           }
         }
       },
@@ -2456,6 +2886,12 @@
             "type": "string",
             "enum": [
               "AgentFailed"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "AgentMessage"
             ]
           },
           {
@@ -2549,6 +2985,18 @@
             ]
           },
           {
+            "type": "string",
+            "enum": [
+              "WorkflowDeclared"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "ArtifactProduced"
+            ]
+          },
+          {
             "type": "object",
             "required": [
               "Unknown"
@@ -2561,6 +3009,195 @@
           }
         ],
         "description": "Every event type aiwatcher understands, plus a passthrough for the\nones it does not.\n\n[`EventType::Unknown`] is deliberate: a producer running a newer SDK\nmust not have its events rejected. They are stored and streamed\nlive, they simply take part in no span."
+      },
+      "ExecutionDetail": {
+        "type": "object",
+        "description": "One execution, with everything needed to draw it.",
+        "required": [
+          "summary",
+          "nodes",
+          "edges",
+          "messages",
+          "messages_truncated"
+        ],
+        "properties": {
+          "edges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowEdge"
+            },
+            "description": "The declared edges of the workflow this executes."
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentMessage"
+            },
+            "description": "Messages actually observed. Never merged with `edges`: sequence is not\ncommunication, and a view that conflated them would claim a handoff\nthat nothing recorded."
+          },
+          "messages_truncated": {
+            "type": "boolean",
+            "description": "Older messages were shed under memory pressure. The count in\n`summary.messages` is still complete."
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeState"
+            },
+            "description": "In declaration order where declared, then first-seen order for the rest."
+          },
+          "summary": {
+            "$ref": "#/components/schemas/ExecutionSummary"
+          }
+        }
+      },
+      "ExecutionPage": {
+        "type": "object",
+        "required": [
+          "executions",
+          "total_known"
+        ],
+        "properties": {
+          "executions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExecutionSummary"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total_known": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "ExecutionStatus": {
+        "type": "string",
+        "description": "Where a whole traversal got to.",
+        "enum": [
+          "running",
+          "succeeded",
+          "failed"
+        ]
+      },
+      "ExecutionSummary": {
+        "type": "object",
+        "description": "One row in the executions list.",
+        "required": [
+          "workflow_run_id",
+          "workflow_id",
+          "status",
+          "started_at",
+          "nodes_total",
+          "nodes_pending",
+          "nodes_running",
+          "nodes_succeeded",
+          "nodes_failed",
+          "agents",
+          "artifacts",
+          "messages",
+          "runs",
+          "last_checkpoint"
+        ],
+        "properties": {
+          "agents": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every agent seen anywhere in the traversal, in first-seen order."
+          },
+          "artifacts": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "ended_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_checkpoint": {
+            "$ref": "#/components/schemas/Checkpoint",
+            "description": "The newest checkpoint folded into this row, so a client can resume the\nlive stream from here without re-reading the execution."
+          },
+          "messages": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "nodes_failed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "nodes_pending": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "nodes_running": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "nodes_succeeded": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "nodes_total": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "runs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The runs this traversal is made of. One for a single-process workflow,\none per stage for a stage-per-pod one."
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ExecutionStatus"
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workflow_id": {
+            "type": "string"
+          },
+          "workflow_run_id": {
+            "type": "string"
+          }
+        }
       },
       "IngestRequest": {
         "type": "object",
@@ -2685,6 +3322,19 @@
           },
           "trace_id": {
             "$ref": "#/components/schemas/TraceId"
+          },
+          "workflow_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Carried for the same reason `conversation_id` is: the live channel is\nfiltered server-side, and a subscriber watching one workflow execution\ncannot be served by resolving it to a set of run ids at subscribe time —\na stage that starts *after* the browser connected would be filtered out\nby the set it was given."
+          },
+          "workflow_run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -2937,6 +3587,112 @@
             ]
           }
         }
+      },
+      "NodeState": {
+        "type": "object",
+        "description": "One node of one execution.",
+        "required": [
+          "node_id",
+          "name",
+          "status",
+          "declared",
+          "attempts",
+          "agents",
+          "artifacts"
+        ],
+        "properties": {
+          "agents": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Artifact"
+            }
+          },
+          "attempts": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many times this node was started.\n\nCounted by distinct span key, not by event, so a redelivery does not\ninvent a retry that never happened.",
+            "minimum": 0
+          },
+          "declared": {
+            "type": "boolean",
+            "description": "Whether the declared graph mentions this node.\n\n`false` means something ran that the declaration does not know about,\nwhich is a stale declaration and worth seeing rather than hiding."
+          },
+          "duration_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "ended_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "node_id": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The run the node executed in. A stage-per-pod orchestrator gives every\nnode a different one; this is what links a node back to its trace."
+          },
+          "span_id": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SpanId"
+              }
+            ]
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "$ref": "#/components/schemas/NodeStatus"
+          }
+        }
+      },
+      "NodeStatus": {
+        "type": "string",
+        "description": "Where one node of one execution got to.\n\nFour states rather than three, and the extra one is the point: `Pending` is\na node the graph declares and nothing has started.",
+        "enum": [
+          "pending",
+          "running",
+          "succeeded",
+          "failed"
+        ]
       },
       "OptimizationOutcome": {
         "type": "string",
@@ -3860,6 +4616,13 @@
               "string",
               "null"
             ]
+          },
+          "workflow_run_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Resolved by [`EventEnvelope::workflow_run`]. `Some` exactly when\n`workflow_id` is."
           }
         }
       },
@@ -3871,6 +4634,81 @@
           "variables_lost",
           "no_change"
         ]
+      },
+      "RerunAccepted": {
+        "type": "object",
+        "description": "What came back. Not a result — the work has not happened yet.\n\nA rerun is accepted, not completed: the evidence that it ran is the events\nit publishes, on the same log as everything else. `reference` is whatever\nthe orchestrator calls the thing it just queued, so a caller can find it in\nthat orchestrator's own console.",
+        "properties": {
+          "reference": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where to watch it, if the orchestrator said."
+          }
+        }
+      },
+      "RerunBody": {
+        "type": "object",
+        "description": "What a caller may ask for.\n\nNote what is *not* here: an endpoint. The orchestrator to talk to comes\nfrom this deployment's configuration, never from the request and never from\nthe log. aiwatcher runs inside the cluster, so a caller-supplied URL is a\nrequest to reach the cluster's network on that caller's behalf.",
+        "properties": {
+          "from_node": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Resume from this node. Advisory — whether an orchestrator can start\nmid-graph is its business, and aiwatcher cannot verify that it did."
+          },
+          "inputs": {
+            "type": "object",
+            "description": "Passed through untouched."
+          },
+          "workflow_run_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The execution to repeat. Omit for a fresh run of the workflow."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RerunRequest": {
+        "type": "object",
+        "description": "What is asked of the orchestrator.\n\nDeliberately thin, and deliberately not a description of *how* to run\nanything: aiwatcher knows the shape of a graph because a producer declared\nit, not because it can execute one. Everything here is a name the producer\nalready chose.",
+        "required": [
+          "workflow_id"
+        ],
+        "properties": {
+          "from_node": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Resume from this node rather than from the start.\n\nAdvisory: whether an orchestrator can resume mid-graph is its business,\nand one that cannot is free to start over. aiwatcher cannot verify the\ndifference and does not claim to."
+          },
+          "inputs": {
+            "type": "object",
+            "description": "Passed through untouched."
+          },
+          "workflow_id": {
+            "type": "string",
+            "description": "The orchestration to run. Always present."
+          },
+          "workflow_run_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The execution being repeated, when there is one. `None` asks for a\nfresh execution rather than a repeat of a particular traversal."
+          }
+        }
       },
       "RunDetail": {
         "type": "object",
@@ -4600,6 +5438,154 @@
           }
         ],
         "description": "Where a version came from.\n\nThe distinction the panel needs to answer \"did a person write this, or did\nan optimiser?\" — which is the first question asked about a prompt that is\nbehaving strangely."
+      },
+      "WorkflowDefinition": {
+        "type": "object",
+        "description": "A workflow as the catalog holds it.",
+        "required": [
+          "workflow_id",
+          "name",
+          "nodes",
+          "edges",
+          "declared_at",
+          "last_activity_at",
+          "executions",
+          "running",
+          "succeeded",
+          "failed"
+        ],
+        "properties": {
+          "declared_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "edges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowEdge"
+            }
+          },
+          "executions": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "last_activity_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "name": {
+            "type": "string"
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowNode"
+            }
+          },
+          "running": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "succeeded": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Content hash of the declared topology, chosen by the producer.\n\nNot interpreted here beyond equality: a changed version replaces the\nstored shape. It exists so re-declaring on every execution — which is\nwhat keeps the catalog alive across retention eviction — costs nothing\nwhen the shape has not moved."
+          },
+          "workflow_id": {
+            "type": "string"
+          }
+        }
+      },
+      "WorkflowEdge": {
+        "type": "object",
+        "description": "One declared edge. Direction is `from → to`.",
+        "required": [
+          "from",
+          "to"
+        ],
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "to": {
+            "type": "string"
+          }
+        }
+      },
+      "WorkflowNode": {
+        "type": "object",
+        "description": "One node of a declared graph.",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "agent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The agent expected to run it, when the graph names one."
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What kind of work it is — `chain`, `retriever`, `agent`, whatever the\nproducer calls it. Free text on purpose: the same reason\n`data.step_type` is free text, so a new kind is not a backend release."
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "WorkflowPage": {
+        "type": "object",
+        "required": [
+          "workflows",
+          "total_known"
+        ],
+        "properties": {
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total_known": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "workflows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowDefinition"
+            }
+          }
+        }
       }
     }
   },
@@ -4619,6 +5605,10 @@
     {
       "name": "prompts",
       "description": "The prompt registry: versions, labels and optimisations"
+    },
+    {
+      "name": "workflow",
+      "description": "Declared graphs, their executions, and rerunning one"
     },
     {
       "name": "live",

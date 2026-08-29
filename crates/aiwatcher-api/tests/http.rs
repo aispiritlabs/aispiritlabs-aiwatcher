@@ -13,7 +13,9 @@ use tower::ServiceExt;
 
 use aiwatcher_bus::MessageSink;
 use aiwatcher_bus::adapters::memory::InMemoryBus;
-use aiwatcher_core::ports::LivePublisher;
+use aiwatcher_core::ports::{
+    LivePublisher, PortError, RerunAccepted, RerunRequest, WorkflowRunner,
+};
 use aiwatcher_core::{Checkpoint, EventEnvelope, EventType, MessageId, Sdk, Source};
 use aiwatcher_projector::{LiveHub, ReadModel};
 use aiwatcher_prompts::adapters::memory::MemoryObjectStore;
@@ -30,16 +32,27 @@ struct Fixture {
 
 impl Fixture {
     fn new(ingest_enabled: bool) -> Self {
-        Self::build(ingest_enabled, true)
+        Self::build(ingest_enabled, true, None)
     }
 
     /// An instance configured without a prompt store, which is what
     /// `AIWATCHER_PROMPT_STORE=none` produces.
     fn without_registry() -> Self {
-        Self::build(false, false)
+        Self::build(false, false, None)
     }
 
-    fn build(ingest_enabled: bool, registry_enabled: bool) -> Self {
+    /// An instance with a runner wired, which is what
+    /// `AIWATCHER_WORKFLOW_RUNNER=http` produces. The default has none, so
+    /// every other test also asserts that reruns are 501 by construction.
+    fn with_runner(runner: Arc<RecordingRunner>) -> Self {
+        Self::build(false, true, Some(runner))
+    }
+
+    fn build(
+        ingest_enabled: bool,
+        registry_enabled: bool,
+        runner: Option<Arc<RecordingRunner>>,
+    ) -> Self {
         let bus = Arc::new(InMemoryBus::new());
         let read_model = Arc::new(ReadModel::default());
         let live = Arc::new(LiveHub::default());
@@ -55,6 +68,7 @@ impl Fixture {
                     RegistryConfig::default(),
                 ))
             }),
+            runner: runner.map(|runner| runner as Arc<dyn WorkflowRunner>),
             health,
         };
         Self {
@@ -150,6 +164,80 @@ impl Fixture {
         }
     }
 
+    /// Push a four-stage workflow through the log, the way the projector
+    /// would: a declaration, then one run per stage, joined by
+    /// `workflow_run_id`. The last stage is left unstarted.
+    async fn seed_workflow(&self, workflow_id: &str, execution_id: &str) {
+        let declare = |suffix: &str| {
+            let mut wire = envelope(
+                &format!("{execution_id}-{suffix}"),
+                EventType::WorkflowDeclared,
+                &format!("{execution_id}-driver"),
+                json!({
+                    "name": "House import",
+                    "version": "sha256:f00d",
+                    "nodes": [
+                        { "id": "acquire", "name": "Acquire" },
+                        { "id": "normalize", "name": "Normalize" },
+                        { "id": "persist", "name": "Persist" },
+                    ],
+                    "edges": [
+                        { "from": "acquire", "to": "normalize" },
+                        { "from": "normalize", "to": "persist" },
+                    ],
+                }),
+            );
+            wire.workflow_id = Some(workflow_id.to_owned());
+            wire.workflow_run_id = Some(execution_id.to_owned());
+            wire
+        };
+
+        let mut events = vec![declare("declare")];
+        for (index, stage) in ["acquire", "normalize"].iter().enumerate() {
+            let run_id = format!("{execution_id}-{stage}");
+            for (suffix, event_type, data) in [
+                (
+                    format!("{index}-start"),
+                    EventType::StepStarted,
+                    json!({ "node": stage }),
+                ),
+                (
+                    format!("{index}-artifact"),
+                    EventType::ArtifactProduced,
+                    json!({
+                        "node": stage,
+                        "uri": format!("s3://planner-flyte/{stage}.json"),
+                        "size_bytes": 2048,
+                    }),
+                ),
+                (
+                    format!("{index}-end"),
+                    EventType::StepCompleted,
+                    json!({ "node": stage }),
+                ),
+            ] {
+                let mut wire = envelope(
+                    &format!("{execution_id}-{suffix}"),
+                    event_type,
+                    &run_id,
+                    data,
+                );
+                wire.workflow_id = Some(workflow_id.to_owned());
+                wire.workflow_run_id = Some(execution_id.to_owned());
+                events.push(wire);
+            }
+        }
+
+        let appended = self.bus.append(events).await.expect("appends");
+        for event in &appended.recorded {
+            self.read_model.apply(event).await;
+            self.live
+                .publish(aiwatcher_core::ports::LiveEvent::from(event))
+                .await
+                .expect("publishes");
+        }
+    }
+
     /// Push an evaluation through the log, the way the projector would.
     async fn seed_evaluation(
         &self,
@@ -182,6 +270,47 @@ impl Fixture {
         for event in &appended.recorded {
             self.read_model.apply(event).await;
         }
+    }
+}
+
+/// A runner that records rather than dispatches.
+///
+/// A fake rather than a mock: what is worth asserting is the request the
+/// handler builds, and a mock that asserted on call counts would pass while
+/// sending the wrong workflow.
+#[derive(Debug, Default)]
+struct RecordingRunner {
+    seen: std::sync::Mutex<Vec<RerunRequest>>,
+    refuse: bool,
+}
+
+impl RecordingRunner {
+    fn refusing() -> Self {
+        Self {
+            seen: std::sync::Mutex::new(Vec::new()),
+            refuse: true,
+        }
+    }
+
+    fn seen(&self) -> Vec<RerunRequest> {
+        self.seen.lock().expect("not poisoned").clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl WorkflowRunner for RecordingRunner {
+    async fn rerun(&self, request: RerunRequest) -> Result<RerunAccepted, PortError> {
+        self.seen.lock().expect("not poisoned").push(request);
+        if self.refuse {
+            return Err(PortError::Rejected {
+                target: "workflow-runner",
+                message: "400: no such workflow".to_owned(),
+            });
+        }
+        Ok(RerunAccepted {
+            reference: Some("import-42".to_owned()),
+            url: None,
+        })
     }
 }
 
@@ -929,4 +1058,203 @@ async fn an_instance_without_a_prompt_store_says_so_rather_than_404ing() {
     let (status, body) = fixture.get("/api/v1/prompts").await;
     assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
     assert_eq!(body["code"], "registry_disabled");
+}
+
+// ── The workflow graph ───────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn the_catalog_lists_a_declared_workflow_with_its_shape() {
+    let fixture = Fixture::new(false);
+    fixture.seed_workflow("house-import", "exec-1").await;
+
+    let (status, body) = fixture.get("/api/v1/workflows").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["workflows"].as_array().expect("an array").len(), 1);
+    assert_eq!(body["workflows"][0]["workflow_id"], "house-import");
+    assert_eq!(body["workflows"][0]["name"], "House import");
+    assert_eq!(
+        body["workflows"][0]["nodes"]
+            .as_array()
+            .expect("nodes")
+            .len(),
+        3
+    );
+    assert_eq!(
+        body["workflows"][0]["edges"]
+            .as_array()
+            .expect("edges")
+            .len(),
+        2
+    );
+    assert_eq!(body["workflows"][0]["executions"], 1);
+}
+
+#[tokio::test]
+async fn an_execution_reports_the_node_that_has_not_run_yet() {
+    // The whole reason the declaration rides the log: "what is left" is not
+    // answerable from observed events, and it is the question somebody
+    // watching a workflow is asking.
+    let fixture = Fixture::new(false);
+    fixture.seed_workflow("house-import", "exec-1").await;
+
+    let (status, body) = fixture.get("/api/v1/workflow-executions/exec-1").await;
+    assert_eq!(status, StatusCode::OK);
+
+    let nodes = body["nodes"].as_array().expect("nodes");
+    assert_eq!(nodes.len(), 3);
+    assert_eq!(nodes[0]["node_id"], "acquire");
+    assert_eq!(nodes[0]["status"], "succeeded");
+    assert_eq!(nodes[1]["status"], "succeeded");
+    assert_eq!(nodes[2]["node_id"], "persist");
+    assert_eq!(nodes[2]["status"], "pending");
+    assert_eq!(body["summary"]["nodes_pending"], 1);
+    // Two stage pods plus the driver that declared: three runs, one execution.
+    // A run filter cannot express that, which is why these routes exist.
+    assert_eq!(body["summary"]["runs"].as_array().expect("runs").len(), 3);
+    assert_eq!(body["edges"].as_array().expect("edges").len(), 2);
+}
+
+#[tokio::test]
+async fn an_artifact_is_listed_on_its_node_as_a_reference() {
+    let fixture = Fixture::new(false);
+    fixture.seed_workflow("house-import", "exec-1").await;
+
+    let (_, body) = fixture.get("/api/v1/workflow-executions/exec-1").await;
+    let artifacts = body["nodes"][0]["artifacts"].as_array().expect("artifacts");
+
+    assert_eq!(artifacts.len(), 1);
+    assert_eq!(artifacts[0]["uri"], "s3://planner-flyte/acquire.json");
+    assert_eq!(artifacts[0]["name"], "acquire.json");
+    assert_eq!(artifacts[0]["size_bytes"], 2048);
+    assert_eq!(body["summary"]["artifacts"], 2);
+}
+
+#[tokio::test]
+async fn executions_can_be_filtered_to_one_workflow() {
+    let fixture = Fixture::new(false);
+    fixture.seed_workflow("house-import", "exec-1").await;
+    fixture.seed_workflow("parcel-import", "exec-2").await;
+
+    let (status, body) = fixture
+        .get("/api/v1/workflow-executions?workflow_id=parcel-import")
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["executions"].as_array().expect("an array").len(), 1);
+    assert_eq!(body["executions"][0]["workflow_run_id"], "exec-2");
+}
+
+#[tokio::test]
+async fn an_unknown_execution_is_a_404_with_a_machine_readable_code() {
+    let fixture = Fixture::new(false);
+    let (status, body) = fixture.get("/api/v1/workflow-executions/nope").await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["code"], "not_found");
+}
+
+#[tokio::test]
+async fn a_rerun_without_a_configured_runner_is_a_501_naming_the_variable() {
+    // 501, not 404: the route exists in the contract and this deployment did
+    // not wire an orchestrator behind it. The panel reads `code` to swap the
+    // button for an explanation.
+    let fixture = Fixture::new(false);
+    fixture.seed_workflow("house-import", "exec-1").await;
+
+    let (status, body) = fixture
+        .post("/api/v1/workflows/house-import/rerun", json!({}))
+        .await;
+
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+    assert_eq!(body["code"], "runner_disabled");
+    assert!(
+        body["message"]
+            .as_str()
+            .expect("a message")
+            .contains("AIWATCHER_WORKFLOW_RUNNER"),
+        "the message must say which variable is unset: {body}"
+    );
+}
+
+#[tokio::test]
+async fn a_rerun_is_accepted_and_carries_only_names_the_producer_chose() {
+    let runner = Arc::new(RecordingRunner::default());
+    let fixture = Fixture::with_runner(Arc::clone(&runner));
+    fixture.seed_workflow("house-import", "exec-1").await;
+
+    let (status, body) = fixture
+        .post(
+            "/api/v1/workflows/house-import/rerun",
+            json!({
+                "workflow_run_id": "exec-1",
+                "from_node": "normalize",
+                "inputs": { "source_url": "https://example.test/plan.pdf" },
+            }),
+        )
+        .await;
+
+    // 202: nothing has run yet. The evidence is the events it publishes.
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert_eq!(body["reference"], "import-42");
+
+    let seen = runner.seen();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].workflow_id, "house-import");
+    assert_eq!(seen[0].workflow_run_id.as_deref(), Some("exec-1"));
+    assert_eq!(seen[0].from_node.as_deref(), Some("normalize"));
+    assert_eq!(
+        seen[0].inputs["source_url"],
+        "https://example.test/plan.pdf"
+    );
+}
+
+#[tokio::test]
+async fn a_rerun_of_a_workflow_nobody_has_heard_of_is_never_dispatched() {
+    // Almost always a typo, and dispatching it would turn that typo into a
+    // request to another system.
+    let runner = Arc::new(RecordingRunner::default());
+    let fixture = Fixture::with_runner(Arc::clone(&runner));
+
+    let (status, body) = fixture
+        .post("/api/v1/workflows/typo-import/rerun", json!({}))
+        .await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["code"], "not_found");
+    assert!(runner.seen().is_empty(), "nothing left the process");
+}
+
+#[tokio::test]
+async fn an_orchestrator_that_refuses_is_a_502_not_a_500() {
+    // The caller asked for something the orchestrator will refuse identically
+    // forever. Saying 500 would invite a retry that cannot work.
+    let runner = Arc::new(RecordingRunner::refusing());
+    let fixture = Fixture::with_runner(Arc::clone(&runner));
+    fixture.seed_workflow("house-import", "exec-1").await;
+
+    let (status, body) = fixture
+        .post("/api/v1/workflows/house-import/rerun", json!({}))
+        .await;
+
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert_eq!(body["code"], "runner_rejected");
+}
+
+#[tokio::test]
+async fn a_rerun_body_naming_its_own_endpoint_is_refused() {
+    // The runner's target comes from configuration. `deny_unknown_fields` is
+    // what makes an attempt to supply one a 400 rather than a silently
+    // ignored field that reads as accepted.
+    let runner = Arc::new(RecordingRunner::default());
+    let fixture = Fixture::with_runner(Arc::clone(&runner));
+    fixture.seed_workflow("house-import", "exec-1").await;
+
+    let (status, _) = fixture
+        .post(
+            "/api/v1/workflows/house-import/rerun",
+            json!({ "endpoint": "http://169.254.169.254/latest/meta-data/" }),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(runner.seen().is_empty(), "nothing left the process");
 }

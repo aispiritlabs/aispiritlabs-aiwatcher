@@ -26,6 +26,7 @@ pub mod pipeline;
 pub mod readmodel;
 pub mod retry;
 pub mod spans;
+pub mod workflows;
 
 pub use conversations::{ConversationFilter, ConversationPage, ConversationSummary};
 pub use deadletter::{FileDeadLetters, InMemoryDeadLetters};
@@ -40,3 +41,8 @@ pub use metrics::{MetricsFilter, MetricsSummary};
 pub use pipeline::{Projector, ProjectorConfig};
 pub use readmodel::{ReadModel, RunDetail, RunFilter, RunPage, RunStatus, RunSummary};
 pub use spans::{SpanFilter, SpanOutcome, SpanPage, SpanRow};
+pub use workflows::{
+    AgentMessage, Artifact, ExecutionDetail, ExecutionFilter, ExecutionPage, ExecutionStatus,
+    ExecutionSummary, NodeState, NodeStatus, WorkflowConfig, WorkflowDefinition, WorkflowEdge,
+    WorkflowFilter, WorkflowNode, WorkflowPage, WorkflowState,
+};

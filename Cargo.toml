@@ -6,6 +6,7 @@
 #   aiwatcher-bus        MessageSource / MessageSink / Checkpointer + adapters
 #   aiwatcher-trace      span assembly + OTLP/JSON exporters
 #   aiwatcher-prompts    the prompt registry, over an object store
+#   aiwatcher-runner     the workflow rerun dispatcher, over HTTP
 #   aiwatcher-projector  the consumer pipeline + live hub + read model
 #   aiwatcher-api        axum router (REST + SSE + WS) + OpenAPI
 #   aiwatcher-server     the deployable binary: config, wiring, shutdown
@@ -28,6 +29,7 @@ aiwatcher-core = { path = "crates/aiwatcher-core", version = "0.1.0" }
 aiwatcher-bus = { path = "crates/aiwatcher-bus", version = "0.1.0" }
 aiwatcher-trace = { path = "crates/aiwatcher-trace", version = "0.1.0" }
 aiwatcher-prompts = { path = "crates/aiwatcher-prompts", version = "0.1.0" }
+aiwatcher-runner = { path = "crates/aiwatcher-runner", version = "0.1.0" }
 aiwatcher-projector = { path = "crates/aiwatcher-projector", version = "0.1.0" }
 aiwatcher-api = { path = "crates/aiwatcher-api", version = "0.1.0" }
 

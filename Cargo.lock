@@ -155,6 +155,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "aiwatcher-runner"
+version = "0.1.0"
+dependencies = [
+ "aiwatcher-core",
+ "async-trait",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "aiwatcher-server"
 version = "0.1.0"
 dependencies = [
@@ -163,6 +176,7 @@ dependencies = [
  "aiwatcher-core",
  "aiwatcher-projector",
  "aiwatcher-prompts",
+ "aiwatcher-runner",
  "aiwatcher-trace",
  "anyhow",
  "async-trait",

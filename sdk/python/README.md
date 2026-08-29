@@ -29,6 +29,42 @@ The scopes emit start and end events; the backend assembles them into spans.
 Telemetry never raises and never blocks: the transport batches on a background
 thread and drops on a full queue, loudly.
 
+## Tracing a workflow
+
+```python
+with client.workflow(
+    "house-import",
+    nodes=["acquire", "normalize", "analyze", "persist"],
+    edges=[("acquire", "normalize"), ("normalize", "analyze"), ("analyze", "persist")],
+) as flow:
+    with flow.node("acquire") as stage:
+        stage.artifact("acquisition.json", uri="s3://planner-flyte/acquisition.json")
+
+    with flow.node("analyze", kind="agent") as stage, stage.agent("floor-plan") as agent:
+        agent.message("importer", kind="response")
+```
+
+**Declare the shape, every time.** The version is a hash of the topology, so
+re-declaring is idempotent and costs nothing — and it is the only way the panel
+can draw a stage that has *not* started. A projection over observed events can
+say what happened; it cannot say what has not.
+
+One stage per pod is the case this exists for. Pass the same `execution_id`
+from every process and the runs join into one graph:
+
+```python
+with client.workflow("house-import", nodes=NODES, execution_id=job_id) as flow:
+    with flow.node("normalize"):
+        ...
+```
+
+Omit it and the run *is* the execution, which is right whenever the whole
+workflow runs in one process. `attempt=` distinguishes retries of one stage —
+two attempts sharing a value fold into one.
+
+Artifacts are **references**. The bytes stay where you put them; aiwatcher
+keeps the `uri` because a pointer is bounded and a floor-plan PDF is not.
+
 ## Recording an evaluation
 
 ```python

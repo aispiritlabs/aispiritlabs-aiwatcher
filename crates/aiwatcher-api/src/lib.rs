@@ -12,6 +12,10 @@
 //!   reads and writes an object store rather than the log, because a prompt is
 //!   authored rather than observed and has to outlive the runs that used it.
 //!   See [`prompts`].
+//! * **The workflow graph** (`/api/v1/workflows`) reads the same log as the
+//!   reads above, one level up: a graph rather than a run. Its rerun route is
+//!   the only endpoint in this API that asks another system to do work — see
+//!   [`workflows`].
 //! * **Ingest** (`/api/v1/events`) exists so a client that cannot reach Laser
 //!   directly — a browser, a serverless function, anything behind a firewall —
 //!   still has a way in. Python and TypeScript SDKs publish to Laser directly;
@@ -23,6 +27,7 @@ pub mod prompts;
 pub mod routes;
 pub mod state;
 pub mod stream;
+pub mod workflows;
 
 pub use error::ApiError;
 pub use openapi::ApiDoc;

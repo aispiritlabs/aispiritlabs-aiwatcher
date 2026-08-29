@@ -22,7 +22,7 @@ use aiwatcher_projector::{
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
-use crate::stream::{LiveFrame, as_sse, catch_up, live_tail};
+use crate::stream::{LiveFrame, Scope, as_sse, catch_up, live_tail};
 
 /// The `Last-Event-ID` header a browser resends after an SSE drop.
 const LAST_EVENT_ID: &str = "last-event-id";
@@ -48,6 +48,9 @@ pub fn router(state: AppState) -> Router {
         // Its own module: the registry is a different store with a different
         // lifetime, and keeping its routes beside the log's would hide that.
         .merge(crate::prompts::router())
+        // And its own module for a sharper reason: one of these routes asks
+        // another system to run something. See `crate::workflows`.
+        .merge(crate::workflows::router())
         .with_state(state)
 }
 
@@ -386,8 +389,9 @@ async fn stream_run(
     headers: HeaderMap,
 ) -> ApiResult<Sse<impl Stream<Item = Result<axum::response::sse::Event, Infallible>>>> {
     let from = resume_point(&headers, query.from.as_deref())?;
-    let (history, boundary) = catch_up(&state, from.as_ref(), Some(&run_id)).await?;
-    let tail = live_tail(&state.live, boundary, Some(run_id));
+    let scope = Scope::Run(run_id);
+    let (history, boundary) = catch_up(&state, from.as_ref(), &scope).await?;
+    let tail = live_tail(&state.live, boundary, scope);
     let frames = futures::stream::iter(history).chain(tail);
 
     Ok(Sse::new(as_sse(frames)).keep_alive(
@@ -402,7 +406,10 @@ async fn stream_run(
 /// The resume point, preferring the browser's `Last-Event-ID` over the query
 /// string — the header is what the browser resends automatically, so it is the
 /// more current of the two.
-fn resume_point(headers: &HeaderMap, from: Option<&str>) -> ApiResult<Option<Checkpoint>> {
+pub(crate) fn resume_point(
+    headers: &HeaderMap,
+    from: Option<&str>,
+) -> ApiResult<Option<Checkpoint>> {
     let raw = headers
         .get(LAST_EVENT_ID)
         .and_then(|value| value.to_str().ok())
@@ -451,7 +458,8 @@ async fn drive_socket(
     from: Option<Checkpoint>,
     run_id: Option<String>,
 ) {
-    let (history, boundary) = match catch_up(&state, from.as_ref(), run_id.as_deref()).await {
+    let scope = run_id.map_or(Scope::Everything, Scope::Run);
+    let (history, boundary) = match catch_up(&state, from.as_ref(), &scope).await {
         Ok(result) => result,
         Err(error) => {
             tracing::warn!(%error, "websocket catch-up failed");
@@ -466,7 +474,7 @@ async fn drive_socket(
         }
     }
 
-    let tail = live_tail(&state.live, boundary, run_id);
+    let tail = live_tail(&state.live, boundary, scope);
     futures::pin_mut!(tail);
     loop {
         tokio::select! {

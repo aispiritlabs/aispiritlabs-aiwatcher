@@ -38,8 +38,16 @@ pub enum Subject {
     /// One execution of an evaluation suite: parameters in, metrics and a
     /// report out.
     ///
-    /// The one subject that forms no span — see [`EventType::forms_span`].
+    /// Forms no span — see [`EventType::forms_span`].
     Eval,
+    /// The shape of an orchestration and what it produced: a declared topology,
+    /// and the artifacts its nodes handed on.
+    ///
+    /// Forms no span either, and for the same reason as [`Self::Eval`]: a
+    /// topology is a document and an artifact is a pointer. Neither is
+    /// something that happened to a request. The *execution* of a node is a
+    /// [`Self::Step`], which does form a span.
+    Workflow,
     Unknown,
 }
 
@@ -53,6 +61,7 @@ impl Subject {
             Self::Tool => "tool",
             Self::Step => "step",
             Self::Eval => "eval",
+            Self::Workflow => "workflow",
             Self::Unknown => "unknown",
         }
     }
@@ -145,6 +154,9 @@ event_catalog! {
     AgentStarted    => "agent.started",    Subject::Agent, Phase::Start;
     AgentCompleted  => "agent.completed",  Subject::Agent, Phase::End { ok: true };
     AgentFailed     => "agent.failed",     Subject::Agent, Phase::End { ok: false };
+    // One agent addressing another. A span *event* on the sending agent's span,
+    // never a span of its own: a handoff has a moment, not a duration.
+    AgentMessage    => "agent.message",    Subject::Agent, Phase::Point;
 
     LlmStarted      => "llm.started",      Subject::Llm,   Phase::Start;
     LlmFirstToken   => "llm.first_token",  Subject::Llm,   Phase::Point;
@@ -165,6 +177,11 @@ event_catalog! {
     EvalCase        => "eval.case",        Subject::Eval,  Phase::Point;
     EvalCompleted   => "eval.completed",   Subject::Eval,  Phase::End { ok: true };
     EvalFailed      => "eval.failed",      Subject::Eval,  Phase::End { ok: false };
+
+    // No phases and no spans: neither is an execution. The topology is what a
+    // node's execution is drawn against, and an artifact is what one produced.
+    WorkflowDeclared => "workflow.declared", Subject::Workflow, Phase::Point;
+    ArtifactProduced => "artifact.produced", Subject::Workflow, Phase::Point;
 }
 
 /// The step kinds this build knows how to name and classify.
@@ -220,18 +237,26 @@ impl EventType {
 
     /// Whether this event takes part in a span at all.
     ///
+    /// Two subjects are withheld, for one reason between them: what they carry
+    /// is a document, not something that happened to a request.
+    ///
     /// An evaluation report has a start, an end and a duration — the
     /// evaluation projection reads all three — and still belongs in no trace.
-    /// Scoring a suite is not something that happened to a request: it is a
-    /// batch job whose payload is a document, and writing it to the trace
-    /// store would put a report where a span goes. The phase is kept because
-    /// the projection needs it; the span is what is withheld.
+    /// Scoring a suite is a batch job whose payload is a document, and writing
+    /// it to the trace store would put a report where a span goes. The phase is
+    /// kept because the projection needs it; the span is what is withheld.
+    ///
+    /// A workflow declaration is the *shape* of an orchestration and an
+    /// artifact is a *pointer* to a byte range somebody else stored. A shape
+    /// has no duration at all, and a waterfall that showed one would be showing
+    /// the moment a producer got round to describing itself. The executions
+    /// drawn against that shape are `step.*`, and those do form spans.
     ///
     /// Distinct from [`Self::is_high_cardinality`], which suppresses a *record*
     /// for an event that still belongs to a span.
     #[must_use]
     pub fn forms_span(&self) -> bool {
-        self.subject() != Subject::Eval
+        !matches!(self.subject(), Subject::Eval | Subject::Workflow)
     }
 
     /// The stable key a span id derives from when the producer sent none.
@@ -258,6 +283,12 @@ impl EventType {
             // One key per evaluation, so a redelivered report lands on the
             // row it already wrote instead of a second one.
             Subject::Eval => "eval".to_owned(),
+            // Never used for a span — see `forms_span`. Derived anyway, and
+            // derived per event type rather than per subject, because
+            // `record` computes it unconditionally and a key that collided
+            // across the two types would be a lie waiting for the day one of
+            // them starts forming a span.
+            Subject::Workflow => format!("workflow:{}", self.as_str()),
             Subject::Unknown => format!("event:{}", self.as_str()),
         }
     }
@@ -281,7 +312,7 @@ impl EventType {
             // reads the same way `chat gpt-5` does.
             (Subject::Step, Some(target)) => target.to_owned(),
             (Subject::Step, None) => "step".to_owned(),
-            (Subject::Eval | Subject::Unknown, _) => self.as_str().to_owned(),
+            (Subject::Eval | Subject::Workflow | Subject::Unknown, _) => self.as_str().to_owned(),
         }
     }
 }
@@ -334,6 +365,9 @@ mod tests {
 
     #[test]
     fn every_subject_has_a_matched_start_and_end() {
+        // `Subject::Workflow` is deliberately absent: a declaration and an
+        // artifact are points, and a topology has no end to wait for. The
+        // execution that does have one is a `Subject::Step`.
         for subject in [
             Subject::Run,
             Subject::Agent,
@@ -382,10 +416,45 @@ mod tests {
         for event_type in EventType::KNOWN {
             assert_eq!(
                 event_type.forms_span(),
-                event_type.subject() != Subject::Eval,
+                !matches!(event_type.subject(), Subject::Eval | Subject::Workflow),
                 "{event_type} disagrees with its subject about being traced"
             );
         }
+    }
+
+    #[test]
+    fn a_declared_topology_and_an_artifact_form_no_span() {
+        // The reason is not the same as the evaluation's, though the rule is:
+        // a shape has no duration, and an artifact is a pointer to bytes
+        // somebody else stored. Putting either in a waterfall would be showing
+        // the moment a producer described itself.
+        for event_type in [EventType::WorkflowDeclared, EventType::ArtifactProduced] {
+            assert_eq!(event_type.subject(), Subject::Workflow);
+            assert_eq!(event_type.phase(), Some(Phase::Point));
+            assert!(!event_type.forms_span(), "{event_type} must not be traced");
+        }
+    }
+
+    #[test]
+    fn a_declaration_and_an_artifact_do_not_share_a_span_key() {
+        // Neither key reaches a span today. They are still distinct, because
+        // `record` derives one unconditionally and a shared key would be a lie
+        // waiting for the day one of them starts forming a span.
+        assert_ne!(
+            EventType::WorkflowDeclared.span_key(None, None),
+            EventType::ArtifactProduced.span_key(None, None),
+        );
+    }
+
+    #[test]
+    fn an_agent_message_belongs_to_the_sending_agents_span() {
+        // A handoff has a moment, not a duration, so it is a span event rather
+        // than a span. Sharing the agent's key is what puts it there.
+        let message = EventType::AgentMessage.span_key(None, Some("planner"));
+        let agent = EventType::AgentStarted.span_key(None, Some("planner"));
+        assert_eq!(message, agent);
+        assert_eq!(EventType::AgentMessage.phase(), Some(Phase::Point));
+        assert!(EventType::AgentMessage.forms_span());
     }
 
     #[test]

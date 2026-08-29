@@ -27,6 +27,7 @@ aiwatcher-bus.workspace = true
 aiwatcher-trace.workspace = true
 aiwatcher-projector.workspace = true
 aiwatcher-prompts.workspace = true
+aiwatcher-runner.workspace = true
 aiwatcher-api.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true

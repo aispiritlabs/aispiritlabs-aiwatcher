@@ -105,6 +105,37 @@ impl FromStr for PromptStoreKind {
     }
 }
 
+/// Whether this deployment can ask an orchestrator to run a workflow again.
+///
+/// `None` is the default, and deliberately so: everything else aiwatcher does
+/// is a read, and turning it into something that can trigger work in another
+/// system should be a decision somebody made rather than one they inherited.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WorkflowRunnerKind {
+    /// No runner. `POST /api/v1/workflows/{id}/rerun` answers 501.
+    #[default]
+    None,
+    /// One HTTP endpoint, named here. Never named by an event — see
+    /// `aiwatcher_runner`.
+    Http,
+}
+
+impl FromStr for WorkflowRunnerKind {
+    type Err = ConfigError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "none" | "off" | "disabled" => Ok(Self::None),
+            "http" | "https" | "webhook" => Ok(Self::Http),
+            other => Err(ConfigError::Invalid {
+                name: "AIWATCHER_WORKFLOW_RUNNER",
+                value: other.to_owned(),
+                expected: "none or http",
+            }),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub listen: SocketAddr,
@@ -155,6 +186,17 @@ pub struct Config {
     pub prompt_s3_region: String,
     /// Create the bucket at start-up when it is missing.
     pub prompt_s3_create_bucket: bool,
+    /// Executions kept in the workflow projection. Its own cap: a graph is
+    /// held per execution, and an execution can outlive several runs.
+    pub max_workflow_executions: usize,
+    /// Whether a rerun can be dispatched at all.
+    pub workflow_runner: WorkflowRunnerKind,
+    /// The endpoint every rerun is posted to. Required when
+    /// `workflow_runner = Http`, and the only place a rerun target may come
+    /// from — see `aiwatcher_runner`.
+    pub workflow_runner_url: Option<String>,
+    pub workflow_runner_token: Option<String>,
+    pub workflow_runner_timeout: Duration,
     pub log_format: LogFormat,
 }
 
@@ -197,6 +239,12 @@ impl Default for Config {
             prompt_s3_session_token: None,
             prompt_s3_region: "us-east-1".to_owned(),
             prompt_s3_create_bucket: true,
+            max_workflow_executions: 1_000,
+            workflow_runner: WorkflowRunnerKind::default(),
+            workflow_runner_url: None,
+            workflow_runner_token: None,
+            // The same ten seconds the OTLP exporter and the object store use.
+            workflow_runner_timeout: Duration::from_secs(10),
             log_format: LogFormat::default(),
         }
     }
@@ -321,6 +369,28 @@ impl Config {
         if let Some(raw) = var("AIWATCHER_PROMPT_S3_CREATE_BUCKET") {
             config.prompt_s3_create_bucket = parse_bool("AIWATCHER_PROMPT_S3_CREATE_BUCKET", &raw)?;
         }
+        if let Some(raw) = var("AIWATCHER_MAX_WORKFLOW_EXECUTIONS") {
+            config.max_workflow_executions = raw.parse().map_err(|_| ConfigError::Invalid {
+                name: "AIWATCHER_MAX_WORKFLOW_EXECUTIONS",
+                value: raw,
+                expected: "whole number of executions",
+            })?;
+        }
+        if let Some(raw) = var("AIWATCHER_WORKFLOW_RUNNER") {
+            config.workflow_runner = raw.parse()?;
+        }
+        if let Some(raw) = var("AIWATCHER_WORKFLOW_RUNNER_URL") {
+            config.workflow_runner_url = Some(raw);
+        }
+        config.workflow_runner_token = var("AIWATCHER_WORKFLOW_RUNNER_TOKEN");
+        if let Some(raw) = var("AIWATCHER_WORKFLOW_RUNNER_TIMEOUT_SECONDS") {
+            let seconds: u64 = raw.parse().map_err(|_| ConfigError::Invalid {
+                name: "AIWATCHER_WORKFLOW_RUNNER_TIMEOUT_SECONDS",
+                value: raw,
+                expected: "whole number of seconds",
+            })?;
+            config.workflow_runner_timeout = Duration::from_secs(seconds);
+        }
         if let Some(raw) = var("AIWATCHER_LOG_FORMAT") {
             config.log_format = match raw.to_ascii_lowercase().as_str() {
                 "json" => LogFormat::Json,
@@ -365,6 +435,19 @@ impl Config {
                     });
                 }
             }
+        }
+
+        // Same reasoning as the S3 check above, one step sharper: a runner
+        // with no endpoint would answer every rerun with a connection error
+        // that looks like the orchestrator being down. Refusing to start says
+        // which variable is missing, once, to whoever deployed it.
+        if config.workflow_runner == WorkflowRunnerKind::Http
+            && config.workflow_runner_url.is_none()
+        {
+            return Err(ConfigError::Required {
+                name: "AIWATCHER_WORKFLOW_RUNNER_URL",
+                because: "AIWATCHER_WORKFLOW_RUNNER=http",
+            });
         }
 
         Ok(config)

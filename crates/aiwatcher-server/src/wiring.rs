@@ -10,15 +10,16 @@ use aiwatcher_bus::adapters::memory::InMemoryBus;
 use aiwatcher_bus::adapters::wal::FileWal;
 use aiwatcher_bus::{Checkpointer, MessageSink, MessageSource};
 use aiwatcher_core::ports::{
-    CompletedSpan, DeadLetterSink, MetricSample, MetricSink, PortResult, TraceStore,
+    CompletedSpan, DeadLetterSink, MetricSample, MetricSink, PortResult, TraceStore, WorkflowRunner,
 };
 use aiwatcher_projector::pipeline::Outputs;
 use aiwatcher_projector::{FileDeadLetters, LiveHub, Projector, ProjectorConfig, ReadModel};
 use aiwatcher_prompts::{Registry, RegistryConfig};
+use aiwatcher_runner::{HttpRunner, HttpRunnerConfig};
 use aiwatcher_trace::AssemblerConfig;
 use aiwatcher_trace::otlp::{OtlpConfig, OtlpMetricSink, OtlpTraceStore};
 
-use crate::config::{BackendKind, Config, PromptStoreKind};
+use crate::config::{BackendKind, Config, PromptStoreKind, WorkflowRunnerKind};
 
 /// Discards what it is given, loudly enough to notice at startup and quietly
 /// enough not to fill a log.
@@ -109,6 +110,42 @@ async fn build_prompt_registry(config: &Config) -> Result<Option<Arc<Registry>>>
     Ok(Some(Arc::new(Registry::new(store, registry_config))))
 }
 
+/// The workflow runner, or `None`.
+///
+/// No null-object branch, unlike [`NullExporter`] above, and the difference is
+/// the point. A null exporter drops telemetry aiwatcher already has; a null
+/// runner would answer `202 Accepted` for a rerun that no orchestrator was ever
+/// asked to perform. Absence has to reach the caller, so it reaches them as a
+/// 501 naming the variable that is unset.
+fn build_workflow_runner(config: &Config) -> Result<Option<Arc<dyn WorkflowRunner>>> {
+    match config.workflow_runner {
+        WorkflowRunnerKind::None => {
+            tracing::info!(
+                "AIWATCHER_WORKFLOW_RUNNER=none; reruns answer 501 and nothing is dispatched"
+            );
+            Ok(None)
+        }
+        WorkflowRunnerKind::Http => {
+            let endpoint = config.workflow_runner_url.clone().context(
+                "AIWATCHER_WORKFLOW_RUNNER_URL is required for \
+                          AIWATCHER_WORKFLOW_RUNNER=http",
+            )?;
+            tracing::info!(
+                %endpoint,
+                authenticated = config.workflow_runner_token.is_some(),
+                "reruns will be dispatched to the configured orchestrator"
+            );
+            let runner = HttpRunner::new(HttpRunnerConfig {
+                endpoint,
+                token: config.workflow_runner_token.clone(),
+                timeout: config.workflow_runner_timeout,
+            })
+            .context("building the workflow runner's HTTP client")?;
+            Ok(Some(Arc::new(runner)))
+        }
+    }
+}
+
 /// A fully wired instance, ready to serve and to consume.
 pub struct Runtime {
     pub state: AppState,
@@ -169,6 +206,10 @@ pub async fn build(config: Config) -> Result<Runtime> {
             evaluations: aiwatcher_projector::evaluations::EvaluationConfig {
                 max_evaluations: config.max_evaluations,
                 max_cases_total: config.max_evaluation_cases_total,
+                ..Default::default()
+            },
+            workflows: aiwatcher_projector::WorkflowConfig {
+                max_executions: config.max_workflow_executions,
                 ..Default::default()
             },
             ..Default::default()
@@ -323,6 +364,7 @@ pub async fn build(config: Config) -> Result<Runtime> {
         source,
         sink: config.ingest_enabled.then_some(sink),
         prompts: build_prompt_registry(&config).await?,
+        runner: build_workflow_runner(&config)?,
         health,
     };
 

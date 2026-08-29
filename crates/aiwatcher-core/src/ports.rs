@@ -205,6 +205,15 @@ pub struct LiveEvent {
     pub run_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conversation_id: Option<String>,
+    /// Carried for the same reason `conversation_id` is: the live channel is
+    /// filtered server-side, and a subscriber watching one workflow execution
+    /// cannot be served by resolving it to a set of run ids at subscribe time —
+    /// a stage that starts *after* the browser connected would be filtered out
+    /// by the set it was given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_run_id: Option<String>,
     pub trace_id: TraceId,
     pub span_id: SpanId,
     pub event_type: EventType,
@@ -222,6 +231,8 @@ impl From<&RecordedEvent> for LiveEvent {
             checkpoint: event.metadata.checkpoint.clone(),
             run_id: event.metadata.run_id.clone(),
             conversation_id: event.metadata.conversation_id.clone(),
+            workflow_id: event.metadata.workflow_id.clone(),
+            workflow_run_id: event.metadata.workflow_run_id.clone(),
             trace_id: event.metadata.trace_id,
             span_id: event.metadata.span_id,
             event_type: event.event_type.clone(),
@@ -268,6 +279,63 @@ pub trait LivePublisher: Send + Sync + std::fmt::Debug {
 #[async_trait]
 pub trait DeadLetterSink: Send + Sync + std::fmt::Debug {
     async fn park(&self, letter: DeadLetter) -> PortResult<()>;
+}
+
+/// Asking for a workflow to be run again.
+///
+/// aiwatcher observes; it does not orchestrate. Every other port here writes
+/// something aiwatcher derived — this one asks somebody else to do work, which
+/// is why it is the only port whose absence is a 501 rather than a no-op: a
+/// null runner would report success for a rerun that never happened.
+///
+/// The adapter's target comes from configuration and never from an event. A
+/// declaration that named its own callback URL would be a request-forgery
+/// primitive posted by anything that can reach ingest.
+#[async_trait]
+pub trait WorkflowRunner: Send + Sync + std::fmt::Debug {
+    async fn rerun(&self, request: RerunRequest) -> PortResult<RerunAccepted>;
+}
+
+/// What is asked of the orchestrator.
+///
+/// Deliberately thin, and deliberately not a description of *how* to run
+/// anything: aiwatcher knows the shape of a graph because a producer declared
+/// it, not because it can execute one. Everything here is a name the producer
+/// already chose.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct RerunRequest {
+    /// The orchestration to run. Always present.
+    pub workflow_id: String,
+    /// The execution being repeated, when there is one. `None` asks for a
+    /// fresh execution rather than a repeat of a particular traversal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_run_id: Option<String>,
+    /// Resume from this node rather than from the start.
+    ///
+    /// Advisory: whether an orchestrator can resume mid-graph is its business,
+    /// and one that cannot is free to start over. aiwatcher cannot verify the
+    /// difference and does not claim to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_node: Option<String>,
+    /// Passed through untouched.
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    #[schema(value_type = Object)]
+    pub inputs: serde_json::Value,
+}
+
+/// What came back. Not a result — the work has not happened yet.
+///
+/// A rerun is accepted, not completed: the evidence that it ran is the events
+/// it publishes, on the same log as everything else. `reference` is whatever
+/// the orchestrator calls the thing it just queued, so a caller can find it in
+/// that orchestrator's own console.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct RerunAccepted {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
+    /// Where to watch it, if the orchestrator said.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }
 
 #[cfg(test)]

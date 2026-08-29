@@ -19,6 +19,7 @@ Two things it does that are easy to get wrong by hand:
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import queue
@@ -41,13 +42,16 @@ SCHEMA_VERSION = 1
 
 __all__ = [
     "SCHEMA_VERSION",
+    "AgentContext",
     "AiwatcherClient",
     "EvaluationContext",
     "HttpTransport",
+    "NodeContext",
     "NullTransport",
     "PromptRegistry",
     "RunContext",
     "Transport",
+    "WorkflowContext",
 ]
 
 
@@ -248,6 +252,7 @@ class _Context:
     run_id: str
     conversation_id: str | None = None
     workflow_id: str | None = None
+    workflow_run_id: str | None = None
     agent_id: str | None = None
     correlation_id: str = field(default_factory=_new_id)
     causation_id: str | None = None
@@ -321,6 +326,8 @@ class AiwatcherClient:
             envelope["conversation_id"] = context.conversation_id
         if context.workflow_id:
             envelope["workflow_id"] = context.workflow_id
+        if context.workflow_run_id:
+            envelope["workflow_run_id"] = context.workflow_run_id
         if context.agent_id:
             envelope["agent_id"] = context.agent_id
         if context.causation_id:
@@ -339,6 +346,7 @@ class AiwatcherClient:
         *,
         conversation_id: str | None = None,
         workflow_id: str | None = None,
+        workflow_run_id: str | None = None,
         correlation_id: str | None = None,
     ) -> Iterator[RunContext]:
         """One execution of an agent. Becomes one trace.
@@ -351,6 +359,11 @@ class AiwatcherClient:
             run_id=run_id,
             conversation_id=conversation_id,
             workflow_id=workflow_id,
+            # Only meaningful alongside a workflow, and defaulted server-side
+            # to `run_id` when absent. Pass it when one workflow execution
+            # spans several processes — one stage per pod is the case it
+            # exists for.
+            workflow_run_id=workflow_run_id if workflow_id else None,
             correlation_id=correlation_id or _new_id(),
         )
         run_context = RunContext(self, context)
@@ -472,6 +485,73 @@ class AiwatcherClient:
         self.emit("eval.completed", context, payload)
         return context.run_id
 
+    # ── Workflows ────────────────────────────────────────────────────────
+
+    @contextlib.contextmanager
+    def workflow(
+        self,
+        workflow_id: str,
+        *,
+        nodes: list[str] | list[dict[str, Any]] | None = None,
+        edges: list[tuple[str, str]] | list[dict[str, Any]] | None = None,
+        name: str | None = None,
+        execution_id: str | None = None,
+        run_id: str | None = None,
+        conversation_id: str | None = None,
+    ) -> Iterator[WorkflowContext]:
+        """One execution of an orchestration, and the shape it is executing.
+
+        Declaring the shape is the point. Without it the graph can only ever
+        show the stages that have already run, and "which stage has this not
+        reached" is the question somebody watching a pipeline is asking.
+
+        >>> with client.workflow(
+        ...     "house-import",
+        ...     nodes=["acquire", "normalize", "analyze", "persist"],
+        ...     edges=[("acquire", "normalize"), ("normalize", "analyze"),
+        ...            ("analyze", "persist")],
+        ... ) as flow:
+        ...     with flow.node("acquire") as stage:
+        ...         stage.artifact("acquisition.json", uri="s3://bucket/a.json")
+
+        The declaration is idempotent — its version is a hash of the topology —
+        so publishing it on every execution costs nothing and is what keeps the
+        catalog alive across retention eviction. Declare unconditionally.
+
+        `execution_id` joins several processes into one traversal. Omit it and
+        the run *is* the execution, which is right whenever the whole workflow
+        runs in one process. A stage-per-pod orchestrator must pass the same
+        value from every pod — its own execution id is the obvious choice.
+        """
+        resolved_nodes = _normalize_nodes(nodes)
+        resolved_edges = _normalize_edges(edges)
+        context = _Context(
+            run_id=run_id or _new_id(),
+            conversation_id=conversation_id,
+            workflow_id=workflow_id,
+            workflow_run_id=execution_id,
+        )
+        self.emit("run.started", context)
+        if resolved_nodes or resolved_edges:
+            self.emit(
+                "workflow.declared",
+                context,
+                {
+                    "name": name or workflow_id,
+                    "version": _topology_version(resolved_nodes, resolved_edges),
+                    "nodes": resolved_nodes,
+                    "edges": resolved_edges,
+                },
+            )
+        flow = WorkflowContext(self, context)
+        try:
+            yield flow
+        except BaseException as error:
+            self.emit("run.failed", context, {"error": str(error), "status": "failed"})
+            raise
+        else:
+            self.emit("run.completed", context, {"status": "succeeded"})
+
     # ── Prompts ──────────────────────────────────────────────────────────
 
     @property
@@ -574,6 +654,80 @@ class EvaluationContext:
         return data
 
 
+def _normalize_nodes(
+    nodes: list[str] | list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Accept the shortest thing somebody writes first.
+
+    `["a", "b"]` is a graph. Requiring `[{"id": "a"}]` would make the simplest
+    declaration the one that silently does nothing.
+    """
+    if not nodes:
+        return []
+    resolved: list[dict[str, Any]] = []
+    for node in nodes:
+        if isinstance(node, str):
+            resolved.append({"id": node, "name": node})
+            continue
+        node_id = node.get("id") or node.get("name")
+        if not node_id:
+            continue
+        resolved.append({**node, "id": node_id, "name": node.get("name", node_id)})
+    return resolved
+
+
+def _normalize_edges(
+    edges: list[tuple[str, str]] | list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Same, for edges: `[("a", "b")]` and `[{"from": …, "to": …}]` both work."""
+    if not edges:
+        return []
+    resolved: list[dict[str, Any]] = []
+    for edge in edges:
+        if isinstance(edge, dict):
+            source, target = edge.get("from"), edge.get("to")
+            if source and target:
+                resolved.append({key: value for key, value in edge.items() if value is not None})
+            continue
+        if len(edge) >= 2:
+            resolved.append({"from": edge[0], "to": edge[1]})
+    return resolved
+
+
+def _topology_version(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> str:
+    """A content hash of the shape, so re-declaring costs nothing.
+
+    Over the *canonical* form, not the caller's dict order: a version that
+    changed because somebody reordered a keyword argument would make every
+    execution look like a new graph.
+    """
+    canonical = json.dumps({"nodes": nodes, "edges": edges}, sort_keys=True, separators=(",", ":"))
+    return f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()[:16]}"
+
+
+def _emit_artifact(
+    client: AiwatcherClient,
+    context: _Context,
+    *,
+    name: str,
+    uri: str,
+    node: str | None,
+    media_type: str | None,
+    size_bytes: int | None,
+    digest: str | None,
+) -> None:
+    payload: dict[str, Any] = {"name": name, "uri": uri}
+    for key, value in (
+        ("node", node),
+        ("media_type", media_type),
+        ("size_bytes", size_bytes),
+        ("digest", digest),
+    ):
+        if value is not None:
+            payload[key] = value
+    client.emit("artifact.produced", context, payload)
+
+
 def _stringify(params: dict[str, Any]) -> dict[str, str]:
     """Parameters are labels, so they arrive as strings.
 
@@ -599,6 +753,7 @@ class RunContext(_Scope):
             run_id=self._context.run_id,
             conversation_id=self._context.conversation_id,
             workflow_id=self._context.workflow_id,
+            workflow_run_id=self._context.workflow_run_id,
             agent_id=agent_id,
             correlation_id=self._context.correlation_id,
             causation_id=self._context.correlation_id,
@@ -614,7 +769,164 @@ class RunContext(_Scope):
             self._client.emit("agent.completed", context)
 
 
+class WorkflowContext(_Scope):
+    """One traversal of a declared graph."""
+
+    @contextlib.contextmanager
+    def node(
+        self,
+        node_id: str,
+        *,
+        agent_id: str | None = None,
+        kind: str = "chain",
+        attempt: str | None = None,
+        **payload: Any,
+    ) -> Iterator[NodeContext]:
+        """One stage. Becomes a span, and a node's status on the graph.
+
+        `step.*` rather than an event type of its own, because a stage really
+        is a step: it has a start, an end and a duration, and it belongs in the
+        waterfall beside the LLM calls it makes.
+
+        `attempt` distinguishes retries of one stage. Two attempts must carry
+        different values or they fold into one — the projection counts attempts
+        by span key, which is derived from this. Generated when omitted, which
+        is right for a stage that runs once.
+        """
+        context = _Context(
+            run_id=self._context.run_id,
+            conversation_id=self._context.conversation_id,
+            workflow_id=self._context.workflow_id,
+            workflow_run_id=self._context.workflow_run_id,
+            agent_id=agent_id,
+            correlation_id=self._context.correlation_id,
+            causation_id=self._context.correlation_id,
+        )
+        base = {
+            "node": node_id,
+            "call_id": attempt or _new_id(),
+            "step_type": kind,
+            **payload,
+        }
+        started = time.monotonic()
+        self._client.emit("step.started", context, base)
+        node = NodeContext(self._client, context, node_id)
+        try:
+            yield node
+        except BaseException as error:
+            self._client.emit(
+                "step.failed",
+                context,
+                {**base, "error": str(error), "duration_ms": (time.monotonic() - started) * 1000},
+            )
+            raise
+        else:
+            self._client.emit(
+                "step.completed",
+                context,
+                {**base, "duration_ms": (time.monotonic() - started) * 1000},
+            )
+
+    @contextlib.contextmanager
+    def agent(self, agent_id: str) -> Iterator[AgentContext]:
+        """An agent inside this traversal, outside any one stage.
+
+        For an agent that coordinates rather than executes — the one that hands
+        work to the others. An agent doing a *stage's* work belongs under
+        `NodeContext.agent` instead, so its span nests inside that stage's.
+        """
+        with RunContext(self._client, self._context).agent(agent_id) as agent:
+            yield agent
+
+    def artifact(
+        self,
+        name: str,
+        *,
+        uri: str,
+        node: str | None = None,
+        media_type: str | None = None,
+        size_bytes: int | None = None,
+        digest: str | None = None,
+    ) -> None:
+        """Record something this traversal produced, **by reference**.
+
+        The bytes stay where you put them. aiwatcher keeps the pointer because
+        a pointer is bounded and a floor-plan PDF is not; an artifact with no
+        `uri` is dropped rather than listed as a row nobody can open.
+        """
+        _emit_artifact(
+            self._client,
+            self._context,
+            name=name,
+            uri=uri,
+            node=node,
+            media_type=media_type,
+            size_bytes=size_bytes,
+            digest=digest,
+        )
+
+
+class NodeContext(_Scope):
+    """One stage of a traversal, while it runs."""
+
+    def __init__(self, client: AiwatcherClient, context: _Context, node_id: str) -> None:
+        super().__init__(client, context)
+        self._node_id = node_id
+
+    @contextlib.contextmanager
+    def agent(self, agent_id: str) -> Iterator[AgentContext]:
+        """An agent doing this stage's work. Nests under the stage's span."""
+        with RunContext(self._client, self._context).agent(agent_id) as agent:
+            yield agent
+
+    def artifact(
+        self,
+        name: str,
+        *,
+        uri: str,
+        media_type: str | None = None,
+        size_bytes: int | None = None,
+        digest: str | None = None,
+    ) -> None:
+        """Record something this stage produced. See `WorkflowContext.artifact`."""
+        _emit_artifact(
+            self._client,
+            self._context,
+            name=name,
+            uri=uri,
+            node=self._node_id,
+            media_type=media_type,
+            size_bytes=size_bytes,
+            digest=digest,
+        )
+
+
 class AgentContext(_Scope):
+    def message(
+        self,
+        to: str,
+        *,
+        kind: str = "handoff",
+        channel: str | None = None,
+        **extra: Any,
+    ) -> None:
+        """Record this agent addressing another one.
+
+        The one thing nothing else here can see. A trace records nesting —
+        agent calls LLM calls tool — and two agents exchanging work through a
+        queue, a file or a task graph nest inside nothing at all. Without this
+        the question "do these agents actually talk" has no answer in the data.
+
+        A point, not a scope: a handoff has a moment, not a duration. It
+        becomes a span event on this agent's span, and an edge on the graph.
+        """
+        payload: dict[str, Any] = {"to": to, "kind": kind, **extra}
+        if self._context.agent_id:
+            payload["from"] = self._context.agent_id
+        if channel:
+            payload["channel"] = channel
+        self._client.emit("agent.message", self._context, payload)
+
     @contextlib.contextmanager
     def llm(
         self,

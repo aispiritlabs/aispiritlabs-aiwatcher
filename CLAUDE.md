@@ -37,6 +37,7 @@ just dev           # server (in-memory bus) + panel dev server on :5173
 just seed          # publish a demo run into a running server
 just seed-evaluation  # publish two comparable evaluation reports
 just seed-prompts  # publish a prompt plus three optimisations, one admitted
+just seed-workflow    # publish two executions of one declared graph
 just stack-up      # docker compose: VictoriaTraces, VictoriaMetrics, Collector, Grafana
 just tilt-up       # the same stack on a local Kubernetes, rebuilt on save
 ```
@@ -87,7 +88,8 @@ Crates, in dependency order. A crate may only depend on ones above it.
 | `aiwatcher-bus` | `MessageSource` / `MessageSink` / `Checkpointer` + memory, write-ahead-log, Laser and generic-broker adapters |
 | `aiwatcher-trace` | `SpanAssembler` and the OTLP/JSON exporters |
 | `aiwatcher-prompts` | The prompt registry: content-addressed versions, optimisation records, and the RustFS/S3 and filesystem adapters behind `ObjectStore`. Includes a hand-written SigV4 signer. |
-| `aiwatcher-projector` | The pipeline, live hub, read model, dimension, span and evaluation folds, dedup, retry, dead letters |
+| `aiwatcher-runner` | The workflow rerun dispatcher: one HTTP POST to one configured endpoint, behind `core::ports::WorkflowRunner`. The only thing here that asks another system to do work. |
+| `aiwatcher-projector` | The pipeline, live hub, read model, dimension, span, evaluation and workflow-graph folds, dedup, retry, dead letters |
 | `aiwatcher-api` | axum router: REST, SSE, WebSocket, OpenAPI |
 | `aiwatcher-server` | Config, wiring, graceful shutdown. The only crate that knows every implementation exists. |
 
@@ -179,6 +181,19 @@ area.
    not transport, which is why the live path stays in Rust and there is no
    export.
 
+11. **A workflow graph is declared, not discovered**
+   ([ADR_0012](docs/ADR/ADR_0012_WORKFLOW_GRAPH.md)). planner runs its house
+   import as four Flyte stages *and* as the same four functions in-process,
+   depending on `settings.flyte_enabled`. So aiwatcher never asks an
+   orchestrator anything: `workflow.declared` carries the topology on the log,
+   `step.*` with `data.node` executes a node of it, `artifact.produced` points
+   at what a node handed on, and `agent.message` records one agent addressing
+   another — the one thing nesting cannot show. `workflow_run_id` joins the
+   stages a per-pod orchestrator scatters across four runs; omit it and the run
+   *is* the execution. A stage nothing has started is `Pending`, which is the
+   whole reason the declaration exists, and rerun is a dispatch to one endpoint
+   from *configuration* — `aiwatcher-runner`, 501 when unset.
+
 ## Conventions
 
 ### Rust
@@ -262,6 +277,33 @@ not an SDK release.
   ordering in `pipeline.rs::flush` is the at-least-once contract; reversing it
   turns a crash into silent data loss.
 - **Never store `llm.chunk` as a trace record.** See ADR_0003.
+- **Never let a rerun target come from the log.** `AIWATCHER_WORKFLOW_RUNNER_URL`
+  is configuration. A `workflow.declared` naming its own callback URL would be a
+  request-forgery primitive posted by anything that can reach ingest — aiwatcher
+  runs inside the cluster, so "POST this url" is a request to reach the
+  cluster's internal network on the caller's behalf. `RerunBody` is
+  `deny_unknown_fields` so an attempt to supply one is a 400 rather than a
+  silently ignored field that reads as accepted.
+- **Never wire a no-op workflow runner.** `NullExporter` is the right shape for
+  telemetry aiwatcher already has and the wrong shape here: a null runner would
+  answer `202 Accepted` for work no orchestrator was ever asked to do. Absence
+  reaches the caller as a 501 naming the variable.
+- **Never let a `workflow.*` event reach span assembly.** Same guard as the
+  evaluation one, `EventType::forms_span`, and a different reason: a topology is
+  a shape with no duration, and a waterfall showing one would be showing the
+  moment a producer got round to describing itself. The node executions drawn
+  against that shape are `step.*`, and those do form spans.
+- **Never store an artifact's content.** The registry stores prompt text because
+  storing it is the point; an artifact is a byte range somebody else already
+  persisted, so aiwatcher keeps the pointer. A producer that inlines a
+  floor-plan PDF into `data` puts it in the durable log and in every
+  projector's memory. An artifact with no `uri` is dropped rather than listed
+  as a row nobody can open.
+- **Never draw an inferred edge as a message.** Declared edges are what the
+  orchestrator promised; `agent.message` is what was said. `workflow-graph.tsx`
+  keeps them visually distinct and never merges them, because sequence is not
+  communication and the whole reason somebody opens that view is to find out
+  whether the agents talk.
 - **Never let an `eval.*` event reach span assembly.** The guard is
   `EventType::forms_span`, checked first in `SpanAssembler::ingest`. A report
   has a start, an end and a duration and is still not a trace: its payload is a

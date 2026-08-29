@@ -34,6 +34,35 @@ use aiwatcher_projector::LiveHub;
 use crate::error::ApiResult;
 use crate::state::AppState;
 
+/// What a subscriber is watching.
+///
+/// One enum rather than a second optional filter argument: the two scopes are
+/// mutually exclusive, and a pair of `Option<String>`s would make "both set"
+/// representable and therefore something every call site has to think about.
+///
+/// [`Self::WorkflowRun`] is the reason `LiveEvent` carries `workflow_run_id`.
+/// Resolving a workflow to a set of run ids at subscribe time would look
+/// equivalent and is not: a stage that starts *after* the browser connected —
+/// which, in a stage-per-pod orchestrator, is most of them — would be filtered
+/// out by the set the subscriber was given.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum Scope {
+    #[default]
+    Everything,
+    Run(String),
+    WorkflowRun(String),
+}
+
+impl Scope {
+    fn admits(&self, event: &LiveEvent) -> bool {
+        match self {
+            Self::Everything => true,
+            Self::Run(run_id) => &event.run_id == run_id,
+            Self::WorkflowRun(execution_id) => event.workflow_run_id.as_ref() == Some(execution_id),
+        }
+    }
+}
+
 /// A frame in the live stream.
 ///
 /// `Caught` is not decoration: it is what lets the panel switch from "loading
@@ -86,7 +115,7 @@ impl LiveFrame {
 pub async fn catch_up(
     state: &AppState,
     from: Option<&Checkpoint>,
-    run_filter: Option<&str>,
+    scope: &Scope,
 ) -> ApiResult<(Vec<LiveFrame>, Checkpoint)> {
     let Some(from) = from else {
         // No cursor means live only. The panel fetches history with
@@ -126,7 +155,7 @@ pub async fn catch_up(
 
     let mut boundary = from.clone();
     for event in missed {
-        if !matches_run(&event, run_filter) {
+        if !scope.admits(&event) {
             continue;
         }
         boundary = event.checkpoint.clone();
@@ -159,11 +188,11 @@ async fn replay_from_log(state: &AppState, from: &Checkpoint) -> ApiResult<Vec<L
 pub fn live_tail(
     live: &LiveHub,
     after: Checkpoint,
-    run_filter: Option<String>,
+    scope: Scope,
 ) -> impl Stream<Item = LiveFrame> + Send + use<> {
     live.stream().filter_map(move |result| {
         let after = after.clone();
-        let run_filter = run_filter.clone();
+        let scope = scope.clone();
         async move {
             let event = match result {
                 Ok(event) => event,
@@ -179,7 +208,7 @@ pub fn live_tail(
                 // Already delivered during catch-up.
                 return None;
             }
-            if !matches_run(&event, run_filter.as_deref()) {
+            if !scope.admits(&event) {
                 return None;
             }
             Some(LiveFrame::Event(Box::new(event)))
@@ -201,10 +230,6 @@ pub fn as_sse(
             }
         }
     })
-}
-
-fn matches_run(event: &LiveEvent, run_filter: Option<&str>) -> bool {
-    run_filter.is_none_or(|run_id| event.run_id == run_id)
 }
 
 #[cfg(test)]
@@ -240,11 +265,17 @@ mod tests {
     }
 
     fn live_event(position: u64, run_id: &str) -> LiveEvent {
+        in_execution(position, run_id, None)
+    }
+
+    fn in_execution(position: u64, run_id: &str, execution: Option<&str>) -> LiveEvent {
         let trace_id = TraceId::derive(run_id);
         LiveEvent {
             checkpoint: Checkpoint::from_global_position(position),
             run_id: run_id.to_owned(),
             conversation_id: None,
+            workflow_id: execution.map(|_| "house-import".to_owned()),
+            workflow_run_id: execution.map(ToOwned::to_owned),
             trace_id,
             span_id: SpanId::derive(trace_id, "run"),
             event_type: EventType::LlmChunk,
@@ -291,7 +322,7 @@ mod tests {
     #[tokio::test]
     async fn the_live_tail_skips_what_catch_up_already_delivered() {
         let hub = LiveHub::default();
-        let tail = live_tail(&hub, Checkpoint::from_global_position(2), None);
+        let tail = live_tail(&hub, Checkpoint::from_global_position(2), Scope::Everything);
         futures::pin_mut!(tail);
 
         for position in 1..=4 {
@@ -314,7 +345,11 @@ mod tests {
     #[tokio::test]
     async fn a_run_filter_keeps_other_runs_out_of_the_stream() {
         let hub = LiveHub::default();
-        let tail = live_tail(&hub, Checkpoint::beginning(), Some("run-a".to_owned()));
+        let tail = live_tail(
+            &hub,
+            Checkpoint::beginning(),
+            Scope::Run("run-a".to_owned()),
+        );
         futures::pin_mut!(tail);
 
         for (position, run) in [(1, "run-b"), (2, "run-a"), (3, "run-b")] {
@@ -327,5 +362,47 @@ mod tests {
             panic!("expected an event frame");
         };
         assert_eq!(event.run_id, "run-a");
+    }
+
+    #[tokio::test]
+    async fn an_execution_filter_follows_a_workflow_across_four_runs() {
+        // The case a run filter cannot express, and the reason `LiveEvent`
+        // carries `workflow_run_id`: a stage-per-pod orchestrator publishes
+        // each stage from a different run, and the pod that has not started
+        // yet is the one worth watching.
+        let hub = LiveHub::default();
+        let tail = live_tail(
+            &hub,
+            Checkpoint::beginning(),
+            Scope::WorkflowRun("exec-7".to_owned()),
+        );
+        futures::pin_mut!(tail);
+
+        for (position, run, execution) in [
+            (1, "run-other", Some("exec-9")),
+            (2, "run-acquire", Some("exec-7")),
+            (3, "run-plain", None),
+            (4, "run-normalize", Some("exec-7")),
+        ] {
+            aiwatcher_core::ports::LivePublisher::publish(
+                &hub,
+                in_execution(position, run, execution),
+            )
+            .await
+            .expect("publishes");
+        }
+
+        let mut seen = Vec::new();
+        for _ in 0..2 {
+            let LiveFrame::Event(event) = tail.next().await.expect("a frame") else {
+                panic!("expected an event frame");
+            };
+            seen.push(event.run_id.clone());
+        }
+        assert_eq!(
+            seen,
+            vec!["run-acquire", "run-normalize"],
+            "two different runs, one execution"
+        );
     }
 }

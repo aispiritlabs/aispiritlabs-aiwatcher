@@ -30,10 +30,13 @@ than the backend keeps working.
 | `step.started` | start | opens a step span — kind from `data.step_type` |
 | `step.completed` | end (ok) | closes it |
 | `step.failed` | end (error) | closes it, status `Error` |
+| `agent.message` | point | one agent addressing another — a span event, and an edge on the workflow graph |
 | `eval.started` | start | opens an evaluation report — **no span** |
 | `eval.case` | point | one scored case — **no span** |
 | `eval.completed` | end (ok) | closes the report, status `succeeded` |
 | `eval.failed` | end (error) | closes it, status `failed` |
+| `workflow.declared` | point | the shape of an orchestration — **no span** |
+| `artifact.produced` | point | a pointer to what a node produced — **no span** |
 
 ## Matching a start to its end
 
@@ -159,10 +162,69 @@ Anything else in `data` is stored and displayed but not interpreted.
 | `top_k` | `aiwatcher.step.top_k` |
 | `candidate_count` | `aiwatcher.step.candidate_count` |
 | `score` | `aiwatcher.step.score` |
+| `node` / `node_id` / `stage` / `task` | which node of a declared graph this step is — see below |
 
 The retrieval fields have no settled OpenTelemetry convention yet, so they sit
 in the aiwatcher namespace rather than squatting on a `gen_ai.*` name that may
 come to mean something else.
+
+### `workflow.declared`, `artifact.produced`, `agent.message`
+
+The three events the workflow graph is folded from. None of the first two
+produces a span — a topology is a document and an artifact is a pointer, and
+neither is something that happened to a request. The *node executions* drawn
+against that shape are `step.*`, and those do.
+
+A workflow event needs `workflow_id` on the envelope, and `workflow_run_id`
+when one execution spans several processes. Omit the second and the run *is*
+the execution, which is right whenever the whole workflow runs in one process.
+
+On `workflow.declared`:
+
+| Field | Becomes |
+|-------|---------|
+| `name` / `workflow_name` | the display name, defaulting to the id |
+| `version` / `workflow_version` | a content hash the producer computes; a changed version replaces the stored shape |
+| `nodes` | the graph's nodes: `{id, name?, kind?, agent?}` objects, or bare strings |
+| `edges` | the graph's edges: `{from, to, label?}` objects, or `[from, to]` pairs |
+
+Declaring is **idempotent** — that is what the version is for — so publish it
+on every execution. A declaration is bounded by retention like everything else
+on the log, and re-declaring is what keeps the catalog alive across eviction.
+A declaration carrying *no* nodes does not wipe the stored shape: that is a
+producer saying the workflow exists, not one saying it is empty.
+
+A node the declaration never mentions is kept and flagged, not dropped. A graph
+that has drifted from the code running it is the case worth seeing.
+
+On `artifact.produced`:
+
+| Field | Becomes |
+|-------|---------|
+| `uri` / `url` / `path` | where the bytes are — **required**; an artifact without one is dropped |
+| `name` / `artifact` | the display name, defaulting to the uri's last segment |
+| `node` | which node produced it |
+| `media_type` / `content_type` | the type |
+| `size_bytes` / `size` | the size |
+| `digest` / `sha256` | a content hash, when the producer computed one |
+
+**The bytes never travel.** aiwatcher keeps the pointer because a pointer is
+bounded and a floor-plan PDF is not; a producer that inlines content is putting
+it in the durable log and in memory.
+
+On `agent.message`:
+
+| Field | Becomes |
+|-------|---------|
+| `to` / `recipient` | the receiving agent — **required** |
+| `from` / `sender` | the sending agent, defaulting to the envelope's `agent_id` |
+| `kind` / `message_type` | `handoff`, `request`, `response`, `broadcast`, or anything a producer coins |
+| `channel` | the queue, topic or file it went over |
+
+A message missing either end is dropped rather than drawn pointing at nothing.
+This is the only event that records agents talking to *each other*: a trace
+records nesting, and two agents exchanging work through a queue nest inside
+nothing at all.
 
 ### `run.*`
 

@@ -22,8 +22,8 @@ use aiwatcher_core::ports::{
 use aiwatcher_core::{Checkpoint, EventEnvelope, EventType, Sdk, Source};
 use aiwatcher_projector::pipeline::Outputs;
 use aiwatcher_projector::{
-    EvaluationStatus, InMemoryDeadLetters, LiveHub, Projector, ProjectorConfig, ReadModel,
-    RunStatus,
+    EvaluationStatus, InMemoryDeadLetters, LiveHub, NodeStatus, Projector, ProjectorConfig,
+    ReadModel, RunStatus,
 };
 use aiwatcher_trace::AssemblerConfig;
 
@@ -799,6 +799,101 @@ async fn an_evaluation_report_reaches_the_projection_and_never_the_trace_store()
         harness.read_model.is_empty().await,
         "and it is not a run either"
     );
+
+    harness.stop().await;
+}
+
+/// A workflow graph is folded from the log, and the declaration that shapes it
+/// never reaches the trace store.
+///
+/// The mirror of the evaluation test above, and the difference is what makes
+/// the feature: an evaluation forms no span *and* no run, while a workflow's
+/// nodes form both. Only the shape and the artifact pointer are withheld.
+#[tokio::test]
+async fn a_declared_workflow_is_folded_into_a_graph_and_never_into_a_trace() {
+    let harness = Harness::start().await;
+
+    let in_execution = |event_id: &str, event_type: EventType, run_id: &str, data| {
+        let mut envelope = identified_event(event_id, event_type, run_id, Some("importer"), data);
+        envelope.workflow_id = Some("house-import".to_owned());
+        envelope.workflow_run_id = Some("exec-1".to_owned());
+        envelope
+    };
+
+    harness
+        .bus
+        .append(vec![
+            in_execution(
+                "wf-1",
+                EventType::WorkflowDeclared,
+                "run-driver",
+                json!({
+                    "name": "House import",
+                    "nodes": [{ "id": "acquire" }, { "id": "normalize" }],
+                    "edges": [{ "from": "acquire", "to": "normalize" }],
+                }),
+            ),
+            // The first stage, in its own pod and therefore its own run.
+            in_execution(
+                "wf-2",
+                EventType::StepStarted,
+                "run-acquire",
+                json!({ "node": "acquire", "call_id": "a1", "step_type": "chain" }),
+            ),
+            in_execution(
+                "wf-3",
+                EventType::ArtifactProduced,
+                "run-acquire",
+                json!({ "node": "acquire", "uri": "s3://planner-flyte/acquire.json" }),
+            ),
+            in_execution(
+                "wf-4",
+                EventType::StepCompleted,
+                "run-acquire",
+                json!({ "node": "acquire", "call_id": "a1", "step_type": "chain" }),
+            ),
+            in_execution(
+                "wf-5",
+                EventType::AgentMessage,
+                "run-acquire",
+                json!({ "to": "floor-plan", "kind": "handoff" }),
+            ),
+        ])
+        .await
+        .expect("appends");
+
+    harness
+        .until("the first node to finish", || async {
+            harness
+                .read_model
+                .workflow_execution("exec-1")
+                .await
+                .is_some_and(|detail| detail.summary.nodes_succeeded == 1)
+        })
+        .await;
+
+    let detail = harness
+        .read_model
+        .workflow_execution("exec-1")
+        .await
+        .expect("the execution");
+
+    assert_eq!(detail.nodes.len(), 2);
+    assert_eq!(detail.nodes[0].node_id, "acquire");
+    assert_eq!(detail.nodes[0].artifacts.len(), 1);
+    assert_eq!(
+        detail.nodes[1].status,
+        NodeStatus::Pending,
+        "the stage nothing has started is the interesting one"
+    );
+    assert_eq!(detail.messages.len(), 1);
+    assert_eq!(detail.messages[0].to, "floor-plan");
+
+    // The node execution is a span; the shape, the pointer and the handoff are
+    // not spans of their own.
+    let written = harness.traces.written().await;
+    let names: Vec<&str> = written.iter().map(|span| span.name.as_str()).collect();
+    assert_eq!(names, vec!["chain"], "got {names:?}");
 
     harness.stop().await;
 }

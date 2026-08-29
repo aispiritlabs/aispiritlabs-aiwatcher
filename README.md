@@ -186,7 +186,7 @@ gain.
 Every view below, with screenshots of it against real data and what each one is
 for: [EXAMPLES.md](EXAMPLES.md).
 
-Five views, all served from aiwatcher's own read model — except Prompts, which
+Six views, all served from aiwatcher's own read model — except Prompts, which
 reads the registry:
 
 - **Runs** — the flat list, filterable.
@@ -197,6 +197,13 @@ reads the registry:
   selection is in the URL. Messages group by span, agent or event type.
 - **Metrics** — tokens, latency percentiles, cache hit rate, and ranked
   breakdowns by model, agent and tool.
+- **Workflows** — the level above a run: pick an orchestration, see its
+  executions, and watch one as a graph. Stages carry their status, duration,
+  agents and artifacts; a stage nothing has started is drawn dim rather than
+  omitted, which is the whole reason the topology rides the log. Messages
+  between agents are drawn as their own kind of edge, never merged with the
+  declared ones — sequence is not communication. Rerun asks a configured
+  orchestrator to run it again; unconfigured, it says which variable is unset.
 - **Evaluation** — suites, reports, per-case scores, and each report against the
   previous one on the same dataset. A mean that improved while a case regressed
   is the thing this view exists to show.
@@ -282,6 +289,12 @@ that matters in every one of them is what would make the decision wrong.
   ([0008](docs/ADR/ADR_0008_FLOW_QUERY_SURFACE.md)). The Query tab's pipeline is
   lexed, whitelisted and turned into objects through an explicit `match` — no
   `eval`, and no name from a query ever becomes a callable.
+- **A workflow graph is declared on the log, not read from an orchestrator**
+  ([0012](docs/ADR/ADR_0012_WORKFLOW_GRAPH.md)). `workflow.declared` carries the
+  shape, `step.*` executes a node of it, and `workflow_run_id` joins the stages
+  a per-pod orchestrator scatters across four runs. That is what makes a stage
+  nothing has started drawable, and what makes swapping the orchestrator a
+  change aiwatcher never notices.
 
 The full index, including trace storage and the local-Kubernetes guards, is in
 [docs/ADR/README.md](docs/ADR/README.md).

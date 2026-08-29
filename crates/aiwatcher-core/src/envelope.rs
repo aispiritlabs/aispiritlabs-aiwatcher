@@ -144,6 +144,19 @@ pub struct EventEnvelope {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow_id: Option<String>,
 
+    /// One execution of that orchestration.
+    ///
+    /// `workflow_id` names the graph; this names the traversal of it. They are
+    /// separate because an execution can outlive a run: a stage-per-pod
+    /// orchestrator gives every stage its own process and therefore its own
+    /// `run_id`, and without this field there is nothing joining the four runs
+    /// of one import back into one graph.
+    ///
+    /// Defaulted rather than required — see [`Self::workflow_run`]. A producer
+    /// that runs a whole workflow in one process never has to set it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_run_id: Option<String>,
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
 
@@ -193,6 +206,7 @@ impl EventEnvelope {
             run_id: run_id.into(),
             conversation_id: None,
             workflow_id: None,
+            workflow_run_id: None,
             agent_id: None,
             sequence: None,
             trace_id: None,
@@ -240,6 +254,31 @@ impl EventEnvelope {
             .or_else(|| self.data.get("workflow_name"))
             .and_then(serde_json::Value::as_str)
             .map(ToOwned::to_owned)
+    }
+
+    /// Which execution of the workflow this event belongs to.
+    ///
+    /// Falls back to the payload the way [`Self::workflow`] does, and then to
+    /// `run_id`: a workflow that runs start to finish in one process *is* its
+    /// own execution, so the common case needs no field at all. Deliberately
+    /// **not** `correlation_id`, which is generated per run when nothing seeds
+    /// it and would put every stage in an execution of its own — and would not
+    /// even be stable across a redelivery that carried no `event_id`.
+    ///
+    /// Returns `None` when there is no workflow, so an ordinary run does not
+    /// appear in the graph projection as an execution of nothing.
+    #[must_use]
+    pub fn workflow_run(&self) -> Option<String> {
+        self.workflow()?;
+        if let Some(id) = &self.workflow_run_id {
+            return Some(id.clone());
+        }
+        let from_payload = self
+            .data
+            .get("workflow_run_id")
+            .or_else(|| self.data.get("workflow_run"))
+            .and_then(serde_json::Value::as_str);
+        Some(from_payload.map_or_else(|| self.run_id.clone(), ToOwned::to_owned))
     }
 
     /// Reject what cannot be recorded. Everything else is repaired in
@@ -296,6 +335,7 @@ impl EventEnvelope {
     ) -> RecordedEvent {
         let message_id = self.event_id.clone().unwrap_or_else(MessageId::generate);
         let workflow_id = self.workflow();
+        let workflow_run_id = self.workflow_run();
         let span_key = self
             .event_type
             .span_key(self.call_id(), self.agent_id.as_deref());
@@ -334,6 +374,7 @@ impl EventEnvelope {
                 run_id: self.run_id,
                 conversation_id: self.conversation_id,
                 workflow_id,
+                workflow_run_id,
                 agent_id: self.agent_id,
                 sequence: self.sequence,
                 span_key,
@@ -374,6 +415,10 @@ pub struct RecordedMetadata {
     pub conversation_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow_id: Option<String>,
+    /// Resolved by [`EventEnvelope::workflow_run`]. `Some` exactly when
+    /// `workflow_id` is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_run_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -564,6 +609,75 @@ mod tests {
             recorded.metadata.workflow_id.as_deref(),
             Some("checkout-v2")
         );
+    }
+
+    #[test]
+    fn a_workflow_that_runs_in_one_process_is_its_own_execution() {
+        // The common case: no field set, and the run is the traversal. This is
+        // what keeps `workflow_run_id` off the wire for every producer that
+        // never fans out.
+        let mut wire = envelope(EventType::RunStarted);
+        wire.workflow_id = Some("house-import".to_owned());
+
+        let recorded = wire.record(1, 1, datetime!(2026-08-28 09:00:00 UTC), None);
+
+        assert_eq!(recorded.metadata.workflow_run_id.as_deref(), Some("run-1"));
+    }
+
+    #[test]
+    fn four_stages_in_four_processes_join_on_one_workflow_run_id() {
+        // A stage-per-pod orchestrator gives each stage its own `run_id`. The
+        // graph is only drawable because they agree on this one field.
+        let stages = ["acquire", "normalize", "analyze", "persist"];
+        let joined: Vec<_> = stages
+            .iter()
+            .enumerate()
+            .map(|(index, stage)| {
+                let mut wire = EventEnvelope::new(
+                    EventType::StepStarted,
+                    format!("run-{stage}"),
+                    datetime!(2026-08-28 09:00:00 UTC),
+                    Source::new("planner-import-service", Sdk::Python),
+                );
+                wire.workflow_id = Some("house-import".to_owned());
+                wire.workflow_run_id = Some("exec-7".to_owned());
+                wire.record(1, index as u64, datetime!(2026-08-28 09:00:01 UTC), None)
+            })
+            .collect();
+
+        assert_eq!(joined.len(), 4);
+        for stage in &joined {
+            assert_eq!(stage.metadata.workflow_run_id.as_deref(), Some("exec-7"));
+        }
+        // And they are still four runs, which is what the runs list shows.
+        let runs: std::collections::BTreeSet<_> = joined
+            .iter()
+            .map(|stage| stage.metadata.run_id.as_str())
+            .collect();
+        assert_eq!(runs.len(), 4);
+    }
+
+    #[test]
+    fn an_execution_id_is_read_from_the_payload_when_the_envelope_omits_it() {
+        // Same fallback shape as `workflow`, for the same reason: a producer
+        // should be able to light the view up without an SDK release.
+        let mut wire = envelope(EventType::StepStarted);
+        wire.data = serde_json::json!({ "workflow": "house-import", "workflow_run_id": "exec-9" });
+
+        let recorded = wire.record(1, 1, datetime!(2026-08-28 09:00:00 UTC), None);
+
+        assert_eq!(recorded.metadata.workflow_run_id.as_deref(), Some("exec-9"));
+    }
+
+    #[test]
+    fn a_run_belonging_to_no_workflow_is_an_execution_of_nothing() {
+        // Defaulting to `run_id` unconditionally would enrol every ordinary run
+        // in the graph projection as a one-node workflow with no name.
+        let recorded =
+            envelope(EventType::RunStarted).record(1, 1, datetime!(2026-08-28 09:00:00 UTC), None);
+
+        assert!(recorded.metadata.workflow_id.is_none());
+        assert!(recorded.metadata.workflow_run_id.is_none());
     }
 
     #[test]

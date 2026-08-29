@@ -26,6 +26,9 @@ pub enum ApiError {
     #[error("this instance has no prompt registry configured (AIWATCHER_PROMPT_STORE)")]
     RegistryDisabled,
 
+    #[error("this instance has no workflow runner configured (AIWATCHER_WORKFLOW_RUNNER)")]
+    RunnerDisabled,
+
     #[error("{what} is too large: {size} bytes, over the {limit} byte limit")]
     TooLarge {
         what: &'static str,
@@ -35,6 +38,12 @@ pub enum ApiError {
 
     #[error(transparent)]
     Registry(#[from] aiwatcher_prompts::RegistryError),
+
+    /// A rerun the orchestrator would not take. Distinct from every other
+    /// variant here in one way that matters: it is the only failure that is
+    /// about work aiwatcher asked somebody else to do.
+    #[error("the workflow runner refused the rerun: {0}")]
+    Runner(aiwatcher_core::ports::PortError),
 
     #[error(transparent)]
     Bus(#[from] aiwatcher_bus::BusError),
@@ -62,6 +71,10 @@ impl ApiError {
             // "you may not" from "nobody can here", which is the difference
             // between a permission problem and a configuration one.
             Self::RegistryDisabled => (StatusCode::NOT_IMPLEMENTED, "registry_disabled"),
+            // Same reasoning, and the message names the variable to set. A
+            // null runner that answered 202 would be worse than this: it would
+            // report success for a rerun that never happened.
+            Self::RunnerDisabled => (StatusCode::NOT_IMPLEMENTED, "runner_disabled"),
             Self::TooLarge { .. } => (StatusCode::PAYLOAD_TOO_LARGE, "too_large"),
             Self::LogUnavailable(_) => (StatusCode::SERVICE_UNAVAILABLE, "log_unavailable"),
             Self::Bus(error) if error.is_retryable() => {
@@ -69,6 +82,14 @@ impl ApiError {
             }
             Self::Bus(_) => (StatusCode::BAD_REQUEST, "bad_request"),
             Self::Registry(error) => registry_parts(error),
+            // The same retryable/not split the registry makes, for the same
+            // reason: an orchestrator that is down is a 503 worth repeating,
+            // and one that refused the request is a 502 that will refuse it
+            // identically forever.
+            Self::Runner(error) if error.is_retryable() => {
+                (StatusCode::SERVICE_UNAVAILABLE, "runner_unavailable")
+            }
+            Self::Runner(_) => (StatusCode::BAD_GATEWAY, "runner_rejected"),
         }
     }
 }

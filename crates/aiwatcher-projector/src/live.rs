@@ -170,6 +170,8 @@ mod tests {
             checkpoint: Checkpoint::from_global_position(position),
             run_id: "run-1".to_owned(),
             conversation_id: None,
+            workflow_id: None,
+            workflow_run_id: None,
             trace_id,
             span_id: SpanId::derive(trace_id, "run"),
             event_type: EventType::LlmChunk,
