@@ -15,12 +15,18 @@
 # Build context is the repo root, not deploy/ — the panel's package-lock.json
 # has to come from apps/panel.
 
-FROM node:22-alpine AS build
+FROM node:24-alpine AS build
 WORKDIR /src
 
 # Manifests first, so a source-only change reuses the install layer.
 COPY apps/panel/package.json apps/panel/package-lock.json ./
-RUN npm ci
+# --ignore-scripts states what npm 11 (which node:24 ships) already does:
+# it skips a dependency's install script unless it is in `allowScripts`, and
+# warns on every install about the one it skipped. The only one here is
+# esbuild's postinstall, which validates a binary that arrives through
+# @esbuild/linux-* as an optional dependency anyway — the vite build does not
+# need it. Neither this package nor the SDK has an install script of its own.
+RUN npm ci --ignore-scripts
 
 COPY apps/panel/ ./
 # `npm run build` is vite followed by a full `tsc -b` project check, so a type

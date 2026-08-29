@@ -20,10 +20,11 @@ COPY crates/aiwatcher-core/Cargo.toml crates/aiwatcher-core/
 COPY crates/aiwatcher-bus/Cargo.toml crates/aiwatcher-bus/
 COPY crates/aiwatcher-trace/Cargo.toml crates/aiwatcher-trace/
 COPY crates/aiwatcher-prompts/Cargo.toml crates/aiwatcher-prompts/
+COPY crates/aiwatcher-runner/Cargo.toml crates/aiwatcher-runner/
 COPY crates/aiwatcher-projector/Cargo.toml crates/aiwatcher-projector/
 COPY crates/aiwatcher-api/Cargo.toml crates/aiwatcher-api/
 COPY crates/aiwatcher-server/Cargo.toml crates/aiwatcher-server/
-RUN for crate in core bus trace prompts projector api server; do \
+RUN for crate in core bus trace prompts runner projector api server; do \
       mkdir -p "crates/aiwatcher-$crate/src" && \
       echo "" > "crates/aiwatcher-$crate/src/lib.rs"; \
     done \
