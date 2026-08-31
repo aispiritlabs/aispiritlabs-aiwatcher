@@ -20,5 +20,7 @@ final readonly class Plan
         public ?Dataset $dataset,
         /** From `to_output(truncate:)`. The panel shortens long cells unless told not to. */
         public bool $truncate,
+        /** The effective relative period after the script overrides the panel, if it does. */
+        public ?int $windowSeconds,
     ) {}
 }

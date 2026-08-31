@@ -59,6 +59,13 @@ just run-laser     # server on the Laser backend
 just test-laser    # six integration tests against the real broker
 ```
 
+With an identity provider, for single sign-on:
+
+```bash
+just authentik-up  # authentik in Docker: server, worker, PostgreSQL, Redis
+just run-sso       # the server as an OIDC relying party against it
+```
+
 With an object store, for the prompt registry:
 
 ```bash
@@ -89,6 +96,7 @@ Crates, in dependency order. A crate may only depend on ones above it.
 | `aiwatcher-trace` | `SpanAssembler` and the OTLP/JSON exporters |
 | `aiwatcher-prompts` | The prompt registry: content-addressed versions, optimisation records, and the RustFS/S3 and filesystem adapters behind `ObjectStore`. Includes a hand-written SigV4 signer. |
 | `aiwatcher-runner` | The workflow rerun dispatcher: one HTTP POST to one configured endpoint, behind `core::ports::WorkflowRunner`. The only thing here that asks another system to do work. |
+| `aiwatcher-auth` | Single sign-on: OIDC discovery, a JWKS cache, the authorization-code flow with PKCE, HMAC-signed session cookies, authentik's forward-auth headers, and the group-to-role mapping. Knows nothing about axum. |
 | `aiwatcher-projector` | The pipeline, live hub, read model, dimension, span, evaluation and workflow-graph folds, dedup, retry, dead letters |
 | `aiwatcher-api` | axum router: REST, SSE, WebSocket, OpenAPI |
 | `aiwatcher-server` | Config, wiring, graceful shutdown. The only crate that knows every implementation exists. |
@@ -181,7 +189,22 @@ area.
    not transport, which is why the live path stays in Rust and there is no
    export.
 
-11. **A workflow graph is declared, not discovered**
+11. **Signing in happens here, and the session is a cookie this server signs**
+   ([ADR_0013](docs/ADR/ADR_0013_SINGLE_SIGN_ON.md)). `AIWATCHER_AUTH_MODE` is
+   `none | oidc | proxy` and defaults to `none` — a release that started
+   refusing requests would be an upgrade that took an installation down. The
+   panel's two most important routes are an SSE stream and a WebSocket, and a
+   browser can set headers on neither, so the authorization-code exchange runs
+   *in this process*, the provider's tokens are read once and dropped, and what
+   the browser keeps is an HttpOnly cookie holding a signed `Identity`. There
+   is no session store: the cookie is self-contained, which means the session
+   TTL *is* the revocation window. Roles are `viewer | editor | admin`, mapped
+   from authentik group names, and `admin` guards exactly one route — the
+   rerun. `proxy` mode reads the outpost's headers instead, which is one
+   variable where planner's ingress already authenticates, and trusts the
+   network rather than a signature.
+
+12. **A workflow graph is declared, not discovered**
    ([ADR_0012](docs/ADR/ADR_0012_WORKFLOW_GRAPH.md)). planner runs its house
    import as four Flyte stages *and* as the same four functions in-process,
    depending on `settings.flyte_enabled`. So aiwatcher never asks an
@@ -280,6 +303,53 @@ not an SDK release.
 
 ## Guardrails
 
+- **Never let a route decide for itself whether it needs a caller.** The
+  authentication layer is applied once, in front of the whole router in
+  `routes::router`, with an exception list in `auth::is_public` — the health
+  probes and the sign-in routes, which cannot require a session in order to
+  establish one. A route added later is then authenticated by default rather
+  than by remembering to say so, and the one somebody forgets is not the one
+  that leaks. What the layer does *not* decide is whether a caller may perform
+  the operation: that is a `Role` check in the handler, because the answer
+  differs per handler and a table of paths in a middleware drifts from the
+  routes it guards.
+- **Never accept `AIWATCHER_AUTH_MODE=proxy` without a network boundary.** In
+  that mode a header is a claim, so any pod that can reach port 8080 can assert
+  it is an admin. The chart refuses to render it without `networkPolicy.enabled`
+  and says why. `oidc` is the mode where the identity is proved to this process
+  rather than asserted to it, and it is what a deployment that needs a real
+  boundary uses.
+- **Never let an ingest token be more than an editor.** `AIWATCHER_AUTH_INGEST_TOKENS`
+  is a shared secret sitting in an agent's environment. It exists because a
+  producer reaches the Service directly, never passes the ingress that
+  authenticates a browser, and cannot complete an interactive sign-in — not so
+  that a leaked environment file can ask an orchestrator to run something. The
+  role is hard-coded in `identity_from_ingest_token` and never comes from the
+  group mapping.
+- **Never take the issuer from the discovery document.** `ProviderMetadata::discover`
+  compares what the document declares against what was configured and refuses a
+  mismatch. Every token accepted afterwards is validated against that issuer, so
+  believing the document would hand the choice to whoever answered the request.
+- **Never pick a JWT's algorithm from its header alone.** `oidc::algorithms_for`
+  derives the permitted set from the *key* and uses the header only to narrow,
+  and refuses a symmetric key in a provider's key set outright. Taking `alg`
+  from the header and the key by `kid` is the confusion attack where an RSA
+  public key is handed back as an HMAC secret.
+- **Never start serving when the identity provider could not be reached.**
+  `Authenticator::connect` retries while it comes up — in a cluster the two
+  start in whatever order the scheduler picks — and then fails the start-up.
+  The only other thing an instance could do is serve unauthenticated, which is
+  the failure the whole crate exists to prevent.
+- **Never widen the session cookie.** `HttpOnly` keeps it out of JavaScript,
+  `SameSite=Lax` is what survives the redirect back from the provider (`Strict`
+  drops it and the sign-in loops with no error anywhere), and `Secure` is
+  derived from the redirect URL's scheme rather than defaulted, because a
+  `Secure` cookie is simply not stored over http and an instance served that
+  way would sign people in and then behave as though nobody had.
+- **Never follow a `next=` that is not a path on this application.**
+  `auth::safe_next` refuses anything that is not one leading slash — an open
+  redirect on a sign-in route is how a phishing link gets to start on the real
+  host.
 - **Never commit the checkpoint before the durable write succeeds.** That single
   ordering in `pipeline.rs::flush` is the at-least-once contract; reversing it
   turns a crash into silent data loss.

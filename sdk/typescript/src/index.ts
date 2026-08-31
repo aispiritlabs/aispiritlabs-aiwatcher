@@ -55,6 +55,16 @@ export class NullTransport implements Transport {
 
 export interface HttpTransportOptions {
   baseUrl: string;
+  /**
+   * Sent as `Authorization: Bearer`.
+   *
+   * Needed only against an instance with single sign-on on. A producer runs
+   * where nobody can complete an interactive login and reaches the server
+   * directly, so it carries a token of its own — which grants the editor role
+   * and never admin. Defaults to `AIWATCHER_TOKEN` where there is an
+   * environment to read it from.
+   */
+  token?: string;
   batchSize?: number;
   flushIntervalMs?: number;
   /**
@@ -73,6 +83,7 @@ export interface HttpTransportOptions {
  */
 export class HttpTransport implements Transport {
   readonly #url: string;
+  readonly #token: string | undefined;
   readonly #batchSize: number;
   readonly #flushIntervalMs: number;
   readonly #queueSize: number;
@@ -82,6 +93,13 @@ export class HttpTransport implements Transport {
 
   constructor(options: HttpTransportOptions) {
     this.#url = `${options.baseUrl.replace(/\/$/, '')}/api/v1/events`;
+    // `globalThis.process` rather than `process`: this runs in a browser as
+    // well, and reaching for a bare `process` there is a ReferenceError rather
+    // than an undefined.
+    this.#token =
+      options.token ??
+      (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env
+        ?.AIWATCHER_TOKEN;
     this.#batchSize = options.batchSize ?? 64;
     this.#flushIntervalMs = options.flushIntervalMs ?? 1000;
     this.#queueSize = options.queueSize ?? 10_000;
@@ -123,12 +141,18 @@ export class HttpTransport implements Transport {
     try {
       await fetch(this.#url, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: {
+          'content-type': 'application/json',
+          ...(this.#token ? { authorization: `Bearer ${this.#token}` } : {}),
+        },
         body: JSON.stringify({ events: batch }),
         keepalive: true,
       });
     } catch (error) {
-      // Telemetry must never take the agent down with it.
+      // Telemetry must never take the agent down with it. A 401 is not thrown
+      // by `fetch` and lands nowhere: it means the instance has single sign-on
+      // on and this producer has no token, which is a variable to set rather
+      // than a network problem to wait out.
       this.#dropped += batch.length;
       console.warn(`[aiwatcher] dropped ${batch.length} events`, error);
     }
@@ -158,6 +182,8 @@ export interface ClientOptions {
   instance?: string;
   transport?: Transport;
   baseUrl?: string;
+  /** See {@link HttpTransportOptions.token}. */
+  token?: string;
 }
 
 export class AiwatcherClient {
@@ -167,7 +193,12 @@ export class AiwatcherClient {
   constructor(options: ClientOptions) {
     this.#transport =
       options.transport ??
-      (options.baseUrl ? new HttpTransport({ baseUrl: options.baseUrl }) : new NullTransport());
+      (options.baseUrl
+        ? new HttpTransport({
+            baseUrl: options.baseUrl,
+            ...(options.token ? { token: options.token } : {}),
+          })
+        : new NullTransport());
     this.#source = {
       service: options.service,
       sdk: 'typescript',

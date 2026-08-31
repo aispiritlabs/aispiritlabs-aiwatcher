@@ -30,6 +30,7 @@ use aiwatcher_prompts::{
     OptimizationRequest, PromptFilter, PromptPage, PublishRequest, Published, Registry,
 };
 
+use crate::auth::Caller;
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 
@@ -54,6 +55,16 @@ pub fn router() -> Router<AppState> {
             get(get_optimization),
         )
         .route("/api/v1/prompts/{name}/rebuild", post(rebuild_prompt))
+}
+
+/// Authoring a prompt is an editor's job, not a viewer's.
+///
+/// Every write in this module goes through here rather than each handler
+/// naming the role, because they are one decision: the registry is the one
+/// store aiwatcher keeps that outlives retention, so what is written into it
+/// is still there long after the run that used it has been evicted.
+fn may_author(caller: &Caller) -> ApiResult<()> {
+    caller.require(aiwatcher_auth::Role::Editor).map(|_| ())
 }
 
 /// The registry, or a 501 explaining that this deployment has none.
@@ -119,8 +130,10 @@ async fn list_prompts(
 )]
 async fn publish_prompt(
     State(state): State<AppState>,
+    caller: Caller,
     Json(request): Json<PublishRequest>,
 ) -> ApiResult<(axum::http::StatusCode, Json<Published>)> {
+    may_author(&caller)?;
     let published = registry(&state)?.publish(request).await?;
     let status = if published.created {
         axum::http::StatusCode::CREATED
@@ -213,9 +226,11 @@ pub struct LabelRequest {
 )]
 async fn set_prompt_label(
     State(state): State<AppState>,
+    caller: Caller,
     Path((name, label)): Path<(String, String)>,
     Json(request): Json<LabelRequest>,
 ) -> ApiResult<Json<PromptHead>> {
+    may_author(&caller)?;
     let name = name_of(&name)?;
     Ok(Json(
         registry(&state)?
@@ -246,9 +261,11 @@ async fn set_prompt_label(
 )]
 async fn record_optimization(
     State(state): State<AppState>,
+    caller: Caller,
     Path(name): Path<String>,
     Json(request): Json<OptimizationRequest>,
 ) -> ApiResult<(axum::http::StatusCode, Json<OptimizationRecord>)> {
+    may_author(&caller)?;
     let name = name_of(&name)?;
     let record = registry(&state)?
         .record_optimization(&name, request)
@@ -302,8 +319,10 @@ async fn get_optimization(
 )]
 async fn rebuild_prompt(
     State(state): State<AppState>,
+    caller: Caller,
     Path(name): Path<String>,
 ) -> ApiResult<Json<PromptHead>> {
+    may_author(&caller)?;
     let name = name_of(&name)?;
     Ok(Json(registry(&state)?.rebuild(&name).await?))
 }

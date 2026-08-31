@@ -6,12 +6,14 @@ use anyhow::{Context, Result};
 use tokio_util::sync::CancellationToken;
 
 use aiwatcher_api::state::{AppState, HealthState};
+use aiwatcher_auth::{AuthMode, Authenticator};
 use aiwatcher_bus::adapters::memory::InMemoryBus;
 use aiwatcher_bus::adapters::wal::FileWal;
 use aiwatcher_bus::{Checkpointer, MessageSink, MessageSource};
 use aiwatcher_core::ports::{
     CompletedSpan, DeadLetterSink, MetricSample, MetricSink, PortResult, TraceStore, WorkflowRunner,
 };
+use aiwatcher_datasets::Registry as DatasetRegistry;
 use aiwatcher_projector::pipeline::Outputs;
 use aiwatcher_projector::{FileDeadLetters, LiveHub, Projector, ProjectorConfig, ReadModel};
 use aiwatcher_prompts::{Registry, RegistryConfig};
@@ -49,14 +51,16 @@ impl MetricSink for NullExporter {
     }
 }
 
-/// The prompt registry, or `None` when this deployment has none.
+/// The authored-data registries, or `None` when this deployment has no object store.
 ///
 /// Built before the server starts listening, and allowed to fail the start-up:
 /// an object store that is misconfigured answers 403 to everything, and
 /// discovering that when somebody saves a prompt puts the failure in front of
 /// the wrong person. `AIWATCHER_PROMPT_STORE=none` is how a deployment says it
 /// does not want one.
-async fn build_prompt_registry(config: &Config) -> Result<Option<Arc<Registry>>> {
+async fn build_registries(
+    config: &Config,
+) -> Result<(Option<Arc<Registry>>, Option<Arc<DatasetRegistry>>)> {
     let registry_config = RegistryConfig {
         prefix: config.prompt_prefix.clone(),
         ..RegistryConfig::default()
@@ -64,8 +68,10 @@ async fn build_prompt_registry(config: &Config) -> Result<Option<Arc<Registry>>>
 
     let store: Arc<dyn aiwatcher_core::prompts::ObjectStore> = match config.prompt_store {
         PromptStoreKind::None => {
-            tracing::info!("AIWATCHER_PROMPT_STORE=none; the prompt registry is disabled");
-            return Ok(None);
+            tracing::info!(
+                "AIWATCHER_PROMPT_STORE=none; the prompt and dataset registries are disabled"
+            );
+            return Ok((None, None));
         }
         PromptStoreKind::Memory => {
             tracing::warn!("the prompt registry is in memory; prompts will not survive a restart");
@@ -107,7 +113,9 @@ async fn build_prompt_registry(config: &Config) -> Result<Option<Arc<Registry>>>
         }
     };
 
-    Ok(Some(Arc::new(Registry::new(store, registry_config))))
+    let prompts = Arc::new(Registry::new(Arc::clone(&store), registry_config));
+    let datasets = Arc::new(DatasetRegistry::new(store, "datasets"));
+    Ok((Some(prompts), Some(datasets)))
 }
 
 /// The workflow runner, or `None`.
@@ -144,6 +152,47 @@ fn build_workflow_runner(config: &Config) -> Result<Option<Arc<dyn WorkflowRunne
             Ok(Some(Arc::new(runner)))
         }
     }
+}
+
+/// The authenticator, or `None` when this deployment has no identity provider.
+///
+/// The same shape as the registry and the runner, and for once absence is not
+/// a 501: `None` here means every caller is anonymous and every role check
+/// passes, which is what `AIWATCHER_AUTH_MODE=none` means. The 501 is reserved
+/// for the sign-in routes, which cannot do anything useful without a provider.
+///
+/// Allowed to fail the start-up, and this is the one place in this file where
+/// that matters most. An instance that could not reach its provider and
+/// started anyway would be an instance serving without authentication, which
+/// is the failure this whole crate exists to prevent — so `connect` retries
+/// while the provider comes up, and then gives up rather than degrading.
+async fn build_authenticator(config: &Config) -> Result<Option<Arc<Authenticator>>> {
+    if config.auth.mode == AuthMode::None {
+        tracing::warn!(
+            "AIWATCHER_AUTH_MODE=none; every caller is anonymous and every role check passes"
+        );
+        return Ok(None);
+    }
+
+    let authenticator = Authenticator::connect(config.auth.clone())
+        .await
+        .context("connecting to the identity provider")?
+        .context("the authentication mode is not none but produced no authenticator")?;
+
+    match config.auth.mode {
+        AuthMode::Proxy => tracing::warn!(
+            username_header = %config.auth.proxy_headers.username,
+            "AIWATCHER_AUTH_MODE=proxy; identity comes from request headers, which is only \
+             sound while nothing but the authenticating proxy can reach this port"
+        ),
+        _ => tracing::info!(
+            issuer = %config.auth.issuer,
+            client_id = %config.auth.client_id,
+            "single sign-on is on"
+        ),
+    }
+
+    Ok(Some(Arc::new(authenticator)))
 }
 
 /// A fully wired instance, ready to serve and to consume.
@@ -358,13 +407,16 @@ pub async fn build(config: Config) -> Result<Runtime> {
         }
     };
 
+    let (prompts, datasets) = build_registries(&config).await?;
     let state = AppState {
         read_model,
         live,
         source,
         sink: config.ingest_enabled.then_some(sink),
-        prompts: build_prompt_registry(&config).await?,
+        prompts,
+        datasets,
         runner: build_workflow_runner(&config)?,
+        auth: build_authenticator(&config).await?,
         health,
     };
 

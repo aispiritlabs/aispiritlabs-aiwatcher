@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import urllib.error
 import urllib.parse
@@ -291,8 +292,14 @@ class PromptRegistry:
     thread.
     """
 
-    def __init__(self, base_url: str, *, timeout: float = 10.0) -> None:
+    def __init__(self, base_url: str, *, token: str | None = None, timeout: float = 10.0) -> None:
         self._base = base_url.rstrip("/")
+        # Sent as ``Authorization: Bearer``, and needed only against an
+        # instance with single sign-on on. Unlike the telemetry client, every
+        # method here raises — reading the prompt a service is about to run on
+        # is the work — so a 401 arrives as a `RegistryError` saying the
+        # registry refused, which is the right shape for "set AIWATCHER_TOKEN".
+        self._token = token if token is not None else os.environ.get("AIWATCHER_TOKEN")
         self._timeout = timeout
 
     # ── Reads ────────────────────────────────────────────────────────────
@@ -467,10 +474,13 @@ class PromptRegistry:
         self, method: str, path: str, body: Mapping[str, Any] | None = None
     ) -> dict[str, Any]:
         payload = None if body is None else json.dumps(body).encode()
+        headers = {"content-type": "application/json"}
+        if self._token:
+            headers["authorization"] = f"Bearer {self._token}"
         request = urllib.request.Request(  # noqa: S310 - the base URL is the caller's own server
             f"{self._base}{path}",
             data=payload,
-            headers={"content-type": "application/json"},
+            headers=headers,
             method=method,
         )
         try:

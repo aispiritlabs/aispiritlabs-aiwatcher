@@ -118,12 +118,19 @@ class HttpTransport:
         self,
         base_url: str,
         *,
+        token: str | None = None,
         batch_size: int = 64,
         flush_interval: float = 1.0,
         queue_size: int = 50_000,
         timeout: float = 5.0,
     ) -> None:
         self._url = base_url.rstrip("/") + "/api/v1/events"
+        # Sent as ``Authorization: Bearer``. Needed only against an instance
+        # with single sign-on on, where an agent cannot complete an interactive
+        # login and gets a token of its own instead. Read from the environment
+        # rather than required, because the same code has to work against an
+        # instance that has no authentication at all.
+        self._token = token if token is not None else os.environ.get("AIWATCHER_TOKEN")
         self._batch_size = batch_size
         self._flush_interval = flush_interval
         self._timeout = timeout
@@ -233,16 +240,26 @@ class HttpTransport:
         request = urllib.request.Request(  # noqa: S310
             self._url,
             data=payload,
-            headers={"content-type": "application/json"},
+            headers=self._headers(),
             method="POST",
         )
         try:
             with urllib.request.urlopen(request, timeout=self._timeout):  # noqa: S310
                 pass
         except (urllib.error.URLError, OSError) as error:
-            # Telemetry must never take the agent down with it.
+            # Telemetry must never take the agent down with it. A 401 arrives
+            # here like any other failure and is worth reading twice: it means
+            # the instance has single sign-on on and this producer has no
+            # token, which is a variable to set rather than a network problem
+            # to wait out.
             self._dropped += len(batch)
             print(f"[aiwatcher] dropped {len(batch)} events: {error}", file=sys.stderr)
+
+    def _headers(self) -> dict[str, str]:
+        headers = {"content-type": "application/json"}
+        if self._token:
+            headers["authorization"] = f"Bearer {self._token}"
+        return headers
 
 
 @dataclass
@@ -277,11 +294,19 @@ class AiwatcherClient:
         transport: Transport | None = None,
         instance: str | None = None,
         base_url: str | None = None,
+        token: str | None = None,
     ) -> None:
         resolved = base_url or os.environ.get("AIWATCHER_URL")
         self._base_url = resolved
+        # One credential for both clients below, because they reach the same
+        # instance. It is only needed against one with single sign-on on: an
+        # agent runs where nobody can complete an interactive login, so it gets
+        # a token of its own — editor, never admin.
+        self._token = token if token is not None else os.environ.get("AIWATCHER_TOKEN")
         self._prompts: PromptRegistry | None = None
-        self._transport = transport or (HttpTransport(resolved) if resolved else NullTransport())
+        self._transport = transport or (
+            HttpTransport(resolved, token=self._token) if resolved else NullTransport()
+        )
         self._source = {
             "service": service,
             "sdk": "python",
@@ -569,7 +594,7 @@ class AiwatcherClient:
                 "The registry has no offline mode — reading a prompt is not telemetry."
             )
         if self._prompts is None:
-            self._prompts = PromptRegistry(self._base_url)
+            self._prompts = PromptRegistry(self._base_url, token=self._token)
         return self._prompts
 
     def close(self) -> None:

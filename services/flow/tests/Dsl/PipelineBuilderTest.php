@@ -172,6 +172,33 @@ final class PipelineBuilderTest extends TestCase
         self::assertSame('web_search', $rows[0]['tool']);
     }
 
+    public function test_any_combines_agent_filters_for_multi_agent_curation(): void
+    {
+        $rows = $this->build("data_frame()
+            ->read(default)
+            ->withEntry('agent', array_expand(ref('agents')))
+            ->filter(any(
+                ref('agent')->same(lit('writer')),
+                ref('agent')->same(lit('reviewer'))
+            ))
+            ->dropDuplicates(ref('run_id'))");
+
+        self::assertCount(1, $rows);
+        self::assertSame('run-2', $rows[0]['run_id']);
+    }
+
+    public function test_curation_can_deduplicate_and_rename_columns(): void
+    {
+        $rows = $this->build("data_frame()
+            ->read(default)
+            ->dropDuplicates(ref('conversation_id'))
+            ->rename('conversation_id', 'source_session_id')
+            ->select(ref('source_session_id'))");
+
+        self::assertCount(1, $rows);
+        self::assertSame('conv-1', $rows[0]['source_session_id']);
+    }
+
     public function test_truncate_false_reaches_the_plan(): void
     {
         $catalog = new Catalog(FakeApi::withDemoRuns(), 'http://api.test');

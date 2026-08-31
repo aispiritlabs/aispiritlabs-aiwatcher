@@ -10,6 +10,155 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/api/v1/auth/callback": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Where the provider sends the browser back to.",
+        "description": "Every failure here ends in a redirect rather than a JSON error, because\nthis is a top-level navigation: whatever this returns is what the person\nsees in their browser. The reason travels as `sign_in_error`, which the\npanel reads and renders on its sign-in screen.",
+        "operationId": "callback",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "state",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "error",
+            "in": "path",
+            "description": "What the provider sends instead of a code when it refused —\n`access_denied` when a user cancelled, most often.",
+            "required": true,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "303": {
+            "description": "Redirect back into the application"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/config": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Whether this instance has a login, and what to call it.",
+        "description": "The one route besides the health probes that answers before anybody has\nsigned in. Without it the panel would have to guess, and guessing wrong\nmeans either a sign-in screen on an instance with no provider or an endless\n401 loop on one that has.",
+        "operationId": "auth_config",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicAuthConfig"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/login": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Start a sign-in: a redirect to the provider.",
+        "operationId": "login",
+        "parameters": [
+          {
+            "name": "next",
+            "in": "path",
+            "description": "Where to land after signing in. A path on this application; anything\nelse is refused rather than followed — see `aiwatcher_auth::safe_next`.",
+            "required": true,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "303": {
+            "description": "Redirect to the identity provider"
+          },
+          "501": {
+            "description": "This instance has no identity provider"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Sign out.",
+        "operationId": "logout",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoggedOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/me": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "The current caller.",
+        "operationId": "me",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Identity"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in"
+          }
+        }
+      }
+    },
     "/api/v1/conversations": {
       "get": {
         "tags": [
@@ -75,6 +224,313 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ConversationPage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/curations": {
+      "get": {
+        "tags": [
+          "data-curation"
+        ],
+        "summary": "Every saved Flow PHP recipe, newest save first.",
+        "operationId": "list_recipes",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecipePage"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "data-curation"
+        ],
+        "summary": "Save a content-addressed revision of a Flow PHP recipe.",
+        "operationId": "save_recipe",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveRecipeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "This exact revision already existed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRecipe"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "A new revision was stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRecipe"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dataset-rows": {
+      "get": {
+        "tags": [
+          "datasets"
+        ],
+        "summary": "One immutable dataset version, returned in small slices for an interactive viewer.",
+        "operationId": "get_dataset_rows",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetRowsPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/datasets": {
+      "get": {
+        "tags": [
+          "datasets"
+        ],
+        "summary": "Every saved dataset, newest execution first.",
+        "operationId": "list_datasets",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetPage"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "datasets"
+        ],
+        "summary": "Persist one completed Flow PHP execution as an immutable dataset version.",
+        "operationId": "publish_dataset",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishDatasetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "This exact version already existed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedDataset"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "A new version was stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedDataset"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
                 }
               }
             }
@@ -377,7 +833,7 @@
           "ingest"
         ],
         "summary": "Publish events over HTTP.",
-        "description": "The fallback path for clients that cannot reach Laser. Returns 403 when the\ninstance is configured without a sink.",
+        "description": "The fallback path for clients that cannot reach Laser. Returns 403 when the\ninstance is configured without a sink.\n\nWriter, not viewer: this is the one read-model route that puts something in\nthe durable log, and an agent that publishes here is a machine identity —\nan authentik service account holding a token for this audience, or a\nbearer the operator issued. Reading runs and writing them are different\npermissions in every deployment that has more than one team.",
         "operationId": "ingest",
         "requestBody": {
           "content": {
@@ -419,6 +875,35 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/v1/events/stream": {
+      "get": {
+        "tags": [
+          "live"
+        ],
+        "summary": "Server-sent events for the whole system: a catch-up marker, then live.",
+        "description": "This is the panel's Observability transport. It is deliberately separate\nfrom the WebSocket below: the panel only receives here, so EventSource can\nown reconnects and `Last-Event-ID` resume without client-side machinery.",
+        "operationId": "stream_events",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "Resume point. Usually unnecessary for SSE — the browser sends\n`Last-Event-ID` on its own — but explicit here for non-browser clients.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "text/event-stream of LiveFrame"
           }
         }
       }
@@ -2133,6 +2618,15 @@
           }
         }
       },
+      "AuthMode": {
+        "type": "string",
+        "description": "Where identity comes from.",
+        "enum": [
+          "none",
+          "oidc",
+          "proxy"
+        ]
+      },
       "Bucket": {
         "type": "object",
         "description": "One point on the timeline.",
@@ -2328,6 +2822,256 @@
       "CorrelationId": {
         "type": "string",
         "description": "Groups an entire flow. Inherited unchanged by everything the flow causes."
+      },
+      "Credential": {
+        "type": "string",
+        "description": "How the caller proved who they are.\n\nKept on the identity because the three are not interchangeable when\nsomething goes wrong: a session is a browser, a bearer is a machine, and a\nproxy header is a statement by whatever sits in front of this process.",
+        "enum": [
+          "session",
+          "bearer",
+          "token",
+          "proxy",
+          "anonymous"
+        ]
+      },
+      "CurationRecipe": {
+        "type": "object",
+        "description": "A saved Flow PHP transformation.",
+        "required": [
+          "name",
+          "pipeline",
+          "revision",
+          "saved_at"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "pipeline": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string",
+            "description": "SHA-256 of the authored fields. The stable identity of this revision."
+          },
+          "saved_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "DatasetPage": {
+        "type": "object",
+        "required": [
+          "datasets"
+        ],
+        "properties": {
+          "datasets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DatasetSummary"
+            }
+          }
+        }
+      },
+      "DatasetRow": {
+        "type": "object",
+        "description": "One original row and its stable position inside an immutable version.",
+        "required": [
+          "row_index",
+          "row"
+        ],
+        "properties": {
+          "row": {
+            "type": "object"
+          },
+          "row_index": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "DatasetRowsPage": {
+        "type": "object",
+        "description": "A small slice suitable for an interactive data viewer.",
+        "required": [
+          "name",
+          "version",
+          "pipeline",
+          "source",
+          "rows",
+          "total_rows",
+          "matching_rows",
+          "offset",
+          "limit"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "matching_rows": {
+            "type": "integer",
+            "description": "Rows matching the current search across all pages.",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "next_offset": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "pipeline": {
+            "type": "string"
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DatasetRow"
+            }
+          },
+          "source": {
+            "type": "string"
+          },
+          "total_rows": {
+            "type": "integer",
+            "description": "Rows in the immutable artifact before search is applied.",
+            "minimum": 0
+          },
+          "version": {
+            "$ref": "#/components/schemas/DatasetVersionSummary"
+          },
+          "window_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "DatasetSummary": {
+        "type": "object",
+        "required": [
+          "name",
+          "latest",
+          "versions"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "latest": {
+            "$ref": "#/components/schemas/DatasetVersionSummary"
+          },
+          "name": {
+            "type": "string"
+          },
+          "versions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DatasetVersionSummary"
+            },
+            "description": "Newest first. Kept in the head so listing does not read every artifact."
+          }
+        }
+      },
+      "DatasetVersion": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/DatasetVersionSummary"
+          },
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "pipeline",
+              "items",
+              "source"
+            ],
+            "properties": {
+              "description": {
+                "type": "string"
+              },
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": {},
+                  "propertyNames": {
+                    "type": "string"
+                  }
+                }
+              },
+              "name": {
+                "type": "string"
+              },
+              "pipeline": {
+                "type": "string"
+              },
+              "source": {
+                "type": "string"
+              },
+              "window_seconds": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "minimum": 0
+              }
+            }
+          }
+        ]
+      },
+      "DatasetVersionSummary": {
+        "type": "object",
+        "required": [
+          "version",
+          "created_at",
+          "row_count",
+          "columns"
+        ],
+        "properties": {
+          "columns": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "recipe": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "row_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "version": {
+            "type": "string"
+          }
+        }
       },
       "DimensionKind": {
         "type": "string",
@@ -3304,6 +4048,64 @@
           }
         }
       },
+      "Identity": {
+        "type": "object",
+        "description": "An authenticated caller.",
+        "required": [
+          "subject",
+          "roles",
+          "credential"
+        ],
+        "properties": {
+          "credential": {
+            "$ref": "#/components/schemas/Credential"
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expires_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "When this identity stops being valid, as a Unix timestamp. `None` for\nthe anonymous identity, which never expires because it was never\nissued."
+          },
+          "groups": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What the provider asserted, verbatim. Kept beside the resolved roles so\nan operator debugging \"why is this person only a viewer\" can see the\ninput to the mapping rather than guessing at it."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Role"
+            },
+            "description": "The roles the groups above resolved to, highest last."
+          },
+          "subject": {
+            "type": "string",
+            "description": "The provider's stable identifier — `sub` on an OIDC token. Never the\nemail, which people change."
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "IngestRequest": {
         "type": "object",
         "required": [
@@ -3508,6 +4310,18 @@
           }
         ],
         "description": "A frame in the live stream.\n\n`Caught` is not decoration: it is what lets the panel switch from \"loading\nhistory\" to \"live\" at the right moment, instead of guessing from a timeout.\nIt mirrors Emmett's `MessageSourceCaughtUp` control message."
+      },
+      "LoggedOut": {
+        "type": "object",
+        "properties": {
+          "redirect_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where to send the browser to end the session at the provider too.\n`None` when the provider declares no `end_session_endpoint`, in which\ncase clearing the cookie is all a sign-out can do."
+          }
+        }
       },
       "MessageId": {
         "type": "string",
@@ -4487,6 +5301,104 @@
         ],
         "description": "A version without its text.\n\nThe list view's row. Kept separate so listing a prompt with two hundred\nversions does not transfer two hundred prompts."
       },
+      "PublicAuthConfig": {
+        "type": "object",
+        "description": "What the panel is told before anybody has signed in.\n\nPublic on purpose, and it is the only route reachable unauthenticated\nbesides the health probes: a panel that cannot ask \"is there a login here,\nand what is it called\" has to guess, and guessing wrong means either a\nsign-in screen on an instance with no provider or an endless 401 loop on\none that has.",
+        "required": [
+          "enabled",
+          "mode",
+          "provider"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "`false` when `AIWATCHER_AUTH_MODE=none`. The panel renders no sign-in\nscreen at all in that case."
+          },
+          "issuer": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Shown in the panel's own diagnostics, so \"which authentik is this\npointing at\" is answerable without a shell on the pod."
+          },
+          "login_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where to send the browser to sign in. `None` in `proxy` mode, where\nsigning in is something that already happened before the request\narrived."
+          },
+          "logout_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mode": {
+            "$ref": "#/components/schemas/AuthMode"
+          },
+          "provider": {
+            "type": "string",
+            "description": "What to put on the button — \"authentik\" by default."
+          }
+        }
+      },
+      "PublishDatasetRequest": {
+        "type": "object",
+        "description": "What one completed Flow execution contributes to the registry.",
+        "required": [
+          "name",
+          "pipeline",
+          "items",
+          "source"
+        ],
+        "properties": {
+          "columns": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "description": {
+            "type": "string"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": {},
+              "propertyNames": {
+                "type": "string"
+              }
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "pipeline": {
+            "type": "string",
+            "description": "The exact script that produced `items`, even when it was not saved first."
+          },
+          "recipe": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Saved recipe name, when the run came from one."
+          },
+          "source": {
+            "type": "string"
+          },
+          "window_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "PublishRequest": {
         "type": "object",
         "description": "Publish a version, and optionally update the prompt around it.",
@@ -4584,6 +5496,36 @@
           },
           "version": {
             "$ref": "#/components/schemas/PromptVersion"
+          }
+        }
+      },
+      "PublishedDataset": {
+        "type": "object",
+        "required": [
+          "dataset",
+          "created"
+        ],
+        "properties": {
+          "created": {
+            "type": "boolean",
+            "description": "False when this exact pipeline and exact ordered set of rows already existed."
+          },
+          "dataset": {
+            "$ref": "#/components/schemas/DatasetSummary"
+          }
+        }
+      },
+      "RecipePage": {
+        "type": "object",
+        "required": [
+          "recipes"
+        ],
+        "properties": {
+          "recipes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CurationRecipe"
+            }
           }
         }
       },
@@ -4815,6 +5757,15 @@
           }
         }
       },
+      "Role": {
+        "type": "string",
+        "description": "What a caller is allowed to do.\n\nThree, not one per route. The distinction that matters is not which\nendpoint but which *kind* of thing an endpoint does: read what happened,\nauthor something that outlives the log, or ask another system to run work.",
+        "enum": [
+          "viewer",
+          "editor",
+          "admin"
+        ]
+      },
       "RunDetail": {
         "type": "object",
         "description": "A run plus what is needed to draw it.",
@@ -4982,6 +5933,40 @@
               "null"
             ],
             "description": "The orchestration this run executes, when the producer names one."
+          }
+        }
+      },
+      "SaveRecipeRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "pipeline"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "pipeline": {
+            "type": "string"
+          }
+        }
+      },
+      "SavedRecipe": {
+        "type": "object",
+        "required": [
+          "recipe",
+          "created"
+        ],
+        "properties": {
+          "created": {
+            "type": "boolean",
+            "description": "False when this exact immutable revision was already present."
+          },
+          "recipe": {
+            "$ref": "#/components/schemas/CurationRecipe"
           }
         }
       },
@@ -5718,6 +6703,14 @@
       "description": "The prompt registry: versions, labels and optimisations"
     },
     {
+      "name": "datasets",
+      "description": "Versioned datasets produced by Flow PHP curations"
+    },
+    {
+      "name": "data-curation",
+      "description": "Saved Flow PHP transformation recipes"
+    },
+    {
       "name": "workflow",
       "description": "Declared graphs, their executions, and rerunning one"
     },
@@ -5728,6 +6721,10 @@
     {
       "name": "ingest",
       "description": "HTTP fallback for publishing events"
+    },
+    {
+      "name": "auth",
+      "description": "Single sign-on: the login flow and the current caller"
     },
     {
       "name": "health",

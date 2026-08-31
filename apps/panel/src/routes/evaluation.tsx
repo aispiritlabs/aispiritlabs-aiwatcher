@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, Link } from '@tanstack/react-router';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { Search } from 'lucide-react';
 import { z } from 'zod';
@@ -436,7 +436,15 @@ function ReportDetail({ detail }: { detail: EvaluationDetail }) {
                 value={pinchId(summary.evaluation_id, 10, 8)}
                 full={summary.evaluation_id}
               />
-              {summary.dataset ? <Badge>{summary.dataset}</Badge> : null}
+              {summary.dataset ? (
+                <Link
+                  to="/datasets"
+                  search={{ ...datasetTarget(summary.dataset), view: 'evaluations' }}
+                  className="hover:opacity-80"
+                >
+                  <Badge>{summary.dataset}</Badge>
+                </Link>
+              ) : null}
               {summary.variant ? <Badge tone="warning">{summary.variant}</Badge> : null}
               <span>{summary.runtime}</span>
             </div>
@@ -477,6 +485,15 @@ function ReportDetail({ detail }: { detail: EvaluationDetail }) {
       <ReportDocument detail={detail} />
     </div>
   );
+}
+
+function datasetTarget(reference: string): { dataset: string; version?: string } {
+  const separator = reference.lastIndexOf('@');
+  const version = separator >= 0 ? reference.slice(separator + 1) : '';
+  if (/^[a-f0-9]{64}$/.test(version)) {
+    return { dataset: reference.slice(0, separator), version };
+  }
+  return { dataset: reference };
 }
 
 function Metrics({

@@ -37,6 +37,7 @@ use aiwatcher_projector::{
     WorkflowPage,
 };
 
+use crate::auth::Caller;
 use crate::error::{ApiError, ApiResult};
 use crate::routes::{StreamQuery, resume_point};
 use crate::state::AppState;
@@ -224,9 +225,17 @@ pub struct RerunBody {
 )]
 async fn rerun_workflow(
     State(state): State<AppState>,
+    caller: Caller,
     Path(workflow_id): Path<String>,
     Json(body): Json<RerunBody>,
 ) -> ApiResult<(StatusCode, Json<RerunAccepted>)> {
+    // Admin, and it is the only route in this API that needs it. Everything
+    // else here reports what happened; this asks another system to make
+    // something happen, inside the cluster, on the caller's behalf.
+    let requester = caller
+        .require(aiwatcher_auth::Role::Admin)?
+        .log_subject()
+        .to_owned();
     let runner = runner(&state)?;
 
     // Asking to rerun a workflow nothing has ever heard of is almost always a
@@ -252,6 +261,10 @@ async fn rerun_workflow(
         workflow_run_id = body.workflow_run_id.as_deref().unwrap_or("-"),
         from_node = body.from_node.as_deref().unwrap_or("-"),
         reference = accepted.reference.as_deref().unwrap_or("-"),
+        // Who asked. The point of having identities at all: a rerun is the
+        // one thing here with a consequence outside aiwatcher, and before SSO
+        // this line could only ever have said "somebody".
+        requested_by = %requester,
         "dispatched a workflow rerun"
     );
 

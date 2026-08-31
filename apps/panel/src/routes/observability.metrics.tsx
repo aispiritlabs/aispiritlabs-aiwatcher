@@ -76,7 +76,6 @@ function MetricsPage() {
       if (response.error) throw new Error('failed to load metrics');
       return response.data;
     },
-    refetchInterval: 10_000,
   });
 
   if (query.isError) {

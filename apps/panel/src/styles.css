@@ -66,6 +66,13 @@
 }
 
 @layer base {
+  :root {
+    /* Keep browser-owned form popovers (especially an open <select>) on the
+       same dark palette as the panel instead of pairing a white menu with the
+       inherited white foreground. */
+    color-scheme: dark;
+  }
+
   * {
     border-color: var(--color-border);
   }
@@ -75,6 +82,17 @@
     color: var(--color-foreground);
     font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
     -webkit-font-smoothing: antialiased;
+  }
+
+  select {
+    color-scheme: dark;
+    background-color: var(--color-card);
+    color: var(--color-card-foreground);
+  }
+
+  select option {
+    background-color: var(--color-card);
+    color: var(--color-card-foreground);
   }
 
   /* Ids are read character by character; a tabular monospace makes a changed

@@ -60,6 +60,20 @@ export type Artifact = {
 };
 
 /**
+ * Where identity comes from.
+ */
+export const AuthMode = {
+    NONE: 'none',
+    OIDC: 'oidc',
+    PROXY: 'proxy'
+} as const;
+
+/**
+ * Where identity comes from.
+ */
+export type AuthMode = typeof AuthMode[keyof typeof AuthMode];
+
+/**
  * One point on the timeline.
  */
 export type Bucket = {
@@ -128,6 +142,111 @@ export type ConversationSummary = {
  * Groups an entire flow. Inherited unchanged by everything the flow causes.
  */
 export type CorrelationId = string;
+
+/**
+ * How the caller proved who they are.
+ *
+ * Kept on the identity because the three are not interchangeable when
+ * something goes wrong: a session is a browser, a bearer is a machine, and a
+ * proxy header is a statement by whatever sits in front of this process.
+ */
+export const Credential = {
+    SESSION: 'session',
+    BEARER: 'bearer',
+    TOKEN: 'token',
+    PROXY: 'proxy',
+    ANONYMOUS: 'anonymous'
+} as const;
+
+/**
+ * How the caller proved who they are.
+ *
+ * Kept on the identity because the three are not interchangeable when
+ * something goes wrong: a session is a browser, a bearer is a machine, and a
+ * proxy header is a statement by whatever sits in front of this process.
+ */
+export type Credential = typeof Credential[keyof typeof Credential];
+
+/**
+ * A saved Flow PHP transformation.
+ */
+export type CurationRecipe = {
+    description?: string;
+    name: string;
+    pipeline: string;
+    /**
+     * SHA-256 of the authored fields. The stable identity of this revision.
+     */
+    revision: string;
+    saved_at: string;
+};
+
+export type DatasetPage = {
+    datasets: Array<DatasetSummary>;
+};
+
+/**
+ * One original row and its stable position inside an immutable version.
+ */
+export type DatasetRow = {
+    row: {
+        [key: string]: unknown;
+    };
+    row_index: number;
+};
+
+/**
+ * A small slice suitable for an interactive data viewer.
+ */
+export type DatasetRowsPage = {
+    description?: string;
+    limit: number;
+    /**
+     * Rows matching the current search across all pages.
+     */
+    matching_rows: number;
+    name: string;
+    next_offset?: number | null;
+    offset: number;
+    pipeline: string;
+    rows: Array<DatasetRow>;
+    source: string;
+    /**
+     * Rows in the immutable artifact before search is applied.
+     */
+    total_rows: number;
+    version: DatasetVersionSummary;
+    window_seconds?: number | null;
+};
+
+export type DatasetSummary = {
+    description?: string;
+    latest: DatasetVersionSummary;
+    name: string;
+    /**
+     * Newest first. Kept in the head so listing does not read every artifact.
+     */
+    versions: Array<DatasetVersionSummary>;
+};
+
+export type DatasetVersion = DatasetVersionSummary & {
+    description?: string;
+    items: Array<{
+        [key: string]: unknown;
+    }>;
+    name: string;
+    pipeline: string;
+    source: string;
+    window_seconds?: number | null;
+};
+
+export type DatasetVersionSummary = {
+    columns: Array<string>;
+    created_at: string;
+    recipe?: string | null;
+    row_count: number;
+    version: string;
+};
 
 /**
  * What the tree is rooted on.
@@ -570,6 +689,37 @@ export type ExecutionSummary = {
     workflow_run_id: string;
 };
 
+/**
+ * An authenticated caller.
+ */
+export type Identity = {
+    credential: Credential;
+    email?: string | null;
+    /**
+     * When this identity stops being valid, as a Unix timestamp. `None` for
+     * the anonymous identity, which never expires because it was never
+     * issued.
+     */
+    expires_at?: number | null;
+    /**
+     * What the provider asserted, verbatim. Kept beside the resolved roles so
+     * an operator debugging "why is this person only a viewer" can see the
+     * input to the mapping rather than guessing at it.
+     */
+    groups?: Array<string>;
+    name?: string | null;
+    /**
+     * The roles the groups above resolved to, highest last.
+     */
+    roles: Array<Role>;
+    /**
+     * The provider's stable identifier — `sub` on an OIDC token. Never the
+     * email, which people change.
+     */
+    subject: string;
+    username?: string | null;
+};
+
 export type IngestRequest = {
     /**
      * A batch. Publishing several events in one call is what keeps a chatty
@@ -659,6 +809,15 @@ export type LiveFrame = (LiveEvent & {
 } | {
     frame: 'resynced';
     from: Checkpoint;
+};
+
+export type LoggedOut = {
+    /**
+     * Where to send the browser to end the session at the provider too.
+     * `None` when the provider declares no `end_session_endpoint`, in which
+     * case clearing the cookie is all a sign-out can do.
+     */
+    redirect_url?: string | null;
 };
 
 /**
@@ -1113,6 +1272,62 @@ export type PromptVersionSummary = VersionOrigin & {
 };
 
 /**
+ * What the panel is told before anybody has signed in.
+ *
+ * Public on purpose, and it is the only route reachable unauthenticated
+ * besides the health probes: a panel that cannot ask "is there a login here,
+ * and what is it called" has to guess, and guessing wrong means either a
+ * sign-in screen on an instance with no provider or an endless 401 loop on
+ * one that has.
+ */
+export type PublicAuthConfig = {
+    /**
+     * `false` when `AIWATCHER_AUTH_MODE=none`. The panel renders no sign-in
+     * screen at all in that case.
+     */
+    enabled: boolean;
+    /**
+     * Shown in the panel's own diagnostics, so "which authentik is this
+     * pointing at" is answerable without a shell on the pod.
+     */
+    issuer?: string | null;
+    /**
+     * Where to send the browser to sign in. `None` in `proxy` mode, where
+     * signing in is something that already happened before the request
+     * arrived.
+     */
+    login_url?: string | null;
+    logout_url?: string | null;
+    mode: AuthMode;
+    /**
+     * What to put on the button — "authentik" by default.
+     */
+    provider: string;
+};
+
+/**
+ * What one completed Flow execution contributes to the registry.
+ */
+export type PublishDatasetRequest = {
+    columns?: Array<string>;
+    description?: string;
+    items: Array<{
+        [key: string]: unknown;
+    }>;
+    name: string;
+    /**
+     * The exact script that produced `items`, even when it was not saved first.
+     */
+    pipeline: string;
+    /**
+     * Saved recipe name, when the run came from one.
+     */
+    recipe?: string | null;
+    source: string;
+    window_seconds?: number | null;
+};
+
+/**
  * Publish a version, and optionally update the prompt around it.
  */
 export type PublishRequest = {
@@ -1158,6 +1373,18 @@ export type Published = {
     created: boolean;
     head: PromptHead;
     version: PromptVersion;
+};
+
+export type PublishedDataset = {
+    /**
+     * False when this exact pipeline and exact ordered set of rows already existed.
+     */
+    created: boolean;
+    dataset: DatasetSummary;
+};
+
+export type RecipePage = {
+    recipes: Array<CurationRecipe>;
 };
 
 /**
@@ -1295,6 +1522,28 @@ export type RerunRequest = {
 };
 
 /**
+ * What a caller is allowed to do.
+ *
+ * Three, not one per route. The distinction that matters is not which
+ * endpoint but which *kind* of thing an endpoint does: read what happened,
+ * author something that outlives the log, or ask another system to run work.
+ */
+export const Role = {
+    VIEWER: 'viewer',
+    EDITOR: 'editor',
+    ADMIN: 'admin'
+} as const;
+
+/**
+ * What a caller is allowed to do.
+ *
+ * Three, not one per route. The distinction that matters is not which
+ * endpoint but which *kind* of thing an endpoint does: read what happened,
+ * author something that outlives the log, or ask another system to run work.
+ */
+export type Role = typeof Role[keyof typeof Role];
+
+/**
  * A run plus what is needed to draw it.
  */
 export type RunDetail = {
@@ -1371,6 +1620,20 @@ export type RunSummary = {
      * The orchestration this run executes, when the producer names one.
      */
     workflow?: string | null;
+};
+
+export type SaveRecipeRequest = {
+    description?: string;
+    name: string;
+    pipeline: string;
+};
+
+export type SavedRecipe = {
+    /**
+     * False when this exact immutable revision was already present.
+     */
+    created: boolean;
+    recipe: CurationRecipe;
 };
 
 /**
@@ -1633,6 +1896,87 @@ export type WorkflowPage = {
     workflows: Array<WorkflowDefinition>;
 };
 
+export type CallbackData = {
+    body?: never;
+    path: {
+        code: string | null;
+        state: string | null;
+        /**
+         * What the provider sends instead of a code when it refused —
+         * `access_denied` when a user cancelled, most often.
+         */
+        error: string | null;
+    };
+    query?: never;
+    url: '/api/v1/auth/callback';
+};
+
+export type AuthConfigData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/auth/config';
+};
+
+export type AuthConfigResponses = {
+    200: PublicAuthConfig;
+};
+
+export type AuthConfigResponse = AuthConfigResponses[keyof AuthConfigResponses];
+
+export type LoginData = {
+    body?: never;
+    path: {
+        /**
+         * Where to land after signing in. A path on this application; anything
+         * else is refused rather than followed — see `aiwatcher_auth::safe_next`.
+         */
+        next: string | null;
+    };
+    query?: never;
+    url: '/api/v1/auth/login';
+};
+
+export type LoginErrors = {
+    /**
+     * This instance has no identity provider
+     */
+    501: unknown;
+};
+
+export type LogoutData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/auth/logout';
+};
+
+export type LogoutResponses = {
+    200: LoggedOut;
+};
+
+export type LogoutResponse = LogoutResponses[keyof LogoutResponses];
+
+export type MeData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/auth/me';
+};
+
+export type MeErrors = {
+    /**
+     * Not signed in
+     */
+    401: unknown;
+};
+
+export type MeResponses = {
+    200: Identity;
+};
+
+export type MeResponse = MeResponses[keyof MeResponses];
+
 export type ListConversationsData = {
     body?: never;
     path?: never;
@@ -1658,6 +2002,127 @@ export type ListConversationsResponses = {
 };
 
 export type ListConversationsResponse = ListConversationsResponses[keyof ListConversationsResponses];
+
+export type ListRecipesData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/curations';
+};
+
+export type ListRecipesErrors = {
+    501: ErrorBody;
+};
+
+export type ListRecipesError = ListRecipesErrors[keyof ListRecipesErrors];
+
+export type ListRecipesResponses = {
+    200: RecipePage;
+};
+
+export type ListRecipesResponse = ListRecipesResponses[keyof ListRecipesResponses];
+
+export type SaveRecipeData = {
+    body: SaveRecipeRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/curations';
+};
+
+export type SaveRecipeErrors = {
+    400: ErrorBody;
+    413: ErrorBody;
+    501: ErrorBody;
+};
+
+export type SaveRecipeError = SaveRecipeErrors[keyof SaveRecipeErrors];
+
+export type SaveRecipeResponses = {
+    /**
+     * This exact revision already existed
+     */
+    200: SavedRecipe;
+    /**
+     * A new revision was stored
+     */
+    201: SavedRecipe;
+};
+
+export type SaveRecipeResponse = SaveRecipeResponses[keyof SaveRecipeResponses];
+
+export type GetDatasetRowsData = {
+    body?: never;
+    path?: never;
+    query: {
+        name: string;
+        version?: string | null;
+        offset?: number | null;
+        limit?: number | null;
+        search?: string | null;
+    };
+    url: '/api/v1/dataset-rows';
+};
+
+export type GetDatasetRowsErrors = {
+    400: ErrorBody;
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type GetDatasetRowsError = GetDatasetRowsErrors[keyof GetDatasetRowsErrors];
+
+export type GetDatasetRowsResponses = {
+    200: DatasetRowsPage;
+};
+
+export type GetDatasetRowsResponse = GetDatasetRowsResponses[keyof GetDatasetRowsResponses];
+
+export type ListDatasetsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/datasets';
+};
+
+export type ListDatasetsErrors = {
+    501: ErrorBody;
+};
+
+export type ListDatasetsError = ListDatasetsErrors[keyof ListDatasetsErrors];
+
+export type ListDatasetsResponses = {
+    200: DatasetPage;
+};
+
+export type ListDatasetsResponse = ListDatasetsResponses[keyof ListDatasetsResponses];
+
+export type PublishDatasetData = {
+    body: PublishDatasetRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/datasets';
+};
+
+export type PublishDatasetErrors = {
+    400: ErrorBody;
+    413: ErrorBody;
+    501: ErrorBody;
+};
+
+export type PublishDatasetError = PublishDatasetErrors[keyof PublishDatasetErrors];
+
+export type PublishDatasetResponses = {
+    /**
+     * This exact version already existed
+     */
+    200: PublishedDataset;
+    /**
+     * A new version was stored
+     */
+    201: PublishedDataset;
+};
+
+export type PublishDatasetResponse = PublishDatasetResponses[keyof PublishDatasetResponses];
 
 export type ListDimensionData = {
     body?: never;
@@ -1795,6 +2260,26 @@ export type IngestResponses = {
 };
 
 export type IngestResponse2 = IngestResponses[keyof IngestResponses];
+
+export type StreamEventsData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * Resume point. Usually unnecessary for SSE — the browser sends
+         * `Last-Event-ID` on its own — but explicit here for non-browser clients.
+         */
+        from?: string | null;
+    };
+    url: '/api/v1/events/stream';
+};
+
+export type StreamEventsResponses = {
+    /**
+     * text/event-stream of LiveFrame
+     */
+    200: unknown;
+};
 
 export type LiveWebsocketData = {
     body?: never;

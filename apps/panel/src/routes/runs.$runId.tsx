@@ -1,9 +1,9 @@
 import * as React from 'react';
 import { createFileRoute } from '@tanstack/react-router';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { getRun } from '@/api/generated/sdk.gen';
-import type { RunStatus } from '@/api/generated/types.gen';
+import { getRun, getRunEvents } from '@/api/generated/sdk.gen';
+import type { RecordedEvent, RunStatus } from '@/api/generated/types.gen';
 import {
   Card,
   CardContent,
@@ -14,7 +14,7 @@ import {
   Stat,
 } from '@/components/ui/primitives';
 import { StatusBadge, StreamBadge } from '@/components/status-badge';
-import { EventFeed } from '@/components/event-feed';
+import { EventFeed, type EventFeedEvent } from '@/components/event-feed';
 import { Waterfall, type Span } from '@/components/waterfall';
 import { openRunStream, type LiveEventFrame, type StreamPhase } from '@/lib/live';
 import { formatAge, formatCount, formatDuration, shortId } from '@/lib/utils';
@@ -22,6 +22,8 @@ import { formatAge, formatCount, formatDuration, shortId } from '@/lib/utils';
 export const Route = createFileRoute('/runs/$runId')({
   component: RunPage,
 });
+
+const EVENT_PAGE_SIZE = 1_000;
 
 /**
  * The handoff from history to live is the whole trick on this page.
@@ -53,11 +55,46 @@ function RunPage() {
     },
   });
 
-  const startCheckpoint = query.data?.summary.last_checkpoint;
+  // History is the durable audit log, not the live buffer. Load it page by
+  // page until the whole run is present; EventFeed virtualises the result so a
+  // chatty trace still mounts only the rows on screen.
+  const history = useInfiniteQuery({
+    queryKey: ['run-events', runId],
+    initialPageParam: undefined as number | undefined,
+    queryFn: async ({ pageParam }) => {
+      const response = await getRunEvents({
+        path: { run_id: runId },
+        query: { after: pageParam, limit: EVENT_PAGE_SIZE },
+      });
+      if (response.error) throw new Error(`failed to load events for run ${runId}`);
+      return response.data;
+    },
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
+  });
+
+  React.useEffect(() => {
+    if (history.hasNextPage && !history.isFetchingNextPage) {
+      void history.fetchNextPage();
+    }
+  }, [history.hasNextPage, history.isFetchingNextPage, history.fetchNextPage]);
+
+  const canStream = query.data !== undefined;
   const isRunning = query.data?.summary.status === 'running';
 
   React.useEffect(() => {
-    if (startCheckpoint === undefined) return undefined;
+    setLiveEvents([]);
+    setPhase('catching-up');
+    setResyncedFrom(null);
+  }, [runId]);
+
+  React.useEffect(() => {
+    if (!canStream) return undefined;
+
+    // Deliberately captured only when the stream first opens. Refetching the
+    // summary advances its cursor, but must not tear down and reopen the live
+    // connection for every event.
+    const startCheckpoint = query.data?.summary.last_checkpoint;
+    let refreshTimer: ReturnType<typeof setTimeout> | undefined;
 
     const close = openRunStream(runId, startCheckpoint, {
       onEvent: (frame) => {
@@ -65,23 +102,27 @@ function RunPage() {
           // The server never resends within one connection, but a reconnect can
           // overlap by a frame. Keyed by checkpoint, which is unique per event.
           if (previous.some((seen) => seen.checkpoint === frame.checkpoint)) return previous;
-          const next = [...previous, frame];
-          // Bound the DOM: a streaming run emits thousands of chunk events and
-          // nobody scrolls back through them.
-          return next.length > 2000 ? next.slice(-2000) : next;
+          return [...previous, frame];
         });
 
-        // A closing event means new spans exist. Refetch rather than trying to
-        // assemble the waterfall in the browser — the projector already does it.
-        if (frame.event_type.endsWith('.completed') || frame.event_type.endsWith('.failed')) {
-          void queryClient.invalidateQueries({ queryKey: ['run', runId] });
+        // Counts and last activity change for every message, while spans appear
+        // on closing messages. Coalesce chatty token streams and let the
+        // projector remain the one place that assembles both.
+        if (!refreshTimer) {
+          refreshTimer = setTimeout(() => {
+            refreshTimer = undefined;
+            void queryClient.invalidateQueries({ queryKey: ['run', runId] });
+          }, 250);
         }
       },
       onPhase: setPhase,
       onResync: setResyncedFrom,
     });
-    return close;
-  }, [runId, startCheckpoint, queryClient]);
+    return () => {
+      if (refreshTimer) clearTimeout(refreshTimer);
+      close();
+    };
+  }, [runId, canStream, queryClient]);
 
   if (query.isError) {
     return (
@@ -96,6 +137,11 @@ function RunPage() {
   }
 
   const { summary, spans } = query.data;
+  const historicalEvents = (history.data?.pages ?? []).flatMap((page) =>
+    page.events.map(toEventFeedEvent),
+  );
+  const currentLiveEvents = liveEvents.filter((event) => event.run_id === runId);
+  const events = mergeEvents(historicalEvents, currentLiveEvents);
 
   return (
     <div className="flex flex-col gap-4">
@@ -174,13 +220,46 @@ function RunPage() {
         <CardHeader className="flex-row items-center justify-between">
           <CardTitle>Events</CardTitle>
           <span className="text-xs text-muted-foreground">
-            {liveEvents.length} streamed since this page opened
+            {events.length} total · {currentLiveEvents.length} received live
+            {history.isFetchingNextPage ? ' · loading history' : ''}
           </span>
         </CardHeader>
         <CardContent className="p-0">
-          <EventFeed events={liveEvents} autoScroll={isRunning} />
+          {history.isLoading ? (
+            <p className="p-6 text-center text-sm text-muted-foreground">
+              Loading event history…
+            </p>
+          ) : history.isError ? (
+            <p className="p-6 text-center text-sm text-danger">
+              Event history could not be loaded. New live events will still appear here.
+            </p>
+          ) : (
+            <EventFeed events={events} autoScroll={isRunning} />
+          )}
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+function toEventFeedEvent(event: RecordedEvent): EventFeedEvent {
+  return {
+    checkpoint: event.metadata.checkpoint,
+    span_id: event.metadata.span_id,
+    event_type: String(event.event_type),
+    occurred_at: event.metadata.occurred_at,
+    data: event.data,
+  };
+}
+
+function mergeEvents(
+  historical: EventFeedEvent[],
+  live: LiveEventFrame[],
+): EventFeedEvent[] {
+  const byCheckpoint = new Map<string, EventFeedEvent>();
+  for (const event of historical) byCheckpoint.set(event.checkpoint, event);
+  for (const event of live) byCheckpoint.set(event.checkpoint, event);
+  return [...byCheckpoint.values()].sort((left, right) =>
+    left.checkpoint.localeCompare(right.checkpoint),
   );
 }

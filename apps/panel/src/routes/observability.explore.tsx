@@ -332,7 +332,6 @@ function Tree({
     },
     getNextPageParam: (last) => last.next_cursor ?? undefined,
     enabled: pivot !== 'span',
-    refetchInterval: 15_000,
   });
 
   // The `span` pivot has no dimension above it: the flat span list *is* the
@@ -357,7 +356,6 @@ function Tree({
     },
     getNextPageParam: (last) => last.next_cursor ?? undefined,
     enabled: pivot === 'span',
-    refetchInterval: 15_000,
   });
 
   const runs = useQuery({
@@ -750,7 +748,6 @@ function Messages({
     },
     getNextPageParam: (last) => last.next_cursor ?? undefined,
     enabled: Boolean(selection.run),
-    refetchInterval: 5_000,
   });
 
   const pages = events.data?.pages ?? [];

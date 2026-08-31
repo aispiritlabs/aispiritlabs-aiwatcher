@@ -186,7 +186,8 @@ gain.
 Every view below, with screenshots of it against real data and what each one is
 for: [EXAMPLES.md](EXAMPLES.md).
 
-Six views, all served from aiwatcher's own read model — except Prompts, which
+The product areas are served from aiwatcher's own read model — except authored
+artifacts such as Prompts and Datasets, which
 reads the registry. Every one of them carries the same time window — 15m, 1h,
 6h, 24h, 7d or everything — in the URL, so a link carries the period with it,
 and a run is in the window when it was last *heard from* rather than when it
@@ -217,9 +218,19 @@ started:
   optimisation with its verdict. Editable: publishing a new version and moving
   the `production` label are two separate acts, because storing a prompt and
   deploying it are two decisions.
+- **Datasets** — immutable, content-addressed versions of cases curated from
+  production runs. A promotion can target one session, one agent or any of
+  several agents, and keeps the source run/session/trace identifiers. Each
+  collection opens in a Hugging Face-style TanStack Table viewer: rows arrive
+  in lazy 50-row slices, search runs across the whole version, and tabs show
+  every linked evaluation plus the Flow PHP lineage. Evaluations should pin the
+  exact reference as `dataset-name@version-sha256`.
+- **Data Curation** — saved Flow PHP recipes with four explicit stages: test
+  without reading, simulate 25 rows, execute the full bounded result, and save
+  that exact output as a dataset version.
 
-Datasets and Experiments are still placeholders, and say what they are waiting
-on rather than rendering plausible fake rows.
+Experiments is still a placeholder and says what it is waiting on rather than
+rendering plausible fake rows.
 
 ## The Laser backend
 
@@ -254,6 +265,7 @@ In dependency order. A crate may only depend on ones above it.
 | `aiwatcher-bus` | `MessageSource` / `MessageSink` / `Checkpointer` + memory, write-ahead-log, Laser and generic-broker adapters |
 | `aiwatcher-trace` | `SpanAssembler` and the OTLP/JSON exporters |
 | `aiwatcher-prompts` | The prompt registry over an `ObjectStore` port: content-addressed versions, optimisation verdicts, RustFS/S3 and filesystem adapters, and a hand-written SigV4 signer |
+| `aiwatcher-auth` | Single sign-on: OIDC discovery, a JWKS cache, the authorization-code flow with PKCE, signed session cookies, authentik's forward-auth headers, group-to-role mapping |
 | `aiwatcher-projector` | The pipeline, live hub, read model, dimension and span folds, dedup, retry, dead letters |
 | `aiwatcher-api` | axum router: REST, SSE, WebSocket, OpenAPI |
 | `aiwatcher-server` | Config, wiring, graceful shutdown. The only crate that knows every implementation exists. |
@@ -295,6 +307,10 @@ that matters in every one of them is what would make the decision wrong.
   ([0008](docs/ADR/ADR_0008_FLOW_QUERY_SURFACE.md)). The Query tab's pipeline is
   lexed, whitelisted and turned into objects through an explicit `match` — no
   `eval`, and no name from a query ever becomes a callable.
+- **Flow executes curation; the Rust registry versions it**
+  ([0014](docs/ADR/ADR_0014_DATA_CURATION.md)). The optional PHP service remains
+  stateless; authenticated Rust endpoints save content-addressed script
+  revisions and the exact rows a completed transformation produced.
 - **A workflow graph is declared on the log, not read from an orchestrator**
   ([0012](docs/ADR/ADR_0012_WORKFLOW_GRAPH.md)). `workflow.declared` carries the
   shape, `step.*` executes a node of it, and `workflow_run_id` joins the stages
@@ -304,6 +320,32 @@ that matters in every one of them is what would make the decision wrong.
 
 The full index, including trace storage and the local-Kubernetes guards, is in
 [docs/ADR/README.md](docs/ADR/README.md).
+
+## Signing in
+
+Off by default. `AIWATCHER_AUTH_MODE=oidc` makes aiwatcher an OpenID Connect
+relying party — built against authentik, and nothing in the code is specific to
+it beyond two defaults — and `proxy` reads the identity from an authenticating
+reverse proxy that is already in front.
+
+```bash
+just authentik-up   # authentik in Docker: server, worker, PostgreSQL, Redis
+just run-sso        # the server as a relying party against it
+```
+
+The authorization-code exchange happens in the server, the provider's tokens
+are read once and dropped, and the browser keeps an HttpOnly cookie the server
+signed — because the panel's two most important routes are an SSE stream and a
+WebSocket, and a browser can set headers on neither
+([0013](docs/ADR/ADR_0013_SINGLE_SIGN_ON.md)).
+
+Roles come from authentik groups and there are three: `viewer` reads, `editor`
+publishes prompt versions and events, `admin` dispatches a rerun — the one
+route that asks another system to do work. A producer cannot sign in
+interactively, so it carries a token instead (`AIWATCHER_TOKEN`), which grants
+editor and never admin.
+
+Setting it up, either way round: [deploy/authentik/README.md](deploy/authentik/README.md).
 
 ## Deploying
 
@@ -335,6 +377,7 @@ just openapi       # regenerate contracts/openapi.json and the panel's client
 just stack-up      # docker compose: VictoriaTraces, VictoriaMetrics, Collector, Grafana
 just tilt-up       # the same stack on a local Kubernetes, rebuilt on save
 just flow-check    # the PHP query service's own gate — `just check` excludes it
+just authentik-up  # a local identity provider, for `just run-sso`
 ```
 
 `contracts/openapi.json` is generated from the axum routes and the panel's

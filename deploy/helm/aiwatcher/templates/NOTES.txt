@@ -7,6 +7,7 @@ What this release owns and what it borrowed:
   collector        {{ .Values.collector.mode }}{{ if eq .Values.collector.mode "external" }} → {{ .Values.collector.external.endpoint }}{{ end }}
   VictoriaTraces   {{ .Values.victoriatraces.mode }}{{ if eq .Values.victoriatraces.mode "external" }} → {{ .Values.victoriatraces.external.url }}{{ end }}
   VictoriaMetrics  {{ .Values.victoriametrics.mode }}{{ if eq .Values.victoriametrics.mode "external" }} → {{ .Values.victoriametrics.external.url }}{{ end }}
+  sign-in          {{ .Values.auth.mode }}{{ if eq .Values.auth.mode "oidc" }} → {{ .Values.auth.oidc.issuer }}{{ end }}
 
 Reach the panel:
 {{- if .Values.ingress.enabled }}
@@ -29,11 +30,35 @@ Point an SDK at it, from inside the cluster:
   ⚠ server.ingestEnabled is false, so POST /api/v1/events is closed. An SDK can
     only publish to the durable log directly.
 {{- end }}
+{{- if and (ne .Values.auth.mode "none") .Values.server.ingestEnabled (not .Values.auth.ingestTokenSecret.name) }}
+
+  ⚠ Signing in is on and auth.ingestTokenSecret.name is empty, so POST
+    /api/v1/events now answers 401 to every producer. An agent reaches the
+    Service directly and cannot complete an interactive sign-in, so it needs a
+    token of its own:
+
+      kubectl -n {{ .Release.Namespace }} create secret generic aiwatcher-ingest \
+        --from-literal=AIWATCHER_AUTH_INGEST_TOKENS="planner=$(openssl rand -hex 32)"
+
+    then set auth.ingestTokenSecret.name and give the SDKs AIWATCHER_TOKEN.
+{{- end }}
 {{- if and (eq .Values.collector.mode "none") (include "aiwatcher.otlpEndpoint" .) }}
 
 ⚠ collector.mode is "none" and the server exports OTLP directly. Prompt and
   completion text is redacted in the Collector, so nothing is redacting it on
   this path. That needs a retention policy, not just this note.
+{{- end }}
+{{- if eq .Values.auth.mode "none" }}
+
+⚠ auth.mode is "none": aiwatcher identifies nobody and refuses nobody. Whatever
+  guards the ingress is the only gate, and anything that can reach the Service
+  is already past it. See docs/ADR/ADR_0013_SINGLE_SIGN_ON.md.
+{{- else if eq .Values.auth.mode "proxy" }}
+
+⚠ auth.mode is "proxy": the caller's identity comes from request headers, so
+  any pod allowed to reach port 8080 can claim to be an admin. The NetworkPolicy
+  is what bounds that, and the chart refused to render without it. `oidc` is the
+  mode where the identity is proved to this process rather than asserted to it.
 {{- end }}
 {{- if eq .Values.victoriatraces.mode "none" }}
 

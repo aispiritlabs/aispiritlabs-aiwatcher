@@ -27,6 +27,9 @@ final readonly class QueryRunner
      */
     public const int MAX_ROWS = 1_000;
 
+    /** A simulation proves the transformation on a reviewable sample only. */
+    public const int SIMULATION_ROWS = 25;
+
     /**
      * Wall-clock ceiling.
      *
@@ -46,20 +49,21 @@ final readonly class QueryRunner
      *
      * @return array<string, mixed>
      */
-    public function run(string $query, ?int $windowSeconds = null): array
+    public function run(string $query, ?int $windowSeconds = null, int $maxRows = self::MAX_ROWS): array
     {
         $plan = (new PipelineBuilder($this->catalog, $windowSeconds))->build(Parser::parse($query));
+        $maxRows = \max(1, \min(self::MAX_ROWS, $maxRows));
 
         \set_time_limit(self::TIMEOUT_SECONDS);
         $started = \microtime(true);
 
         // One more than the cap, so "there was more" is a fact rather than an
         // inference from a full page.
-        $rows = $plan->frame->fetch(self::MAX_ROWS + 1)->toArray();
-        $truncated = \count($rows) > self::MAX_ROWS;
+        $rows = $plan->frame->fetch($maxRows + 1)->toArray();
+        $truncated = \count($rows) > $maxRows;
 
         if ($truncated) {
-            $rows = \array_slice($rows, 0, self::MAX_ROWS);
+            $rows = \array_slice($rows, 0, $maxRows);
         }
 
         return [
@@ -74,7 +78,7 @@ final readonly class QueryRunner
             'source' => $this->source,
             // What the rows were read through, so a table that looks short can
             // be read as scoped rather than as empty.
-            'window_seconds' => $windowSeconds !== null && $windowSeconds > 0 ? $windowSeconds : null,
+            'window_seconds' => $plan->windowSeconds,
             'took_ms' => (int) \round((\microtime(true) - $started) * 1000),
         ];
     }

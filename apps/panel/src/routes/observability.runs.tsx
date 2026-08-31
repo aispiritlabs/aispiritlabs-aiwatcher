@@ -148,9 +148,6 @@ function RunsPage() {
       if (response.error) throw new Error('failed to list runs');
       return response.data;
     },
-    // A runs list is the one place polling earns its keep: new runs appear
-    // without a page-level stream, and the payload is small.
-    refetchInterval: 5_000,
   });
 
   const runs = React.useMemo(() => query.data?.runs ?? [], [query.data]);

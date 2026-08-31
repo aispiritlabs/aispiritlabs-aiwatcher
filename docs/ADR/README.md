@@ -18,5 +18,8 @@ decision is made rather than reconstructed afterwards. The value is in the
 | [0010](ADR_0010_EVALUATION_REPORTS.md) | An evaluation report rides the event log and forms no span |
 | [0011](ADR_0011_PROMPT_REGISTRY.md) | A prompt is authored, not observed, and lives in an object store |
 | [0012](ADR_0012_WORKFLOW_GRAPH.md) | A workflow graph is declared on the log and folded like everything else |
+| [0013](ADR_0013_SINGLE_SIGN_ON.md) | aiwatcher is its own relying party, and the session is a cookie it signs |
+| [0014](ADR_0014_DATA_CURATION.md) | Flow executes curation; the authenticated Rust registry versions its scripts and outputs |
+| [0015](ADR_0015_DATASET_EXPLORATION.md) | Dataset exploration uses slices and immutable dataset references |
 
 Use [template.md](template.md) for a new one.

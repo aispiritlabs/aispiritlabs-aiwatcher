@@ -17,11 +17,18 @@ use aiwatcher_core::ports::{
     LivePublisher, PortError, RerunAccepted, RerunRequest, WorkflowRunner,
 };
 use aiwatcher_core::{Checkpoint, EventEnvelope, EventType, MessageId, Sdk, Source};
+use aiwatcher_datasets::Registry as DatasetRegistry;
 use aiwatcher_projector::{LiveHub, ReadModel};
 use aiwatcher_prompts::adapters::memory::MemoryObjectStore;
 use aiwatcher_prompts::{Registry, RegistryConfig};
 
 use aiwatcher_api::state::{AppState, HealthState};
+use aiwatcher_auth::{AuthConfig, AuthMode, Authenticator, IngestToken, RoleMapping};
+
+/// What a producer presents. Long enough that the parser accepts it, which is
+/// itself part of what is under test in `aiwatcher_auth`.
+const INGEST_TOKEN: &str = "agents=0123456789abcdef0123456789abcdef";
+const INGEST_SECRET: &str = "0123456789abcdef0123456789abcdef";
 
 struct Fixture {
     state: AppState,
@@ -32,26 +39,48 @@ struct Fixture {
 
 impl Fixture {
     fn new(ingest_enabled: bool) -> Self {
-        Self::build(ingest_enabled, true, None)
+        Self::build(ingest_enabled, true, None, None)
     }
 
     /// An instance configured without a prompt store, which is what
     /// `AIWATCHER_PROMPT_STORE=none` produces.
     fn without_registry() -> Self {
-        Self::build(false, false, None)
+        Self::build(false, false, None, None)
     }
 
     /// An instance with a runner wired, which is what
     /// `AIWATCHER_WORKFLOW_RUNNER=http` produces. The default has none, so
     /// every other test also asserts that reruns are 501 by construction.
     fn with_runner(runner: Arc<RecordingRunner>) -> Self {
-        Self::build(false, true, Some(runner))
+        Self::build(false, true, Some(runner), None)
+    }
+
+    /// An instance behind an authenticating reverse proxy, which is what
+    /// `AIWATCHER_AUTH_MODE=proxy` produces. Chosen for these tests because it
+    /// is the one mode that establishes a real identity with no network at
+    /// all: there is no provider to discover, only headers to read.
+    async fn behind_a_proxy(ingest_enabled: bool) -> Self {
+        let auth = Authenticator::connect(AuthConfig {
+            mode: AuthMode::Proxy,
+            roles: RoleMapping::default(),
+            ingest_tokens: vec![
+                INGEST_TOKEN
+                    .parse::<IngestToken>()
+                    .expect("long enough to be accepted"),
+            ],
+            ..AuthConfig::default()
+        })
+        .await
+        .expect("a proxy-mode authenticator needs nothing running")
+        .expect("proxy mode produces an authenticator");
+        Self::build(ingest_enabled, true, None, Some(Arc::new(auth)))
     }
 
     fn build(
         ingest_enabled: bool,
         registry_enabled: bool,
         runner: Option<Arc<RecordingRunner>>,
+        auth: Option<Arc<Authenticator>>,
     ) -> Self {
         let bus = Arc::new(InMemoryBus::new());
         let read_model = Arc::new(ReadModel::default());
@@ -68,7 +97,14 @@ impl Fixture {
                     RegistryConfig::default(),
                 ))
             }),
+            datasets: registry_enabled.then(|| {
+                Arc::new(DatasetRegistry::new(
+                    Arc::new(MemoryObjectStore::new()),
+                    "datasets",
+                ))
+            }),
             runner: runner.map(|runner| runner as Arc<dyn WorkflowRunner>),
+            auth,
             health,
         };
         Self {
@@ -108,6 +144,39 @@ impl Fixture {
             Request::builder()
                 .uri(uri)
                 .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+    }
+
+    /// A request carrying what authentik's outpost puts on one it let through.
+    async fn get_as(&self, uri: &str, user: &str, groups: &str) -> (StatusCode, Value) {
+        self.request(
+            Request::builder()
+                .uri(uri)
+                .header("x-authentik-username", user)
+                .header("x-authentik-groups", groups)
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+    }
+
+    async fn post_as(
+        &self,
+        uri: &str,
+        user: &str,
+        groups: &str,
+        body: Value,
+    ) -> (StatusCode, Value) {
+        self.request(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("x-authentik-username", user)
+                .header("x-authentik-groups", groups)
+                .body(Body::from(body.to_string()))
                 .expect("request"),
         )
         .await
@@ -602,6 +671,43 @@ async fn a_stream_opened_without_a_cursor_is_live_only() {
 }
 
 #[tokio::test]
+async fn the_global_sse_stream_replays_every_run_from_its_resume_point() {
+    let fixture = Fixture::new(false);
+    fixture.seed_run("run-1").await;
+    fixture.seed_run("run-2").await;
+
+    let response = fixture
+        .router()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/events/stream")
+                .header("last-event-id", Checkpoint::beginning().to_string())
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("responds");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("text/event-stream")
+    );
+
+    let text = read_until_caught_up(response).await;
+    assert_eq!(
+        text.matches("event: event").count(),
+        6,
+        "the global stream includes both runs: {text}"
+    );
+    assert!(text.contains("\"run_id\":\"run-1\""), "{text}");
+    assert!(text.contains("\"run_id\":\"run-2\""), "{text}");
+}
+
+#[tokio::test]
 async fn the_sse_stream_replays_history_then_announces_it_is_live() {
     let fixture = Fixture::new(false);
     fixture.seed_run("run-1").await;
@@ -1060,6 +1166,141 @@ async fn an_instance_without_a_prompt_store_says_so_rather_than_404ing() {
     assert_eq!(body["code"], "registry_disabled");
 }
 
+// ── Data curation and datasets ──────────────────────────────────────────────
+
+const CURATION: &str = "data_frame()->read(default)->filter(ref('status')->same(lit('succeeded')))";
+
+#[tokio::test]
+async fn a_flow_recipe_can_be_saved_and_listed() {
+    let fixture = Fixture::new(false);
+    let (status, saved) = fixture
+        .post(
+            "/api/v1/curations",
+            json!({
+                "name": "production/succeeded",
+                "description": "Candidates from production",
+                "pipeline": CURATION,
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{saved}");
+    assert_eq!(
+        saved["recipe"]["revision"].as_str().expect("a hash").len(),
+        64
+    );
+
+    let (status, page) = fixture.get("/api/v1/curations").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(page["recipes"][0]["name"], "production/succeeded");
+}
+
+#[tokio::test]
+async fn a_completed_curation_is_a_content_addressed_dataset_version() {
+    let fixture = Fixture::new(false);
+    let request = json!({
+        "name": "support/conversations",
+        "description": "Promoted production sessions",
+        "recipe": "production/succeeded",
+        "pipeline": CURATION,
+        "columns": ["run_id", "conversation_id"],
+        "items": [{"run_id": "run-1", "conversation_id": "session-1"}],
+        "source": "http://aiwatcher.test",
+        "window_seconds": 900,
+    });
+    let (status, first) = fixture.post("/api/v1/datasets", request.clone()).await;
+    assert_eq!(status, StatusCode::CREATED, "{first}");
+    assert_eq!(first["dataset"]["latest"]["row_count"], 1);
+    assert_eq!(
+        first["dataset"]["latest"]["version"]
+            .as_str()
+            .expect("a hash")
+            .len(),
+        64
+    );
+
+    let (status, same) = fixture.post("/api/v1/datasets", request).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(same["created"], false);
+    assert_eq!(
+        same["dataset"]["versions"]
+            .as_array()
+            .expect("versions")
+            .len(),
+        1
+    );
+
+    let (_, page) = fixture.get("/api/v1/datasets").await;
+    assert_eq!(page["datasets"][0]["name"], "support/conversations");
+}
+
+#[tokio::test]
+async fn dataset_rows_are_lazy_pages_with_server_side_search() {
+    let fixture = Fixture::new(false);
+    let (status, published) = fixture
+        .post(
+            "/api/v1/datasets",
+            json!({
+                "name": "support/conversations",
+                "pipeline": CURATION,
+                "columns": ["run_id", "conversation_id"],
+                "items": [
+                    {"run_id": "run-1", "conversation_id": "session-alpha"},
+                    {"run_id": "run-2", "conversation_id": "session-beta"}
+                ],
+                "source": "http://aiwatcher.test"
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{published}");
+    let version = published["dataset"]["latest"]["version"]
+        .as_str()
+        .expect("a version");
+
+    let (status, first) = fixture
+        .get(&format!(
+            "/api/v1/dataset-rows?name=support%2Fconversations&version={version}&offset=0&limit=1"
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!(first["rows"].as_array().expect("rows").len(), 1);
+    assert_eq!(first["rows"][0]["row_index"], 0);
+    assert_eq!(first["matching_rows"], 2);
+    assert_eq!(first["next_offset"], 1);
+
+    let (status, searched) = fixture
+        .get("/api/v1/dataset-rows?name=support%2Fconversations&search=BETA&limit=50")
+        .await;
+    assert_eq!(status, StatusCode::OK, "{searched}");
+    assert_eq!(searched["matching_rows"], 1);
+    assert_eq!(searched["rows"][0]["row"]["run_id"], "run-2");
+
+    let (status, missing) = fixture.get("/api/v1/dataset-rows?name=missing").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{missing}");
+    assert_eq!(missing["code"], "not_found");
+}
+
+#[tokio::test]
+async fn a_reader_may_not_save_a_curation_or_dataset() {
+    let fixture = Fixture::behind_a_proxy(false).await;
+    let (status, _) = fixture
+        .post_as(
+            "/api/v1/curations",
+            "alice",
+            "everyone",
+            json!({ "name": "production/succeeded", "pipeline": CURATION }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn an_instance_without_an_object_store_disables_datasets_too() {
+    let fixture = Fixture::without_registry();
+    let (status, body) = fixture.get("/api/v1/datasets").await;
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+    assert_eq!(body["code"], "registry_disabled");
+}
+
 // ── The workflow graph ───────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -1257,4 +1498,244 @@ async fn a_rerun_body_naming_its_own_endpoint_is_refused() {
 
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert!(runner.seen().is_empty(), "nothing left the process");
+}
+
+// ── Single sign-on ───────────────────────────────────────────────────────────
+//
+// Exercised in `proxy` mode throughout, because it is the one mode that
+// establishes a real identity with nothing running: there is no provider to
+// discover, only the headers authentik's outpost already sets on every request
+// it lets through. What is under test is the same for every mode — the layer,
+// the role checks and the public-path list — because all three sit above the
+// point where the modes differ.
+
+#[tokio::test]
+async fn an_instance_with_no_provider_refuses_nobody() {
+    // The default, and the thing an upgrade must not change: a release that
+    // started answering 401 would be one that took an installation down.
+    let fixture = Fixture::new(false);
+
+    let (status, _) = fixture.get("/api/v1/runs").await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, body) = fixture.get("/api/v1/auth/config").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["enabled"], false,
+        "the panel renders no sign-in screen"
+    );
+}
+
+#[tokio::test]
+async fn a_request_that_did_not_come_through_the_proxy_is_refused() {
+    // In proxy mode the absence of the header means the request did not come
+    // through the proxy, which is the one thing that must never read as
+    // "nobody is signed in, carry on".
+    let fixture = Fixture::behind_a_proxy(false).await;
+    let (status, body) = fixture.get("/api/v1/runs").await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(body["code"], "unauthenticated");
+}
+
+#[tokio::test]
+async fn the_probes_and_the_auth_config_answer_without_a_credential() {
+    // A kubelet has no session, and a panel that cannot ask whether there is a
+    // login here has to guess.
+    let fixture = Fixture::behind_a_proxy(false).await;
+    for public in ["/livez", "/healthz"] {
+        let (status, _) = fixture.get(public).await;
+        assert_eq!(status, StatusCode::OK, "{public}");
+    }
+    // Readiness answers its own question — this fixture never marked itself
+    // ready — and the point is that it answers it rather than 401.
+    let (status, _) = fixture.get("/readyz").await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    let (status, body) = fixture.get("/api/v1/auth/config").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["enabled"], true);
+    assert_eq!(body["mode"], "proxy");
+    assert!(
+        body["login_url"].is_null(),
+        "in proxy mode signing in already happened before the request arrived"
+    );
+}
+
+#[tokio::test]
+async fn the_current_caller_is_the_one_the_proxy_named() {
+    let fixture = Fixture::behind_a_proxy(false).await;
+
+    let (status, _) = fixture.get("/api/v1/auth/me").await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "a 401 here is what tells the panel to show its sign-in screen"
+    );
+
+    let (status, body) = fixture
+        .get_as("/api/v1/auth/me", "alice", "everyone|aiwatcher-admins")
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["username"], "alice");
+    assert_eq!(body["credential"], "proxy");
+    assert_eq!(
+        body["roles"].as_array().expect("a list").last(),
+        Some(&json!("admin"))
+    );
+}
+
+#[tokio::test]
+async fn a_reader_may_read_and_may_not_author_a_prompt() {
+    let fixture = Fixture::behind_a_proxy(false).await;
+
+    let (status, _) = fixture.get_as("/api/v1/runs", "alice", "everyone").await;
+    assert_eq!(status, StatusCode::OK, "an unmapped user is still a viewer");
+
+    let (status, body) = fixture
+        .post_as(
+            "/api/v1/prompts",
+            "alice",
+            "everyone",
+            json!({ "name": "planner.floor-plan", "text": BASELINE }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["code"], "forbidden");
+    assert!(
+        body["message"]
+            .as_str()
+            .expect("a message")
+            .contains("editor"),
+        "the message has to name the role, because the fix is a group: {body}"
+    );
+}
+
+#[tokio::test]
+async fn an_editor_may_author_a_prompt() {
+    let fixture = Fixture::behind_a_proxy(false).await;
+    let (status, body) = fixture
+        .post_as(
+            "/api/v1/prompts",
+            "bob",
+            "aiwatcher-editors",
+            json!({ "name": "planner.floor-plan", "text": BASELINE }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+}
+
+#[tokio::test]
+async fn only_an_admin_may_dispatch_a_rerun() {
+    // And the role is checked before the instance says whether it has a runner
+    // at all: an editor learning that a rerun endpoint exists and is unwired
+    // is a fact they were not entitled to.
+    let fixture = Fixture::behind_a_proxy(false).await;
+
+    let (status, _) = fixture
+        .post_as(
+            "/api/v1/workflows/import/rerun",
+            "bob",
+            "aiwatcher-editors",
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let (status, body) = fixture
+        .post_as(
+            "/api/v1/workflows/import/rerun",
+            "alice",
+            "aiwatcher-admins",
+            json!({}),
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_IMPLEMENTED,
+        "past the role check, and this fixture wires no runner: {body}"
+    );
+}
+
+#[tokio::test]
+async fn publishing_events_over_http_needs_an_editor() {
+    let fixture = Fixture::behind_a_proxy(true).await;
+    let batch = json!({
+        "events": [{
+            "event_type": "run.started",
+            "occurred_at": "2026-08-27T18:20:11Z",
+            "run_id": "run-sso",
+            "source": { "service": "browser", "sdk": "typescript" },
+            "data": {}
+        }]
+    });
+
+    let (status, _) = fixture
+        .post_as("/api/v1/events", "alice", "everyone", batch.clone())
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "reading is not writing");
+
+    let (status, body) = fixture
+        .post_as("/api/v1/events", "agent", "aiwatcher-editors", batch)
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+}
+
+#[tokio::test]
+async fn the_login_route_says_this_instance_has_no_provider() {
+    // 501, not 404: the route is in the contract and this deployment wired
+    // nothing behind it — the same answer the prompt registry gives.
+    let fixture = Fixture::behind_a_proxy(false).await;
+    let (status, body) = fixture.get("/api/v1/auth/login").await;
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+    assert_eq!(body["code"], "auth_disabled");
+}
+
+#[tokio::test]
+async fn a_producer_publishes_with_a_token_and_still_cannot_rerun() {
+    // The case that decides whether single sign-on is adoptable at all: an
+    // agent runs in the cluster, reaches the Service directly, never passes
+    // the proxy that authenticates a browser, and cannot complete an
+    // interactive sign-in. Without a credential of its own, turning SSO on
+    // would silently stop every SDK publishing over HTTP.
+    let fixture = Fixture::behind_a_proxy(true).await;
+    let batch = json!({
+        "events": [{
+            "event_type": "run.started",
+            "occurred_at": "2026-08-27T18:20:11Z",
+            "run_id": "run-token",
+            "source": { "service": "planner", "sdk": "python" },
+            "data": {}
+        }]
+    });
+
+    let publish = |token: &str, body: Value| {
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/v1/events")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .body(Body::from(body.to_string()))
+            .expect("request");
+        fixture.request(request)
+    };
+
+    let (status, body) = publish(INGEST_SECRET, batch.clone()).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+
+    let (status, _) = publish("not-the-token", batch).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // Editor, never admin: a secret sitting in an agent's environment must not
+    // be able to ask an orchestrator to run something.
+    let (status, _) = fixture
+        .request(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/workflows/import/rerun")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, format!("Bearer {INGEST_SECRET}"))
+                .body(Body::from("{}"))
+                .expect("request"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
 }

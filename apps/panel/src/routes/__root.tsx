@@ -7,11 +7,14 @@ import {
   LineChart,
   ScrollText,
   Sparkles,
+  WandSparkles,
   Workflow,
 } from 'lucide-react';
 
+import { UserMenu } from '@/components/user-menu';
+
 /**
- * Six areas, not eleven pages.
+ * Seven areas, not a flat list of every page.
  *
  * The header used to list every route side by side, which worked while there
  * was one product area. There are six now — watching runs, watching the
@@ -45,6 +48,7 @@ const AREAS = [
   // evidence about and the thing a dataset is used to change.
   { to: '/prompts', label: 'Prompts', icon: ScrollText },
   { to: '/datasets', label: 'Datasets', icon: Database },
+  { to: '/data-curation', label: 'Data Curation', icon: WandSparkles },
   { to: '/experiments', label: 'Experiments', icon: Sparkles },
 ] as const;
 
@@ -60,7 +64,10 @@ function RootLayout() {
             <Activity className="h-4 w-4 text-primary" />
             aiwatcher
           </Link>
-          <nav className="flex items-center gap-1">
+          {/* `min-w-0` and its own overflow: the areas plus the caller's chip
+              are wider than a laptop at some widths, and the nav is the part
+              that should scroll rather than the page. */}
+          <nav className="flex min-w-0 items-center gap-1 overflow-x-auto">
             {AREAS.map(({ to, label, icon: Icon }) => (
               <Link
                 key={to}
@@ -75,6 +82,7 @@ function RootLayout() {
               </Link>
             ))}
           </nav>
+          <UserMenu />
         </div>
       </header>
       <main className="mx-auto max-w-[100rem] px-6 py-6">

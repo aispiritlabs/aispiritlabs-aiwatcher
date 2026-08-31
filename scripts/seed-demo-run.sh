@@ -16,6 +16,7 @@ CONVERSATION="${AIWATCHER_CONVERSATION:-conv-demo}"
 WORKFLOW="${AIWATCHER_WORKFLOW:-research-summary}"
 # `source.service` is what the `runtime` pivot groups by.
 SERVICE="${AIWATCHER_SERVICE:-demo-seeder}"
+AGENT="${AIWATCHER_AGENT:-research-agent}"
 
 if ! curl -sf "$BASE/livez" >/dev/null; then
   echo "✗ no server at $BASE — start one with 'make run'" >&2
@@ -48,24 +49,24 @@ emit() { # emit <event_type> <agent_id|-> <data-json>
 echo "seeding $RUN_ID …"
 
 emit run.started        - '{}'
-emit agent.started      research-agent '{}'
-emit llm.started        research-agent '{"call_id":"c1","provider":"anthropic","model":"claude-opus-5"}'
+emit agent.started      "$AGENT" '{}'
+emit llm.started        "$AGENT" '{"call_id":"c1","provider":"anthropic","model":"claude-opus-5"}'
 sleep 0.2
-emit llm.first_token    research-agent '{"call_id":"c1","provider":"anthropic","model":"claude-opus-5"}'
+emit llm.first_token    "$AGENT" '{"call_id":"c1","provider":"anthropic","model":"claude-opus-5"}'
 for i in $(seq 1 24); do
-  emit llm.chunk        research-agent "{\"call_id\":\"c1\",\"text\":\"token-$i \"}"
+  emit llm.chunk        "$AGENT" "{\"call_id\":\"c1\",\"text\":\"token-$i \"}"
 done
-emit llm.completed      research-agent '{"call_id":"c1","provider":"anthropic","model":"claude-opus-5","prompt_tokens":812,"completion_tokens":193,"cached_tokens":400,"finish_reason":"stop"}'
+emit llm.completed      "$AGENT" '{"call_id":"c1","provider":"anthropic","model":"claude-opus-5","prompt_tokens":812,"completion_tokens":193,"cached_tokens":400,"finish_reason":"stop"}'
 
-emit tool.started       research-agent '{"call_id":"t1","tool_name":"web_search"}'
+emit tool.started       "$AGENT" '{"call_id":"t1","tool_name":"web_search"}'
 sleep 0.3
-emit tool.completed     research-agent '{"call_id":"t1","tool_name":"web_search","results":7}'
+emit tool.completed     "$AGENT" '{"call_id":"t1","tool_name":"web_search","results":7}'
 
-emit llm.started        research-agent '{"call_id":"c2","provider":"anthropic","model":"claude-opus-5"}'
+emit llm.started        "$AGENT" '{"call_id":"c2","provider":"anthropic","model":"claude-opus-5"}'
 sleep 0.2
-emit llm.completed      research-agent '{"call_id":"c2","provider":"anthropic","model":"claude-opus-5","prompt_tokens":1420,"completion_tokens":88,"cached_tokens":812,"finish_reason":"stop"}'
+emit llm.completed      "$AGENT" '{"call_id":"c2","provider":"anthropic","model":"claude-opus-5","prompt_tokens":1420,"completion_tokens":88,"cached_tokens":812,"finish_reason":"stop"}'
 
-emit agent.completed    research-agent '{}'
+emit agent.completed    "$AGENT" '{}'
 emit run.completed      - '{"status":"succeeded"}'
 
 sleep 0.8

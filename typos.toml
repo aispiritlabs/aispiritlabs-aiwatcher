@@ -11,6 +11,9 @@ extend-exclude = [
   ".data/",
   # Composer dependencies for services/flow, same reasoning as node_modules.
   "vendor/",
+  # A base64url modulus and a PEM key. Base64 of anything eventually contains
+  # four letters that spell something the dictionary has an opinion about.
+  "crates/aiwatcher-auth/tests/fixtures/",
 ]
 
 [default.extend-words]

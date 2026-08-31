@@ -27,6 +27,7 @@ export function VirtualList<T>({
   onReachEnd,
   isFetchingMore,
   footer,
+  followEnd = false,
 }: {
   items: T[];
   estimateSize?: number;
@@ -38,6 +39,8 @@ export function VirtualList<T>({
   onReachEnd?: () => void;
   isFetchingMore?: boolean;
   footer?: React.ReactNode;
+  /** Keep the newest row visible as items are appended. */
+  followEnd?: boolean;
 }) {
   const scrollRef = React.useRef<HTMLDivElement>(null);
 
@@ -59,6 +62,12 @@ export function VirtualList<T>({
       onReachEnd();
     }
   }, [onReachEnd, lastRendered, items.length]);
+
+  React.useEffect(() => {
+    if (followEnd && items.length > 0) {
+      virtualizer.scrollToIndex(items.length - 1, { align: 'end' });
+    }
+  }, [followEnd, items.length, virtualizer]);
 
   return (
     <div ref={scrollRef} className={cn('overflow-y-auto', className)}>

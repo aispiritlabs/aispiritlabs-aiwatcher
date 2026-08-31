@@ -105,6 +105,40 @@ promptStore:
     accessKeyKey: RUSTFS_ACCESS_KEY
     secretKeyKey: RUSTFS_SECRET_KEY
 
+# ── Signing in ───────────────────────────────────────────────────────────────
+#
+# Left off, and this is the one setting in this file that is deliberately not
+# what planner will end up running. Turning it on changes who can reach what,
+# and it needs two secrets in the namespace *before* the release rolls — so it
+# is two lines somebody types, not a default they inherit on the next upgrade.
+#
+# planner's ingress already sends every request through authentik's outpost
+# (see the middlewares at the bottom of this file), which is why `proxy` is the
+# mode here: the sign-in already happens, and aiwatcher simply starts reading
+# who it was. What that buys is a name on every rerun, a role on every write,
+# and the ability to say that the person looking at a run is not the person who
+# may re-run it.
+#
+# What it does not buy is a boundary inside the namespace: in `proxy` mode any
+# pod that can reach port 8080 can assert any identity, which is why the chart
+# refuses to render it without networkPolicy.enabled below. `oidc` is the mode
+# where the identity is proved to aiwatcher rather than asserted to it; it needs
+# an application in planner's authentik, and deploy/authentik has the blueprint.
+#
+# To turn it on:
+#
+#   kubectl -n planner create secret generic aiwatcher-ingest #     --from-literal=AIWATCHER_AUTH_INGEST_TOKENS="planner=$(openssl rand -hex 32)"
+#
+#   # then give every agent that posts to /api/v1/events the same value as
+#   # AIWATCHER_TOKEN, and uncomment:
+#
+# auth:
+#   mode: proxy
+#   ingestTokenSecret:
+#     name: aiwatcher-ingest
+auth:
+  mode: none
+
 networkPolicy:
   # planner fences its observability pods (planner-observability-ingress) and
   # runs NetworkPolicies for everything else, so aiwatcher's own pods should be

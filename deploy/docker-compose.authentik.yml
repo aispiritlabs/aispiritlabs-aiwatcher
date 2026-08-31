@@ -1,0 +1,92 @@
+# authentik, for developing against a real identity provider.
+#
+#   just authentik-up      start it
+#   just run-sso           the server as a relying party against it
+#
+# Separate from docker-compose.yml on purpose. That file is the observability
+# stack — the Collector, VictoriaTraces, VictoriaMetrics, Grafana — and every
+# service in it is one aiwatcher talks to about data. This is four containers,
+# two of them databases, for a thing aiwatcher talks to about people, and
+# nobody working on span assembly should have to run a PostgreSQL to do it.
+#
+# Pinned rather than `latest`: authentik's blueprint schema has changed shape
+# between releases (redirect URIs became objects, an invalidation flow became
+# required), so the blueprint beside this file is written against one version
+# and says so.
+name: aiwatcher-authentik
+
+x-authentik: &authentik
+  image: ghcr.io/goauthentik/server:2025.6.4
+  restart: unless-stopped
+  environment:
+    AUTHENTIK_REDIS__HOST: redis
+    AUTHENTIK_POSTGRESQL__HOST: postgresql
+    AUTHENTIK_POSTGRESQL__USER: authentik
+    AUTHENTIK_POSTGRESQL__NAME: authentik
+    AUTHENTIK_POSTGRESQL__PASSWORD: authentik
+    # Development only. A real deployment generates this and keeps it in a
+    # Secret; losing it invalidates every session and every encrypted field.
+    AUTHENTIK_SECRET_KEY: development-only-not-a-secret-change-me
+    # http rather than https on the loopback, which is also why the aiwatcher
+    # session cookie is not `Secure` under `just run-sso` — see the note on
+    # AIWATCHER_AUTH_COOKIE_SECURE in crates/aiwatcher-server/src/config.rs.
+    AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+  depends_on:
+    postgresql:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+services:
+  postgresql:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: authentik
+      POSTGRES_PASSWORD: authentik
+      POSTGRES_DB: authentik
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U authentik"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - authentik-postgresql:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: --save 60 1 --loglevel warning
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - authentik-redis:/data
+
+  server:
+    <<: *authentik
+    command: server
+    ports:
+      - "9000:9000"
+    volumes:
+      # Anything here is applied on start-up, which is what makes the provider,
+      # the application and the three groups reproducible rather than a
+      # sequence of clicks somebody has to repeat.
+      - ./authentik:/blueprints/custom:ro
+
+  worker:
+    <<: *authentik
+    command: worker
+    user: root
+    volumes:
+      - ./authentik:/blueprints/custom:ro
+      # The worker is what applies blueprints, and it reconciles them against
+      # the database rather than the file — an edit is picked up on the next
+      # pass without a restart.
+      - /var/run/docker.sock:/var/run/docker.sock
+
+volumes:
+  authentik-postgresql:
+  authentik-redis:

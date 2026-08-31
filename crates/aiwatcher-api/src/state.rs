@@ -2,8 +2,10 @@
 
 use std::sync::Arc;
 
+use aiwatcher_auth::Authenticator;
 use aiwatcher_bus::{MessageSink, MessageSource};
 use aiwatcher_core::ports::WorkflowRunner;
+use aiwatcher_datasets::Registry as DatasetRegistry;
 use aiwatcher_projector::{LiveHub, ReadModel};
 use aiwatcher_prompts::Registry;
 
@@ -27,12 +29,23 @@ pub struct AppState {
     /// deliberate choice and the API says so instead of pretending the routes
     /// do not exist.
     pub prompts: Option<Arc<Registry>>,
+    /// The durable half of Data Curation: saved Flow recipes and the immutable
+    /// rows each execution produced. It shares the configured object store
+    /// with prompts, under a separate key prefix.
+    pub datasets: Option<Arc<DatasetRegistry>>,
     /// `None` when no orchestrator is configured, which makes the rerun route
     /// answer 501 rather than 404 — the same reasoning as `prompts`, with a
     /// sharper edge. This is the only thing here that makes something happen
     /// rather than reporting that it did, so the disabled case must be
     /// unmistakable: a no-op adapter would acknowledge a rerun nobody ran.
     pub runner: Option<Arc<dyn WorkflowRunner>>,
+    /// `None` when no identity provider is configured, which is the default.
+    /// Unlike `prompts` and `runner`, absence here is not a 501 on a few
+    /// routes — it is every caller being [`aiwatcher_auth::Identity::anonymous`]
+    /// and every role check passing, which is what `AIWATCHER_AUTH_MODE=none`
+    /// means. The 501 is reserved for the sign-in routes, which cannot do
+    /// anything useful without a provider.
+    pub auth: Option<Arc<Authenticator>>,
     pub health: HealthState,
 }
 
@@ -42,7 +55,9 @@ impl std::fmt::Debug for AppState {
             .field("source", &self.source)
             .field("ingest_enabled", &self.sink.is_some())
             .field("prompt_registry", &self.prompts.is_some())
+            .field("dataset_registry", &self.datasets.is_some())
             .field("workflow_runner", &self.runner)
+            .field("auth", &self.auth)
             .finish_non_exhaustive()
     }
 }

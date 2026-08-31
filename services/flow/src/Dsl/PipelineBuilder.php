@@ -12,6 +12,8 @@ use Flow\ETL\Function\ScalarFunction;
 use Flow\ETL\Row\EntryReference;
 use Flow\ETL\Row\Reference;
 
+use function Flow\ETL\DSL\all;
+use function Flow\ETL\DSL\any;
 use function Flow\ETL\DSL\array_expand;
 use function Flow\ETL\DSL\array_get;
 use function Flow\ETL\DSL\average;
@@ -70,18 +72,16 @@ final class PipelineBuilder
 
     private ?Dataset $dataset = null;
 
+    /** The request window, overridden by read(..., period:) when the script pins one. */
+    private ?int $effectiveWindowSeconds;
+
     public function __construct(
         private readonly Catalog $catalog,
-        /**
-         * The panel's time window, in seconds, or null for everything.
-         *
-         * Not part of the language on purpose: a query says *what* to read,
-         * and every list in the panel is already scoped by one control. A
-         * `->window(900)` step would be a second way to say it, and the two
-         * would disagree the first time somebody set both.
-         */
-        private readonly ?int $windowSeconds = null,
-    ) {}
+        /** The panel's fallback time window, in seconds, or null for everything. */
+        ?int $windowSeconds = null,
+    ) {
+        $this->effectiveWindowSeconds = $windowSeconds;
+    }
 
     public function build(Query $query): Plan
     {
@@ -106,13 +106,14 @@ final class PipelineBuilder
             );
         }
 
-        return new Plan($frame, $this->dataset, $this->truncate);
+        return new Plan($frame, $this->dataset, $this->truncate, $this->effectiveWindowSeconds);
     }
 
     private function read(Step $step): DataFrame
     {
         $name = null;
         $run = null;
+        $periodWasSet = false;
 
         foreach ($step->args as $argument) {
             if ($argument->name === 'run') {
@@ -121,9 +122,23 @@ final class PipelineBuilder
                 continue;
             }
 
+            if ($argument->name === 'period') {
+                if ($periodWasSet) {
+                    throw new ParseError('read() takes period: only once.', $argument->value->column());
+                }
+
+                $this->effectiveWindowSeconds = $this->period($argument->value);
+                $periodWasSet = true;
+
+                continue;
+            }
+
             if ($argument->name !== null) {
                 throw new ParseError(
-                    \sprintf('read() has no argument "%s". It takes a dataset, and optionally run:.', $argument->name),
+                    \sprintf(
+                        'read() has no argument "%s". It takes a dataset, optionally run: and period:.',
+                        $argument->name,
+                    ),
                     $argument->value->column(),
                 );
             }
@@ -166,10 +181,63 @@ final class PipelineBuilder
             );
         }
 
+        if ($periodWasSet && !$dataset->windowed) {
+            throw new ParseError(
+                \sprintf('Dataset "%s" does not take a period. It is already bounded to one run.', $dataset->name),
+                $step->column,
+            );
+        }
+
         $this->dataset = $dataset;
         $this->known = \array_fill_keys(\array_keys($dataset->columns), true);
 
-        return $this->catalog->open($dataset, \is_string($run) ? $run : null, $this->windowSeconds);
+        return $this->catalog->open($dataset, \is_string($run) ? $run : null, $this->effectiveWindowSeconds);
+    }
+
+    /**
+     * A reproducible relative period embedded in the Flow script.
+     *
+     * Examples: period: '15m', '6h', '7d', '2w', 'all', or 3600 seconds.
+     */
+    private function period(Node $node): ?int
+    {
+        $value = $this->scalar($node, 'period');
+
+        if ($value === 'all') {
+            return null;
+        }
+
+        if (\is_int($value)) {
+            if ($value > 0) {
+                return $value;
+            }
+
+            throw new ParseError('period: seconds must be a positive whole number.', $node->column());
+        }
+
+        if (!\is_string($value) || \preg_match('/^([1-9][0-9]*)(m|h|d|w)$/', $value, $matches) !== 1) {
+            throw new ParseError(
+                "period: takes a duration such as '15m', '6h', '7d', '2w', 'all', or seconds.",
+                $node->column(),
+            );
+        }
+
+        $multiplier = match ($matches[2]) {
+            'm' => 60,
+            'h' => 3_600,
+            'd' => 86_400,
+            'w' => 604_800,
+        };
+        $seconds = (int) $matches[1] * $multiplier;
+
+        if ($seconds > 31_536_000) {
+            throw new ParseError(
+                "period: is capped at 365d; use 'all' for the whole retention window.",
+                $node->column(),
+            );
+        }
+
+        return $seconds;
     }
 
     /**
@@ -203,6 +271,8 @@ final class PipelineBuilder
         return match ($step->name) {
             'select' => $frame->select(...$this->references($step)),
             'drop' => $frame->drop(...$this->references($step)),
+            'dropDuplicates' => $frame->dropDuplicates(...$this->references($step)),
+            'rename' => $this->rename($frame, $step),
             'groupBy' => $frame->groupBy(...$this->references($step)),
             'sortBy' => $frame->sortBy(...$this->references($step)),
             'filter' => $frame->filter($this->scalarFunction($step)),
@@ -241,6 +311,30 @@ final class PipelineBuilder
         $this->known[$name] = true;
 
         return $frame->withEntry($name, $value);
+    }
+
+    private function rename(DataFrame $frame, Step $step): DataFrame
+    {
+        if (\count($step->args) !== 2) {
+            throw new ParseError('rename() takes the old and new column names.', $step->column);
+        }
+
+        $from = $this->scalar($step->args[0]->value, 'rename source');
+        $to = $this->scalar($step->args[1]->value, 'rename target');
+
+        if (!\is_string($from) || !\is_string($to) || $to === '') {
+            throw new ParseError('rename() takes two non-empty column-name strings.', $step->column);
+        }
+        if (!isset($this->known[$from])) {
+            throw new ParseError(
+                $this->dataset?->explainUnknownColumn($from) ?? \sprintf('Unknown column "%s".', $from),
+            );
+        }
+
+        unset($this->known[$from]);
+        $this->known[$to] = true;
+
+        return $frame->rename($from, $to);
     }
 
     private function aggregate(DataFrame|GroupedDataFrame $frame, Step $step): DataFrame
@@ -449,6 +543,8 @@ final class PipelineBuilder
             'hash' => hash($args[0]),
             'identical' => identical($args[0], $args[1]),
             'optional' => optional($args[0]),
+            'all' => all(...$this->scalarFns($node, $args)),
+            'any' => any(...$this->scalarFns($node, $args)),
             // Sinks are handled by `write`; reaching here means one was used as
             // a value, which is not a thing.
             'to_output', 'to_array', 'to_memory' => throw new ParseError(
@@ -555,6 +651,27 @@ final class PipelineBuilder
         }
 
         /** @var list<Reference> $args */
+        return $args;
+    }
+
+    /**
+     * @param list<mixed> $args
+     *
+     * @return list<ScalarFunction>
+     */
+    private function scalarFns(Call $node, array $args): array
+    {
+        if ($args === []) {
+            throw new ParseError(\sprintf('%s() needs at least one condition.', $node->name), $node->column());
+        }
+
+        foreach ($args as $argument) {
+            if (!$argument instanceof ScalarFunction) {
+                throw new ParseError(\sprintf('%s() takes conditions.', $node->name), $node->column());
+            }
+        }
+
+        /** @var list<ScalarFunction> $args */
         return $args;
     }
 

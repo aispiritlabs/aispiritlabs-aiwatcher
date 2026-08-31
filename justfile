@@ -23,6 +23,11 @@ kubeconform_k8s_version := "1.33.0"
 # `crates/aiwatcher-prompts/src/sigv4.rs`.
 rustfs_image := "rustfs/rustfs:1.0.0-rc.3"
 rustfs_endpoint := env_var_or_default("AIWATCHER_PROMPT_S3_ENDPOINT", "http://127.0.0.1:9010")
+
+# The local authentik `just authentik-up` starts. The issuer ends in the
+# *application* slug, not the provider name — the one thing that is always
+# wrong the first time.
+authentik_issuer := env_var_or_default("AIWATCHER_AUTH_ISSUER", "http://localhost:9000/application/o/aiwatcher/")
 laser_connection := env_var_or_default("AIWATCHER_LASER_CONNECTION_STRING", "iggy:iggy@127.0.0.1:8090")
 
 # Clusters Tilt is allowed to touch. A remote context is a hard stop, not a
@@ -129,6 +134,24 @@ run-rustfs:
     AIWATCHER_PROMPT_S3_ENDPOINT={{rustfs_endpoint}} \
     AIWATCHER_PROMPT_S3_ACCESS_KEY=rustfsadmin \
     AIWATCHER_PROMPT_S3_SECRET_KEY=rustfsadmin \
+    AIWATCHER_LOG=info,aiwatcher=debug \
+    cargo run --bin aiwatcher
+
+# The redirect URL below comes back to the panel's dev server rather than to the
+# API, because that server proxies /api — so the browser sees one origin
+# exactly as it will behind an ingress. Run `just dev` beside this.
+#
+# The client secret is not in here. Read it once from authentik
+# (Admin → Providers → aiwatcher) into .env as AIWATCHER_AUTH_CLIENT_SECRET.
+
+# Server on :8080 as an OIDC relying party. Run `just authentik-up` first.
+run-sso:
+    AIWATCHER_BUS=wal \
+    AIWATCHER_INGEST_ENABLED=true \
+    AIWATCHER_AUTH_MODE=oidc \
+    AIWATCHER_AUTH_ISSUER={{authentik_issuer}} \
+    AIWATCHER_AUTH_CLIENT_ID=aiwatcher \
+    AIWATCHER_AUTH_REDIRECT_URL=http://localhost:5173/api/v1/auth/callback \
     AIWATCHER_LOG=info,aiwatcher=debug \
     cargo run --bin aiwatcher
 
@@ -280,6 +303,41 @@ iggy-logs:
 # On :9010 rather than :9000, which is what a MinIO somebody already runs would
 # be holding — the point of a local store is that starting it does not break
 # whatever else is on the machine.
+
+# Its own compose file rather than a service in docker-compose.yml. That stack
+# is what aiwatcher talks to about data; this is four containers, two of them
+# databases, for what it talks to about people — and nobody working on span
+# assembly should have to run a PostgreSQL to do it.
+
+# A local authentik for `just run-sso`: server, worker, PostgreSQL and Redis.
+authentik-up:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    docker compose -f deploy/docker-compose.authentik.yml up -d
+    echo "waiting for authentik …"
+    for _ in $(seq 1 60); do
+      if curl -sf http://localhost:9000/-/health/ready/ >/dev/null 2>&1; then
+        echo "✓ authentik is up on http://localhost:9000"
+        echo
+        echo "  1. finish the first-run setup: http://localhost:9000/if/flow/initial-setup/"
+        echo "  2. the blueprint has already created the provider, the application"
+        echo "     and the three groups — read the client secret from"
+        echo "     Admin → Providers → aiwatcher into .env"
+        echo "  3. put yourself in aiwatcher-admins, then: just run-sso"
+        exit 0
+      fi
+      sleep 2
+    done
+    echo "✗ authentik did not come up; docker compose -f deploy/docker-compose.authentik.yml logs" >&2
+    exit 1
+
+# Stop it, keeping its database.
+authentik-down:
+    docker compose -f deploy/docker-compose.authentik.yml down
+
+# Wipe it, including the admin account and the groups.
+authentik-reset:
+    docker compose -f deploy/docker-compose.authentik.yml down -v
 
 # A local object store for `just run-rustfs` and `just test-rustfs`.
 rustfs-up:

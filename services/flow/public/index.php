@@ -5,7 +5,7 @@ declare(strict_types=1);
 /**
  * The Flow query service.
  *
- * Four routes and no framework, because there are four routes. The panel
+ * Five routes and no framework, because the surface is still deliberately small. The panel
  * talks to this directly rather than through the Rust API: aiwatcher's binary
  * has no idea this exists, which is what lets the service be absent without the
  * rest of the panel noticing (see ADR_0008).
@@ -13,6 +13,7 @@ declare(strict_types=1);
  *   GET  /flow/healthz   is the service up, and can it see aiwatcher
  *   GET  /flow/datasets  what a query may read, and the columns of each
  *   POST /flow/check     {"pipeline": …} -> what is wrong with it, without running it
+ *   POST /flow/simulate  {"pipeline": …} -> a 25-row, side-effect-free preview
  *   POST /flow/query     {"pipeline": …, "window_seconds": …} -> a table
  */
 
@@ -116,6 +117,18 @@ try {
             }
 
             $send(200, $runner->run($query, $window()));
+        })(),
+
+        $path === '/flow/simulate' && $method === 'POST' => (static function () use ($send, $runner, $pipeline, $window): void {
+            $query = $pipeline();
+
+            if ($query === null) {
+                $send(400, ['error' => ['message' => 'Send {"pipeline": "data_frame()->…"}.', 'column' => 0]]);
+
+                return;
+            }
+
+            $send(200, $runner->run($query, $window(), QueryRunner::SIMULATION_ROWS));
         })(),
 
         default => $send(404, ['error' => ['message' => \sprintf('No route %s.', $path), 'column' => 0]]),

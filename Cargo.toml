@@ -6,7 +6,9 @@
 #   aiwatcher-bus        MessageSource / MessageSink / Checkpointer + adapters
 #   aiwatcher-trace      span assembly + OTLP/JSON exporters
 #   aiwatcher-prompts    the prompt registry, over an object store
+#   aiwatcher-datasets   curation recipes + versioned dataset artifacts
 #   aiwatcher-runner     the workflow rerun dispatcher, over HTTP
+#   aiwatcher-auth       OIDC relying party: discovery, JWKS, sessions, roles
 #   aiwatcher-projector  the consumer pipeline + live hub + read model
 #   aiwatcher-api        axum router (REST + SSE + WS) + OpenAPI
 #   aiwatcher-server     the deployable binary: config, wiring, shutdown
@@ -29,16 +31,28 @@ aiwatcher-core = { path = "crates/aiwatcher-core", version = "0.1.0" }
 aiwatcher-bus = { path = "crates/aiwatcher-bus", version = "0.1.0" }
 aiwatcher-trace = { path = "crates/aiwatcher-trace", version = "0.1.0" }
 aiwatcher-prompts = { path = "crates/aiwatcher-prompts", version = "0.1.0" }
+aiwatcher-datasets = { path = "crates/aiwatcher-datasets", version = "0.1.0" }
 aiwatcher-runner = { path = "crates/aiwatcher-runner", version = "0.1.0" }
+aiwatcher-auth = { path = "crates/aiwatcher-auth", version = "0.1.0" }
 aiwatcher-projector = { path = "crates/aiwatcher-projector", version = "0.1.0" }
 aiwatcher-api = { path = "crates/aiwatcher-api", version = "0.1.0" }
 
 anyhow = "1.0.104"
 async-trait = "0.1.92"
 axum = { version = "0.8.9", features = ["ws", "macros"] }
+# Session cookies and JWT segments are base64url; the alphabet is not something
+# to hand-roll beside a signature check.
+base64 = "0.22.1"
 bytes = "1.10"
 futures = "0.3"
 hex = "0.4.3"
+# JWT verification for the OIDC relying party. Version 9 rather than 11 on
+# purpose: 9 signs and verifies with `ring`, which rustls already puts in this
+# graph, while 11 asks for either `aws-lc-rs` (a C toolchain in the image) or
+# `rust_crypto`, which pulls `rsa` — and `rsa` carries RUSTSEC-2023-0071 with no
+# fixed release, so `just audit` would go red on a crate we only ever use to
+# *verify* somebody else's signature.
+jsonwebtoken = "9.3.1"
 # The real Laser SDK, over Apache Iggy. Optional: the default build (and every
 # test that does not need a broker) stays free of it, and of the ~360 crates
 # beneath it.
@@ -49,6 +63,10 @@ hex = "0.4.3"
 laser-sdk = { version = "0.3.0", default-features = false, features = ["streaming"] }
 # reqwest 0.13 renamed the TLS features: `rustls-tls` became `rustls`.
 reqwest = { version = "0.13", default-features = false, features = ["json", "http2", "rustls"] }
+# HMAC-SHA256 for the session cookie's signature and a CSPRNG for the state,
+# the PKCE verifier and the nonce. Already in the graph under rustls, and the
+# one place in this workspace where "write it by hand" is the wrong answer.
+ring = "0.17.14"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 # SHA-256 for content-addressed prompt versions and for SigV4. Both have to
@@ -67,6 +85,7 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 utoipa = { version = "5.5.0", features = ["axum_extras", "time"] }
 utoipa-axum = "0.2.0"
+url = "2.5.8"
 uuid = { version = "1.26.0", features = ["v7", "serde"] }
 
 [workspace.lints.rust]

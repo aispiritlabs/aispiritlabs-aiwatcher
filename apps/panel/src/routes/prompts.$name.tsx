@@ -13,6 +13,7 @@ import {
   setPromptLabel,
 } from '@/api/generated/sdk.gen';
 import type { OptimizationSummary, PromptHead, PromptVersion } from '@/api/generated/types.gen';
+import { needsRole, useCan } from '@/lib/auth';
 import {
   Badge,
   Button,
@@ -160,6 +161,10 @@ function PromptPage() {
     onSuccess: invalidate,
   });
 
+  // Authoring a prompt is an editor's job; reading one is not. The server
+  // refuses either way — this is so that finding out does not cost a round
+  // trip and a red toast.
+  const mayAuthor = useCan('editor');
   const rebuild = useMutation({
     mutationFn: async () => {
       const response = await rebuildPrompt({ path: { name } });
@@ -229,14 +234,24 @@ function PromptPage() {
           ) : null}
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={() => setEditing((open) => !open)} className="gap-1.5">
+          <Button
+            variant="outline"
+            onClick={() => setEditing((open) => !open)}
+            className="gap-1.5"
+            disabled={!mayAuthor}
+            title={mayAuthor ? undefined : needsRole('editor')}
+          >
             <Pencil className="h-3.5 w-3.5" />
             New version
           </Button>
           <Button
             variant="ghost"
-            title="Re-derive the index from the objects that are stored. Safe to run at any time; labels survive it."
-            disabled={rebuild.isPending}
+            title={
+              mayAuthor
+                ? 'Re-derive the index from the objects that are stored. Safe to run at any time; labels survive it.'
+                : needsRole('editor')
+            }
+            disabled={rebuild.isPending || !mayAuthor}
             onClick={() => rebuild.mutate()}
             className="gap-1.5"
           >
@@ -293,9 +308,7 @@ function PromptPage() {
             against={against.data}
             againstId={againstId}
             onView={(view) => select({ view })}
-            onPromote={() =>
-              selected.data ? promote.mutate(selected.data.version_id) : undefined
-            }
+            onPromote={() => (selected.data ? promote.mutate(selected.data.version_id) : undefined)}
             promoting={promote.isPending}
             promoteError={promote.error}
           />
@@ -338,7 +351,9 @@ function VersionList({
     <Card className="h-fit overflow-hidden">
       <CardHeader className="border-b border-border">
         <CardTitle>Versions</CardTitle>
-        <p className="text-xs text-muted-foreground">Newest first. The id is the text&rsquo;s hash.</p>
+        <p className="text-xs text-muted-foreground">
+          Newest first. The id is the text&rsquo;s hash.
+        </p>
       </CardHeader>
       <ul className="max-h-[32rem] overflow-y-auto">
         {versions.map((version) => (
@@ -398,6 +413,8 @@ function VersionPane({
   promoting: boolean;
   promoteError: unknown;
 }) {
+  const mayAuthor = useCan('editor');
+
   if (loading) {
     return (
       <Card className="flex items-center gap-2 p-10 text-sm text-muted-foreground">
@@ -459,9 +476,13 @@ function VersionPane({
             <Button
               variant="outline"
               size="sm"
-              disabled={promoting}
+              disabled={promoting || !mayAuthor}
               onClick={onPromote}
-              title="Point the production label at this version. Nothing is deployed by recording evidence — this is the act that deploys."
+              title={
+                mayAuthor
+                  ? 'Point the production label at this version. Nothing is deployed by recording evidence — this is the act that deploys.'
+                  : needsRole('editor')
+              }
             >
               {promoting ? <Spinner /> : null}
               Make production
@@ -589,13 +610,7 @@ function Optimizations({
  * blob with no size this panel gets to assume, and a list of fifty rows should
  * not carry fifty of them.
  */
-function OptimizationDetail({
-  name,
-  optimizationId,
-}: {
-  name: string;
-  optimizationId: string;
-}) {
+function OptimizationDetail({ name, optimizationId }: { name: string; optimizationId: string }) {
   const record = useQuery({
     queryKey: ['optimization', name, optimizationId],
     staleTime: Infinity,
@@ -621,7 +636,10 @@ function OptimizationDetail({
   // of them still gets a row, with the other side empty rather than absent.
   const dev = record.data.dev ?? [];
   const test = record.data.test ?? [];
-  const metrics = new Set([...dev.map((score) => score.metric), ...test.map((score) => score.metric)]);
+  const metrics = new Set([
+    ...dev.map((score) => score.metric),
+    ...test.map((score) => score.metric),
+  ]);
 
   return (
     <div className="border-t border-border/60 bg-muted/20 px-4 py-3">
@@ -735,8 +753,8 @@ function NewVersionForm({
       >
         <label className="flex flex-col gap-1 text-xs">
           <span className="text-muted-foreground">
-            Prompt text. The version id is <code>sha256</code> of exactly this, so an unchanged
-            save writes nothing.
+            Prompt text. The version id is <code>sha256</code> of exactly this, so an unchanged save
+            writes nothing.
           </span>
           <textarea
             value={text}
@@ -760,8 +778,8 @@ function NewVersionForm({
             checked={promote}
             onChange={(event) => setPromote(event.target.checked)}
           />
-          Make it production — storing a prompt and deploying it are different decisions, so this
-          is opt-in.
+          Make it production — storing a prompt and deploying it are different decisions, so this is
+          opt-in.
         </label>
         {error ? <ErrorText error={error} /> : null}
         <div className="flex items-center gap-2">

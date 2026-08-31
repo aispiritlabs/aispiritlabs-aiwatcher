@@ -18,6 +18,7 @@ import {
 } from '@/api/generated/sdk.gen';
 import type { ExecutionSummary, NodeState, WorkflowDefinition } from '@/api/generated/types.gen';
 import { rerunWorkflow } from '@/api/generated/sdk.gen';
+import { needsRole, useCan } from '@/lib/auth';
 import { StatusBadge, StreamBadge } from '@/components/status-badge';
 import {
   DEFAULT_WINDOW_SECONDS,
@@ -631,6 +632,11 @@ function RerunButton({
   executionId: string;
   fromNode: string | undefined;
 }) {
+  // The one control in this panel that asks another system to do work, and
+  // the only one that needs admin. Hidden rather than greyed out: an operator
+  // who cannot dispatch a rerun has no use for the button, and a disabled
+  // control that never becomes enabled is a permanent question.
+  const mayRerun = useCan('admin');
   const rerun = useMutation({
     mutationFn: async () => {
       const response = await rerunWorkflow({
@@ -641,6 +647,14 @@ function RerunButton({
       return response.data;
     },
   });
+
+  if (!mayRerun) {
+    return (
+      <span className="text-xs text-muted-foreground" title={needsRole('admin')}>
+        rerun needs admin
+      </span>
+    );
+  }
 
   if (isRunnerDisabled(rerun.error)) {
     return (

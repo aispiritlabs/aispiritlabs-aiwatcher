@@ -26,6 +26,7 @@ import {
 } from '@/components/time-range';
 import { VirtualList } from '@/components/virtual-list';
 import { cn, formatCount } from '@/lib/utils';
+import { useObservabilityRevision } from '@/lib/observability-revision';
 
 /**
  * Queries over the same runs the explorer shows, written as a Flow pipeline.
@@ -60,6 +61,7 @@ function QueryPage() {
   const navigate = Route.useNavigate();
   const windowSeconds = search.window ?? DEFAULT_WINDOW_SECONDS;
   const [draft, setDraft] = React.useState(search.q ?? STARTER_QUERY);
+  const liveRevision = useObservabilityRevision();
 
   const available = useQuery({
     queryKey: ['flow', 'available'],
@@ -76,15 +78,32 @@ function QueryPage() {
 
   // The window scopes the datasets the query reads, not the query itself: the
   // service forwards it to the aiwatcher routes that take one and leaves the
-  // per-run `events` route alone. Re-running is explicit here — a query is
-  // work somebody asked for — so changing the window arms the next Run rather
-  // than firing one.
+  // per-run `events` route alone. The first run is explicit; after that the
+  // executed pipeline follows backend events just like the other tabs. Edits
+  // in the textarea do not take effect until Run is pressed again.
+  const lastPipeline = React.useRef<string | null>(null);
   const query = useMutation({
     mutationFn: (pipeline: string) => runQuery(pipeline, windowParam(windowSeconds)),
     onSuccess: (_, pipeline) => {
+      lastPipeline.current = pipeline;
       void navigate({ search: (previous) => ({ ...previous, q: pipeline }), replace: true });
     },
   });
+
+  const appliedRevision = React.useRef(liveRevision);
+  React.useEffect(() => {
+    if (appliedRevision.current === liveRevision) return;
+    if (!lastPipeline.current) {
+      appliedRevision.current = liveRevision;
+      return;
+    }
+    // If a refresh is already running, leave the revision pending. This effect
+    // runs again when the mutation settles and folds every intervening event
+    // into one follow-up query instead of racing responses against each other.
+    if (query.isPending) return;
+    appliedRevision.current = liveRevision;
+    query.mutate(lastPipeline.current);
+  }, [liveRevision, query.isPending, query.mutate]);
 
   // Checking is cheap — it parses and validates columns without calling
   // aiwatcher at all — so it runs as you type rather than only on Run. The
@@ -130,8 +149,8 @@ function QueryPage() {
           <h1 className="text-lg font-semibold">Query</h1>
           <p className="max-w-3xl text-sm text-muted-foreground">
             A Flow PHP pipeline over the same runs the explorer shows. Reads the API rather than a
-            copy of it, so results are as current as the runs list — and bounded by the same
-            retention.
+            copy of it, so after the first Run its results follow live events — and stay bounded by
+            the same retention.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -319,9 +338,8 @@ function ResultTable({ result }: { result: FlowResult }) {
   return (
     <Card className="overflow-hidden">
       {/*
-       * Where the numbers came from, said once. A table on its own reads as
-       * live and complete, and this one is neither by default — it is the
-       * retention window, as of the moment Run was pressed.
+       * Where the numbers came from, said once. The first result is explicit;
+       * while this tab stays open it is re-run when the live stream advances.
        */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border p-2 text-xs text-muted-foreground">
         <span>

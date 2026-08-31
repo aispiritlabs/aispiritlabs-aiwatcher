@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { GetEvaluationData, GetEvaluationErrors, GetEvaluationResponses, GetMetricsData, GetMetricsResponses, GetOptimizationData, GetOptimizationErrors, GetOptimizationResponses, GetPromptData, GetPromptErrors, GetPromptResponses, GetPromptVersionData, GetPromptVersionErrors, GetPromptVersionResponses, GetRunData, GetRunErrors, GetRunEventsData, GetRunEventsErrors, GetRunEventsResponses, GetRunResponses, GetWorkflowData, GetWorkflowErrors, GetWorkflowExecutionData, GetWorkflowExecutionErrors, GetWorkflowExecutionResponses, GetWorkflowResponses, IngestData, IngestErrors, IngestResponses, ListConversationsData, ListConversationsResponses, ListDimensionData, ListDimensionErrors, ListDimensionResponses, ListEvaluationsData, ListEvaluationsResponses, ListEvaluationSuitesData, ListEvaluationSuitesResponses, ListPromptsData, ListPromptsErrors, ListPromptsResponses, ListRunsData, ListRunsResponses, ListSpansData, ListSpansResponses, ListWorkflowExecutionsData, ListWorkflowExecutionsResponses, ListWorkflowsData, ListWorkflowsResponses, LiveWebsocketData, LivezData, LivezResponses, PublishPromptData, PublishPromptErrors, PublishPromptResponses, ReadyzData, ReadyzErrors, ReadyzResponses, RebuildPromptData, RebuildPromptErrors, RebuildPromptResponses, RecordOptimizationData, RecordOptimizationErrors, RecordOptimizationResponses, RerunWorkflowData, RerunWorkflowErrors, RerunWorkflowResponses, SetPromptLabelData, SetPromptLabelErrors, SetPromptLabelResponses, StreamRunData, StreamRunResponses, StreamWorkflowExecutionData, StreamWorkflowExecutionResponses } from './types.gen';
+import type { AuthConfigData, AuthConfigResponses, CallbackData, GetDatasetRowsData, GetDatasetRowsErrors, GetDatasetRowsResponses, GetEvaluationData, GetEvaluationErrors, GetEvaluationResponses, GetMetricsData, GetMetricsResponses, GetOptimizationData, GetOptimizationErrors, GetOptimizationResponses, GetPromptData, GetPromptErrors, GetPromptResponses, GetPromptVersionData, GetPromptVersionErrors, GetPromptVersionResponses, GetRunData, GetRunErrors, GetRunEventsData, GetRunEventsErrors, GetRunEventsResponses, GetRunResponses, GetWorkflowData, GetWorkflowErrors, GetWorkflowExecutionData, GetWorkflowExecutionErrors, GetWorkflowExecutionResponses, GetWorkflowResponses, IngestData, IngestErrors, IngestResponses, ListConversationsData, ListConversationsResponses, ListDatasetsData, ListDatasetsErrors, ListDatasetsResponses, ListDimensionData, ListDimensionErrors, ListDimensionResponses, ListEvaluationsData, ListEvaluationsResponses, ListEvaluationSuitesData, ListEvaluationSuitesResponses, ListPromptsData, ListPromptsErrors, ListPromptsResponses, ListRecipesData, ListRecipesErrors, ListRecipesResponses, ListRunsData, ListRunsResponses, ListSpansData, ListSpansResponses, ListWorkflowExecutionsData, ListWorkflowExecutionsResponses, ListWorkflowsData, ListWorkflowsResponses, LiveWebsocketData, LivezData, LivezResponses, LoginData, LoginErrors, LogoutData, LogoutResponses, MeData, MeErrors, MeResponses, PublishDatasetData, PublishDatasetErrors, PublishDatasetResponses, PublishPromptData, PublishPromptErrors, PublishPromptResponses, ReadyzData, ReadyzErrors, ReadyzResponses, RebuildPromptData, RebuildPromptErrors, RebuildPromptResponses, RecordOptimizationData, RecordOptimizationErrors, RecordOptimizationResponses, RerunWorkflowData, RerunWorkflowErrors, RerunWorkflowResponses, SaveRecipeData, SaveRecipeErrors, SaveRecipeResponses, SetPromptLabelData, SetPromptLabelErrors, SetPromptLabelResponses, StreamEventsData, StreamEventsResponses, StreamRunData, StreamRunResponses, StreamWorkflowExecutionData, StreamWorkflowExecutionResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -19,12 +19,86 @@ export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends 
 };
 
 /**
+ * Where the provider sends the browser back to.
+ *
+ * Every failure here ends in a redirect rather than a JSON error, because
+ * this is a top-level navigation: whatever this returns is what the person
+ * sees in their browser. The reason travels as `sign_in_error`, which the
+ * panel reads and renders on its sign-in screen.
+ */
+export const callback = <ThrowOnError extends boolean = false>(options: Options<CallbackData, ThrowOnError>): RequestResult<unknown, unknown, ThrowOnError> => (options.client ?? client).get<unknown, unknown, ThrowOnError>({ url: '/api/v1/auth/callback', ...options });
+
+/**
+ * Whether this instance has a login, and what to call it.
+ *
+ * The one route besides the health probes that answers before anybody has
+ * signed in. Without it the panel would have to guess, and guessing wrong
+ * means either a sign-in screen on an instance with no provider or an endless
+ * 401 loop on one that has.
+ */
+export const authConfig = <ThrowOnError extends boolean = false>(options?: Options<AuthConfigData, ThrowOnError>): RequestResult<AuthConfigResponses, unknown, ThrowOnError> => (options?.client ?? client).get<AuthConfigResponses, unknown, ThrowOnError>({ url: '/api/v1/auth/config', ...options });
+
+/**
+ * Start a sign-in: a redirect to the provider.
+ */
+export const login = <ThrowOnError extends boolean = false>(options: Options<LoginData, ThrowOnError>): RequestResult<unknown, LoginErrors, ThrowOnError> => (options.client ?? client).get<unknown, LoginErrors, ThrowOnError>({ url: '/api/v1/auth/login', ...options });
+
+/**
+ * Sign out.
+ */
+export const logout = <ThrowOnError extends boolean = false>(options?: Options<LogoutData, ThrowOnError>): RequestResult<LogoutResponses, unknown, ThrowOnError> => (options?.client ?? client).post<LogoutResponses, unknown, ThrowOnError>({ url: '/api/v1/auth/logout', ...options });
+
+/**
+ * The current caller.
+ */
+export const me = <ThrowOnError extends boolean = false>(options?: Options<MeData, ThrowOnError>): RequestResult<MeResponses, MeErrors, ThrowOnError> => (options?.client ?? client).get<MeResponses, MeErrors, ThrowOnError>({ url: '/api/v1/auth/me', ...options });
+
+/**
  * Sessions, each grouping the runs it produced.
  *
  * The level above a run, so the panel can start from "which session" and walk
  * down to a single LLM call without going back to a flat list and re-filtering.
  */
 export const listConversations = <ThrowOnError extends boolean = false>(options?: Options<ListConversationsData, ThrowOnError>): RequestResult<ListConversationsResponses, unknown, ThrowOnError> => (options?.client ?? client).get<ListConversationsResponses, unknown, ThrowOnError>({ url: '/api/v1/conversations', ...options });
+
+/**
+ * Every saved Flow PHP recipe, newest save first.
+ */
+export const listRecipes = <ThrowOnError extends boolean = false>(options?: Options<ListRecipesData, ThrowOnError>): RequestResult<ListRecipesResponses, ListRecipesErrors, ThrowOnError> => (options?.client ?? client).get<ListRecipesResponses, ListRecipesErrors, ThrowOnError>({ url: '/api/v1/curations', ...options });
+
+/**
+ * Save a content-addressed revision of a Flow PHP recipe.
+ */
+export const saveRecipe = <ThrowOnError extends boolean = false>(options: Options<SaveRecipeData, ThrowOnError>): RequestResult<SaveRecipeResponses, SaveRecipeErrors, ThrowOnError> => (options.client ?? client).post<SaveRecipeResponses, SaveRecipeErrors, ThrowOnError>({
+    url: '/api/v1/curations',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * One immutable dataset version, returned in small slices for an interactive viewer.
+ */
+export const getDatasetRows = <ThrowOnError extends boolean = false>(options: Options<GetDatasetRowsData, ThrowOnError>): RequestResult<GetDatasetRowsResponses, GetDatasetRowsErrors, ThrowOnError> => (options.client ?? client).get<GetDatasetRowsResponses, GetDatasetRowsErrors, ThrowOnError>({ url: '/api/v1/dataset-rows', ...options });
+
+/**
+ * Every saved dataset, newest execution first.
+ */
+export const listDatasets = <ThrowOnError extends boolean = false>(options?: Options<ListDatasetsData, ThrowOnError>): RequestResult<ListDatasetsResponses, ListDatasetsErrors, ThrowOnError> => (options?.client ?? client).get<ListDatasetsResponses, ListDatasetsErrors, ThrowOnError>({ url: '/api/v1/datasets', ...options });
+
+/**
+ * Persist one completed Flow PHP execution as an immutable dataset version.
+ */
+export const publishDataset = <ThrowOnError extends boolean = false>(options: Options<PublishDatasetData, ThrowOnError>): RequestResult<PublishDatasetResponses, PublishDatasetErrors, ThrowOnError> => (options.client ?? client).post<PublishDatasetResponses, PublishDatasetErrors, ThrowOnError>({
+    url: '/api/v1/datasets',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
 
 /**
  * One dimension's rows: the explorer's top level, whatever it is rooted on.
@@ -66,6 +140,12 @@ export const getEvaluation = <ThrowOnError extends boolean = false>(options: Opt
  *
  * The fallback path for clients that cannot reach Laser. Returns 403 when the
  * instance is configured without a sink.
+ *
+ * Writer, not viewer: this is the one read-model route that puts something in
+ * the durable log, and an agent that publishes here is a machine identity —
+ * an authentik service account holding a token for this audience, or a
+ * bearer the operator issued. Reading runs and writing them are different
+ * permissions in every deployment that has more than one team.
  */
 export const ingest = <ThrowOnError extends boolean = false>(options: Options<IngestData, ThrowOnError>): RequestResult<IngestResponses, IngestErrors, ThrowOnError> => (options.client ?? client).post<IngestResponses, IngestErrors, ThrowOnError>({
     url: '/api/v1/events',
@@ -75,6 +155,15 @@ export const ingest = <ThrowOnError extends boolean = false>(options: Options<In
         ...options.headers
     }
 });
+
+/**
+ * Server-sent events for the whole system: a catch-up marker, then live.
+ *
+ * This is the panel's Observability transport. It is deliberately separate
+ * from the WebSocket below: the panel only receives here, so EventSource can
+ * own reconnects and `Last-Event-ID` resume without client-side machinery.
+ */
+export const streamEvents = <ThrowOnError extends boolean = false>(options?: Options<StreamEventsData, ThrowOnError>): RequestResult<StreamEventsResponses, unknown, ThrowOnError> => (options?.client ?? client).get<StreamEventsResponses, unknown, ThrowOnError>({ url: '/api/v1/events/stream', ...options });
 
 /**
  * A WebSocket for the whole system, or one run.

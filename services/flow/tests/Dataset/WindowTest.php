@@ -11,14 +11,11 @@ use Aiwatcher\Flow\Tests\Fake\FakeApi;
 use PHPUnit\Framework\TestCase;
 
 /**
- * The panel's time window, forwarded to the API.
+ * Relative periods are applied at the API read boundary.
  *
- * The window is not part of the query language — a query says what to read,
- * and the period is a view control the whole panel shares. What has to hold is
- * that it reaches the routes that accept it and stays away from the one that
- * does not: the aiwatcher API rejects unknown query parameters, so sending
- * `window_seconds` to the per-run events route would turn a scoped query into
- * a 400.
+ * A script-level period wins over the panel fallback, making a saved recipe
+ * reproducible. The aiwatcher API rejects unknown query parameters, so it must
+ * still stay away from the per-run events route.
  */
 final class WindowTest extends TestCase
 {
@@ -49,6 +46,48 @@ final class WindowTest extends TestCase
         foreach ($api->requested as $url) {
             self::assertStringNotContainsString('window_seconds', $url);
         }
+    }
+
+    public function test_a_script_period_overrides_the_panel_window(): void
+    {
+        $api = $this->read("data_frame()->read(default, period: '6h')", 900);
+
+        foreach ($api->requested as $url) {
+            self::assertStringContainsString('window_seconds=21600', $url);
+            self::assertStringNotContainsString('window_seconds=900', $url);
+        }
+    }
+
+    public function test_all_in_the_script_disables_the_panel_window(): void
+    {
+        $api = $this->read("data_frame()->read(default, period: 'all')", 900);
+
+        foreach ($api->requested as $url) {
+            self::assertStringNotContainsString('window_seconds', $url);
+        }
+    }
+
+    public function test_a_numeric_period_is_interpreted_as_seconds(): void
+    {
+        $api = $this->read('data_frame()->read(default, period: 3600)', null);
+
+        foreach ($api->requested as $url) {
+            self::assertStringContainsString('window_seconds=3600', $url);
+        }
+    }
+
+    public function test_an_invalid_period_explains_the_supported_formats(): void
+    {
+        $this->expectExceptionMessage("'15m', '6h', '7d', '2w', 'all', or seconds");
+
+        $this->read("data_frame()->read(default, period: 'yesterday')", null);
+    }
+
+    public function test_a_per_run_dataset_refuses_a_period_it_cannot_apply(): void
+    {
+        $this->expectExceptionMessage('does not take a period');
+
+        $this->read("data_frame()->read(events, run: 'run-1', period: '1h')", null);
     }
 
     /**

@@ -46,6 +46,9 @@ const badgeVariants = cva(
         danger: 'border-transparent bg-danger/15 text-danger',
         running: 'border-transparent bg-running/15 text-running',
         warning: 'border-transparent bg-warning/15 text-warning',
+        // The caller's own role, which is the one badge here that is about a
+        // person rather than about a run.
+        primary: 'border-transparent bg-primary/15 text-primary',
       },
     },
     defaultVariants: { tone: 'neutral' },

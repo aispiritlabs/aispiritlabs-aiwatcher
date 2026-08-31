@@ -27,6 +27,7 @@ async fn main() -> Result<()> {
         bus = ?config.bus,
         otlp = config.otlp_endpoint.as_deref().unwrap_or("<none>"),
         ingest_enabled = config.ingest_enabled,
+        auth = config.auth.mode.as_str(),
         "starting aiwatcher"
     );
 

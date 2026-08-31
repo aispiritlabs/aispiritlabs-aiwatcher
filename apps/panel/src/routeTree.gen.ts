@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as DataCurationRouteImport } from './routes/data-curation'
 import { Route as DatasetsRouteImport } from './routes/datasets'
 import { Route as EvaluationRouteImport } from './routes/evaluation'
 import { Route as ExperimentsRouteImport } from './routes/experiments'
@@ -27,6 +28,11 @@ import { Route as RunsRunIdRouteImport } from './routes/runs.$runId'
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DataCurationRoute = DataCurationRouteImport.update({
+  id: '/data-curation',
+  path: '/data-curation',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DatasetsRoute = DatasetsRouteImport.update({
@@ -97,6 +103,7 @@ const RunsRunIdRoute = RunsRunIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/data-curation': typeof DataCurationRoute
   '/datasets': typeof DatasetsRoute
   '/evaluation': typeof EvaluationRoute
   '/experiments': typeof ExperimentsRoute
@@ -113,6 +120,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/data-curation': typeof DataCurationRoute
   '/datasets': typeof DatasetsRoute
   '/evaluation': typeof EvaluationRoute
   '/experiments': typeof ExperimentsRoute
@@ -129,6 +137,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/data-curation': typeof DataCurationRoute
   '/datasets': typeof DatasetsRoute
   '/evaluation': typeof EvaluationRoute
   '/experiments': typeof ExperimentsRoute
@@ -147,6 +156,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/data-curation'
     | '/datasets'
     | '/evaluation'
     | '/experiments'
@@ -163,6 +173,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/data-curation'
     | '/datasets'
     | '/evaluation'
     | '/experiments'
@@ -178,6 +189,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/data-curation'
     | '/datasets'
     | '/evaluation'
     | '/experiments'
@@ -195,6 +207,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  DataCurationRoute: typeof DataCurationRoute
   DatasetsRoute: typeof DatasetsRoute
   EvaluationRoute: typeof EvaluationRoute
   ExperimentsRoute: typeof ExperimentsRoute
@@ -212,6 +225,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/data-curation': {
+      id: '/data-curation'
+      path: '/data-curation'
+      fullPath: '/data-curation'
+      preLoaderRoute: typeof DataCurationRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/datasets': {
@@ -330,6 +350,7 @@ const ObservabilityRouteWithChildren = ObservabilityRoute._addFileChildren(
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  DataCurationRoute: DataCurationRoute,
   DatasetsRoute: DatasetsRoute,
   EvaluationRoute: EvaluationRoute,
   ExperimentsRoute: ExperimentsRoute,

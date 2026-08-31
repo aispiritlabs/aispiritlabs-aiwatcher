@@ -9,6 +9,7 @@ use std::net::SocketAddr;
 use std::str::FromStr;
 use std::time::Duration;
 
+use aiwatcher_auth::{AuthConfig, AuthMode, IngestToken, ProxyHeaders, Role, RoleMapping};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -31,6 +32,13 @@ pub enum ConfigError {
         name: &'static str,
         because: &'static str,
     },
+
+    /// A configuration the authentication crate itself refused. Its own
+    /// variant rather than a `String` in `Invalid`, so the message the crate
+    /// wrote — which names the variable and says what it needed — reaches the
+    /// operator unedited.
+    #[error(transparent)]
+    Auth(#[from] aiwatcher_auth::AuthError),
 }
 
 /// Which durable log to run against.
@@ -197,6 +205,9 @@ pub struct Config {
     pub workflow_runner_url: Option<String>,
     pub workflow_runner_token: Option<String>,
     pub workflow_runner_timeout: Duration,
+    /// Who may reach this instance, and what they may do once they have.
+    /// `AuthMode::None` by default — see `aiwatcher_auth`.
+    pub auth: AuthConfig,
     pub log_format: LogFormat,
 }
 
@@ -245,6 +256,7 @@ impl Default for Config {
             workflow_runner_token: None,
             // The same ten seconds the OTLP exporter and the object store use.
             workflow_runner_timeout: Duration::from_secs(10),
+            auth: AuthConfig::default(),
             log_format: LogFormat::default(),
         }
     }
@@ -391,6 +403,8 @@ impl Config {
             })?;
             config.workflow_runner_timeout = Duration::from_secs(seconds);
         }
+        read_auth(&mut config)?;
+
         if let Some(raw) = var("AIWATCHER_LOG_FORMAT") {
             config.log_format = match raw.to_ascii_lowercase().as_str() {
                 "json" => LogFormat::Json,
@@ -450,6 +464,22 @@ impl Config {
             });
         }
 
+        config.auth.validate()?;
+
+        // A wildcard CORS policy on an instance that has a login says "every
+        // origin may call this API" on the one deployment whose whole point is
+        // that not everybody may. Cookies would not travel cross-origin
+        // anyway — nothing here sets `Access-Control-Allow-Credentials` — but
+        // an operator who wrote both of these meant one of them, and starting
+        // anyway would pick for them silently.
+        if config.auth.mode != AuthMode::None && config.cors_origins.iter().any(|o| o == "*") {
+            return Err(ConfigError::Invalid {
+                name: "AIWATCHER_CORS_ORIGINS",
+                value: "*".to_owned(),
+                expected: "a list of origins; a wildcard cannot be combined with AIWATCHER_AUTH_MODE",
+            });
+        }
+
         Ok(config)
     }
 
@@ -472,6 +502,143 @@ impl Config {
     pub fn prompt_dir(&self) -> String {
         format!("{}/prompts", self.data_dir.trim_end_matches('/'))
     }
+}
+
+/// Everything under `AIWATCHER_AUTH_*`.
+///
+/// Its own function because it is a third of the variables this binary reads
+/// and none of the rest of `from_env` needs to know about any of them. The
+/// defaults are `aiwatcher_auth`'s, which means the whole block is inert until
+/// `AIWATCHER_AUTH_MODE` says otherwise.
+fn read_auth(config: &mut Config) -> Result<(), ConfigError> {
+    if let Some(raw) = var("AIWATCHER_AUTH_MODE") {
+        config.auth.mode = raw.parse()?;
+    }
+    if let Some(raw) = var("AIWATCHER_AUTH_ISSUER") {
+        // authentik's issuer ends in a slash and its discovery document says
+        // so. Trimming here and comparing trimmed in `discover` means an
+        // operator who copied it without the slash still starts.
+        config.auth.issuer = raw.trim_end_matches('/').to_owned();
+    }
+    if let Some(raw) = var("AIWATCHER_AUTH_CLIENT_ID") {
+        config.auth.client_id = raw;
+    }
+    config.auth.client_secret = var("AIWATCHER_AUTH_CLIENT_SECRET");
+    if let Some(raw) = var("AIWATCHER_AUTH_AUDIENCES") {
+        config.auth.audiences = list(&raw);
+    }
+    if let Some(raw) = var("AIWATCHER_AUTH_SCOPES") {
+        config.auth.scopes = list(&raw);
+    }
+    if let Some(raw) = var("AIWATCHER_AUTH_REDIRECT_URL") {
+        config.auth.redirect_url = raw;
+    }
+    config.auth.post_logout_url = var("AIWATCHER_AUTH_POST_LOGOUT_URL");
+    if let Some(raw) = var("AIWATCHER_AUTH_GROUPS_CLAIM") {
+        config.auth.groups_claim = raw;
+    }
+    if let Some(raw) = var("AIWATCHER_AUTH_PROVIDER_NAME") {
+        config.auth.provider_name = raw;
+    }
+    if let Some(raw) = var("AIWATCHER_AUTH_SESSION_TTL_SECONDS") {
+        let seconds: u64 = raw.parse().map_err(|_| ConfigError::Invalid {
+            name: "AIWATCHER_AUTH_SESSION_TTL_SECONDS",
+            value: raw,
+            expected: "whole number of seconds",
+        })?;
+        config.auth.session_ttl = Duration::from_secs(seconds);
+    }
+    config.auth.session_secret = var("AIWATCHER_AUTH_SESSION_SECRET");
+    if let Some(raw) = var("AIWATCHER_AUTH_COOKIE_NAME") {
+        config.auth.cookie_name = raw;
+    }
+    config.auth.cookie_domain = var("AIWATCHER_AUTH_COOKIE_DOMAIN");
+    if let Some(raw) = var("AIWATCHER_AUTH_ALLOW_BEARER") {
+        config.auth.allow_bearer = parse_bool("AIWATCHER_AUTH_ALLOW_BEARER", &raw)?;
+    }
+    if let Some(raw) = var("AIWATCHER_AUTH_USERINFO_FALLBACK") {
+        config.auth.userinfo_fallback = parse_bool("AIWATCHER_AUTH_USERINFO_FALLBACK", &raw)?;
+    }
+    if let Some(raw) = var("AIWATCHER_AUTH_INGEST_TOKENS") {
+        // Comma-separated only: a shared secret may legitimately contain a
+        // space, and splitting on one would quietly halve it.
+        config.auth.ingest_tokens = raw
+            .split(',')
+            .map(str::trim)
+            .filter(|entry| !entry.is_empty())
+            .map(str::parse::<IngestToken>)
+            .collect::<Result<Vec<_>, _>>()?;
+    }
+
+    // Derived from the redirect URL rather than defaulted to `true`, unless it
+    // is set by hand. A `Secure` cookie is simply not stored by a browser over
+    // http, so an instance served over http with the safe default would sign
+    // everybody in and then behave as though nobody had — with no error
+    // anywhere. The scheme of the redirect URL is the same fact stated once.
+    config.auth.cookie_secure = match var("AIWATCHER_AUTH_COOKIE_SECURE") {
+        Some(raw) => parse_bool("AIWATCHER_AUTH_COOKIE_SECURE", &raw)?,
+        None => !config.auth.redirect_url.starts_with("http://"),
+    };
+
+    config.auth.roles = read_roles(&config.auth.roles)?;
+    config.auth.proxy_headers = read_proxy_headers(&config.auth.proxy_headers);
+    Ok(())
+}
+
+fn read_roles(defaults: &RoleMapping) -> Result<RoleMapping, ConfigError> {
+    let default_role = match var("AIWATCHER_AUTH_DEFAULT_ROLE") {
+        None => defaults.default_role,
+        // "none" is how a deployment says that a group membership is required
+        // to see anything at all, as distinct from "viewer", which is how it
+        // says the provider's decision to let somebody in was the decision.
+        Some(raw) if matches!(raw.to_ascii_lowercase().as_str(), "none" | "off") => None,
+        Some(raw) => Some(raw.parse::<Role>().map_err(|_| ConfigError::Invalid {
+            name: "AIWATCHER_AUTH_DEFAULT_ROLE",
+            value: raw,
+            expected: "one of viewer, editor, admin, none",
+        })?),
+    };
+
+    Ok(RoleMapping {
+        admin_groups: var("AIWATCHER_AUTH_ADMIN_GROUPS")
+            .map_or_else(|| defaults.admin_groups.clone(), |raw| list(&raw)),
+        editor_groups: var("AIWATCHER_AUTH_EDITOR_GROUPS")
+            .map_or_else(|| defaults.editor_groups.clone(), |raw| list(&raw)),
+        viewer_groups: var("AIWATCHER_AUTH_VIEWER_GROUPS")
+            .map_or_else(|| defaults.viewer_groups.clone(), |raw| list(&raw)),
+        required_groups: var("AIWATCHER_AUTH_REQUIRED_GROUPS")
+            .map_or_else(|| defaults.required_groups.clone(), |raw| list(&raw)),
+        default_role,
+    })
+}
+
+fn read_proxy_headers(defaults: &ProxyHeaders) -> ProxyHeaders {
+    ProxyHeaders {
+        subject: var("AIWATCHER_AUTH_PROXY_SUBJECT_HEADER")
+            .unwrap_or_else(|| defaults.subject.clone())
+            .to_ascii_lowercase(),
+        username: var("AIWATCHER_AUTH_PROXY_USERNAME_HEADER")
+            .unwrap_or_else(|| defaults.username.clone())
+            .to_ascii_lowercase(),
+        email: var("AIWATCHER_AUTH_PROXY_EMAIL_HEADER")
+            .unwrap_or_else(|| defaults.email.clone())
+            .to_ascii_lowercase(),
+        name: var("AIWATCHER_AUTH_PROXY_NAME_HEADER")
+            .unwrap_or_else(|| defaults.name.clone())
+            .to_ascii_lowercase(),
+        groups: var("AIWATCHER_AUTH_PROXY_GROUPS_HEADER")
+            .unwrap_or_else(|| defaults.groups.clone())
+            .to_ascii_lowercase(),
+    }
+}
+
+/// A comma- or whitespace-separated list, however an operator wrote it.
+fn list(raw: &str) -> Vec<String> {
+    raw.split([',', ' ', '\t', '\n'])
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 fn var(name: &str) -> Option<String> {
@@ -584,6 +751,75 @@ mod tests {
             && (config.prompt_s3_endpoint.is_none()
                 || config.prompt_s3_access_key.is_none()
                 || config.prompt_s3_secret_key.is_none())
+    }
+
+    #[test]
+    fn nothing_is_authenticated_until_a_mode_says_so() {
+        // The default has to leave an existing installation exactly as it was:
+        // a release that started answering 401 is an upgrade that took
+        // somebody's observability down at the moment they needed it.
+        let config = Config::default();
+        assert_eq!(config.auth.mode, AuthMode::None);
+        assert!(config.auth.validate().is_ok());
+    }
+
+    #[test]
+    fn a_default_role_of_none_is_how_a_deployment_requires_a_group() {
+        // Distinct from `viewer`, which says the provider letting somebody in
+        // was the decision. Both are legitimate and they are not the same.
+        let mapping = RoleMapping {
+            default_role: None,
+            ..RoleMapping::default()
+        };
+        assert!(mapping.resolve("alice", &["everyone".to_owned()]).is_err());
+    }
+
+    #[test]
+    fn a_secure_cookie_is_derived_from_the_redirect_url_when_it_is_not_set() {
+        // A `Secure` cookie is not stored at all over http, so an instance
+        // served over http would sign people in and then behave as though
+        // nobody had, with no error anywhere. The redirect URL's scheme is the
+        // same fact, already written down once.
+        for (redirect, expected) in [
+            ("https://aiwatcher.example.test/api/v1/auth/callback", true),
+            ("http://localhost:5173/api/v1/auth/callback", false),
+        ] {
+            let secure = !redirect.starts_with("http://");
+            assert_eq!(secure, expected, "{redirect}");
+        }
+    }
+
+    #[test]
+    fn a_list_is_read_however_an_operator_wrote_it() {
+        let expected = vec!["aiwatcher-admins".to_owned(), "platform".to_owned()];
+        for raw in [
+            "aiwatcher-admins,platform",
+            "aiwatcher-admins, platform",
+            "aiwatcher-admins platform",
+            " aiwatcher-admins ,, platform ",
+        ] {
+            assert_eq!(list(raw), expected, "{raw}");
+        }
+        assert!(list("  ").is_empty());
+    }
+
+    #[test]
+    fn a_wildcard_cors_policy_cannot_be_combined_with_a_login() {
+        // Two settings that contradict each other. Cookies would not travel
+        // cross-origin anyway, but an operator who wrote both meant one of
+        // them, and starting anyway picks for them in silence.
+        let config = Config {
+            cors_origins: vec!["*".to_owned()],
+            auth: AuthConfig {
+                mode: AuthMode::Proxy,
+                ..AuthConfig::default()
+            },
+            ..Config::default()
+        };
+        assert!(
+            config.auth.mode != AuthMode::None && config.cors_origins.iter().any(|o| o == "*"),
+            "the condition from_env refuses on"
+        );
     }
 
     #[test]

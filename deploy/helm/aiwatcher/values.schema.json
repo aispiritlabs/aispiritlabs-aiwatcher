@@ -43,6 +43,72 @@
         }
       }
     },
+    "auth": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "description": "none | oidc | proxy. `proxy` trusts request headers and therefore the network; see ADR_0013.",
+          "enum": [
+            "none",
+            "oidc",
+            "proxy"
+          ]
+        },
+        "roles": {
+          "type": "object",
+          "properties": {
+            "adminGroups": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "editorGroups": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "viewerGroups": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "requiredGroups": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "defaultRole": {
+              "description": "What an authenticated user in none of the mapped groups gets. `none` requires a group to see anything at all.",
+              "enum": [
+                "viewer",
+                "editor",
+                "admin",
+                "none"
+              ]
+            }
+          }
+        },
+        "oidc": {
+          "type": "object",
+          "properties": {
+            "scopes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "sessionTtlSeconds": {
+              "type": "integer",
+              "minimum": 60
+            }
+          }
+        }
+      }
+    },
     "collector": {
       "type": "object",
       "properties": {

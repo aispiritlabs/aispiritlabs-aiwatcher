@@ -59,6 +59,17 @@ export interface LiveHandlers {
   onResync?(from: string): void;
 }
 
+function parseLiveFrame(raw: string): LiveFrame | null {
+  try {
+    return liveFrameSchema.parse(JSON.parse(raw));
+  } catch (error) {
+    // A frame this build does not understand — a newer server, a new event
+    // type — must not tear down the stream. Drop it and keep going.
+    console.warn('[aiwatcher] dropping an unparsable live frame', error);
+    return null;
+  }
+}
+
 /**
  * Open a run's stream. Returns a function that closes it.
  *
@@ -94,6 +105,11 @@ export function openWorkflowStream(
   );
 }
 
+/** Follow every event in the system over the global SSE stream. */
+export function openSystemStream(handlers: LiveHandlers): () => void {
+  return open('/api/v1/events/stream', undefined, handlers);
+}
+
 /** The mechanics both streams share. Only the path differs. */
 function open(path: string, from: string | undefined, handlers: LiveHandlers): () => void {
   const query = from ? `?from=${encodeURIComponent(from)}` : '';
@@ -101,19 +117,8 @@ function open(path: string, from: string | undefined, handlers: LiveHandlers): (
 
   handlers.onPhase('catching-up');
 
-  const parse = (raw: string): LiveFrame | null => {
-    try {
-      return liveFrameSchema.parse(JSON.parse(raw));
-    } catch (error) {
-      // A frame this build does not understand — a newer server, a new event
-      // type — must not tear down the stream. Drop it and keep going.
-      console.warn('[aiwatcher] dropping an unparsable live frame', error);
-      return null;
-    }
-  };
-
   source.addEventListener('event', (message) => {
-    const frame = parse((message as MessageEvent<string>).data);
+    const frame = parseLiveFrame((message as MessageEvent<string>).data);
     if (frame?.frame === 'event') handlers.onEvent(frame);
   });
 
@@ -122,7 +127,7 @@ function open(path: string, from: string | undefined, handlers: LiveHandlers): (
   });
 
   source.addEventListener('resynced', (message) => {
-    const frame = parse((message as MessageEvent<string>).data);
+    const frame = parseLiveFrame((message as MessageEvent<string>).data);
     if (frame?.frame === 'resynced') handlers.onResync?.(frame.from);
   });
 

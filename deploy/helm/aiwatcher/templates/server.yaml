@@ -1,6 +1,9 @@
 {{- $fullname := include "aiwatcher.fullname" . -}}
 {{- $otlp := include "aiwatcher.otlpEndpoint" . -}}
 {{- $promptStore := include "aiwatcher.promptStoreEndpoint" . -}}
+{{- if and (eq .Values.auth.mode "proxy") (not .Values.networkPolicy.enabled) -}}
+{{- fail "auth.mode is \"proxy\" but networkPolicy.enabled is false. That mode takes the caller's identity from request headers, which is only sound while nothing but the authenticating proxy can reach the server. With no policy, any pod in the namespace can claim to be an admin. Turn the policy on, or use auth.mode \"oidc\", where the identity is proved to this process rather than asserted to it." -}}
+{{- end -}}
 {{- if and (eq .Values.server.bus "laser") (not .Values.server.laser.connectionStringSecret.name) -}}
 {{- fail "server.bus is \"laser\" but server.laser.connectionStringSecret.name is empty. The connection string carries a password, so it comes from a Secret." -}}
 {{- end -}}
@@ -116,6 +119,50 @@ spec:
             # No store: every /api/v1/prompts route answers 501, and the panel
             # says which variable is unset rather than showing an empty list.
             - { name: AIWATCHER_PROMPT_STORE, value: "none" }
+            {{- end }}
+            - { name: AIWATCHER_AUTH_MODE, value: {{ .Values.auth.mode | quote }} }
+            {{- if ne .Values.auth.mode "none" }}
+            - { name: AIWATCHER_AUTH_PROVIDER_NAME, value: {{ .Values.auth.providerName | quote }} }
+            - { name: AIWATCHER_AUTH_ADMIN_GROUPS, value: {{ join "," .Values.auth.roles.adminGroups | quote }} }
+            - { name: AIWATCHER_AUTH_EDITOR_GROUPS, value: {{ join "," .Values.auth.roles.editorGroups | quote }} }
+            - { name: AIWATCHER_AUTH_VIEWER_GROUPS, value: {{ join "," .Values.auth.roles.viewerGroups | quote }} }
+            - { name: AIWATCHER_AUTH_DEFAULT_ROLE, value: {{ .Values.auth.roles.defaultRole | quote }} }
+            {{- with .Values.auth.roles.requiredGroups }}
+            - { name: AIWATCHER_AUTH_REQUIRED_GROUPS, value: {{ join "," . | quote }} }
+            {{- end }}
+            {{- with .Values.auth.ingestTokenSecret.name }}
+            - name: AIWATCHER_AUTH_INGEST_TOKENS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: {{ $.Values.auth.ingestTokenSecret.key }}
+            {{- end }}
+            {{- end }}
+            {{- if eq .Values.auth.mode "oidc" }}
+            - name: AIWATCHER_AUTH_ISSUER
+              value: {{ required "auth.mode is \"oidc\" but auth.oidc.issuer is empty. For authentik it is https://<host>/application/o/<application-slug>/ — the application slug, not the provider name." .Values.auth.oidc.issuer | quote }}
+            - { name: AIWATCHER_AUTH_CLIENT_ID, value: {{ .Values.auth.oidc.clientId | quote }} }
+            - { name: AIWATCHER_AUTH_REDIRECT_URL, value: {{ include "aiwatcher.authRedirectUrl" . | quote }} }
+            - { name: AIWATCHER_AUTH_SCOPES, value: {{ join " " .Values.auth.oidc.scopes | quote }} }
+            - { name: AIWATCHER_AUTH_GROUPS_CLAIM, value: {{ .Values.auth.oidc.groupsClaim | quote }} }
+            - { name: AIWATCHER_AUTH_SESSION_TTL_SECONDS, value: {{ .Values.auth.oidc.sessionTtlSeconds | quote }} }
+            {{- with .Values.auth.oidc.postLogoutUrl }}
+            - { name: AIWATCHER_AUTH_POST_LOGOUT_URL, value: {{ . | quote }} }
+            {{- end }}
+            - name: AIWATCHER_AUTH_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aiwatcher.authSecretName" . }}
+                  key: {{ .Values.auth.oidc.secret.clientSecretKey }}
+            - name: AIWATCHER_AUTH_SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aiwatcher.authSecretName" . }}
+                  key: {{ .Values.auth.oidc.secret.sessionSecretKey }}
+                  # Optional so an installation can start without one and be
+                  # given one later; the cost until then is that a restart
+                  # signs everybody out.
+                  optional: true
             {{- end }}
             {{- if eq .Values.server.bus "laser" }}
             - name: AIWATCHER_LASER_CONNECTION_STRING

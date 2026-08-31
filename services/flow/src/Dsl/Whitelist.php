@@ -22,6 +22,8 @@ final class Whitelist
         'read',
         'select',
         'drop',
+        'dropDuplicates',
+        'rename',
         'filter',
         'withEntry',
         'groupBy',
@@ -70,6 +72,8 @@ final class Whitelist
         'hash',
         'identical',
         'optional',
+        'all',
+        'any',
     ];
 
     /**

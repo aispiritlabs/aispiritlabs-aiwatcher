@@ -159,17 +159,34 @@ export async function checkQuery(pipeline: string): Promise<FlowCheck> {
 }
 
 /**
- * Run a query, scoped to the panel's time window.
+ * Run a query, scoped to the script's period or the panel's fallback window.
  *
- * The window is a parameter of the request rather than a step in the query:
- * the service forwards it to the aiwatcher routes that accept one and leaves
- * the per-run `events` route alone. A `->window(900)` step would be a second
- * way to say what every other tab's control already says, and the two would
- * disagree the first time somebody set both.
+ * `read(default, period: '24h')` is reproducible and wins when present. The
+ * request parameter remains a fallback for older/ad-hoc scripts and is
+ * forwarded only to aiwatcher routes that accept one.
  */
 export async function runQuery(pipeline: string, windowSeconds?: number): Promise<FlowResult> {
   return resultSchema.parse(
     await call('/query', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(
+        windowSeconds ? { pipeline, window_seconds: windowSeconds } : { pipeline },
+      ),
+    }),
+  );
+}
+
+/**
+ * Execute the same plan against a 25-row preview and persist nothing.
+ *
+ * This has its own endpoint rather than a client-side slice: the cap is
+ * applied while Flow fetches, so a simulation cannot accidentally walk the
+ * full result just to hide most of it in the browser.
+ */
+export async function simulateQuery(pipeline: string, windowSeconds?: number): Promise<FlowResult> {
+  return resultSchema.parse(
+    await call('/simulate', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(
@@ -196,5 +213,23 @@ export const STARTER_QUERY = `data_frame()
         sum(ref('input_tokens')->as('input_tokens'))
     )
     ->sortBy(ref('runs')->desc())
+    ->write(to_output(truncate: false))
+    ->run();`;
+
+/** A useful curation: successful production runs, one case per session. */
+export const STARTER_CURATION = `data_frame()
+    ->read(default, period: '24h')
+    ->filter(ref('status')->same(lit('succeeded')))
+    ->dropDuplicates(ref('conversation_id'))
+    ->rename('run_id', 'source_run_id')
+    ->rename('conversation_id', 'source_session_id')
+    ->rename('trace_id', 'source_trace_id')
+    ->select(
+        ref('source_run_id'),
+        ref('source_session_id'),
+        ref('source_trace_id'),
+        ref('agents'),
+        ref('started_at')
+    )
     ->write(to_output(truncate: false))
     ->run();`;

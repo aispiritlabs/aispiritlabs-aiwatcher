@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { cn, formatTime, shortId } from '@/lib/utils';
 import { IdChip } from '@/components/ui/primitives';
-import type { LiveEventFrame } from '@/lib/live';
+import { VirtualList } from '@/components/virtual-list';
 
 /**
  * The raw event feed.
@@ -18,62 +18,64 @@ const toneFor = (eventType: string) => {
   return 'text-foreground';
 };
 
+/** The common fields shared by durable history and a live stream frame. */
+export interface EventFeedEvent {
+  checkpoint: string;
+  span_id: string;
+  event_type: string;
+  occurred_at: string;
+  data: Record<string, unknown>;
+}
+
 export function EventFeed({
   events,
   autoScroll = true,
 }: {
-  events: LiveEventFrame[];
+  events: EventFeedEvent[];
   autoScroll?: boolean;
 }) {
-  const bottom = React.useRef<HTMLDivElement>(null);
-
-  React.useEffect(() => {
-    if (autoScroll) bottom.current?.scrollIntoView({ block: 'end' });
-  }, [events.length, autoScroll]);
-
   if (events.length === 0) {
     return <p className="p-6 text-center text-sm text-muted-foreground">No events yet.</p>;
   }
 
   return (
-    <div className="max-h-[28rem] overflow-y-auto">
-      <table className="w-full text-left text-sm">
-        <thead className="sticky top-0 bg-card">
-          <tr className="border-b border-border text-xs uppercase tracking-wide text-muted-foreground">
-            <th className="px-3 py-2 font-medium">Time</th>
-            <th className="px-3 py-2 font-medium">Event</th>
-            <th className="px-3 py-2 font-medium">Span</th>
-            <th className="px-3 py-2 font-medium">Payload</th>
-          </tr>
-        </thead>
-        <tbody>
-          {events.map((event) => (
-            <tr
-              key={`${event.checkpoint}-${event.span_id}`}
-              className="border-b border-border/40 align-top last:border-b-0 hover:bg-accent/40"
-            >
-              <td className="whitespace-nowrap px-3 py-1.5 text-xs tabular-nums text-muted-foreground">
+    <div className="overflow-x-auto">
+      <div className="min-w-[46rem] text-left text-sm">
+        <div className="grid grid-cols-[5.5rem_minmax(10rem,0.8fr)_8rem_minmax(16rem,1.6fr)] border-b border-border text-xs uppercase tracking-wide text-muted-foreground">
+          <span className="px-3 py-2 font-medium">Time</span>
+          <span className="px-3 py-2 font-medium">Event</span>
+          <span className="px-3 py-2 font-medium">Span</span>
+          <span className="px-3 py-2 font-medium">Payload</span>
+        </div>
+        <VirtualList
+          items={events}
+          className="max-h-[28rem]"
+          estimateSize={33}
+          followEnd={autoScroll}
+          keyOf={(event) => `${event.checkpoint}-${event.span_id}`}
+          renderRow={(event) => (
+            <div className="grid grid-cols-[5.5rem_minmax(10rem,0.8fr)_8rem_minmax(16rem,1.6fr)] border-b border-border/40 align-top last:border-b-0 hover:bg-accent/40">
+              <span className="whitespace-nowrap px-3 py-1.5 text-xs tabular-nums text-muted-foreground">
                 {formatTime(event.occurred_at)}
-              </td>
-              <td
+              </span>
+              <span
                 className={cn(
                   'whitespace-nowrap px-3 py-1.5 font-medium',
                   toneFor(event.event_type),
                 )}
               >
                 {event.event_type}
-              </td>
-              <td className="px-3 py-1.5">
+              </span>
+              <span className="px-3 py-1.5">
                 <IdChip value={shortId(event.span_id)} full={event.span_id} label="span" />
-              </td>
-              <td className="px-3 py-1.5">
+              </span>
+              <span className="px-3 py-1.5">
                 <Payload data={event.data} />
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <div ref={bottom} />
+              </span>
+            </div>
+          )}
+        />
+      </div>
     </div>
   );
 }

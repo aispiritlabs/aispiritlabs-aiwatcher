@@ -265,6 +265,51 @@ than installing a release that answers 404 on the host the SSO app points at.
 
 ---
 
+## Signing in
+
+The chart installs with `auth.mode: none`, which is what every release before
+this one did: aiwatcher identifies nobody and refuses nobody, and whatever
+guards the ingress is the only gate. Turning that on is two decisions.
+
+**Which mode.** `proxy` where a forward-auth already sits in front — planner's
+ingress sends every request through authentik's outpost, so aiwatcher can start
+reading `X-authentik-username` and the group header for one line of values.
+`oidc` everywhere else, and anywhere the namespace is not a boundary you would
+defend: in `proxy` mode a header is a claim, so any pod that can reach port
+8080 can claim to be an admin, and the chart refuses to render that mode
+without `networkPolicy.enabled`.
+
+**What producers do.** An agent posting to `/api/v1/events` reaches the Service
+directly, never passes the ingress, and cannot complete an interactive
+sign-in — so turning either mode on closes HTTP ingest until it has a token:
+
+```bash
+kubectl -n planner create secret generic aiwatcher-ingest \
+  --from-literal=AIWATCHER_AUTH_INGEST_TOKENS="planner=$(openssl rand -hex 32)"
+```
+
+then set `auth.ingestTokenSecret.name: aiwatcher-ingest` and give every agent
+the same value as `AIWATCHER_TOKEN`. Each token grants the editor role and
+never admin. Do this **before** the release rolls, not after: the chart's NOTES
+say so, and the symptom otherwise is every SDK logging a 401.
+
+For `oidc` there is a second Secret, holding the client secret and the session
+signing key:
+
+```bash
+kubectl -n planner create secret generic aiwatcher-auth \
+  --from-literal=AIWATCHER_AUTH_CLIENT_SECRET=... \
+  --from-literal=AIWATCHER_AUTH_SESSION_SECRET="$(openssl rand -hex 32)"
+```
+
+Without the session key the server generates one at start-up and warns, which
+is safe and signs everybody out on every restart.
+
+The authentik side — the provider, the application whose *slug* makes the
+issuer URL, and the three groups — is
+[deploy/authentik/README.md](../deploy/authentik/README.md), with a blueprint
+beside it that creates all of them.
+
 ## The Query tab
 
 Off by default, and a deployment without it is a supported state rather than a

@@ -166,3 +166,39 @@ imagePullSecrets:
   {{- toYaml . | nindent 2 }}
 {{- end }}
 {{- end -}}
+
+{{/*
+Where authentik sends the browser back to.
+
+Derived from the ingress host rather than configured twice, because it has to
+match the redirect URI registered on the authentik application byte for byte
+and a second copy of one string is a second chance to get it wrong. Naming it
+explicitly still wins — a release published on a host this chart does not own
+has no way to derive it.
+*/}}
+{{- define "aiwatcher.authRedirectUrl" -}}
+{{- $auth := .Values.auth -}}
+{{- if $auth.oidc.redirectUrl -}}
+{{- $auth.oidc.redirectUrl -}}
+{{- else if .Values.ingress.enabled -}}
+{{- $scheme := .Values.ingress.tls.enabled | ternary "https" "http" -}}
+{{- printf "%s://%s/api/v1/auth/callback" $scheme (required "auth.mode is \"oidc\" and ingress.enabled is true, but ingress.host is empty" .Values.ingress.host) -}}
+{{- else -}}
+{{- fail "auth.mode is \"oidc\" but there is no ingress to derive a redirect URL from. Set auth.oidc.redirectUrl to the absolute URL authentik will redirect to, which must match the application's redirect URI exactly." -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+The Secret holding the client secret and the session signing key.
+
+Required, the same way the Laser connection string is: both are passwords, and
+a chart that let them come from values would put them in every `helm get
+values` and every CI log that renders the release.
+*/}}
+{{- define "aiwatcher.authSecretName" -}}
+{{- $name := .Values.auth.oidc.secret.name -}}
+{{- if not $name -}}
+{{- fail "auth.mode is \"oidc\" but auth.oidc.secret.name is empty. It holds the client secret and the session signing key, both of which are passwords, so they come from a Secret rather than from values." -}}
+{{- end -}}
+{{- $name -}}
+{{- end -}}

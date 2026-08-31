@@ -107,6 +107,99 @@ server:
   tolerations: []
   affinity: {}
 
+# ── Single sign-on ───────────────────────────────────────────────────────────
+#
+# Off by default, like everything else that changes who can reach what. An
+# installation that upgrades into a release which started refusing requests is
+# an installation whose observability went away at the moment it was needed.
+#
+# Three modes, and the middle one is why the other two are not enough:
+#
+#   none    nobody is identified; every role check passes. The default.
+#   oidc    aiwatcher runs the login itself, against authentik. Works anywhere,
+#           needs an application in authentik, and is the only mode where the
+#           identity is proved to *this* process rather than asserted to it.
+#   proxy   an authenticating proxy already in front of aiwatcher puts the
+#           identity in headers. One line to adopt where that proxy exists —
+#           environments/planner.yaml is exactly that case — and it trusts the
+#           network: any pod that can reach port 8080 can claim to be anybody.
+#           Hence the NetworkPolicy requirement below.
+#
+# See docs/ADR/ADR_0013_SINGLE_SIGN_ON.md.
+auth:
+  mode: none
+
+  # What the sign-in button says.
+  providerName: authentik
+
+  oidc:
+    # authentik's issuer is `https://<host>/application/o/<application-slug>/`
+    # — the *application* slug, not the provider name. The single most common
+    # thing to get wrong here, and the symptom is a 404 on discovery.
+    issuer: ""
+    clientId: aiwatcher
+
+    # The client secret and the session signing key. Both are passwords, so
+    # they come from a Secret rather than from values — the same rule the Laser
+    # connection string follows.
+    #
+    #   kubectl create secret generic aiwatcher-auth     #     --from-literal=AIWATCHER_AUTH_CLIENT_SECRET=...     #     --from-literal=AIWATCHER_AUTH_SESSION_SECRET="$(openssl rand -hex 32)"
+    #
+    # Without the session key the server generates one at start-up, which is
+    # safe and signs everybody out on every restart.
+    secret:
+      name: ""
+      clientSecretKey: AIWATCHER_AUTH_CLIENT_SECRET
+      sessionSecretKey: AIWATCHER_AUTH_SESSION_SECRET
+
+    # Derived from ingress.host when empty. Must match the redirect URI on the
+    # authentik application exactly; set it by hand only for a host this chart
+    # does not publish.
+    redirectUrl: ""
+    # Where to land after signing out. Empty leaves the browser on authentik's
+    # own signed-out page.
+    postLogoutUrl: ""
+
+    scopes: [openid, profile, email]
+    # authentik puts group names here under its default profile scope mapping.
+    groupsClaim: groups
+    # Eight hours. This is also the revocation window: sessions are signed
+    # cookies with no server-side store, so signing out clears the browser's
+    # copy and cannot invalidate one somebody took.
+    sessionTtlSeconds: 28800
+
+  # Which authentik groups mean which role. Create them in authentik — the
+  # blueprint under deploy/authentik does — and put people in them there;
+  # nothing about membership is configured here.
+  roles:
+    adminGroups: [aiwatcher-admins]
+    editorGroups: [aiwatcher-editors]
+    viewerGroups: [aiwatcher-viewers]
+    # When non-empty, somebody in none of these is refused outright. The "who
+    # may sign in at all" switch, separate from "what may they do".
+    requiredGroups: []
+    # What an authenticated user in none of the mapped groups gets. `viewer`
+    # says the provider letting them in was the decision; `none` says a group
+    # is required to see anything.
+    defaultRole: viewer
+
+  # How a producer authenticates.
+  #
+  # Not a shortcut around the provider — the thing the provider cannot do. An
+  # agent posting to /api/v1/events runs in the cluster, reaches the Service
+  # directly, never passes the ingress that authenticates a browser, and cannot
+  # complete an interactive sign-in. Without this, turning `mode` on would
+  # silently stop every SDK that publishes over HTTP.
+  #
+  # The Secret holds `name=secret` pairs, comma-separated. Each grants the
+  # editor role and never admin: a secret in an agent's environment must not be
+  # able to ask an orchestrator to run something.
+  #
+  #   kubectl create secret generic aiwatcher-ingest   #     --from-literal=AIWATCHER_AUTH_INGEST_TOKENS="planner=$(openssl rand -hex 32)"
+  ingestTokenSecret:
+    name: ""
+    key: AIWATCHER_AUTH_INGEST_TOKENS
+
 # ── Panel ────────────────────────────────────────────────────────────────────
 #
 # nginx serving the built React app and proxying /api to the server, so the

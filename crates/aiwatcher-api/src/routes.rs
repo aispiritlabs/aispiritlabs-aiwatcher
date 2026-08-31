@@ -20,6 +20,7 @@ use aiwatcher_projector::{
     RunFilter, RunPage, SpanFilter, SpanPage, SuitePage,
 };
 
+use crate::auth::Caller;
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 use crate::stream::{LiveFrame, Scope, as_sse, catch_up, live_tail};
@@ -40,6 +41,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/runs/{run_id}", get(get_run))
         .route("/api/v1/runs/{run_id}/events", get(get_run_events))
         .route("/api/v1/runs/{run_id}/stream", get(stream_run))
+        .route("/api/v1/events/stream", get(stream_events))
         .route("/api/v1/live", get(live_websocket))
         .route("/api/v1/events", post(ingest))
         .route("/livez", get(livez))
@@ -48,9 +50,23 @@ pub fn router(state: AppState) -> Router {
         // Its own module: the registry is a different store with a different
         // lifetime, and keeping its routes beside the log's would hide that.
         .merge(crate::prompts::router())
+        // Curation recipes and completed dataset artifacts share the authored
+        // object store, but not the prompt domain.
+        .merge(crate::datasets::router())
         // And its own module for a sharper reason: one of these routes asks
         // another system to run something. See `crate::workflows`.
         .merge(crate::workflows::router())
+        // And its own module because it is about the caller rather than the
+        // data. See `crate::auth`.
+        .merge(crate::auth::router())
+        // In front of everything above, including the health probes and the
+        // sign-in routes themselves — which is why the layer has an exception
+        // list rather than being applied route by route. A route added later
+        // is then authenticated by default instead of by remembering to.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::authenticate,
+        ))
         .with_state(state)
 }
 
@@ -374,6 +390,36 @@ pub struct StreamQuery {
     pub from: Option<String>,
 }
 
+/// Server-sent events for the whole system: a catch-up marker, then live.
+///
+/// This is the panel's Observability transport. It is deliberately separate
+/// from the WebSocket below: the panel only receives here, so EventSource can
+/// own reconnects and `Last-Event-ID` resume without client-side machinery.
+#[utoipa::path(
+    get,
+    path = "/api/v1/events/stream",
+    params(StreamQuery),
+    responses((status = 200, description = "text/event-stream of LiveFrame")),
+    tag = "live",
+)]
+async fn stream_events(
+    State(state): State<AppState>,
+    Query(query): Query<StreamQuery>,
+    headers: HeaderMap,
+) -> ApiResult<Sse<impl Stream<Item = Result<axum::response::sse::Event, Infallible>>>> {
+    let from = resume_point(&headers, query.from.as_deref())?;
+    let scope = Scope::Everything;
+    let (history, boundary) = catch_up(&state, from.as_ref(), &scope).await?;
+    let tail = live_tail(&state.live, boundary, scope);
+    let frames = futures::stream::iter(history).chain(tail);
+
+    Ok(Sse::new(as_sse(frames)).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("keep-alive"),
+    ))
+}
+
 /// Server-sent events for one run: history, a catch-up marker, then live.
 #[utoipa::path(
     get,
@@ -536,6 +582,12 @@ pub struct IngestResponse {
 ///
 /// The fallback path for clients that cannot reach Laser. Returns 403 when the
 /// instance is configured without a sink.
+///
+/// Writer, not viewer: this is the one read-model route that puts something in
+/// the durable log, and an agent that publishes here is a machine identity —
+/// an authentik service account holding a token for this audience, or a
+/// bearer the operator issued. Reading runs and writing them are different
+/// permissions in every deployment that has more than one team.
 #[utoipa::path(
     post,
     path = "/api/v1/events",
@@ -549,8 +601,10 @@ pub struct IngestResponse {
 )]
 async fn ingest(
     State(state): State<AppState>,
+    caller: Caller,
     Json(request): Json<IngestRequest>,
 ) -> ApiResult<(StatusCode, Json<IngestResponse>)> {
+    caller.require(aiwatcher_auth::Role::Editor)?;
     let Some(sink) = state.sink.as_ref() else {
         return Err(ApiError::IngestDisabled);
     };
