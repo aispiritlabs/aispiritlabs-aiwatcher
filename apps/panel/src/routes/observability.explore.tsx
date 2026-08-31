@@ -15,8 +15,23 @@ import type {
 } from '@/api/generated/types.gen';
 import { Badge, Button, Card, EmptyState, IdChip, Spinner } from '@/components/ui/primitives';
 import { StatusBadge } from '@/components/status-badge';
+import {
+  DEFAULT_WINDOW_SECONDS,
+  TimeRange,
+  windowParam,
+  windowSearchSchema,
+} from '@/components/time-range';
 import { VirtualList } from '@/components/virtual-list';
-import { cn, formatCount, formatDuration, formatTime, pinchId, shortId } from '@/lib/utils';
+import {
+  cn,
+  formatAge,
+  formatCount,
+  formatDuration,
+  formatTime,
+  isStalled,
+  pinchId,
+  shortId,
+} from '@/lib/utils';
 
 /**
  * One place to move between every level of a run.
@@ -80,6 +95,7 @@ const TREE_PAGE = 100;
 const EVENT_PAGE = 200;
 
 const searchSchema = z.object({
+  ...windowSearchSchema,
   /** The dimension the tree is rooted on. */
   by: z.enum(PIVOTS).optional(),
   /** The selected row of that dimension. */
@@ -115,7 +131,10 @@ function ExplorePage() {
   );
   const replace = React.useCallback(
     (next: Selection) => {
-      void navigate({ search: () => next });
+      // The window survives, because it is not part of the path: switching
+      // pivot or walking back up a level is a move inside the period being
+      // looked at, not a decision to look at a different one.
+      void navigate({ search: (previous) => ({ window: previous.window, ...next }) });
     },
     [navigate],
   );
@@ -136,18 +155,26 @@ function ExplorePage() {
          * and "which runtime is slow" and "which session failed" are the same
          * three clicks.
          */}
-        <div className="flex flex-wrap items-center gap-1">
-          <span className="mr-1 text-xs text-muted-foreground">group by</span>
-          {PIVOTS.map((option) => (
-            <Button
-              key={option}
-              size="sm"
-              variant={pivot === option ? 'default' : 'outline'}
-              onClick={() => replace({ by: option })}
-            >
-              {option}
-            </Button>
-          ))}
+        <div className="flex flex-col items-end gap-2">
+          <TimeRange
+            value={search.window ?? DEFAULT_WINDOW_SECONDS}
+            onChange={(seconds) =>
+              void navigate({ search: (previous) => ({ ...previous, window: seconds }) })
+            }
+          />
+          <div className="flex flex-wrap items-center gap-1">
+            <span className="mr-1 text-xs text-muted-foreground">group by</span>
+            {PIVOTS.map((option) => (
+              <Button
+                key={option}
+                size="sm"
+                variant={pivot === option ? 'default' : 'outline'}
+                onClick={() => replace({ by: option })}
+              >
+                {option}
+              </Button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -273,6 +300,7 @@ function Tree({
   onSelect: (next: Partial<Selection>) => void;
 }) {
   const pivot = selection.by ?? 'session';
+  const windowSeconds = selection.window ?? DEFAULT_WINDOW_SECONDS;
   const [draft, setDraft] = React.useState(selection.find ?? '');
   const find = selection.find ?? '';
 
@@ -287,13 +315,14 @@ function Tree({
   }, [draft, find, onSelect]);
 
   const dimensions = useInfiniteQuery({
-    queryKey: ['dimensions', pivot, find],
+    queryKey: ['dimensions', pivot, find, windowSeconds],
     initialPageParam: undefined as string | undefined,
     queryFn: async ({ pageParam }) => {
       const response = await listDimension({
         path: { kind: pivot as DimensionKind },
         query: {
           search: find || undefined,
+          window_seconds: windowParam(windowSeconds),
           after: pageParam,
           limit: TREE_PAGE,
         },
@@ -310,12 +339,13 @@ function Tree({
   // top level. It is the one view that answers "which call was slow" without
   // knowing the run first.
   const allSpans = useInfiniteQuery({
-    queryKey: ['spans', 'flat', find],
+    queryKey: ['spans', 'flat', find, windowSeconds],
     initialPageParam: undefined as string | undefined,
     queryFn: async ({ pageParam }) => {
       const response = await listSpans({
         query: {
           search: find || undefined,
+          window_seconds: windowParam(windowSeconds),
           after: pageParam,
           limit: TREE_PAGE,
         },
@@ -331,11 +361,15 @@ function Tree({
   });
 
   const runs = useQuery({
-    queryKey: ['runs', pivot, selection.key],
+    // Windowed like the row above it: a row counting three runs that expands
+    // into nine is a row nobody trusts, and the count is the thing people are
+    // reading when they open it.
+    queryKey: ['runs', pivot, selection.key, windowSeconds],
     queryFn: async () => {
       const response = await listRuns({
         query: {
           [RUN_FILTER[pivot as Exclude<Pivot, 'span'>]]: selection.key,
+          window_seconds: windowParam(windowSeconds),
           limit: 100,
         },
       });
@@ -414,9 +448,7 @@ function Tree({
       {active.isError ? (
         <p className="p-4 text-sm text-muted-foreground">Could not reach the API.</p>
       ) : rows.length === 0 && !active.isLoading ? (
-        <p className="p-4 text-sm text-muted-foreground">
-          {find ? `No ${pivot} matches “${find}”.` : `Nothing recorded for this pivot yet.`}
-        </p>
+        <EmptyPivot pivot={pivot} find={find} ungrouped={ungrouped} />
       ) : (
         <VirtualList
           items={rows}
@@ -441,6 +473,57 @@ function Tree({
         />
       )}
     </div>
+  );
+}
+
+/**
+ * What a producer has to send for a pivot to have rows.
+ *
+ * The empty state used to read "Nothing recorded for this pivot yet", which is
+ * true of an idle server and false of the case that actually brings people
+ * here: runs exist, they are in the tree under every other pivot, and this one
+ * is empty because nothing on the wire carries the field it groups by. The
+ * backend has always known — it counts those runs as `ungrouped_runs` — but
+ * that number was only ever rendered in the footer of a list that has no rows.
+ */
+const PIVOT_FIELD: Record<Exclude<Pivot, 'span' | 'trace'>, string> = {
+  session: 'conversation_id',
+  agent: 'agent_id',
+  runtime: 'source.service',
+  workflow: 'workflow_id',
+  model: 'gen_ai.request.model on an LLM span',
+  tool: 'gen_ai.tool.name on a tool span',
+};
+
+function EmptyPivot({ pivot, find, ungrouped }: { pivot: Pivot; find: string; ungrouped: number }) {
+  if (find) {
+    return (
+      <p className="p-4 text-sm text-muted-foreground">
+        No {pivot} matches “{find}”.
+      </p>
+    );
+  }
+  const field = pivot in PIVOT_FIELD ? PIVOT_FIELD[pivot as keyof typeof PIVOT_FIELD] : undefined;
+  if (ungrouped > 0 && field) {
+    return (
+      <div className="flex flex-col gap-2 p-4 text-sm text-muted-foreground">
+        <p>
+          {ungrouped} run{ungrouped === 1 ? '' : 's'} in this window, none carrying a {pivot}.
+        </p>
+        <p className="text-xs">
+          A run joins this pivot when its producer sets{' '}
+          <code className="rounded bg-muted px-1 py-0.5 text-foreground">{field}</code>.
+        </p>
+        <Link to="/observability/runs" className="text-xs text-primary hover:underline">
+          See them in the runs list →
+        </Link>
+      </div>
+    );
+  }
+  return (
+    <p className="p-4 text-sm text-muted-foreground">
+      Nothing recorded in this window. Widen it, or pick “all”.
+    </p>
   );
 }
 
@@ -513,7 +596,25 @@ function TreeNode({
             {row.row.failed}
           </Badge>
         ) : null}
-        {row.row.running > 0 ? <Spinner className="shrink-0 text-running" /> : null}
+        {/*
+         * `running` counts runs with no end event, which a killed producer
+         * keeps above zero for as long as the row is retained. The newest
+         * event on those runs is what separates working from stuck, so the
+         * spinner gives way to how long it has been quiet.
+         */}
+        {row.row.running > 0 ? (
+          isStalled(row.row.running_last_event_at) ? (
+            <Badge
+              tone="warning"
+              className="shrink-0 px-1.5 py-0 text-[10px]"
+              title={`Nothing since ${row.row.running_last_event_at}`}
+            >
+              stalled {formatAge(row.row.running_last_event_at)}
+            </Badge>
+          ) : (
+            <Spinner className="shrink-0 text-running" />
+          )
+        ) : null}
       </Row>
     );
   }
@@ -528,7 +629,7 @@ function TreeNode({
         active={open && !selection.span}
         onClick={() => onSelect({ run: open ? undefined : row.run.run_id, span: undefined })}
       >
-        <StatusBadge status={row.run.status as RunStatus} />
+        <StatusBadge status={row.run.status as RunStatus} lastEventAt={row.run.last_event_at} />
         <span className="flex-1 truncate">{row.run.run_id}</span>
         <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
           {formatDuration(row.run.duration_ms)}

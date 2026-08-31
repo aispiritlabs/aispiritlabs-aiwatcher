@@ -97,6 +97,9 @@ pub enum SpanOutcome {
 #[derive(Clone, Debug, Default, Deserialize, utoipa::IntoParams)]
 #[serde(deny_unknown_fields)]
 pub struct SpanFilter {
+    /// Only spans that ended in the last this-many seconds. See
+    /// [`crate::window`].
+    pub window_seconds: Option<i64>,
     pub run_id: Option<String>,
     pub trace_id: Option<String>,
     pub agent_id: Option<String>,
@@ -208,7 +211,12 @@ fn matches(row: &SpanRow, filter: &SpanFilter) -> bool {
 }
 
 /// Flatten and filter every retained span.
-pub fn compute(spans: &HashMap<String, Vec<CompletedSpan>>, filter: &SpanFilter) -> SpanPage {
+pub fn compute(
+    spans: &HashMap<String, Vec<CompletedSpan>>,
+    filter: &SpanFilter,
+    now: OffsetDateTime,
+) -> SpanPage {
+    let since = crate::window::cutoff(filter.window_seconds, now);
     let mut rows: Vec<SpanRow> = spans
         .iter()
         // `run_id` is the map key, so narrowing by it skips whole runs before
@@ -220,6 +228,10 @@ pub fn compute(spans: &HashMap<String, Vec<CompletedSpan>>, filter: &SpanFilter)
                 .is_none_or(|wanted| *run_id == wanted)
         })
         .flat_map(|(run_id, spans)| spans.iter().map(move |span| SpanRow::build(run_id, span)))
+        // On the end, not the start: a span is only ever written when it
+        // finishes, so "in the last fifteen minutes" is a question about when
+        // it landed.
+        .filter(|row| since.is_none_or(|start| row.end >= start))
         .filter(|row| matches(row, filter))
         .collect();
 
@@ -257,6 +269,10 @@ mod tests {
     use aiwatcher_core::ports::attr;
 
     use super::*;
+
+    fn now() -> OffsetDateTime {
+        datetime!(2026-08-27 18:30:00 UTC)
+    }
 
     fn span(run_id: &str, name: &str, millis: i64, step_type: Option<&str>) -> CompletedSpan {
         let trace_id = TraceId::derive(run_id);
@@ -301,9 +317,37 @@ mod tests {
 
     #[test]
     fn every_span_carries_the_run_it_belongs_to() {
-        let page = compute(&model(), &SpanFilter::default());
+        let page = compute(&model(), &SpanFilter::default(), now());
         assert_eq!(page.total_known, 3);
         assert!(page.spans.iter().all(|row| !row.run_id.is_empty()));
+    }
+
+    /// A span is written when it ends, so the window asks about its end.
+    #[test]
+    fn the_window_keeps_the_spans_that_ended_inside_it() {
+        let page = compute(
+            &model(),
+            &SpanFilter {
+                window_seconds: Some(60),
+                ..SpanFilter::default()
+            },
+            now(),
+        );
+
+        assert_eq!(
+            page.total_known, 0,
+            "every span in the fixture ended ten minutes ago"
+        );
+
+        let page = compute(
+            &model(),
+            &SpanFilter {
+                window_seconds: Some(3600),
+                ..SpanFilter::default()
+            },
+            now(),
+        );
+        assert_eq!(page.total_known, 3);
     }
 
     #[test]
@@ -315,6 +359,7 @@ mod tests {
                 step_type: Some("tool".to_owned()),
                 ..SpanFilter::default()
             },
+            now(),
         );
 
         assert_eq!(page.spans.len(), 1);
@@ -330,6 +375,7 @@ mod tests {
                 min_duration_ms: Some(1_000),
                 ..SpanFilter::default()
             },
+            now(),
         );
 
         assert_eq!(page.spans.len(), 1);
@@ -345,6 +391,7 @@ mod tests {
                 limit: Some(2),
                 ..SpanFilter::default()
             },
+            now(),
         );
         assert_eq!(first.spans.len(), 2);
         let cursor = first.next_cursor.clone().expect("a third span remains");
@@ -356,6 +403,7 @@ mod tests {
                 limit: Some(2),
                 ..SpanFilter::default()
             },
+            now(),
         );
 
         assert_eq!(second.spans.len(), 1);
@@ -372,6 +420,7 @@ mod tests {
                 search: Some("EMBED".to_owned()),
                 ..SpanFilter::default()
             },
+            now(),
         );
 
         assert_eq!(page.spans.len(), 1);

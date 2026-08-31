@@ -111,8 +111,8 @@ export type ConversationSummary = {
     failed: number;
     input_tokens: number;
     /**
-     * The newest run's start. What the list sorts by, so an active session
-     * stays at the top.
+     * The newest event on any of the session's runs. What the list sorts by,
+     * so an active session stays at the top.
      */
     last_activity_at: string;
     llm_calls: number;
@@ -179,13 +179,30 @@ export type DimensionSummary = {
     input_tokens: number;
     key: string;
     /**
-     * The newest run's start. What the list sorts by, so an active row stays
-     * at the top.
+     * The newest event on any of the row's runs. What the list sorts by, so a
+     * row where something is happening stays at the top.
+     *
+     * Read from the runs' last event rather than from their start, which is
+     * what it used to be: a row whose runs all began an hour ago and are
+     * still working is active, and sorting it below a row that started one
+     * run a minute ago and finished it buried the thing worth looking at.
      */
     last_activity_at: string;
     llm_calls: number;
     output_tokens: number;
     running: number;
+    /**
+     * The newest event on a run in this row that has **not** ended. Absent
+     * when none is running.
+     *
+     * What tells a row that is working from a row that stopped talking. The
+     * running count alone cannot: a run whose producer was killed keeps that
+     * count above zero forever, and a spinner that never stops is the one
+     * thing this view must not show without saying how long it has been
+     * spinning. Where to draw the line is the reader's, so the number is
+     * reported rather than judged.
+     */
+    running_last_event_at?: string | null;
     runs: number;
     started_at: string;
     succeeded: number;
@@ -521,6 +538,15 @@ export type ExecutionSummary = {
     duration_ms?: number | null;
     ended_at?: string | null;
     error?: string | null;
+    /**
+     * The newest event folded into this execution, ended or not.
+     *
+     * An execution outlives its runs, and a stage-per-pod one is idle between
+     * them by design, so "started three hours ago" says nothing about whether
+     * anything is still moving. This does. Same fact as `RunSummary`'s field
+     * of the same shape, and it is what the time window matches on.
+     */
+    last_activity_at: string;
     /**
      * The newest checkpoint folded into this row, so a client can resume the
      * live stream from here without re-reading the execution.
@@ -1316,6 +1342,17 @@ export type RunSummary = {
      * live stream from here without re-reading the run.
      */
     last_checkpoint: Checkpoint;
+    /**
+     * The newest event folded into this row, ended or not.
+     *
+     * The one number that separates a run still working from a run whose
+     * producer stopped talking. Nothing here promotes the second case to a
+     * status — a projector that decided a run had died would be guessing
+     * about a process it cannot see, and the guess would be wrong for every
+     * agent that legitimately thinks for an hour. It reports when the run was
+     * last heard from and lets the reader draw the line.
+     */
+    last_event_at: string;
     llm_calls: number;
     output_tokens: number;
     run_id: string;
@@ -1600,6 +1637,11 @@ export type ListConversationsData = {
     body?: never;
     path?: never;
     query?: {
+        /**
+         * Only sessions with activity in the last this-many seconds. See
+         * [`crate::window`].
+         */
+        window_seconds?: number | null;
         agent_id?: string | null;
         /**
          * Substring match on the conversation id. The one control that turns a
@@ -1626,6 +1668,12 @@ export type ListDimensionData = {
         kind: DimensionKind;
     };
     query?: {
+        /**
+         * Only runs with activity in the last this-many seconds, before they are
+         * grouped. See [`crate::window`] — a row whose every run falls outside the
+         * window disappears with them rather than staying behind as an empty key.
+         */
+        window_seconds?: number | null;
         /**
          * Narrow to runs that ran this agent, whatever the dimension is. Lets the
          * tree stay scoped when someone arrives from an agent-filtered view.
@@ -1675,6 +1723,11 @@ export type ListEvaluationsData = {
     body?: never;
     path?: never;
     query?: {
+        /**
+         * Only reports that finished — or, while they are still running, started
+         * — in the last this-many seconds. See [`crate::window`].
+         */
+        window_seconds?: number | null;
         suite?: string | null;
         dataset?: string | null;
         variant?: string | null;
@@ -2013,6 +2066,11 @@ export type ListRunsData = {
     body?: never;
     path?: never;
     query?: {
+        /**
+         * Only runs with activity in the last this-many seconds. See
+         * [`crate::window`] — zero and absent both mean everything.
+         */
+        window_seconds?: number | null;
         conversation_id?: string | null;
         agent_id?: string | null;
         /**
@@ -2154,6 +2212,11 @@ export type ListSpansData = {
     body?: never;
     path?: never;
     query?: {
+        /**
+         * Only spans that ended in the last this-many seconds. See
+         * [`crate::window`].
+         */
+        window_seconds?: number | null;
         run_id?: string | null;
         trace_id?: string | null;
         agent_id?: string | null;
@@ -2190,6 +2253,11 @@ export type ListWorkflowExecutionsData = {
     body?: never;
     path?: never;
     query?: {
+        /**
+         * Only executions with activity in the last this-many seconds. See
+         * [`crate::window`].
+         */
+        window_seconds?: number | null;
         workflow_id?: string | null;
         status?: null | ExecutionStatus;
         /**
@@ -2264,6 +2332,12 @@ export type ListWorkflowsData = {
     body?: never;
     path?: never;
     query?: {
+        /**
+         * Only graphs with activity in the last this-many seconds. See
+         * [`crate::window`]. A declaration is not evicted by it — the catalog
+         * keeps the shape, the window decides what is shown.
+         */
+        window_seconds?: number | null;
         /**
          * Substring over the id and the name.
          */

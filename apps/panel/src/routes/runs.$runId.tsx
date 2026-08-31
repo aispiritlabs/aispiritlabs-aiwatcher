@@ -17,7 +17,7 @@ import { StatusBadge, StreamBadge } from '@/components/status-badge';
 import { EventFeed } from '@/components/event-feed';
 import { Waterfall, type Span } from '@/components/waterfall';
 import { openRunStream, type LiveEventFrame, type StreamPhase } from '@/lib/live';
-import { formatCount, formatDuration, shortId } from '@/lib/utils';
+import { formatAge, formatCount, formatDuration, shortId } from '@/lib/utils';
 
 export const Route = createFileRoute('/runs/$runId')({
   component: RunPage,
@@ -103,7 +103,7 @@ function RunPage() {
         <div className="flex flex-col gap-1">
           <div className="flex items-center gap-3">
             <h1 className="text-lg font-semibold">{summary.run_id}</h1>
-            <StatusBadge status={summary.status as RunStatus} />
+            <StatusBadge status={summary.status as RunStatus} lastEventAt={summary.last_event_at} />
             {isRunning ? <StreamBadge phase={phase} /> : null}
           </div>
           <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
@@ -115,6 +115,8 @@ function RunPage() {
                 <IdChip value={summary.conversation_id} label="conversation" />
               </>
             ) : null}
+            <span>· last event</span>
+            <span className="tabular-nums">{formatAge(summary.last_event_at)} ago</span>
             <span>· cursor</span>
             <IdChip value={summary.last_checkpoint} label="checkpoint" />
           </div>

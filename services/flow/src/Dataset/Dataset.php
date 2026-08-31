@@ -41,6 +41,15 @@ final readonly class Dataset
          * window dressed up as one query.
          */
         public bool $requiresRun = false,
+        /**
+         * Whether the route accepts `window_seconds`.
+         *
+         * The aiwatcher API rejects unknown query parameters rather than
+         * ignoring them, so this is not a hint — sending the window to a route
+         * that has none turns the whole query into a 400. `events` is per-run
+         * and has no window: a run's log is bounded by the run.
+         */
+        public bool $windowed = false,
     ) {}
 
     public function hasColumn(string $name): bool

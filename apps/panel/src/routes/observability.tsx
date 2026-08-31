@@ -29,6 +29,15 @@ function ObservabilityLayout() {
           <Link
             key={to}
             to={to}
+            // The period carries across the sub-navigation; nothing else does.
+            // Having narrowed to the last fifteen minutes, "now show me the
+            // metrics for it" is the next question, and a tab switch that
+            // silently reset the window would answer a different one. The rest
+            // of the search — the pivot, the open run, a query — belongs to the
+            // view that owns it.
+            search={(previous: { window?: number }) =>
+              previous.window === undefined ? {} : { window: previous.window }
+            }
             className="-mb-px border-b-2 border-transparent px-3 py-2 text-sm text-muted-foreground transition-colors hover:text-foreground [&.active]:border-primary [&.active]:text-foreground"
           >
             {label}

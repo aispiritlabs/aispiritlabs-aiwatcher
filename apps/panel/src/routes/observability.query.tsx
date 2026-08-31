@@ -17,6 +17,13 @@ import {
   type FlowResult,
 } from '@/lib/flow';
 import { Badge, Button, Card, EmptyState, Spinner } from '@/components/ui/primitives';
+import {
+  DEFAULT_WINDOW_SECONDS,
+  TIME_WINDOWS,
+  TimeRange,
+  windowParam,
+  windowSearchSchema,
+} from '@/components/time-range';
 import { VirtualList } from '@/components/virtual-list';
 import { cn, formatCount } from '@/lib/utils';
 
@@ -41,7 +48,7 @@ import { cn, formatCount } from '@/lib/utils';
  * lands the reader somewhere else.
  */
 
-const searchSchema = z.object({ q: z.string().optional() });
+const searchSchema = z.object({ ...windowSearchSchema, q: z.string().optional() });
 
 export const Route = createFileRoute('/observability/query')({
   validateSearch: searchSchema,
@@ -51,6 +58,7 @@ export const Route = createFileRoute('/observability/query')({
 function QueryPage() {
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
+  const windowSeconds = search.window ?? DEFAULT_WINDOW_SECONDS;
   const [draft, setDraft] = React.useState(search.q ?? STARTER_QUERY);
 
   const available = useQuery({
@@ -66,10 +74,15 @@ function QueryPage() {
     enabled: available.data === true,
   });
 
+  // The window scopes the datasets the query reads, not the query itself: the
+  // service forwards it to the aiwatcher routes that take one and leaves the
+  // per-run `events` route alone. Re-running is explicit here — a query is
+  // work somebody asked for — so changing the window arms the next Run rather
+  // than firing one.
   const query = useMutation({
-    mutationFn: runQuery,
+    mutationFn: (pipeline: string) => runQuery(pipeline, windowParam(windowSeconds)),
     onSuccess: (_, pipeline) => {
-      void navigate({ search: { q: pipeline }, replace: true });
+      void navigate({ search: (previous) => ({ ...previous, q: pipeline }), replace: true });
     },
   });
 
@@ -121,11 +134,19 @@ function QueryPage() {
             retention.
           </p>
         </div>
-        <Button onClick={submit} disabled={query.isPending} className="gap-2">
-          {query.isPending ? <Spinner /> : <Play className="h-3.5 w-3.5" />}
-          Run
-          <span className="text-[10px] opacity-60">⌘↵</span>
-        </Button>
+        <div className="flex flex-wrap items-center gap-3">
+          <TimeRange
+            value={windowSeconds}
+            onChange={(seconds) =>
+              void navigate({ search: (previous) => ({ ...previous, window: seconds }) })
+            }
+          />
+          <Button onClick={submit} disabled={query.isPending} className="gap-2">
+            {query.isPending ? <Spinner /> : <Play className="h-3.5 w-3.5" />}
+            Run
+            <span className="text-[10px] opacity-60">⌘↵</span>
+          </Button>
+        </div>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[1fr_minmax(16rem,22rem)]">
@@ -152,6 +173,11 @@ function QueryPage() {
       </div>
     </div>
   );
+}
+
+/** `900` → `15m`. The label the time control uses for the same number. */
+function formatWindow(seconds: number): string {
+  return TIME_WINDOWS.find((option) => option.seconds === seconds)?.label ?? `${seconds}s`;
 }
 
 /**
@@ -308,7 +334,17 @@ function ResultTable({ result }: { result: FlowResult }) {
         <span>·</span>
         <span>{result.took_ms} ms</span>
         <span>·</span>
-        <span className="truncate">from {result.source}, within its retention window</span>
+        {/*
+         * Said rather than implied: a scoped table and an empty system look
+         * identical, and the window was applied when Run was pressed, not
+         * when the control was last moved.
+         */}
+        <span className="truncate">
+          from {result.source},{' '}
+          {result.window_seconds
+            ? `over the last ${formatWindow(result.window_seconds)}`
+            : 'within its retention window'}
+        </span>
         {result.truncated ? (
           <Badge tone="warning" className="px-1.5 py-0 text-[10px]">
             truncated at the row cap

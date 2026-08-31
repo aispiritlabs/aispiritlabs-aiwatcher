@@ -13,7 +13,7 @@ declare(strict_types=1);
  *   GET  /flow/healthz   is the service up, and can it see aiwatcher
  *   GET  /flow/datasets  what a query may read, and the columns of each
  *   POST /flow/check     {"pipeline": …} -> what is wrong with it, without running it
- *   POST /flow/query     {"pipeline": …} -> a table
+ *   POST /flow/query     {"pipeline": …, "window_seconds": …} -> a table
  */
 
 use Aiwatcher\Flow\Dataset\Catalog;
@@ -34,12 +34,28 @@ $linter = MagoLinter::fromVendor($catalog, \dirname(__DIR__));
 $runner = new QueryRunner($catalog, $aiwatcher);
 $checker = new QueryChecker($catalog, $linter);
 
-/** Read a `{"pipeline": "…"}` body, or null when it is not one. */
-$pipeline = static function (): ?string {
+/** The request body, decoded once — `php://input` is read, not re-read. */
+$request = (static function (): array {
     $raw = \file_get_contents('php://input');
     $body = \json_decode(\is_string($raw) ? $raw : '', true);
 
-    return \is_array($body) && \is_string($body['pipeline'] ?? null) ? $body['pipeline'] : null;
+    return \is_array($body) ? $body : [];
+})();
+
+/** Read a `{"pipeline": "…"}` body, or null when it is not one. */
+$pipeline = static fn(): ?string => \is_string($request['pipeline'] ?? null) ? $request['pipeline'] : null;
+
+/**
+ * The panel's time window, in seconds, from the same body.
+ *
+ * Anything that is not a positive whole number reads as "everything" rather
+ * than as an error: the window is a view control, and a malformed one should
+ * widen the answer, never refuse to give it.
+ */
+$window = static function () use ($request): ?int {
+    $value = $request['window_seconds'] ?? null;
+
+    return \is_int($value) && $value > 0 ? $value : null;
 };
 
 $path = \parse_url($_SERVER['REQUEST_URI'] ?? '/', \PHP_URL_PATH) ?: '/';
@@ -90,7 +106,7 @@ try {
             $send(200, $checker->check($query));
         })(),
 
-        $path === '/flow/query' && $method === 'POST' => (static function () use ($send, $runner, $pipeline): void {
+        $path === '/flow/query' && $method === 'POST' => (static function () use ($send, $runner, $pipeline, $window): void {
             $query = $pipeline();
 
             if ($query === null) {
@@ -99,7 +115,7 @@ try {
                 return;
             }
 
-            $send(200, $runner->run($query));
+            $send(200, $runner->run($query, $window()));
         })(),
 
         default => $send(404, ['error' => ['message' => \sprintf('No route %s.', $path), 'column' => 0]]),

@@ -95,6 +95,7 @@ final readonly class Catalog
                 'model' => 'A run does not carry the models it used; its spans do. Read the "spans" dataset.',
                 'tool' => 'A run does not carry the tools it called; its spans do. Read the "spans" dataset.',
             ],
+            windowed: true,
         );
 
         $spans = new Dataset(
@@ -124,6 +125,7 @@ final readonly class Catalog
                 'agent' => 'The column is "agent_id".',
                 'duration' => 'The column is "duration_ms".',
             ],
+            windowed: true,
         );
 
         $events = new Dataset(
@@ -156,6 +158,26 @@ final readonly class Catalog
         return ['runs' => $runs, 'spans' => $spans, 'events' => $events];
     }
 
+    /**
+     * The query string one page of a dataset is read with.
+     *
+     * The window is the panel's time control, forwarded to the API rather than
+     * applied to the rows here: filtering after the fact would page through
+     * everything to throw most of it away, and the API already answers the
+     * question. Datasets that do not take one are read whole — see
+     * `Dataset::$windowed`.
+     */
+    private static function query(Dataset $dataset, int $pageSize, ?int $windowSeconds): string
+    {
+        $parameters = ['limit' => $pageSize];
+
+        if ($dataset->windowed && $windowSeconds !== null && $windowSeconds > 0) {
+            $parameters['window_seconds'] = $windowSeconds;
+        }
+
+        return \http_build_query($parameters);
+    }
+
     /** `default` is `runs`: the grain the explorer shows, and the cheap one. */
     public function resolve(string $name): ?Dataset
     {
@@ -177,13 +199,16 @@ final readonly class Catalog
      * the declared columns. Whoever writes the query sees run columns, never the
      * HTTP envelope.
      */
-    public function open(Dataset $dataset, ?string $run = null): DataFrame
+    public function open(Dataset $dataset, ?string $run = null, ?int $windowSeconds = null): DataFrame
     {
         $path = $dataset->requiresRun
             ? \str_replace('{run}', \rawurlencode((string) $run), $dataset->path)
             : $dataset->path;
 
-        $request = new Request('GET', \sprintf('%s%s?limit=%d', $this->baseUrl, $path, $this->pageSize));
+        $request = new Request(
+            'GET',
+            $this->baseUrl . $path . '?' . self::query($dataset, $this->pageSize, $windowSeconds),
+        );
 
         $frame = data_frame()
             ->read(from_http_paginated(

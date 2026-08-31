@@ -72,6 +72,15 @@ final class PipelineBuilder
 
     public function __construct(
         private readonly Catalog $catalog,
+        /**
+         * The panel's time window, in seconds, or null for everything.
+         *
+         * Not part of the language on purpose: a query says *what* to read,
+         * and every list in the panel is already scoped by one control. A
+         * `->window(900)` step would be a second way to say it, and the two
+         * would disagree the first time somebody set both.
+         */
+        private readonly ?int $windowSeconds = null,
     ) {}
 
     public function build(Query $query): Plan
@@ -160,7 +169,7 @@ final class PipelineBuilder
         $this->dataset = $dataset;
         $this->known = \array_fill_keys(\array_keys($dataset->columns), true);
 
-        return $this->catalog->open($dataset, \is_string($run) ? $run : null);
+        return $this->catalog->open($dataset, \is_string($run) ? $run : null, $this->windowSeconds);
     }
 
     /**

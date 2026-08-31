@@ -8,7 +8,13 @@ import { listRuns } from '@/api/generated/sdk.gen';
 import type { RunStatus, RunSummary } from '@/api/generated/types.gen';
 import { Button, Card, EmptyState, IdChip } from '@/components/ui/primitives';
 import { StatusBadge } from '@/components/status-badge';
-import { formatCount, formatDuration, formatTime, shortId } from '@/lib/utils';
+import {
+  DEFAULT_WINDOW_SECONDS,
+  TimeRange,
+  windowParam,
+  windowSearchSchema,
+} from '@/components/time-range';
+import { formatAge, formatCount, formatDuration, formatTime, shortId } from '@/lib/utils';
 
 /**
  * Filters live in the URL, not in component state. A run that looks wrong is
@@ -16,6 +22,7 @@ import { formatCount, formatDuration, formatTime, shortId } from '@/lib/utils';
  * lands the reader somewhere else.
  */
 const searchSchema = z.object({
+  ...windowSearchSchema,
   status: z.enum(['running', 'succeeded', 'failed']).optional(),
   conversation_id: z.string().optional(),
   agent_id: z.string().optional(),
@@ -30,7 +37,14 @@ const columns: ColumnDef<RunSummary>[] = [
   {
     accessorKey: 'status',
     header: 'Status',
-    cell: ({ row }) => <StatusBadge status={row.original.status as RunStatus} />,
+    // The run's newest event, so a run whose producer was killed reads as
+    // stalled rather than as one still working. See `StatusBadge`.
+    cell: ({ row }) => (
+      <StatusBadge
+        status={row.original.status as RunStatus}
+        lastEventAt={row.original.last_event_at}
+      />
+    ),
   },
   {
     accessorKey: 'run_id',
@@ -72,6 +86,15 @@ const columns: ColumnDef<RunSummary>[] = [
     ),
   },
   {
+    accessorKey: 'last_event_at',
+    header: 'Last event',
+    cell: ({ row }) => (
+      <span className="text-xs tabular-nums text-muted-foreground">
+        {formatAge(row.original.last_event_at)} ago
+      </span>
+    ),
+  },
+  {
     accessorKey: 'duration_ms',
     header: 'Duration',
     cell: ({ row }) => (
@@ -109,11 +132,19 @@ const columns: ColumnDef<RunSummary>[] = [
 function RunsPage() {
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
+  const windowSeconds = search.window ?? DEFAULT_WINDOW_SECONDS;
 
   const query = useQuery({
-    queryKey: ['runs', search],
+    queryKey: ['runs', search, windowSeconds],
     queryFn: async () => {
-      const response = await listRuns({ query: search });
+      const response = await listRuns({
+        query: {
+          status: search.status,
+          conversation_id: search.conversation_id,
+          agent_id: search.agent_id,
+          window_seconds: windowParam(windowSeconds),
+        },
+      });
       if (response.error) throw new Error('failed to list runs');
       return response.data;
     },
@@ -138,7 +169,13 @@ function RunsPage() {
             {query.data ? `${query.data.total_known} matching` : 'loading…'}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <TimeRange
+            value={windowSeconds}
+            onChange={(seconds) =>
+              void navigate({ search: (previous) => ({ ...previous, window: seconds }) })
+            }
+          />
           {(['running', 'succeeded', 'failed'] as const).map((status) => (
             <Button
               key={status}
@@ -166,8 +203,12 @@ function RunsPage() {
         />
       ) : runs.length === 0 && !query.isLoading ? (
         <EmptyState
-          title="No runs yet"
-          hint="Publish a run.started event and it will appear here."
+          title="No runs in this window"
+          hint={
+            windowSeconds
+              ? 'Nothing was active in the selected period. Widen it, or pick “all”.'
+              : 'Publish a run.started event and it will appear here.'
+          }
         />
       ) : (
         <Card className="overflow-hidden">

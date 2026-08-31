@@ -257,6 +257,14 @@ pub struct ExecutionSummary {
     pub status: ExecutionStatus,
     #[serde(with = "time::serde::rfc3339")]
     pub started_at: OffsetDateTime,
+    /// The newest event folded into this execution, ended or not.
+    ///
+    /// An execution outlives its runs, and a stage-per-pod one is idle between
+    /// them by design, so "started three hours ago" says nothing about whether
+    /// anything is still moving. This does. Same fact as `RunSummary`'s field
+    /// of the same shape, and it is what the time window matches on.
+    #[serde(with = "time::serde::rfc3339")]
+    pub last_activity_at: OffsetDateTime,
     #[serde(
         default,
         with = "time::serde::rfc3339::option",
@@ -306,6 +314,10 @@ pub struct ExecutionDetail {
 #[derive(Clone, Debug, Default, Deserialize, utoipa::IntoParams)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowFilter {
+    /// Only graphs with activity in the last this-many seconds. See
+    /// [`crate::window`]. A declaration is not evicted by it — the catalog
+    /// keeps the shape, the window decides what is shown.
+    pub window_seconds: Option<i64>,
     /// Substring over the id and the name.
     pub search: Option<String>,
     /// Cursor: the last workflow id on the previous page. Exclusive.
@@ -324,6 +336,9 @@ pub struct WorkflowPage {
 #[derive(Clone, Debug, Default, Deserialize, utoipa::IntoParams)]
 #[serde(deny_unknown_fields)]
 pub struct ExecutionFilter {
+    /// Only executions with activity in the last this-many seconds. See
+    /// [`crate::window`].
+    pub window_seconds: Option<i64>,
     pub workflow_id: Option<String>,
     pub status: Option<ExecutionStatus>,
     /// Substring over the execution id, the workflow id and the agents.
@@ -417,6 +432,7 @@ impl Held {
                 version: None,
                 status: ExecutionStatus::Running,
                 started_at: event.metadata.occurred_at,
+                last_activity_at: event.metadata.occurred_at,
                 ended_at: None,
                 duration_ms: None,
                 nodes_total: 0,
@@ -640,6 +656,10 @@ impl WorkflowState {
                 return;
             };
             held.summary.last_checkpoint = event.metadata.checkpoint.clone();
+            held.summary.last_activity_at = held
+                .summary
+                .last_activity_at
+                .max(event.metadata.occurred_at);
             if event.metadata.occurred_at < held.summary.started_at {
                 // Producers across four pods do not agree on a clock to the
                 // millisecond; keep the earliest observation as the start.
@@ -796,13 +816,15 @@ impl WorkflowState {
 
     /// The catalog, most recently active first.
     #[must_use]
-    pub fn workflows(&self, filter: &WorkflowFilter) -> WorkflowPage {
+    pub fn workflows(&self, filter: &WorkflowFilter, now: OffsetDateTime) -> WorkflowPage {
         let limit = filter.limit.unwrap_or(50).clamp(1, 500);
         let needle = filter.search.as_ref().map(|text| text.to_lowercase());
+        let since = crate::window::cutoff(filter.window_seconds, now);
 
         let mut matching: Vec<&WorkflowDefinition> = self
             .definitions
             .values()
+            .filter(|row| since.is_none_or(|start| row.last_activity_at >= start))
             .filter(|row| {
                 needle.as_ref().is_none_or(|needle| {
                     row.workflow_id.to_lowercase().contains(needle)
@@ -847,9 +869,10 @@ impl WorkflowState {
 
     /// Newest first, filtered, one page.
     #[must_use]
-    pub fn executions(&self, filter: &ExecutionFilter) -> ExecutionPage {
+    pub fn executions(&self, filter: &ExecutionFilter, now: OffsetDateTime) -> ExecutionPage {
         let limit = filter.limit.unwrap_or(50).clamp(1, 500);
         let needle = filter.search.as_ref().map(|text| text.to_lowercase());
+        let since = crate::window::cutoff(filter.window_seconds, now);
 
         let mut matching: Vec<&ExecutionSummary> = self
             .order
@@ -857,6 +880,7 @@ impl WorkflowState {
             .rev()
             .filter_map(|id| self.held.get(id))
             .map(|held| &held.summary)
+            .filter(|row| since.is_none_or(|start| row.last_activity_at >= start))
             .filter(|row| {
                 filter
                     .workflow_id
@@ -1330,6 +1354,10 @@ mod tests {
     use aiwatcher_core::{EventEnvelope, Sdk, Source};
 
     use super::*;
+
+    fn now() -> OffsetDateTime {
+        OffsetDateTime::now_utc()
+    }
 
     /// Builds the recorded stream for one execution, the way a log would.
     struct Traversal {
@@ -1821,7 +1849,7 @@ mod tests {
         let events = vec![run.emit(EventType::RunStarted, "run-a", None, json!({}))];
 
         let state = fold(&events);
-        let page = state.workflows(&WorkflowFilter::default());
+        let page = state.workflows(&WorkflowFilter::default(), now());
 
         assert_eq!(page.workflows.len(), 1);
         assert_eq!(page.workflows[0].workflow_id, "nightly-summary");
@@ -1843,7 +1871,61 @@ mod tests {
         let state = fold(&[event]);
 
         assert!(state.is_empty());
-        assert_eq!(state.workflows(&WorkflowFilter::default()).total_known, 0);
+        assert_eq!(
+            state
+                .workflows(&WorkflowFilter::default(), now())
+                .total_known,
+            0
+        );
+    }
+
+    /// An execution is in the window when it last *moved* in it.
+    ///
+    /// A stage-per-pod traversal is idle between its stages by design, so how
+    /// long ago it started says nothing about whether it is still going. Its
+    /// last event does.
+    #[test]
+    fn the_window_keeps_an_execution_that_is_still_moving_and_drops_a_finished_one() {
+        let mut state = WorkflowState::default();
+        let config = WorkflowConfig::default();
+
+        let mut old = Traversal::new("house-import", "exec-old");
+        state.apply(
+            &old.emit(EventType::RunStarted, "run-a", None, json!({})),
+            &config,
+        );
+
+        let mut long = Traversal::new("house-import", "exec-long");
+        state.apply(
+            &long.emit(EventType::RunStarted, "run-b", None, json!({})),
+            &config,
+        );
+        // Same start, an event four hours later: still working.
+        state.apply(
+            &long.after(4 * 60 * 60 * 1000).emit(
+                EventType::StepStarted,
+                "run-b",
+                None,
+                json!({"node": "load"}),
+            ),
+            &config,
+        );
+
+        let page = state.executions(
+            &ExecutionFilter {
+                window_seconds: Some(900),
+                ..ExecutionFilter::default()
+            },
+            datetime!(2026-08-28 13:05:00 UTC),
+        );
+
+        assert_eq!(
+            page.executions
+                .iter()
+                .map(|row| row.workflow_run_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["exec-long"],
+        );
     }
 
     #[test]
@@ -1856,10 +1938,13 @@ mod tests {
             state.apply(&event, &config);
         }
 
-        let first = state.executions(&ExecutionFilter {
-            limit: Some(2),
-            ..ExecutionFilter::default()
-        });
+        let first = state.executions(
+            &ExecutionFilter {
+                limit: Some(2),
+                ..ExecutionFilter::default()
+            },
+            now(),
+        );
         assert_eq!(
             first
                 .executions
@@ -1870,11 +1955,14 @@ mod tests {
         );
         assert_eq!(first.next_cursor.as_deref(), Some("exec-3"));
 
-        let second = state.executions(&ExecutionFilter {
-            limit: Some(2),
-            after: first.next_cursor,
-            ..ExecutionFilter::default()
-        });
+        let second = state.executions(
+            &ExecutionFilter {
+                limit: Some(2),
+                after: first.next_cursor,
+                ..ExecutionFilter::default()
+            },
+            now(),
+        );
         assert_eq!(
             second
                 .executions
@@ -1947,7 +2035,7 @@ mod tests {
             }
         }
 
-        let catalog = state.workflows(&WorkflowFilter::default());
+        let catalog = state.workflows(&WorkflowFilter::default(), now());
         assert!(
             catalog.total_known <= 3 + config.max_executions,
             "the catalog grew to {} rows",

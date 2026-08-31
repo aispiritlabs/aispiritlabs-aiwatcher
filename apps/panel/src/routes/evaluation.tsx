@@ -14,6 +14,12 @@ import type {
 } from '@/api/generated/types.gen';
 import { Badge, Button, Card, EmptyState, IdChip, Spinner, Stat } from '@/components/ui/primitives';
 import { StatusBadge } from '@/components/status-badge';
+import {
+  DEFAULT_WINDOW_SECONDS,
+  TimeRange,
+  windowParam,
+  windowSearchSchema,
+} from '@/components/time-range';
 import { VirtualList } from '@/components/virtual-list';
 import { cn, formatDuration, formatTime, pinchId } from '@/lib/utils';
 
@@ -41,6 +47,7 @@ import { cn, formatDuration, formatTime, pinchId } from '@/lib/utils';
  */
 
 const searchSchema = z.object({
+  ...windowSearchSchema,
   suite: z.string().optional(),
   dataset: z.string().optional(),
   status: z.enum(['running', 'succeeded', 'failed']).optional(),
@@ -59,6 +66,7 @@ const REPORT_PAGE = 50;
 function EvaluationPage() {
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
+  const windowSeconds = search.window ?? DEFAULT_WINDOW_SECONDS;
 
   const select = React.useCallback(
     (next: Partial<z.infer<typeof searchSchema>>) => {
@@ -78,7 +86,7 @@ function EvaluationPage() {
   });
 
   const reports = useInfiniteQuery({
-    queryKey: ['evaluations', search.suite, search.dataset, search.status, search.q],
+    queryKey: ['evaluations', search.suite, search.dataset, search.status, search.q, windowSeconds],
     initialPageParam: undefined as string | undefined,
     queryFn: async ({ pageParam }) => {
       const response = await listEvaluations({
@@ -87,6 +95,9 @@ function EvaluationPage() {
           dataset: search.dataset,
           status: search.status,
           search: search.q || undefined,
+          // A report is dated by when it finished, not when it started: a
+          // twenty-minute batch is normal here. See the projector's `window`.
+          window_seconds: windowParam(windowSeconds),
           after: pageParam,
           limit: REPORT_PAGE,
         },
@@ -108,12 +119,21 @@ function EvaluationPage() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div>
-        <h1 className="text-lg font-semibold">Evaluation</h1>
-        <p className="max-w-3xl text-sm text-muted-foreground">
-          Scoring runs against a dataset: which prompt, model or agent version answers better, and
-          by how much. Reports arrive on the same log as the traces and are folded apart from them.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-lg font-semibold">Evaluation</h1>
+          <p className="max-w-3xl text-sm text-muted-foreground">
+            Scoring runs against a dataset: which prompt, model or agent version answers better, and
+            by how much. Reports arrive on the same log as the traces and are folded apart from
+            them.
+          </p>
+        </div>
+        <TimeRange
+          value={windowSeconds}
+          onChange={(seconds) =>
+            void navigate({ search: (previous) => ({ ...previous, window: seconds }) })
+          }
+        />
       </div>
 
       <Suites
@@ -144,8 +164,12 @@ function EvaluationPage() {
             />
           ) : rows.length === 0 && !reports.isLoading ? (
             <EmptyState
-              title="No evaluation reports"
-              hint="Publish an eval.completed event — the Python SDK's record_evaluation is one call — and it will appear here."
+              title="No evaluation reports in this window"
+              hint={
+                windowSeconds
+                  ? 'Nothing finished in the selected period. Widen it, or pick “all”.'
+                  : "Publish an eval.completed event — the Python SDK's record_evaluation is one call — and it will appear here."
+              }
             />
           ) : (
             <VirtualList

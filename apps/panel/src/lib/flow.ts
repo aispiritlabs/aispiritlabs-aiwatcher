@@ -40,6 +40,8 @@ const resultSchema = z.object({
   dataset: z.string().nullable(),
   grain: z.string().nullable(),
   source: z.string(),
+  /** The window the rows were read through, so a short table reads as scoped. */
+  window_seconds: z.number().nullable().optional(),
   took_ms: z.number(),
 });
 
@@ -156,12 +158,23 @@ export async function checkQuery(pipeline: string): Promise<FlowCheck> {
   );
 }
 
-export async function runQuery(pipeline: string): Promise<FlowResult> {
+/**
+ * Run a query, scoped to the panel's time window.
+ *
+ * The window is a parameter of the request rather than a step in the query:
+ * the service forwards it to the aiwatcher routes that accept one and leaves
+ * the per-run `events` route alone. A `->window(900)` step would be a second
+ * way to say what every other tab's control already says, and the two would
+ * disagree the first time somebody set both.
+ */
+export async function runQuery(pipeline: string, windowSeconds?: number): Promise<FlowResult> {
   return resultSchema.parse(
     await call('/query', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ pipeline }),
+      body: JSON.stringify(
+        windowSeconds ? { pipeline, window_seconds: windowSeconds } : { pipeline },
+      ),
     }),
   );
 }

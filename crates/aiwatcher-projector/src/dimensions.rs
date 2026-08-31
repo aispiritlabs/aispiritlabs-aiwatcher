@@ -73,6 +73,10 @@ impl DimensionKind {
 #[derive(Clone, Debug, Default, Deserialize, utoipa::IntoParams)]
 #[serde(deny_unknown_fields)]
 pub struct DimensionFilter {
+    /// Only runs with activity in the last this-many seconds, before they are
+    /// grouped. See [`crate::window`] — a row whose every run falls outside the
+    /// window disappears with them rather than staying behind as an empty key.
+    pub window_seconds: Option<i64>,
     /// Narrow to runs that ran this agent, whatever the dimension is. Lets the
     /// tree stay scoped when someone arrives from an agent-filtered view.
     pub agent_id: Option<String>,
@@ -102,10 +106,30 @@ pub struct DimensionSummary {
     pub cached_tokens: i64,
     #[serde(with = "time::serde::rfc3339")]
     pub started_at: OffsetDateTime,
-    /// The newest run's start. What the list sorts by, so an active row stays
-    /// at the top.
+    /// The newest event on any of the row's runs. What the list sorts by, so a
+    /// row where something is happening stays at the top.
+    ///
+    /// Read from the runs' last event rather than from their start, which is
+    /// what it used to be: a row whose runs all began an hour ago and are
+    /// still working is active, and sorting it below a row that started one
+    /// run a minute ago and finished it buried the thing worth looking at.
     #[serde(with = "time::serde::rfc3339")]
     pub last_activity_at: OffsetDateTime,
+    /// The newest event on a run in this row that has **not** ended. Absent
+    /// when none is running.
+    ///
+    /// What tells a row that is working from a row that stopped talking. The
+    /// running count alone cannot: a run whose producer was killed keeps that
+    /// count above zero forever, and a spinner that never stops is the one
+    /// thing this view must not show without saying how long it has been
+    /// spinning. Where to draw the line is the reader's, so the number is
+    /// reported rather than judged.
+    #[serde(
+        default,
+        with = "time::serde::rfc3339::option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub running_last_event_at: Option<OffsetDateTime>,
 }
 
 impl DimensionSummary {
@@ -123,7 +147,8 @@ impl DimensionSummary {
             output_tokens: 0,
             cached_tokens: 0,
             started_at: run.started_at,
-            last_activity_at: run.started_at,
+            last_activity_at: run.last_event_at,
+            running_last_event_at: None,
         }
     }
 
@@ -140,7 +165,13 @@ impl DimensionSummary {
         self.output_tokens += run.output_tokens;
         self.cached_tokens += run.cached_tokens;
         self.started_at = self.started_at.min(run.started_at);
-        self.last_activity_at = self.last_activity_at.max(run.started_at);
+        self.last_activity_at = self.last_activity_at.max(run.last_event_at);
+        if run.status == RunStatus::Running {
+            self.running_last_event_at = Some(
+                self.running_last_event_at
+                    .map_or(run.last_event_at, |seen| seen.max(run.last_event_at)),
+            );
+        }
         for agent in &run.agents {
             if !self.agents.iter().any(|known| known == agent) {
                 self.agents.push(agent.clone());
@@ -205,11 +236,18 @@ pub fn compute(
     spans: &HashMap<String, Vec<CompletedSpan>>,
     kind: DimensionKind,
     filter: &DimensionFilter,
+    now: OffsetDateTime,
 ) -> DimensionPage {
     let mut grouped: HashMap<String, DimensionSummary> = HashMap::new();
     let mut ungrouped_runs = 0u64;
+    let since = crate::window::cutoff(filter.window_seconds, now);
 
     for run in runs {
+        // Outside the window the run is not ungrouped, it is not here at all —
+        // counting it would put runs nobody asked about in the footer's total.
+        if since.is_some_and(|start| run.last_event_at < start) {
+            continue;
+        }
         if filter
             .agent_id
             .as_ref()
@@ -296,6 +334,7 @@ mod tests {
             runtimes: vec!["agent-service".to_owned()],
             workflow: None,
             started_at: started,
+            last_event_at: started,
             ended_at: None,
             duration_ms: Some(100),
             event_count: 4,
@@ -346,6 +385,7 @@ mod tests {
             &HashMap::new(),
             DimensionKind::Runtime,
             &DimensionFilter::default(),
+            now(),
         );
 
         assert_eq!(page.total, 2);
@@ -369,6 +409,7 @@ mod tests {
             &HashMap::new(),
             DimensionKind::Workflow,
             &DimensionFilter::default(),
+            now(),
         );
 
         assert_eq!(page.rows.len(), 1);
@@ -389,6 +430,7 @@ mod tests {
             &HashMap::new(),
             DimensionKind::Trace,
             &DimensionFilter::default(),
+            now(),
         );
 
         assert_eq!(page.rows.len(), 1);
@@ -412,6 +454,7 @@ mod tests {
             &spans,
             DimensionKind::Model,
             &DimensionFilter::default(),
+            now(),
         );
 
         assert_eq!(page.rows.len(), 1);
@@ -438,6 +481,7 @@ mod tests {
                 limit: Some(2),
                 ..DimensionFilter::default()
             },
+            now(),
         );
         assert_eq!(first.rows.len(), 2);
         let cursor = first.next_cursor.clone().expect("more rows remain");
@@ -451,12 +495,94 @@ mod tests {
                 limit: Some(2),
                 ..DimensionFilter::default()
             },
+            now(),
         );
 
         assert_eq!(second.rows.len(), 2);
         for row in &second.rows {
             assert!(!first.rows.iter().any(|seen| seen.key == row.key));
         }
+    }
+
+    /// The one number that tells a working row from a stuck one.
+    ///
+    /// `running` counts runs with no end event, and a producer that was killed
+    /// keeps that count above zero for as long as the row is retained. What
+    /// separates the two cases is when the running run was last heard from.
+    #[test]
+    fn a_row_reports_when_its_running_runs_were_last_heard_from() {
+        let mut finished = run("run-1", RunStatus::Succeeded, now());
+        finished.last_event_at = now() + time::Duration::minutes(5);
+        let mut stuck = run("run-2", RunStatus::Running, now());
+        stuck.last_event_at = now() + time::Duration::minutes(1);
+
+        let page = compute(
+            &[finished, stuck],
+            &HashMap::new(),
+            DimensionKind::Agent,
+            &DimensionFilter::default(),
+            now(),
+        );
+
+        let row = &page.rows[0];
+        assert_eq!(row.running, 1);
+        assert_eq!(
+            row.running_last_event_at,
+            Some(now() + time::Duration::minutes(1)),
+            "the newest event of the run still going, not of the row"
+        );
+        assert_eq!(
+            row.last_activity_at,
+            now() + time::Duration::minutes(5),
+            "the row's own activity is the newest event on any of its runs"
+        );
+    }
+
+    #[test]
+    fn a_row_with_nothing_running_reports_no_running_activity() {
+        let page = compute(
+            &[run("run-1", RunStatus::Succeeded, now())],
+            &HashMap::new(),
+            DimensionKind::Agent,
+            &DimensionFilter::default(),
+            now(),
+        );
+
+        assert_eq!(page.rows[0].running_last_event_at, None);
+    }
+
+    /// A windowed-out run is absent, not ungrouped.
+    ///
+    /// The footer counts runs that have no key for this dimension, and it is
+    /// the number that keeps this view and the runs list agreeing. Runs the
+    /// caller excluded by asking about the last fifteen minutes were never
+    /// part of that question.
+    #[test]
+    fn the_window_removes_a_quiet_run_without_counting_it_as_ungrouped() {
+        let mut recent = run("run-1", RunStatus::Succeeded, now());
+        recent.last_event_at = now();
+        let mut old = run(
+            "run-2",
+            RunStatus::Succeeded,
+            now() - time::Duration::hours(2),
+        );
+        old.last_event_at = now() - time::Duration::hours(2);
+        old.agents = Vec::new();
+
+        let page = compute(
+            &[recent, old],
+            &HashMap::new(),
+            DimensionKind::Agent,
+            &DimensionFilter {
+                window_seconds: Some(900),
+                ..DimensionFilter::default()
+            },
+            now(),
+        );
+
+        assert_eq!(page.rows.len(), 1);
+        assert_eq!(page.rows[0].runs, 1);
+        assert_eq!(page.ungrouped_runs, 0);
     }
 
     #[test]
@@ -472,6 +598,7 @@ mod tests {
                 search: Some("WRIT".to_owned()),
                 ..DimensionFilter::default()
             },
+            now(),
         );
 
         assert_eq!(page.rows.len(), 1);

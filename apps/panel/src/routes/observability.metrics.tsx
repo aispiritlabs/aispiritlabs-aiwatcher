@@ -4,18 +4,17 @@ import { z } from 'zod';
 
 import { getMetrics } from '@/api/generated/sdk.gen';
 import type { MetricsSummary, Percentiles } from '@/api/generated/types.gen';
-import {
-  Button,
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-  EmptyState,
-} from '@/components/ui/primitives';
+import { Card, CardContent, CardHeader, CardTitle, EmptyState } from '@/components/ui/primitives';
 import { RankedBars, type RankedRow } from '@/components/charts/ranked-bars';
 import { StackedBars } from '@/components/charts/stacked-bars';
 import { SERIES } from '@/components/charts/primitives';
 import type { SeriesDef } from '@/components/charts/primitives';
+import {
+  DEFAULT_WINDOW_SECONDS,
+  TimeRange,
+  windowParam,
+  windowSearchSchema,
+} from '@/components/time-range';
 import { formatCount, formatDuration } from '@/lib/utils';
 
 /**
@@ -27,16 +26,8 @@ import { formatCount, formatDuration } from '@/lib/utils';
  * states rather than hides.
  */
 
-const WINDOWS = [
-  { label: '15m', seconds: 900 },
-  { label: '1h', seconds: 3600 },
-  { label: '6h', seconds: 21_600 },
-  { label: '24h', seconds: 86_400 },
-  { label: 'all', seconds: 0 },
-] as const;
-
 const searchSchema = z.object({
-  window: z.number().optional(),
+  ...windowSearchSchema,
   agent_id: z.string().optional(),
   model: z.string().optional(),
 });
@@ -61,14 +52,22 @@ const RUN_SERIES: SeriesDef[] = [
 function MetricsPage() {
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
-  const windowSeconds = search.window ?? 3600;
+  // The same presets as every other tab, from `@/components/time-range` —
+  // this page had its own list first, and a control that offered different
+  // periods here than in Explore made switching tabs a re-read.
+  //
+  // The window means something slightly different here and deliberately so:
+  // it is the timeline's x-axis, so it selects runs by *start*, while the
+  // lists select by last activity. A run that began before the axis has no
+  // bucket to be counted in.
+  const windowSeconds = search.window ?? DEFAULT_WINDOW_SECONDS;
 
   const query = useQuery({
     queryKey: ['metrics', windowSeconds, search.agent_id, search.model],
     queryFn: async () => {
       const response = await getMetrics({
         query: {
-          window_seconds: windowSeconds || undefined,
+          window_seconds: windowParam(windowSeconds),
           agent_id: search.agent_id,
           model: search.model,
           buckets: 48,
@@ -107,25 +106,12 @@ function MetricsPage() {
             {search.model ? ` · model ${search.model}` : ''}
           </p>
         </div>
-        <div className="flex items-center gap-1">
-          {WINDOWS.map((option) => (
-            <Button
-              key={option.label}
-              size="sm"
-              variant={windowSeconds === option.seconds ? 'default' : 'outline'}
-              onClick={() =>
-                void navigate({
-                  search: (previous) => ({
-                    ...previous,
-                    window: option.seconds,
-                  }),
-                })
-              }
-            >
-              {option.label}
-            </Button>
-          ))}
-        </div>
+        <TimeRange
+          value={windowSeconds}
+          onChange={(seconds) =>
+            void navigate({ search: (previous) => ({ ...previous, window: seconds }) })
+          }
+        />
       </div>
 
       {truncated ? (

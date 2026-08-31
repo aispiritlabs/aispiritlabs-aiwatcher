@@ -41,10 +41,14 @@ final readonly class QueryRunner
         private string $source,
     ) {}
 
-    /** @return array<string, mixed> */
-    public function run(string $query): array
+    /**
+     * @param ?int $windowSeconds the panel's time window; null or zero reads everything
+     *
+     * @return array<string, mixed>
+     */
+    public function run(string $query, ?int $windowSeconds = null): array
     {
-        $plan = (new PipelineBuilder($this->catalog))->build(Parser::parse($query));
+        $plan = (new PipelineBuilder($this->catalog, $windowSeconds))->build(Parser::parse($query));
 
         \set_time_limit(self::TIMEOUT_SECONDS);
         $started = \microtime(true);
@@ -68,6 +72,9 @@ final readonly class QueryRunner
             'dataset' => $plan->dataset?->name,
             'grain' => $plan->dataset?->grain,
             'source' => $this->source,
+            // What the rows were read through, so a table that looks short can
+            // be read as scoped rather than as empty.
+            'window_seconds' => $windowSeconds !== null && $windowSeconds > 0 ? $windowSeconds : null,
             'took_ms' => (int) \round((\microtime(true) - $started) * 1000),
         ];
     }

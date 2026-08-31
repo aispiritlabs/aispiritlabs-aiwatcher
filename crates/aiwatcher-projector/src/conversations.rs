@@ -30,6 +30,9 @@ use crate::readmodel::RunSummary;
 #[derive(Clone, Debug, Default, Deserialize, utoipa::IntoParams)]
 #[serde(deny_unknown_fields)]
 pub struct ConversationFilter {
+    /// Only sessions with activity in the last this-many seconds. See
+    /// [`crate::window`].
+    pub window_seconds: Option<i64>,
     pub agent_id: Option<String>,
     /// Substring match on the conversation id. The one control that turns a
     /// long list into the session someone is actually looking for.
@@ -53,8 +56,8 @@ pub struct ConversationSummary {
     pub cached_tokens: i64,
     #[serde(with = "time::serde::rfc3339")]
     pub started_at: OffsetDateTime,
-    /// The newest run's start. What the list sorts by, so an active session
-    /// stays at the top.
+    /// The newest event on any of the session's runs. What the list sorts by,
+    /// so an active session stays at the top.
     #[serde(with = "time::serde::rfc3339")]
     pub last_activity_at: OffsetDateTime,
 }
@@ -73,6 +76,7 @@ pub fn compute(
     runs: &[RunSummary],
     spans: &HashMap<String, Vec<CompletedSpan>>,
     filter: &ConversationFilter,
+    now: OffsetDateTime,
 ) -> ConversationPage {
     // One fold, seven dimensions: see [`crate::dimensions`]. A session is the
     // `conversation_id` dimension with a name people already use, so this is a
@@ -83,11 +87,13 @@ pub fn compute(
         spans,
         DimensionKind::Session,
         &DimensionFilter {
+            window_seconds: filter.window_seconds,
             agent_id: filter.agent_id.clone(),
             search: filter.search.clone(),
             after: None,
             limit: filter.limit,
         },
+        now,
     );
 
     ConversationPage {
@@ -130,6 +136,10 @@ mod tests {
     use super::*;
     use crate::readmodel::RunStatus;
 
+    fn now() -> OffsetDateTime {
+        datetime!(2026-08-27 12:00:00 UTC)
+    }
+
     fn run(
         run_id: &str,
         conversation: Option<&str>,
@@ -145,6 +155,7 @@ mod tests {
             runtimes: vec!["agent-service".to_owned()],
             workflow: None,
             started_at: started,
+            last_event_at: started,
             ended_at: None,
             duration_ms: Some(1000),
             event_count: 3,
@@ -180,7 +191,12 @@ mod tests {
                 datetime!(2026-08-27 10:01:00 UTC),
             ),
         ];
-        let page = compute(&runs, &HashMap::new(), &ConversationFilter::default());
+        let page = compute(
+            &runs,
+            &HashMap::new(),
+            &ConversationFilter::default(),
+            now(),
+        );
 
         assert_eq!(page.total, 2);
         let first = &page.conversations[0];
@@ -209,7 +225,12 @@ mod tests {
                 datetime!(2026-08-27 10:01:00 UTC),
             ),
         ];
-        let page = compute(&runs, &HashMap::new(), &ConversationFilter::default());
+        let page = compute(
+            &runs,
+            &HashMap::new(),
+            &ConversationFilter::default(),
+            now(),
+        );
         assert_eq!(page.total, 1);
         assert_eq!(
             page.ungrouped_runs, 1,
@@ -240,6 +261,7 @@ mod tests {
                 search: Some("alpha".to_owned()),
                 ..ConversationFilter::default()
             },
+            now(),
         );
         assert_eq!(page.conversations.len(), 1);
         assert_eq!(page.conversations[0].conversation_id, "chat-alpha");
@@ -263,7 +285,12 @@ mod tests {
             ),
             second,
         ];
-        let page = compute(&runs, &HashMap::new(), &ConversationFilter::default());
+        let page = compute(
+            &runs,
+            &HashMap::new(),
+            &ConversationFilter::default(),
+            now(),
+        );
         assert_eq!(page.conversations[0].agents, vec!["researcher", "planner"]);
     }
 }

@@ -19,6 +19,12 @@ import {
 import type { ExecutionSummary, NodeState, WorkflowDefinition } from '@/api/generated/types.gen';
 import { rerunWorkflow } from '@/api/generated/sdk.gen';
 import { StatusBadge, StreamBadge } from '@/components/status-badge';
+import {
+  DEFAULT_WINDOW_SECONDS,
+  TimeRange,
+  windowParam,
+  windowSearchSchema,
+} from '@/components/time-range';
 import { VirtualList } from '@/components/virtual-list';
 import { WorkflowGraph } from '@/components/workflow-graph';
 import {
@@ -70,6 +76,7 @@ function formatBytes(bytes: number): string {
  */
 
 const searchSchema = z.object({
+  ...windowSearchSchema,
   workflow: z.string().optional(),
   execution: z.string().optional(),
   node: z.string().optional(),
@@ -88,6 +95,7 @@ const PAGE = 40;
 function WorkflowsPage() {
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
+  const windowSeconds = search.window ?? DEFAULT_WINDOW_SECONDS;
 
   const merge = React.useCallback(
     (next: Partial<Selection>) => {
@@ -110,11 +118,18 @@ function WorkflowsPage() {
   }, [draft, find, merge]);
 
   const workflows = useInfiniteQuery({
-    queryKey: ['workflows', find],
+    queryKey: ['workflows', find, windowSeconds],
     initialPageParam: undefined as string | undefined,
     queryFn: async ({ pageParam }) => {
       const response = await listWorkflows({
-        query: { search: find || undefined, after: pageParam, limit: PAGE },
+        query: {
+          search: find || undefined,
+          // The declaration is not evicted by the window — the catalog keeps
+          // every shape it was told about. This decides which are shown.
+          window_seconds: windowParam(windowSeconds),
+          after: pageParam,
+          limit: PAGE,
+        },
       });
       if (!response.data) throw new Error('failed to list workflows');
       return response.data;
@@ -133,11 +148,16 @@ function WorkflowsPage() {
   const selectedWorkflow = search.workflow ?? rows[0]?.workflow_id;
 
   const executions = useInfiniteQuery({
-    queryKey: ['workflow-executions', selectedWorkflow],
+    queryKey: ['workflow-executions', selectedWorkflow, windowSeconds],
     initialPageParam: undefined as string | undefined,
     queryFn: async ({ pageParam }) => {
       const response = await listWorkflowExecutions({
-        query: { workflow_id: selectedWorkflow, after: pageParam, limit: PAGE },
+        query: {
+          workflow_id: selectedWorkflow,
+          window_seconds: windowParam(windowSeconds),
+          after: pageParam,
+          limit: PAGE,
+        },
       });
       if (!response.data) throw new Error('failed to list executions');
       return response.data;
@@ -163,6 +183,12 @@ function WorkflowsPage() {
             the same log as everything else — aiwatcher never calls the orchestrator to draw this.
           </p>
         </div>
+        <TimeRange
+          value={windowSeconds}
+          onChange={(seconds) =>
+            void navigate({ search: (previous) => ({ ...previous, window: seconds }) })
+          }
+        />
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(16rem,20rem)_1fr]">
@@ -184,9 +210,15 @@ function WorkflowsPage() {
               </p>
             ) : rows.length === 0 && !workflows.isLoading ? (
               <p className="p-4 text-sm text-muted-foreground">
-                No workflows yet. A run joins one by carrying{' '}
-                <code className="id">workflow_id</code>; publishing{' '}
-                <code className="id">workflow.declared</code> gives it a shape.
+                {windowSeconds ? (
+                  <>No workflow was active in this window. Widen it, or pick “all”.</>
+                ) : (
+                  <>
+                    No workflows yet. A run joins one by carrying{' '}
+                    <code className="id">workflow_id</code>; publishing{' '}
+                    <code className="id">workflow.declared</code> gives it a shape.
+                  </>
+                )}
               </p>
             ) : (
               <VirtualList

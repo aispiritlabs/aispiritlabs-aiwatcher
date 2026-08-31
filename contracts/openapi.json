@@ -20,6 +20,19 @@
         "operationId": "list_conversations",
         "parameters": [
           {
+            "name": "window_seconds",
+            "in": "query",
+            "description": "Only sessions with activity in the last this-many seconds. See\n[`crate::window`].",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
             "name": "agent_id",
             "in": "query",
             "required": false,
@@ -85,6 +98,19 @@
             "required": true,
             "schema": {
               "$ref": "#/components/schemas/DimensionKind"
+            }
+          },
+          {
+            "name": "window_seconds",
+            "in": "query",
+            "description": "Only runs with activity in the last this-many seconds, before they are\ngrouped. See [`crate::window`] — a row whose every run falls outside the\nwindow disappears with them rather than staying behind as an empty key.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
             }
           },
           {
@@ -191,6 +217,19 @@
         "description": "The other half of the loop the traces come from: a trace says what one run\ndid, an evaluation says whether the thing producing those runs is getting\nbetter. They arrive on the same log and are folded apart — an `eval.*`\nevent produces no span and no row in the runs list. See\n`aiwatcher_projector::evaluations`.",
         "operationId": "list_evaluations",
         "parameters": [
+          {
+            "name": "window_seconds",
+            "in": "query",
+            "description": "Only reports that finished — or, while they are still running, started\n— in the last this-many seconds. See [`crate::window`].",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
           {
             "name": "suite",
             "in": "query",
@@ -1048,6 +1087,19 @@
         "operationId": "list_runs",
         "parameters": [
           {
+            "name": "window_seconds",
+            "in": "query",
+            "description": "Only runs with activity in the last this-many seconds. See\n[`crate::window`] — zero and absent both mean everything.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
             "name": "conversation_id",
             "in": "query",
             "required": false,
@@ -1375,6 +1427,19 @@
         "operationId": "list_spans",
         "parameters": [
           {
+            "name": "window_seconds",
+            "in": "query",
+            "description": "Only spans that ended in the last this-many seconds. See\n[`crate::window`].",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
             "name": "run_id",
             "in": "query",
             "required": false,
@@ -1538,6 +1603,19 @@
         "summary": "Executions, newest first.",
         "operationId": "list_workflow_executions",
         "parameters": [
+          {
+            "name": "window_seconds",
+            "in": "query",
+            "description": "Only executions with activity in the last this-many seconds. See\n[`crate::window`].",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
           {
             "name": "workflow_id",
             "in": "query",
@@ -1704,6 +1782,19 @@
         "description": "Includes workflows nothing ever declared: a producer that has been setting\n`workflow_id` since before there was a graph to draw still belongs in the\npicker, with whatever shape its runs revealed.",
         "operationId": "list_workflows",
         "parameters": [
+          {
+            "name": "window_seconds",
+            "in": "query",
+            "description": "Only graphs with activity in the last this-many seconds. See\n[`crate::window`]. A declaration is not evicted by it — the catalog\nkeeps the shape, the window decides what is shown.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
           {
             "name": "search",
             "in": "query",
@@ -2197,7 +2288,7 @@
           "last_activity_at": {
             "type": "string",
             "format": "date-time",
-            "description": "The newest run's start. What the list sorts by, so an active session\nstays at the top."
+            "description": "The newest event on any of the session's runs. What the list sorts by,\nso an active session stays at the top."
           },
           "llm_calls": {
             "type": "integer",
@@ -2334,7 +2425,7 @@
           "last_activity_at": {
             "type": "string",
             "format": "date-time",
-            "description": "The newest run's start. What the list sorts by, so an active row stays\nat the top."
+            "description": "The newest event on any of the row's runs. What the list sorts by, so a\nrow where something is happening stays at the top.\n\nRead from the runs' last event rather than from their start, which is\nwhat it used to be: a row whose runs all began an hour ago and are\nstill working is active, and sorting it below a row that started one\nrun a minute ago and finished it buried the thing worth looking at."
           },
           "llm_calls": {
             "type": "integer",
@@ -2349,6 +2440,14 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          },
+          "running_last_event_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "The newest event on a run in this row that has **not** ended. Absent\nwhen none is running.\n\nWhat tells a row that is working from a row that stopped talking. The\nrunning count alone cannot: a run whose producer was killed keeps that\ncount above zero forever, and a spinner that never stops is the one\nthing this view must not show without saying how long it has been\nspinning. Where to draw the line is the reader's, so the number is\nreported rather than judged."
           },
           "runs": {
             "type": "integer",
@@ -3093,6 +3192,7 @@
           "workflow_id",
           "status",
           "started_at",
+          "last_activity_at",
           "nodes_total",
           "nodes_pending",
           "nodes_running",
@@ -3136,6 +3236,11 @@
               "string",
               "null"
             ]
+          },
+          "last_activity_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The newest event folded into this execution, ended or not.\n\nAn execution outlives its runs, and a stage-per-pod one is idle between\nthem by design, so \"started three hours ago\" says nothing about whether\nanything is still moving. This does. Same fact as `RunSummary`'s field\nof the same shape, and it is what the time window matches on."
           },
           "last_checkpoint": {
             "$ref": "#/components/schemas/Checkpoint",
@@ -4773,6 +4878,7 @@
           "status",
           "agents",
           "started_at",
+          "last_event_at",
           "event_count",
           "llm_calls",
           "tool_calls",
@@ -4830,6 +4936,11 @@
           "last_checkpoint": {
             "$ref": "#/components/schemas/Checkpoint",
             "description": "The newest checkpoint folded into this row. A client can resume the\nlive stream from here without re-reading the run."
+          },
+          "last_event_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The newest event folded into this row, ended or not.\n\nThe one number that separates a run still working from a run whose\nproducer stopped talking. Nothing here promotes the second case to a\nstatus — a projector that decided a run had died would be guessing\nabout a process it cannot see, and the guess would be wrong for every\nagent that legitimately thinks for an hour. It reports when the run was\nlast heard from and lets the reader draw the line."
           },
           "llm_calls": {
             "type": "integer",

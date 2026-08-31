@@ -187,9 +187,15 @@ Every view below, with screenshots of it against real data and what each one is
 for: [EXAMPLES.md](EXAMPLES.md).
 
 Six views, all served from aiwatcher's own read model — except Prompts, which
-reads the registry:
+reads the registry. Every one of them carries the same time window — 15m, 1h,
+6h, 24h, 7d or everything — in the URL, so a link carries the period with it,
+and a run is in the window when it was last *heard from* rather than when it
+started:
 
-- **Runs** — the flat list, filterable.
+- **Runs** — the flat list, filterable. A run whose producer stopped talking
+  reads as `stalled 22m` rather than as a spinner that never stops: nothing
+  here promotes silence to a failure, but a run last heard from before the
+  span assembler gave up on it should not still look busy.
 - **Explore** — one page for every level. The tree pivots on **session, agent,
   model or tool**; below the root it is always run → span → messages, so
   switching what the top level *is* costs no relearning. Selecting a span

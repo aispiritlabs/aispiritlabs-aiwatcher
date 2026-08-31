@@ -262,6 +262,13 @@ not an SDK release.
 - Any list that can grow with retention is a `useInfiniteQuery` feeding
   `VirtualList` (`src/components/virtual-list.tsx`). A `.map` over a full
   response is only correct for a list with a fixed ceiling.
+- Every list that can grow with retention also carries the time window
+  (`src/components/time-range.tsx`), in the URL as `window` seconds and served
+  by the API as `window_seconds`. One control, one preset list, one default
+  across every tab: a period that means the last hour in Explore and something
+  else in Metrics is a control people re-read before every click. It carries
+  across the observability sub-navigation and nothing else does — having
+  narrowed to fifteen minutes, "now the metrics for it" is the next question.
 - An area that exists in the navigation before it exists in the backend renders
   `AreaPlaceholder`, which names what is missing. Never mock data to fill a
   screen — a plausible fake reads as working software.
@@ -362,6 +369,28 @@ not an SDK release.
 - **Never expose the Flow service without authentication.** It has none. The
   parser bounds what a query can say, not who may ask, and `just flow-serve`
   binds it to localhost.
+- **Never let the projector decide a run has died.** A run with no end event
+  stays `Running`: the producer may have been killed, or may be thinking for
+  twenty minutes, and nothing in the log distinguishes them. What the read
+  model reports instead is `RunSummary::last_event_at` — when the run was last
+  heard from — and the panel draws the line at `STALLED_AFTER_MS`, the same
+  fifteen minutes as `AssemblerConfig::orphan_timeout`, because past it the
+  span assembler has already closed that run's spans with `closed_by=timeout`
+  and a runs list still showing a spinner is contradicting the waterfall beside
+  it. A dimension row carries the same fact as `running_last_event_at`, over
+  its *running* runs only: the row's own `last_activity_at` includes runs that
+  finished, and a row that just completed something looks busy either way.
+- **The window matches last activity, except on metrics.** `window_seconds` on
+  every list means "active in the period" — a run that began three hours ago
+  and emitted an event a minute ago is the thing most worth seeing in the last
+  fifteen minutes, and windowing on start is exactly what hides it. Metrics
+  keeps windowing by start because there the window is the timeline's x-axis: a
+  run with no bucket cannot be counted into one. See
+  `aiwatcher-projector/src/window.rs`; the panel's Query tab forwards the same
+  number to the Flow service, which sends it only to datasets whose route
+  accepts it (`Dataset::$windowed`) — the API rejects unknown query parameters,
+  so sending it to the per-run events route would turn a scoped query into a
+  400.
 - **Never return a whole stream from a read route.** `read_stream_page` is the
   one the API uses; `read_stream` remains for the projector, which needs the
   whole thing. A route that pages is what keeps one long run from being a

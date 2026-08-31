@@ -587,6 +587,7 @@ mod tests {
             runtimes: vec!["agent-service".to_owned()],
             workflow: None,
             started_at: started,
+            last_event_at: started + time::Duration::seconds(2),
             ended_at: Some(started + time::Duration::seconds(2)),
             duration_ms: Some(2000),
             event_count: 6,

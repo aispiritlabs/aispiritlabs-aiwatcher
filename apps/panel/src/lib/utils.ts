@@ -61,3 +61,39 @@ export function formatTime(iso: string | null | undefined): string {
         fractionalSecondDigits: 3,
       });
 }
+
+/**
+ * How long a run may go without an event before the panel calls it stalled.
+ *
+ * The same fifteen minutes as the projector's `AssemblerConfig::orphan_timeout`
+ * default, and deliberately: past it the span assembler has already closed the
+ * run's open spans with `closed_by=timeout`, so a runs list still showing a
+ * spinner is disagreeing with the waterfall next to it. If the server's orphan
+ * timeout is configured away from the default, move this with it.
+ *
+ * Nothing here changes the run's status. A producer that thinks for twenty
+ * minutes is doing its job, and a projector that promoted silence to failure
+ * would be reporting a death it cannot observe. The panel says how long it has
+ * been quiet and lets the reader decide — which is the difference between a
+ * spinner that spins forever and one that admits it has heard nothing.
+ */
+export const STALLED_AFTER_MS = 15 * 60 * 1000;
+
+/** Whether a still-running row has gone quiet for longer than that. */
+export function isStalled(lastEventAt: string | null | undefined, now = Date.now()): boolean {
+  if (!lastEventAt) return false;
+  const seen = Date.parse(lastEventAt);
+  return !Number.isNaN(seen) && now - seen >= STALLED_AFTER_MS;
+}
+
+/** `2026-08-29T10:00:00Z` → `22m` — how long ago, coarsely. */
+export function formatAge(iso: string | null | undefined, now = Date.now()): string {
+  if (!iso) return '—';
+  const at = Date.parse(iso);
+  if (Number.isNaN(at)) return '—';
+  const seconds = Math.max(0, Math.round((now - at) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h`;
+  return `${Math.floor(seconds / 86_400)}d`;
+}

@@ -59,6 +59,16 @@ pub struct RunSummary {
     pub workflow: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     pub started_at: OffsetDateTime,
+    /// The newest event folded into this row, ended or not.
+    ///
+    /// The one number that separates a run still working from a run whose
+    /// producer stopped talking. Nothing here promotes the second case to a
+    /// status — a projector that decided a run had died would be guessing
+    /// about a process it cannot see, and the guess would be wrong for every
+    /// agent that legitimately thinks for an hour. It reports when the run was
+    /// last heard from and lets the reader draw the line.
+    #[serde(with = "time::serde::rfc3339")]
+    pub last_event_at: OffsetDateTime,
     #[serde(
         default,
         with = "time::serde::rfc3339::option",
@@ -90,6 +100,7 @@ impl RunSummary {
             runtimes: Vec::new(),
             workflow: None,
             started_at: event.metadata.occurred_at,
+            last_event_at: event.metadata.occurred_at,
             ended_at: None,
             duration_ms: None,
             event_count: 0,
@@ -111,6 +122,9 @@ impl RunSummary {
             // the earliest observation as the start.
             self.started_at = event.metadata.occurred_at;
         }
+        // …and the latest as the last we heard from it. Same reason, other
+        // end: a late-arriving event must not move the row backwards in time.
+        self.last_event_at = self.last_event_at.max(event.metadata.occurred_at);
         if self.conversation_id.is_none() {
             self.conversation_id = event.metadata.conversation_id.clone();
         }
@@ -199,6 +213,9 @@ pub struct RunDetail {
 #[derive(Clone, Debug, Default, Deserialize, utoipa::IntoParams)]
 #[serde(deny_unknown_fields)]
 pub struct RunFilter {
+    /// Only runs with activity in the last this-many seconds. See
+    /// [`crate::window`] — zero and absent both mean everything.
+    pub window_seconds: Option<i64>,
     pub conversation_id: Option<String>,
     pub agent_id: Option<String>,
     /// Runs produced by this service. See `RunSummary::runtimes`.
@@ -423,8 +440,14 @@ impl ReadModel {
     }
 
     pub async fn list(&self, filter: &RunFilter) -> RunPage {
+        self.list_at(filter, OffsetDateTime::now_utc()).await
+    }
+
+    /// The runs list with the clock passed in, so the window is testable.
+    pub async fn list_at(&self, filter: &RunFilter, now: OffsetDateTime) -> RunPage {
         let state = self.state.read().await;
         let limit = filter.limit.unwrap_or(50).clamp(1, 500);
+        let since = crate::window::cutoff(filter.window_seconds, now);
 
         // Newest first.
         let mut matching: Vec<&RunSummary> = state
@@ -432,6 +455,9 @@ impl ReadModel {
             .iter()
             .rev()
             .filter_map(|run_id| state.runs.get(run_id))
+            // Last activity, not start: a run that began before the window and
+            // is still emitting is the one most worth seeing in it.
+            .filter(|run| since.is_none_or(|start| run.last_event_at >= start))
             .filter(|run| {
                 filter
                     .conversation_id
@@ -509,7 +535,7 @@ impl ReadModel {
     ) -> crate::conversations::ConversationPage {
         let state = self.state.read().await;
         let runs: Vec<RunSummary> = state.runs.values().cloned().collect();
-        crate::conversations::compute(&runs, &state.spans, filter)
+        crate::conversations::compute(&runs, &state.spans, filter, OffsetDateTime::now_utc())
     }
 
     /// One dimension's rows: the explorer's top level, whatever it is rooted on.
@@ -520,18 +546,22 @@ impl ReadModel {
     ) -> crate::dimensions::DimensionPage {
         let state = self.state.read().await;
         let runs: Vec<RunSummary> = state.runs.values().cloned().collect();
-        crate::dimensions::compute(&runs, &state.spans, kind, filter)
+        crate::dimensions::compute(&runs, &state.spans, kind, filter, OffsetDateTime::now_utc())
     }
 
     /// Every retained span, flat and filterable. See [`crate::spans`].
     pub async fn spans(&self, filter: &crate::spans::SpanFilter) -> crate::spans::SpanPage {
         let state = self.state.read().await;
-        crate::spans::compute(&state.spans, filter)
+        crate::spans::compute(&state.spans, filter, OffsetDateTime::now_utc())
     }
 
     /// Evaluation reports, newest first. See [`crate::evaluations`].
     pub async fn evaluations(&self, filter: &EvaluationFilter) -> EvaluationPage {
-        self.state.read().await.evaluations.page(filter)
+        self.state
+            .read()
+            .await
+            .evaluations
+            .page(filter, OffsetDateTime::now_utc())
     }
 
     /// One evaluation, with its cases, its report and its baseline.
@@ -542,7 +572,11 @@ impl ReadModel {
     /// Suites: the level above an evaluation report.
     /// The workflow catalog: every declared graph, and the ones only observed.
     pub async fn workflows(&self, filter: &WorkflowFilter) -> WorkflowPage {
-        self.state.read().await.workflows.workflows(filter)
+        self.state
+            .read()
+            .await
+            .workflows
+            .workflows(filter, OffsetDateTime::now_utc())
     }
 
     pub async fn workflow(&self, workflow_id: &str) -> Option<WorkflowDefinition> {
@@ -550,7 +584,11 @@ impl ReadModel {
     }
 
     pub async fn workflow_executions(&self, filter: &ExecutionFilter) -> ExecutionPage {
-        self.state.read().await.workflows.executions(filter)
+        self.state
+            .read()
+            .await
+            .workflows
+            .executions(filter, OffsetDateTime::now_utc())
     }
 
     pub async fn workflow_execution(&self, workflow_run_id: &str) -> Option<ExecutionDetail> {
@@ -666,6 +704,7 @@ mod tests {
             runtimes: Vec::new(),
             workflow: None,
             started_at: datetime!(2026-08-27 18:20:00 UTC),
+            last_event_at: datetime!(2026-08-27 18:20:00 UTC),
             ended_at: None,
             duration_ms: Some(1),
             event_count: 1,
@@ -706,6 +745,63 @@ mod tests {
         drop(state);
         let batch: Vec<CompletedSpan> = (0..spans).map(|index| span(run_id, index)).collect();
         model.record_spans(&batch).await;
+    }
+
+    /// A run is in the window when it was last *heard from* in it.
+    ///
+    /// Start would have been the easy predicate and the wrong one: the run
+    /// worth seeing in a fifteen-minute view is the one that began an hour ago
+    /// and is still talking, and windowing on start is exactly what hides it.
+    #[tokio::test]
+    async fn the_window_keeps_an_old_run_that_is_still_emitting_and_drops_a_quiet_one() {
+        let model = ReadModel::default();
+        let now = datetime!(2026-08-29 12:00:00 UTC);
+
+        let mut talkative = summary("talkative", RunStatus::Running);
+        talkative.started_at = now - time::Duration::hours(3);
+        talkative.last_event_at = now - time::Duration::minutes(2);
+        let mut quiet = summary("quiet", RunStatus::Succeeded);
+        quiet.started_at = now - time::Duration::hours(3);
+        quiet.last_event_at = now - time::Duration::hours(2);
+
+        {
+            let mut state = model.state.write().await;
+            for run in [talkative, quiet] {
+                state.order.push(run.run_id.clone());
+                state.runs.insert(run.run_id.clone(), run);
+            }
+        }
+
+        let page = model
+            .list_at(
+                &RunFilter {
+                    window_seconds: Some(900),
+                    ..RunFilter::default()
+                },
+                now,
+            )
+            .await;
+
+        assert_eq!(page.total_known, 1);
+        assert_eq!(page.runs[0].run_id, "talkative");
+    }
+
+    #[tokio::test]
+    async fn a_window_of_zero_lists_everything_rather_than_nothing() {
+        let model = ReadModel::default();
+        seed(&model, "run-1", RunStatus::Succeeded, 0).await;
+
+        let page = model
+            .list_at(
+                &RunFilter {
+                    window_seconds: Some(0),
+                    ..RunFilter::default()
+                },
+                OffsetDateTime::now_utc(),
+            )
+            .await;
+
+        assert_eq!(page.total_known, 1);
     }
 
     /// The cap that makes the footprint predictable.

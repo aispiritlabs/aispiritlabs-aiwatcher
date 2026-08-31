@@ -210,6 +210,9 @@ pub struct CaseDelta {
 #[derive(Clone, Debug, Default, Deserialize, utoipa::IntoParams)]
 #[serde(deny_unknown_fields)]
 pub struct EvaluationFilter {
+    /// Only reports that finished — or, while they are still running, started
+    /// — in the last this-many seconds. See [`crate::window`].
+    pub window_seconds: Option<i64>,
     pub suite: Option<String>,
     pub dataset: Option<String>,
     pub variant: Option<String>,
@@ -454,9 +457,10 @@ impl EvaluationState {
 
     /// Newest first, filtered, one page.
     #[must_use]
-    pub fn page(&self, filter: &EvaluationFilter) -> EvaluationPage {
+    pub fn page(&self, filter: &EvaluationFilter, now: OffsetDateTime) -> EvaluationPage {
         let limit = filter.limit.unwrap_or(50).clamp(1, 500);
         let needle = filter.search.as_ref().map(|text| text.to_lowercase());
+        let since = crate::window::cutoff(filter.window_seconds, now);
 
         let mut matching: Vec<&EvaluationSummary> = self
             .order
@@ -464,6 +468,7 @@ impl EvaluationState {
             .rev()
             .filter_map(|id| self.held.get(id))
             .filter_map(|held| held.summary.as_ref())
+            .filter(|row| since.is_none_or(|start| row.ended_at.unwrap_or(row.started_at) >= start))
             .filter(|row| filter.suite.as_ref().is_none_or(|want| &row.suite == want))
             .filter(|row| {
                 filter
@@ -862,6 +867,10 @@ mod tests {
     use aiwatcher_core::{EventEnvelope, Sdk, Source};
 
     use super::*;
+
+    fn now() -> OffsetDateTime {
+        OffsetDateTime::now_utc()
+    }
 
     fn event(
         id: &str,
@@ -1302,6 +1311,51 @@ mod tests {
         assert!(state.len() <= 3, "held {} evaluations", state.len());
     }
 
+    /// A report is in the window when it finished in it.
+    ///
+    /// Not when it started: a twenty-minute batch is normal here, and dating a
+    /// report by its start would drop the run that has just told you something
+    /// out of the view you opened to read it.
+    #[test]
+    fn the_window_dates_a_report_by_when_it_finished() {
+        let state = fold(&[
+            event(
+                "eval-old",
+                EventType::EvalCompleted,
+                datetime!(2026-08-28 09:00:00 UTC),
+                json!({ "suite": "alpha" }),
+            ),
+            event(
+                "eval-long",
+                EventType::EvalStarted,
+                datetime!(2026-08-28 09:00:00 UTC),
+                json!({ "suite": "alpha" }),
+            ),
+            event(
+                "eval-long",
+                EventType::EvalCompleted,
+                datetime!(2026-08-28 11:55:00 UTC),
+                json!({ "suite": "alpha" }),
+            ),
+        ]);
+
+        let page = state.page(
+            &EvaluationFilter {
+                window_seconds: Some(900),
+                ..EvaluationFilter::default()
+            },
+            datetime!(2026-08-28 12:00:00 UTC),
+        );
+
+        assert_eq!(
+            page.evaluations
+                .iter()
+                .map(|row| row.evaluation_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["eval-long"],
+        );
+    }
+
     #[test]
     fn the_list_pages_from_a_cursor_and_search_narrows_it() {
         let events: Vec<RecordedEvent> = (0..5)
@@ -1316,25 +1370,34 @@ mod tests {
             .collect();
         let state = fold(&events);
 
-        let first = state.page(&EvaluationFilter {
-            limit: Some(2),
-            ..EvaluationFilter::default()
-        });
+        let first = state.page(
+            &EvaluationFilter {
+                limit: Some(2),
+                ..EvaluationFilter::default()
+            },
+            now(),
+        );
         assert_eq!(first.evaluations.len(), 2);
         assert_eq!(first.evaluations[0].evaluation_id, "eval-4", "newest first");
         let cursor = first.next_cursor.clone().expect("more to read");
 
-        let second = state.page(&EvaluationFilter {
-            limit: Some(2),
-            after: Some(cursor),
-            ..EvaluationFilter::default()
-        });
+        let second = state.page(
+            &EvaluationFilter {
+                limit: Some(2),
+                after: Some(cursor),
+                ..EvaluationFilter::default()
+            },
+            now(),
+        );
         assert_eq!(second.evaluations[0].evaluation_id, "eval-2");
 
-        let searched = state.page(&EvaluationFilter {
-            search: Some("ALPHA".to_owned()),
-            ..EvaluationFilter::default()
-        });
+        let searched = state.page(
+            &EvaluationFilter {
+                search: Some("ALPHA".to_owned()),
+                ..EvaluationFilter::default()
+            },
+            now(),
+        );
         assert_eq!(searched.total_known, 3);
     }
 }
