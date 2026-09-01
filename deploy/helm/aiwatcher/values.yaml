@@ -280,6 +280,65 @@ flow:
 # In the path even though the server can post OTLP straight at a store: it is
 # where sampling, redaction and a second destination live, and having it here
 # from the start makes those a ConfigMap edit rather than a redeploy.
+# ── The pipeline engine ──────────────────────────────────────────────────────
+#
+# What this instance may list and start: the launch plans an orchestrator
+# already holds, and one execution of one of them. Off by default, and
+# deliberately: everything else aiwatcher does is a read, and being able to
+# start a training run in another system is a decision somebody makes rather
+# than one they inherit. See ADR_0016.
+#
+# Unset, every /api/v1/engine route answers 501 naming the variable — the
+# prompt registry's pattern, for the same reason.
+engine:
+  # none | flyte.
+  mode: none
+
+  flyte:
+    # The control plane's base URL, no trailing slash. In-cluster this is the
+    # admin Service; the console below is the browser-facing host, and they are
+    # usually different. The ONLY place an engine target may come from — never
+    # an event, never a request body.
+    endpoint: ""
+
+    # Which namespace of the orchestrator to browse by default. A request may
+    # name another; this is what a picker opens on.
+    project: flytesnacks
+    domain: development
+
+    # Where to link out to. Empty renders no link rather than a broken one.
+    consoleUrl: ""
+
+    # A service account, when the control plane authenticates. All three
+    # together or none: half a credential authenticates nothing, and the
+    # symptom is a 401 on the first catalog request rather than anything naming
+    # the variable that was left out. The token endpoint is explicit rather
+    # than discovered — taking it from a document the same host serves would
+    # hand the choice of who mints aiwatcher's credentials to whoever answered.
+    clientId: ""
+    tokenUrl: ""
+    scopes: all
+
+    # `clientSecret` under this key, and `token` for the pre-issued-bearer case
+    # instead. Optional: an unauthenticated sandbox needs neither.
+    credentialsSecret:
+      name: ""
+      clientSecretKey: clientSecret
+      tokenKey: token
+
+  # Whether a rerun from the Workflows tab goes to the engine as well.
+  # `engine` reuses the connection above; `none` leaves the rerun route at 501.
+  # There is no third option here on purpose — a webhook runner is
+  # AIWATCHER_WORKFLOW_RUNNER, set through server.extraEnv, and having two ways
+  # to spell it in one chart is how they drift.
+  rerun: none
+
+  # NOTE on NetworkPolicy: this chart adds no egress rule for the control
+  # plane, and that is the same reasoning as the prompt store's. A rule
+  # attached to pods no policy already selects narrows them from "accepts
+  # everything" to "accepts aiwatcher only" and cuts off whoever else was
+  # talking to the orchestrator — which, for a control plane, is everybody.
+
 collector:
   # install | external | none.
   #

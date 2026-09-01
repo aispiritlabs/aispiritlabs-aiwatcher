@@ -180,6 +180,67 @@
         }
       }
     },
+    "engine": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "description": "none | flyte. Unset, every /api/v1/engine route answers 501 naming the variable. See ADR_0016.",
+          "enum": [
+            "none",
+            "flyte"
+          ]
+        },
+        "flyte": {
+          "type": "object",
+          "properties": {
+            "endpoint": {
+              "type": "string",
+              "description": "The control plane's base URL. Required when mode is flyte, and the only place an engine target may come from."
+            },
+            "project": {
+              "type": "string"
+            },
+            "domain": {
+              "type": "string"
+            },
+            "consoleUrl": {
+              "type": "string"
+            },
+            "clientId": {
+              "type": "string"
+            },
+            "tokenUrl": {
+              "type": "string",
+              "description": "Explicit rather than discovered \u2014 see ADR_0016."
+            },
+            "scopes": {
+              "type": "string"
+            },
+            "credentialsSecret": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "clientSecretKey": {
+                  "type": "string"
+                },
+                "tokenKey": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "rerun": {
+          "description": "none | engine. Whether the Workflows tab\u2019s rerun is dispatched through the engine configured above.",
+          "enum": [
+            "none",
+            "engine"
+          ]
+        }
+      }
+    },
     "ingress": {
       "type": "object",
       "properties": {

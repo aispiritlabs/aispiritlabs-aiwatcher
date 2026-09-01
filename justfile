@@ -30,6 +30,14 @@ rustfs_endpoint := env_var_or_default("AIWATCHER_PROMPT_S3_ENDPOINT", "http://12
 authentik_issuer := env_var_or_default("AIWATCHER_AUTH_ISSUER", "http://localhost:9000/application/o/aiwatcher/")
 laser_connection := env_var_or_default("AIWATCHER_LASER_CONNECTION_STRING", "iggy:iggy@127.0.0.1:8090")
 
+# The control plane `just run-flyte` browses. `flytectl demo start` serves one
+# on :30080; a cluster's is the flyteadmin Service. There is no `flyte-up` here
+# on purpose — the demo cluster is a k3s in Docker that this repo does not
+# manage, and pretending to own its lifecycle would be a recipe that half works.
+flyte_endpoint := env_var_or_default("AIWATCHER_FLYTE_ENDPOINT", "http://localhost:30080")
+flyte_project := env_var_or_default("AIWATCHER_FLYTE_PROJECT", "flytesnacks")
+flyte_domain := env_var_or_default("AIWATCHER_FLYTE_DOMAIN", "development")
+
 # Clusters Tilt is allowed to touch. A remote context is a hard stop, not a
 # prompt — see the Tiltfile.
 k8s_context := env_var_or_default("AIWATCHER_K8S_CONTEXT", "orbstack")
@@ -126,6 +134,36 @@ run:
     AIWATCHER_LOG=info,aiwatcher=debug \
     cargo run --bin aiwatcher
 
+# Points at whatever control plane AIWATCHER_FLYTE_ENDPOINT names — `flytectl
+# demo start` serves one on :30080. With none running the engine routes answer
+# 503 rather than 501: "configured and unreachable" against "not configured",
+# and the panel says which.
+
+# Server on :8080 with the Flyte engine wired, and reruns going through it.
+run-flyte:
+    AIWATCHER_BUS=wal \
+    AIWATCHER_INGEST_ENABLED=true \
+    AIWATCHER_ENGINE=flyte \
+    AIWATCHER_FLYTE_ENDPOINT={{flyte_endpoint}} \
+    AIWATCHER_FLYTE_PROJECT={{flyte_project}} \
+    AIWATCHER_FLYTE_DOMAIN={{flyte_domain}} \
+    AIWATCHER_FLYTE_CONSOLE_URL={{flyte_endpoint}} \
+    AIWATCHER_WORKFLOW_RUNNER=engine \
+    AIWATCHER_LOG=info,aiwatcher=debug \
+    cargo run --bin aiwatcher
+
+# Nothing needs to be running: both suites stand a control plane up on a
+# loopback socket. The second one is the end-to-end pass — a real instance built
+# by `wiring::build`, served on another socket, driven over HTTP — and it is
+# what covers the seams neither half can: a config field nothing wires, a rerun
+# reaching a 501 the engine would have served, a correlation id minted by the
+# API and dropped by the adapter.
+
+# The engine: the adapter, then the whole stack, against a stand-in Flyte.
+test-pipeline:
+    cargo test -p aiwatcher-pipeline
+    cargo test -p aiwatcher-server --test engine_end_to_end
+
 # Server on :8080 with the prompt registry in RustFS. Run `just rustfs-up` first.
 run-rustfs:
     AIWATCHER_BUS=wal \
@@ -190,6 +228,17 @@ seed-evaluation:
 # Publish two executions of one declared workflow: one finished, one running.
 seed-workflow stamp="":
     ./scripts/seed-demo-workflow.sh {{stamp}}
+
+# Seed an annotation project: six plans, three families, an export, a training run.
+seed-annotations:
+    ./scripts/seed-demo-annotations.py
+
+# The whole chain against a running server: annotate, export, fit a real
+# (tiny) model, register it, and check the guardrail refuses an unmeasured one.
+# Fails if the loss does not fall — a green run means data moved, not that
+# every call returned 200.
+e2e-train:
+    ./scripts/e2e-mini-train.py
 
 # ── Python SDK ───────────────────────────────────────────────────────────────
 

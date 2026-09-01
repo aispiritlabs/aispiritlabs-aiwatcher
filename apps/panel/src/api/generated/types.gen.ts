@@ -40,6 +40,86 @@ export type AgentMessage = {
 };
 
 /**
+ * One drawn instance.
+ */
+export type Annotation = {
+    attributes?: {
+        [key: string]: unknown;
+    };
+    class: string;
+    /**
+     * What the producer thought of its own proposal. Present for `model` and
+     * `ocr`, meaningless for `human`.
+     */
+    confidence?: number | null;
+    geometry: Geometry;
+    /**
+     * Unique within its revision. Supplied by the client so links can be
+     * drawn before a save, and validated rather than trusted.
+     */
+    id: string;
+    /**
+     * Named references to other instances in this revision.
+     */
+    links?: {
+        [key: string]: unknown;
+    };
+    origin?: Origin;
+    /**
+     * What a recogniser read, for a text instance.
+     */
+    text?: string | null;
+};
+
+/**
+ * One annotation project: its vocabulary, its split policy, its overrides.
+ */
+export type AnnotationProject = {
+    created_at: string;
+    description?: string;
+    name: string;
+    schema: LabelSchema;
+    /**
+     * `group_id` to a fixed side, for the houses that have to be in the test
+     * set. Keyed by family for the same reason the hash is.
+     */
+    split_overrides?: {
+        [key: string]: Split;
+    };
+    /**
+     * Mixed into the split hash. Changing it re-deals every family, which is
+     * occasionally what you want and never what you want by accident — so it
+     * is stored, and an export records the one it used.
+     */
+    split_salt?: string;
+    splits?: SplitRatios;
+    updated_at: string;
+};
+
+/**
+ * One immutable set of shapes for one image.
+ */
+export type AnnotationRevision = {
+    annotations: Array<Annotation>;
+    author?: string;
+    created_at: string;
+    image_id: string;
+    notes?: string;
+    project: string;
+    /**
+     * SHA-256 of the shapes, the schema version and the image. Author, notes
+     * and time are deliberately outside it: two people drawing the same thing
+     * is one revision.
+     */
+    revision: string;
+    /**
+     * The schema these shapes were checked against. An export refuses a
+     * revision drawn under a different vocabulary rather than guessing.
+     */
+    schema_version: string;
+};
+
+/**
  * Something a node produced, by reference.
  *
  * The bytes stay wherever the producer put them. aiwatcher keeps the pointer
@@ -60,6 +140,40 @@ export type Artifact = {
 };
 
 /**
+ * One typed field on a class.
+ */
+export type AttributeDef = {
+    default?: unknown;
+    description?: string;
+    kind: AttributeKind;
+    name: string;
+    /**
+     * A required attribute is refused when missing, which is what stops a
+     * half-labelled door from reaching a training export.
+     */
+    required?: boolean;
+    /**
+     * The closed vocabulary for [`AttributeKind::Enum`]. Ignored otherwise.
+     */
+    values?: Array<string>;
+};
+
+/**
+ * The type of one attribute a class carries.
+ */
+export const AttributeKind = {
+    ENUM: 'enum',
+    BOOL: 'bool',
+    NUMBER: 'number',
+    TEXT: 'text'
+} as const;
+
+/**
+ * The type of one attribute a class carries.
+ */
+export type AttributeKind = typeof AttributeKind[keyof typeof AttributeKind];
+
+/**
  * Where identity comes from.
  */
 export const AuthMode = {
@@ -74,6 +188,15 @@ export const AuthMode = {
 export type AuthMode = typeof AuthMode[keyof typeof AuthMode];
 
 /**
+ * The number a run is judged on.
+ */
+export type BestMetric = {
+    epoch?: number | null;
+    metric: string;
+    value: number;
+};
+
+/**
  * One point on the timeline.
  */
 export type Bucket = {
@@ -85,6 +208,14 @@ export type Bucket = {
     output_tokens: number;
     runs: number;
     tool_calls: number;
+};
+
+export type BuiltExport = {
+    /**
+     * False when this exact export already existed.
+     */
+    created: boolean;
+    manifest: ExportManifest;
 };
 
 export type CaseDelta = {
@@ -103,6 +234,32 @@ export type CausationId = string;
  * An opaque resume position in the log.
  */
 export type Checkpoint = string;
+
+export type CheckpointInput = {
+    best?: boolean;
+    epoch?: number | null;
+    metric?: string | null;
+    step?: number | null;
+    uri: string;
+    value?: number | null;
+};
+
+/**
+ * Where the weights went, and what selected them. Never the weights.
+ */
+export type CheckpointRecord = {
+    at: string;
+    best?: boolean;
+    epoch?: number | null;
+    /**
+     * What selected it. A checkpoint with no metric is a periodic save; one
+     * with a metric is a decision.
+     */
+    metric?: string | null;
+    step?: number | null;
+    uri: string;
+    value?: number | null;
+};
 
 export type ConversationPage = {
     conversations: Array<ConversationSummary>;
@@ -219,6 +376,41 @@ export type DatasetRowsPage = {
     window_seconds?: number | null;
 };
 
+/**
+ * One corpus.
+ */
+export type DatasetSource = {
+    access: SourceAccess;
+    id: string;
+    item_label: string;
+    /**
+     * Best published figure. `None` where the authors give a range.
+     */
+    items?: number | null;
+    kind: SourceKind;
+    /**
+     * What it labels, in this crate's vocabulary: `walls`, `rooms`, `doors`,
+     * `windows`, `openings`, `stairs`, `text`, `scale`, `graph`, `furniture`,
+     * `symbols`.
+     */
+    labels: Array<string>;
+    license: string;
+    /**
+     * `raster`, `vector`, `cad`, `panorama`.
+     */
+    media: Array<string>;
+    name: string;
+    notes: string;
+    paper?: string | null;
+    summary: string;
+    url: string;
+    usage: SourceUsage;
+    /**
+     * When somebody last read the licence at `url`.
+     */
+    verified_on: string;
+};
+
 export type DatasetSummary = {
     description?: string;
     latest: DatasetVersionSummary;
@@ -329,6 +521,191 @@ export type DimensionSummary = {
 };
 
 /**
+ * A page of launchable things.
+ */
+export type EngineCatalog = {
+    /**
+     * Absent on the last page.
+     */
+    next_token?: string | null;
+    workflows: Array<EngineWorkflow>;
+};
+
+/**
+ * How this instance is wired, for a client deciding what to render.
+ */
+export type EngineDescription = {
+    /**
+     * The engine's console, when one is configured, so the panel can link out
+     * rather than pretending to be it.
+     */
+    console_url?: string | null;
+    domain: string;
+    /**
+     * `flyte` today. A name, not a version: the panel branches on nothing.
+     */
+    kind: string;
+    project: string;
+};
+
+/**
+ * Where an execution has got to, as the engine sees it.
+ *
+ * aiwatcher's own view of a run comes from the log and says something
+ * different: `RunStatus` is what the *producer* reported. When they disagree
+ * the disagreement is the finding — an execution the orchestrator calls
+ * `Failed` whose events stop mid-run is a pod that was killed, and one it
+ * calls `Succeeded` with no events at all is a producer that is not
+ * instrumented.
+ */
+export type EngineExecution = {
+    message?: string;
+    phase: EnginePhase;
+    reference: string;
+    started_at?: string | null;
+    url?: string | null;
+    workflow?: string | null;
+    /**
+     * Read back from the execution's labels, when aiwatcher set one.
+     */
+    workflow_run_id?: string | null;
+};
+
+/**
+ * The shape of one declared input, for a form to render.
+ *
+ * Display only. Whatever a caller sends is bound to the engine's *own*
+ * declared type at launch time, read from the engine at that moment — see
+ * [`WorkflowEngine::launch`]. A panel that has been open since before a
+ * redeploy is therefore rendering a stale form against a fresh interface, and
+ * the launch fails with the engine's own message rather than binding a value
+ * to a type nobody checked.
+ */
+export type EngineParameter = {
+    /**
+     * The default, rendered as JSON. `None` means there is none, which for a
+     * required parameter is the normal case.
+     */
+    default?: {
+        [key: string]: unknown;
+    };
+    description?: string;
+    /**
+     * The permitted values, when the engine declared a closed set. Turns a
+     * text box into a select, which is the difference between a filter
+     * somebody types wrong and one they pick.
+     */
+    enum_values?: Array<string>;
+    kind: ParameterKind;
+    name: string;
+    /**
+     * Required *and* without a default. A parameter with a default is
+     * optional however the engine phrases it.
+     */
+    required: boolean;
+    /**
+     * The engine's own name for the type, for the cases [`ParameterKind`]
+     * flattens: a blob, a structured dataset, a union. Shown beside the
+     * field so a `Json` box is not a mystery.
+     */
+    type_name?: string;
+};
+
+export const EnginePhase = {
+    QUEUED: 'queued',
+    RUNNING: 'running',
+    SUCCEEDED: 'succeeded',
+    FAILED: 'failed',
+    ABORTED: 'aborted',
+    UNKNOWN: 'unknown'
+} as const;
+
+export type EnginePhase = typeof EnginePhase[keyof typeof EnginePhase];
+
+/**
+ * One thing a caller could start.
+ */
+export type EngineWorkflow = {
+    /**
+     * Whether the engine considers this version launchable. An inactive
+     * launch plan is listed rather than hidden, because "it is there and it
+     * is switched off" is the answer somebody is looking for when they cannot
+     * find it.
+     */
+    active: boolean;
+    description?: string;
+    domain: string;
+    /**
+     * [`EngineRef::render`] — what `POST /launches` and the detail route take.
+     */
+    id: string;
+    kind: EntityKind;
+    /**
+     * The registered name, without project or domain.
+     */
+    name: string;
+    parameters: Array<EngineParameter>;
+    project: string;
+    stage_hint?: null | PipelineStage;
+    updated_at?: string | null;
+    /**
+     * Where to see it in the engine's own console, when one is configured.
+     */
+    url?: string | null;
+    version?: string;
+};
+
+/**
+ * The kind of registered thing a launch names.
+ *
+ * Flyte's launchable unit is a launch plan; a task and a workflow are
+ * registered entities that a launch plan points at. Other engines divide this
+ * differently, so the kind travels with the reference rather than being
+ * assumed.
+ */
+export const EntityKind = {
+    LAUNCH_PLAN: 'launch_plan',
+    TASK: 'task',
+    WORKFLOW: 'workflow'
+} as const;
+
+/**
+ * The kind of registered thing a launch names.
+ *
+ * Flyte's launchable unit is a launch plan; a task and a workflow are
+ * registered entities that a launch plan points at. Other engines divide this
+ * differently, so the kind travels with the reference rather than being
+ * assumed.
+ */
+export type EntityKind = typeof EntityKind[keyof typeof EntityKind];
+
+export type EpochInput = {
+    duration_ms?: number;
+    epoch: number;
+    metrics?: {
+        [key: string]: number;
+    };
+    steps?: number;
+};
+
+/**
+ * One epoch: the grain a human reads a training run at.
+ */
+export type EpochRecord = {
+    at: string;
+    duration_ms: number;
+    epoch: number;
+    metrics: {
+        [key: string]: number;
+    };
+    /**
+     * Optimiser steps inside this epoch. Counted by the client, never sent
+     * one by one — a step is arithmetic, not a request.
+     */
+    steps: number;
+};
+
+/**
  * The body every error response carries.
  */
 export type ErrorBody = {
@@ -336,6 +713,14 @@ export type ErrorBody = {
      * Stable machine-readable discriminator. Switch on this, not on `message`.
      */
     code: string;
+    /**
+     * One line per problem, where a request can fail in more than one way at
+     * once. An annotation is the case that needs it: a labeller fixing one
+     * error per round trip stops using the tool, so every problem in a
+     * drawing is reported together. Absent everywhere else, which keeps the
+     * one JSON shape one shape.
+     */
+    details?: Array<string>;
     message: string;
 };
 
@@ -600,6 +985,32 @@ export type EventType = 'RunStarted' | 'RunCompleted' | 'RunFailed' | 'AgentStar
 };
 
 /**
+ * Why an image is not in an export.
+ *
+ * Every one of these is listed by name in the manifest rather than silently
+ * dropped. An export that quietly loses a third of a corpus reads exactly
+ * like one that did not.
+ */
+export const ExclusionReason = {
+    RIGHTS: 'rights',
+    UNREVIEWED: 'unreviewed',
+    EMPTY: 'empty',
+    SCHEMA_MISMATCH: 'schema_mismatch',
+    VIEW_TYPE: 'view_type',
+    MISSING: 'missing',
+    NO_REQUESTED_CLASS: 'no_requested_class'
+} as const;
+
+/**
+ * Why an image is not in an export.
+ *
+ * Every one of these is listed by name in the manifest rather than silently
+ * dropped. An export that quietly loses a third of a corpus reads exactly
+ * like one that did not.
+ */
+export type ExclusionReason = typeof ExclusionReason[keyof typeof ExclusionReason];
+
+/**
  * One execution, with everything needed to draw it.
  */
 export type ExecutionDetail = {
@@ -689,6 +1100,194 @@ export type ExecutionSummary = {
     workflow_run_id: string;
 };
 
+export type ExportCounts = {
+    excluded: number;
+    groups: number;
+    groups_per_split: {
+        [key: string]: number;
+    };
+    images: number;
+    /**
+     * `train | validation | test` to image count.
+     */
+    images_per_split: {
+        [key: string]: number;
+    };
+    instances: number;
+    /**
+     * Class to instance count, over the whole export.
+     */
+    instances_per_class: {
+        [key: string]: number;
+    };
+    /**
+     * Class to per-split instance counts. This is the table that says the test
+     * set contains four doors, which is the number that invalidates a recall
+     * figure before anybody quotes it.
+     */
+    instances_per_class_split: {
+        [key: string]: {
+            [key: string]: number;
+        };
+    };
+};
+
+export type ExportExclusion = {
+    detail?: string;
+    group_id: string;
+    image_id: string;
+    reason: ExclusionReason;
+};
+
+/**
+ * The immutable result.
+ */
+export type ExportManifest = {
+    all_view_types: boolean;
+    /**
+     * In schema order. The index in this list is the category id COCO uses,
+     * which is why the order is fixed by the schema and not by first sight.
+     */
+    classes: Array<string>;
+    counts: ExportCounts;
+    created_at: string;
+    excluded: Array<ExportExclusion>;
+    /**
+     * SHA-256 of everything below except `created_at` and `note`. Two exports
+     * of an unchanged project are one export.
+     */
+    export: string;
+    note?: string;
+    project: string;
+    require_human_review: boolean;
+    rights_policy: RightsPolicy;
+    samples: Array<ExportSample>;
+    schema_version: string;
+    split_salt: string;
+    splits: SplitRatios;
+};
+
+export type ExportPage = {
+    exports: Array<ExportSummary>;
+};
+
+/**
+ * What a caller asks for.
+ */
+export type ExportRequest = {
+    /**
+     * Include sections and elevations. Off by default.
+     */
+    all_view_types?: boolean;
+    /**
+     * Empty means every class in the schema.
+     */
+    classes?: Array<string>;
+    note?: string;
+    project: string;
+    /**
+     * Refuse an image whose accepted revision was produced entirely by a model
+     * or an import. Defaults to on, because that is the whole point of
+     * recording an origin.
+     */
+    require_human_review?: boolean;
+    rights_policy?: RightsPolicy;
+    /**
+     * Overrides the project's salt for this export only.
+     */
+    split_salt?: string | null;
+    splits?: null | SplitRatios;
+};
+
+/**
+ * One image in an export, pinned to the revision that was accepted when the
+ * export was built.
+ */
+export type ExportSample = {
+    group_id: string;
+    height: number;
+    image_id: string;
+    instances: number;
+    level?: string | null;
+    revision: string;
+    /**
+     * Flattened for the manifest so a reader can see the licence mix without
+     * resolving every image.
+     */
+    rights: string;
+    source?: string;
+    split: Split;
+    uri: string;
+    width: number;
+};
+
+export type ExportSummary = {
+    counts: ExportCounts;
+    created_at: string;
+    export: string;
+    note?: string;
+    project: string;
+    rights_policy: RightsPolicy;
+    schema_version: string;
+};
+
+/**
+ * What closes a run.
+ */
+export type FinishRunRequest = {
+    best?: null | BestMetric;
+    error?: string | null;
+    status: TrainingStatus;
+};
+
+/**
+ * What was drawn.
+ */
+export type Geometry = {
+    at: Array<number>;
+    kind: 'point';
+} | {
+    kind: 'bbox';
+    max: Array<number>;
+    min: Array<number>;
+} | {
+    kind: 'polyline';
+    points: Array<Array<number>>;
+} | {
+    exterior: Array<Array<number>>;
+    /**
+     * Interior rings. A room with a chimney is one polygon with one hole,
+     * not two polygons whose difference a consumer has to infer.
+     */
+    holes?: Array<Array<Array<number>>>;
+    kind: 'polygon';
+} | {
+    kind: 'keypoints';
+    points: Array<Keypoint>;
+};
+
+/**
+ * The shape a class is drawn as.
+ *
+ * One kind per class, checked on save. A class drawn as a polygon in one
+ * image and a box in another produces a training target nothing can decode.
+ */
+export const GeometryKind = {
+    POINT: 'point',
+    BBOX: 'bbox',
+    POLYLINE: 'polyline',
+    POLYGON: 'polygon',
+    KEYPOINTS: 'keypoints'
+} as const;
+
+/**
+ * The shape a class is drawn as.
+ *
+ * One kind per class, checked on save. A class drawn as a polygon in one
+ * image and a box in another produces a training target nothing can decode.
+ */
+export type GeometryKind = typeof GeometryKind[keyof typeof GeometryKind];
+
 /**
  * An authenticated caller.
  */
@@ -720,6 +1319,91 @@ export type Identity = {
     username?: string | null;
 };
 
+/**
+ * Where one image's revisions and its head are read together.
+ */
+export type ImageDetail = ImageHead & {
+    revision?: null | AnnotationRevision;
+    /**
+     * Which side of the split this image's family is on, under the project's
+     * current policy. Shown so a labeller knows whether they are drawing a
+     * test case, which changes how carefully they draw it.
+     */
+    split: Split;
+};
+
+/**
+ * One image's mutable head: what it is, what has been drawn on it, and which
+ * of those drawings is the truth.
+ */
+export type ImageHead = {
+    /**
+     * The revision an export reads. Set only by acceptance.
+     */
+    accepted?: string | null;
+    image: ImageRecord;
+    note?: string;
+    project: string;
+    review?: ReviewState;
+    reviewed_at?: string | null;
+    reviewed_by?: string | null;
+    /**
+     * Newest first.
+     */
+    revisions?: Array<RevisionSummary>;
+};
+
+export type ImagePage = {
+    images: Array<ImageHead>;
+    limit: number;
+    next_offset?: number | null;
+    offset: number;
+    total: number;
+};
+
+/**
+ * One registered image.
+ */
+export type ImageRecord = {
+    /**
+     * The split key. Every rendering of one building shares it.
+     */
+    group_id: string;
+    height: number;
+    /**
+     * SHA-256 of the bytes, lowercase hex. Computed by the server on upload
+     * and never taken from the client.
+     */
+    image_id: string;
+    /**
+     * `ground_floor`, `attic`, `basement`. Free text, because the vocabulary
+     * differs per supplier and guessing it wrong is worse than keeping theirs.
+     */
+    level?: string | null;
+    /**
+     * Everything known about this plan that did not come from the pixels: the
+     * room names and areas from the catalogue page, the plan's own dimensions,
+     * the listing URL.
+     *
+     * This is the field that makes OCR a cross-check rather than a source.
+     */
+    metadata?: {
+        [key: string]: unknown;
+    };
+    registered_at: string;
+    rights: UsageRights;
+    /**
+     * Where it came from — a supplier, a public corpus, a scan batch.
+     */
+    source: string;
+    /**
+     * Where the bytes are. `blob:<image_id>` for something uploaded here.
+     */
+    uri: string;
+    view?: ViewType;
+    width: number;
+};
+
 export type IngestRequest = {
     /**
      * A batch. Publishing several events in one call is what keeps a chatty
@@ -737,8 +1421,77 @@ export type IngestResponse = {
     last_checkpoint: Checkpoint;
 };
 
+/**
+ * One named position inside a keypoint instance.
+ */
+export type Keypoint = {
+    at: Array<number>;
+    name: string;
+    /**
+     * False when the plan shows the element but not this position — a door
+     * whose leaf is drawn open past the page edge still has a hinge.
+     */
+    visible?: boolean;
+};
+
+/**
+ * One drawable class.
+ */
+export type LabelClass = {
+    attributes?: Array<AttributeDef>;
+    /**
+     * What the canvas draws it in. Presentation only; nothing downstream may
+     * depend on it.
+     */
+    color?: string;
+    description?: string;
+    geometry: GeometryKind;
+    /**
+     * Excluded from every training target and from the loss.
+     *
+     * The furniture, the hatching and the title block are not background —
+     * they are pixels a model must not be scored on either way. Marking them
+     * is cheaper than labelling them and far cheaper than the false positives
+     * they produce.
+     */
+    ignore?: boolean;
+    /**
+     * The named positions a [`GeometryKind::Keypoints`] class expects, in the
+     * order the tool asks for them.
+     */
+    keypoints?: Array<string>;
+    /**
+     * Named references this class may hold to other instances in the same
+     * image: `wall` for an opening, `connects` for a door's two rooms.
+     */
+    links?: Array<LinkDef>;
+    /**
+     * Stable machine name — `wall_exterior`, not `Exterior wall`. Renaming it
+     * is a new schema version, never an edit.
+     */
+    name: string;
+    /**
+     * Keypoints that may be left out because the plan does not show them.
+     * Everything else in `keypoints` is required.
+     */
+    optional_keypoints?: Array<string>;
+};
+
 export type LabelRequest = {
     version_id: PromptVersionId;
+};
+
+/**
+ * The complete, versioned vocabulary of one project.
+ *
+ * Content-addressed like everything else authored here: the version is the
+ * digest of the classes, so an unchanged schema re-saved is the same version
+ * and a renamed class is unmistakably a different one.
+ */
+export type LabelSchema = {
+    classes: Array<LabelClass>;
+    created_at: string;
+    version: string;
 };
 
 export type Latency = {
@@ -762,6 +1515,69 @@ export type Latency = {
      * Per tool call.
      */
     tool: Percentiles;
+};
+
+/**
+ * What came back. Not a result — nothing has finished.
+ */
+export type LaunchAccepted = {
+    /**
+     * The engine's name for the execution it just created.
+     */
+    reference: string;
+    url?: string | null;
+    /**
+     * Echoed back so the caller can subscribe to
+     * `/api/v1/workflow-executions/{id}/stream` immediately — before the
+     * producer has published anything, which is the interesting part of a
+     * launch's first thirty seconds.
+     */
+    workflow_run_id?: string | null;
+};
+
+/**
+ * What a caller may ask to start.
+ *
+ * Note what is not here, and it is the same absence as `RerunBody`: no
+ * endpoint, no image, no command. `deny_unknown_fields` so an attempt to
+ * supply one is a 400 rather than a field that is silently ignored and reads
+ * as accepted.
+ */
+export type LaunchBody = {
+    /**
+     * Parameter name to value, bound to the types the engine declares.
+     */
+    inputs?: {
+        [key: string]: unknown;
+    };
+    /**
+     * The engine reference from the catalog, e.g.
+     * `lp:planner:production:house_dataset_curation:v7`.
+     */
+    workflow: string;
+    /**
+     * Supply one to join this execution to events a producer will publish
+     * under an id it already knows. Left out, aiwatcher mints one and returns
+     * it, which is what the panel follows.
+     */
+    workflow_run_id?: string | null;
+};
+
+/**
+ * One named reference from an instance to another instance.
+ */
+export type LinkDef = {
+    max?: number;
+    /**
+     * How many targets this link must have. `(1, 1)` for an opening's wall,
+     * `(2, 2)` for the two spaces it connects.
+     */
+    min?: number;
+    name: string;
+    /**
+     * Classes the target may belong to. Empty means any class.
+     */
+    targets?: Array<string>;
 };
 
 /**
@@ -889,6 +1705,110 @@ export type ModelBreakdown = {
     model: string;
     output_tokens: number;
     provider?: string | null;
+};
+
+/**
+ * One model, its head and one version's full record.
+ *
+ * `head` is a field rather than a flattened one, unlike the annotation
+ * registry's equivalent. Flattening reads better in the JSON and produces a
+ * TypeScript intersection type that the panel then cannot narrow, so the
+ * nesting is the price of the client being generated rather than written.
+ */
+export type ModelDetail = {
+    current?: null | ModelVersion;
+    head: ModelHead;
+};
+
+/**
+ * One model's mutable head: its versions, newest first, and its labels.
+ *
+ * Labels live here and nowhere else, exactly as a prompt's do: a version is
+ * immutable and `production` is not.
+ */
+export type ModelHead = {
+    description?: string;
+    /**
+     * Label to version id. `production` is the one a deployment reads.
+     */
+    labels?: {
+        [key: string]: string;
+    };
+    name: string;
+    updated_at: string;
+    versions?: Array<ModelVersionSummary>;
+};
+
+export type ModelLabelRequest = {
+    label: string;
+    version: string;
+};
+
+/**
+ * What a version measured, split by which data measured it.
+ *
+ * Two maps rather than one, because the distinction is the whole point.
+ * `validation` is what the training loop watched and selected against;
+ * `test` is what nothing was allowed to look at. A registry that merged them
+ * would let a model be promoted on the number its own early stopping
+ * maximised.
+ */
+export type ModelMetrics = {
+    test?: {
+        [key: string]: number;
+    };
+    validation?: {
+        [key: string]: number;
+    };
+};
+
+export type ModelPage = {
+    models: Array<ModelHead>;
+};
+
+/**
+ * One registered model version.
+ */
+export type ModelVersion = {
+    /**
+     * Where the weights are. A pointer, like every other artifact here.
+     */
+    checkpoint_uri: string;
+    code?: string;
+    created_at: string;
+    /**
+     * `project@export-sha256` from the annotation registry.
+     */
+    dataset: string;
+    framework?: string;
+    metrics?: ModelMetrics;
+    name: string;
+    notes?: string;
+    /**
+     * False when the dataset is a mutable name rather than an immutable
+     * export reference. Recorded rather than refused, and it is what blocks
+     * a promotion.
+     */
+    reproducible: boolean;
+    run_id: string;
+    /**
+     * SHA-256 of what makes this version *this* version: the run, the
+     * checkpoint, the dataset and the measurements. Registering the same
+     * thing twice is one version.
+     */
+    version: string;
+};
+
+/**
+ * A version as it appears in a list.
+ */
+export type ModelVersionSummary = {
+    created_at: string;
+    dataset: string;
+    metrics?: ModelMetrics;
+    reproducible: boolean;
+    run_id: string;
+    version: string;
 };
 
 /**
@@ -1119,6 +2039,52 @@ export type OptimizationSummary = {
 };
 
 /**
+ * Who drew a shape.
+ *
+ * The whole reason a model-assisted pass is affordable: pre-annotation is
+ * welcome and is recorded as such, so an export can require that a human
+ * looked at it. A field that defaulted to `human` for machine output would
+ * make the distinction unrecoverable one import later.
+ */
+export const Origin = {
+    HUMAN: 'human',
+    MODEL: 'model',
+    IMPORT: 'import',
+    OCR: 'ocr'
+} as const;
+
+/**
+ * Who drew a shape.
+ *
+ * The whole reason a model-assisted pass is affordable: pre-annotation is
+ * welcome and is recorded as such, so an export can require that a human
+ * looked at it. A field that defaulted to `human` for machine output would
+ * make the distinction unrecoverable one import later.
+ */
+export type Origin = typeof Origin[keyof typeof Origin];
+
+/**
+ * How a form should render one input.
+ */
+export const ParameterKind = {
+    STRING: 'string',
+    INTEGER: 'integer',
+    FLOAT: 'float',
+    BOOLEAN: 'boolean',
+    DATETIME: 'datetime',
+    DURATION: 'duration',
+    ENUM: 'enum',
+    COLLECTION: 'collection',
+    MAP: 'map',
+    JSON: 'json'
+} as const;
+
+/**
+ * How a form should render one input.
+ */
+export type ParameterKind = typeof ParameterKind[keyof typeof ParameterKind];
+
+/**
  * Nearest-rank percentiles, in milliseconds.
  */
 export type Percentiles = {
@@ -1126,6 +2092,99 @@ export type Percentiles = {
     p50: number;
     p95: number;
     p99: number;
+};
+
+/**
+ * Which part of the feature/training/inference cycle a workflow belongs to.
+ *
+ * A **hint**, and named as one everywhere it is rendered. It is derived from
+ * the entity's own name and description, which is a guess: an orchestrator
+ * has no field that says "this one produces datasets". The value is that a
+ * picker in Data Curation can default to curation workflows instead of
+ * listing every launch plan in the cluster; the cost of being wrong is a
+ * filter somebody switches off, which is why nothing but presentation may
+ * depend on it.
+ */
+export const PipelineStage = {
+    CURATION: 'curation',
+    TRAINING: 'training',
+    EVALUATION: 'evaluation',
+    INFERENCE: 'inference'
+} as const;
+
+/**
+ * Which part of the feature/training/inference cycle a workflow belongs to.
+ *
+ * A **hint**, and named as one everywhere it is rendered. It is derived from
+ * the entity's own name and description, which is a guess: an orchestrator
+ * has no field that says "this one produces datasets". The value is that a
+ * picker in Data Curation can default to curation workflows instead of
+ * listing every launch plan in the cluster; the cost of being wrong is a
+ * filter somebody switches off, which is why nothing but presentation may
+ * depend on it.
+ */
+export type PipelineStage = typeof PipelineStage[keyof typeof PipelineStage];
+
+export type ProfileInput = {
+    summary: {
+        [key: string]: unknown;
+    };
+    uri?: string | null;
+};
+
+/**
+ * A profiler session, as the part somebody reads in a review.
+ */
+export type ProfileRecord = {
+    at: string;
+    /**
+     * Top operators, totals, memory peak — whatever the profiler bridge
+     * produced. Free-form because the fields on a profiler event have moved
+     * between framework releases more than once.
+     */
+    summary: {
+        [key: string]: unknown;
+    };
+    /**
+     * Where the full trace is, for whoever wants to open it in a profiler UI.
+     */
+    uri?: string | null;
+};
+
+/**
+ * One batched write of progress.
+ *
+ * Batched rather than four endpoints, because the client buffers: a six-hour
+ * run should make one request per epoch, not four, and an epoch that is
+ * retried after a network blip has to land on the epoch it already wrote
+ * rather than beside it.
+ */
+export type ProgressRequest = {
+    checkpoints?: Array<CheckpointInput>;
+    epochs?: Array<EpochInput>;
+    profiles?: Array<ProfileInput>;
+    samples?: Array<SampleInput>;
+};
+
+export type ProjectPage = {
+    projects: Array<AnnotationProject>;
+};
+
+/**
+ * A project as it appears in a list, with the counts a reader wants first.
+ */
+export type ProjectSummary = AnnotationProject & {
+    accepted: number;
+    groups: number;
+    images: number;
+    instances: number;
+    /**
+     * Instances per class over accepted revisions only. The number that says
+     * whether there are enough doors yet.
+     */
+    per_class: {
+        [key: string]: number;
+    };
 };
 
 /**
@@ -1436,6 +2495,56 @@ export type RecordedMetadata = {
     workflow_run_id?: string | null;
 };
 
+/**
+ * What is being asked for when an image is registered.
+ */
+export type RegisterImageRequest = {
+    group_id: string;
+    height: number;
+    image_id: string;
+    level?: string | null;
+    metadata?: {
+        [key: string]: unknown;
+    };
+    project: string;
+    rights: UsageRights;
+    source?: string;
+    uri: string;
+    view?: ViewType;
+    width: number;
+};
+
+export type RegisterModelRequest = {
+    checkpoint_uri: string;
+    description?: string;
+    metrics?: ModelMetrics;
+    name: string;
+    notes?: string;
+    /**
+     * The run that produced it. Read for its dataset, framework and code, so
+     * a version cannot claim provenance the run does not have.
+     */
+    run_id: string;
+};
+
+/**
+ * What registering returned.
+ */
+export type RegisteredModel = {
+    /**
+     * False when this exact version already existed.
+     */
+    created: boolean;
+    head: ModelHead;
+    /**
+     * Why a label cannot point here yet, if it cannot. Returned on the
+     * *registration* so the answer arrives with the thing it is about, rather
+     * than when somebody later tries to promote it.
+     */
+    promotion_blocked?: string | null;
+    version: ModelVersion;
+};
+
 export const RejectionReason = {
     NO_HELD_OUT_IMPROVEMENT: 'no_held_out_improvement',
     NO_HELD_OUT_MEASUREMENT: 'no_held_out_measurement',
@@ -1520,6 +2629,84 @@ export type RerunRequest = {
      */
     workflow_run_id?: string | null;
 };
+
+/**
+ * A change to an image's review state.
+ */
+export type ReviewRequest = {
+    image_id: string;
+    note?: string;
+    project: string;
+    review: ReviewState;
+    /**
+     * Which revision is being accepted. Required for
+     * [`ReviewState::Accepted`], refused otherwise — accepting "whatever is
+     * newest" is the same mistake as launching without pinning a version.
+     */
+    revision?: string | null;
+};
+
+/**
+ * Where a revision sits between drawn and trusted.
+ */
+export const ReviewState = {
+    DRAFT: 'draft',
+    IN_REVIEW: 'in_review',
+    ACCEPTED: 'accepted',
+    REJECTED: 'rejected'
+} as const;
+
+/**
+ * Where a revision sits between drawn and trusted.
+ */
+export type ReviewState = typeof ReviewState[keyof typeof ReviewState];
+
+/**
+ * A revision as it appears in a list, without its shapes.
+ */
+export type RevisionSummary = {
+    author?: string;
+    created_at: string;
+    /**
+     * Instances per class, which is what tells a reviewer at a glance that a
+     * plan has nine rooms and no doors.
+     */
+    per_class: {
+        [key: string]: number;
+    };
+    /**
+     * Instances per origin. A revision that is entirely `model` has not been
+     * looked at, whatever its review state claims.
+     */
+    per_origin: {
+        [key: string]: number;
+    };
+    revision: string;
+    schema_version: string;
+    shape_count: number;
+};
+
+/**
+ * What an export claims about itself.
+ *
+ * `Commercial` is the default, because the failure this guards against is
+ * silent and the correction is one field. An export that wants CubiCasa5K in
+ * it has to say `research` and will say so in its manifest forever.
+ */
+export const RightsPolicy = {
+    COMMERCIAL: 'commercial',
+    RESEARCH: 'research',
+    ANY: 'any'
+} as const;
+
+/**
+ * What an export claims about itself.
+ *
+ * `Commercial` is the default, because the failure this guards against is
+ * silent and the correction is one field. An export that wants CubiCasa5K in
+ * it has to say `research` and will say so in its manifest forever.
+ */
+export type RightsPolicy = typeof RightsPolicy[keyof typeof RightsPolicy];
 
 /**
  * What a caller is allowed to do.
@@ -1622,10 +2809,57 @@ export type RunSummary = {
     workflow?: string | null;
 };
 
+export type SampleInput = {
+    metrics: {
+        [key: string]: number;
+    };
+    step?: number | null;
+};
+
+/**
+ * A point on a finer series — a learning rate, a gradient norm.
+ */
+export type SampleRecord = {
+    at: string;
+    metrics: {
+        [key: string]: number;
+    };
+    step?: number | null;
+};
+
+/**
+ * What a caller sends to create or re-describe a project.
+ */
+export type SaveProjectRequest = {
+    classes: Array<LabelClass>;
+    description?: string;
+    name: string;
+    split_overrides?: {
+        [key: string]: Split;
+    };
+    split_salt?: string;
+    splits?: SplitRatios;
+};
+
 export type SaveRecipeRequest = {
     description?: string;
     name: string;
     pipeline: string;
+};
+
+/**
+ * What a caller sends to save a drawing.
+ */
+export type SaveRevisionRequest = {
+    /**
+     * Promote this revision in the same call. Requires that it validates
+     * clean, which is the only place review and validation meet.
+     */
+    accept?: boolean;
+    annotations: Array<Annotation>;
+    image_id: string;
+    notes?: string;
+    project: string;
 };
 
 export type SavedRecipe = {
@@ -1634,6 +2868,18 @@ export type SavedRecipe = {
      */
     created: boolean;
     recipe: CurationRecipe;
+};
+
+/**
+ * The result of saving a drawing.
+ */
+export type SavedRevision = {
+    /**
+     * False when this exact set of shapes was already stored.
+     */
+    created: boolean;
+    head: ImageHead;
+    revision: AnnotationRevision;
 };
 
 /**
@@ -1663,6 +2909,68 @@ export type Source = {
     sdk: Sdk;
     service: string;
 };
+
+/**
+ * How the bytes are obtained.
+ */
+export const SourceAccess = {
+    OPEN: 'open',
+    REQUEST: 'request',
+    ACADEMIC: 'academic'
+} as const;
+
+/**
+ * How the bytes are obtained.
+ */
+export type SourceAccess = typeof SourceAccess[keyof typeof SourceAccess];
+
+/**
+ * A place to go looking, rather than a corpus.
+ */
+export type SourceDirectory = {
+    name: string;
+    notes: string;
+    url: string;
+};
+
+/**
+ * What kind of thing a corpus contains.
+ */
+export const SourceKind = {
+    FLOOR_PLAN: 'floor_plan',
+    VECTOR: 'vector',
+    CAD: 'cad',
+    CAPTURE: 'capture'
+} as const;
+
+/**
+ * What kind of thing a corpus contains.
+ */
+export type SourceKind = typeof SourceKind[keyof typeof SourceKind];
+
+export type SourcePage = {
+    directories: Array<SourceDirectory>;
+    sources: Array<DatasetSource>;
+    /**
+     * Rows before the filter, so a caller can tell an empty filter from an
+     * empty table.
+     */
+    total: number;
+};
+
+/**
+ * What the licence permits, stated conservatively.
+ */
+export const SourceUsage = {
+    COMMERCIAL: 'commercial',
+    NON_COMMERCIAL: 'non_commercial',
+    UNCLEAR: 'unclear'
+} as const;
+
+/**
+ * What the licence permits, stated conservatively.
+ */
+export type SourceUsage = typeof SourceUsage[keyof typeof SourceUsage];
 
 /**
  * Lowercase hex span id
@@ -1730,6 +3038,49 @@ export type SpanStatus = {
 };
 
 /**
+ * Which side of the split a family is on.
+ */
+export const Split = {
+    TRAIN: 'train',
+    VALIDATION: 'validation',
+    TEST: 'test'
+} as const;
+
+/**
+ * Which side of the split a family is on.
+ */
+export type Split = typeof Split[keyof typeof Split];
+
+/**
+ * How families are dealt out. Percentages, summing to 100.
+ */
+export type SplitRatios = {
+    test: number;
+    train: number;
+    validation: number;
+};
+
+/**
+ * What opens a run.
+ */
+export type StartRunRequest = {
+    code?: string;
+    /**
+     * `project@export-sha256`, ideally.
+     */
+    dataset: string;
+    device?: string;
+    framework?: string;
+    model: string;
+    params?: {
+        [key: string]: unknown;
+    };
+    run_id: string;
+    schema_version?: string | null;
+    workflow_run_id?: string | null;
+};
+
+/**
  * Retrieval, embedding, rerank, guardrail — grouped by kind, then by name.
  *
  * Retrieval latency is the number a slow RAG turn gets debugged against, and
@@ -1741,6 +3092,26 @@ export type StepBreakdown = {
     latency: Percentiles;
     name: string;
     step_type: string;
+};
+
+/**
+ * A stored image blob and what it is.
+ */
+export type StoredBlob = {
+    bytes: number;
+    content_type: string;
+    /**
+     * False when these exact bytes were already stored.
+     */
+    created: boolean;
+    /**
+     * SHA-256 of the bytes, computed here. This is the `image_id`.
+     */
+    image_id: string;
+    /**
+     * What to put in `ImageRecord::uri`. See [`BLOB_SCHEME`].
+     */
+    uri: string;
 };
 
 /**
@@ -1824,6 +3195,139 @@ export type Totals = {
 export type TraceId = string;
 
 /**
+ * One training run, with everything it accumulated.
+ */
+export type TrainingRun = {
+    best?: null | BestMetric;
+    checkpoints?: Array<CheckpointRecord>;
+    /**
+     * The code that ran. A git revision, usually.
+     */
+    code?: string;
+    /**
+     * `project@export-sha256` from the annotation registry. A bare project
+     * name is recorded and marks the run irreproducible rather than being
+     * refused: a smoke test on an unversioned dataset is a legitimate thing
+     * to do, and refusing it would only teach people to lie about it.
+     */
+    dataset: string;
+    device?: string;
+    ended_at?: string | null;
+    epochs?: Array<EpochRecord>;
+    error?: string | null;
+    framework?: string;
+    /**
+     * When this run last wrote anything. The only honest answer to "is it
+     * still alive", and the field a reader draws a stall from.
+     */
+    last_heard_from: string;
+    /**
+     * The model being trained — a name, not a version. The version is what
+     * this run *produces*; see [`crate::model::ModelVersion`].
+     */
+    model: string;
+    params?: {
+        [key: string]: unknown;
+    };
+    profiles?: Array<ProfileRecord>;
+    /**
+     * Whether this run can be pointed at afterwards and repeated. Decided
+     * once, when the run opens, and stored rather than re-derived: a rule
+     * computed in three places is a rule three places can disagree about, and
+     * the panel is one of them.
+     */
+    reproducible?: boolean;
+    run_id: string;
+    /**
+     * How many times the sampled series has been halved. The effective
+     * interval is the original one times two to this power, and saying so is
+     * what stops somebody reading a decimated curve as a complete one.
+     */
+    sample_decimations?: number;
+    samples?: Array<SampleRecord>;
+    schema_version?: string | null;
+    started_at: string;
+    status: TrainingStatus;
+    /**
+     * Set when the orchestrator launched this run, so it joins the workflow
+     * execution it belongs to. See ADR_0012 and ADR_0016.
+     */
+    workflow_run_id?: string | null;
+};
+
+export type TrainingRunPage = {
+    runs: Array<TrainingRunSummary>;
+    total: number;
+};
+
+/**
+ * A run as it appears in a list: everything but the curve.
+ */
+export type TrainingRunSummary = {
+    best?: null | BestMetric;
+    checkpoints: number;
+    dataset: string;
+    device?: string;
+    duration_ms?: number | null;
+    ended_at?: string | null;
+    epochs: number;
+    error?: string | null;
+    framework?: string;
+    last_heard_from: string;
+    model: string;
+    reproducible: boolean;
+    run_id: string;
+    started_at: string;
+    status: TrainingStatus;
+    workflow_run_id?: string | null;
+};
+
+/**
+ * Where a run is.
+ *
+ * `Running` is the *absence* of an end, not a claim that anything is
+ * happening — exactly the rule the projector follows for agent runs. A
+ * trainer killed by an OOM and a trainer thinking for twenty minutes look
+ * identical from here, so nothing in this crate decides which one it is.
+ * [`TrainingRun::last_heard_from`] is what a reader draws the line from.
+ */
+export const TrainingStatus = {
+    RUNNING: 'running',
+    SUCCEEDED: 'succeeded',
+    FAILED: 'failed',
+    CANCELLED: 'cancelled'
+} as const;
+
+/**
+ * Where a run is.
+ *
+ * `Running` is the *absence* of an end, not a claim that anything is
+ * happening — exactly the rule the projector follows for agent runs. A
+ * trainer killed by an OOM and a trainer thinking for twenty minutes look
+ * identical from here, so nothing in this crate decides which one it is.
+ * [`TrainingRun::last_heard_from`] is what a reader draws the line from.
+ */
+export type TrainingStatus = typeof TrainingStatus[keyof typeof TrainingStatus];
+
+/**
+ * What may be done with an image, and therefore with a model trained on it.
+ */
+export type UsageRights = {
+    grant?: string;
+    kind: 'owned';
+} | {
+    kind: 'licensed';
+    license: string;
+    url?: string | null;
+} | {
+    kind: 'research_only';
+    license: string;
+    url?: string | null;
+} | {
+    kind: 'unknown';
+};
+
+/**
  * Where a version came from.
  *
  * The distinction the panel needs to answer "did a person write this, or did
@@ -1837,6 +3341,30 @@ export type VersionOrigin = {
     optimization_id: string;
     origin: 'optimized';
 };
+
+/**
+ * What a drawing on a page actually is.
+ *
+ * A section and an elevation are the same house drawn a different way, and a
+ * model trained to read plans reads neither. Recording the view is what keeps
+ * them out of an export instead of out of somebody's memory.
+ */
+export const ViewType = {
+    FLOOR_PLAN: 'floor_plan',
+    SECTION: 'section',
+    ELEVATION: 'elevation',
+    SITE_PLAN: 'site_plan',
+    OTHER: 'other'
+} as const;
+
+/**
+ * What a drawing on a page actually is.
+ *
+ * A section and an elevation are the same house drawn a different way, and a
+ * model trained to read plans reads neither. Recording the view is what keeps
+ * them out of an export instead of out of somebody's memory.
+ */
+export type ViewType = typeof ViewType[keyof typeof ViewType];
 
 /**
  * A workflow as the catalog holds it.
@@ -1895,6 +3423,404 @@ export type WorkflowPage = {
     total_known: number;
     workflows: Array<WorkflowDefinition>;
 };
+
+export type UploadBlobData = {
+    body: Array<number>;
+    path?: never;
+    query?: never;
+    url: '/api/v1/annotation-blobs';
+};
+
+export type UploadBlobErrors = {
+    400: ErrorBody;
+    403: ErrorBody;
+    413: ErrorBody;
+    501: ErrorBody;
+};
+
+export type UploadBlobError = UploadBlobErrors[keyof UploadBlobErrors];
+
+export type UploadBlobResponses = {
+    /**
+     * These exact bytes were already stored
+     */
+    200: StoredBlob;
+    /**
+     * The bytes were stored
+     */
+    201: StoredBlob;
+};
+
+export type UploadBlobResponse = UploadBlobResponses[keyof UploadBlobResponses];
+
+export type GetBlobData = {
+    body?: never;
+    path: {
+        /**
+         * The image's SHA-256
+         */
+        image_id: string;
+    };
+    query?: never;
+    url: '/api/v1/annotation-blobs/{image_id}';
+};
+
+export type GetBlobErrors = {
+    400: ErrorBody;
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type GetBlobError = GetBlobErrors[keyof GetBlobErrors];
+
+export type GetBlobResponses = {
+    /**
+     * The image bytes
+     */
+    200: unknown;
+};
+
+export type GetExportData = {
+    body?: never;
+    path?: never;
+    query: {
+        project: string;
+        export: string;
+        /**
+         * One side of the split, for a trainer that wants its own file per split.
+         */
+        split?: null | Split;
+    };
+    url: '/api/v1/annotation-export';
+};
+
+export type GetExportErrors = {
+    400: ErrorBody;
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type GetExportError = GetExportErrors[keyof GetExportErrors];
+
+export type GetExportResponses = {
+    200: ExportManifest;
+};
+
+export type GetExportResponse = GetExportResponses[keyof GetExportResponses];
+
+export type GetExportCocoData = {
+    body?: never;
+    path?: never;
+    query: {
+        project: string;
+        export: string;
+        /**
+         * One side of the split, for a trainer that wants its own file per split.
+         */
+        split?: null | Split;
+    };
+    url: '/api/v1/annotation-export/coco';
+};
+
+export type GetExportCocoErrors = {
+    400: ErrorBody;
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type GetExportCocoError = GetExportCocoErrors[keyof GetExportCocoErrors];
+
+export type GetExportCocoResponses = {
+    /**
+     * A COCO document
+     */
+    200: unknown;
+};
+
+export type ListExportsData = {
+    body?: never;
+    path?: never;
+    query: {
+        name: string;
+    };
+    url: '/api/v1/annotation-exports';
+};
+
+export type ListExportsErrors = {
+    501: ErrorBody;
+};
+
+export type ListExportsError = ListExportsErrors[keyof ListExportsErrors];
+
+export type ListExportsResponses = {
+    200: ExportPage;
+};
+
+export type ListExportsResponse = ListExportsResponses[keyof ListExportsResponses];
+
+export type BuildExportData = {
+    body: ExportRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/annotation-exports';
+};
+
+export type BuildExportErrors = {
+    400: ErrorBody;
+    403: ErrorBody;
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type BuildExportError = BuildExportErrors[keyof BuildExportErrors];
+
+export type BuildExportResponses = {
+    /**
+     * This exact export already existed
+     */
+    200: BuiltExport;
+    /**
+     * A new export was stored
+     */
+    201: BuiltExport;
+};
+
+export type BuildExportResponse = BuildExportResponses[keyof BuildExportResponses];
+
+export type GetImageData = {
+    body?: never;
+    path?: never;
+    query: {
+        project: string;
+        image_id: string;
+        /**
+         * Which revision's shapes to return. Omitted means the accepted one, then
+         * the newest — what a labeller reopening an image expects to see.
+         */
+        revision?: string | null;
+    };
+    url: '/api/v1/annotation-image';
+};
+
+export type GetImageErrors = {
+    400: ErrorBody;
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type GetImageError = GetImageErrors[keyof GetImageErrors];
+
+export type GetImageResponses = {
+    200: ImageDetail;
+};
+
+export type GetImageResponse = GetImageResponses[keyof GetImageResponses];
+
+export type ListImagesData = {
+    body?: never;
+    path?: never;
+    query: {
+        project: string;
+        review?: null | ReviewState;
+        split?: null | Split;
+        group_id?: string | null;
+        search?: string | null;
+        offset?: number | null;
+        limit?: number | null;
+    };
+    url: '/api/v1/annotation-images';
+};
+
+export type ListImagesErrors = {
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type ListImagesError = ListImagesErrors[keyof ListImagesErrors];
+
+export type ListImagesResponses = {
+    200: ImagePage;
+};
+
+export type ListImagesResponse = ListImagesResponses[keyof ListImagesResponses];
+
+export type RegisterImageData = {
+    body: RegisterImageRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/annotation-images';
+};
+
+export type RegisterImageErrors = {
+    400: ErrorBody;
+    403: ErrorBody;
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type RegisterImageError = RegisterImageErrors[keyof RegisterImageErrors];
+
+export type RegisterImageResponses = {
+    200: ImageHead;
+};
+
+export type RegisterImageResponse = RegisterImageResponses[keyof RegisterImageResponses];
+
+export type ListPresetsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/annotation-presets';
+};
+
+export type ListPresetsResponses = {
+    200: Array<LabelClass>;
+};
+
+export type ListPresetsResponse = ListPresetsResponses[keyof ListPresetsResponses];
+
+export type GetProjectData = {
+    body?: never;
+    path?: never;
+    query: {
+        name: string;
+    };
+    url: '/api/v1/annotation-project';
+};
+
+export type GetProjectErrors = {
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type GetProjectError = GetProjectErrors[keyof GetProjectErrors];
+
+export type GetProjectResponses = {
+    200: ProjectSummary;
+};
+
+export type GetProjectResponse = GetProjectResponses[keyof GetProjectResponses];
+
+export type ListProjectsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/annotation-projects';
+};
+
+export type ListProjectsErrors = {
+    501: ErrorBody;
+};
+
+export type ListProjectsError = ListProjectsErrors[keyof ListProjectsErrors];
+
+export type ListProjectsResponses = {
+    200: ProjectPage;
+};
+
+export type ListProjectsResponse = ListProjectsResponses[keyof ListProjectsResponses];
+
+export type SaveProjectData = {
+    body: SaveProjectRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/annotation-projects';
+};
+
+export type SaveProjectErrors = {
+    400: ErrorBody;
+    403: ErrorBody;
+    501: ErrorBody;
+};
+
+export type SaveProjectError = SaveProjectErrors[keyof SaveProjectErrors];
+
+export type SaveProjectResponses = {
+    200: AnnotationProject;
+};
+
+export type SaveProjectResponse = SaveProjectResponses[keyof SaveProjectResponses];
+
+export type ReviewImageData = {
+    body: ReviewRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/annotation-reviews';
+};
+
+export type ReviewImageErrors = {
+    400: ErrorBody;
+    403: ErrorBody;
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type ReviewImageError = ReviewImageErrors[keyof ReviewImageErrors];
+
+export type ReviewImageResponses = {
+    200: ImageHead;
+};
+
+export type ReviewImageResponse = ReviewImageResponses[keyof ReviewImageResponses];
+
+export type SaveRevisionData = {
+    body: SaveRevisionRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/annotation-revisions';
+};
+
+export type SaveRevisionErrors = {
+    403: ErrorBody;
+    404: ErrorBody;
+    413: ErrorBody;
+    /**
+     * The drawing was refused; `details` holds every problem
+     */
+    422: ErrorBody;
+    501: ErrorBody;
+};
+
+export type SaveRevisionError = SaveRevisionErrors[keyof SaveRevisionErrors];
+
+export type SaveRevisionResponses = {
+    /**
+     * These exact shapes already existed
+     */
+    200: SavedRevision;
+    /**
+     * A new revision was stored
+     */
+    201: SavedRevision;
+};
+
+export type SaveRevisionResponse = SaveRevisionResponses[keyof SaveRevisionResponses];
+
+export type ListSourcesData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * Free text over name, summary, licence, labels and notes.
+         */
+        q?: string | null;
+        /**
+         * The filter that matters: what a commercial model may be trained on.
+         */
+        usage?: null | SourceUsage;
+        /**
+         * A label kind the corpus has to carry — `doors`, `scale`, `graph`.
+         */
+        label?: string | null;
+    };
+    url: '/api/v1/annotation-sources';
+};
+
+export type ListSourcesResponses = {
+    200: SourcePage;
+};
+
+export type ListSourcesResponse = ListSourcesResponses[keyof ListSourcesResponses];
 
 export type CallbackData = {
     body?: never;
@@ -2171,6 +4097,145 @@ export type ListDimensionResponses = {
 
 export type ListDimensionResponse = ListDimensionResponses[keyof ListDimensionResponses];
 
+export type DescribeEngineData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/engine';
+};
+
+export type DescribeEngineErrors = {
+    501: ErrorBody;
+};
+
+export type DescribeEngineError = DescribeEngineErrors[keyof DescribeEngineErrors];
+
+export type DescribeEngineResponses = {
+    200: EngineDescription;
+};
+
+export type DescribeEngineResponse = DescribeEngineResponses[keyof DescribeEngineResponses];
+
+export type LaunchWorkflowData = {
+    body: LaunchBody;
+    path?: never;
+    query?: never;
+    url: '/api/v1/engine/launches';
+};
+
+export type LaunchWorkflowErrors = {
+    /**
+     * The engine refused it: an undeclared input, a missing one, a value that will not bind
+     */
+    400: ErrorBody;
+    403: ErrorBody;
+    501: ErrorBody;
+    502: ErrorBody;
+    503: ErrorBody;
+};
+
+export type LaunchWorkflowError = LaunchWorkflowErrors[keyof LaunchWorkflowErrors];
+
+export type LaunchWorkflowResponses = {
+    202: LaunchAccepted;
+};
+
+export type LaunchWorkflowResponse = LaunchWorkflowResponses[keyof LaunchWorkflowResponses];
+
+export type GetLaunchData = {
+    body?: never;
+    path: {
+        /**
+         * The reference from a launch, e.g. project:domain:execution
+         */
+        reference: string;
+    };
+    query?: never;
+    url: '/api/v1/engine/launches/{reference}';
+};
+
+export type GetLaunchErrors = {
+    400: ErrorBody;
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type GetLaunchError = GetLaunchErrors[keyof GetLaunchErrors];
+
+export type GetLaunchResponses = {
+    200: EngineExecution;
+};
+
+export type GetLaunchResponse = GetLaunchResponses[keyof GetLaunchResponses];
+
+export type ListEngineWorkflowsData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * Case-insensitive substring over name and description.
+         */
+        search?: string | null;
+        /**
+         * Overrides the configured project and domain for this request.
+         */
+        project?: string | null;
+        domain?: string | null;
+        /**
+         * `curation | training | evaluation | inference`. A hint the engine
+         * derived from the entity's name — see `core::engine::PipelineStage`.
+         */
+        stage?: string | null;
+        limit?: number | null;
+        /**
+         * The engine's own continuation token, from a previous `next_token`.
+         */
+        token?: string | null;
+    };
+    url: '/api/v1/engine/workflows';
+};
+
+export type ListEngineWorkflowsErrors = {
+    400: ErrorBody;
+    501: ErrorBody;
+    502: ErrorBody;
+    503: ErrorBody;
+};
+
+export type ListEngineWorkflowsError = ListEngineWorkflowsErrors[keyof ListEngineWorkflowsErrors];
+
+export type ListEngineWorkflowsResponses = {
+    200: EngineCatalog;
+};
+
+export type ListEngineWorkflowsResponse = ListEngineWorkflowsResponses[keyof ListEngineWorkflowsResponses];
+
+export type GetEngineWorkflowData = {
+    body?: never;
+    path: {
+        /**
+         * An engine reference, e.g. lp:project:domain:name:version
+         */
+        workflow_id: string;
+    };
+    query?: never;
+    url: '/api/v1/engine/workflows/{workflow_id}';
+};
+
+export type GetEngineWorkflowErrors = {
+    400: ErrorBody;
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type GetEngineWorkflowError = GetEngineWorkflowErrors[keyof GetEngineWorkflowErrors];
+
+export type GetEngineWorkflowResponses = {
+    200: EngineWorkflow;
+};
+
+export type GetEngineWorkflowResponse = GetEngineWorkflowResponses[keyof GetEngineWorkflowResponses];
+
 export type ListEvaluationSuitesData = {
     body?: never;
     path?: never;
@@ -2318,6 +4383,116 @@ export type GetMetricsResponses = {
 };
 
 export type GetMetricsResponse = GetMetricsResponses[keyof GetMetricsResponses];
+
+export type ListModelsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/models';
+};
+
+export type ListModelsErrors = {
+    501: ErrorBody;
+};
+
+export type ListModelsError = ListModelsErrors[keyof ListModelsErrors];
+
+export type ListModelsResponses = {
+    200: ModelPage;
+};
+
+export type ListModelsResponse = ListModelsResponses[keyof ListModelsResponses];
+
+export type RegisterModelData = {
+    body: RegisterModelRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/models';
+};
+
+export type RegisterModelErrors = {
+    400: ErrorBody;
+    403: ErrorBody;
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type RegisterModelError = RegisterModelErrors[keyof RegisterModelErrors];
+
+export type RegisterModelResponses = {
+    /**
+     * This exact version already existed
+     */
+    200: RegisteredModel;
+    /**
+     * A new version was stored
+     */
+    201: RegisteredModel;
+};
+
+export type RegisterModelResponse = RegisterModelResponses[keyof RegisterModelResponses];
+
+export type GetModelData = {
+    body?: never;
+    path: {
+        /**
+         * The model name
+         */
+        name: string;
+    };
+    query?: {
+        /**
+         * Omitted resolves `production`, then the newest version.
+         */
+        version?: string | null;
+    };
+    url: '/api/v1/models/{name}';
+};
+
+export type GetModelErrors = {
+    400: ErrorBody;
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type GetModelError = GetModelErrors[keyof GetModelErrors];
+
+export type GetModelResponses = {
+    200: ModelDetail;
+};
+
+export type GetModelResponse = GetModelResponses[keyof GetModelResponses];
+
+export type SetModelLabelData = {
+    body: ModelLabelRequest;
+    path: {
+        /**
+         * The model name
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/models/{name}/labels';
+};
+
+export type SetModelLabelErrors = {
+    400: ErrorBody;
+    403: ErrorBody;
+    404: ErrorBody;
+    /**
+     * The version may not be promoted
+     */
+    422: ErrorBody;
+    501: ErrorBody;
+};
+
+export type SetModelLabelError = SetModelLabelErrors[keyof SetModelLabelErrors];
+
+export type SetModelLabelResponses = {
+    200: ModelHead;
+};
+
+export type SetModelLabelResponse = SetModelLabelResponses[keyof SetModelLabelResponses];
 
 export type ListPromptsData = {
     body?: never;
@@ -2733,6 +4908,144 @@ export type ListSpansResponses = {
 };
 
 export type ListSpansResponse = ListSpansResponses[keyof ListSpansResponses];
+
+export type ListTrainingRunsData = {
+    body?: never;
+    path?: never;
+    query?: {
+        model?: string | null;
+        status?: null | TrainingStatus;
+        /**
+         * An exact `project@version`, or a bare project name to match every
+         * export of it.
+         */
+        dataset?: string | null;
+        limit?: number | null;
+    };
+    url: '/api/v1/training-runs';
+};
+
+export type ListTrainingRunsErrors = {
+    501: ErrorBody;
+};
+
+export type ListTrainingRunsError = ListTrainingRunsErrors[keyof ListTrainingRunsErrors];
+
+export type ListTrainingRunsResponses = {
+    200: TrainingRunPage;
+};
+
+export type ListTrainingRunsResponse = ListTrainingRunsResponses[keyof ListTrainingRunsResponses];
+
+export type StartTrainingRunData = {
+    body: StartRunRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/training-runs';
+};
+
+export type StartTrainingRunErrors = {
+    400: ErrorBody;
+    403: ErrorBody;
+    /**
+     * The run id already finished
+     */
+    409: ErrorBody;
+    501: ErrorBody;
+};
+
+export type StartTrainingRunError = StartTrainingRunErrors[keyof StartTrainingRunErrors];
+
+export type StartTrainingRunResponses = {
+    201: TrainingRun;
+};
+
+export type StartTrainingRunResponse = StartTrainingRunResponses[keyof StartTrainingRunResponses];
+
+export type GetTrainingRunData = {
+    body?: never;
+    path: {
+        /**
+         * The run id the trainer chose
+         */
+        run_id: string;
+    };
+    query?: never;
+    url: '/api/v1/training-runs/{run_id}';
+};
+
+export type GetTrainingRunErrors = {
+    400: ErrorBody;
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type GetTrainingRunError = GetTrainingRunErrors[keyof GetTrainingRunErrors];
+
+export type GetTrainingRunResponses = {
+    200: TrainingRun;
+};
+
+export type GetTrainingRunResponse = GetTrainingRunResponses[keyof GetTrainingRunResponses];
+
+export type FinishTrainingRunData = {
+    body: FinishRunRequest;
+    path: {
+        /**
+         * The run id
+         */
+        run_id: string;
+    };
+    query?: never;
+    url: '/api/v1/training-runs/{run_id}/finish';
+};
+
+export type FinishTrainingRunErrors = {
+    400: ErrorBody;
+    403: ErrorBody;
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type FinishTrainingRunError = FinishTrainingRunErrors[keyof FinishTrainingRunErrors];
+
+export type FinishTrainingRunResponses = {
+    200: TrainingRunSummary;
+};
+
+export type FinishTrainingRunResponse = FinishTrainingRunResponses[keyof FinishTrainingRunResponses];
+
+export type RecordTrainingProgressData = {
+    body: ProgressRequest;
+    path: {
+        /**
+         * The run id
+         */
+        run_id: string;
+    };
+    query?: never;
+    url: '/api/v1/training-runs/{run_id}/progress';
+};
+
+export type RecordTrainingProgressErrors = {
+    400: ErrorBody;
+    403: ErrorBody;
+    404: ErrorBody;
+    /**
+     * The run has finished
+     */
+    409: ErrorBody;
+    413: ErrorBody;
+    501: ErrorBody;
+};
+
+export type RecordTrainingProgressError = RecordTrainingProgressErrors[keyof RecordTrainingProgressErrors];
+
+export type RecordTrainingProgressResponses = {
+    200: TrainingRunSummary;
+};
+
+export type RecordTrainingProgressResponse = RecordTrainingProgressResponses[keyof RecordTrainingProgressResponses];
 
 export type ListWorkflowExecutionsData = {
     body?: never;

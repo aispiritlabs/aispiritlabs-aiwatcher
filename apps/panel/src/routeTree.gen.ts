@@ -10,12 +10,18 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AnnotationsRouteImport } from './routes/annotations'
 import { Route as DataCurationRouteImport } from './routes/data-curation'
 import { Route as DatasetsRouteImport } from './routes/datasets'
 import { Route as EvaluationRouteImport } from './routes/evaluation'
 import { Route as ExperimentsRouteImport } from './routes/experiments'
 import { Route as ObservabilityRouteImport } from './routes/observability'
+import { Route as TrainingRouteImport } from './routes/training'
 import { Route as WorkflowsRouteImport } from './routes/workflows'
+import { Route as AnnotationsIndexRouteImport } from './routes/annotations.index'
+import { Route as AnnotationsExportsRouteImport } from './routes/annotations.exports'
+import { Route as AnnotationsLabelRouteImport } from './routes/annotations.label'
+import { Route as AnnotationsSourcesRouteImport } from './routes/annotations.sources'
 import { Route as ObservabilityIndexRouteImport } from './routes/observability.index'
 import { Route as ObservabilityExploreRouteImport } from './routes/observability.explore'
 import { Route as ObservabilityMetricsRouteImport } from './routes/observability.metrics'
@@ -24,10 +30,18 @@ import { Route as ObservabilityRunsRouteImport } from './routes/observability.ru
 import { Route as PromptsIndexRouteImport } from './routes/prompts.index'
 import { Route as PromptsNameRouteImport } from './routes/prompts.$name'
 import { Route as RunsRunIdRouteImport } from './routes/runs.$runId'
+import { Route as TrainingIndexRouteImport } from './routes/training.index'
+import { Route as TrainingModelsRouteImport } from './routes/training.models'
+import { Route as TrainingRunsRouteImport } from './routes/training.runs'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AnnotationsRoute = AnnotationsRouteImport.update({
+  id: '/annotations',
+  path: '/annotations',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DataCurationRoute = DataCurationRouteImport.update({
@@ -55,10 +69,35 @@ const ObservabilityRoute = ObservabilityRouteImport.update({
   path: '/observability',
   getParentRoute: () => rootRouteImport,
 } as any)
+const TrainingRoute = TrainingRouteImport.update({
+  id: '/training',
+  path: '/training',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const WorkflowsRoute = WorkflowsRouteImport.update({
   id: '/workflows',
   path: '/workflows',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AnnotationsIndexRoute = AnnotationsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AnnotationsRoute,
+} as any)
+const AnnotationsExportsRoute = AnnotationsExportsRouteImport.update({
+  id: '/exports',
+  path: '/exports',
+  getParentRoute: () => AnnotationsRoute,
+} as any)
+const AnnotationsLabelRoute = AnnotationsLabelRouteImport.update({
+  id: '/label',
+  path: '/label',
+  getParentRoute: () => AnnotationsRoute,
+} as any)
+const AnnotationsSourcesRoute = AnnotationsSourcesRouteImport.update({
+  id: '/sources',
+  path: '/sources',
+  getParentRoute: () => AnnotationsRoute,
 } as any)
 const ObservabilityIndexRoute = ObservabilityIndexRouteImport.update({
   id: '/',
@@ -100,23 +139,47 @@ const RunsRunIdRoute = RunsRunIdRouteImport.update({
   path: '/runs/$runId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const TrainingIndexRoute = TrainingIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => TrainingRoute,
+} as any)
+const TrainingModelsRoute = TrainingModelsRouteImport.update({
+  id: '/models',
+  path: '/models',
+  getParentRoute: () => TrainingRoute,
+} as any)
+const TrainingRunsRoute = TrainingRunsRouteImport.update({
+  id: '/runs',
+  path: '/runs',
+  getParentRoute: () => TrainingRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/annotations': typeof AnnotationsRouteWithChildren
   '/data-curation': typeof DataCurationRoute
   '/datasets': typeof DatasetsRoute
   '/evaluation': typeof EvaluationRoute
   '/experiments': typeof ExperimentsRoute
   '/observability': typeof ObservabilityRouteWithChildren
+  '/training': typeof TrainingRouteWithChildren
   '/workflows': typeof WorkflowsRoute
+  '/annotations/exports': typeof AnnotationsExportsRoute
+  '/annotations/label': typeof AnnotationsLabelRoute
+  '/annotations/sources': typeof AnnotationsSourcesRoute
   '/observability/explore': typeof ObservabilityExploreRoute
   '/observability/metrics': typeof ObservabilityMetricsRoute
   '/observability/query': typeof ObservabilityQueryRoute
   '/observability/runs': typeof ObservabilityRunsRoute
   '/prompts/$name': typeof PromptsNameRoute
   '/runs/$runId': typeof RunsRunIdRoute
+  '/training/models': typeof TrainingModelsRoute
+  '/training/runs': typeof TrainingRunsRoute
+  '/annotations/': typeof AnnotationsIndexRoute
   '/observability/': typeof ObservabilityIndexRoute
   '/prompts/': typeof PromptsIndexRoute
+  '/training/': typeof TrainingIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -125,51 +188,76 @@ export interface FileRoutesByTo {
   '/evaluation': typeof EvaluationRoute
   '/experiments': typeof ExperimentsRoute
   '/workflows': typeof WorkflowsRoute
+  '/annotations/exports': typeof AnnotationsExportsRoute
+  '/annotations/label': typeof AnnotationsLabelRoute
+  '/annotations/sources': typeof AnnotationsSourcesRoute
   '/observability/explore': typeof ObservabilityExploreRoute
   '/observability/metrics': typeof ObservabilityMetricsRoute
   '/observability/query': typeof ObservabilityQueryRoute
   '/observability/runs': typeof ObservabilityRunsRoute
   '/prompts/$name': typeof PromptsNameRoute
   '/runs/$runId': typeof RunsRunIdRoute
+  '/training/models': typeof TrainingModelsRoute
+  '/training/runs': typeof TrainingRunsRoute
+  '/annotations': typeof AnnotationsIndexRoute
   '/observability': typeof ObservabilityIndexRoute
   '/prompts': typeof PromptsIndexRoute
+  '/training': typeof TrainingIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/annotations': typeof AnnotationsRouteWithChildren
   '/data-curation': typeof DataCurationRoute
   '/datasets': typeof DatasetsRoute
   '/evaluation': typeof EvaluationRoute
   '/experiments': typeof ExperimentsRoute
   '/observability': typeof ObservabilityRouteWithChildren
+  '/training': typeof TrainingRouteWithChildren
   '/workflows': typeof WorkflowsRoute
+  '/annotations/exports': typeof AnnotationsExportsRoute
+  '/annotations/label': typeof AnnotationsLabelRoute
+  '/annotations/sources': typeof AnnotationsSourcesRoute
   '/observability/explore': typeof ObservabilityExploreRoute
   '/observability/metrics': typeof ObservabilityMetricsRoute
   '/observability/query': typeof ObservabilityQueryRoute
   '/observability/runs': typeof ObservabilityRunsRoute
   '/prompts/$name': typeof PromptsNameRoute
   '/runs/$runId': typeof RunsRunIdRoute
+  '/training/models': typeof TrainingModelsRoute
+  '/training/runs': typeof TrainingRunsRoute
+  '/annotations/': typeof AnnotationsIndexRoute
   '/observability/': typeof ObservabilityIndexRoute
   '/prompts/': typeof PromptsIndexRoute
+  '/training/': typeof TrainingIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/annotations'
     | '/data-curation'
     | '/datasets'
     | '/evaluation'
     | '/experiments'
     | '/observability'
+    | '/training'
     | '/workflows'
+    | '/annotations/exports'
+    | '/annotations/label'
+    | '/annotations/sources'
     | '/observability/explore'
     | '/observability/metrics'
     | '/observability/query'
     | '/observability/runs'
     | '/prompts/$name'
     | '/runs/$runId'
+    | '/training/models'
+    | '/training/runs'
+    | '/annotations/'
     | '/observability/'
     | '/prompts/'
+    | '/training/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -178,40 +266,58 @@ export interface FileRouteTypes {
     | '/evaluation'
     | '/experiments'
     | '/workflows'
+    | '/annotations/exports'
+    | '/annotations/label'
+    | '/annotations/sources'
     | '/observability/explore'
     | '/observability/metrics'
     | '/observability/query'
     | '/observability/runs'
     | '/prompts/$name'
     | '/runs/$runId'
+    | '/training/models'
+    | '/training/runs'
+    | '/annotations'
     | '/observability'
     | '/prompts'
+    | '/training'
   id:
     | '__root__'
     | '/'
+    | '/annotations'
     | '/data-curation'
     | '/datasets'
     | '/evaluation'
     | '/experiments'
     | '/observability'
+    | '/training'
     | '/workflows'
+    | '/annotations/exports'
+    | '/annotations/label'
+    | '/annotations/sources'
     | '/observability/explore'
     | '/observability/metrics'
     | '/observability/query'
     | '/observability/runs'
     | '/prompts/$name'
     | '/runs/$runId'
+    | '/training/models'
+    | '/training/runs'
+    | '/annotations/'
     | '/observability/'
     | '/prompts/'
+    | '/training/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AnnotationsRoute: typeof AnnotationsRouteWithChildren
   DataCurationRoute: typeof DataCurationRoute
   DatasetsRoute: typeof DatasetsRoute
   EvaluationRoute: typeof EvaluationRoute
   ExperimentsRoute: typeof ExperimentsRoute
   ObservabilityRoute: typeof ObservabilityRouteWithChildren
+  TrainingRoute: typeof TrainingRouteWithChildren
   WorkflowsRoute: typeof WorkflowsRoute
   PromptsNameRoute: typeof PromptsNameRoute
   RunsRunIdRoute: typeof RunsRunIdRoute
@@ -225,6 +331,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/annotations': {
+      id: '/annotations'
+      path: '/annotations'
+      fullPath: '/annotations'
+      preLoaderRoute: typeof AnnotationsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/data-curation': {
@@ -262,12 +375,47 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ObservabilityRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/training': {
+      id: '/training'
+      path: '/training'
+      fullPath: '/training'
+      preLoaderRoute: typeof TrainingRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/workflows': {
       id: '/workflows'
       path: '/workflows'
       fullPath: '/workflows'
       preLoaderRoute: typeof WorkflowsRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/annotations/': {
+      id: '/annotations/'
+      path: '/'
+      fullPath: '/annotations/'
+      preLoaderRoute: typeof AnnotationsIndexRouteImport
+      parentRoute: typeof AnnotationsRoute
+    }
+    '/annotations/exports': {
+      id: '/annotations/exports'
+      path: '/exports'
+      fullPath: '/annotations/exports'
+      preLoaderRoute: typeof AnnotationsExportsRouteImport
+      parentRoute: typeof AnnotationsRoute
+    }
+    '/annotations/label': {
+      id: '/annotations/label'
+      path: '/label'
+      fullPath: '/annotations/label'
+      preLoaderRoute: typeof AnnotationsLabelRouteImport
+      parentRoute: typeof AnnotationsRoute
+    }
+    '/annotations/sources': {
+      id: '/annotations/sources'
+      path: '/sources'
+      fullPath: '/annotations/sources'
+      preLoaderRoute: typeof AnnotationsSourcesRouteImport
+      parentRoute: typeof AnnotationsRoute
     }
     '/observability/': {
       id: '/observability/'
@@ -325,8 +473,47 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof RunsRunIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/training/': {
+      id: '/training/'
+      path: '/'
+      fullPath: '/training/'
+      preLoaderRoute: typeof TrainingIndexRouteImport
+      parentRoute: typeof TrainingRoute
+    }
+    '/training/models': {
+      id: '/training/models'
+      path: '/models'
+      fullPath: '/training/models'
+      preLoaderRoute: typeof TrainingModelsRouteImport
+      parentRoute: typeof TrainingRoute
+    }
+    '/training/runs': {
+      id: '/training/runs'
+      path: '/runs'
+      fullPath: '/training/runs'
+      preLoaderRoute: typeof TrainingRunsRouteImport
+      parentRoute: typeof TrainingRoute
+    }
   }
 }
+
+interface AnnotationsRouteChildren {
+  AnnotationsExportsRoute: typeof AnnotationsExportsRoute
+  AnnotationsLabelRoute: typeof AnnotationsLabelRoute
+  AnnotationsSourcesRoute: typeof AnnotationsSourcesRoute
+  AnnotationsIndexRoute: typeof AnnotationsIndexRoute
+}
+
+const AnnotationsRouteChildren: AnnotationsRouteChildren = {
+  AnnotationsExportsRoute: AnnotationsExportsRoute,
+  AnnotationsLabelRoute: AnnotationsLabelRoute,
+  AnnotationsSourcesRoute: AnnotationsSourcesRoute,
+  AnnotationsIndexRoute: AnnotationsIndexRoute,
+}
+
+const AnnotationsRouteWithChildren = AnnotationsRoute._addFileChildren(
+  AnnotationsRouteChildren,
+)
 
 interface ObservabilityRouteChildren {
   ObservabilityExploreRoute: typeof ObservabilityExploreRoute
@@ -348,13 +535,31 @@ const ObservabilityRouteWithChildren = ObservabilityRoute._addFileChildren(
   ObservabilityRouteChildren,
 )
 
+interface TrainingRouteChildren {
+  TrainingModelsRoute: typeof TrainingModelsRoute
+  TrainingRunsRoute: typeof TrainingRunsRoute
+  TrainingIndexRoute: typeof TrainingIndexRoute
+}
+
+const TrainingRouteChildren: TrainingRouteChildren = {
+  TrainingModelsRoute: TrainingModelsRoute,
+  TrainingRunsRoute: TrainingRunsRoute,
+  TrainingIndexRoute: TrainingIndexRoute,
+}
+
+const TrainingRouteWithChildren = TrainingRoute._addFileChildren(
+  TrainingRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AnnotationsRoute: AnnotationsRouteWithChildren,
   DataCurationRoute: DataCurationRoute,
   DatasetsRoute: DatasetsRoute,
   EvaluationRoute: EvaluationRoute,
   ExperimentsRoute: ExperimentsRoute,
   ObservabilityRoute: ObservabilityRouteWithChildren,
+  TrainingRoute: TrainingRouteWithChildren,
   WorkflowsRoute: WorkflowsRoute,
   PromptsNameRoute: PromptsNameRoute,
   RunsRunIdRoute: RunsRunIdRoute,

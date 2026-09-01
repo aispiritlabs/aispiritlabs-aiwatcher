@@ -11,14 +11,21 @@ use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
+use aiwatcher_annotations::Registry as AnnotationRegistry;
 use aiwatcher_bus::MessageSink;
 use aiwatcher_bus::adapters::memory::InMemoryBus;
+use aiwatcher_core::engine::{
+    CatalogQuery, EngineCatalog, EngineDescription, EngineExecution, EngineParameter, EnginePhase,
+    EngineRef, EngineWorkflow, EntityKind, LaunchAccepted, LaunchRequest, ParameterKind,
+    PipelineStage, WorkflowEngine,
+};
 use aiwatcher_core::ports::{
     LivePublisher, PortError, RerunAccepted, RerunRequest, WorkflowRunner,
 };
 use aiwatcher_core::{Checkpoint, EventEnvelope, EventType, MessageId, Sdk, Source};
 use aiwatcher_datasets::Registry as DatasetRegistry;
 use aiwatcher_projector::{LiveHub, ReadModel};
+use aiwatcher_training::Registry as TrainingRegistry;
 use aiwatcher_prompts::adapters::memory::MemoryObjectStore;
 use aiwatcher_prompts::{Registry, RegistryConfig};
 
@@ -39,20 +46,27 @@ struct Fixture {
 
 impl Fixture {
     fn new(ingest_enabled: bool) -> Self {
-        Self::build(ingest_enabled, true, None, None)
+        Self::build(ingest_enabled, true, None, None, None)
     }
 
     /// An instance configured without a prompt store, which is what
     /// `AIWATCHER_PROMPT_STORE=none` produces.
     fn without_registry() -> Self {
-        Self::build(false, false, None, None)
+        Self::build(false, false, None, None, None)
     }
 
     /// An instance with a runner wired, which is what
     /// `AIWATCHER_WORKFLOW_RUNNER=http` produces. The default has none, so
     /// every other test also asserts that reruns are 501 by construction.
     fn with_runner(runner: Arc<RecordingRunner>) -> Self {
-        Self::build(false, true, Some(runner), None)
+        Self::build(false, true, Some(runner), None, None)
+    }
+
+    /// An instance with a pipeline engine wired, which is what
+    /// `AIWATCHER_ENGINE=flyte` produces. The default has none, so every other
+    /// test also asserts that the engine routes are 501 by construction.
+    fn with_engine(engine: Arc<RecordingEngine>) -> Self {
+        Self::build(false, true, None, None, Some(engine))
     }
 
     /// An instance behind an authenticating reverse proxy, which is what
@@ -60,6 +74,18 @@ impl Fixture {
     /// is the one mode that establishes a real identity with no network at
     /// all: there is no provider to discover, only headers to read.
     async fn behind_a_proxy(ingest_enabled: bool) -> Self {
+        let auth = Self::proxy_authenticator().await;
+        Self::build(ingest_enabled, true, None, Some(auth), None)
+    }
+
+    /// Both: an identity to check the role against, and an engine to reach
+    /// once the check passes.
+    async fn behind_a_proxy_with_engine(engine: Arc<RecordingEngine>) -> Self {
+        let auth = Self::proxy_authenticator().await;
+        Self::build(false, true, None, Some(auth), Some(engine))
+    }
+
+    async fn proxy_authenticator() -> Arc<Authenticator> {
         let auth = Authenticator::connect(AuthConfig {
             mode: AuthMode::Proxy,
             roles: RoleMapping::default(),
@@ -73,7 +99,7 @@ impl Fixture {
         .await
         .expect("a proxy-mode authenticator needs nothing running")
         .expect("proxy mode produces an authenticator");
-        Self::build(ingest_enabled, true, None, Some(Arc::new(auth)))
+        Arc::new(auth)
     }
 
     fn build(
@@ -81,6 +107,7 @@ impl Fixture {
         registry_enabled: bool,
         runner: Option<Arc<RecordingRunner>>,
         auth: Option<Arc<Authenticator>>,
+        engine: Option<Arc<RecordingEngine>>,
     ) -> Self {
         let bus = Arc::new(InMemoryBus::new());
         let read_model = Arc::new(ReadModel::default());
@@ -103,7 +130,20 @@ impl Fixture {
                     "datasets",
                 ))
             }),
+            annotations: registry_enabled.then(|| {
+                Arc::new(AnnotationRegistry::new(
+                    Arc::new(MemoryObjectStore::new()),
+                    "annotations",
+                ))
+            }),
+            training: registry_enabled.then(|| {
+                Arc::new(TrainingRegistry::new(
+                    Arc::new(MemoryObjectStore::new()),
+                    "training",
+                ))
+            }),
             runner: runner.map(|runner| runner as Arc<dyn WorkflowRunner>),
+            engine: engine.map(|engine| engine as Arc<dyn WorkflowEngine>),
             auth,
             health,
         };
@@ -380,6 +420,140 @@ impl WorkflowRunner for RecordingRunner {
             reference: Some("import-42".to_owned()),
             url: None,
         })
+    }
+}
+
+/// A pipeline engine that records what it was asked and answers from memory.
+///
+/// The adapter's own conversation with Flyte is covered in
+/// `aiwatcher-pipeline`; what these tests are about is the API in front of it —
+/// the role check, the 501, the minted correlation id, and the fields a body
+/// may not carry.
+#[derive(Debug, Default)]
+struct RecordingEngine {
+    catalogued: std::sync::Mutex<Vec<CatalogQuery>>,
+    launched: std::sync::Mutex<Vec<LaunchRequest>>,
+    /// Refuse the launch the way an engine refuses a bad one, or the way one
+    /// that is down fails.
+    refuse: Option<PortError>,
+    refuse_catalog: bool,
+}
+
+impl RecordingEngine {
+    fn refusing(error: PortError) -> Self {
+        Self {
+            refuse: Some(error),
+            ..Self::default()
+        }
+    }
+
+    /// An engine that will not answer a read either — a project it cannot see,
+    /// a control plane that returned something unparsable.
+    fn refusing_catalog() -> Self {
+        Self {
+            refuse_catalog: true,
+            ..Self::default()
+        }
+    }
+
+    fn catalogued(&self) -> Vec<CatalogQuery> {
+        self.catalogued.lock().expect("not poisoned").clone()
+    }
+
+    fn launched(&self) -> Vec<LaunchRequest> {
+        self.launched.lock().expect("not poisoned").clone()
+    }
+
+    fn curation() -> EngineWorkflow {
+        EngineWorkflow {
+            id: "lp:planner:production:house_dataset_curation:v7".to_owned(),
+            name: "house_dataset_curation".to_owned(),
+            project: "planner".to_owned(),
+            domain: "production".to_owned(),
+            version: "v7".to_owned(),
+            kind: EntityKind::LaunchPlan,
+            description: "Curate the house corpus".to_owned(),
+            stage_hint: Some(PipelineStage::Curation),
+            parameters: vec![EngineParameter {
+                name: "since".to_owned(),
+                kind: ParameterKind::Datetime,
+                required: true,
+                default: None,
+                description: String::new(),
+                type_name: "datetime".to_owned(),
+                enum_values: Vec::new(),
+            }],
+            active: true,
+            updated_at: None,
+            url: None,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl WorkflowEngine for RecordingEngine {
+    fn describe(&self) -> EngineDescription {
+        EngineDescription {
+            kind: "flyte".to_owned(),
+            project: "planner".to_owned(),
+            domain: "production".to_owned(),
+            console_url: Some("https://flyte.example".to_owned()),
+        }
+    }
+
+    async fn catalog(&self, query: &CatalogQuery) -> Result<EngineCatalog, PortError> {
+        self.catalogued
+            .lock()
+            .expect("not poisoned")
+            .push(query.clone());
+        if self.refuse_catalog {
+            return Err(PortError::Rejected {
+                target: "flyte",
+                message: "403: no access to that project".to_owned(),
+            });
+        }
+        Ok(EngineCatalog {
+            workflows: vec![Self::curation()],
+            next_token: None,
+        })
+    }
+
+    async fn workflow(&self, reference: &EngineRef) -> Result<Option<EngineWorkflow>, PortError> {
+        Ok((reference.name == "house_dataset_curation").then(Self::curation))
+    }
+
+    async fn launch(&self, request: LaunchRequest) -> Result<LaunchAccepted, PortError> {
+        let workflow_run_id = request.workflow_run_id.clone();
+        self.launched.lock().expect("not poisoned").push(request);
+        if let Some(error) = &self.refuse {
+            return Err(match error {
+                PortError::Unavailable { target, message } => PortError::Unavailable {
+                    target,
+                    message: message.clone(),
+                },
+                other => PortError::Rejected {
+                    target: "workflow-engine",
+                    message: other.to_string(),
+                },
+            });
+        }
+        Ok(LaunchAccepted {
+            reference: "planner:production:a018f3a2b7c417b3e9d5".to_owned(),
+            url: Some("https://flyte.example/console/x".to_owned()),
+            workflow_run_id,
+        })
+    }
+
+    async fn execution(&self, reference: &str) -> Result<Option<EngineExecution>, PortError> {
+        Ok(Some(EngineExecution {
+            reference: reference.to_owned(),
+            phase: EnginePhase::Running,
+            message: String::new(),
+            workflow: None,
+            started_at: None,
+            url: None,
+            workflow_run_id: None,
+        }))
     }
 }
 
@@ -1738,4 +1912,565 @@ async fn a_producer_publishes_with_a_token_and_still_cannot_rerun() {
         )
         .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+// ── The pipeline engine ──────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn the_engine_routes_say_this_instance_has_no_orchestrator() {
+    // 501, not 404 and not an empty list: a client has to be able to tell
+    // "this deployment has no orchestrator" from "the orchestrator has nothing
+    // to run". Different problems, different fixes, and only one of them is
+    // fixed by setting a variable — which the message names.
+    let fixture = Fixture::new(false);
+    for uri in [
+        "/api/v1/engine",
+        "/api/v1/engine/workflows",
+        "/api/v1/engine/workflows/lp:planner:production:x:v1",
+        "/api/v1/engine/launches/planner:production:abc",
+    ] {
+        let (status, body) = fixture.get(uri).await;
+        assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{uri}: {body}");
+        assert_eq!(body["code"], "engine_disabled");
+        assert!(
+            body["message"]
+                .as_str()
+                .expect("a message")
+                .contains("AIWATCHER_ENGINE"),
+            "the message has to name the variable: {body}"
+        );
+    }
+
+    let (status, body) = fixture
+        .post(
+            "/api/v1/engine/launches",
+            json!({ "workflow": "lp:p:d:n:v" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{body}");
+}
+
+#[tokio::test]
+async fn the_catalog_carries_the_search_the_stage_and_the_window_of_a_page() {
+    let engine = Arc::new(RecordingEngine::default());
+    let fixture = Fixture::with_engine(Arc::clone(&engine));
+
+    let (status, body) = fixture
+        .get("/api/v1/engine/workflows?search=curation&stage=curation&limit=5")
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["workflows"][0]["id"],
+        "lp:planner:production:house_dataset_curation:v7"
+    );
+    // The declared inputs reach the panel typed, which is what turns "set the
+    // metadata" into a form rather than a JSON box.
+    assert_eq!(body["workflows"][0]["parameters"][0]["kind"], "datetime");
+    assert_eq!(body["workflows"][0]["stage_hint"], "curation");
+
+    let seen = engine.catalogued();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].search.as_deref(), Some("curation"));
+    assert_eq!(seen[0].stage, Some(PipelineStage::Curation));
+    assert_eq!(seen[0].limit, 5);
+}
+
+#[tokio::test]
+async fn a_stage_that_is_not_one_is_a_400_rather_than_a_silent_no_filter() {
+    // A misspelled filter that quietly returns everything is how somebody
+    // launches the wrong thing off the wrong list.
+    let fixture = Fixture::with_engine(Arc::new(RecordingEngine::default()));
+    let (status, body) = fixture.get("/api/v1/engine/workflows?stage=trainig").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "bad_request");
+}
+
+#[tokio::test]
+async fn a_reference_that_could_be_a_path_never_reaches_the_engine() {
+    let fixture = Fixture::with_engine(Arc::new(RecordingEngine::default()));
+    let (status, body) = fixture
+        .get("/api/v1/engine/workflows/lp:planner:production:..")
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+}
+
+#[tokio::test]
+async fn a_launch_is_accepted_and_mints_the_id_the_panel_will_follow() {
+    let engine = Arc::new(RecordingEngine::default());
+    let fixture = Fixture::with_engine(Arc::clone(&engine));
+
+    let (status, body) = fixture
+        .post(
+            "/api/v1/engine/launches",
+            json!({
+                "workflow": "lp:planner:production:house_dataset_curation:v7",
+                "inputs": { "since": "2026-08-30T00:00:00Z", "dataset": "evaluation/sessions" }
+            }),
+        )
+        .await;
+
+    // 202: nothing has run yet, and what comes back is an acknowledgement.
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(body["reference"], "planner:production:a018f3a2b7c417b3e9d5");
+
+    let launched = engine.launched();
+    assert_eq!(launched.len(), 1);
+    assert_eq!(launched[0].inputs["dataset"], "evaluation/sessions");
+
+    // The id is minted here rather than in the adapter, because the caller
+    // needs it in the response to subscribe to a stream for work that has not
+    // started. It must also be usable as a Kubernetes label.
+    let minted = body["workflow_run_id"].as_str().expect("an id comes back");
+    assert_eq!(launched[0].workflow_run_id.as_deref(), Some(minted));
+    assert!(
+        minted.len() <= 63 && minted.chars().all(|c| c.is_ascii_alphanumeric()),
+        "{minted}"
+    );
+}
+
+#[tokio::test]
+async fn a_launch_may_carry_an_id_the_producer_already_knows() {
+    let engine = Arc::new(RecordingEngine::default());
+    let fixture = Fixture::with_engine(Arc::clone(&engine));
+    let (status, body) = fixture
+        .post(
+            "/api/v1/engine/launches",
+            json!({
+                "workflow": "lp:planner:production:house_dataset_curation:v7",
+                "workflow_run_id": "018f3a2b7c417b3e9d552f6a1c0b8e77"
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(body["workflow_run_id"], "018f3a2b7c417b3e9d552f6a1c0b8e77");
+    assert_eq!(
+        engine.launched()[0].workflow_run_id.as_deref(),
+        Some("018f3a2b7c417b3e9d552f6a1c0b8e77")
+    );
+}
+
+#[tokio::test]
+async fn a_launch_body_naming_its_own_endpoint_is_refused() {
+    // The same rule as the rerun's, for the same reason: aiwatcher runs inside
+    // the cluster, so "POST this url" is a request to reach the cluster's
+    // network on the caller's behalf. `deny_unknown_fields` makes the attempt
+    // a rejection rather than a field that is ignored and reads as accepted —
+    // 422 from axum's own JSON extractor, as on the rerun.
+    let engine = Arc::new(RecordingEngine::default());
+    let fixture = Fixture::with_engine(Arc::clone(&engine));
+    let (status, body) = fixture
+        .post(
+            "/api/v1/engine/launches",
+            json!({
+                "workflow": "lp:planner:production:house_dataset_curation:v7",
+                "endpoint": "http://169.254.169.254/latest/meta-data/"
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert!(engine.launched().is_empty(), "nothing may be dispatched");
+}
+
+#[tokio::test]
+async fn a_refused_launch_is_the_callers_problem_and_an_engine_that_is_down_is_not() {
+    // The distinction that decides where the message goes. A launch the engine
+    // refused is the *request* being wrong — an undeclared input, a date that
+    // will not parse — so it is a 400 whose message belongs beside a form
+    // field. Answering 502 would tell somebody who mistyped a timestamp that
+    // the gateway is broken.
+    let rejected = Fixture::with_engine(Arc::new(RecordingEngine::refusing(PortError::Rejected {
+        target: "flyte",
+        message: "since expects an RFC 3339 timestamp".to_owned(),
+    })));
+    let (status, body) = rejected
+        .post(
+            "/api/v1/engine/launches",
+            json!({ "workflow": "lp:p:d:n:v" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["code"], "launch_refused");
+    assert!(
+        body["message"]
+            .as_str()
+            .expect("a message")
+            .contains("RFC 3339"),
+        "the engine's own words are what a form shows: {body}"
+    );
+
+    // An engine that is down is nobody's request being wrong, and it is worth
+    // trying again — which is the whole reason the port classifies at all.
+    let unavailable = Fixture::with_engine(Arc::new(RecordingEngine::refusing(
+        PortError::Unavailable {
+            target: "flyte",
+            message: "connection refused".to_owned(),
+        },
+    )));
+    let (status, body) = unavailable
+        .post(
+            "/api/v1/engine/launches",
+            json!({ "workflow": "lp:p:d:n:v" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(body["code"], "engine_unavailable");
+}
+
+#[tokio::test]
+async fn a_catalog_the_engine_would_not_serve_is_still_a_gateway_failure() {
+    // Reading is not launching: nothing the caller wrote is wrong here, so the
+    // 400 above would be blaming them for the orchestrator's answer.
+    let fixture = Fixture::with_engine(Arc::new(RecordingEngine::refusing_catalog()));
+    let (status, body) = fixture.get("/api/v1/engine/workflows").await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
+    assert_eq!(body["code"], "engine_rejected");
+}
+
+#[tokio::test]
+async fn only_an_admin_may_launch_and_an_editor_may_still_browse() {
+    // Reading the catalog is reading. Starting something is the one class of
+    // action that reaches outside aiwatcher, and it is capped at admin for the
+    // same reason the rerun is — an ingest token is never more than an editor.
+    let engine = Arc::new(RecordingEngine::default());
+    let fixture = Fixture::behind_a_proxy_with_engine(Arc::clone(&engine)).await;
+
+    let (status, body) = fixture
+        .post_as(
+            "/api/v1/engine/launches",
+            "bob",
+            "aiwatcher-editors",
+            json!({ "workflow": "lp:planner:production:house_dataset_curation:v7" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert!(engine.launched().is_empty());
+
+    let (status, body) = fixture
+        .post_as(
+            "/api/v1/engine/launches",
+            "alice",
+            "aiwatcher-admins",
+            json!({ "workflow": "lp:planner:production:house_dataset_curation:v7" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(engine.launched().len(), 1);
+}
+
+// ── Annotations ──────────────────────────────────────────────────────────────
+
+const ANNOTATION_PROJECT: &str = "floor-plans/dom-projekt";
+
+/// A well-formed 64-character lowercase SHA-256, without hashing anything.
+fn fake_image_id(seed: &str) -> String {
+    let mut id = String::new();
+    while id.len() < 64 {
+        id.push_str(seed);
+    }
+    id.truncate(64);
+    id
+}
+
+fn floor_plan_project() -> Value {
+    json!({
+        "name": ANNOTATION_PROJECT,
+        "description": "Catalogue plans",
+        "classes": aiwatcher_annotations::floor_plan_classes(),
+        "split_salt": "2026-09",
+    })
+}
+
+fn registered_image(image_id: &str) -> Value {
+    json!({
+        "project": ANNOTATION_PROJECT,
+        "image_id": image_id,
+        "uri": format!("{}{image_id}", aiwatcher_annotations::BLOB_SCHEME),
+        "width": 1064,
+        "height": 1021,
+        "group_id": "komancza-dws",
+        "source": "dom-projekt",
+        "rights": { "kind": "owned", "grant": "supplier agreement" },
+    })
+}
+
+#[tokio::test]
+async fn every_annotation_route_answers_501_when_no_object_store_is_configured() {
+    // The same shape as the prompt and dataset registries: the routes exist in
+    // the contract, and this deployment wired no store behind them. A 404
+    // would say they do not exist, which sends somebody looking for a missing
+    // release rather than a missing variable.
+    let fixture = Fixture::without_registry();
+    for uri in [
+        "/api/v1/annotation-projects",
+        "/api/v1/annotation-project?name=x",
+        "/api/v1/annotation-images?project=x",
+        "/api/v1/annotation-exports?name=x",
+    ] {
+        let (status, body) = fixture.get(uri).await;
+        assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{uri}: {body}");
+        assert_eq!(body["code"], json!("registry_disabled"));
+        assert!(
+            body["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("AIWATCHER_PROMPT_STORE")),
+            "the message names the variable to set: {body}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_source_catalogue_answers_without_an_object_store_because_it_is_a_table() {
+    // It is shipped data, not stored data. An instance with no registry can
+    // still tell somebody which corpora exist and which of them a commercial
+    // model may use.
+    let fixture = Fixture::without_registry();
+    let (status, body) = fixture
+        .get("/api/v1/annotation-sources?usage=non_commercial")
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let sources = body["sources"].as_array().expect("sources");
+    assert!(!sources.is_empty());
+    assert!(
+        sources
+            .iter()
+            .all(|source| source["usage"] == json!("non_commercial"))
+    );
+    assert!(body["total"].as_u64().expect("total") > sources.len() as u64);
+    assert!(
+        !body["directories"]
+            .as_array()
+            .expect("directories")
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn a_viewer_may_read_a_project_and_may_not_draw_on_it() {
+    let fixture = Fixture::behind_a_proxy(false).await;
+    let (status, body) = fixture
+        .post_as(
+            "/api/v1/annotation-projects",
+            "alice",
+            "aiwatcher-editors",
+            floor_plan_project(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["name"], json!(ANNOTATION_PROJECT));
+    let schema_version = body["schema"]["version"].as_str().expect("a version");
+    assert_eq!(schema_version.len(), 64);
+
+    let (status, body) = fixture
+        .get_as("/api/v1/annotation-projects", "bob", "aiwatcher-viewers")
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["projects"].as_array().expect("projects").len(), 1);
+
+    let (status, body) = fixture
+        .post_as(
+            "/api/v1/annotation-projects",
+            "bob",
+            "aiwatcher-viewers",
+            floor_plan_project(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+}
+
+#[tokio::test]
+async fn a_refused_drawing_is_a_422_carrying_every_problem_rather_than_the_first() {
+    // The whole reason `ErrorBody::details` exists. A labeller fixing one
+    // error per round trip stops using the tool.
+    let fixture = Fixture::behind_a_proxy(false).await;
+    let image_id = fake_image_id("ab");
+    fixture
+        .post_as(
+            "/api/v1/annotation-projects",
+            "alice",
+            "aiwatcher-editors",
+            floor_plan_project(),
+        )
+        .await;
+    let (status, body) = fixture
+        .post_as(
+            "/api/v1/annotation-images",
+            "alice",
+            "aiwatcher-editors",
+            registered_image(&image_id),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let (status, body) = fixture
+        .post_as(
+            "/api/v1/annotation-revisions",
+            "alice",
+            "aiwatcher-editors",
+            json!({
+                "project": ANNOTATION_PROJECT,
+                "image_id": image_id,
+                "annotations": [
+                    {
+                        "id": "wall_1",
+                        "class": "wall",
+                        "geometry": { "kind": "polyline", "points": [[10.0, 10.0], [400.0, 10.0]] },
+                        "attributes": { "role": "bearing" }
+                    },
+                    {
+                        "id": "thing_1",
+                        "class": "chimney",
+                        "geometry": { "kind": "point", "at": [5.0, 5.0] }
+                    }
+                ]
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(body["code"], json!("annotation_rejected"));
+    let details = body["details"].as_array().expect("details");
+    assert!(details.len() >= 3, "{body}");
+    let joined = details
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>()
+        .join(" | ");
+    assert!(joined.contains("thickness_px"), "{joined}");
+    assert!(joined.contains("bearing"), "{joined}");
+    assert!(joined.contains("chimney"), "{joined}");
+}
+
+#[tokio::test]
+async fn a_drawing_saved_accepted_reaches_an_export_and_its_coco() {
+    let fixture = Fixture::behind_a_proxy(false).await;
+    let image_id = fake_image_id("cd");
+    fixture
+        .post_as(
+            "/api/v1/annotation-projects",
+            "alice",
+            "aiwatcher-editors",
+            floor_plan_project(),
+        )
+        .await;
+    fixture
+        .post_as(
+            "/api/v1/annotation-images",
+            "alice",
+            "aiwatcher-editors",
+            registered_image(&image_id),
+        )
+        .await;
+
+    let (status, body) = fixture
+        .post_as(
+            "/api/v1/annotation-revisions",
+            "alice",
+            "aiwatcher-editors",
+            json!({
+                "project": ANNOTATION_PROJECT,
+                "image_id": image_id,
+                "accept": true,
+                "annotations": [{
+                    "id": "space_1",
+                    "class": "space",
+                    "geometry": {
+                        "kind": "polygon",
+                        "exterior": [[0.0, 0.0], [100.0, 0.0], [100.0, 50.0], [0.0, 50.0]]
+                    },
+                    "attributes": { "printed_area_m2": 49.01 }
+                }]
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["head"]["review"], json!("accepted"));
+    // Provenance comes from the caller, never from the body.
+    assert_eq!(body["revision"]["author"], json!("alice"));
+
+    let (status, body) = fixture
+        .post_as(
+            "/api/v1/annotation-exports",
+            "alice",
+            "aiwatcher-editors",
+            json!({ "project": ANNOTATION_PROJECT, "note": "first cut" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let export = body["manifest"]["export"].as_str().expect("an export id");
+    assert_eq!(body["manifest"]["counts"]["images"], json!(1));
+
+    let (status, body) = fixture
+        .get_as(
+            &format!("/api/v1/annotation-export/coco?project={ANNOTATION_PROJECT}&export={export}"),
+            "bob",
+            "aiwatcher-viewers",
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["info"]["aiwatcher"]["export"], json!(export));
+    assert_eq!(
+        body["annotations"].as_array().expect("annotations").len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn an_uploaded_image_comes_back_under_the_digest_the_server_computed() {
+    let fixture = Fixture::behind_a_proxy(false).await;
+    let png = b"\x89PNG\r\n\x1a\nnot really a png".to_vec();
+    let response = fixture
+        .router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/annotation-blobs")
+                .header(header::CONTENT_TYPE, "image/png")
+                .header("x-authentik-username", "alice")
+                .header("x-authentik-groups", "aiwatcher-editors")
+                .body(Body::from(png.clone()))
+                .expect("request"),
+        )
+        .await
+        .expect("responds");
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let bytes = response
+        .into_body()
+        .collect()
+        .await
+        .expect("collects")
+        .to_bytes();
+    let stored: Value = serde_json::from_slice(&bytes).expect("json");
+    let image_id = stored["image_id"].as_str().expect("an image id");
+    assert_eq!(image_id.len(), 64);
+    assert_eq!(
+        stored["uri"],
+        json!(format!("{}{image_id}", aiwatcher_annotations::BLOB_SCHEME))
+    );
+
+    let response = fixture
+        .router()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v1/annotation-blobs/{image_id}"))
+                .header("x-authentik-username", "bob")
+                .header("x-authentik-groups", "aiwatcher-viewers")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("responds");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("image/png")
+    );
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("collects")
+        .to_bytes();
+    assert_eq!(body.as_ref(), png.as_slice());
 }

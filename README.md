@@ -187,8 +187,8 @@ Every view below, with screenshots of it against real data and what each one is
 for: [EXAMPLES.md](EXAMPLES.md).
 
 The product areas are served from aiwatcher's own read model — except authored
-artifacts such as Prompts and Datasets, which
-reads the registry. Every one of them carries the same time window — 15m, 1h,
+artifacts such as Prompts, Datasets and Annotations, which
+read the registry. Every one of them carries the same time window — 15m, 1h,
 6h, 24h, 7d or everything — in the URL, so a link carries the period with it,
 and a run is in the window when it was last *heard from* rather than when it
 started:
@@ -225,12 +225,35 @@ started:
   in lazy 50-row slices, search runs across the whole version, and tabs show
   every linked evaluation plus the Flow PHP lineage. Evaluations should pin the
   exact reference as `dataset-name@version-sha256`.
-- **Data Curation** — saved Flow PHP recipes with four explicit stages: test
-  without reading, simulate 25 rows, execute the full bounded result, and save
-  that exact output as a dataset version.
+- **Data Curation** — two ways to produce a dataset, on one page. Either write
+  the transformation in Flow PHP with four explicit stages — test without
+  reading, simulate 25 rows, execute the full bounded result, save that exact
+  output as a version — or pick a curation workflow the orchestrator already
+  holds and set only what, where, which rows and over what period. The second
+  is a form rendered from the launch plan's own declared inputs, with the
+  page's time window and dataset name already filled in.
+- **Annotations** — the labelling tool, and the two things around it. **Label**
+  is a canvas over a plan: polygons for rooms, polylines with a thickness for
+  wall centrelines, named keypoints for a door's opening, hinge and leaf, typed
+  attributes for what a shape says about itself, and links between instances so
+  an opening knows which wall it sits on and which two rooms it connects. A
+  drawing the registry refuses comes back with *every* problem at once, drawn
+  red on the shapes that caused them. **Sources** is a dated table of the public
+  floor-plan corpora — what each labels, and whether its licence permits a
+  commercial model — with the filter that matters as one click. **Exports**
+  freezes the project into an immutable manifest whose id is the string a
+  training run records, lists every image it left out with the reason, and
+  serves COCO per split. The split key is the *building*, not the image, so a
+  plan's mirror never lands on the opposite side from the plan.
+- **Experiments** — the same picker over training, evaluation and inference
+  workflows: the other three legs of the feature/training/inference cycle,
+  started from here and watched in Workflows. The comparison half of the area
+  is still a placeholder that says what it is waiting on rather than rendering
+  plausible fake rows.
 
-Experiments is still a placeholder and says what it is waiting on rather than
-rendering plausible fake rows.
+Launching needs the `admin` role, exactly as a rerun does, and an instance with
+no orchestrator configured says which variable is unset rather than showing an
+empty catalog.
 
 ## The Laser backend
 
@@ -265,6 +288,8 @@ In dependency order. A crate may only depend on ones above it.
 | `aiwatcher-bus` | `MessageSource` / `MessageSink` / `Checkpointer` + memory, write-ahead-log, Laser and generic-broker adapters |
 | `aiwatcher-trace` | `SpanAssembler` and the OTLP/JSON exporters |
 | `aiwatcher-prompts` | The prompt registry over an `ObjectStore` port: content-addressed versions, optimisation verdicts, RustFS/S3 and filesystem adapters, and a hand-written SigV4 signer |
+| `aiwatcher-annotations` | Vector image annotations over the same `ObjectStore` port: label schemas, content-addressed revisions, review state, the family-keyed split, immutable training exports and COCO, plus a dated table of public floor-plan corpora and their licences |
+| `aiwatcher-pipeline` | Pipeline engines behind a `WorkflowEngine` port: an orchestrator's launchable catalog, the inputs each entry declares, and starting one. Flyte 2 over its `/api/v1/` gateway |
 | `aiwatcher-auth` | Single sign-on: OIDC discovery, a JWKS cache, the authorization-code flow with PKCE, signed session cookies, authentik's forward-auth headers, group-to-role mapping |
 | `aiwatcher-projector` | The pipeline, live hub, read model, dimension and span folds, dedup, retry, dead letters |
 | `aiwatcher-api` | axum router: REST, SSE, WebSocket, OpenAPI |
@@ -317,6 +342,30 @@ that matters in every one of them is what would make the decision wrong.
   a per-pod orchestrator scatters across four runs. That is what makes a stage
   nothing has started drawable, and what makes swapping the orchestrator a
   change aiwatcher never notices.
+- **An annotation is vector-first, and split by family**
+  ([0017](docs/ADR/ADR_0017_IMAGE_ANNOTATION.md)). A mask cannot say which wall
+  an opening sits on or which way a door swings, so the shape is the source and
+  every raster is derived. The split key is the building rather than the image,
+  because a catalogue plan, its mirror and its garage variant are four
+  renderings of one house and splitting them apart measures memorisation. Usage
+  rights are required, and an export excludes what fails its policy by name —
+  the best public corpora are non-commercial, and that failure shows up in a
+  legal review rather than in a metric.
+- **A training run rides the log; an epoch is a point, a step is a count**
+  ([0018](docs/ADR/ADR_0018_TRAINING_RUNS.md)). `train.*` is one span and one
+  row in the runs list, and the model version an agent run used is then
+  traceable back to the export it was trained on. Two hundred epochs are two
+  hundred points on a curve rather than two hundred bars in a waterfall, a step
+  never reaches the log at all, and a profiler session arrives as a summary and
+  a link rather than as fifty thousand spans.
+
+- **The orchestrator is read for its inventory, never for its history**
+  ([0016](docs/ADR/ADR_0016_PIPELINE_ENGINE.md)). Nothing publishes an event
+  about a workflow nobody has run, and no event carries an input interface — so
+  `/api/v1/engine` asks Flyte what it could start while `/api/v1/workflows`
+  still folds what has run. A launch binds its inputs to the types the engine
+  declares at that moment, always pins a version, and carries an id the panel
+  can stream before anything has published.
 
 The full index, including trace storage and the local-Kubernetes guards, is in
 [docs/ADR/README.md](docs/ADR/README.md).
@@ -374,6 +423,7 @@ just check         # everything CI runs; green here means green there
 just test          # cargo test --workspace --all-targets
 just test-one PAT  # one test by name, e.g. `just test-one two_parallel`
 just openapi       # regenerate contracts/openapi.json and the panel's client
+just seed-annotations  # six synthetic plans, three families, an export, a training run
 just stack-up      # docker compose: VictoriaTraces, VictoriaMetrics, Collector, Grafana
 just tilt-up       # the same stack on a local Kubernetes, rebuilt on save
 just flow-check    # the PHP query service's own gate — `just check` excludes it

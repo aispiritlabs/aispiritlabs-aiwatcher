@@ -6,6 +6,8 @@ import {
   FlaskConical,
   LineChart,
   ScrollText,
+  Shapes,
+  Sigma,
   Sparkles,
   WandSparkles,
   Workflow,
@@ -14,7 +16,7 @@ import {
 import { UserMenu } from '@/components/user-menu';
 
 /**
- * Seven areas, not a flat list of every page.
+ * Nine areas, not a flat list of every page.
  *
  * The header used to list every route side by side, which worked while there
  * was one product area. There are six now — watching runs, watching the
@@ -49,6 +51,13 @@ const AREAS = [
   { to: '/prompts', label: 'Prompts', icon: ScrollText },
   { to: '/datasets', label: 'Datasets', icon: Database },
   { to: '/data-curation', label: 'Data Curation', icon: WandSparkles },
+  // Between curating and experimenting: an annotation export is the other kind
+  // of training input — authored rather than folded, and outside retention.
+  { to: '/annotations', label: 'Annotations', icon: Shapes },
+  // And the thing those annotations are for. Its own area rather than a tab
+  // inside Experiments, because a training run reads nothing folded from the
+  // log and shares no machinery with anything above it — see ADR_0018.
+  { to: '/training', label: 'Training', icon: Sigma },
   { to: '/experiments', label: 'Experiments', icon: Sparkles },
 ] as const;
 

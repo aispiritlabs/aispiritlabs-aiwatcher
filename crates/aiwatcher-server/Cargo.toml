@@ -24,8 +24,11 @@ laser = ["aiwatcher-bus/laser"]
 [dependencies]
 aiwatcher-core.workspace = true
 aiwatcher-bus.workspace = true
+aiwatcher-annotations.workspace = true
+aiwatcher-training.workspace = true
 aiwatcher-datasets.workspace = true
 aiwatcher-trace.workspace = true
+aiwatcher-pipeline.workspace = true
 aiwatcher-projector.workspace = true
 aiwatcher-prompts.workspace = true
 aiwatcher-runner.workspace = true
@@ -44,6 +47,13 @@ tower-http.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 utoipa.workspace = true
+
+[dev-dependencies]
+# A real socket on both sides: the test drives aiwatcher over HTTP and
+# aiwatcher reaches the stand-in control plane over HTTP. Anything less would
+# stop being end to end at the first seam that has ever broken.
+reqwest.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]
 workspace = true

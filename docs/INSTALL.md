@@ -354,6 +354,53 @@ If the service already runs somewhere this chart does not manage, point at it
 with `panel.flowUpstream` instead and leave `flow.enabled` off. That field wins
 over `flow.enabled` when both are set.
 
+## The pipeline engine
+
+Off by default, and for a sharper reason than the Query tab: this is what lets
+somebody in the panel start work in another system. Everything else aiwatcher
+does is a read.
+
+```bash
+helm upgrade aiwatcher deploy/helm/aiwatcher -n planner \
+  -f deploy/environments/planner.yaml \
+  --set engine.mode=flyte \
+  --set engine.flyte.endpoint=http://flyteadmin.flyte:80 \
+  --set engine.flyte.project=planner \
+  --set engine.flyte.domain=production \
+  --set engine.flyte.consoleUrl=https://flyte.example.com
+```
+
+What that gets you is a picker over Flyte's registered launch plans in Data
+Curation and Experiments, a form built from each one's declared inputs, and
+`POST /api/v1/engine/launches`. Four things matter at install time.
+
+**The endpoint is in-cluster; the console is not.** `engine.flyte.endpoint` is
+the flyteadmin Service, which is what aiwatcher's pod can reach.
+`engine.flyte.consoleUrl` is the host a browser can reach, used only to build
+links. They are usually different addresses and setting one to the other is the
+common mistake — the symptom is either a catalog that cannot load or links that
+404.
+
+**Launching is `admin`.** The only other route with that requirement is the
+rerun. An ingest token is capped at editor precisely so that a leaked agent
+environment cannot start a training run, so do not hand out admin to producers.
+
+**Credentials are all-or-nothing.** Either a pre-issued bearer under the
+secret's `token` key, or a service account — `clientId`, `tokenUrl` and the
+secret's `clientSecret` together. Half a credential fails the render rather
+than the first request. The token endpoint is configured rather than
+discovered: taking it from a document the control plane serves would hand the
+choice of who mints aiwatcher's credentials to whoever answered.
+
+**No NetworkPolicy rule is added for it.** Same reasoning as the object store's:
+a policy attached to pods nothing already fences narrows them from "accepts
+everything" to "accepts aiwatcher only", and for a control plane that would cut
+off everybody. If egress is restricted in your namespace, add the rule where
+the rest of that policy lives.
+
+Set `engine.rerun=engine` to send the Workflows tab's rerun through the same
+connection instead of a webhook.
+
 ## Replacing MLflow
 
 Install aiwatcher before deploying the Planner cutover. Planner no longer runs

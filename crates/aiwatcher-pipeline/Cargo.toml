@@ -1,0 +1,25 @@
+[package]
+name = "aiwatcher-pipeline"
+description = "Pipeline engines behind core's WorkflowEngine port: the launchable catalog, its input interface, and starting one. Flyte 2 today."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+aiwatcher-core.workspace = true
+async-trait.workspace = true
+reqwest = { workspace = true, features = ["form", "query"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread"] }
+
+[lints]
+workspace = true

@@ -58,15 +58,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "aiwatcher-annotations"
+version = "0.1.0"
+dependencies = [
+ "aiwatcher-core",
+ "aiwatcher-prompts",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "time",
+ "tokio",
+ "utoipa",
+]
+
+[[package]]
 name = "aiwatcher-api"
 version = "0.1.0"
 dependencies = [
+ "aiwatcher-annotations",
  "aiwatcher-auth",
  "aiwatcher-bus",
  "aiwatcher-core",
  "aiwatcher-datasets",
  "aiwatcher-projector",
  "aiwatcher-prompts",
+ "aiwatcher-training",
  "async-trait",
  "axum",
  "futures",
@@ -82,6 +100,7 @@ dependencies = [
  "tracing",
  "utoipa",
  "utoipa-axum",
+ "uuid",
 ]
 
 [[package]]
@@ -152,6 +171,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "aiwatcher-pipeline"
+version = "0.1.0"
+dependencies = [
+ "aiwatcher-core",
+ "async-trait",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "time",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "aiwatcher-projector"
 version = "0.1.0"
 dependencies = [
@@ -207,18 +241,22 @@ dependencies = [
 name = "aiwatcher-server"
 version = "0.1.0"
 dependencies = [
+ "aiwatcher-annotations",
  "aiwatcher-api",
  "aiwatcher-auth",
  "aiwatcher-bus",
  "aiwatcher-core",
  "aiwatcher-datasets",
+ "aiwatcher-pipeline",
  "aiwatcher-projector",
  "aiwatcher-prompts",
  "aiwatcher-runner",
  "aiwatcher-trace",
+ "aiwatcher-training",
  "anyhow",
  "async-trait",
  "axum",
+ "reqwest",
  "serde",
  "serde_json",
  "thiserror",
@@ -244,6 +282,22 @@ dependencies = [
  "time",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "aiwatcher-training"
+version = "0.1.0"
+dependencies = [
+ "aiwatcher-core",
+ "aiwatcher-prompts",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "time",
+ "tokio",
+ "utoipa",
 ]
 
 [[package]]

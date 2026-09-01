@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { AuthConfigData, AuthConfigResponses, CallbackData, GetDatasetRowsData, GetDatasetRowsErrors, GetDatasetRowsResponses, GetEvaluationData, GetEvaluationErrors, GetEvaluationResponses, GetMetricsData, GetMetricsResponses, GetOptimizationData, GetOptimizationErrors, GetOptimizationResponses, GetPromptData, GetPromptErrors, GetPromptResponses, GetPromptVersionData, GetPromptVersionErrors, GetPromptVersionResponses, GetRunData, GetRunErrors, GetRunEventsData, GetRunEventsErrors, GetRunEventsResponses, GetRunResponses, GetWorkflowData, GetWorkflowErrors, GetWorkflowExecutionData, GetWorkflowExecutionErrors, GetWorkflowExecutionResponses, GetWorkflowResponses, IngestData, IngestErrors, IngestResponses, ListConversationsData, ListConversationsResponses, ListDatasetsData, ListDatasetsErrors, ListDatasetsResponses, ListDimensionData, ListDimensionErrors, ListDimensionResponses, ListEvaluationsData, ListEvaluationsResponses, ListEvaluationSuitesData, ListEvaluationSuitesResponses, ListPromptsData, ListPromptsErrors, ListPromptsResponses, ListRecipesData, ListRecipesErrors, ListRecipesResponses, ListRunsData, ListRunsResponses, ListSpansData, ListSpansResponses, ListWorkflowExecutionsData, ListWorkflowExecutionsResponses, ListWorkflowsData, ListWorkflowsResponses, LiveWebsocketData, LivezData, LivezResponses, LoginData, LoginErrors, LogoutData, LogoutResponses, MeData, MeErrors, MeResponses, PublishDatasetData, PublishDatasetErrors, PublishDatasetResponses, PublishPromptData, PublishPromptErrors, PublishPromptResponses, ReadyzData, ReadyzErrors, ReadyzResponses, RebuildPromptData, RebuildPromptErrors, RebuildPromptResponses, RecordOptimizationData, RecordOptimizationErrors, RecordOptimizationResponses, RerunWorkflowData, RerunWorkflowErrors, RerunWorkflowResponses, SaveRecipeData, SaveRecipeErrors, SaveRecipeResponses, SetPromptLabelData, SetPromptLabelErrors, SetPromptLabelResponses, StreamEventsData, StreamEventsResponses, StreamRunData, StreamRunResponses, StreamWorkflowExecutionData, StreamWorkflowExecutionResponses } from './types.gen';
+import type { AuthConfigData, AuthConfigResponses, BuildExportData, BuildExportErrors, BuildExportResponses, CallbackData, DescribeEngineData, DescribeEngineErrors, DescribeEngineResponses, FinishTrainingRunData, FinishTrainingRunErrors, FinishTrainingRunResponses, GetBlobData, GetBlobErrors, GetBlobResponses, GetDatasetRowsData, GetDatasetRowsErrors, GetDatasetRowsResponses, GetEngineWorkflowData, GetEngineWorkflowErrors, GetEngineWorkflowResponses, GetEvaluationData, GetEvaluationErrors, GetEvaluationResponses, GetExportCocoData, GetExportCocoErrors, GetExportCocoResponses, GetExportData, GetExportErrors, GetExportResponses, GetImageData, GetImageErrors, GetImageResponses, GetLaunchData, GetLaunchErrors, GetLaunchResponses, GetMetricsData, GetMetricsResponses, GetModelData, GetModelErrors, GetModelResponses, GetOptimizationData, GetOptimizationErrors, GetOptimizationResponses, GetProjectData, GetProjectErrors, GetProjectResponses, GetPromptData, GetPromptErrors, GetPromptResponses, GetPromptVersionData, GetPromptVersionErrors, GetPromptVersionResponses, GetRunData, GetRunErrors, GetRunEventsData, GetRunEventsErrors, GetRunEventsResponses, GetRunResponses, GetTrainingRunData, GetTrainingRunErrors, GetTrainingRunResponses, GetWorkflowData, GetWorkflowErrors, GetWorkflowExecutionData, GetWorkflowExecutionErrors, GetWorkflowExecutionResponses, GetWorkflowResponses, IngestData, IngestErrors, IngestResponses, LaunchWorkflowData, LaunchWorkflowErrors, LaunchWorkflowResponses, ListConversationsData, ListConversationsResponses, ListDatasetsData, ListDatasetsErrors, ListDatasetsResponses, ListDimensionData, ListDimensionErrors, ListDimensionResponses, ListEngineWorkflowsData, ListEngineWorkflowsErrors, ListEngineWorkflowsResponses, ListEvaluationsData, ListEvaluationsResponses, ListEvaluationSuitesData, ListEvaluationSuitesResponses, ListExportsData, ListExportsErrors, ListExportsResponses, ListImagesData, ListImagesErrors, ListImagesResponses, ListModelsData, ListModelsErrors, ListModelsResponses, ListPresetsData, ListPresetsResponses, ListProjectsData, ListProjectsErrors, ListProjectsResponses, ListPromptsData, ListPromptsErrors, ListPromptsResponses, ListRecipesData, ListRecipesErrors, ListRecipesResponses, ListRunsData, ListRunsResponses, ListSourcesData, ListSourcesResponses, ListSpansData, ListSpansResponses, ListTrainingRunsData, ListTrainingRunsErrors, ListTrainingRunsResponses, ListWorkflowExecutionsData, ListWorkflowExecutionsResponses, ListWorkflowsData, ListWorkflowsResponses, LiveWebsocketData, LivezData, LivezResponses, LoginData, LoginErrors, LogoutData, LogoutResponses, MeData, MeErrors, MeResponses, PublishDatasetData, PublishDatasetErrors, PublishDatasetResponses, PublishPromptData, PublishPromptErrors, PublishPromptResponses, ReadyzData, ReadyzErrors, ReadyzResponses, RebuildPromptData, RebuildPromptErrors, RebuildPromptResponses, RecordOptimizationData, RecordOptimizationErrors, RecordOptimizationResponses, RecordTrainingProgressData, RecordTrainingProgressErrors, RecordTrainingProgressResponses, RegisterImageData, RegisterImageErrors, RegisterImageResponses, RegisterModelData, RegisterModelErrors, RegisterModelResponses, RerunWorkflowData, RerunWorkflowErrors, RerunWorkflowResponses, ReviewImageData, ReviewImageErrors, ReviewImageResponses, SaveProjectData, SaveProjectErrors, SaveProjectResponses, SaveRecipeData, SaveRecipeErrors, SaveRecipeResponses, SaveRevisionData, SaveRevisionErrors, SaveRevisionResponses, SetModelLabelData, SetModelLabelErrors, SetModelLabelResponses, SetPromptLabelData, SetPromptLabelErrors, SetPromptLabelResponses, StartTrainingRunData, StartTrainingRunErrors, StartTrainingRunResponses, StreamEventsData, StreamEventsResponses, StreamRunData, StreamRunResponses, StreamWorkflowExecutionData, StreamWorkflowExecutionResponses, UploadBlobData, UploadBlobErrors, UploadBlobResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -17,6 +17,172 @@ export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends 
      */
     meta?: keyof ClientMeta extends never ? Record<string, unknown> : ClientMeta;
 };
+
+/**
+ * Store an image under the digest of its own bytes.
+ *
+ * The digest is computed here. A content address supplied by the caller is
+ * not a content address, and trusting one would let two different images
+ * occupy the same key.
+ */
+export const uploadBlob = <ThrowOnError extends boolean = false>(options: Options<UploadBlobData, ThrowOnError>): RequestResult<UploadBlobResponses, UploadBlobErrors, ThrowOnError> => (options.client ?? client).post<UploadBlobResponses, UploadBlobErrors, ThrowOnError>({
+    bodySerializer: null,
+    url: '/api/v1/annotation-blobs',
+    ...options,
+    headers: {
+        'Content-Type': 'application/octet-stream',
+        ...options.headers
+    }
+});
+
+/**
+ * The bytes of an uploaded image.
+ *
+ * Immutable by construction — the key *is* the digest — so it is cached for a
+ * year. An annotation canvas re-fetching a 2 MB plan on every pan would be the
+ * slowest part of the tool.
+ */
+export const getBlob = <ThrowOnError extends boolean = false>(options: Options<GetBlobData, ThrowOnError>): RequestResult<GetBlobResponses, GetBlobErrors, ThrowOnError> => (options.client ?? client).get<GetBlobResponses, GetBlobErrors, ThrowOnError>({ url: '/api/v1/annotation-blobs/{image_id}', ...options });
+
+/**
+ * One immutable manifest: its samples, its splits, and every exclusion with
+ * its reason.
+ */
+export const getExport = <ThrowOnError extends boolean = false>(options: Options<GetExportData, ThrowOnError>): RequestResult<GetExportResponses, GetExportErrors, ThrowOnError> => (options.client ?? client).get<GetExportResponses, GetExportErrors, ThrowOnError>({ url: '/api/v1/annotation-export', ...options });
+
+/**
+ * The same export as a COCO document.
+ *
+ * Generated rather than stored: COCO is a derived view of the vector
+ * annotations, and storing it would be a second copy of the truth that can
+ * disagree with the first. It reads one revision object per sample, which is
+ * paid once per training run rather than once per epoch.
+ */
+export const getExportCoco = <ThrowOnError extends boolean = false>(options: Options<GetExportCocoData, ThrowOnError>): RequestResult<GetExportCocoResponses, GetExportCocoErrors, ThrowOnError> => (options.client ?? client).get<GetExportCocoResponses, GetExportCocoErrors, ThrowOnError>({ url: '/api/v1/annotation-export/coco', ...options });
+
+/**
+ * Every export built from a project, newest first.
+ */
+export const listExports = <ThrowOnError extends boolean = false>(options: Options<ListExportsData, ThrowOnError>): RequestResult<ListExportsResponses, ListExportsErrors, ThrowOnError> => (options.client ?? client).get<ListExportsResponses, ListExportsErrors, ThrowOnError>({ url: '/api/v1/annotation-exports', ...options });
+
+/**
+ * Freeze the project as it stands into an immutable, content-addressed
+ * manifest.
+ *
+ * The reference a training run records is `project@export`. Two exports of an
+ * unchanged project are one export, which is why re-running this nightly is
+ * cheap and why a manifest is a comparison boundary rather than a timestamp.
+ */
+export const buildExport = <ThrowOnError extends boolean = false>(options: Options<BuildExportData, ThrowOnError>): RequestResult<BuildExportResponses, BuildExportErrors, ThrowOnError> => (options.client ?? client).post<BuildExportResponses, BuildExportErrors, ThrowOnError>({
+    url: '/api/v1/annotation-exports',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * One image, its revision history, one revision's shapes, and the side of the
+ * split its family is on.
+ */
+export const getImage = <ThrowOnError extends boolean = false>(options: Options<GetImageData, ThrowOnError>): RequestResult<GetImageResponses, GetImageErrors, ThrowOnError> => (options.client ?? client).get<GetImageResponses, GetImageErrors, ThrowOnError>({ url: '/api/v1/annotation-image', ...options });
+
+/**
+ * The images in a project, newest registration first.
+ */
+export const listImages = <ThrowOnError extends boolean = false>(options: Options<ListImagesData, ThrowOnError>): RequestResult<ListImagesResponses, ListImagesErrors, ThrowOnError> => (options.client ?? client).get<ListImagesResponses, ListImagesErrors, ThrowOnError>({ url: '/api/v1/annotation-images', ...options });
+
+/**
+ * Register an image into a project, or correct what is known about it.
+ *
+ * Re-registering keeps the revisions and the review state: a plan re-submitted
+ * with a corrected `group_id` is a correction, and resetting its labels would
+ * punish the correction.
+ */
+export const registerImage = <ThrowOnError extends boolean = false>(options: Options<RegisterImageData, ThrowOnError>): RequestResult<RegisterImageResponses, RegisterImageErrors, ThrowOnError> => (options.client ?? client).post<RegisterImageResponses, RegisterImageErrors, ThrowOnError>({
+    url: '/api/v1/annotation-images',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * The label schemas this build ships as a starting point.
+ *
+ * Not a database read: a project that starts from a blank vocabulary usually
+ * invents one without a hinge point, and that is the vocabulary that has to be
+ * re-drawn. Shipping one is cheaper than discovering that.
+ */
+export const listPresets = <ThrowOnError extends boolean = false>(options?: Options<ListPresetsData, ThrowOnError>): RequestResult<ListPresetsResponses, unknown, ThrowOnError> => (options?.client ?? client).get<ListPresetsResponses, unknown, ThrowOnError>({ url: '/api/v1/annotation-presets', ...options });
+
+/**
+ * One project, with the counts that answer "is there enough data yet".
+ */
+export const getProject = <ThrowOnError extends boolean = false>(options: Options<GetProjectData, ThrowOnError>): RequestResult<GetProjectResponses, GetProjectErrors, ThrowOnError> => (options.client ?? client).get<GetProjectResponses, GetProjectErrors, ThrowOnError>({ url: '/api/v1/annotation-project', ...options });
+
+/**
+ * Every annotation project.
+ */
+export const listProjects = <ThrowOnError extends boolean = false>(options?: Options<ListProjectsData, ThrowOnError>): RequestResult<ListProjectsResponses, ListProjectsErrors, ThrowOnError> => (options?.client ?? client).get<ListProjectsResponses, ListProjectsErrors, ThrowOnError>({ url: '/api/v1/annotation-projects', ...options });
+
+/**
+ * Create a project, or replace its description, split policy and label schema.
+ *
+ * The schema version is re-derived from the classes. An unchanged class list
+ * keeps its version and every accepted revision stays valid; a changed one is
+ * a new version, and the next export names every revision drawn under the old
+ * one as excluded rather than quietly relabelling them.
+ */
+export const saveProject = <ThrowOnError extends boolean = false>(options: Options<SaveProjectData, ThrowOnError>): RequestResult<SaveProjectResponses, SaveProjectErrors, ThrowOnError> => (options.client ?? client).post<SaveProjectResponses, SaveProjectErrors, ThrowOnError>({
+    url: '/api/v1/annotation-projects',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Move an image's review state, and pin the revision an export will read.
+ */
+export const reviewImage = <ThrowOnError extends boolean = false>(options: Options<ReviewImageData, ThrowOnError>): RequestResult<ReviewImageResponses, ReviewImageErrors, ThrowOnError> => (options.client ?? client).post<ReviewImageResponses, ReviewImageErrors, ThrowOnError>({
+    url: '/api/v1/annotation-reviews',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Save a drawing.
+ *
+ * A revision that does not validate against the project's schema is not
+ * stored at all, and the 422 carries every problem rather than the first.
+ * Storing an invalid revision and marking it so would move the decision about
+ * whether a half-drawn door is a training target to whatever reads it next.
+ */
+export const saveRevision = <ThrowOnError extends boolean = false>(options: Options<SaveRevisionData, ThrowOnError>): RequestResult<SaveRevisionResponses, SaveRevisionErrors, ThrowOnError> => (options.client ?? client).post<SaveRevisionResponses, SaveRevisionErrors, ThrowOnError>({
+    url: '/api/v1/annotation-revisions',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * The public floor-plan corpora, and where to look for more.
+ *
+ * A dated table this build ships, not a search against Hugging Face or
+ * Roboflow. Those mirrors restate licences wrongly often enough that a live
+ * answer would be worse than no answer, because it would arrive looking
+ * authoritative. Every row links its original.
+ */
+export const listSources = <ThrowOnError extends boolean = false>(options?: Options<ListSourcesData, ThrowOnError>): RequestResult<ListSourcesResponses, unknown, ThrowOnError> => (options?.client ?? client).get<ListSourcesResponses, unknown, ThrowOnError>({ url: '/api/v1/annotation-sources', ...options });
 
 /**
  * Where the provider sends the browser back to.
@@ -110,6 +276,57 @@ export const publishDataset = <ThrowOnError extends boolean = false>(options: Op
 export const listDimension = <ThrowOnError extends boolean = false>(options: Options<ListDimensionData, ThrowOnError>): RequestResult<ListDimensionResponses, ListDimensionErrors, ThrowOnError> => (options.client ?? client).get<ListDimensionResponses, ListDimensionErrors, ThrowOnError>({ url: '/api/v1/dimensions/{kind}', ...options });
 
 /**
+ * Which engine this instance can reach, if any.
+ *
+ * A 501 rather than an empty body when none is configured, so a client can
+ * tell "this deployment has no orchestrator" from "the orchestrator has
+ * nothing to run" — different problems with different fixes.
+ */
+export const describeEngine = <ThrowOnError extends boolean = false>(options?: Options<DescribeEngineData, ThrowOnError>): RequestResult<DescribeEngineResponses, DescribeEngineErrors, ThrowOnError> => (options?.client ?? client).get<DescribeEngineResponses, DescribeEngineErrors, ThrowOnError>({ url: '/api/v1/engine', ...options });
+
+/**
+ * Start one.
+ *
+ * `202`, not `200`: nothing has run yet. What comes back is an
+ * acknowledgement carrying the engine's reference, a link into its console,
+ * and the `workflow_run_id` the events this execution publishes are expected
+ * to arrive under — which is what lets the panel open a live stream for work
+ * that has not started.
+ */
+export const launchWorkflow = <ThrowOnError extends boolean = false>(options: Options<LaunchWorkflowData, ThrowOnError>): RequestResult<LaunchWorkflowResponses, LaunchWorkflowErrors, ThrowOnError> => (options.client ?? client).post<LaunchWorkflowResponses, LaunchWorkflowErrors, ThrowOnError>({
+    url: '/api/v1/engine/launches',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Where one launched execution has got to, as the engine sees it.
+ *
+ * A second opinion, not the truth: aiwatcher's own view comes from the log
+ * and answers a different question. When they disagree the disagreement is
+ * the finding — an execution the engine calls `succeeded` that published no
+ * events is a producer nobody instrumented.
+ */
+export const getLaunch = <ThrowOnError extends boolean = false>(options: Options<GetLaunchData, ThrowOnError>): RequestResult<GetLaunchResponses, GetLaunchErrors, ThrowOnError> => (options.client ?? client).get<GetLaunchResponses, GetLaunchErrors, ThrowOnError>({ url: '/api/v1/engine/launches/{reference}', ...options });
+
+/**
+ * One page of what the engine could start.
+ */
+export const listEngineWorkflows = <ThrowOnError extends boolean = false>(options?: Options<ListEngineWorkflowsData, ThrowOnError>): RequestResult<ListEngineWorkflowsResponses, ListEngineWorkflowsErrors, ThrowOnError> => (options?.client ?? client).get<ListEngineWorkflowsResponses, ListEngineWorkflowsErrors, ThrowOnError>({ url: '/api/v1/engine/workflows', ...options });
+
+/**
+ * One entity and the inputs it declares.
+ *
+ * Read again at launch time by the adapter, so this is what a form renders
+ * and never what a launch is validated against — a panel open since before a
+ * redeploy is showing an interface that no longer exists.
+ */
+export const getEngineWorkflow = <ThrowOnError extends boolean = false>(options: Options<GetEngineWorkflowData, ThrowOnError>): RequestResult<GetEngineWorkflowResponses, GetEngineWorkflowErrors, ThrowOnError> => (options.client ?? client).get<GetEngineWorkflowResponses, GetEngineWorkflowErrors, ThrowOnError>({ url: '/api/v1/engine/workflows/{workflow_id}', ...options });
+
+/**
  * Suites: the level above a report, and what MLflow calls an experiment.
  *
  * A separate resource rather than `/evaluations/suites`, so an evaluation
@@ -184,6 +401,50 @@ export const liveWebsocket = <ThrowOnError extends boolean = false>(options?: Op
  * a caller whether it is looking at everything or at a truncated tail.
  */
 export const getMetrics = <ThrowOnError extends boolean = false>(options?: Options<GetMetricsData, ThrowOnError>): RequestResult<GetMetricsResponses, unknown, ThrowOnError> => (options?.client ?? client).get<GetMetricsResponses, unknown, ThrowOnError>({ url: '/api/v1/metrics', ...options });
+
+/**
+ * Every registered model.
+ */
+export const listModels = <ThrowOnError extends boolean = false>(options?: Options<ListModelsData, ThrowOnError>): RequestResult<ListModelsResponses, ListModelsErrors, ThrowOnError> => (options?.client ?? client).get<ListModelsResponses, ListModelsErrors, ThrowOnError>({ url: '/api/v1/models', ...options });
+
+/**
+ * Register what a run produced.
+ *
+ * The provenance — dataset, framework, code — is read from the run rather
+ * than from this request, so a version cannot claim a lineage the run it
+ * names does not have. A version that cannot be promoted is still recorded,
+ * and the reason comes back with it.
+ */
+export const registerModel = <ThrowOnError extends boolean = false>(options: Options<RegisterModelData, ThrowOnError>): RequestResult<RegisterModelResponses, RegisterModelErrors, ThrowOnError> => (options.client ?? client).post<RegisterModelResponses, RegisterModelErrors, ThrowOnError>({
+    url: '/api/v1/models',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * One model: its versions, its labels, and one version's record.
+ */
+export const getModel = <ThrowOnError extends boolean = false>(options: Options<GetModelData, ThrowOnError>): RequestResult<GetModelResponses, GetModelErrors, ThrowOnError> => (options.client ?? client).get<GetModelResponses, GetModelErrors, ThrowOnError>({ url: '/api/v1/models/{name}', ...options });
+
+/**
+ * Point a label at a version.
+ *
+ * The one write here that changes what a service loads next, so it needs
+ * `admin` — and the one the registry itself can refuse: a version with no
+ * held-out measurement, or one trained on a dataset name nobody can
+ * reconstruct, is not promotable however much anybody wants it to be.
+ */
+export const setModelLabel = <ThrowOnError extends boolean = false>(options: Options<SetModelLabelData, ThrowOnError>): RequestResult<SetModelLabelResponses, SetModelLabelErrors, ThrowOnError> => (options.client ?? client).post<SetModelLabelResponses, SetModelLabelErrors, ThrowOnError>({
+    url: '/api/v1/models/{name}/labels',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
 
 /**
  * Every prompt in the registry.
@@ -292,6 +553,60 @@ export const streamRun = <ThrowOnError extends boolean = false>(options: Options
  * look at is not yet known.
  */
 export const listSpans = <ThrowOnError extends boolean = false>(options?: Options<ListSpansData, ThrowOnError>): RequestResult<ListSpansResponses, unknown, ThrowOnError> => (options?.client ?? client).get<ListSpansResponses, unknown, ThrowOnError>({ url: '/api/v1/spans', ...options });
+
+/**
+ * Training runs, newest first.
+ */
+export const listTrainingRuns = <ThrowOnError extends boolean = false>(options?: Options<ListTrainingRunsData, ThrowOnError>): RequestResult<ListTrainingRunsResponses, ListTrainingRunsErrors, ThrowOnError> => (options?.client ?? client).get<ListTrainingRunsResponses, ListTrainingRunsErrors, ThrowOnError>({ url: '/api/v1/training-runs', ...options });
+
+/**
+ * Open a training run.
+ *
+ * Answered before the first epoch on purpose: if this instance is going to
+ * refuse the run, a trainer should find out now rather than after six GPU
+ * hours. Re-opening an already-open run returns it, so a retried start does
+ * not lose the curve it already wrote.
+ */
+export const startTrainingRun = <ThrowOnError extends boolean = false>(options: Options<StartTrainingRunData, ThrowOnError>): RequestResult<StartTrainingRunResponses, StartTrainingRunErrors, ThrowOnError> => (options.client ?? client).post<StartTrainingRunResponses, StartTrainingRunErrors, ThrowOnError>({
+    url: '/api/v1/training-runs',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * One run, with its whole curve.
+ */
+export const getTrainingRun = <ThrowOnError extends boolean = false>(options: Options<GetTrainingRunData, ThrowOnError>): RequestResult<GetTrainingRunResponses, GetTrainingRunErrors, ThrowOnError> => (options.client ?? client).get<GetTrainingRunResponses, GetTrainingRunErrors, ThrowOnError>({ url: '/api/v1/training-runs/{run_id}', ...options });
+
+/**
+ * Close a run.
+ */
+export const finishTrainingRun = <ThrowOnError extends boolean = false>(options: Options<FinishTrainingRunData, ThrowOnError>): RequestResult<FinishTrainingRunResponses, FinishTrainingRunErrors, ThrowOnError> => (options.client ?? client).post<FinishTrainingRunResponses, FinishTrainingRunErrors, ThrowOnError>({
+    url: '/api/v1/training-runs/{run_id}/finish',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * One batch of progress: epochs, sampled points, checkpoints, profiles.
+ *
+ * Returns the summary rather than the whole record, because a trainer flushing
+ * every epoch does not want its own curve back every time.
+ */
+export const recordTrainingProgress = <ThrowOnError extends boolean = false>(options: Options<RecordTrainingProgressData, ThrowOnError>): RequestResult<RecordTrainingProgressResponses, RecordTrainingProgressErrors, ThrowOnError> => (options.client ?? client).post<RecordTrainingProgressResponses, RecordTrainingProgressErrors, ThrowOnError>({
+    url: '/api/v1/training-runs/{run_id}/progress',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
 
 /**
  * Executions, newest first.

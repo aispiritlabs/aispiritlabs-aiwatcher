@@ -195,13 +195,151 @@ refused, and for the two different reasons a candidate gets refused:
 Publishing a new version and moving the `production` label are two separate
 acts, because storing a prompt and deploying it are two decisions.
 
+## Annotations
+
+The one area that draws. Everything else here is a fold over the log and is
+bounded by retention; an annotation is authored, and the label a model was
+trained on has to outlive every run that used it — so it lives in the same
+object store as prompts, under its own prefix
+([ADR_0017](docs/ADR/ADR_0017_IMAGE_ANNOTATION.md)).
+
+**Label** is a canvas over one plan, with the three columns in the order
+attention moves: which image, the plan, what the selected shape says.
+
+A room is a polygon, a wall is a *centreline plus a thickness* — the thing an
+editor drags and a 3D extrusion needs, with the filled rectangle recoverable
+from it — and a door is a named keypoint set: the two ends of its opening, its
+hinge, and where its leaf ends when open. That last one is the whole reason
+this is not a mask tool. A segmentation mask cannot say which wall an opening
+sits on, which way a door swings, or which two rooms it connects, and those are
+exactly the fields the output JSON has to carry. Draw pixels and they are lost
+at the moment of drawing.
+
+Attributes and links carry the rest: `role: exterior | interior` and
+`thickness_px` on a wall, `door_type` and `exterior` on a door, `wall` and
+`connects` as references to other instances in the same image. A model's
+proposal is drawn dashed and marked `model`, so a page of predictions nobody
+has checked looks like one.
+
+A drawing the registry refuses comes back as a 422 carrying *every* problem at
+once — the shapes that caused them turn red, and the sentences are listed under
+the canvas. Fixing one error per round trip is how somebody stops using a tool.
+
+**Sources** is a dated table of the public floor-plan corpora: CubiCasa5K,
+ResPlan, MSD, CVC-FP, FloorPlanCAD, WAFFLE, R2V/R3D, ZInD, RPLAN and LIFULL
+HOME'S — what each one labels, how large it is, and whether its licence permits
+a commercial model. That last filter is one click, because it is the question
+with an expensive wrong answer. The table is shipped rather than fetched:
+Hugging Face, Kaggle and Roboflow Universe all restate licences wrongly often
+enough that a live answer would be worse than none, since it would arrive
+looking authoritative. Every row links its original and says when somebody last
+read the licence there.
+
+**Exports** freezes a project into an immutable, content-addressed manifest.
+Its id is the string a training run records — `project@export-sha256`, the same
+shape as `dataset@version` — and two exports of an unchanged project are one
+export, so building it before every run costs nothing.
+
+Two things on that page are worth more than the headline counts:
+
+- **the split is by family.** Every image declares a `group_id`: one building,
+  however many renderings. A catalogue house published as the plain plan, its
+  mirror and a garage variant is four images and one observation, and splitting
+  them across train and test makes the score a measurement of memorisation with
+  nothing in the numbers to say so. The panel shows a labeller which side the
+  plan in front of them is on, because that changes how carefully it gets drawn.
+- **every exclusion is listed with its reason.** An export that quietly loses a
+  third of a corpus reads exactly like one that did not. The seeded project has
+  two: one image nobody accepted, and one CC BY-NC image that a *commercial*
+  export refuses — which is the failure mode that otherwise surfaces in a legal
+  review rather than in a metric.
+
+COCO is served per split, generated from the manifest rather than stored: a
+second copy of the annotations is a copy that can disagree with the first.
+Masks and heatmaps are produced in Python, where the array libraries already
+are.
+
+## Training
+
+A training run is a run. `train.started | train.completed | train.failed` are
+`Subject::Train` with the ordinary phases, so it appears in Explore, in the
+runs list and in the metrics fold with no new machinery — and the model version
+an agent run used is then traceable back to the export it was trained on
+([ADR_0018](docs/ADR/ADR_0018_TRAINING_RUNS.md)).
+
+```python
+from aiwatcher_sdk import AiwatcherClient
+from aiwatcher_sdk.annotations import AnnotationRegistry
+
+registry = AnnotationRegistry("http://aiwatcher:8080")
+export = registry.build_export("floor-plans/dom-projekt")
+
+client = AiwatcherClient(service="floor-plan-trainer", base_url="http://aiwatcher:8080")
+with client.training(
+    "floorplan-effnetv2s-2026-09-01",
+    model="efficientnetv2-s",
+    dataset=export.reference,          # project@sha256, never a bare name
+    params={"batch_size": 4, "lr": 3e-4},
+) as run:
+    for index in range(epochs):
+        with run.epoch(index) as epoch:
+            for batch in loader:
+                epoch.step(loss=loss.item())   # counted; never published
+            epoch.metrics(val_miou=score)      # measured once; published
+    run.checkpoint(path, metric="val_miou", value=score, best=True)
+```
+
+What that publishes is deliberately small. An **epoch** is one point carrying
+its own duration and metrics — two hundred equal bars in a waterfall is a
+picture of the fact that epochs take about the same time, and the curve is the
+view. A **step** never reaches the log at all: the SDK averages locally, which
+is the same rule `llm.chunk` follows at a different scale. A **checkpoint** is
+a pointer, because the projector holds every event it accepts in memory. A
+**profiler session** arrives as its top operators and a link, because
+`torch.profiler` on one step emits more records than the read model holds for a
+week.
+
+For Lightning there is a callback that needs no change to the loop at all, and
+it never imports Lightning — it duck-types the hooks, the same way the DeepEval
+bridge reads a report structurally:
+
+```python
+from aiwatcher_sdk.integrations.torch import TrainingCallback
+
+trainer = Trainer(callbacks=[TrainingCallback(
+    client, run_id="…", model="efficientnetv2-s", dataset=export.reference,
+)])
+```
+
+Weights & Biases stays available and is not the system of record here: pass a
+`wandb` run as `mirror=` and the same points go to both. What W&B cannot answer
+is which agent runs used the resulting checkpoint, and that is the reason the
+training run is on this log.
+
+## Starting the work, not only watching it
+
+Data Curation and Experiments both carry a picker over the orchestrator's own
+inventory: the launch plans Flyte already holds, with the inputs each one
+declares rendered as a form. The page fills in what it knows — the dataset name
+and the time window become the "what" and the "over what period" — and
+launching needs the `admin` role, exactly as a rerun does. An instance with no
+orchestrator configured says which variable is unset rather than showing an
+empty catalog. See [ADR_0016](docs/ADR/ADR_0016_PIPELINE_ENGINE.md).
+
+Nothing has run when the acknowledgement appears, and the panel says so: it
+shows the engine's phase as a second opinion and links to aiwatcher's own live
+view of the execution, which fills in once the workflow's producer publishes.
+
 ## What is not built yet
 
 ![The datasets placeholder](docs/screenshots/datasets.png)
 
-Datasets and Experiments exist in the navigation and not in the backend. They
-render a placeholder that names what is missing and why, rather than mocked
-rows — a plausible fake reads as working software, and this one does not.
+Experiments can start a training, evaluation or inference workflow, and cannot
+yet *compare* two of them: the join from a variant to the traces it produced —
+where latency and token cost live — needs `variant` to become a dimension
+first. That half of the area renders a placeholder naming what is missing,
+rather than mocked rows: a plausible fake reads as working software, and this
+one does not.
 
 ## Reproducing these
 
@@ -217,7 +355,14 @@ just seed             # one run: ~35 events in, 5 spans out
 just seed-evaluation  # two comparable reports of one suite on one dataset
 just seed-prompts     # a prompt, three optimisations, one of them admitted
 just seed-workflow    # two executions of one declared graph: one done, one live
+just seed-annotations # six synthetic plans, three families, an export, a training run
 ```
+
+`seed-annotations` draws its own plans in pure Python — no Pillow, no numpy —
+so the labels are correct for the pixels rather than approximately correct,
+which is the one thing a seeded dataset can get wrong in a way nobody notices.
+It leaves one image as a draft and marks one CC BY-NC, so the export has
+something to exclude for each of the two reasons.
 
 The Query tab needs the optional PHP service; without it that tab says so and
 nothing else is affected:

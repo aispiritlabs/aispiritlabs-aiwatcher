@@ -2,12 +2,15 @@
 
 use std::sync::Arc;
 
+use aiwatcher_annotations::Registry as AnnotationRegistry;
 use aiwatcher_auth::Authenticator;
 use aiwatcher_bus::{MessageSink, MessageSource};
+use aiwatcher_core::engine::WorkflowEngine;
 use aiwatcher_core::ports::WorkflowRunner;
 use aiwatcher_datasets::Registry as DatasetRegistry;
 use aiwatcher_projector::{LiveHub, ReadModel};
 use aiwatcher_prompts::Registry;
+use aiwatcher_training::Registry as TrainingRegistry;
 
 /// Shared application state.
 ///
@@ -33,12 +36,28 @@ pub struct AppState {
     /// rows each execution produced. It shares the configured object store
     /// with prompts, under a separate key prefix.
     pub datasets: Option<Arc<DatasetRegistry>>,
+    /// Vector image annotations and the training exports built from them.
+    /// Same store, third prefix, and the same reason all three are here rather
+    /// than on the log: a training label has to outlive every run that used
+    /// it. See ADR_0017.
+    pub annotations: Option<Arc<AnnotationRegistry>>,
+    /// Training runs and the model versions they produce. Same store, fourth
+    /// prefix — and the one registry here whose contents never came from the
+    /// event log at all. See ADR_0018.
+    pub training: Option<Arc<TrainingRegistry>>,
     /// `None` when no orchestrator is configured, which makes the rerun route
     /// answer 501 rather than 404 — the same reasoning as `prompts`, with a
     /// sharper edge. This is the only thing here that makes something happen
     /// rather than reporting that it did, so the disabled case must be
     /// unmistakable: a no-op adapter would acknowledge a rerun nobody ran.
     pub runner: Option<Arc<dyn WorkflowRunner>>,
+    /// `None` when no orchestrator is configured, which makes every
+    /// `/api/v1/engine` route answer 501. Same reasoning as `runner`, and the
+    /// same sharp edge: this is the other thing here that makes something
+    /// happen. It is a separate field rather than the same one because the
+    /// two ports answer different questions — a deployment can perfectly well
+    /// dispatch reruns to a webhook while having no inventory to browse.
+    pub engine: Option<Arc<dyn WorkflowEngine>>,
     /// `None` when no identity provider is configured, which is the default.
     /// Unlike `prompts` and `runner`, absence here is not a 501 on a few
     /// routes — it is every caller being [`aiwatcher_auth::Identity::anonymous`]
@@ -56,7 +75,10 @@ impl std::fmt::Debug for AppState {
             .field("ingest_enabled", &self.sink.is_some())
             .field("prompt_registry", &self.prompts.is_some())
             .field("dataset_registry", &self.datasets.is_some())
+            .field("annotation_registry", &self.annotations.is_some())
+            .field("training_registry", &self.training.is_some())
             .field("workflow_runner", &self.runner)
+            .field("engine", &self.engine)
             .field("auth", &self.auth)
             .finish_non_exhaustive()
     }

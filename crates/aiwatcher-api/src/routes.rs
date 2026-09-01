@@ -53,9 +53,20 @@ pub fn router(state: AppState) -> Router {
         // Curation recipes and completed dataset artifacts share the authored
         // object store, but not the prompt domain.
         .merge(crate::datasets::router())
+        // Annotations share it too, and are the only group that accepts bytes.
+        // See `crate::annotations`.
+        .merge(crate::annotations::router())
+        // And training, which is the one group here that touches neither the
+        // log nor the live hub: a run is a record that grows in place. See
+        // `crate::training`.
+        .merge(crate::training::router())
         // And its own module for a sharper reason: one of these routes asks
         // another system to run something. See `crate::workflows`.
         .merge(crate::workflows::router())
+        // And its own module again, one level further out: these routes read
+        // the orchestrator's inventory rather than aiwatcher's log, and one of
+        // them starts something. See `crate::engine`.
+        .merge(crate::engine::router())
         // And its own module because it is about the caller rather than the
         // data. See `crate::auth`.
         .merge(crate::auth::router())

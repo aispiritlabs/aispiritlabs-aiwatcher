@@ -22,6 +22,8 @@ Python / TypeScript agents
                    └─► read model ─────► REST reads
 
    prompt registry ──► RustFS (S3)   authored, and outside retention entirely
+   annotations     ──► RustFS (S3)   drawn, versioned, exported for training
+   pipeline engine ──► Flyte 2       what could be started; read, and asked
 ```
 
 ## Commands
@@ -38,6 +40,7 @@ just seed          # publish a demo run into a running server
 just seed-evaluation  # publish two comparable evaluation reports
 just seed-prompts  # publish a prompt plus three optimisations, one admitted
 just seed-workflow    # publish two executions of one declared graph
+just seed-annotations # six synthetic plans, three families, an export, a training run
 just stack-up      # docker compose: VictoriaTraces, VictoriaMetrics, Collector, Grafana
 just tilt-up       # the same stack on a local Kubernetes, rebuilt on save
 ```
@@ -68,6 +71,13 @@ just run-sso       # the server as an OIDC relying party against it
 
 With an object store, for the prompt registry:
 
+With an orchestrator, for launching registered pipelines:
+
+```bash
+just run-flyte     # the server with the Flyte engine wired to a local control plane
+just test-pipeline # the adapter, then the whole stack, against a stand-in Flyte admin
+```
+
 ```bash
 just rustfs-up     # RustFS on :9010
 just run-rustfs    # server with the registry in the object store
@@ -95,7 +105,9 @@ Crates, in dependency order. A crate may only depend on ones above it.
 | `aiwatcher-bus` | `MessageSource` / `MessageSink` / `Checkpointer` + memory, write-ahead-log, Laser and generic-broker adapters |
 | `aiwatcher-trace` | `SpanAssembler` and the OTLP/JSON exporters |
 | `aiwatcher-prompts` | The prompt registry: content-addressed versions, optimisation records, and the RustFS/S3 and filesystem adapters behind `ObjectStore`. Includes a hand-written SigV4 signer. |
-| `aiwatcher-runner` | The workflow rerun dispatcher: one HTTP POST to one configured endpoint, behind `core::ports::WorkflowRunner`. The only thing here that asks another system to do work. |
+| `aiwatcher-annotations` | Vector image annotations: the label schema, the drawings, the review state, the family-keyed split, and the immutable training export a run names. Plus the dated table of public floor-plan corpora and what their licences permit. |
+| `aiwatcher-runner` | The workflow rerun dispatcher: one HTTP POST to one configured endpoint, behind `core::ports::WorkflowRunner`. |
+| `aiwatcher-pipeline` | Pipeline engines behind `core::engine::WorkflowEngine`: the orchestrator's launchable catalog, the inputs each entry declares, and starting one. Flyte 2 over its `/api/v1/` gateway, plus the literal encoder that binds a form's JSON to Flyte's declared types. With the runner, the second and last thing here that asks another system to do work. |
 | `aiwatcher-auth` | Single sign-on: OIDC discovery, a JWKS cache, the authorization-code flow with PKCE, HMAC-signed session cookies, authentik's forward-auth headers, and the group-to-role mapping. Knows nothing about axum. |
 | `aiwatcher-projector` | The pipeline, live hub, read model, dimension, span, evaluation and workflow-graph folds, dedup, retry, dead letters |
 | `aiwatcher-api` | axum router: REST, SSE, WebSocket, OpenAPI |
@@ -217,6 +229,42 @@ area.
    whole reason the declaration exists, and rerun is a dispatch to one endpoint
    from *configuration* — `aiwatcher-runner`, 501 when unset.
 
+13. **The orchestrator is read for its inventory, never for its history**
+   ([ADR_0016](docs/ADR/ADR_0016_PIPELINE_ENGINE.md)). Nothing publishes an
+   event about a workflow nobody has run, and no event carries an input
+   interface — so `/api/v1/engine` asks Flyte what it *could* start, while
+   `/api/v1/workflows` still folds what *has* run from the log. ADR_0012 is
+   unchanged by this: the shape of a graph is still the declaration, because
+   that is the source that is right when the orchestrator is bypassed. A
+   launch binds inputs to the types the engine declares *at launch time*,
+   always pins a version, and carries a `workflow_run_id` aiwatcher mints — as
+   a Flyte label and, when the entity declares one, as an input — which is what
+   lets the panel stream an execution that has not started. `AIWATCHER_ENGINE`
+   defaults to `none` and every route answers 501 naming it.
+
+14. **An annotation is authored, vector-first, and split by family**
+   ([ADR_0017](docs/ADR/ADR_0017_IMAGE_ANNOTATION.md)). A segmentation mask
+   cannot say which wall an opening sits on, which way a door swings, or which
+   two rooms it connects — and those are the fields the product's output JSON
+   has to carry, so drawing pixels loses them at the moment of drawing. The
+   vector shape is the source and every raster is derived. Identity is content,
+   as it is for a prompt; review state is a label in the head, as prompt labels
+   are; and the split key is `group_id`, the *building*, so a plan's mirror and
+   its garage variant land on the same side by construction. Usage rights are a
+   required field and an export enforces a policy, because the best public
+   corpora are non-commercial and a licence breach shows up in a legal review
+   rather than in a metric.
+
+15. **A training run rides the log; an epoch is a point, a step is a count**
+   ([ADR_0018](docs/ADR/ADR_0018_TRAINING_RUNS.md)). `train.*` is
+   `Subject::Train` with the ordinary phases, so a training run is one span and
+   one row in the runs list with no new machinery. What it deliberately is not
+   is two hundred spans: an epoch is a point carrying its own duration and
+   metrics, because the useful view of training is a curve and not a waterfall.
+   A step never reaches the log at all — the SDK aggregates locally, which is
+   ADR_0003's `llm.chunk` rule at a different scale. A checkpoint is a pointer
+   and a profiler session is a summary plus a link.
+
 ## Conventions
 
 ### Rust
@@ -281,7 +329,17 @@ not an SDK release.
 - `prompts` is the one area that reads something other than the log, and the
   one that writes. It answers 501 rather than 404 when no store is configured,
   and `RegistryDisabled` says which variable is unset — an empty list would be
-  a different problem with a different fix.
+  a different problem with a different fix. `datasets` and `annotations` share
+  that store and that component, because one setting decides all three.
+- `annotations` is the one area that draws. Its canvas puts an `<img>` and an
+  `<svg>` in one transformed container, both sized to the image's *natural*
+  pixels, so SVG user units are image coordinates and no shape ever carries a
+  zoom level. Stroke widths and vertex radii divide by the zoom, or the plan
+  disappears under ink as soon as somebody zooms out. The draft lives in
+  component state and is saved explicitly: a revision is content-addressed, so
+  autosaving every vertex drag would mint one per mouse move. The canvas
+  implements no validation — the registry's 422 carries every problem, and a
+  second rule set in TypeScript would drift from the first.
 - Any list that can grow with retention is a `useInfiniteQuery` feeding
   `VirtualList` (`src/components/virtual-list.tsx`). A `.map` over a full
   response is only correct for a list with a fixed ceiling.
@@ -354,6 +412,36 @@ not an SDK release.
   ordering in `pipeline.rs::flush` is the at-least-once contract; reversing it
   turns a crash into silent data loss.
 - **Never store `llm.chunk` as a trace record.** See ADR_0003.
+- **Never let an engine's address come from anywhere but configuration.**
+  `AIWATCHER_FLYTE_ENDPOINT`, exactly like the rerun target and for exactly the
+  same reason. `LaunchBody` is `deny_unknown_fields`, so a body naming its own
+  endpoint is a 400 rather than a field that is ignored and reads as accepted.
+  Every part of an `EngineRef` is checked against `[A-Za-z0-9._-]` before it is
+  interpolated into the orchestrator's URLs — a launch plan name holding `../`
+  would be a path traversal aimed at a system aiwatcher authenticates to.
+- **Never let a launch carry an input the entity does not declare.**
+  `Interface::bind` refuses it. An orchestrator that ignores unknown fields
+  turns a typo in a filter into a run over everything, and the panel's form is
+  rendered from an interface that may already be stale — which is why binding
+  re-reads the interface from the engine rather than trusting what the caller
+  was shown. A blank *optional* input is omitted rather than sent empty, so the
+  launch plan's own default survives.
+- **Never launch without pinning a version.** A reference with no version
+  resolves to the newest registered one and that is what goes on the wire. An
+  execution recorded against "whatever was current" is not something anybody
+  can repeat, which is the entire point of recording it.
+- **Never let `stage_hint` decide anything but what a picker shows first.** It
+  is guessed from an entity's name — the name first, the description only as a
+  tie-break, because "fine-tune on a **curated** dataset" would otherwise file
+  a training job under curation. Presentation may depend on it; nothing else
+  may.
+- **Never poll the engine to fill in a run's status.** The engine's phase is a
+  second opinion shown on a launch acknowledgement, never merged into
+  `RunStatus`. When they disagree the disagreement is the finding: an execution
+  the engine calls succeeded that published no events is a producer nobody
+  instrumented, and a status column that quietly took the engine's word would
+  hide exactly that. See also the guardrail below about the projector never
+  deciding a run has died.
 - **Never let a rerun target come from the log.** `AIWATCHER_WORKFLOW_RUNNER_URL`
   is configuration. A `workflow.declared` naming its own callback URL would be a
   request-forgery primitive posted by anything that can reach ingest — aiwatcher
@@ -411,11 +499,74 @@ not an SDK release.
   checked *before* the scores in `verdict`, so the reason says "it stopped
   reading its input" rather than inviting somebody to raise the iteration
   count.
+- **Never make a raster the source of an annotation.** The mask, the heatmap
+  and the COCO document are all derived from the vector shapes and are
+  regenerated on demand. Storing an edited mask beside the vector it came from
+  is two sources of truth that will disagree, with nothing able to say which
+  one is right. See ADR_0017.
+- **Never split an annotation corpus by image.** The key is `group_id`, the
+  building — one house published as the plain plan, its mirror, a garage
+  variant and a re-drawn revision is four images and one observation. Splitting
+  them apart makes the test score a measurement of memorisation, and nothing in
+  the numbers says so. `export::split_for` hashes the family and the salt and
+  *only* those, so adding an image never re-deals an existing family. There is
+  no API that assigns a split per image.
+- **Never let an image's usage rights be optional.** `UsageRights` has no
+  default and `RightsPolicy` defaults to `commercial`, so the strict answer is
+  the free one. The best public floor-plan corpora — CubiCasa5K, FloorPlanCAD,
+  ZInD — are non-commercial, and a model trained on them by accident is a
+  problem that surfaces in a legal review rather than in a metric. An export
+  *excludes by name* rather than refusing, so the manifest records what it left
+  out and why, forever.
+- **Never let a model's proposal become a training target on its own.** Every
+  shape carries `origin: human | model | import | ocr`, an export defaults to
+  `require_human_review`, and a revision that is entirely machine output is
+  excluded with the reason. Pre-annotation is what makes 300 plans affordable;
+  what it may not do is produce labels nobody looked at.
+- **Never take a content address from the client.** `put_blob` hashes the bytes
+  it received and ignores whatever the caller claimed. A content address
+  supplied by the caller would let two different images occupy one key, which
+  is a training set whose labels belong to a different picture — the one
+  corruption no metric detects. `AnnotationRegistry.fetch_image` verifies it
+  again on the way out.
+- **Never validate a drawing in two places.** The registry refuses an invalid
+  revision and reports *every* problem at once, as `details` on a 422; the
+  panel renders exactly those lines and implements no rules of its own. A
+  second implementation in TypeScript would drift, and the day it does is the
+  day somebody trusts the wrong one.
+- **Never rename an annotation class in place.** The label schema is versioned
+  by the content of its class list, and a revision names the version it was
+  drawn against. Changing the classes excludes every earlier revision from the
+  next export *by name*, which is the loud failure and the correct one: a
+  rename that silently relabelled history would be undetectable afterwards.
+- **Never store `train.metric` per step, and never make an epoch a span.**
+  ADR_0018, and ADR_0003's `llm.chunk` rule at a different scale. The SDK
+  aggregates steps locally and `EventType::is_high_cardinality` covers
+  `train.metric` on the backend, so both sides refuse. An epoch is a point
+  carrying its own duration: two hundred equal bars in a waterfall is a picture
+  of the fact that epochs take about the same time, and the curve is the view.
+- **Never fold a profiler trace into the span tree.** `torch.profiler` on a
+  single step emits tens of thousands of records. `train.profile` carries the
+  top operators, the memory peak and a URI; the trace stays wherever the
+  profiler wrote it, and a profiler UI draws it better than a waterfall ever
+  will.
+- **Never let a checkpoint's weights reach the log.** Same rule as
+  `artifact.produced` and a sharper reason: a checkpoint is hundreds of
+  megabytes and the projector holds every event it accepts in memory.
+- **Never fetch a dataset licence from a mirror.** `sources::catalog` is a
+  dated table a human wrote, and every row links its original. Hugging Face,
+  Kaggle and Roboflow Universe all restate licences wrongly often enough that a
+  live answer would be worse than none, because it would arrive looking
+  authoritative. The table is a signpost; the licence at the link is the
+  permission.
 - **Never write a prompt's head before the version it indexes.** Same ordering
   as the pipeline's checkpoint, same reason: an index naming an object that was
   never stored is a list whose rows 404, while an unindexed object is waiting
   for `Registry::rebuild`. The head is derived; the versions are the truth —
-  except the labels, which exist nowhere else and survive a rebuild.
+  except the labels, which exist nowhere else and survive a rebuild. The
+  annotation registry keeps the same two orderings for the same reason: the
+  revision object before the image head that indexes it, and the export
+  manifest before the index entry that lists it.
 - **Prompt text is not redacted.** The Collector strips `gen_ai.prompt` and
   `gen_ai.completion` from spans; the registry stores prompt text verbatim,
   because storing it is the point. A producer that puts a secret in a prompt is

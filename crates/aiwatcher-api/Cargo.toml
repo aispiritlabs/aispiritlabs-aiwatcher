@@ -11,9 +11,11 @@ repository.workspace = true
 aiwatcher-core.workspace = true
 aiwatcher-auth.workspace = true
 aiwatcher-bus.workspace = true
+aiwatcher-annotations.workspace = true
 aiwatcher-datasets.workspace = true
 aiwatcher-projector.workspace = true
 aiwatcher-prompts.workspace = true
+aiwatcher-training.workspace = true
 async-trait.workspace = true
 axum.workspace = true
 futures.workspace = true
@@ -27,6 +29,7 @@ tower-http.workspace = true
 tracing.workspace = true
 utoipa.workspace = true
 utoipa-axum.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }

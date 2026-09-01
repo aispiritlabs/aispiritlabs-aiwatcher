@@ -12,6 +12,17 @@
 //!   reads and writes an object store rather than the log, because a prompt is
 //!   authored rather than observed and has to outlive the runs that used it.
 //!   See [`prompts`].
+//! * **Annotations** (`/api/v1/annotation-*`) are authored in the same sense
+//!   and go further: they are the only routes here that accept image bytes,
+//!   and the only ones whose refusal carries a list rather than a sentence.
+//!   See [`annotations`].
+//! * **Training** (`/api/v1/training-runs`, `/api/v1/models`) is the group
+//!   that touches none of the machinery above: no log, no live hub, no span
+//!   assembler. A training run is a record that grows in place and a model
+//!   version is what it produced. See [`training`] and ADR_0018.
+//! * **The engine** (`/api/v1/engine`) is the only group here that reads
+//!   neither the log nor an authored store: it asks the orchestrator what it
+//!   could start, and starts one. See [`engine`].
 //! * **The workflow graph** (`/api/v1/workflows`) reads the same log as the
 //!   reads above, one level up: a graph rather than a run. Its rerun route is
 //!   the only endpoint in this API that asks another system to do work — see
@@ -24,14 +35,17 @@
 //!   still has a way in. Python and TypeScript SDKs publish to Laser directly;
 //!   this is the fallback, not the main path.
 
+pub mod annotations;
 pub mod auth;
 pub mod datasets;
+pub mod engine;
 pub mod error;
 pub mod openapi;
 pub mod prompts;
 pub mod routes;
 pub mod state;
 pub mod stream;
+pub mod training;
 pub mod workflows;
 
 pub use auth::Caller;

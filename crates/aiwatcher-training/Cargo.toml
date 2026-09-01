@@ -1,0 +1,25 @@
+[package]
+name = "aiwatcher-training"
+description = "Training runs and the model versions they produce: a durable registry, not a trace"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+aiwatcher-core.workspace = true
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+time.workspace = true
+utoipa.workspace = true
+
+[dev-dependencies]
+aiwatcher-prompts.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

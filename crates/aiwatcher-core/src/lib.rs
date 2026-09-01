@@ -14,6 +14,7 @@ pub mod attrs;
 pub mod catalog;
 pub mod checkpoint;
 pub mod context;
+pub mod engine;
 pub mod envelope;
 pub mod error;
 pub mod ids;
@@ -24,6 +25,11 @@ pub mod stream;
 pub use catalog::{EventType, Phase, Subject};
 pub use checkpoint::Checkpoint;
 pub use context::{ContextGenerator, ObservabilityContext, SeedContext, SystemContextGenerator};
+pub use engine::{
+    CatalogQuery, EngineCatalog, EngineDescription, EngineExecution, EngineParameter, EnginePhase,
+    EngineRef, EngineWorkflow, EntityKind, LaunchAccepted, LaunchError, LaunchRequest,
+    ParameterKind, PipelineStage, WorkflowEngine,
+};
 pub use envelope::{
     EventEnvelope, MessageKind, RecordedEvent, RecordedMetadata, SCHEMA_VERSION, Sdk, Source,
 };

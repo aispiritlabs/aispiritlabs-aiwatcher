@@ -10,6 +10,1111 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/api/v1/annotation-blobs": {
+      "post": {
+        "tags": [
+          "annotations"
+        ],
+        "summary": "Store an image under the digest of its own bytes.",
+        "description": "The digest is computed here. A content address supplied by the caller is\nnot a content address, and trusting one would let two different images\noccupy the same key.",
+        "operationId": "upload_blob",
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "These exact bytes were already stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoredBlob"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The bytes were stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoredBlob"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/annotation-blobs/{image_id}": {
+      "get": {
+        "tags": [
+          "annotations"
+        ],
+        "summary": "The bytes of an uploaded image.",
+        "description": "Immutable by construction — the key *is* the digest — so it is cached for a\nyear. An annotation canvas re-fetching a 2 MB plan on every pan would be the\nslowest part of the tool.",
+        "operationId": "get_blob",
+        "parameters": [
+          {
+            "name": "image_id",
+            "in": "path",
+            "description": "The image's SHA-256",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The image bytes"
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/annotation-export": {
+      "get": {
+        "tags": [
+          "annotations"
+        ],
+        "summary": "One immutable manifest: its samples, its splits, and every exclusion with\nits reason.",
+        "operationId": "get_export",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "export",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "split",
+            "in": "query",
+            "description": "One side of the split, for a trainer that wants its own file per split.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/Split"
+                }
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportManifest"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/annotation-export/coco": {
+      "get": {
+        "tags": [
+          "annotations"
+        ],
+        "summary": "The same export as a COCO document.",
+        "description": "Generated rather than stored: COCO is a derived view of the vector\nannotations, and storing it would be a second copy of the truth that can\ndisagree with the first. It reads one revision object per sample, which is\npaid once per training run rather than once per epoch.",
+        "operationId": "get_export_coco",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "export",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "split",
+            "in": "query",
+            "description": "One side of the split, for a trainer that wants its own file per split.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/Split"
+                }
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A COCO document",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/annotation-exports": {
+      "get": {
+        "tags": [
+          "annotations"
+        ],
+        "summary": "Every export built from a project, newest first.",
+        "operationId": "list_exports",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportPage"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "annotations"
+        ],
+        "summary": "Freeze the project as it stands into an immutable, content-addressed\nmanifest.",
+        "description": "The reference a training run records is `project@export`. Two exports of an\nunchanged project are one export, which is why re-running this nightly is\ncheap and why a manifest is a comparison boundary rather than a timestamp.",
+        "operationId": "build_export",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "This exact export already existed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BuiltExport"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "A new export was stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BuiltExport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/annotation-image": {
+      "get": {
+        "tags": [
+          "annotations"
+        ],
+        "summary": "One image, its revision history, one revision's shapes, and the side of the\nsplit its family is on.",
+        "operationId": "get_image",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "image_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "revision",
+            "in": "query",
+            "description": "Which revision's shapes to return. Omitted means the accepted one, then\nthe newest — what a labeller reopening an image expects to see.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/annotation-images": {
+      "get": {
+        "tags": [
+          "annotations"
+        ],
+        "summary": "The images in a project, newest registration first.",
+        "operationId": "list_images",
+        "parameters": [
+          {
+            "name": "project",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "review",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/ReviewState"
+                }
+              ]
+            }
+          },
+          {
+            "name": "split",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/Split"
+                }
+              ]
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImagePage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "annotations"
+        ],
+        "summary": "Register an image into a project, or correct what is known about it.",
+        "description": "Re-registering keeps the revisions and the review state: a plan re-submitted\nwith a corrected `group_id` is a correction, and resetting its labels would\npunish the correction.",
+        "operationId": "register_image",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterImageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageHead"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/annotation-presets": {
+      "get": {
+        "tags": [
+          "annotations"
+        ],
+        "summary": "The label schemas this build ships as a starting point.",
+        "description": "Not a database read: a project that starts from a blank vocabulary usually\ninvents one without a hinge point, and that is the vocabulary that has to be\nre-drawn. Shipping one is cheaper than discovering that.",
+        "operationId": "list_presets",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LabelClass"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/annotation-project": {
+      "get": {
+        "tags": [
+          "annotations"
+        ],
+        "summary": "One project, with the counts that answer \"is there enough data yet\".",
+        "operationId": "get_project",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectSummary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/annotation-projects": {
+      "get": {
+        "tags": [
+          "annotations"
+        ],
+        "summary": "Every annotation project.",
+        "operationId": "list_projects",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectPage"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "annotations"
+        ],
+        "summary": "Create a project, or replace its description, split policy and label schema.",
+        "description": "The schema version is re-derived from the classes. An unchanged class list\nkeeps its version and every accepted revision stays valid; a changed one is\na new version, and the next export names every revision drawn under the old\none as excluded rather than quietly relabelling them.",
+        "operationId": "save_project",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveProjectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnnotationProject"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/annotation-reviews": {
+      "post": {
+        "tags": [
+          "annotations"
+        ],
+        "summary": "Move an image's review state, and pin the revision an export will read.",
+        "operationId": "review_image",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageHead"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/annotation-revisions": {
+      "post": {
+        "tags": [
+          "annotations"
+        ],
+        "summary": "Save a drawing.",
+        "description": "A revision that does not validate against the project's schema is not\nstored at all, and the 422 carries every problem rather than the first.\nStoring an invalid revision and marking it so would move the decision about\nwhether a half-drawn door is a training target to whatever reads it next.",
+        "operationId": "save_revision",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveRevisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "These exact shapes already existed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRevision"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "A new revision was stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedRevision"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The drawing was refused; `details` holds every problem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/annotation-sources": {
+      "get": {
+        "tags": [
+          "annotations"
+        ],
+        "summary": "The public floor-plan corpora, and where to look for more.",
+        "description": "A dated table this build ships, not a search against Hugging Face or\nRoboflow. Those mirrors restate licences wrongly often enough that a live\nanswer would be worse than no answer, because it would arrive looking\nauthoritative. Every row links its original.",
+        "operationId": "list_sources",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Free text over name, summary, licence, labels and notes.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "usage",
+            "in": "query",
+            "description": "The filter that matters: what a commercial model may be trained on.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/SourceUsage"
+                }
+              ]
+            }
+          },
+          {
+            "name": "label",
+            "in": "query",
+            "description": "A label kind the corpus has to carry — `doors`, `scale`, `graph`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourcePage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/auth/callback": {
       "get": {
         "tags": [
@@ -642,6 +1747,380 @@
         }
       }
     },
+    "/api/v1/engine": {
+      "get": {
+        "tags": [
+          "engine"
+        ],
+        "summary": "Which engine this instance can reach, if any.",
+        "description": "A 501 rather than an empty body when none is configured, so a client can\ntell \"this deployment has no orchestrator\" from \"the orchestrator has\nnothing to run\" — different problems with different fixes.",
+        "operationId": "describe_engine",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngineDescription"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engine/launches": {
+      "post": {
+        "tags": [
+          "engine"
+        ],
+        "summary": "Start one.",
+        "description": "`202`, not `200`: nothing has run yet. What comes back is an\nacknowledgement carrying the engine's reference, a link into its console,\nand the `workflow_run_id` the events this execution publishes are expected\nto arrive under — which is what lets the panel open a live stream for work\nthat has not started.",
+        "operationId": "launch_workflow",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LaunchBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LaunchAccepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The engine refused it: an undeclared input, a missing one, a value that will not bind",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engine/launches/{reference}": {
+      "get": {
+        "tags": [
+          "engine"
+        ],
+        "summary": "Where one launched execution has got to, as the engine sees it.",
+        "description": "A second opinion, not the truth: aiwatcher's own view comes from the log\nand answers a different question. When they disagree the disagreement is\nthe finding — an execution the engine calls `succeeded` that published no\nevents is a producer nobody instrumented.",
+        "operationId": "get_launch",
+        "parameters": [
+          {
+            "name": "reference",
+            "in": "path",
+            "description": "The reference from a launch, e.g. project:domain:execution",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngineExecution"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engine/workflows": {
+      "get": {
+        "tags": [
+          "engine"
+        ],
+        "summary": "One page of what the engine could start.",
+        "operationId": "list_engine_workflows",
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Case-insensitive substring over name and description.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "project",
+            "in": "query",
+            "description": "Overrides the configured project and domain for this request.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "domain",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "stage",
+            "in": "query",
+            "description": "`curation | training | evaluation | inference`. A hint the engine\nderived from the entity's name — see `core::engine::PipelineStage`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "description": "The engine's own continuation token, from a previous `next_token`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngineCatalog"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engine/workflows/{workflow_id}": {
+      "get": {
+        "tags": [
+          "engine"
+        ],
+        "summary": "One entity and the inputs it declares.",
+        "description": "Read again at launch time by the adapter, so this is what a form renders\nand never what a launch is validated against — a panel open since before a\nredeploy is showing an interface that no longer exists.",
+        "operationId": "get_engine_workflow",
+        "parameters": [
+          {
+            "name": "workflow_id",
+            "in": "path",
+            "description": "An engine reference, e.g. lp:project:domain:name:version",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngineWorkflow"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/evaluation-suites": {
       "get": {
         "tags": [
@@ -1024,6 +2503,284 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/MetricsSummary"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/models": {
+      "get": {
+        "tags": [
+          "training"
+        ],
+        "summary": "Every registered model.",
+        "operationId": "list_models",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelPage"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "training"
+        ],
+        "summary": "Register what a run produced.",
+        "description": "The provenance — dataset, framework, code — is read from the run rather\nthan from this request, so a version cannot claim a lineage the run it\nnames does not have. A version that cannot be promoted is still recorded,\nand the reason comes back with it.",
+        "operationId": "register_model",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterModelRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "This exact version already existed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisteredModel"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "A new version was stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisteredModel"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/models/{name}": {
+      "get": {
+        "tags": [
+          "training"
+        ],
+        "summary": "One model: its versions, its labels, and one version's record.",
+        "operationId": "get_model",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The model name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "description": "Omitted resolves `production`, then the newest version.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/models/{name}/labels": {
+      "post": {
+        "tags": [
+          "training"
+        ],
+        "summary": "Point a label at a version.",
+        "description": "The one write here that changes what a service loads next, so it needs\n`admin` — and the one the registry itself can refuse: a version with no\nheld-out measurement, or one trained on a dataset name nobody can\nreconstruct, is not promotable however much anybody wants it to be.",
+        "operationId": "set_model_label",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The model name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelLabelRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelHead"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The version may not be promoted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
                 }
               }
             }
@@ -2080,6 +3837,406 @@
         }
       }
     },
+    "/api/v1/training-runs": {
+      "get": {
+        "tags": [
+          "training"
+        ],
+        "summary": "Training runs, newest first.",
+        "operationId": "list_training_runs",
+        "parameters": [
+          {
+            "name": "model",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/TrainingStatus"
+                }
+              ]
+            }
+          },
+          {
+            "name": "dataset",
+            "in": "query",
+            "description": "An exact `project@version`, or a bare project name to match every\nexport of it.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrainingRunPage"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "training"
+        ],
+        "summary": "Open a training run.",
+        "description": "Answered before the first epoch on purpose: if this instance is going to\nrefuse the run, a trainer should find out now rather than after six GPU\nhours. Re-opening an already-open run returns it, so a retried start does\nnot lose the curve it already wrote.",
+        "operationId": "start_training_run",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrainingRun"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The run id already finished",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/training-runs/{run_id}": {
+      "get": {
+        "tags": [
+          "training"
+        ],
+        "summary": "One run, with its whole curve.",
+        "operationId": "get_training_run",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "description": "The run id the trainer chose",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrainingRun"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/training-runs/{run_id}/finish": {
+      "post": {
+        "tags": [
+          "training"
+        ],
+        "summary": "Close a run.",
+        "operationId": "finish_training_run",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "description": "The run id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FinishRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrainingRunSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/training-runs/{run_id}/progress": {
+      "post": {
+        "tags": [
+          "training"
+        ],
+        "summary": "One batch of progress: epochs, sampled points, checkpoints, profiles.",
+        "description": "Returns the summary rather than the whole record, because a trainer flushing\nevery epoch does not want its own curve back every time.",
+        "operationId": "record_training_progress",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "description": "The run id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProgressRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrainingRunSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The run has finished",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/workflow-executions": {
       "get": {
         "tags": [
@@ -2577,6 +4734,142 @@
           }
         }
       },
+      "Annotation": {
+        "type": "object",
+        "description": "One drawn instance.",
+        "required": [
+          "id",
+          "class",
+          "geometry"
+        ],
+        "properties": {
+          "attributes": {
+            "type": "object"
+          },
+          "class": {
+            "type": "string"
+          },
+          "confidence": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "What the producer thought of its own proposal. Present for `model` and\n`ocr`, meaningless for `human`."
+          },
+          "geometry": {
+            "$ref": "#/components/schemas/Geometry"
+          },
+          "id": {
+            "type": "string",
+            "description": "Unique within its revision. Supplied by the client so links can be\ndrawn before a save, and validated rather than trusted."
+          },
+          "links": {
+            "type": "object",
+            "description": "Named references to other instances in this revision."
+          },
+          "origin": {
+            "$ref": "#/components/schemas/Origin"
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What a recogniser read, for a text instance."
+          }
+        }
+      },
+      "AnnotationProject": {
+        "type": "object",
+        "description": "One annotation project: its vocabulary, its split policy, its overrides.",
+        "required": [
+          "name",
+          "schema",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "description": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "schema": {
+            "$ref": "#/components/schemas/LabelSchema"
+          },
+          "split_overrides": {
+            "type": "object",
+            "description": "`group_id` to a fixed side, for the houses that have to be in the test\nset. Keyed by family for the same reason the hash is.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Split"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "split_salt": {
+            "type": "string",
+            "description": "Mixed into the split hash. Changing it re-deals every family, which is\noccasionally what you want and never what you want by accident — so it\nis stored, and an export records the one it used."
+          },
+          "splits": {
+            "$ref": "#/components/schemas/SplitRatios"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "AnnotationRevision": {
+        "type": "object",
+        "description": "One immutable set of shapes for one image.",
+        "required": [
+          "project",
+          "image_id",
+          "schema_version",
+          "revision",
+          "annotations",
+          "created_at"
+        ],
+        "properties": {
+          "annotations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Annotation"
+            }
+          },
+          "author": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "image_id": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "project": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string",
+            "description": "SHA-256 of the shapes, the schema version and the image. Author, notes\nand time are deliberately outside it: two people drawing the same thing\nis one revision."
+          },
+          "schema_version": {
+            "type": "string",
+            "description": "The schema these shapes were checked against. An export refuses a\nrevision drawn under a different vocabulary rather than guessing."
+          }
+        }
+      },
       "Artifact": {
         "type": "object",
         "description": "Something a node produced, by reference.\n\nThe bytes stay wherever the producer put them. aiwatcher keeps the pointer\nbecause a pointer is bounded and a floor-plan PDF is not — see the\nartifact guardrail in `CLAUDE.md`.",
@@ -2618,6 +4911,47 @@
           }
         }
       },
+      "AttributeDef": {
+        "type": "object",
+        "description": "One typed field on a class.",
+        "required": [
+          "name",
+          "kind"
+        ],
+        "properties": {
+          "default": {},
+          "description": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/AttributeKind"
+          },
+          "name": {
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean",
+            "description": "A required attribute is refused when missing, which is what stops a\nhalf-labelled door from reaching a training export."
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The closed vocabulary for [`AttributeKind::Enum`]. Ignored otherwise."
+          }
+        }
+      },
+      "AttributeKind": {
+        "type": "string",
+        "description": "The type of one attribute a class carries.",
+        "enum": [
+          "enum",
+          "bool",
+          "number",
+          "text"
+        ]
+      },
       "AuthMode": {
         "type": "string",
         "description": "Where identity comes from.",
@@ -2626,6 +4960,31 @@
           "oidc",
           "proxy"
         ]
+      },
+      "BestMetric": {
+        "type": "object",
+        "description": "The number a run is judged on.",
+        "required": [
+          "metric",
+          "value"
+        ],
+        "properties": {
+          "epoch": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "metric": {
+            "type": "string"
+          },
+          "value": {
+            "type": "number",
+            "format": "double"
+          }
+        }
       },
       "Bucket": {
         "type": "object",
@@ -2679,6 +5038,22 @@
           }
         }
       },
+      "BuiltExport": {
+        "type": "object",
+        "required": [
+          "manifest",
+          "created"
+        ],
+        "properties": {
+          "created": {
+            "type": "boolean",
+            "description": "False when this exact export already existed."
+          },
+          "manifest": {
+            "$ref": "#/components/schemas/ExportManifest"
+          }
+        }
+      },
       "CaseDelta": {
         "type": "object",
         "required": [
@@ -2711,6 +5086,100 @@
       "Checkpoint": {
         "type": "string",
         "description": "An opaque resume position in the log."
+      },
+      "CheckpointInput": {
+        "type": "object",
+        "required": [
+          "uri"
+        ],
+        "properties": {
+          "best": {
+            "type": "boolean"
+          },
+          "epoch": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "metric": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "step": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "uri": {
+            "type": "string"
+          },
+          "value": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        },
+        "additionalProperties": false
+      },
+      "CheckpointRecord": {
+        "type": "object",
+        "description": "Where the weights went, and what selected them. Never the weights.",
+        "required": [
+          "uri",
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "best": {
+            "type": "boolean"
+          },
+          "epoch": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "metric": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What selected it. A checkpoint with no metric is a periodic save; one\nwith a metric is a decision."
+          },
+          "step": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "uri": {
+            "type": "string"
+          },
+          "value": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        }
       },
       "ConversationPage": {
         "type": "object",
@@ -2965,6 +5434,90 @@
           }
         }
       },
+      "DatasetSource": {
+        "type": "object",
+        "description": "One corpus.",
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "summary",
+          "item_label",
+          "labels",
+          "media",
+          "license",
+          "usage",
+          "access",
+          "url",
+          "verified_on",
+          "notes"
+        ],
+        "properties": {
+          "access": {
+            "$ref": "#/components/schemas/SourceAccess"
+          },
+          "id": {
+            "type": "string"
+          },
+          "item_label": {
+            "type": "string"
+          },
+          "items": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Best published figure. `None` where the authors give a range.",
+            "minimum": 0
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SourceKind"
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What it labels, in this crate's vocabulary: `walls`, `rooms`, `doors`,\n`windows`, `openings`, `stairs`, `text`, `scale`, `graph`, `furniture`,\n`symbols`."
+          },
+          "license": {
+            "type": "string"
+          },
+          "media": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`raster`, `vector`, `cad`, `panorama`."
+          },
+          "name": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "paper": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "summary": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/SourceUsage"
+          },
+          "verified_on": {
+            "type": "string",
+            "description": "When somebody last read the licence at `url`."
+          }
+        }
+      },
       "DatasetSummary": {
         "type": "object",
         "required": [
@@ -3214,6 +5767,308 @@
           }
         }
       },
+      "EngineCatalog": {
+        "type": "object",
+        "description": "A page of launchable things.",
+        "required": [
+          "workflows"
+        ],
+        "properties": {
+          "next_token": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Absent on the last page."
+          },
+          "workflows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EngineWorkflow"
+            }
+          }
+        }
+      },
+      "EngineDescription": {
+        "type": "object",
+        "description": "How this instance is wired, for a client deciding what to render.",
+        "required": [
+          "kind",
+          "project",
+          "domain"
+        ],
+        "properties": {
+          "console_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The engine's console, when one is configured, so the panel can link out\nrather than pretending to be it."
+          },
+          "domain": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "description": "`flyte` today. A name, not a version: the panel branches on nothing."
+          },
+          "project": {
+            "type": "string"
+          }
+        }
+      },
+      "EngineExecution": {
+        "type": "object",
+        "description": "Where an execution has got to, as the engine sees it.\n\naiwatcher's own view of a run comes from the log and says something\ndifferent: `RunStatus` is what the *producer* reported. When they disagree\nthe disagreement is the finding — an execution the orchestrator calls\n`Failed` whose events stop mid-run is a pod that was killed, and one it\ncalls `Succeeded` with no events at all is a producer that is not\ninstrumented.",
+        "required": [
+          "reference",
+          "phase"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "phase": {
+            "$ref": "#/components/schemas/EnginePhase"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workflow": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workflow_run_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Read back from the execution's labels, when aiwatcher set one."
+          }
+        }
+      },
+      "EngineParameter": {
+        "type": "object",
+        "description": "The shape of one declared input, for a form to render.\n\nDisplay only. Whatever a caller sends is bound to the engine's *own*\ndeclared type at launch time, read from the engine at that moment — see\n[`WorkflowEngine::launch`]. A panel that has been open since before a\nredeploy is therefore rendering a stale form against a fresh interface, and\nthe launch fails with the engine's own message rather than binding a value\nto a type nobody checked.",
+        "required": [
+          "name",
+          "kind",
+          "required"
+        ],
+        "properties": {
+          "default": {
+            "type": "object",
+            "description": "The default, rendered as JSON. `None` means there is none, which for a\nrequired parameter is the normal case."
+          },
+          "description": {
+            "type": "string"
+          },
+          "enum_values": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The permitted values, when the engine declared a closed set. Turns a\ntext box into a select, which is the difference between a filter\nsomebody types wrong and one they pick."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ParameterKind"
+          },
+          "name": {
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean",
+            "description": "Required *and* without a default. A parameter with a default is\noptional however the engine phrases it."
+          },
+          "type_name": {
+            "type": "string",
+            "description": "The engine's own name for the type, for the cases [`ParameterKind`]\nflattens: a blob, a structured dataset, a union. Shown beside the\nfield so a `Json` box is not a mystery."
+          }
+        }
+      },
+      "EnginePhase": {
+        "type": "string",
+        "enum": [
+          "queued",
+          "running",
+          "succeeded",
+          "failed",
+          "aborted",
+          "unknown"
+        ]
+      },
+      "EngineWorkflow": {
+        "type": "object",
+        "description": "One thing a caller could start.",
+        "required": [
+          "id",
+          "name",
+          "project",
+          "domain",
+          "kind",
+          "parameters",
+          "active"
+        ],
+        "properties": {
+          "active": {
+            "type": "boolean",
+            "description": "Whether the engine considers this version launchable. An inactive\nlaunch plan is listed rather than hidden, because \"it is there and it\nis switched off\" is the answer somebody is looking for when they cannot\nfind it."
+          },
+          "description": {
+            "type": "string"
+          },
+          "domain": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "description": "[`EngineRef::render`] — what `POST /launches` and the detail route take."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/EntityKind"
+          },
+          "name": {
+            "type": "string",
+            "description": "The registered name, without project or domain."
+          },
+          "parameters": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EngineParameter"
+            }
+          },
+          "project": {
+            "type": "string"
+          },
+          "stage_hint": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PipelineStage",
+                "description": "A guess, never a fact — see [`PipelineStage`]."
+              }
+            ]
+          },
+          "updated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where to see it in the engine's own console, when one is configured."
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "EntityKind": {
+        "type": "string",
+        "description": "The kind of registered thing a launch names.\n\nFlyte's launchable unit is a launch plan; a task and a workflow are\nregistered entities that a launch plan points at. Other engines divide this\ndifferently, so the kind travels with the reference rather than being\nassumed.",
+        "enum": [
+          "launch_plan",
+          "task",
+          "workflow"
+        ]
+      },
+      "EpochInput": {
+        "type": "object",
+        "required": [
+          "epoch"
+        ],
+        "properties": {
+          "duration_ms": {
+            "type": "number",
+            "format": "double"
+          },
+          "epoch": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "metrics": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number",
+              "format": "double"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "steps": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "EpochRecord": {
+        "type": "object",
+        "description": "One epoch: the grain a human reads a training run at.",
+        "required": [
+          "epoch",
+          "duration_ms",
+          "steps",
+          "metrics",
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "duration_ms": {
+            "type": "number",
+            "format": "double"
+          },
+          "epoch": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "metrics": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number",
+              "format": "double"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "steps": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Optimiser steps inside this epoch. Counted by the client, never sent\none by one — a step is arithmetic, not a request.",
+            "minimum": 0
+          }
+        }
+      },
       "ErrorBody": {
         "type": "object",
         "description": "The body every error response carries.",
@@ -3225,6 +6080,13 @@
           "code": {
             "type": "string",
             "description": "Stable machine-readable discriminator. Switch on this, not on `message`."
+          },
+          "details": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "One line per problem, where a request can fail in more than one way at\nonce. An annotation is the case that needs it: a labeller fixing one\nerror per round trip stops using the tool, so every problem in a\ndrawing is reported together. Absent everywhere else, which keeps the\none JSON shape one shape."
           },
           "message": {
             "type": "string"
@@ -3853,6 +6715,19 @@
         ],
         "description": "Every event type aiwatcher understands, plus a passthrough for the\nones it does not.\n\n[`EventType::Unknown`] is deliberate: a producer running a newer SDK\nmust not have its events rejected. They are stored and streamed\nlive, they simply take part in no span."
       },
+      "ExclusionReason": {
+        "type": "string",
+        "description": "Why an image is not in an export.\n\nEvery one of these is listed by name in the manifest rather than silently\ndropped. An export that quietly loses a third of a corpus reads exactly\nlike one that did not.",
+        "enum": [
+          "rights",
+          "unreviewed",
+          "empty",
+          "schema_mismatch",
+          "view_type",
+          "missing",
+          "no_requested_class"
+        ]
+      },
       "ExecutionDetail": {
         "type": "object",
         "description": "One execution, with everything needed to draw it.",
@@ -4048,6 +6923,526 @@
           }
         }
       },
+      "ExportCounts": {
+        "type": "object",
+        "required": [
+          "images",
+          "groups",
+          "instances",
+          "excluded",
+          "images_per_split",
+          "groups_per_split",
+          "instances_per_class",
+          "instances_per_class_split"
+        ],
+        "properties": {
+          "excluded": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "groups": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "groups_per_split": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "images": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "images_per_split": {
+            "type": "object",
+            "description": "`train | validation | test` to image count.",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "instances": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "instances_per_class": {
+            "type": "object",
+            "description": "Class to instance count, over the whole export.",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "instances_per_class_split": {
+            "type": "object",
+            "description": "Class to per-split instance counts. This is the table that says the test\nset contains four doors, which is the number that invalidates a recall\nfigure before anybody quotes it.",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "propertyNames": {
+                "type": "string"
+              }
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ExportExclusion": {
+        "type": "object",
+        "required": [
+          "image_id",
+          "group_id",
+          "reason"
+        ],
+        "properties": {
+          "detail": {
+            "type": "string"
+          },
+          "group_id": {
+            "type": "string"
+          },
+          "image_id": {
+            "type": "string"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/ExclusionReason"
+          }
+        }
+      },
+      "ExportManifest": {
+        "type": "object",
+        "description": "The immutable result.",
+        "required": [
+          "export",
+          "project",
+          "schema_version",
+          "created_at",
+          "rights_policy",
+          "require_human_review",
+          "all_view_types",
+          "splits",
+          "split_salt",
+          "classes",
+          "samples",
+          "excluded",
+          "counts"
+        ],
+        "properties": {
+          "all_view_types": {
+            "type": "boolean"
+          },
+          "classes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "In schema order. The index in this list is the category id COCO uses,\nwhich is why the order is fixed by the schema and not by first sight."
+          },
+          "counts": {
+            "$ref": "#/components/schemas/ExportCounts"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "excluded": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExportExclusion"
+            }
+          },
+          "export": {
+            "type": "string",
+            "description": "SHA-256 of everything below except `created_at` and `note`. Two exports\nof an unchanged project are one export."
+          },
+          "note": {
+            "type": "string"
+          },
+          "project": {
+            "type": "string"
+          },
+          "require_human_review": {
+            "type": "boolean"
+          },
+          "rights_policy": {
+            "$ref": "#/components/schemas/RightsPolicy"
+          },
+          "samples": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExportSample"
+            }
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "split_salt": {
+            "type": "string"
+          },
+          "splits": {
+            "$ref": "#/components/schemas/SplitRatios"
+          }
+        }
+      },
+      "ExportPage": {
+        "type": "object",
+        "required": [
+          "exports"
+        ],
+        "properties": {
+          "exports": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExportSummary"
+            }
+          }
+        }
+      },
+      "ExportRequest": {
+        "type": "object",
+        "description": "What a caller asks for.",
+        "required": [
+          "project"
+        ],
+        "properties": {
+          "all_view_types": {
+            "type": "boolean",
+            "description": "Include sections and elevations. Off by default."
+          },
+          "classes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Empty means every class in the schema."
+          },
+          "note": {
+            "type": "string"
+          },
+          "project": {
+            "type": "string"
+          },
+          "require_human_review": {
+            "type": "boolean",
+            "description": "Refuse an image whose accepted revision was produced entirely by a model\nor an import. Defaults to on, because that is the whole point of\nrecording an origin."
+          },
+          "rights_policy": {
+            "$ref": "#/components/schemas/RightsPolicy"
+          },
+          "split_salt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Overrides the project's salt for this export only."
+          },
+          "splits": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SplitRatios",
+                "description": "Overrides the project's ratios for this export only."
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "ExportSample": {
+        "type": "object",
+        "description": "One image in an export, pinned to the revision that was accepted when the\nexport was built.",
+        "required": [
+          "image_id",
+          "uri",
+          "width",
+          "height",
+          "group_id",
+          "split",
+          "revision",
+          "rights",
+          "instances"
+        ],
+        "properties": {
+          "group_id": {
+            "type": "string"
+          },
+          "height": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "image_id": {
+            "type": "string"
+          },
+          "instances": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "level": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "type": "string"
+          },
+          "rights": {
+            "type": "string",
+            "description": "Flattened for the manifest so a reader can see the licence mix without\nresolving every image."
+          },
+          "source": {
+            "type": "string"
+          },
+          "split": {
+            "$ref": "#/components/schemas/Split"
+          },
+          "uri": {
+            "type": "string"
+          },
+          "width": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "ExportSummary": {
+        "type": "object",
+        "required": [
+          "export",
+          "project",
+          "schema_version",
+          "created_at",
+          "rights_policy",
+          "counts"
+        ],
+        "properties": {
+          "counts": {
+            "$ref": "#/components/schemas/ExportCounts"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "export": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          },
+          "project": {
+            "type": "string"
+          },
+          "rights_policy": {
+            "$ref": "#/components/schemas/RightsPolicy"
+          },
+          "schema_version": {
+            "type": "string"
+          }
+        }
+      },
+      "FinishRunRequest": {
+        "type": "object",
+        "description": "What closes a run.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "best": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BestMetric"
+              }
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "$ref": "#/components/schemas/TrainingStatus"
+          }
+        },
+        "additionalProperties": false
+      },
+      "Geometry": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "at",
+              "kind"
+            ],
+            "properties": {
+              "at": {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "point"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Renamed for the same reason [`GeometryKind::BBox`] is: the derived\nsnake_case of `BBox` is `b_box`.",
+            "required": [
+              "min",
+              "max",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "bbox"
+                ]
+              },
+              "max": {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                }
+              },
+              "min": {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "points",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "polyline"
+                ]
+              },
+              "points": {
+                "type": "array",
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "number",
+                    "format": "double"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "exterior",
+              "kind"
+            ],
+            "properties": {
+              "exterior": {
+                "type": "array",
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "number",
+                    "format": "double"
+                  }
+                }
+              },
+              "holes": {
+                "type": "array",
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "type": "number",
+                      "format": "double"
+                    }
+                  }
+                },
+                "description": "Interior rings. A room with a chimney is one polygon with one hole,\nnot two polygons whose difference a consumer has to infer."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "polygon"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "points",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "keypoints"
+                ]
+              },
+              "points": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Keypoint"
+                }
+              }
+            }
+          }
+        ],
+        "description": "What was drawn."
+      },
+      "GeometryKind": {
+        "type": "string",
+        "description": "The shape a class is drawn as.\n\nOne kind per class, checked on save. A class drawn as a polygon in one\nimage and a box in another produces a training target nothing can decode.",
+        "enum": [
+          "point",
+          "bbox",
+          "polyline",
+          "polygon",
+          "keypoints"
+        ]
+      },
       "Identity": {
         "type": "object",
         "description": "An authenticated caller.",
@@ -4106,6 +7501,185 @@
           }
         }
       },
+      "ImageDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ImageHead"
+          },
+          {
+            "type": "object",
+            "required": [
+              "split"
+            ],
+            "properties": {
+              "revision": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/AnnotationRevision",
+                    "description": "The shapes of one revision — the accepted one, or the one asked for."
+                  }
+                ]
+              },
+              "split": {
+                "$ref": "#/components/schemas/Split",
+                "description": "Which side of the split this image's family is on, under the project's\ncurrent policy. Shown so a labeller knows whether they are drawing a\ntest case, which changes how carefully they draw it."
+              }
+            }
+          }
+        ],
+        "description": "Where one image's revisions and its head are read together."
+      },
+      "ImageHead": {
+        "type": "object",
+        "description": "One image's mutable head: what it is, what has been drawn on it, and which\nof those drawings is the truth.",
+        "required": [
+          "project",
+          "image"
+        ],
+        "properties": {
+          "accepted": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The revision an export reads. Set only by acceptance."
+          },
+          "image": {
+            "$ref": "#/components/schemas/ImageRecord"
+          },
+          "note": {
+            "type": "string"
+          },
+          "project": {
+            "type": "string"
+          },
+          "review": {
+            "$ref": "#/components/schemas/ReviewState"
+          },
+          "reviewed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "reviewed_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revisions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RevisionSummary"
+            },
+            "description": "Newest first."
+          }
+        }
+      },
+      "ImagePage": {
+        "type": "object",
+        "required": [
+          "images",
+          "total",
+          "offset",
+          "limit"
+        ],
+        "properties": {
+          "images": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImageHead"
+            }
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "next_offset": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "ImageRecord": {
+        "type": "object",
+        "description": "One registered image.",
+        "required": [
+          "image_id",
+          "uri",
+          "width",
+          "height",
+          "group_id",
+          "source",
+          "rights",
+          "registered_at"
+        ],
+        "properties": {
+          "group_id": {
+            "type": "string",
+            "description": "The split key. Every rendering of one building shares it."
+          },
+          "height": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "image_id": {
+            "type": "string",
+            "description": "SHA-256 of the bytes, lowercase hex. Computed by the server on upload\nand never taken from the client."
+          },
+          "level": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`ground_floor`, `attic`, `basement`. Free text, because the vocabulary\ndiffers per supplier and guessing it wrong is worse than keeping theirs."
+          },
+          "metadata": {
+            "type": "object",
+            "description": "Everything known about this plan that did not come from the pixels: the\nroom names and areas from the catalogue page, the plan's own dimensions,\nthe listing URL.\n\nThis is the field that makes OCR a cross-check rather than a source."
+          },
+          "registered_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "rights": {
+            "$ref": "#/components/schemas/UsageRights"
+          },
+          "source": {
+            "type": "string",
+            "description": "Where it came from — a supplier, a public corpus, a scan batch."
+          },
+          "uri": {
+            "type": "string",
+            "description": "Where the bytes are. `blob:<image_id>` for something uploaded here."
+          },
+          "view": {
+            "$ref": "#/components/schemas/ViewType"
+          },
+          "width": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
       "IngestRequest": {
         "type": "object",
         "required": [
@@ -4138,6 +7712,85 @@
           }
         }
       },
+      "Keypoint": {
+        "type": "object",
+        "description": "One named position inside a keypoint instance.",
+        "required": [
+          "name",
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "visible": {
+            "type": "boolean",
+            "description": "False when the plan shows the element but not this position — a door\nwhose leaf is drawn open past the page edge still has a hinge."
+          }
+        }
+      },
+      "LabelClass": {
+        "type": "object",
+        "description": "One drawable class.",
+        "required": [
+          "name",
+          "geometry"
+        ],
+        "properties": {
+          "attributes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AttributeDef"
+            }
+          },
+          "color": {
+            "type": "string",
+            "description": "What the canvas draws it in. Presentation only; nothing downstream may\ndepend on it."
+          },
+          "description": {
+            "type": "string"
+          },
+          "geometry": {
+            "$ref": "#/components/schemas/GeometryKind"
+          },
+          "ignore": {
+            "type": "boolean",
+            "description": "Excluded from every training target and from the loss.\n\nThe furniture, the hatching and the title block are not background —\nthey are pixels a model must not be scored on either way. Marking them\nis cheaper than labelling them and far cheaper than the false positives\nthey produce."
+          },
+          "keypoints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The named positions a [`GeometryKind::Keypoints`] class expects, in the\norder the tool asks for them."
+          },
+          "links": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LinkDef"
+            },
+            "description": "Named references this class may hold to other instances in the same\nimage: `wall` for an opening, `connects` for a door's two rooms."
+          },
+          "name": {
+            "type": "string",
+            "description": "Stable machine name — `wall_exterior`, not `Exterior wall`. Renaming it\nis a new schema version, never an edit."
+          },
+          "optional_keypoints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Keypoints that may be left out because the plan does not show them.\nEverything else in `keypoints` is required."
+          }
+        }
+      },
       "LabelRequest": {
         "type": "object",
         "required": [
@@ -4146,6 +7799,30 @@
         "properties": {
           "version_id": {
             "$ref": "#/components/schemas/PromptVersionId"
+          }
+        }
+      },
+      "LabelSchema": {
+        "type": "object",
+        "description": "The complete, versioned vocabulary of one project.\n\nContent-addressed like everything else authored here: the version is the\ndigest of the classes, so an unchanged schema re-saved is the same version\nand a renamed class is unmistakably a different one.",
+        "required": [
+          "version",
+          "classes",
+          "created_at"
+        ],
+        "properties": {
+          "classes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LabelClass"
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "version": {
+            "type": "string"
           }
         }
       },
@@ -4178,6 +7855,85 @@
           "tool": {
             "$ref": "#/components/schemas/Percentiles",
             "description": "Per tool call."
+          }
+        }
+      },
+      "LaunchAccepted": {
+        "type": "object",
+        "description": "What came back. Not a result — nothing has finished.",
+        "required": [
+          "reference"
+        ],
+        "properties": {
+          "reference": {
+            "type": "string",
+            "description": "The engine's name for the execution it just created."
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workflow_run_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Echoed back so the caller can subscribe to\n`/api/v1/workflow-executions/{id}/stream` immediately — before the\nproducer has published anything, which is the interesting part of a\nlaunch's first thirty seconds."
+          }
+        }
+      },
+      "LaunchBody": {
+        "type": "object",
+        "description": "What a caller may ask to start.\n\nNote what is not here, and it is the same absence as `RerunBody`: no\nendpoint, no image, no command. `deny_unknown_fields` so an attempt to\nsupply one is a 400 rather than a field that is silently ignored and reads\nas accepted.",
+        "required": [
+          "workflow"
+        ],
+        "properties": {
+          "inputs": {
+            "type": "object",
+            "description": "Parameter name to value, bound to the types the engine declares."
+          },
+          "workflow": {
+            "type": "string",
+            "description": "The engine reference from the catalog, e.g.\n`lp:planner:production:house_dataset_curation:v7`."
+          },
+          "workflow_run_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Supply one to join this execution to events a producer will publish\nunder an id it already knows. Left out, aiwatcher mints one and returns\nit, which is what the panel follows."
+          }
+        },
+        "additionalProperties": false
+      },
+      "LinkDef": {
+        "type": "object",
+        "description": "One named reference from an instance to another instance.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "max": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "min": {
+            "type": "integer",
+            "description": "How many targets this link must have. `(1, 1)` for an opening's wall,\n`(2, 2)` for the two spaces it connects.",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "targets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Classes the target may belong to. Empty means any class."
           }
         }
       },
@@ -4504,6 +8260,205 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "ModelDetail": {
+        "type": "object",
+        "description": "One model, its head and one version's full record.\n\n`head` is a field rather than a flattened one, unlike the annotation\nregistry's equivalent. Flattening reads better in the JSON and produces a\nTypeScript intersection type that the panel then cannot narrow, so the\nnesting is the price of the client being generated rather than written.",
+        "required": [
+          "head"
+        ],
+        "properties": {
+          "current": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ModelVersion"
+              }
+            ]
+          },
+          "head": {
+            "$ref": "#/components/schemas/ModelHead"
+          }
+        }
+      },
+      "ModelHead": {
+        "type": "object",
+        "description": "One model's mutable head: its versions, newest first, and its labels.\n\nLabels live here and nowhere else, exactly as a prompt's do: a version is\nimmutable and `production` is not.",
+        "required": [
+          "name",
+          "updated_at"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "labels": {
+            "type": "object",
+            "description": "Label to version id. `production` is the one a deployment reads.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "versions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModelVersionSummary"
+            }
+          }
+        }
+      },
+      "ModelLabelRequest": {
+        "type": "object",
+        "required": [
+          "label",
+          "version"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ModelMetrics": {
+        "type": "object",
+        "description": "What a version measured, split by which data measured it.\n\nTwo maps rather than one, because the distinction is the whole point.\n`validation` is what the training loop watched and selected against;\n`test` is what nothing was allowed to look at. A registry that merged them\nwould let a model be promoted on the number its own early stopping\nmaximised.",
+        "properties": {
+          "test": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number",
+              "format": "double"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "validation": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number",
+              "format": "double"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ModelPage": {
+        "type": "object",
+        "required": [
+          "models"
+        ],
+        "properties": {
+          "models": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModelHead"
+            }
+          }
+        }
+      },
+      "ModelVersion": {
+        "type": "object",
+        "description": "One registered model version.",
+        "required": [
+          "name",
+          "version",
+          "run_id",
+          "dataset",
+          "checkpoint_uri",
+          "reproducible",
+          "created_at"
+        ],
+        "properties": {
+          "checkpoint_uri": {
+            "type": "string",
+            "description": "Where the weights are. A pointer, like every other artifact here."
+          },
+          "code": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "dataset": {
+            "type": "string",
+            "description": "`project@export-sha256` from the annotation registry."
+          },
+          "framework": {
+            "type": "string"
+          },
+          "metrics": {
+            "$ref": "#/components/schemas/ModelMetrics"
+          },
+          "name": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "reproducible": {
+            "type": "boolean",
+            "description": "False when the dataset is a mutable name rather than an immutable\nexport reference. Recorded rather than refused, and it is what blocks\na promotion."
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string",
+            "description": "SHA-256 of what makes this version *this* version: the run, the\ncheckpoint, the dataset and the measurements. Registering the same\nthing twice is one version."
+          }
+        }
+      },
+      "ModelVersionSummary": {
+        "type": "object",
+        "description": "A version as it appears in a list.",
+        "required": [
+          "version",
+          "run_id",
+          "dataset",
+          "reproducible",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "dataset": {
+            "type": "string"
+          },
+          "metrics": {
+            "$ref": "#/components/schemas/ModelMetrics"
+          },
+          "reproducible": {
+            "type": "boolean"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
           }
         }
       },
@@ -4933,6 +8888,32 @@
           }
         }
       },
+      "Origin": {
+        "type": "string",
+        "description": "Who drew a shape.\n\nThe whole reason a model-assisted pass is affordable: pre-annotation is\nwelcome and is recorded as such, so an export can require that a human\nlooked at it. A field that defaulted to `human` for machine output would\nmake the distinction unrecoverable one import later.",
+        "enum": [
+          "human",
+          "model",
+          "import",
+          "ocr"
+        ]
+      },
+      "ParameterKind": {
+        "type": "string",
+        "description": "How a form should render one input.",
+        "enum": [
+          "string",
+          "integer",
+          "float",
+          "boolean",
+          "datetime",
+          "duration",
+          "enum",
+          "collection",
+          "map",
+          "json"
+        ]
+      },
       "Percentiles": {
         "type": "object",
         "description": "Nearest-rank percentiles, in milliseconds.",
@@ -4961,6 +8942,151 @@
             "format": "double"
           }
         }
+      },
+      "PipelineStage": {
+        "type": "string",
+        "description": "Which part of the feature/training/inference cycle a workflow belongs to.\n\nA **hint**, and named as one everywhere it is rendered. It is derived from\nthe entity's own name and description, which is a guess: an orchestrator\nhas no field that says \"this one produces datasets\". The value is that a\npicker in Data Curation can default to curation workflows instead of\nlisting every launch plan in the cluster; the cost of being wrong is a\nfilter somebody switches off, which is why nothing but presentation may\ndepend on it.",
+        "enum": [
+          "curation",
+          "training",
+          "evaluation",
+          "inference"
+        ]
+      },
+      "ProfileInput": {
+        "type": "object",
+        "required": [
+          "summary"
+        ],
+        "properties": {
+          "summary": {
+            "type": "object"
+          },
+          "uri": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "ProfileRecord": {
+        "type": "object",
+        "description": "A profiler session, as the part somebody reads in a review.",
+        "required": [
+          "summary",
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "summary": {
+            "type": "object",
+            "description": "Top operators, totals, memory peak — whatever the profiler bridge\nproduced. Free-form because the fields on a profiler event have moved\nbetween framework releases more than once."
+          },
+          "uri": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where the full trace is, for whoever wants to open it in a profiler UI."
+          }
+        }
+      },
+      "ProgressRequest": {
+        "type": "object",
+        "description": "One batched write of progress.\n\nBatched rather than four endpoints, because the client buffers: a six-hour\nrun should make one request per epoch, not four, and an epoch that is\nretried after a network blip has to land on the epoch it already wrote\nrather than beside it.",
+        "properties": {
+          "checkpoints": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CheckpointInput"
+            }
+          },
+          "epochs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EpochInput"
+            }
+          },
+          "profiles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProfileInput"
+            }
+          },
+          "samples": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SampleInput"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "ProjectPage": {
+        "type": "object",
+        "required": [
+          "projects"
+        ],
+        "properties": {
+          "projects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AnnotationProject"
+            }
+          }
+        }
+      },
+      "ProjectSummary": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/AnnotationProject"
+          },
+          {
+            "type": "object",
+            "required": [
+              "images",
+              "accepted",
+              "groups",
+              "instances",
+              "per_class"
+            ],
+            "properties": {
+              "accepted": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "groups": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "images": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "instances": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "per_class": {
+                "type": "object",
+                "description": "Instances per class over accepted revisions only. The number that says\nwhether there are enough doors yet.",
+                "additionalProperties": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        ],
+        "description": "A project as it appears in a list, with the counts a reader wants first."
       },
       "PromptDetail": {
         "type": "object",
@@ -5673,6 +9799,124 @@
           }
         }
       },
+      "RegisterImageRequest": {
+        "type": "object",
+        "description": "What is being asked for when an image is registered.",
+        "required": [
+          "project",
+          "image_id",
+          "uri",
+          "width",
+          "height",
+          "group_id",
+          "rights"
+        ],
+        "properties": {
+          "group_id": {
+            "type": "string"
+          },
+          "height": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "image_id": {
+            "type": "string"
+          },
+          "level": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "project": {
+            "type": "string"
+          },
+          "rights": {
+            "$ref": "#/components/schemas/UsageRights"
+          },
+          "source": {
+            "type": "string"
+          },
+          "uri": {
+            "type": "string"
+          },
+          "view": {
+            "$ref": "#/components/schemas/ViewType"
+          },
+          "width": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "RegisterModelRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "run_id",
+          "checkpoint_uri"
+        ],
+        "properties": {
+          "checkpoint_uri": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "metrics": {
+            "$ref": "#/components/schemas/ModelMetrics"
+          },
+          "name": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "run_id": {
+            "type": "string",
+            "description": "The run that produced it. Read for its dataset, framework and code, so\na version cannot claim provenance the run does not have."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RegisteredModel": {
+        "type": "object",
+        "description": "What registering returned.",
+        "required": [
+          "version",
+          "head",
+          "created"
+        ],
+        "properties": {
+          "created": {
+            "type": "boolean",
+            "description": "False when this exact version already existed."
+          },
+          "head": {
+            "$ref": "#/components/schemas/ModelHead"
+          },
+          "promotion_blocked": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why a label cannot point here yet, if it cannot. Returned on the\n*registration* so the answer arrives with the thing it is about, rather\nthan when somebody later tries to promote it."
+          },
+          "version": {
+            "$ref": "#/components/schemas/ModelVersion"
+          }
+        }
+      },
       "RejectionReason": {
         "type": "string",
         "enum": [
@@ -5756,6 +10000,109 @@
             "description": "The execution being repeated, when there is one. `None` asks for a\nfresh execution rather than a repeat of a particular traversal."
           }
         }
+      },
+      "ReviewRequest": {
+        "type": "object",
+        "description": "A change to an image's review state.",
+        "required": [
+          "project",
+          "image_id",
+          "review"
+        ],
+        "properties": {
+          "image_id": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          },
+          "project": {
+            "type": "string"
+          },
+          "review": {
+            "$ref": "#/components/schemas/ReviewState"
+          },
+          "revision": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Which revision is being accepted. Required for\n[`ReviewState::Accepted`], refused otherwise — accepting \"whatever is\nnewest\" is the same mistake as launching without pinning a version."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ReviewState": {
+        "type": "string",
+        "description": "Where a revision sits between drawn and trusted.",
+        "enum": [
+          "draft",
+          "in_review",
+          "accepted",
+          "rejected"
+        ]
+      },
+      "RevisionSummary": {
+        "type": "object",
+        "description": "A revision as it appears in a list, without its shapes.",
+        "required": [
+          "revision",
+          "schema_version",
+          "created_at",
+          "shape_count",
+          "per_class",
+          "per_origin"
+        ],
+        "properties": {
+          "author": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "per_class": {
+            "type": "object",
+            "description": "Instances per class, which is what tells a reviewer at a glance that a\nplan has nine rooms and no doors.",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "per_origin": {
+            "type": "object",
+            "description": "Instances per origin. A revision that is entirely `model` has not been\nlooked at, whatever its review state claims.",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "revision": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "shape_count": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "RightsPolicy": {
+        "type": "string",
+        "description": "What an export claims about itself.\n\n`Commercial` is the default, because the failure this guards against is\nsilent and the correction is one field. An export that wants CubiCasa5K in\nit has to say `research` and will say so in its manifest forever.",
+        "enum": [
+          "commercial",
+          "research",
+          "any"
+        ]
       },
       "Role": {
         "type": "string",
@@ -5936,6 +10283,103 @@
           }
         }
       },
+      "SampleInput": {
+        "type": "object",
+        "required": [
+          "metrics"
+        ],
+        "properties": {
+          "metrics": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number",
+              "format": "double"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "step": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "SampleRecord": {
+        "type": "object",
+        "description": "A point on a finer series — a learning rate, a gradient norm.",
+        "required": [
+          "metrics",
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "metrics": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number",
+              "format": "double"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "step": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "SaveProjectRequest": {
+        "type": "object",
+        "description": "What a caller sends to create or re-describe a project.",
+        "required": [
+          "name",
+          "classes"
+        ],
+        "properties": {
+          "classes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LabelClass"
+            }
+          },
+          "description": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "split_overrides": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Split"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "split_salt": {
+            "type": "string"
+          },
+          "splits": {
+            "$ref": "#/components/schemas/SplitRatios"
+          }
+        },
+        "additionalProperties": false
+      },
       "SaveRecipeRequest": {
         "type": "object",
         "required": [
@@ -5954,6 +10398,37 @@
           }
         }
       },
+      "SaveRevisionRequest": {
+        "type": "object",
+        "description": "What a caller sends to save a drawing.",
+        "required": [
+          "project",
+          "image_id",
+          "annotations"
+        ],
+        "properties": {
+          "accept": {
+            "type": "boolean",
+            "description": "Promote this revision in the same call. Requires that it validates\nclean, which is the only place review and validation meet."
+          },
+          "annotations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Annotation"
+            }
+          },
+          "image_id": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "project": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "SavedRecipe": {
         "type": "object",
         "required": [
@@ -5967,6 +10442,27 @@
           },
           "recipe": {
             "$ref": "#/components/schemas/CurationRecipe"
+          }
+        }
+      },
+      "SavedRevision": {
+        "type": "object",
+        "description": "The result of saving a drawing.",
+        "required": [
+          "revision",
+          "head",
+          "created"
+        ],
+        "properties": {
+          "created": {
+            "type": "boolean",
+            "description": "False when this exact set of shapes was already stored."
+          },
+          "head": {
+            "$ref": "#/components/schemas/ImageHead"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/AnnotationRevision"
           }
         }
       },
@@ -6051,6 +10547,81 @@
             "type": "string"
           }
         }
+      },
+      "SourceAccess": {
+        "type": "string",
+        "description": "How the bytes are obtained.",
+        "enum": [
+          "open",
+          "request",
+          "academic"
+        ]
+      },
+      "SourceDirectory": {
+        "type": "object",
+        "description": "A place to go looking, rather than a corpus.",
+        "required": [
+          "name",
+          "url",
+          "notes"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "SourceKind": {
+        "type": "string",
+        "description": "What kind of thing a corpus contains.",
+        "enum": [
+          "floor_plan",
+          "vector",
+          "cad",
+          "capture"
+        ]
+      },
+      "SourcePage": {
+        "type": "object",
+        "required": [
+          "sources",
+          "directories",
+          "total"
+        ],
+        "properties": {
+          "directories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SourceDirectory"
+            }
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DatasetSource"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "description": "Rows before the filter, so a caller can tell an empty filter from an\nempty table.",
+            "minimum": 0
+          }
+        }
+      },
+      "SourceUsage": {
+        "type": "string",
+        "description": "What the licence permits, stated conservatively.",
+        "enum": [
+          "commercial",
+          "non_commercial",
+          "unclear"
+        ]
       },
       "SpanId": {
         "type": "string",
@@ -6238,6 +10809,91 @@
           }
         ]
       },
+      "Split": {
+        "type": "string",
+        "description": "Which side of the split a family is on.",
+        "enum": [
+          "train",
+          "validation",
+          "test"
+        ]
+      },
+      "SplitRatios": {
+        "type": "object",
+        "description": "How families are dealt out. Percentages, summing to 100.",
+        "required": [
+          "train",
+          "validation",
+          "test"
+        ],
+        "properties": {
+          "test": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "train": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "validation": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "StartRunRequest": {
+        "type": "object",
+        "description": "What opens a run.",
+        "required": [
+          "run_id",
+          "model",
+          "dataset"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "dataset": {
+            "type": "string",
+            "description": "`project@export-sha256`, ideally."
+          },
+          "device": {
+            "type": "string"
+          },
+          "framework": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "workflow_run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "StepBreakdown": {
         "type": "object",
         "description": "Retrieval, embedding, rerank, guardrail — grouped by kind, then by name.\n\nRetrieval latency is the number a slow RAG turn gets debugged against, and\nit is invisible in the LLM and tool breakdowns.",
@@ -6267,6 +10923,38 @@
           },
           "step_type": {
             "type": "string"
+          }
+        }
+      },
+      "StoredBlob": {
+        "type": "object",
+        "description": "A stored image blob and what it is.",
+        "required": [
+          "image_id",
+          "content_type",
+          "bytes",
+          "uri",
+          "created"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "content_type": {
+            "type": "string"
+          },
+          "created": {
+            "type": "boolean",
+            "description": "False when these exact bytes were already stored."
+          },
+          "image_id": {
+            "type": "string",
+            "description": "SHA-256 of the bytes, computed here. This is the `image_id`."
+          },
+          "uri": {
+            "type": "string",
+            "description": "What to put in `ImageRecord::uri`. See [`BLOB_SCHEME`]."
           }
         }
       },
@@ -6492,6 +11180,333 @@
         "type": "string",
         "description": "Lowercase hex trace id"
       },
+      "TrainingRun": {
+        "type": "object",
+        "description": "One training run, with everything it accumulated.",
+        "required": [
+          "run_id",
+          "model",
+          "dataset",
+          "status",
+          "started_at",
+          "last_heard_from"
+        ],
+        "properties": {
+          "best": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BestMetric"
+              }
+            ]
+          },
+          "checkpoints": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CheckpointRecord"
+            }
+          },
+          "code": {
+            "type": "string",
+            "description": "The code that ran. A git revision, usually."
+          },
+          "dataset": {
+            "type": "string",
+            "description": "`project@export-sha256` from the annotation registry. A bare project\nname is recorded and marks the run irreproducible rather than being\nrefused: a smoke test on an unversioned dataset is a legitimate thing\nto do, and refusing it would only teach people to lie about it."
+          },
+          "device": {
+            "type": "string"
+          },
+          "ended_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "epochs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EpochRecord"
+            }
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "framework": {
+            "type": "string"
+          },
+          "last_heard_from": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this run last wrote anything. The only honest answer to \"is it\nstill alive\", and the field a reader draws a stall from."
+          },
+          "model": {
+            "type": "string",
+            "description": "The model being trained — a name, not a version. The version is what\nthis run *produces*; see [`crate::model::ModelVersion`]."
+          },
+          "params": {
+            "type": "object"
+          },
+          "profiles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProfileRecord"
+            }
+          },
+          "reproducible": {
+            "type": "boolean",
+            "description": "Whether this run can be pointed at afterwards and repeated. Decided\nonce, when the run opens, and stored rather than re-derived: a rule\ncomputed in three places is a rule three places can disagree about, and\nthe panel is one of them."
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "sample_decimations": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many times the sampled series has been halved. The effective\ninterval is the original one times two to this power, and saying so is\nwhat stops somebody reading a decimated curve as a complete one.",
+            "minimum": 0
+          },
+          "samples": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SampleRecord"
+            }
+          },
+          "schema_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TrainingStatus"
+          },
+          "workflow_run_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Set when the orchestrator launched this run, so it joins the workflow\nexecution it belongs to. See ADR_0012 and ADR_0016."
+          }
+        }
+      },
+      "TrainingRunPage": {
+        "type": "object",
+        "required": [
+          "runs",
+          "total"
+        ],
+        "properties": {
+          "runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TrainingRunSummary"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "TrainingRunSummary": {
+        "type": "object",
+        "description": "A run as it appears in a list: everything but the curve.",
+        "required": [
+          "run_id",
+          "model",
+          "dataset",
+          "status",
+          "reproducible",
+          "started_at",
+          "last_heard_from",
+          "epochs",
+          "checkpoints"
+        ],
+        "properties": {
+          "best": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BestMetric"
+              }
+            ]
+          },
+          "checkpoints": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "dataset": {
+            "type": "string"
+          },
+          "device": {
+            "type": "string"
+          },
+          "duration_ms": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "ended_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "epochs": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "framework": {
+            "type": "string"
+          },
+          "last_heard_from": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "model": {
+            "type": "string"
+          },
+          "reproducible": {
+            "type": "boolean"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TrainingStatus"
+          },
+          "workflow_run_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "TrainingStatus": {
+        "type": "string",
+        "description": "Where a run is.\n\n`Running` is the *absence* of an end, not a claim that anything is\nhappening — exactly the rule the projector follows for agent runs. A\ntrainer killed by an OOM and a trainer thinking for twenty minutes look\nidentical from here, so nothing in this crate decides which one it is.\n[`TrainingRun::last_heard_from`] is what a reader draws the line from.",
+        "enum": [
+          "running",
+          "succeeded",
+          "failed",
+          "cancelled"
+        ]
+      },
+      "UsageRights": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Produced here, or supplied with an explicit grant covering training,\nderived artifacts and the resulting weights.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "grant": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "owned"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Licensed under terms that permit commercial use.",
+            "required": [
+              "license",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "licensed"
+                ]
+              },
+              "license": {
+                "type": "string"
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Licensed for research only — CC BY-NC and everything shaped like it.",
+            "required": [
+              "license",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "research_only"
+                ]
+              },
+              "license": {
+                "type": "string"
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Nobody has checked. Usable for an experiment, excluded from anything\nthat claims a policy.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "unknown"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "What may be done with an image, and therefore with a model trained on it."
+      },
       "VersionOrigin": {
         "oneOf": [
           {
@@ -6534,6 +11549,17 @@
           }
         ],
         "description": "Where a version came from.\n\nThe distinction the panel needs to answer \"did a person write this, or did\nan optimiser?\" — which is the first question asked about a prompt that is\nbehaving strangely."
+      },
+      "ViewType": {
+        "type": "string",
+        "description": "What a drawing on a page actually is.\n\nA section and an elevation are the same house drawn a different way, and a\nmodel trained to read plans reads neither. Recording the view is what keeps\nthem out of an export instead of out of somebody's memory.",
+        "enum": [
+          "floor_plan",
+          "section",
+          "elevation",
+          "site_plan",
+          "other"
+        ]
       },
       "WorkflowDefinition": {
         "type": "object",
@@ -6711,8 +11737,20 @@
       "description": "Saved Flow PHP transformation recipes"
     },
     {
+      "name": "annotations",
+      "description": "Image annotation projects, drawings, reviews and training exports"
+    },
+    {
+      "name": "training",
+      "description": "Training runs, their curves, and the model versions they produce"
+    },
+    {
       "name": "workflow",
       "description": "Declared graphs, their executions, and rerunning one"
+    },
+    {
+      "name": "engine",
+      "description": "The orchestrator's launchable inventory, and starting one"
     },
     {
       "name": "live",

@@ -120,6 +120,44 @@ spec:
             # says which variable is unset rather than showing an empty list.
             - { name: AIWATCHER_PROMPT_STORE, value: "none" }
             {{- end }}
+            {{- if eq .Values.engine.mode "flyte" }}
+            - { name: AIWATCHER_ENGINE, value: "flyte" }
+            - name: AIWATCHER_FLYTE_ENDPOINT
+              value: {{ required "engine.mode is \"flyte\" but engine.flyte.endpoint is empty. In-cluster this is the flyteadmin Service — the console host is engine.flyte.consoleUrl and is usually a different address." .Values.engine.flyte.endpoint | quote }}
+            - { name: AIWATCHER_FLYTE_PROJECT, value: {{ .Values.engine.flyte.project | quote }} }
+            - { name: AIWATCHER_FLYTE_DOMAIN, value: {{ .Values.engine.flyte.domain | quote }} }
+            {{- with .Values.engine.flyte.consoleUrl }}
+            - { name: AIWATCHER_FLYTE_CONSOLE_URL, value: {{ . | quote }} }
+            {{- end }}
+            {{- with .Values.engine.flyte.clientId }}
+            - { name: AIWATCHER_FLYTE_CLIENT_ID, value: {{ . | quote }} }
+            - name: AIWATCHER_FLYTE_TOKEN_URL
+              value: {{ required "engine.flyte.clientId is set but engine.flyte.tokenUrl is empty. It is explicit rather than discovered: taking the token endpoint from a document the control plane serves would hand the choice of who mints aiwatcher's credentials to whoever answered the request." $.Values.engine.flyte.tokenUrl | quote }}
+            - { name: AIWATCHER_FLYTE_SCOPES, value: {{ $.Values.engine.flyte.scopes | quote }} }
+            - name: AIWATCHER_FLYTE_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "engine.flyte.clientId is set but engine.flyte.credentialsSecret.name is empty — the secret is where the client secret comes from." $.Values.engine.flyte.credentialsSecret.name }}
+                  key: {{ $.Values.engine.flyte.credentialsSecret.clientSecretKey }}
+            {{- else }}
+            {{- with .Values.engine.flyte.credentialsSecret.name }}
+            # No service account: a pre-issued bearer, when the cluster hands
+            # one out. Optional so the sandbox — which authenticates nothing —
+            # needs neither.
+            - name: AIWATCHER_FLYTE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: {{ $.Values.engine.flyte.credentialsSecret.tokenKey }}
+                  optional: true
+            {{- end }}
+            {{- end }}
+            {{- if eq .Values.engine.rerun "engine" }}
+            # One adapter, both ports: the Workflows tab's rerun becomes a
+            # launch of the launch plan with that workflow's name.
+            - { name: AIWATCHER_WORKFLOW_RUNNER, value: "engine" }
+            {{- end }}
+            {{- end }}
             - { name: AIWATCHER_AUTH_MODE, value: {{ .Values.auth.mode | quote }} }
             {{- if ne .Values.auth.mode "none" }}
             - { name: AIWATCHER_AUTH_PROVIDER_NAME, value: {{ .Values.auth.providerName | quote }} }

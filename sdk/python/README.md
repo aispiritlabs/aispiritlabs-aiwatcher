@@ -65,6 +65,37 @@ two attempts sharing a value fold into one.
 Artifacts are **references**. The bytes stay where you put them; aiwatcher
 keeps the `uri` because a pointer is bounded and a floor-plan PDF is not.
 
+### Under Flyte, the execution id is already in the pod
+
+Flyte puts its execution metadata in every task pod's environment, so the
+`execution_id` above does not have to be threaded through anything:
+
+```python
+from aiwatcher_sdk.integrations.flyte import workflow_arguments
+
+with client.workflow(**workflow_arguments("house-import", nodes=NODES, edges=EDGES)) as flow:
+    with flow.node("acquire") as stage:
+        stage.artifact("acquisition.json", uri=uri)
+```
+
+Off Flyte it returns `{"workflow_id": ...}` and nothing else, so the same call
+site serves planner's in-process path — where the run *is* the execution — with
+no branch.
+
+When the execution was launched from **aiwatcher's own engine routes**, prefer
+the id aiwatcher minted: it is what the panel started streaming before the
+first pod existed. Declare an `aiwatcher_workflow_run_id` input on the entity
+and pass it through, or put it in the environment as
+`AIWATCHER_WORKFLOW_RUN_ID`:
+
+```python
+workflow_arguments("house-import", nodes=NODES, workflow_run_id=aiwatcher_workflow_run_id)
+```
+
+`FLYTE_INTERNAL_*` is internal to Flyte and has changed shape before. Everything
+here degrades to "no execution id" rather than raising, so a rename costs the
+join and never a task.
+
 ## Recording an evaluation
 
 ```python

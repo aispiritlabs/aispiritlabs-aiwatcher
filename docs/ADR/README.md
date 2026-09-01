@@ -21,5 +21,8 @@ decision is made rather than reconstructed afterwards. The value is in the
 | [0013](ADR_0013_SINGLE_SIGN_ON.md) | aiwatcher is its own relying party, and the session is a cookie it signs |
 | [0014](ADR_0014_DATA_CURATION.md) | Flow executes curation; the authenticated Rust registry versions its scripts and outputs |
 | [0015](ADR_0015_DATASET_EXPLORATION.md) | Dataset exploration uses slices and immutable dataset references |
+| [0016](ADR_0016_PIPELINE_ENGINE.md) | The orchestrator is read for its inventory and asked to start one entry; the graph still comes from the log |
+| [0017](ADR_0017_IMAGE_ANNOTATION.md) | An annotation is authored, vector-first, and split by family rather than by image |
+| [0018](ADR_0018_TRAINING_RUNS.md) | A training run rides the log; an epoch is a point, a step is a count, the profiler is not a trace |
 
 Use [template.md](template.md) for a new one.

@@ -6,6 +6,7 @@ import { z } from 'zod';
 
 import { listRecipes, publishDataset, saveRecipe } from '@/api/generated/sdk.gen';
 import type { CurationRecipe } from '@/api/generated/types.gen';
+import { EngineLauncher } from '@/components/engine-launcher';
 import { FlowDiagnostics, FlowResultView } from '@/components/flow-preview';
 import {
   DEFAULT_WINDOW_SECONDS,
@@ -26,6 +27,11 @@ const searchSchema = z.object({
   name: z.string().optional(),
   dataset: z.string().optional(),
   window: z.number().int().nonnegative().optional(),
+  // The engine picker's own selection and search, in the URL like every other
+  // filter here: a link to "this launch plan, over this window" is what
+  // somebody sends a colleague when a curation needs re-running.
+  engine: z.string().optional(),
+  engineFind: z.string().optional(),
 });
 
 export const Route = createFileRoute('/data-curation')({
@@ -129,8 +135,10 @@ function DataCurationPage() {
         <div>
           <h1 className="text-lg font-semibold">Data Curation</h1>
           <p className="max-w-3xl text-sm text-muted-foreground">
-            Turn retained production data into reproducible, versioned datasets with Flow PHP.
-            Pin its period in read(), test without reading rows, simulate 25 cases, then execute and save the exact output.
+            Turn retained production data into reproducible, versioned datasets. Either start a
+            curation workflow the orchestrator already holds and set only what, where and over what
+            period, or write the transformation here in Flow PHP: pin its period in read(), test
+            without reading rows, simulate 25 cases, then execute and save the exact output.
           </p>
         </div>
         <TimeRange
@@ -138,6 +146,27 @@ function DataCurationPage() {
           onChange={(window) => void navigate({ search: (previous) => ({ ...previous, window }) })}
         />
       </div>
+
+      {/* The orchestrated route, first: a workflow somebody registered is
+          already able to do this, and the editor below is for when there is
+          not one. */}
+      <EngineLauncher
+        stage="curation"
+        title="Run a registered curation workflow"
+        summary="What the orchestrator holds, with the inputs it declared. The period above and the dataset name below fill this in; nothing else is sent."
+        context={{ dataset, windowSeconds }}
+        search={search.engineFind ?? ''}
+        onSearchChange={(engineFind) =>
+          void navigate({
+            search: (previous) => ({ ...previous, engineFind: engineFind || undefined }),
+            replace: true,
+          })
+        }
+        selected={search.engine}
+        onSelect={(engine) =>
+          void navigate({ search: (previous) => ({ ...previous, engine }), replace: true })
+        }
+      />
 
       {available.data === false ? (
         <EmptyState

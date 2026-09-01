@@ -19,3 +19,15 @@ extend-exclude = [
 [default.extend-words]
 # OTLP / OpenTelemetry vocabulary the dictionary trips on.
 Ser = "Ser"
+# Stems, not typos. `PipelineStage::guess` matches a launch plan's name by
+# substring, so "prepar" has to catch prepare, prepared and preparation — and
+# a stem is a word with its ending cut off, which is precisely what a spell
+# checker is built to complain about.
+prepar = "prepar"
+validat = "validat"
+generat = "generat"
+annotat = "annotat"
+# A deliberate misspelling: the test that proves an input the entity does not
+# declare is refused rather than dropped is about somebody typing this.
+windwo = "windwo"
+agnets = "agnets"

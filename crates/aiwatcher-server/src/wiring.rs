@@ -5,6 +5,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use tokio_util::sync::CancellationToken;
 
+use aiwatcher_annotations::Registry as AnnotationRegistry;
 use aiwatcher_api::state::{AppState, HealthState};
 use aiwatcher_auth::{AuthMode, Authenticator};
 use aiwatcher_bus::adapters::memory::InMemoryBus;
@@ -14,14 +15,16 @@ use aiwatcher_core::ports::{
     CompletedSpan, DeadLetterSink, MetricSample, MetricSink, PortResult, TraceStore, WorkflowRunner,
 };
 use aiwatcher_datasets::Registry as DatasetRegistry;
+use aiwatcher_pipeline::{FlyteConfig, FlyteEngine};
 use aiwatcher_projector::pipeline::Outputs;
 use aiwatcher_projector::{FileDeadLetters, LiveHub, Projector, ProjectorConfig, ReadModel};
 use aiwatcher_prompts::{Registry, RegistryConfig};
+use aiwatcher_training::Registry as TrainingRegistry;
 use aiwatcher_runner::{HttpRunner, HttpRunnerConfig};
 use aiwatcher_trace::AssemblerConfig;
 use aiwatcher_trace::otlp::{OtlpConfig, OtlpMetricSink, OtlpTraceStore};
 
-use crate::config::{BackendKind, Config, PromptStoreKind, WorkflowRunnerKind};
+use crate::config::{BackendKind, Config, EngineKind, PromptStoreKind, WorkflowRunnerKind};
 
 /// Discards what it is given, loudly enough to notice at startup and quietly
 /// enough not to fill a log.
@@ -51,16 +54,29 @@ impl MetricSink for NullExporter {
     }
 }
 
-/// The authored-data registries, or `None` when this deployment has no object store.
+/// Everything authored rather than observed, over one object store.
+///
+/// Three registries, three key prefixes, one store — and one setting deciding
+/// whether any of them exist. They are grouped because the alternative is a
+/// four-tuple that grows every time another authored artifact appears, and
+/// because they genuinely share a lifetime: a deployment either has somewhere
+/// durable to put authored data or it does not.
+#[derive(Clone, Debug, Default)]
+struct Registries {
+    prompts: Option<Arc<Registry>>,
+    datasets: Option<Arc<DatasetRegistry>>,
+    annotations: Option<Arc<AnnotationRegistry>>,
+    training: Option<Arc<TrainingRegistry>>,
+}
+
+/// The authored-data registries, or empty when this deployment has no object store.
 ///
 /// Built before the server starts listening, and allowed to fail the start-up:
 /// an object store that is misconfigured answers 403 to everything, and
 /// discovering that when somebody saves a prompt puts the failure in front of
 /// the wrong person. `AIWATCHER_PROMPT_STORE=none` is how a deployment says it
 /// does not want one.
-async fn build_registries(
-    config: &Config,
-) -> Result<(Option<Arc<Registry>>, Option<Arc<DatasetRegistry>>)> {
+async fn build_registries(config: &Config) -> Result<Registries> {
     let registry_config = RegistryConfig {
         prefix: config.prompt_prefix.clone(),
         ..RegistryConfig::default()
@@ -69,9 +85,9 @@ async fn build_registries(
     let store: Arc<dyn aiwatcher_core::prompts::ObjectStore> = match config.prompt_store {
         PromptStoreKind::None => {
             tracing::info!(
-                "AIWATCHER_PROMPT_STORE=none; the prompt and dataset registries are disabled"
+                "AIWATCHER_PROMPT_STORE=none; the prompt, dataset, annotation and training registries are disabled"
             );
-            return Ok((None, None));
+            return Ok(Registries::default());
         }
         PromptStoreKind::Memory => {
             tracing::warn!("the prompt registry is in memory; prompts will not survive a restart");
@@ -114,8 +130,15 @@ async fn build_registries(
     };
 
     let prompts = Arc::new(Registry::new(Arc::clone(&store), registry_config));
-    let datasets = Arc::new(DatasetRegistry::new(store, "datasets"));
-    Ok((Some(prompts), Some(datasets)))
+    let datasets = Arc::new(DatasetRegistry::new(Arc::clone(&store), "datasets"));
+    let annotations = Arc::new(AnnotationRegistry::new(Arc::clone(&store), "annotations"));
+    let training = Arc::new(TrainingRegistry::new(store, "training"));
+    Ok(Registries {
+        prompts: Some(prompts),
+        datasets: Some(datasets),
+        annotations: Some(annotations),
+        training: Some(training),
+    })
 }
 
 /// The workflow runner, or `None`.
@@ -125,7 +148,10 @@ async fn build_registries(
 /// runner would answer `202 Accepted` for a rerun that no orchestrator was ever
 /// asked to perform. Absence has to reach the caller, so it reaches them as a
 /// 501 naming the variable that is unset.
-fn build_workflow_runner(config: &Config) -> Result<Option<Arc<dyn WorkflowRunner>>> {
+fn build_workflow_runner(
+    config: &Config,
+    engine: Option<&Arc<FlyteEngine>>,
+) -> Result<Option<Arc<dyn WorkflowRunner>>> {
     match config.workflow_runner {
         WorkflowRunnerKind::None => {
             tracing::info!(
@@ -150,6 +176,64 @@ fn build_workflow_runner(config: &Config) -> Result<Option<Arc<dyn WorkflowRunne
             })
             .context("building the workflow runner's HTTP client")?;
             Ok(Some(Arc::new(runner)))
+        }
+        WorkflowRunnerKind::Engine => {
+            // One adapter, both ports. The alternative is an HTTP runner
+            // pointed at a shim that then talks to the same control plane —
+            // a second thing to deploy for no new capability.
+            let engine = engine.context(
+                "AIWATCHER_WORKFLOW_RUNNER=engine needs AIWATCHER_ENGINE set to an engine",
+            )?;
+            tracing::info!("reruns will be dispatched to the configured pipeline engine");
+            Ok(Some(Arc::clone(engine) as Arc<dyn WorkflowRunner>))
+        }
+    }
+}
+
+/// The pipeline engine, or `None`.
+///
+/// Absence is a 501 for the same reason the runner's is, and this one has a
+/// second edge: a catalog that answered with an empty list would say "the
+/// orchestrator has nothing to run" about a deployment that has no
+/// orchestrator. Those are different problems with different fixes.
+///
+/// Built as the concrete type rather than as `Arc<dyn WorkflowEngine>` so the
+/// same instance can serve `WorkflowRunner` as well — one connection pool, one
+/// cached token.
+fn build_engine(config: &Config) -> Result<Option<Arc<FlyteEngine>>> {
+    match config.engine {
+        EngineKind::None => {
+            tracing::info!(
+                "AIWATCHER_ENGINE=none; the engine routes answer 501 and nothing can be launched"
+            );
+            Ok(None)
+        }
+        EngineKind::Flyte => {
+            let endpoint = config
+                .flyte_endpoint
+                .clone()
+                .context("AIWATCHER_FLYTE_ENDPOINT is required for AIWATCHER_ENGINE=flyte")?;
+            tracing::info!(
+                %endpoint,
+                project = %config.flyte_project,
+                domain = %config.flyte_domain,
+                authenticated = config.flyte_token.is_some() || config.flyte_client_id.is_some(),
+                "the Flyte catalog is readable and its launch plans can be started"
+            );
+            let engine = FlyteEngine::new(FlyteConfig {
+                endpoint,
+                project: config.flyte_project.clone(),
+                domain: config.flyte_domain.clone(),
+                token: config.flyte_token.clone(),
+                client_id: config.flyte_client_id.clone(),
+                client_secret: config.flyte_client_secret.clone(),
+                token_url: config.flyte_token_url.clone(),
+                scopes: config.flyte_scopes.clone(),
+                console_url: config.flyte_console_url.clone(),
+                timeout: config.flyte_timeout,
+            })
+            .context("building the pipeline engine's HTTP client")?;
+            Ok(Some(Arc::new(engine)))
         }
     }
 }
@@ -407,15 +491,19 @@ pub async fn build(config: Config) -> Result<Runtime> {
         }
     };
 
-    let (prompts, datasets) = build_registries(&config).await?;
+    let registries = build_registries(&config).await?;
+    let engine = build_engine(&config)?;
     let state = AppState {
         read_model,
         live,
         source,
         sink: config.ingest_enabled.then_some(sink),
-        prompts,
-        datasets,
-        runner: build_workflow_runner(&config)?,
+        prompts: registries.prompts,
+        datasets: registries.datasets,
+        annotations: registries.annotations,
+        training: registries.training,
+        runner: build_workflow_runner(&config, engine.as_ref())?,
+        engine: engine.map(|engine| engine as Arc<dyn aiwatcher_core::engine::WorkflowEngine>),
         auth: build_authenticator(&config).await?,
         health,
     };
