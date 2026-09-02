@@ -131,6 +131,16 @@ async function call(path: string, init?: RequestInit): Promise<unknown> {
     throw new FlowUnavailableError();
   }
 
+  // 404 is a *different* process answering. Every path here is one the service
+  // serves, so it never 404s on its own; what does is whatever else happens to
+  // hold the port the proxy points at — measured against a Go service on :8081
+  // answering `404 page not found` to everything. Reading that as a refused
+  // query blames the pipeline for a port collision, and the message it produces
+  // ("The service answered 404") sends the reader to the query they just wrote.
+  if (response.status === 404) {
+    throw new FlowUnavailableError();
+  }
+
   const body: unknown = await response.json().catch(() => null);
 
   if (!response.ok) {

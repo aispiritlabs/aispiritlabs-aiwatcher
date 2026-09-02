@@ -189,8 +189,13 @@ final readonly class Catalog
                 'files' => 'The search does not list files. Open the dataset at its "url".',
             ],
             parameters: [
-                'search' => new Parameter(
-                    name: 'search',
+                // `q`, not `search`: a parameter's name is what goes on the
+                // wire, and this route spells it `q` where the annotation
+                // routes spell theirs `search`. Declared wrongly it is a 400
+                // from aiwatcher rather than a parse error here, which is the
+                // failure this class exists to prevent.
+                'q' => new Parameter(
+                    name: 'q',
                     required: false,
                     description: 'Free text. Omitted asks each hub what it considers popular, which is a worse question than any real one.',
                 ),

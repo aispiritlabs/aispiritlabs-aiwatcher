@@ -504,7 +504,7 @@ function discoveryPipeline(
   selected: HubDataset | null,
 ): string {
   const lines = ['data_frame()'];
-  const args = [`search: '${phpString(query)}'`];
+  const args = [`q: '${phpString(query)}'`];
   if (hub !== 'all') args.push(`hub: '${phpString(hub)}'`);
   lines.push(`    ->read(hub_datasets, ${args.join(', ')})`);
 

@@ -92,7 +92,7 @@ final class HubDatasetTest extends TestCase
     public function test_a_hub_search_comes_back_as_flat_rows(): void
     {
         $api = $this->api();
-        $rows = $this->rows("data_frame()->read(hub_datasets, search: 'floor plan')->fetch()", $api);
+        $rows = $this->rows("data_frame()->read(hub_datasets, q: 'floor plan')->fetch()", $api);
 
         self::assertCount(2, $rows);
         self::assertSame('someone/curated-corpus', $rows[0]['id']);
@@ -106,9 +106,13 @@ final class HubDatasetTest extends TestCase
     public function test_the_search_reaches_the_route_rather_than_filtering_afterwards(): void
     {
         $api = $this->api();
-        $this->rows("data_frame()->read(hub_datasets, search: 'floor plan', hub: 'kaggle')->fetch()", $api);
+        $this->rows("data_frame()->read(hub_datasets, q: 'floor plan', hub: 'kaggle')->fetch()", $api);
 
-        self::assertStringContainsString('search=floor+plan', $api->requested[0]);
+        // `q`, which is how this route spells it — the annotation routes spell
+        // theirs `search`, and a parameter declared under the wrong one reaches
+        // aiwatcher as a 400 naming a word nobody wrote. FakeApi answers on the
+        // path alone, so this assertion is the only thing that sees it.
+        self::assertStringContainsString('q=floor+plan', $api->requested[0]);
         self::assertStringContainsString('hub=kaggle', $api->requested[0]);
     }
 
