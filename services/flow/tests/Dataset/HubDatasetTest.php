@@ -211,6 +211,23 @@ final class HubDatasetTest extends TestCase
         self::assertStringContainsString('column=image_content', $rows[0]['uri']);
     }
 
+    /// What a query is written against, readable as rows of its own. The
+    /// picking still happens in whoever writes the read() — this is the list
+    /// they pick from.
+    public function test_the_columns_a_corpus_declares_are_readable_as_rows(): void
+    {
+        $rows = $this->rows("data_frame()->read(hub_columns, dataset: 'someone/floor-plans')->fetch()", $this->api());
+
+        self::assertSame(
+            [
+                ['name' => 'image', 'kind' => 'Image', 'dtype' => ''],
+                ['name' => 'image_content', 'kind' => 'Value', 'dtype' => 'binary'],
+                ['name' => 'indices', 'kind' => 'Value', 'dtype' => 'string'],
+            ],
+            $rows,
+        );
+    }
+
     public function test_an_argument_the_dataset_never_declared_is_a_parse_error(): void
     {
         $this->expectException(ParseError::class);

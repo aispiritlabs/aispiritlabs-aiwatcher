@@ -277,6 +277,46 @@ final readonly class Catalog
             ],
         );
 
+        $hubColumns = new Dataset(
+            name: 'hub_columns',
+            // The same route, read for its envelope instead of its rows: what
+            // the corpus declares it holds, which is the thing a hub_rows
+            // query has to be written against.
+            path: '/api/v1/dataset-hubs/rows',
+            rowsPath: 'columns',
+            cursorParam: 'unused',
+            grain: 'one row per column a hub dataset declares',
+            description: 'What a Hugging Face dataset says its columns are, in its own words. Read this first when writing a hub_rows query: it is where the column names come from, and it is the hub\'s answer rather than aiwatcher\'s.',
+            columns: [
+                'name' => 'string',
+                // The hub's own type tag, verbatim. Empty where the hub
+                // describes a column with a nested structure instead of a tag.
+                'kind' => 'string',
+                'dtype' => 'string',
+            ],
+            hints: [
+                'image' => 'There is no such column here either. "kind" and "dtype" are the hub\'s words — Image, Value, binary, string — and which of them holds a picture is a judgement about the corpus.',
+                'type' => 'The columns are "kind" (the hub\'s type tag) and "dtype" (what a Value carries).',
+            ],
+            parameters: [
+                'dataset' => new Parameter(
+                    name: 'dataset',
+                    required: true,
+                    description: 'owner/name, exactly as a hub_datasets row addresses it.',
+                ),
+                'config' => new Parameter(
+                    name: 'config',
+                    required: false,
+                    description: 'The dataset configuration. Discovered when absent.',
+                ),
+                'split' => new Parameter(
+                    name: 'split',
+                    required: false,
+                    description: 'The split to read. Discovered when absent.',
+                ),
+            ],
+        );
+
         $annotationImages = new Dataset(
             name: 'annotation_images',
             path: '/api/v1/annotation-images',
@@ -329,6 +369,7 @@ final readonly class Catalog
             'events' => $events,
             'hub_datasets' => $hubDatasets,
             'hub_rows' => $hubRows,
+            'hub_columns' => $hubColumns,
             'annotation_images' => $annotationImages,
         ];
     }
