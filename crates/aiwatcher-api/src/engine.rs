@@ -39,6 +39,7 @@ use aiwatcher_core::engine::{
 use crate::auth::Caller;
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
+use utoipa::OpenApi;
 
 /// What one catalog page may cost.
 ///
@@ -46,6 +47,27 @@ use crate::state::AppState;
 /// number of requests to somebody else's control plane. Twenty is a screen.
 const DEFAULT_LIMIT: usize = 20;
 const MAX_LIMIT: usize = 100;
+
+/// This module's operations, as the contract they satisfy.
+///
+/// Derived beside the router rather than listed in the root document, so
+/// adding a route and forgetting the contract is a change to one file rather
+/// than a change to two files that has to be noticed in the second.
+#[derive(OpenApi)]
+#[openapi(paths(
+    describe_engine,
+    list_engine_workflows,
+    get_engine_workflow,
+    launch_workflow,
+    get_launch,
+))]
+struct Api;
+
+/// The operations this module serves. Composed by [`crate::openapi`].
+#[must_use]
+pub fn openapi() -> utoipa::openapi::OpenApi {
+    Api::openapi()
+}
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -116,7 +138,7 @@ fn engine(state: &AppState) -> ApiResult<&Arc<dyn WorkflowEngine>> {
     ),
     tag = "engine",
 )]
-pub async fn describe_engine(State(state): State<AppState>) -> ApiResult<Json<EngineDescription>> {
+async fn describe_engine(State(state): State<AppState>) -> ApiResult<Json<EngineDescription>> {
     Ok(Json(engine(&state)?.describe()))
 }
 
@@ -134,7 +156,7 @@ pub async fn describe_engine(State(state): State<AppState>) -> ApiResult<Json<En
     ),
     tag = "engine",
 )]
-pub async fn list_engine_workflows(
+async fn list_engine_workflows(
     State(state): State<AppState>,
     Query(params): Query<CatalogParams>,
 ) -> ApiResult<Json<EngineCatalog>> {
@@ -176,7 +198,7 @@ pub async fn list_engine_workflows(
     ),
     tag = "engine",
 )]
-pub async fn get_engine_workflow(
+async fn get_engine_workflow(
     State(state): State<AppState>,
     Path(workflow_id): Path<String>,
 ) -> ApiResult<Json<EngineWorkflow>> {
@@ -215,7 +237,7 @@ pub async fn get_engine_workflow(
     ),
     tag = "engine",
 )]
-pub async fn launch_workflow(
+async fn launch_workflow(
     State(state): State<AppState>,
     caller: Caller,
     Json(body): Json<LaunchBody>,
@@ -289,7 +311,7 @@ pub async fn launch_workflow(
     ),
     tag = "engine",
 )]
-pub async fn get_launch(
+async fn get_launch(
     State(state): State<AppState>,
     Path(reference): Path<String>,
 ) -> ApiResult<Json<EngineExecution>> {

@@ -10,11 +10,16 @@ import { Badge, Card, CardContent, CardHeader, CardTitle, Spinner } from '@/comp
 /**
  * Where the images come from.
  *
- * A dated table this build ships, not a search against Hugging Face, Kaggle or
- * Roboflow Universe. Those mirrors restate licences wrongly often enough that a
- * live answer would be worse than none: it would arrive looking authoritative.
- * Every row links its original and says when somebody last read the licence
- * there.
+ * A dated table an instance was configured with, not a search against Hugging
+ * Face, Kaggle or Roboflow Universe. Those mirrors restate licences wrongly
+ * often enough that a live answer would be worse than none: it would arrive
+ * looking authoritative. Every row links its original and says when somebody
+ * last read the licence there.
+ *
+ * This build ships no rows — which corpora exist and what their licences
+ * permit is a question about one field, and a list shipped here would be one
+ * project's homework. Empty is a working state: nothing outranks a mirror's
+ * claim, so every hub result stays `unclear`.
  *
  * The filter that matters is the first one. "What may a commercial model be
  * trained on" is a question with an expensive wrong answer, and it should be
@@ -64,7 +69,7 @@ function SourcesPage() {
       <div>
         <h1 className="text-lg font-semibold">Dataset sources</h1>
         <p className="max-w-3xl text-sm text-muted-foreground">
-          The public floor-plan corpora, what each of them labels, and what its licence permits.
+          The corpora somebody read the licence of, what each of them labels, and what it permits.
           Dated and linked rather than fetched: a mirror&rsquo;s declared licence is often not the
           original&rsquo;s, and this table is a signpost, never a permission.
         </p>
@@ -131,13 +136,13 @@ function SourcesPage() {
                   </CardTitle>
                   <p className="mt-1 text-xs text-muted-foreground">{source.summary}</p>
                 </div>
-                <Badge tone={USAGE_TONES[source.usage]} className="shrink-0">
-                  {source.usage.replace('_', ' ')}
+                <Badge tone={USAGE_TONES[source.usage ?? 'unclear']} className="shrink-0">
+                  {(source.usage ?? 'unclear').replace('_', ' ')}
                 </Badge>
               </CardHeader>
               <CardContent className="flex flex-col gap-2 text-xs">
                 <div className="flex flex-wrap gap-1">
-                  {source.labels.map((label) => (
+                  {(source.labels ?? []).map((label) => (
                     <Badge key={label} className="px-1.5 py-0 text-[10px]">
                       {label}
                     </Badge>

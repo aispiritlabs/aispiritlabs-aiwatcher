@@ -35,6 +35,11 @@ pub enum ApiError {
     #[error("this instance has no training registry configured (AIWATCHER_PROMPT_STORE)")]
     TrainingRegistryDisabled,
 
+    #[error(
+        "this instance searches no dataset hubs (AIWATCHER_HUGGINGFACE_ENABLED, AIWATCHER_KAGGLE_USERNAME/AIWATCHER_KAGGLE_KEY)"
+    )]
+    HubsDisabled,
+
     #[error("this instance has no workflow runner configured (AIWATCHER_WORKFLOW_RUNNER)")]
     RunnerDisabled,
 
@@ -136,9 +141,12 @@ impl ApiError {
             Self::RegistryDisabled
             | Self::DatasetRegistryDisabled
             | Self::AnnotationRegistryDisabled
-            | Self::TrainingRegistryDisabled => {
-                (StatusCode::NOT_IMPLEMENTED, "registry_disabled")
-            }
+            | Self::TrainingRegistryDisabled => (StatusCode::NOT_IMPLEMENTED, "registry_disabled"),
+            // Same shape once more, with the sharpest reason of the set: an
+            // empty search result would read as "there is no such corpus",
+            // which is a fact about the world rather than about this
+            // deployment's configuration.
+            Self::HubsDisabled => (StatusCode::NOT_IMPLEMENTED, "hubs_disabled"),
             // Same reasoning, and the message names the variable to set. A
             // null runner that answered 202 would be worse than this: it would
             // report success for a rerun that never happened.
@@ -263,9 +271,7 @@ fn training_registry_parts(error: &aiwatcher_training::Error) -> (StatusCode, &'
         Error::Invalid(_) => (StatusCode::BAD_REQUEST, "bad_request"),
         // A closed run and a reused run id are conflicts with state, not bad
         // requests; a refused promotion is a decision about content.
-        Error::Refused(message) if message.contains("run") => {
-            (StatusCode::CONFLICT, "run_closed")
-        }
+        Error::Refused(message) if message.contains("run") => (StatusCode::CONFLICT, "run_closed"),
         Error::Refused(_) => (StatusCode::UNPROCESSABLE_ENTITY, "promotion_refused"),
         Error::TooLarge { .. } => (StatusCode::PAYLOAD_TOO_LARGE, "too_large"),
         Error::Store(store) if store.is_retryable() => {

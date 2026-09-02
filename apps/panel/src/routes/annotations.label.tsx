@@ -8,7 +8,6 @@ import {
   getImage,
   getProject,
   listImages,
-  listPresets,
   listProjects,
   registerImage,
   reviewImage,
@@ -24,7 +23,6 @@ import type {
   ReviewState,
   Split,
   UsageRights,
-  ViewType,
 } from '@/api/generated/types.gen';
 import { AnnotationCanvas, type Tool } from '@/components/annotation-canvas';
 import {
@@ -665,7 +663,7 @@ function ImageImport({
   const [groupId, setGroupId] = React.useState('');
   const [source, setSource] = React.useState('');
   const [level, setLevel] = React.useState('');
-  const [view, setView] = React.useState<ViewType>('floor_plan');
+  const [view, setView] = React.useState('');
   const [rights, setRights] = React.useState<UsageRights['kind']>('owned');
   const [license, setLicense] = React.useState('');
   const [error, setError] = React.useState<string | null>(null);
@@ -759,23 +757,21 @@ function ImageImport({
           <input
             value={level}
             onChange={(event) => setLevel(event.target.value)}
-            placeholder="ground_floor"
+            placeholder="level, if the corpus has them"
             className="rounded-md border border-border bg-background px-2 py-1"
           />
         </label>
         <label className="flex flex-col gap-1">
+          {/* Free text, not a list: an export selects the views it wants by
+              name, and the vocabulary is the corpus's. Blank is right for a
+              corpus with only one kind of picture, which is most of them. */}
           <span className="font-medium text-muted-foreground">view</span>
-          <select
+          <input
             value={view}
-            onChange={(event) => setView(event.target.value as ViewType)}
+            onChange={(event) => setView(event.target.value)}
+            placeholder="only if this corpus mixes kinds"
             className="rounded-md border border-border bg-background px-2 py-1"
-          >
-            {['floor_plan', 'section', 'elevation', 'site_plan', 'other'].map((option) => (
-              <option key={option} value={option}>
-                {option.replace('_', ' ')}
-              </option>
-            ))}
-          </select>
+          />
         </label>
         <label className="flex flex-col gap-1">
           <span className="font-medium text-muted-foreground">rights</span>
@@ -837,21 +833,45 @@ async function measure(file: File): Promise<{ width: number; height: number }> {
 }
 
 /**
- * The first project, from the shipped floor-plan schema.
+ * The first project, and the vocabulary it starts from.
  *
- * Starting from a blank vocabulary is how a label set ends up without a hinge
- * point, and that is the one that has to be re-drawn. The preset is editable
- * afterwards; what it buys is that the first hour is spent labelling.
+ * aiwatcher ships none — the label schema is the one thing about an annotation
+ * project that is entirely the domain's, and a preset shipped here would be
+ * one field's homework imposed on every other. So this offers a *shape* to
+ * edit rather than a vocabulary to accept: one filled class, one stroked
+ * class, and an ignore class, which is the smallest set that demonstrates what
+ * the schema can say.
+ *
+ * The `ignore` class is not decoration. Whatever a corpus is full of that a
+ * model must not be scored on either way — furniture, borders, watermarks —
+ * marking it is cheaper than labelling it and far cheaper than the false
+ * positives it produces.
  */
+const STARTER_CLASSES = [
+  {
+    name: 'region',
+    geometry: 'polygon' as const,
+    color: '#2563eb',
+    description: 'An enclosed area.',
+  },
+  {
+    name: 'edge',
+    geometry: 'polyline' as const,
+    color: '#1f2937',
+    description: 'A boundary, drawn as a centreline carrying its own width.',
+    attributes: [{ name: 'thickness_px', kind: 'number' as const, required: true }],
+  },
+  {
+    name: 'ignore',
+    geometry: 'polygon' as const,
+    color: '#dc2626',
+    description: 'Excluded from every training target and from the loss.',
+    ignore: true,
+  },
+];
+
 function FirstProject({ onCreated }: { onCreated: (name: string) => void }) {
-  const [name, setName] = React.useState('floor-plans/catalogue');
-  const presets = useQuery({
-    queryKey: ['annotation-presets'],
-    queryFn: async () => {
-      const response = await listPresets({ throwOnError: true });
-      return response.data;
-    },
-  });
+  const [name, setName] = React.useState('corpora/first');
 
   const create = useMutation({
     mutationFn: async () => {
@@ -859,8 +879,8 @@ function FirstProject({ onCreated }: { onCreated: (name: string) => void }) {
         throwOnError: true,
         body: {
           name,
-          description: 'Residential floor plans',
-          classes: presets.data ?? [],
+          description: 'A starting vocabulary, meant to be edited',
+          classes: STARTER_CLASSES,
           split_salt: new Date().toISOString().slice(0, 7),
         },
       });
@@ -874,9 +894,10 @@ function FirstProject({ onCreated }: { onCreated: (name: string) => void }) {
       <h2 className="text-sm font-semibold">No annotation project yet</h2>
       <p className="text-xs leading-relaxed text-muted-foreground">
         A project holds the label schema, the split policy and every image drawn against them. The
-        schema below is the one this build ships for residential floor plans: walls as centrelines
-        with a thickness, rooms as polygons, doors as keypoint sets with a hinge and a leaf, and an
-        ignore class for furniture and title blocks.
+        classes below are a starting shape rather than a vocabulary: one filled class, one stroked
+        class carrying its own width, and an ignore class. Rename them to whatever this corpus is
+        actually of &mdash; renaming later is a new schema version and excludes every drawing made
+        under the old one, by name.
       </p>
       <input
         value={name}
@@ -884,21 +905,14 @@ function FirstProject({ onCreated }: { onCreated: (name: string) => void }) {
         className="rounded-md border border-border bg-background px-2 py-1.5 text-sm"
       />
       <div className="flex flex-wrap gap-1">
-        {(presets.data ?? []).map((definition) => (
+        {STARTER_CLASSES.map((definition) => (
           <Badge key={definition.name} className="gap-1 px-2 py-0.5 text-[11px]">
-            <span
-              className="h-2 w-2 rounded-sm"
-              style={{ background: definition.color ?? '#94a3b8' }}
-            />
+            <span className="h-2 w-2 rounded-sm" style={{ background: definition.color }} />
             {definition.name}
           </Badge>
         ))}
       </div>
-      <Button
-        onClick={() => create.mutate()}
-        disabled={!name || presets.isLoading || create.isPending}
-        className="self-start"
-      >
+      <Button onClick={() => create.mutate()} disabled={!name || create.isPending} className="self-start">
         Create project
       </Button>
       {create.isError && (

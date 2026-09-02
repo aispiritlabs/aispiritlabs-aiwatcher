@@ -15,6 +15,20 @@ import { z } from 'zod';
 
 const columnSchema = z.object({ name: z.string(), type: z.string() });
 
+/**
+ * A named argument a `read()` may carry, beyond the dataset name.
+ *
+ * Part of the contract rather than a hint: the aiwatcher API rejects unknown
+ * query parameters, so a `read()` argument the dataset never declared turns
+ * the whole query into a 400.
+ */
+const parameterSchema = z.object({
+  name: z.string(),
+  required: z.boolean(),
+  description: z.string(),
+  values: z.array(z.string()),
+});
+
 const datasetSchema = z.object({
   name: z.string(),
   aliases: z.array(z.string()),
@@ -22,6 +36,8 @@ const datasetSchema = z.object({
   description: z.string(),
   requires_run: z.boolean(),
   columns: z.array(columnSchema),
+  /** Optional so a panel build stays compatible with an older Flow service. */
+  parameters: z.array(parameterSchema).optional().default([]),
 });
 
 const datasetsSchema = z.object({
@@ -72,6 +88,7 @@ const errorSchema = z.object({
 export type FlowDiagnostic = z.infer<typeof diagnosticSchema>;
 export type FlowCheck = z.infer<typeof checkSchema>;
 export type FlowDataset = z.infer<typeof datasetSchema>;
+export type FlowParameter = z.infer<typeof parameterSchema>;
 export type FlowDatasets = z.infer<typeof datasetsSchema>;
 export type FlowResult = z.infer<typeof resultSchema>;
 

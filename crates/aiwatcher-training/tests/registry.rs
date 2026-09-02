@@ -345,7 +345,8 @@ async fn a_promotable_version_takes_the_label_and_the_head_answers_with_it() {
         .await
         .unwrap();
     assert_eq!(
-        head.labelled("production").map(|entry| entry.version.clone()),
+        head.labelled("production")
+            .map(|entry| entry.version.clone()),
         Some(registered.version.version.clone())
     );
 

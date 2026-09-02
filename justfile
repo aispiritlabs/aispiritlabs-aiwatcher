@@ -134,6 +134,19 @@ run:
     AIWATCHER_LOG=info,aiwatcher=debug \
     cargo run --bin aiwatcher
 
+# Hugging Face's dataset search is public, so it is a switch rather than a
+# credential. Kaggle needs both halves of one — export AIWATCHER_KAGGLE_USERNAME
+# and AIWATCHER_KAGGLE_KEY before running this and it joins in. Neither hub is
+# ever asked what a licence permits; see ADR_0019.
+
+# The server with dataset hub search on, for the Datasets area's Discover view.
+run-hubs:
+    AIWATCHER_BUS=wal \
+    AIWATCHER_INGEST_ENABLED=true \
+    AIWATCHER_HUGGINGFACE_ENABLED=true \
+    AIWATCHER_LOG=info,aiwatcher=debug \
+    cargo run --bin aiwatcher
+
 # Points at whatever control plane AIWATCHER_FLYTE_ENDPOINT names — `flytectl
 # demo start` serves one on :30080. With none running the engine routes answer
 # 503 rather than 501: "configured and unreachable" against "not configured",

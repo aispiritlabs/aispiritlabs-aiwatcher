@@ -25,9 +25,9 @@ use aiwatcher_core::ports::{
 use aiwatcher_core::{Checkpoint, EventEnvelope, EventType, MessageId, Sdk, Source};
 use aiwatcher_datasets::Registry as DatasetRegistry;
 use aiwatcher_projector::{LiveHub, ReadModel};
-use aiwatcher_training::Registry as TrainingRegistry;
 use aiwatcher_prompts::adapters::memory::MemoryObjectStore;
 use aiwatcher_prompts::{Registry, RegistryConfig};
+use aiwatcher_training::Registry as TrainingRegistry;
 
 use aiwatcher_api::state::{AppState, HealthState};
 use aiwatcher_auth::{AuthConfig, AuthMode, Authenticator, IngestToken, RoleMapping};
@@ -142,6 +142,14 @@ impl Fixture {
                     "training",
                 ))
             }),
+            // Empty, like the shipped default: nothing is curated, so no hub
+            // result can be promoted past `unclear`.
+            sources: Arc::new(aiwatcher_annotations::SourceCatalog::default()),
+            // Deliberately never on. These tests must not reach Kaggle or
+            // Hugging Face — a suite whose result depends on somebody else's
+            // uptime is a suite people learn to re-run rather than read. What
+            // is worth asserting here is the 501, and that needs `None`.
+            hubs: None,
             runner: runner.map(|runner| runner as Arc<dyn WorkflowRunner>),
             engine: engine.map(|engine| engine as Arc<dyn WorkflowEngine>),
             auth,
@@ -2159,7 +2167,37 @@ async fn only_an_admin_may_launch_and_an_editor_may_still_browse() {
 
 // ── Annotations ──────────────────────────────────────────────────────────────
 
-const ANNOTATION_PROJECT: &str = "floor-plans/dom-projekt";
+const ANNOTATION_PROJECT: &str = "corpora/example";
+
+/// A vocabulary with no domain in it.
+///
+/// This build ships none — a project brings its own — so the tests bring one.
+/// It is the smallest set that exercises what these routes check: a stroked
+/// polyline with a required attribute, a keypoint instance whose required
+/// positions the 422 has to name, and a class marked `ignore`.
+fn test_classes() -> Value {
+    json!([
+        {
+            "name": "edge",
+            "geometry": "polyline",
+            "attributes": [
+                {"name": "role", "kind": "enum", "values": ["outer", "inner", "unknown"],
+                 "required": true, "default": "unknown"},
+                {"name": "thickness_px", "kind": "number", "required": true}
+            ]
+        },
+        {"name": "region", "geometry": "polygon"},
+        {
+            "name": "mark",
+            "geometry": "keypoints",
+            "keypoints": ["start", "end", "pivot"],
+            "optional_keypoints": ["pivot"],
+            "links": [{"name": "edge", "targets": ["edge"], "min": 0, "max": 1}],
+            "layer": 1
+        },
+        {"name": "ignore", "geometry": "polygon", "ignore": true}
+    ])
+}
 
 /// A well-formed 64-character lowercase SHA-256, without hashing anything.
 fn fake_image_id(seed: &str) -> String {
@@ -2171,11 +2209,11 @@ fn fake_image_id(seed: &str) -> String {
     id
 }
 
-fn floor_plan_project() -> Value {
+fn annotation_project() -> Value {
     json!({
         "name": ANNOTATION_PROJECT,
-        "description": "Catalogue plans",
-        "classes": aiwatcher_annotations::floor_plan_classes(),
+        "description": "A corpus with no domain in it",
+        "classes": test_classes(),
         "split_salt": "2026-09",
     })
 }
@@ -2187,8 +2225,8 @@ fn registered_image(image_id: &str) -> Value {
         "uri": format!("{}{image_id}", aiwatcher_annotations::BLOB_SCHEME),
         "width": 1064,
         "height": 1021,
-        "group_id": "komancza-dws",
-        "source": "dom-projekt",
+        "group_id": "family-a",
+        "source": "example",
         "rights": { "kind": "owned", "grant": "supplier agreement" },
     })
 }
@@ -2219,29 +2257,20 @@ async fn every_annotation_route_answers_501_when_no_object_store_is_configured()
 }
 
 #[tokio::test]
-async fn the_source_catalogue_answers_without_an_object_store_because_it_is_a_table() {
-    // It is shipped data, not stored data. An instance with no registry can
-    // still tell somebody which corpora exist and which of them a commercial
-    // model may use.
+async fn the_source_catalogue_is_empty_until_an_instance_loads_one() {
+    // It is domain content, not code, so this build ships none. Empty is a
+    // working state rather than a broken one: nothing matches a hub result, so
+    // every one stays licence-unclear and an import of it records unknown
+    // rights — which a commercial export excludes, by name.
+    //
+    // It answers without an object store because it is a table rather than a
+    // stored artifact, and that is worth keeping true.
     let fixture = Fixture::without_registry();
-    let (status, body) = fixture
-        .get("/api/v1/annotation-sources?usage=non_commercial")
-        .await;
+    let (status, body) = fixture.get("/api/v1/annotation-sources").await;
+
     assert_eq!(status, StatusCode::OK, "{body}");
-    let sources = body["sources"].as_array().expect("sources");
-    assert!(!sources.is_empty());
-    assert!(
-        sources
-            .iter()
-            .all(|source| source["usage"] == json!("non_commercial"))
-    );
-    assert!(body["total"].as_u64().expect("total") > sources.len() as u64);
-    assert!(
-        !body["directories"]
-            .as_array()
-            .expect("directories")
-            .is_empty()
-    );
+    assert_eq!(body["sources"].as_array().map(Vec::len), Some(0), "{body}");
+    assert_eq!(body["total"], json!(0));
 }
 
 #[tokio::test]
@@ -2252,7 +2281,7 @@ async fn a_viewer_may_read_a_project_and_may_not_draw_on_it() {
             "/api/v1/annotation-projects",
             "alice",
             "aiwatcher-editors",
-            floor_plan_project(),
+            annotation_project(),
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -2271,7 +2300,7 @@ async fn a_viewer_may_read_a_project_and_may_not_draw_on_it() {
             "/api/v1/annotation-projects",
             "bob",
             "aiwatcher-viewers",
-            floor_plan_project(),
+            annotation_project(),
         )
         .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
@@ -2288,7 +2317,7 @@ async fn a_refused_drawing_is_a_422_carrying_every_problem_rather_than_the_first
             "/api/v1/annotation-projects",
             "alice",
             "aiwatcher-editors",
-            floor_plan_project(),
+            annotation_project(),
         )
         .await;
     let (status, body) = fixture
@@ -2311,14 +2340,14 @@ async fn a_refused_drawing_is_a_422_carrying_every_problem_rather_than_the_first
                 "image_id": image_id,
                 "annotations": [
                     {
-                        "id": "wall_1",
-                        "class": "wall",
+                        "id": "edge_1",
+                        "class": "edge",
                         "geometry": { "kind": "polyline", "points": [[10.0, 10.0], [400.0, 10.0]] },
-                        "attributes": { "role": "bearing" }
+                        "attributes": { "role": "load" }
                     },
                     {
                         "id": "thing_1",
-                        "class": "chimney",
+                        "class": "nonexistent",
                         "geometry": { "kind": "point", "at": [5.0, 5.0] }
                     }
                 ]
@@ -2335,8 +2364,8 @@ async fn a_refused_drawing_is_a_422_carrying_every_problem_rather_than_the_first
         .collect::<Vec<_>>()
         .join(" | ");
     assert!(joined.contains("thickness_px"), "{joined}");
-    assert!(joined.contains("bearing"), "{joined}");
-    assert!(joined.contains("chimney"), "{joined}");
+    assert!(joined.contains("load"), "{joined}");
+    assert!(joined.contains("nonexistent"), "{joined}");
 }
 
 #[tokio::test]
@@ -2348,7 +2377,7 @@ async fn a_drawing_saved_accepted_reaches_an_export_and_its_coco() {
             "/api/v1/annotation-projects",
             "alice",
             "aiwatcher-editors",
-            floor_plan_project(),
+            annotation_project(),
         )
         .await;
     fixture
@@ -2370,13 +2399,13 @@ async fn a_drawing_saved_accepted_reaches_an_export_and_its_coco() {
                 "image_id": image_id,
                 "accept": true,
                 "annotations": [{
-                    "id": "space_1",
-                    "class": "space",
+                    "id": "region_1",
+                    "class": "region",
                     "geometry": {
                         "kind": "polygon",
                         "exterior": [[0.0, 0.0], [100.0, 0.0], [100.0, 50.0], [0.0, 50.0]]
                     },
-                    "attributes": { "printed_area_m2": 49.01 }
+                    "attributes": {}
                 }]
             }),
         )
@@ -2473,4 +2502,638 @@ async fn an_uploaded_image_comes_back_under_the_digest_the_server_computed() {
         .expect("collects")
         .to_bytes();
     assert_eq!(body.as_ref(), png.as_slice());
+}
+
+// ── Training ─────────────────────────────────────────────────────────────────
+
+const TRAINING_EXPORT: &str = "floor-plans/dom-projekt@9f3c2b1a";
+
+fn started_run(run_id: &str, dataset: &str) -> Value {
+    json!({
+        "run_id": run_id,
+        "model": "floor-plan-segmenter",
+        "dataset": dataset,
+        "framework": "pytorch",
+        "device": "cuda:0",
+        "code": "git:9f3c2b1",
+        "params": { "batch_size": 4 },
+    })
+}
+
+fn epoch_batch(index: u32, loss: f64) -> Value {
+    json!({
+        "epochs": [{
+            "epoch": index,
+            "duration_ms": 1000.0,
+            "steps": 25,
+            "metrics": { "loss": loss },
+        }],
+    })
+}
+
+#[tokio::test]
+async fn the_training_routes_answer_501_when_no_object_store_is_configured() {
+    let fixture = Fixture::without_registry();
+    for uri in ["/api/v1/training-runs", "/api/v1/models"] {
+        let (status, body) = fixture.get(uri).await;
+        assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{uri}: {body}");
+        assert_eq!(body["code"], json!("registry_disabled"));
+    }
+}
+
+#[tokio::test]
+async fn a_training_run_never_touches_the_event_log() {
+    // ADR_0018, asserted rather than described. A training run publishes
+    // nothing: no envelope, no span, no live frame. If it did, the read model
+    // would grow a row that the runs list has no way to close.
+    let fixture = Fixture::behind_a_proxy(true).await;
+    fixture
+        .post_as(
+            "/api/v1/training-runs",
+            "alice",
+            "aiwatcher-editors",
+            started_run("run-1", TRAINING_EXPORT),
+        )
+        .await;
+    fixture
+        .post_as(
+            "/api/v1/training-runs/run-1/progress",
+            "alice",
+            "aiwatcher-editors",
+            epoch_batch(0, 1.2),
+        )
+        .await;
+
+    let (status, body) = fixture
+        .get_as("/api/v1/runs", "bob", "aiwatcher-viewers")
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["runs"].as_array().expect("runs").len(), 0);
+    assert_eq!(body["total_known"], json!(0));
+}
+
+#[tokio::test]
+async fn a_retried_epoch_lands_on_the_epoch_it_already_wrote() {
+    let fixture = Fixture::behind_a_proxy(false).await;
+    fixture
+        .post_as(
+            "/api/v1/training-runs",
+            "alice",
+            "aiwatcher-editors",
+            started_run("run-2", TRAINING_EXPORT),
+        )
+        .await;
+    for batch in [
+        epoch_batch(0, 1.2),
+        epoch_batch(1, 0.9),
+        epoch_batch(1, 0.8),
+    ] {
+        let (status, body) = fixture
+            .post_as(
+                "/api/v1/training-runs/run-2/progress",
+                "alice",
+                "aiwatcher-editors",
+                batch,
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+
+    let (status, body) = fixture
+        .get_as("/api/v1/training-runs/run-2", "bob", "aiwatcher-viewers")
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let epochs = body["epochs"].as_array().expect("epochs");
+    assert_eq!(epochs.len(), 2);
+    assert_eq!(epochs[1]["metrics"]["loss"], json!(0.8));
+}
+
+#[tokio::test]
+async fn reusing_a_finished_run_id_is_a_conflict_rather_than_a_second_curve() {
+    let fixture = Fixture::behind_a_proxy(false).await;
+    fixture
+        .post_as(
+            "/api/v1/training-runs",
+            "alice",
+            "aiwatcher-editors",
+            started_run("run-3", TRAINING_EXPORT),
+        )
+        .await;
+    let (status, body) = fixture
+        .post_as(
+            "/api/v1/training-runs/run-3/finish",
+            "alice",
+            "aiwatcher-editors",
+            json!({ "status": "succeeded" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let (status, body) = fixture
+        .post_as(
+            "/api/v1/training-runs",
+            "alice",
+            "aiwatcher-editors",
+            started_run("run-3", TRAINING_EXPORT),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["code"], json!("run_closed"));
+}
+
+#[tokio::test]
+async fn an_ingest_token_may_publish_a_training_run_and_may_not_promote_a_model() {
+    // The whole reason an ingest token is capped at editor. It sits in a
+    // trainer's environment; a leaked one must not be able to decide which
+    // weights production loads next.
+    let fixture = Fixture::behind_a_proxy(false).await;
+    let response = fixture
+        .router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/training-runs")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, format!("Bearer {INGEST_SECRET}"))
+                .body(Body::from(
+                    started_run("run-4", TRAINING_EXPORT).to_string(),
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("responds");
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let response = fixture
+        .router()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/models/floor-plan.segmenter/labels")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, format!("Bearer {INGEST_SECRET}"))
+                .body(Body::from(
+                    json!({ "label": "production", "version": "ab" }).to_string(),
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("responds");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn a_model_version_carries_the_reason_it_cannot_be_promoted() {
+    let fixture = Fixture::behind_a_proxy(false).await;
+    fixture
+        .post_as(
+            "/api/v1/training-runs",
+            "alice",
+            "aiwatcher-editors",
+            started_run("run-5", TRAINING_EXPORT),
+        )
+        .await;
+    let (status, body) = fixture
+        .post_as(
+            "/api/v1/models",
+            "alice",
+            "aiwatcher-editors",
+            json!({
+                "name": "floor-plan.segmenter",
+                "run_id": "run-5",
+                "checkpoint_uri": "s3://models/run-5.pt",
+                "metrics": { "validation": { "miou": 0.91 } },
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    // Recorded, and the reason arrives with the registration rather than three
+    // days later when somebody tries to ship it.
+    let blocked = body["promotion_blocked"].as_str().expect("a reason");
+    assert!(blocked.contains("held-out"), "{blocked}");
+
+    let version = body["version"]["version"].as_str().expect("a version");
+    let (status, body) = fixture
+        .post_as(
+            "/api/v1/models/floor-plan.segmenter/labels",
+            "admin",
+            "aiwatcher-admins",
+            json!({ "label": "production", "version": version }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(body["code"], json!("promotion_refused"));
+}
+
+#[tokio::test]
+async fn a_version_with_a_held_out_score_promotes_and_the_head_answers_with_it() {
+    let fixture = Fixture::behind_a_proxy(false).await;
+    fixture
+        .post_as(
+            "/api/v1/training-runs",
+            "alice",
+            "aiwatcher-editors",
+            started_run("run-6", TRAINING_EXPORT),
+        )
+        .await;
+    let (_, body) = fixture
+        .post_as(
+            "/api/v1/models",
+            "alice",
+            "aiwatcher-editors",
+            json!({
+                "name": "floor-plan.segmenter",
+                "run_id": "run-6",
+                "checkpoint_uri": "s3://models/run-6.pt",
+                "metrics": {
+                    "validation": { "miou": 0.81 },
+                    "test": { "miou": 0.74 },
+                },
+            }),
+        )
+        .await;
+    assert!(body["promotion_blocked"].is_null(), "{body}");
+    let version = body["version"]["version"]
+        .as_str()
+        .expect("a version")
+        .to_owned();
+
+    let (status, body) = fixture
+        .post_as(
+            "/api/v1/models/floor-plan.segmenter/labels",
+            "admin",
+            "aiwatcher-admins",
+            json!({ "label": "production", "version": version }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["labels"]["production"], json!(version));
+
+    // Reading the model with no version asked for resolves `production`.
+    let (status, body) = fixture
+        .get_as(
+            "/api/v1/models/floor-plan.segmenter",
+            "bob",
+            "aiwatcher-viewers",
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["current"]["version"], json!(version));
+    assert_eq!(body["current"]["dataset"], json!(TRAINING_EXPORT));
+}
+
+// ── Dataset hubs and importing from one ──────────────────────────────────────
+
+#[tokio::test]
+async fn the_hub_routes_answer_501_naming_what_to_set_rather_than_an_empty_list() {
+    // Sharper than the registry 501s and worth its own test. An empty search
+    // result is a statement about the world — "no such corpus exists" — and a
+    // deployment that simply never configured a hub must not make it.
+    let fixture = Fixture::without_registry();
+    for uri in [
+        "/api/v1/dataset-hubs",
+        "/api/v1/dataset-hubs/search?q=floor",
+    ] {
+        let (status, body) = fixture.get(uri).await;
+        assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{uri}: {body}");
+        assert_eq!(body["code"], json!("hubs_disabled"));
+        let message = body["message"].as_str().unwrap_or_default();
+        assert!(message.contains("AIWATCHER_KAGGLE"), "{body}");
+        assert!(message.contains("AIWATCHER_HUGGINGFACE_ENABLED"), "{body}");
+    }
+}
+
+/// A batch of rows in the import schema, all from one building.
+fn import_rows(count: usize, group: &str) -> Vec<Value> {
+    (0..count)
+        .map(|index| {
+            json!({
+                "image_id": fake_image_id(&format!("{:02x}", 0x10 + index)),
+                "uri": format!("https://example.test/plan-{index}.png"),
+                "width": 1064,
+                "height": 1021,
+                "group_id": group,
+            })
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn an_import_dry_run_registers_nothing_and_still_reports_every_problem() {
+    let fixture = Fixture::behind_a_proxy(false).await;
+    fixture
+        .post_as(
+            "/api/v1/annotation-projects",
+            "alice",
+            "aiwatcher-editors",
+            annotation_project(),
+        )
+        .await;
+
+    let (status, body) = fixture
+        .post_as(
+            "/api/v1/annotation-imports",
+            "alice",
+            "aiwatcher-editors",
+            json!({
+                "project": ANNOTATION_PROJECT,
+                "dry_run": true,
+                "source": { "hub": "huggingface", "dataset_id": "someone/plans" },
+                "rows": import_rows(2, "komancza-dws"),
+            }),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["dry_run"], json!(true));
+    assert_eq!(body["accepted"], json!(2));
+    assert_eq!(body["families"], json!(1));
+
+    // And nothing was written. A preview that registers is not a preview.
+    let (status, listed) = fixture
+        .get_as(
+            &format!("/api/v1/annotation-images?project={ANNOTATION_PROJECT}"),
+            "alice",
+            "aiwatcher-editors",
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert_eq!(
+        listed["images"].as_array().map(Vec::len),
+        Some(0),
+        "{listed}"
+    );
+}
+
+#[tokio::test]
+async fn an_import_with_no_stated_rights_says_what_that_will_cost_the_export() {
+    // The safe default, and the one whose consequence is invisible later: a
+    // commercial export drops every one of these and only its manifest says so.
+    let fixture = Fixture::behind_a_proxy(false).await;
+    fixture
+        .post_as(
+            "/api/v1/annotation-projects",
+            "alice",
+            "aiwatcher-editors",
+            annotation_project(),
+        )
+        .await;
+
+    let (status, body) = fixture
+        .post_as(
+            "/api/v1/annotation-imports",
+            "alice",
+            "aiwatcher-editors",
+            json!({
+                "project": ANNOTATION_PROJECT,
+                "source": {
+                    "hub": "huggingface",
+                    "dataset_id": "someone/plans",
+                    "claimed_license": "mit",
+                },
+                "rows": import_rows(1, "komancza-dws"),
+            }),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let warnings = body["warnings"]
+        .as_array()
+        .expect("warnings")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>()
+        .join(" | ");
+    assert!(
+        warnings.contains("commercial export will exclude"),
+        "{warnings}"
+    );
+    // The mirror's claim is preserved and explicitly not believed.
+    assert!(warnings.contains("mit"), "{warnings}");
+    assert!(warnings.contains("Nobody has checked"), "{warnings}");
+}
+
+#[tokio::test]
+async fn a_batch_where_every_image_is_its_own_family_is_warned_about_loudly() {
+    // The mistake that turns a family split back into a per-image split, with
+    // nothing in any later number saying so.
+    let fixture = Fixture::behind_a_proxy(false).await;
+    fixture
+        .post_as(
+            "/api/v1/annotation-projects",
+            "alice",
+            "aiwatcher-editors",
+            annotation_project(),
+        )
+        .await;
+
+    let rows: Vec<Value> = (0..3)
+        .map(|index| {
+            json!({
+                "image_id": fake_image_id(&format!("{:02x}", 0x40 + index)),
+                "uri": format!("https://example.test/plan-{index}.png"),
+                "width": 800,
+                "height": 600,
+                "group_id": format!("plan-{index}"),
+            })
+        })
+        .collect();
+
+    let (status, body) = fixture
+        .post_as(
+            "/api/v1/annotation-imports",
+            "alice",
+            "aiwatcher-editors",
+            json!({
+                "project": ANNOTATION_PROJECT,
+                "dry_run": true,
+                "rights": { "kind": "owned", "grant": "supplier agreement" },
+                "rows": rows,
+            }),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["families"], json!(3));
+    let warnings = body["warnings"].to_string();
+    assert!(warnings.contains("its own family"), "{warnings}");
+}
+
+#[tokio::test]
+async fn a_research_only_corpus_cannot_be_imported_as_commercially_usable() {
+    // The one licence decision aiwatcher makes against the caller, and it
+    // makes it because a human read that licence at the original, on a date.
+    let fixture = Fixture::behind_a_proxy(false).await;
+    fixture
+        .post_as(
+            "/api/v1/annotation-projects",
+            "alice",
+            "aiwatcher-editors",
+            annotation_project(),
+        )
+        .await;
+
+    let (status, body) = fixture
+        .post_as(
+            "/api/v1/annotation-imports",
+            "alice",
+            "aiwatcher-editors",
+            json!({
+                "project": ANNOTATION_PROJECT,
+                "rights": { "kind": "licensed", "license": "MIT" },
+                "source": {
+                    "hub": "huggingface",
+                    "dataset_id": "someone/cubicasa5k-mirror",
+                    "claimed_license": "mit",
+                    "curated_source": "cubicasa5k",
+                    "curated_usage": "non_commercial",
+                },
+                "rows": import_rows(1, "komancza-dws"),
+            }),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let message = body["message"].as_str().unwrap_or_default();
+    assert!(message.contains("cubicasa5k"), "{body}");
+    assert!(message.contains("research-only"), "{body}");
+}
+
+#[tokio::test]
+async fn one_unusable_row_does_not_take_the_batch_with_it() {
+    let fixture = Fixture::behind_a_proxy(false).await;
+    fixture
+        .post_as(
+            "/api/v1/annotation-projects",
+            "alice",
+            "aiwatcher-editors",
+            annotation_project(),
+        )
+        .await;
+
+    let (status, body) = fixture
+        .post_as(
+            "/api/v1/annotation-imports",
+            "alice",
+            "aiwatcher-editors",
+            json!({
+                "project": ANNOTATION_PROJECT,
+                "rights": { "kind": "research_only", "license": "CC BY-NC 4.0" },
+                "rows": [
+                    {
+                        "image_id": fake_image_id("aa"),
+                        "uri": "https://example.test/good.png",
+                        "width": 1064,
+                        "height": 1021,
+                        "group_id": "family-a",
+                    },
+                    {
+                        // No content address. The registry refuses rather than
+                        // inventing one: a made-up id is two pictures sharing
+                        // a key, which is a training set whose labels belong
+                        // to a different image.
+                        "uri": "https://example.test/no-digest.png",
+                        "width": 1064,
+                        "height": 1021,
+                        "group_id": "family-a",
+                    },
+                ],
+            }),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["accepted"], json!(1), "{body}");
+    assert_eq!(body["rejected"], json!(1), "{body}");
+    let outcomes = body["outcomes"].to_string();
+    assert!(outcomes.contains("no-digest.png"), "{outcomes}");
+
+    // And the good one is really there.
+    let (_, listed) = fixture
+        .get_as(
+            &format!("/api/v1/annotation-images?project={ANNOTATION_PROJECT}"),
+            "alice",
+            "aiwatcher-editors",
+        )
+        .await;
+    assert_eq!(
+        listed["images"].as_array().map(Vec::len),
+        Some(1),
+        "{listed}"
+    );
+}
+
+#[tokio::test]
+async fn importing_is_an_editors_job_like_every_other_annotation_write() {
+    let fixture = Fixture::behind_a_proxy(false).await;
+    let (status, body) = fixture
+        .post_as(
+            "/api/v1/annotation-imports",
+            "bob",
+            "aiwatcher-viewers",
+            json!({ "project": ANNOTATION_PROJECT, "rows": [] }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+}
+
+#[tokio::test]
+async fn an_imported_image_carries_where_it_came_from_and_what_the_mirror_claimed() {
+    let fixture = Fixture::behind_a_proxy(false).await;
+    fixture
+        .post_as(
+            "/api/v1/annotation-projects",
+            "alice",
+            "aiwatcher-editors",
+            annotation_project(),
+        )
+        .await;
+    let image_id = fake_image_id("bc");
+
+    fixture
+        .post_as(
+            "/api/v1/annotation-imports",
+            "alice",
+            "aiwatcher-editors",
+            json!({
+                "project": ANNOTATION_PROJECT,
+                "source": {
+                    "hub": "kaggle",
+                    "dataset_id": "someone/floor-plans",
+                    "url": "https://www.kaggle.com/datasets/someone/floor-plans",
+                    "claimed_license": "CC0: Public Domain",
+                    "pipeline": "data_frame()->read(hub_datasets, search: 'floor plan')",
+                },
+                "rows": [{
+                    "image_id": image_id,
+                    "uri": "https://example.test/plan.png",
+                    "width": 1064,
+                    "height": 1021,
+                    "group_id": "family-a",
+                }],
+            }),
+        )
+        .await;
+
+    let (status, body) = fixture
+        .get_as(
+            &format!("/api/v1/annotation-image?project={ANNOTATION_PROJECT}&image_id={image_id}"),
+            "alice",
+            "aiwatcher-editors",
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["image"]["source"], json!("kaggle:someone/floor-plans"));
+    // Recorded beside the rights rather than as them.
+    assert_eq!(
+        body["image"]["metadata"]["import.claimed_license"],
+        json!("CC0: Public Domain")
+    );
+    assert_eq!(body["image"]["rights"]["kind"], json!("unknown"));
+    assert!(
+        body["image"]["metadata"]["import.pipeline"]
+            .as_str()
+            .is_some_and(|value| value.contains("hub_datasets")),
+        "the Flow script that produced the row is the provenance: {body}"
+    );
 }

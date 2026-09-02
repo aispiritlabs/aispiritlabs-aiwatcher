@@ -721,24 +721,71 @@
         }
       }
     },
-    "/api/v1/annotation-presets": {
-      "get": {
+    "/api/v1/annotation-imports": {
+      "post": {
         "tags": [
           "annotations"
         ],
-        "summary": "The label schemas this build ships as a starting point.",
-        "description": "Not a database read: a project that starts from a blank vocabulary usually\ninvents one without a hinge point, and that is the vocabulary that has to be\nre-drawn. Shipping one is cheaper than discovering that.",
-        "operationId": "list_presets",
+        "summary": "Register many images at once, from rows a Flow PHP pipeline produced.",
+        "description": "The write half of dataset discovery. A hub search says a corpus exists; a\nFlow query maps its file listing onto this schema; this registers the\nresult into a project somebody can draw on.\n\nTwo things about the response are worth reading rather than skipping. One\nbad row does not fail the batch — `outcomes` names every refusal — and\n`warnings` carries the states that *succeed* and still leave the corpus\nworth less than it looks: unknown rights, and a group key that gave every\nimage its own family.\n\nAlways `dry_run` first from a UI. Six hundred images with the split key\nmapped from a filename is not something to discover after the fact.",
+        "operationId": "import_images",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "description": "",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/LabelClass"
-                  }
+                  "$ref": "#/components/schemas/ImportReport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The asserted rights contradict what a human recorded about this corpus",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
                 }
               }
             }
@@ -1419,6 +1466,111 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dataset-hubs": {
+      "get": {
+        "tags": [
+          "datasets"
+        ],
+        "summary": "Which hubs are configured, and the variable to set for each that is not.",
+        "operationId": "list_hubs",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubsPage"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dataset-hubs/search": {
+      "get": {
+        "tags": [
+          "datasets"
+        ],
+        "summary": "Search the configured hubs.",
+        "description": "Always 200 when at least one hub is configured, even if every one of them\nfailed: the per-hub status carries the failure. A search where Kaggle is\nrate-limited and Hugging Face answered is a partial result, and returning a\n502 for it would throw away the half that worked.",
+        "operationId": "search_hubs",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Free text. Empty asks each hub for its own idea of what is popular,\nwhich is a worse question than any real one but a reasonable landing\nstate for a search box nobody has typed in yet.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "hub",
+            "in": "query",
+            "description": "One hub, or both when absent.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/HubKind"
+                }
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubSearchPage"
                 }
               }
             }
@@ -5437,30 +5589,24 @@
       "DatasetSource": {
         "type": "object",
         "description": "One corpus.",
-        "required": [
-          "id",
-          "name",
-          "kind",
-          "summary",
-          "item_label",
-          "labels",
-          "media",
-          "license",
-          "usage",
-          "access",
-          "url",
-          "verified_on",
-          "notes"
-        ],
         "properties": {
           "access": {
-            "$ref": "#/components/schemas/SourceAccess"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SourceAccess"
+              }
+            ],
+            "default": "open"
           },
           "id": {
-            "type": "string"
+            "type": "string",
+            "description": "Stable slug. What [`crate::integrations::hubs`] matches a mirror\nagainst, and what an import records as the row it was checked against.",
+            "default": ""
           },
           "item_label": {
-            "type": "string"
+            "type": "string",
+            "description": "What one item is: `images`, `scans`, `studies`.",
+            "default": ""
           },
           "items": {
             "type": [
@@ -5469,52 +5615,69 @@
             ],
             "format": "int64",
             "description": "Best published figure. `None` where the authors give a range.",
+            "default": null,
             "minimum": 0
           },
           "kind": {
-            "$ref": "#/components/schemas/SourceKind"
+            "type": "string",
+            "description": "What kind of thing it contains, in the caller's own words —\n`floor_plan`, `satellite`, `radiograph`. Free text for the same reason\n[`crate::images::ImageRecord::view`] is: an enum here would be one\ndomain's list.",
+            "default": ""
           },
           "labels": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "What it labels, in this crate's vocabulary: `walls`, `rooms`, `doors`,\n`windows`, `openings`, `stairs`, `text`, `scale`, `graph`, `furniture`,\n`symbols`."
+            "description": "What it labels, in whatever vocabulary the corpus uses.",
+            "default": []
           },
           "license": {
-            "type": "string"
+            "type": "string",
+            "default": ""
           },
           "media": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "`raster`, `vector`, `cad`, `panorama`."
+            "description": "`raster`, `vector`, `video`, `point_cloud`.",
+            "default": []
           },
           "name": {
-            "type": "string"
+            "type": "string",
+            "default": ""
           },
           "notes": {
-            "type": "string"
+            "type": "string",
+            "default": ""
           },
           "paper": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "default": null
           },
           "summary": {
-            "type": "string"
+            "type": "string",
+            "default": ""
           },
           "url": {
-            "type": "string"
+            "type": "string",
+            "default": ""
           },
           "usage": {
-            "$ref": "#/components/schemas/SourceUsage"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SourceUsage"
+              }
+            ],
+            "default": "unclear"
           },
           "verified_on": {
             "type": "string",
-            "description": "When somebody last read the licence at `url`."
+            "description": "When somebody last read the licence at `url`.\n\nThe field that makes a row worth more than a guess, and the one that\ngoes stale. A row with no date is a row nobody checked.",
+            "default": ""
           }
         }
       },
@@ -6723,7 +6886,7 @@
           "unreviewed",
           "empty",
           "schema_mismatch",
-          "view_type",
+          "view",
           "missing",
           "no_requested_class"
         ]
@@ -7035,7 +7198,6 @@
           "created_at",
           "rights_policy",
           "require_human_review",
-          "all_view_types",
           "splits",
           "split_salt",
           "classes",
@@ -7044,9 +7206,6 @@
           "counts"
         ],
         "properties": {
-          "all_view_types": {
-            "type": "boolean"
-          },
           "classes": {
             "type": "array",
             "items": {
@@ -7097,6 +7256,12 @@
           },
           "splits": {
             "$ref": "#/components/schemas/SplitRatios"
+          },
+          "views": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
@@ -7121,10 +7286,6 @@
           "project"
         ],
         "properties": {
-          "all_view_types": {
-            "type": "boolean",
-            "description": "Include sections and elevations. Off by default."
-          },
           "classes": {
             "type": "array",
             "items": {
@@ -7162,6 +7323,13 @@
                 "description": "Overrides the project's ratios for this export only."
               }
             ]
+          },
+          "views": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Which [`views`](crate::images::ImageRecord::view) to include.\n\nEmpty means every one, which is the right default for a corpus that\nhas only one kind of picture — most of them. A corpus that mixes kinds\nnames the ones a model reads, and every other image is excluded *by\nname* in the manifest rather than quietly."
           }
         },
         "additionalProperties": false
@@ -7443,6 +7611,195 @@
           "keypoints"
         ]
       },
+      "HubDataset": {
+        "type": "object",
+        "description": "One dataset a hub says it has.\n\nEvery field here is the hub's, not aiwatcher's, with two exceptions:\n[`usage`](Self::usage) and [`curated_source`](Self::curated_source), which\nthis module decides — see `Hubs::reconcile`.",
+        "required": [
+          "hub",
+          "id",
+          "title",
+          "url",
+          "usage"
+        ],
+        "properties": {
+          "claimed_license": {
+            "type": "string",
+            "description": "What the *hub* says the licence is. Named for what it is.\n\nEmpty is common and is not a licence: an unstated licence on a mirror\nmeans nobody filled the field in, never that the data is unencumbered."
+          },
+          "curated_source": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The id of the [`DatasetSource`] row this matched, when it matched one.\n\nA match is on the *original's* URL, so it means \"a human read this\nlicence, at the source, on a date\" — which is the only thing that ever\njustifies a usage other than unclear."
+          },
+          "downloads": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HubFile"
+            }
+          },
+          "hub": {
+            "$ref": "#/components/schemas/HubKind"
+          },
+          "id": {
+            "type": "string",
+            "description": "`owner/name` on both hubs, which is also how each addresses a download."
+          },
+          "likes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "owner": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/SourceUsage",
+            "description": "Always [`SourceUsage::Unclear`] unless [`curated_source`](Self::curated_source)\nis set. This is the guardrail, expressed as a field that cannot say\n\"commercial\" on a hub's word."
+          }
+        }
+      },
+      "HubFile": {
+        "type": "object",
+        "description": "One file inside a hub dataset, as far as the hub will say.\n\nOnly enough to tell a floor-plan corpus from a CSV of house prices before\ndownloading either. Sizes are the hub's own and are not verified.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "HubKind": {
+        "type": "string",
+        "description": "Which mirror a row came from.",
+        "enum": [
+          "kaggle",
+          "huggingface"
+        ]
+      },
+      "HubSearchPage": {
+        "type": "object",
+        "description": "A page of results, and what each hub had to say about answering.",
+        "required": [
+          "results",
+          "hubs",
+          "notice"
+        ],
+        "properties": {
+          "hubs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HubStatus"
+            }
+          },
+          "notice": {
+            "type": "string",
+            "description": "Repeated on every response rather than left to a tooltip, because it is\nthe one thing a reader of this list has to know about it."
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HubDataset"
+            }
+          }
+        }
+      },
+      "HubStatus": {
+        "type": "object",
+        "description": "Whether a hub answered, and if not, why.",
+        "required": [
+          "hub",
+          "configured",
+          "results"
+        ],
+        "properties": {
+          "configured": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Present when the hub was asked and did not answer. A search with one\nhub down is a partial answer, and saying which half is missing beats\nboth an error and a silently short list."
+          },
+          "hub": {
+            "$ref": "#/components/schemas/HubKind"
+          },
+          "results": {
+            "type": "integer",
+            "description": "Rows this hub contributed to the page.",
+            "minimum": 0
+          },
+          "variable": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What to set when `configured` is false."
+          }
+        }
+      },
+      "HubsPage": {
+        "type": "object",
+        "description": "What this instance can search, before anybody types a query.",
+        "required": [
+          "hubs",
+          "notice"
+        ],
+        "properties": {
+          "hubs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HubStatus"
+            }
+          },
+          "notice": {
+            "type": "string",
+            "description": "The same sentence every search response carries. Repeated here so a\npanel that renders the hub list before the first search has it."
+          }
+        }
+      },
       "Identity": {
         "type": "object",
         "description": "An authenticated caller.",
@@ -7671,7 +8028,8 @@
             "description": "Where the bytes are. `blob:<image_id>` for something uploaded here."
           },
           "view": {
-            "$ref": "#/components/schemas/ViewType"
+            "type": "string",
+            "description": "What kind of picture this is, in the caller's own words.\n\nFree text for the same reason `level` is: the vocabulary differs per\ncorpus, and an enum shipped here would be one project's list imposed on\nevery other. An export selects the views it wants by name, so a corpus\nthat mixes photographs with diagrams, or plans with elevations, keeps\nthe ones a model reads out of the ones it does not — by saying so\nrather than by somebody remembering."
           },
           "width": {
             "type": "integer",
@@ -7679,6 +8037,175 @@
             "minimum": 0
           }
         }
+      },
+      "ImportReport": {
+        "type": "object",
+        "description": "What an import did.",
+        "required": [
+          "project",
+          "dry_run",
+          "accepted",
+          "rejected",
+          "families",
+          "outcomes"
+        ],
+        "properties": {
+          "accepted": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "dry_run": {
+            "type": "boolean"
+          },
+          "families": {
+            "type": "integer",
+            "description": "Distinct [`ImportRow::group_id`] values across the batch.",
+            "minimum": 0
+          },
+          "outcomes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RowOutcome"
+            }
+          },
+          "project": {
+            "type": "string"
+          },
+          "rejected": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Things that are not errors and that somebody has to read anyway.\n\nEvery one of these describes a state where the import succeeds and the\nresulting corpus is quietly worth less than it looks."
+          }
+        }
+      },
+      "ImportRequest": {
+        "type": "object",
+        "description": "A bulk registration.",
+        "required": [
+          "project",
+          "rows"
+        ],
+        "properties": {
+          "dry_run": {
+            "type": "boolean",
+            "description": "Check everything and register nothing.\n\nThe default is false, but the panel always asks for a dry run first:\nsix hundred rows with a group key mapped from the filename is not\nsomething anybody wants to discover after it is in the project."
+          },
+          "project": {
+            "type": "string"
+          },
+          "rights": {
+            "$ref": "#/components/schemas/UsageRights",
+            "description": "What the caller asserts may be done with every image in this batch.\n\nOne value for the batch rather than per row, because a licence is a\nproperty of the corpus and a per-row field invites a pipeline to derive\nit from a column — which is exactly the mirror's word, laundered\nthrough a `withEntry`."
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportRow"
+            }
+          },
+          "source": {
+            "$ref": "#/components/schemas/ImportSource"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ImportRow": {
+        "type": "object",
+        "description": "One image a pipeline produced.\n\nDeliberately the same field names as [`RegisterImageRequest`], minus what\nthe request supplies once for the whole batch. A Flow query that renames\nits columns to these is the entire mapping layer.",
+        "required": [
+          "uri",
+          "width",
+          "height",
+          "group_id"
+        ],
+        "properties": {
+          "group_id": {
+            "type": "string",
+            "description": "The **building**, not the drawing. See the module docstring."
+          },
+          "height": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "image_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "SHA-256 of the bytes, when the pipeline has already fetched and stored\nthem. Absent for a row that only points at a remote file."
+          },
+          "level": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "uri": {
+            "type": "string"
+          },
+          "view": {
+            "type": "string"
+          },
+          "width": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "ImportSource": {
+        "type": "object",
+        "description": "Where a batch came from, recorded on every image it produces.",
+        "properties": {
+          "claimed_license": {
+            "type": "string",
+            "description": "What the hub said the licence was. Kept verbatim and never believed —\nit is evidence about the mirror, not about the data."
+          },
+          "curated_source": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The curated row this matched, if any. The presence of this is what lets\n[`check_rights`] refuse an over-claim."
+          },
+          "curated_usage": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SourceUsage",
+                "description": "The curated verdict, when there was one."
+              }
+            ]
+          },
+          "dataset_id": {
+            "type": "string"
+          },
+          "hub": {
+            "type": "string",
+            "description": "`kaggle` or `huggingface`, or anything else for a pipeline that did not\nstart at a hub."
+          },
+          "pipeline": {
+            "type": "string",
+            "description": "The Flow PHP that produced these rows. Provenance that survives the\nimport: \"where did these six hundred images come from\" has an answer\nthat is a script rather than a memory."
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
       },
       "IngestRequest": {
         "type": "object",
@@ -7770,6 +8297,12 @@
               "type": "string"
             },
             "description": "The named positions a [`GeometryKind::Keypoints`] class expects, in the\norder the tool asks for them."
+          },
+          "layer": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Which grid this class paints into when a revision is rasterised.\n\nThe generic form of a problem that does not look generic: some classes\n*overlay* others and must not erase them. An opening in a wall, a\ndefect on a component, a marking on a road — in every case the thing\nunderneath is still there, and one grid could only represent the\noverlay by deleting it.\n\nSo the schema says so. Classes on the same layer share one integer grid\nand paint in declaration order, last wins; classes on different layers\nnever contend, and a model reads one head per layer. Most vocabularies\nneed exactly one layer and never set this.",
+            "minimum": 0
           },
           "links": {
             "type": "array",
@@ -9849,7 +10382,8 @@
             "type": "string"
           },
           "view": {
-            "$ref": "#/components/schemas/ViewType"
+            "type": "string",
+            "description": "What kind of picture this is, in the caller's own words.\n\nFree text for the same reason `level` is: the vocabulary differs per\ncorpus, and an enum shipped here would be one project's list imposed on\nevery other. An export selects the views it wants by name, so a corpus\nthat mixes photographs with diagrams, or plans with elevations, keeps\nthe ones a model reads out of the ones it does not — by saying so\nrather than by somebody remembering."
           },
           "width": {
             "type": "integer",
@@ -10112,6 +10646,53 @@
           "editor",
           "admin"
         ]
+      },
+      "RowOutcome": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Registered, or would have been under `dry_run`.",
+            "required": [
+              "image_id",
+              "outcome"
+            ],
+            "properties": {
+              "image_id": {
+                "type": "string"
+              },
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "accepted"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Refused, with the reason. One row's problem never fails the batch: an\nimport of six hundred where four have a bad URI should register five\nhundred and ninety-six and say which four.",
+            "required": [
+              "uri",
+              "reason",
+              "outcome"
+            ],
+            "properties": {
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "rejected"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              },
+              "uri": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "What happened to one row."
       },
       "RunDetail": {
         "type": "object",
@@ -10557,13 +11138,30 @@
           "academic"
         ]
       },
+      "SourceCatalog": {
+        "type": "object",
+        "description": "A loaded catalogue: the corpora somebody checked, and where to look for more.\n\nCloneable and cheap to hold. An instance loads one at start-up and every\nreader shares it — the alternative, re-reading a file per request, would\nmake the answer depend on when it was asked.",
+        "properties": {
+          "directories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SourceDirectory"
+            }
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DatasetSource"
+            }
+          }
+        }
+      },
       "SourceDirectory": {
         "type": "object",
         "description": "A place to go looking, rather than a corpus.",
         "required": [
           "name",
-          "url",
-          "notes"
+          "url"
         ],
         "properties": {
           "name": {
@@ -10576,16 +11174,6 @@
             "type": "string"
           }
         }
-      },
-      "SourceKind": {
-        "type": "string",
-        "description": "What kind of thing a corpus contains.",
-        "enum": [
-          "floor_plan",
-          "vector",
-          "cad",
-          "capture"
-        ]
       },
       "SourcePage": {
         "type": "object",
@@ -11549,17 +12137,6 @@
           }
         ],
         "description": "Where a version came from.\n\nThe distinction the panel needs to answer \"did a person write this, or did\nan optimiser?\" — which is the first question asked about a prompt that is\nbehaving strangely."
-      },
-      "ViewType": {
-        "type": "string",
-        "description": "What a drawing on a page actually is.\n\nA section and an elevation are the same house drawn a different way, and a\nmodel trained to read plans reads neither. Recording the view is what keeps\nthem out of an export instead of out of somebody's memory.",
-        "enum": [
-          "floor_plan",
-          "section",
-          "elevation",
-          "site_plan",
-          "other"
-        ]
       },
       "WorkflowDefinition": {
         "type": "object",

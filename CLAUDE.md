@@ -23,7 +23,9 @@ Python / TypeScript agents
 
    prompt registry ──► RustFS (S3)   authored, and outside retention entirely
    annotations     ──► RustFS (S3)   drawn, versioned, exported for training
+   training runs   ──► RustFS (S3)   a curve and a model registry; off the log
    pipeline engine ──► Flyte 2       what could be started; read, and asked
+   dataset hubs    ──► Kaggle, HF    what exists; never what is permitted
 ```
 
 ## Commands
@@ -35,12 +37,14 @@ just test          # cargo test --workspace --all-targets
 just lint          # cargo clippy -Dwarnings
 just openapi       # regenerate contracts/openapi.json AND the panel's client
 just run           # server on :8080, write-ahead log in ./.data
+just run-hubs      # the same, with Kaggle/Hugging Face dataset search on
 just dev           # server (in-memory bus) + panel dev server on :5173
 just seed          # publish a demo run into a running server
 just seed-evaluation  # publish two comparable evaluation reports
 just seed-prompts  # publish a prompt plus three optimisations, one admitted
 just seed-workflow    # publish two executions of one declared graph
 just seed-annotations # six synthetic plans, three families, an export, a training run
+just e2e-train        # the whole chain: annotate → export → fit a real tiny model → promote
 just stack-up      # docker compose: VictoriaTraces, VictoriaMetrics, Collector, Grafana
 just tilt-up       # the same stack on a local Kubernetes, rebuilt on save
 ```
@@ -105,7 +109,8 @@ Crates, in dependency order. A crate may only depend on ones above it.
 | `aiwatcher-bus` | `MessageSource` / `MessageSink` / `Checkpointer` + memory, write-ahead-log, Laser and generic-broker adapters |
 | `aiwatcher-trace` | `SpanAssembler` and the OTLP/JSON exporters |
 | `aiwatcher-prompts` | The prompt registry: content-addressed versions, optimisation records, and the RustFS/S3 and filesystem adapters behind `ObjectStore`. Includes a hand-written SigV4 signer. |
-| `aiwatcher-annotations` | Vector image annotations: the label schema, the drawings, the review state, the family-keyed split, and the immutable training export a run names. Plus the dated table of public floor-plan corpora and what their licences permit. |
+| `aiwatcher-annotations` | Vector image annotations for **any** vision domain — it ships no vocabulary, and the project's label schema carries the domain (ADR_0020). Sliced by noun: `images/` (one picture — head, revisions, review, bytes, bulk import), `project`, `export`, `license` (what may be done with the data), `schema`, `shapes`, `sources` (a catalogue an instance loads), `integrations/hubs` (Kaggle and Hugging Face). `registry` is the facade and the only public door; `store` is the private key layout every slice reads through. |
+| `aiwatcher-training` | Training runs and the model versions they produce. The one registry here whose contents never came from the event log: a run is a record that grows in place, and a promotion is refused without a held-out score. |
 | `aiwatcher-runner` | The workflow rerun dispatcher: one HTTP POST to one configured endpoint, behind `core::ports::WorkflowRunner`. |
 | `aiwatcher-pipeline` | Pipeline engines behind `core::engine::WorkflowEngine`: the orchestrator's launchable catalog, the inputs each entry declares, and starting one. Flyte 2 over its `/api/v1/` gateway, plus the literal encoder that binds a form's JSON to Flyte's declared types. With the runner, the second and last thing here that asks another system to do work. |
 | `aiwatcher-auth` | Single sign-on: OIDC discovery, a JWKS cache, the authorization-code flow with PKCE, HMAC-signed session cookies, authentik's forward-auth headers, and the group-to-role mapping. Knows nothing about axum. |
@@ -243,27 +248,55 @@ area.
    defaults to `none` and every route answers 501 naming it.
 
 14. **An annotation is authored, vector-first, and split by family**
-   ([ADR_0017](docs/ADR/ADR_0017_IMAGE_ANNOTATION.md)). A segmentation mask
-   cannot say which wall an opening sits on, which way a door swings, or which
-   two rooms it connects — and those are the fields the product's output JSON
+   ([ADR_0017](docs/ADR/ADR_0017_IMAGE_ANNOTATION.md),
+   [ADR_0020](docs/ADR/ADR_0020_GENERIC_VISION_ANNOTATION.md)). A segmentation
+   mask cannot say which of two things an overlay belongs to, which way it
+   faces, or what it connects — and those are fields a product's output JSON
    has to carry, so drawing pixels loses them at the moment of drawing. The
    vector shape is the source and every raster is derived. Identity is content,
    as it is for a prompt; review state is a label in the head, as prompt labels
-   are; and the split key is `group_id`, the *building*, so a plan's mirror and
-   its garage variant land on the same side by construction. Usage rights are a
+   are; and the split key is `group_id`, the *subject*, so every rendering of
+   one thing lands on the same side by construction. Usage rights are a
    required field and an export enforces a policy, because the best public
-   corpora are non-commercial and a licence breach shows up in a legal review
-   rather than in a metric.
+   corpora are often non-commercial and a licence breach shows up in a legal
+   review rather than in a metric.
 
-15. **A training run rides the log; an epoch is a point, a step is a count**
-   ([ADR_0018](docs/ADR/ADR_0018_TRAINING_RUNS.md)). `train.*` is
-   `Subject::Train` with the ordinary phases, so a training run is one span and
-   one row in the runs list with no new machinery. What it deliberately is not
-   is two hundred spans: an epoch is a point carrying its own duration and
-   metrics, because the useful view of training is a curve and not a waterfall.
-   A step never reaches the log at all — the SDK aggregates locally, which is
-   ADR_0003's `llm.chunk` rule at a different scale. A checkpoint is a pointer
-   and a profiler session is a summary plus a link.
+   **This ships no vocabulary.** The label schema is the domain — its classes,
+   their geometry, which are `ignore`, and which `layer` each paints into — and
+   every mechanism reads it. A class on a higher layer overlays one below
+   without erasing it, which is the generic form of "an opening is a segment of
+   a wall": one grid could only draw the overlay by deleting what it sits in.
+
+15. **A hub says what exists; the table says what is permitted**
+   ([ADR_0019](docs/ADR/ADR_0019_DATASET_HUB_DISCOVERY.md)). ADR_0017's
+   `sources` table is a signpost a human wrote, and its docstring says why it
+   is not a client: Hugging Face and Kaggle restate corpus licences wrongly
+   often enough that a live answer would be worse than none. Searching them is
+   still worth doing, because "what exists" and "what may we train on" are
+   different questions with different costs of being wrong. So a hub row
+   carries `claimed_license` (the mirror's word, named for what it is) and
+   `usage` (`unclear`, unless it matched a curated row, which is then named).
+   The first live search proved the point: `Voxel51/FloorPlanCAD` declares
+   `cc-by-sa-4.0` for a corpus whose authors say the drawings are not theirs to
+   license. Importing is a **Flow PHP** pipeline into
+   `POST /api/v1/annotation-imports`, because every hub lays its files out
+   differently and that mapping belongs somewhere versioned.
+
+16. **A training run is a record, not a trace**
+   ([ADR_0018](docs/ADR/ADR_0018_TRAINING_RUNS.md)). The first design put
+   `train.*` on the event log; following it through, an epoch turned out not to
+   be a span, a step not to belong on the log at all, and a profiler session
+   not to be a trace — which left one span with no children and an exception in
+   the read model's status fold to make it work. A design whose last step is an
+   exception in somebody else's fold is in the wrong place. So training is its
+   own module with its own store and its own three write routes; a run opens,
+   accumulates a curve and closes; a retried epoch replaces the one it already
+   wrote, and reusing a finished run id is a 409. The other half is the **model
+   registry**, which is why this lives here rather than in W&B: a version names
+   the run and the export behind it, an agent span names a model, and that join
+   is the whole point. A label is refused without a held-out measurement — the
+   validation score is what early stopping maximised — and refused on a mutable
+   dataset name.
 
 ## Conventions
 
@@ -284,6 +317,51 @@ area.
 - Integration tests under `tests/` need
   `#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]` — the
   `clippy.toml` allowances only reach `#[cfg(test)]` modules.
+
+### Module layout
+
+Two crates are sliced by noun rather than by layer, and the rule that decides
+where something goes is the same in both: **a change to what one thing *is*
+should touch one directory.**
+
+In `aiwatcher-annotations`, `images/` owns everything about one picture and
+`registry` is a facade that resolves a project and delegates. The slice never
+looks a project up — every operation takes an already-resolved
+`AnnotationProject`, which keeps "does this project exist" answered in one
+place and stops an import of six hundred rows resolving it six hundred times.
+Slice operations are `pub(crate)`; `Registry` is the public API.
+
+`license` is a module rather than three scattered types because it is one
+question. `UsageRights` is what somebody *asserted*, `RightsPolicy` what an
+export *demands*, and `SourceUsage` what a human *recorded at the original* —
+and only the third outranks a caller. They used to sit in three files with the
+rule connecting them in a fourth.
+
+In `aiwatcher-api` every module is a **facade**, and the facade is the whole
+contract: `pub fn router()` and `pub fn openapi()`, and nothing else. Handlers
+are private, the `#[derive(OpenApi)]` that lists them sits beside the router
+that serves them, and neither `routes` nor `openapi` names a single handler —
+they compose facades. Two things follow. Adding a route and forgetting the
+contract is now a change to one file rather than to two, and
+`every_module_facade_reaches_the_document` fails when a module has a perfectly
+good router and openapi and is simply missing from `ApiDoc::document()` — the
+one failure this layout introduces, where both halves compile and the panel's
+client has no method for a route that serves traffic.
+
+The one asymmetry is `components(schemas(...))`, which stays in the root. An
+OpenAPI components block is a single global namespace and these types come from
+the *domain crates* rather than from the API modules, so splitting them would
+mean picking an owner for `RunSummary` between `runs`, `workflows` and `live` —
+a choice with no right answer that would be re-made every time a type gained a
+second reader. A module owns its operations; the vocabulary they speak is
+shared.
+
+`integrations/` is the one grouping in either crate that is not a product area:
+it holds what the crate reaches *out* to. Everything else answers from the log,
+the read model or the object store; these leave the building, with a timeout, a
+credential and a third party whose answers are data rather than truth. Both
+`aiwatcher-annotations` and `aiwatcher-api` group hubs there for that reason,
+and a reader of `routes::router` can see which routes leave at a glance.
 
 ### Contract
 
@@ -326,11 +404,21 @@ not an SDK release.
   its own sub-navigation; `evaluation`, `prompts`, `datasets` and `experiments`
   are the other four areas. `/` and `/observability` redirect rather than
   render, so old links keep working.
+- `training` is the one area that reads nothing folded from the log at all. It
+  polls while a run is `running` and stops when none is — an epoch is minutes,
+  so five seconds costs one request and answers the same question a live
+  channel would. It draws no progress bar: nothing knows how many epochs a run
+  intends, and a bar that guesses is a bar that lies.
 - `prompts` is the one area that reads something other than the log, and the
   one that writes. It answers 501 rather than 404 when no store is configured,
   and `RegistryDisabled` says which variable is unset — an empty list would be
   a different problem with a different fix. `datasets` and `annotations` share
   that store and that component, because one setting decides all three.
+- `datasets` is the one area that reads a service aiwatcher does not run. Its
+  Discover view searches Kaggle and Hugging Face, and renders the mirror's
+  licence claim and aiwatcher's verdict as two separate things — never one
+  badge, and the rights selector is never pre-filled from a hub's word. A hub
+  nobody configured renders the 501 with its variable, not an empty list.
 - `annotations` is the one area that draws. Its canvas puts an `<img>` and an
   `<svg>` in one transformed container, both sized to the image's *natural*
   pixels, so SVG user units are image coordinates and no shape ever carries a
@@ -461,7 +549,7 @@ not an SDK release.
 - **Never store an artifact's content.** The registry stores prompt text because
   storing it is the point; an artifact is a byte range somebody else already
   persisted, so aiwatcher keeps the pointer. A producer that inlines a
-  floor-plan PDF into `data` puts it in the durable log and in every
+  scanned document into `data` puts it in the durable log and in every
   projector's memory. An artifact with no `uri` is dropped rather than listed
   as a row nobody can open.
 - **Never draw an inferred edge as a message.** Declared edges are what the
@@ -499,6 +587,27 @@ not an SDK release.
   checked *before* the scores in `verdict`, so the reason says "it stopped
   reading its input" rather than inviting somebody to raise the iteration
   count.
+- **Never ship a label vocabulary.** aiwatcher is a generic vision annotation
+  tool and the project's schema is where the domain lives — its classes, their
+  geometry, which are `ignore`, and which `layer` each paints into. A shipped
+  preset is not a neutral default: it decides what the first hour of labelling
+  produces, it is what the panel renders, and it is what every example shows. A
+  tool that ships one is a tool for that domain with an escape hatch. See
+  ADR_0020, and the `floor_plan_classes()` it removed.
+- **Never let a class erase what it overlays.** That is what `LabelClass::layer`
+  is for. Classes on one layer share an integer grid and paint in declaration
+  order; classes on different layers never contend, and a model reads one head
+  per layer. An opening in a wall, a defect on a component, a marking on a road
+  — in every case the thing underneath is still there, and one grid could only
+  represent the overlay by deleting it. A schema that never sets `layer` gets
+  one grid and never thinks about it.
+- **Never let the rasteriser know a class name.**
+  `aiwatcher_sdk.integrations.vision` is driven by the schema it is handed and
+  matches on nothing: geometry decides fill or stroke, the class's own `ignore`
+  flag decides exclusion, declaration order decides who wins a contested pixel,
+  and `layer` decides which grid. It also *checks* the schema against the
+  export's pinned `schema_version` — rasterising against a reordered vocabulary
+  permutes every label, every metric stays finite, and nothing says so.
 - **Never make a raster the source of an annotation.** The mask, the heatmap
   and the COCO document are all derived from the vector shapes and are
   regenerated on demand. Storing an edited mask beside the vector it came from
@@ -513,9 +622,9 @@ not an SDK release.
   no API that assigns a split per image.
 - **Never let an image's usage rights be optional.** `UsageRights` has no
   default and `RightsPolicy` defaults to `commercial`, so the strict answer is
-  the free one. The best public floor-plan corpora — CubiCasa5K, FloorPlanCAD,
-  ZInD — are non-commercial, and a model trained on them by accident is a
-  problem that surfaces in a legal review rather than in a metric. An export
+  the free one. Many of the best public corpora in any field are
+  non-commercial, and a model trained on one by accident is a problem that
+  surfaces in a legal review rather than in a metric. An export
   *excludes by name* rather than refusing, so the manifest records what it left
   out and why, forever.
 - **Never let a model's proposal become a training target on its own.** Every
@@ -539,26 +648,94 @@ not an SDK release.
   drawn against. Changing the classes excludes every earlier revision from the
   next export *by name*, which is the loud failure and the correct one: a
   rename that silently relabelled history would be undetectable afterwards.
-- **Never store `train.metric` per step, and never make an epoch a span.**
-  ADR_0018, and ADR_0003's `llm.chunk` rule at a different scale. The SDK
-  aggregates steps locally and `EventType::is_high_cardinality` covers
-  `train.metric` on the backend, so both sides refuse. An epoch is a point
-  carrying its own duration: two hundred equal bars in a waterfall is a picture
-  of the fact that epochs take about the same time, and the curve is the view.
-- **Never fold a profiler trace into the span tree.** `torch.profiler` on a
-  single step emits tens of thousands of records. `train.profile` carries the
-  top operators, the memory peak and a URI; the trace stays wherever the
-  profiler wrote it, and a profiler UI draws it better than a waterfall ever
-  will.
-- **Never let a checkpoint's weights reach the log.** Same rule as
-  `artifact.produced` and a sharper reason: a checkpoint is hundreds of
-  megabytes and the projector holds every event it accepts in memory.
-- **Never fetch a dataset licence from a mirror.** `sources::catalog` is a
-  dated table a human wrote, and every row links its original. Hugging Face,
+- **Never put a training run on the event log.** It was there once. An epoch is
+  not a span, a step does not belong on the log at all, a profiler session is
+  not a trace and a checkpoint is not an artifact — which left one span with no
+  children and a `Subject::Train` arm in the read model's status fold. Training
+  has its own module, its own store and its own routes; `train.*` is not in the
+  event catalog and adding it back means re-reading ADR_0018.
+- **Never send a training step anywhere.** The SDK counts and averages steps
+  locally and emits one epoch record. A 300-image run at batch 4 for 200 epochs
+  is 15 000 steps; the same loop on a real corpus is millions, and a rule that
+  only holds at the small size is not a rule. The finer series that does exist
+  is rate-limited at the client and decimated at the server.
+- **Never append a retried epoch.** `progress` replaces an epoch index it
+  already holds. A network blip during a six-hour run must not produce a curve
+  with two points at the same x, which reads as training that went backwards.
+- **Never reuse a training run id.** Re-opening an *open* run returns it, so a
+  retried start loses nothing; re-opening a *finished* one is a 409, because
+  the second run would inherit the first one's curve.
+- **Never store a profiler trace or a checkpoint's weights.** The trace is tens
+  of thousands of records per step and the weights are hundreds of megabytes.
+  `ProfileRecord` is the top operators and a URI; `CheckpointRecord` is a URI
+  and what selected it.
+- **Never let a model version claim provenance its run does not have.**
+  `register_model` reads the dataset, framework and code *from the run it
+  names*, and ignores whatever the request said about them.
+- **Never promote a model on a validation score.** It is the number early
+  stopping maximised, so promoting on it promotes the selection — ADR_0011's
+  verdict rule, for weights. `ModelVersion::check_promotable` also refuses a
+  mutable dataset name, and the two refusals are deliberately different
+  sentences: one invites a held-out evaluation and the other invites an export,
+  while "not promotable" invites neither. A version that fails either is still
+  recorded, with the reason returned on the registration.
+- **Never fit a model against an empty split.** `app/training/run.py` in
+  planner refuses a run whose train, validation *or* test side is empty. The
+  middle one is the trap: with no validation images every epoch scores zero,
+  epoch 0 wins by default, the checkpoint is selected arbitrarily — and the run
+  still reports a validation number the model registry accepts as the held-out
+  measurement a promotion needs. A metric computed over nothing is worse than a
+  missing one, because it looks like a metric. Three families cannot be dealt
+  into three non-empty sides, and the message says so.
+- **Never make a raster the input to a rasteriser.**
+  `aiwatcher_sdk.integrations.vision` derives every grid from the vector shapes
+  on demand and writes none of them back — ADR_0017's rule, expressed as code
+  that only runs one way. Its z-order is the one ordering decision in it: rooms
+  first, walls last, so a wall keeps the pixels it shares with the room it
+  bounds. Reverse it and every wall between two rooms has a hole in it exactly
+  where two rooms meet.
+- **Never let the training registry decide a trainer died.** A run with no end
+  is `Running` and `last_heard_from` is what it reports instead — the same rule
+  the projector keeps for agent runs, and for the same reason: an OOM kill and a
+  twenty-minute think are indistinguishable from here.
+- **Never fetch a dataset licence from a mirror.** `sources` is a dated table
+  a human wrote and an instance loaded (`AIWATCHER_DATASET_SOURCES`), and every
+  row links its original. This build ships **no rows**: which corpora exist and
+  what their licences permit is a question about one field, and an empty table
+  is a working state — nothing outranks a mirror's claim, so every hub result
+  stays `unclear`. Hugging Face,
   Kaggle and Roboflow Universe all restate licences wrongly often enough that a
   live answer would be worse than none, because it would arrive looking
   authoritative. The table is a signpost; the licence at the link is the
-  permission.
+  permission. Searching those hubs is a different thing and is
+  allowed — see the next three rules.
+- **Never let a hub's licence field become a usage verdict.** `hubs::reconcile`
+  starts every row at `SourceUsage::Unclear` and only a match against
+  `sources::catalog` moves it. The mirror's own words survive verbatim in
+  `claimed_license`, named for what they are, and the two are never merged into
+  one badge in the panel. This is not hypothetical: the first live search
+  returned `Voxel51/FloorPlanCAD` declaring `cc-by-sa-4.0` for a corpus whose
+  authors state the drawings are not theirs to license.
+- **Never match a corpus name by substring.** The example that produced this
+  rule, from the first search that ever ran: `RPLAN` is a substring of
+  `floorplans`, and a plain `contains` handed
+  `wall-constrained-floorplans-manual-only` RPLAN's licence verdict — a
+  permission claim invented by a coincidence of spelling. The rule is a whole-token match, with cross-separator
+  matching allowed only from eight characters up. A miss is safe; a wrong match
+  is a licence claim.
+- **Never let an import assert rights the curated table contradicts.**
+  `import::check_rights` refuses a commercial claim on a batch that matched a
+  research-only corpus, and only that. Everything else is the caller's
+  assertion, recorded with `UsageRights::Unknown` as the default — which a
+  commercial export excludes by name, in a manifest, forever. Refusing an
+  unknown-rights import outright was considered and rejected: it would teach
+  people to claim a licence in order to get past the dialog.
+- **Never derive an import's `group_id` from the file name.** It is the
+  *building*, and a per-file key silently turns the family split back into a
+  per-image one — after which the test score measures memorisation and nothing
+  in the numbers says so. The import route cannot prevent it, so it reports it:
+  a batch whose every row is its own family comes back with a warning on a
+  response that succeeded.
 - **Never write a prompt's head before the version it indexes.** Same ordering
   as the pipeline's checkpoint, same reason: an index naming an object that was
   never stored is a list whose rows 404, while an unindexed object is waiting

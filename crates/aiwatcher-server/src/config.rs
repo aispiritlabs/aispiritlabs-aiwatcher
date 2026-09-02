@@ -244,6 +244,24 @@ pub struct Config {
     pub workflow_runner_url: Option<String>,
     pub workflow_runner_token: Option<String>,
     pub workflow_runner_timeout: Duration,
+    /// A JSON catalogue of corpora somebody read the licence of.
+    ///
+    /// Domain content, so this build ships none. Absent means an empty table,
+    /// which is a working state: nothing matches a hub result, so every one
+    /// stays `unclear`. See `aiwatcher_annotations::sources`.
+    pub dataset_sources: Option<String>,
+    /// Whether the dataset area may search Hugging Face.
+    ///
+    /// A switch rather than a credential: the dataset search is public. Off by
+    /// default, because an instance in a cluster with no egress should not
+    /// have a search box that times out — and because reaching a third party
+    /// at all is a decision somebody makes rather than inherits.
+    pub huggingface_enabled: bool,
+    /// Only for gated repositories. Search works without it.
+    pub huggingface_token: Option<String>,
+    /// Kaggle's API needs both halves; either alone is not a credential.
+    pub kaggle_username: Option<String>,
+    pub kaggle_key: Option<String>,
     /// Whether this instance can list and start an orchestrator's work.
     pub engine: EngineKind,
     /// The control plane's base URL. Required when `engine = Flyte`, and the
@@ -317,6 +335,11 @@ impl Default for Config {
             workflow_runner_token: None,
             // The same ten seconds the OTLP exporter and the object store use.
             workflow_runner_timeout: Duration::from_secs(10),
+            dataset_sources: None,
+            huggingface_enabled: false,
+            huggingface_token: None,
+            kaggle_username: None,
+            kaggle_key: None,
             engine: EngineKind::default(),
             flyte_endpoint: None,
             // Flyte's own defaults, so a sandbox needs one variable set.
@@ -476,6 +499,14 @@ impl Config {
             })?;
             config.workflow_runner_timeout = Duration::from_secs(seconds);
         }
+        config.dataset_sources = var("AIWATCHER_DATASET_SOURCES");
+        if let Some(raw) = var("AIWATCHER_HUGGINGFACE_ENABLED") {
+            config.huggingface_enabled = parse_bool("AIWATCHER_HUGGINGFACE_ENABLED", &raw)?;
+        }
+        config.huggingface_token = var("AIWATCHER_HUGGINGFACE_TOKEN").or_else(|| var("HF_TOKEN"));
+        config.kaggle_username =
+            var("AIWATCHER_KAGGLE_USERNAME").or_else(|| var("KAGGLE_USERNAME"));
+        config.kaggle_key = var("AIWATCHER_KAGGLE_KEY").or_else(|| var("KAGGLE_KEY"));
         if let Some(raw) = var("AIWATCHER_ENGINE") {
             config.engine = raw.parse()?;
         }

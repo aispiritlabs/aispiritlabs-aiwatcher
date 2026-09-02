@@ -239,12 +239,21 @@ started:
   an opening knows which wall it sits on and which two rooms it connects. A
   drawing the registry refuses comes back with *every* problem at once, drawn
   red on the shapes that caused them. **Sources** is a dated table of the public
-  floor-plan corpora — what each labels, and whether its licence permits a
+  corpora somebody read the licence of — what each labels, and whether it permits a
   commercial model — with the filter that matters as one click. **Exports**
   freezes the project into an immutable manifest whose id is the string a
   training run records, lists every image it left out with the reason, and
   serves COCO per split. The split key is the *building*, not the image, so a
   plan's mirror never lands on the opposite side from the plan.
+- **Training** — the one area that reads nothing folded from the log. **Runs**
+  is the curve: metrics per epoch, the checkpoint that was selected and what
+  selected it, and a profiler summary rather than a flame graph. **Models** is
+  what a run produced — versions with their validation and held-out numbers
+  side by side, the gap between them, and one label that decides which weights
+  a service loads next. That label is refused on a version nothing measured on
+  held-out data, and refused on one trained against a dataset name rather than
+  an immutable export. From a bad agent run back to the labelled images is two
+  clicks: model → version → export.
 - **Experiments** — the same picker over training, evaluation and inference
   workflows: the other three legs of the feature/training/inference cycle,
   started from here and watched in Workflows. The comparison half of the area
@@ -288,7 +297,8 @@ In dependency order. A crate may only depend on ones above it.
 | `aiwatcher-bus` | `MessageSource` / `MessageSink` / `Checkpointer` + memory, write-ahead-log, Laser and generic-broker adapters |
 | `aiwatcher-trace` | `SpanAssembler` and the OTLP/JSON exporters |
 | `aiwatcher-prompts` | The prompt registry over an `ObjectStore` port: content-addressed versions, optimisation verdicts, RustFS/S3 and filesystem adapters, and a hand-written SigV4 signer |
-| `aiwatcher-annotations` | Vector image annotations over the same `ObjectStore` port: label schemas, content-addressed revisions, review state, the family-keyed split, immutable training exports and COCO, plus a dated table of public floor-plan corpora and their licences |
+| `aiwatcher-annotations` | Vector image annotations for any vision domain, over the same `ObjectStore` port. Ships no vocabulary — the project's label schema carries the domain. Sliced by noun: `images/` (head, revisions, review, bytes, bulk import), `project`, `export` and COCO, `license`, `schema`, `shapes`, the loaded corpus table in `sources`, and `integrations/hubs` for the Kaggle/Hugging Face search that is reconciled against it and never believed over it |
+| `aiwatcher-training` | Training runs and the model versions they produce, over the same `ObjectStore` port and none of the log's machinery: a curve, a checkpoint pointer, a profiler summary, and a promotion that is refused without a held-out score |
 | `aiwatcher-pipeline` | Pipeline engines behind a `WorkflowEngine` port: an orchestrator's launchable catalog, the inputs each entry declares, and starting one. Flyte 2 over its `/api/v1/` gateway |
 | `aiwatcher-auth` | Single sign-on: OIDC discovery, a JWKS cache, the authorization-code flow with PKCE, signed session cookies, authentik's forward-auth headers, group-to-role mapping |
 | `aiwatcher-projector` | The pipeline, live hub, read model, dimension and span folds, dedup, retry, dead letters |
@@ -351,13 +361,23 @@ that matters in every one of them is what would make the decision wrong.
   rights are required, and an export excludes what fails its policy by name —
   the best public corpora are non-commercial, and that failure shows up in a
   legal review rather than in a metric.
-- **A training run rides the log; an epoch is a point, a step is a count**
-  ([0018](docs/ADR/ADR_0018_TRAINING_RUNS.md)). `train.*` is one span and one
-  row in the runs list, and the model version an agent run used is then
-  traceable back to the export it was trained on. Two hundred epochs are two
-  hundred points on a curve rather than two hundred bars in a waterfall, a step
-  never reaches the log at all, and a profiler session arrives as a summary and
-  a link rather than as fifty thousand spans.
+- **A training run is a record, not a trace**
+  ([0018](docs/ADR/ADR_0018_TRAINING_RUNS.md)). It was on the event log once,
+  and every step of following that through produced an exception: an epoch is
+  not a span, a step does not belong on the log, a profiler session is not a
+  trace. So training is its own module with its own store — a run opens,
+  accumulates a curve and closes. The other half is the model registry, which
+  is the reason this is here and not in Weights & Biases: a version names the
+  export it was trained on, an agent span names a model, and a promotion is
+  refused without a held-out score.
+- **A hub says what exists; the table says what is permitted**
+  ([0019](docs/ADR/ADR_0019_DATASET_HUB_DISCOVERY.md)). Kaggle and Hugging Face
+  are searched, and neither is asked what a licence allows. A result carries
+  the mirror's `claimed_license` and aiwatcher's `usage` as two fields that are
+  never merged, and `usage` reads `unclear` unless the row matched a corpus
+  somebody read the licence for at its original. The first live search returned
+  a FloorPlanCAD mirror declaring `cc-by-sa-4.0` for a corpus whose authors say
+  the drawings are not theirs to license.
 
 - **The orchestrator is read for its inventory, never for its history**
   ([0016](docs/ADR/ADR_0016_PIPELINE_ENGINE.md)). Nothing publishes an event
@@ -424,6 +444,8 @@ just test          # cargo test --workspace --all-targets
 just test-one PAT  # one test by name, e.g. `just test-one two_parallel`
 just openapi       # regenerate contracts/openapi.json and the panel's client
 just seed-annotations  # six synthetic plans, three families, an export, a training run
+just e2e-train     # the whole chain, end to end, against a running server
+just run-hubs      # the server with Kaggle/Hugging Face dataset search on
 just stack-up      # docker compose: VictoriaTraces, VictoriaMetrics, Collector, Grafana
 just tilt-up       # the same stack on a local Kubernetes, rebuilt on save
 just flow-check    # the PHP query service's own gate — `just check` excludes it

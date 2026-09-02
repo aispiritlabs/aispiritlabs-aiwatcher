@@ -20,9 +20,9 @@ use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 use utoipa::ToSchema;
 
-use crate::project::{
-    AnnotationProject, AnnotationRevision, ImageHead, RightsPolicy, Split, SplitRatios, ViewType,
-};
+use crate::images::{AnnotationRevision, ImageHead};
+use crate::license::RightsPolicy;
+use crate::project::{AnnotationProject, Split, SplitRatios};
 use crate::schema::{GeometryKind, LabelSchema};
 use crate::shapes::Geometry;
 use crate::{Error, Result, digest, validate_name};
@@ -44,7 +44,7 @@ pub enum ExclusionReason {
     /// The accepted revision was drawn against a different label schema.
     SchemaMismatch,
     /// It is a section or an elevation, not a plan.
-    ViewType,
+    View,
     /// Its accepted revision is named by the head and missing from the store.
     Missing,
     /// It has shapes, and none of them are in the requested class subset.
@@ -59,7 +59,7 @@ impl ExclusionReason {
             Self::Unreviewed => "unreviewed",
             Self::Empty => "empty",
             Self::SchemaMismatch => "schema_mismatch",
-            Self::ViewType => "view_type",
+            Self::View => "view",
             Self::Missing => "missing",
             Self::NoRequestedClass => "no_requested_class",
         }
@@ -136,9 +136,14 @@ pub struct ExportRequest {
     /// Overrides the project's salt for this export only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub split_salt: Option<String>,
-    /// Include sections and elevations. Off by default.
-    #[serde(default)]
-    pub all_view_types: bool,
+    /// Which [`views`](crate::images::ImageRecord::view) to include.
+    ///
+    /// Empty means every one, which is the right default for a corpus that
+    /// has only one kind of picture — most of them. A corpus that mixes kinds
+    /// names the ones a model reads, and every other image is excluded *by
+    /// name* in the manifest rather than quietly.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub views: Vec<String>,
 }
 
 /// The immutable result.
@@ -155,7 +160,8 @@ pub struct ExportManifest {
     pub note: String,
     pub rights_policy: RightsPolicy,
     pub require_human_review: bool,
-    pub all_view_types: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub views: Vec<String>,
     pub splits: SplitRatios,
     pub split_salt: String,
     /// In schema order. The index in this list is the category id COCO uses,
@@ -316,10 +322,14 @@ pub fn build(
             });
         };
 
-        if !request.all_view_types && head.image.view != ViewType::FloorPlan {
+        if !request.views.is_empty() && !request.views.contains(&head.image.view) {
             exclude(
-                ExclusionReason::ViewType,
-                format!("{:?} is not a floor plan", head.image.view),
+                ExclusionReason::View,
+                format!(
+                    "the view is {:?}; this export takes {}",
+                    head.image.view,
+                    request.views.join(", ")
+                ),
             );
             continue;
         }
@@ -438,7 +448,7 @@ pub fn build(
         "schema_version": project.schema.version,
         "rights_policy": request.rights_policy,
         "require_human_review": request.require_human_review,
-        "all_view_types": request.all_view_types,
+        "views": request.views,
         "splits": ratios,
         "split_salt": salt,
         "classes": classes,
@@ -455,7 +465,7 @@ pub fn build(
         note: request.note.clone(),
         rights_policy: request.rights_policy,
         require_human_review: request.require_human_review,
-        all_view_types: request.all_view_types,
+        views: request.views.clone(),
         splits: ratios,
         split_salt: salt,
         classes,

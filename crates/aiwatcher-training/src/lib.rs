@@ -31,7 +31,7 @@ pub mod registry;
 pub mod run;
 
 pub use model::{
-    ModelLabelRequest, ModelDetail, ModelHead, ModelMetrics, ModelPage, ModelVersion,
+    ModelDetail, ModelHead, ModelLabelRequest, ModelMetrics, ModelPage, ModelVersion,
     ModelVersionSummary, PRODUCTION, RegisterModelRequest, RegisteredModel,
 };
 pub use registry::Registry;
@@ -105,8 +105,8 @@ pub fn validate_slug(value: &str, what: &str) -> Result<()> {
     let starts_well = characters
         .next()
         .is_some_and(|value| value.is_ascii_alphanumeric());
-    let continues_well = characters
-        .all(|value| value.is_ascii_alphanumeric() || matches!(value, '-' | '_' | '.'));
+    let continues_well =
+        characters.all(|value| value.is_ascii_alphanumeric() || matches!(value, '-' | '_' | '.'));
     if !starts_well || !continues_well || matches!(value, "." | "..") {
         return Err(Error::Invalid(format!(
             "{what} must start with a letter or number and hold only letters, numbers, '.', '_' or '-'"

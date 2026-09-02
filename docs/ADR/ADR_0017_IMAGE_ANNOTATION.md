@@ -1,6 +1,9 @@
 # ADR_0017: An annotation is authored, vector-first, and split by family rather than by image
 
-- **Status**: accepted
+- **Status**: accepted, amended by [ADR_0020](ADR_0020_GENERIC_VISION_ANNOTATION.md)
+  — every decision below still holds, but the floor-plan *vocabulary* it
+  describes is no longer shipped: a project supplies its own classes, and
+  `view` is free text rather than an enum.
 - **Date**: 2026-09-01
 
 ## Context

@@ -23,44 +23,76 @@
 //!          ├─ exclusions: every image left out, and why
 //!          └─ COCO, generated on request
 //! ```
+//!
+//! # Layout
+//!
+//! Sliced by noun rather than by layer, so a change to "what an image is"
+//! touches one directory:
+//!
+//! ```text
+//! registry     the facade. Resolves a project, then delegates. The only
+//!              public door: every operation below is crate-internal.
+//! project      a project: its vocabulary, its split policy, its overrides
+//! images/      SLICE — one picture: its head, revisions, review, bytes
+//!   store        what the registry does to one
+//!   import       many at once, from rows a Flow pipeline produced
+//! export       freezing a project into an immutable manifest, and COCO
+//! license      what may be done with the data. One question, one module.
+//! schema       the label vocabulary a drawing is checked against
+//! shapes       the geometry itself, and what makes a drawing finished
+//! sources      the dated table of public corpora somebody read the licence of
+//! integrations/  what this crate reaches *out* to
+//!   hubs         Kaggle and Hugging Face — asked what exists, never what is
+//!                permitted
+//! store        (private) the key layout every slice reads and writes through
+//! ```
 
 use aiwatcher_core::ports::{PortError, PortResult};
 use aiwatcher_core::prompts::ObjectStore;
 use sha2::{Digest, Sha256};
 
 pub mod export;
+pub mod images;
+pub mod integrations;
+pub mod license;
 pub mod project;
 pub mod registry;
 pub mod schema;
 pub mod shapes;
 pub mod sources;
+mod store;
 
 pub use export::{
     BuiltExport, ExclusionReason, ExportCounts, ExportExclusion, ExportManifest, ExportPage,
     ExportRequest, ExportSample, ExportSummary, split_for, to_coco,
 };
+pub use images::import::{
+    ImportReport, ImportRequest, ImportRow, ImportSource, MAX_IMPORT_ROWS, RowOutcome,
+};
+pub use images::{
+    AnnotationRevision, BLOB_SCHEME, ImageDetail, ImageFilter, ImageHead, ImagePage, ImageRecord,
+    RegisterImageRequest, ReviewRequest, ReviewState, RevisionSummary, SaveRevisionRequest,
+    SavedRevision, StoredBlob,
+};
+pub use integrations::hubs::{
+    HubConfig, HubDataset, HubFile, HubKind, HubQuery, HubSearchPage, HubStatus, Hubs,
+};
+pub use license::{RightsPolicy, SourceUsage, UsageRights, check_rights};
 pub use project::{
-    AnnotationProject, AnnotationRevision, ImageDetail, ImageHead, ImagePage, ImageRecord,
-    ProjectPage, ProjectSummary, RegisterImageRequest, ReviewRequest, ReviewState, RevisionSummary,
-    RightsPolicy, SaveProjectRequest, SaveRevisionRequest, Split, SplitRatios, UsageRights,
-    ViewType,
+    AnnotationProject, ProjectPage, ProjectSummary, SaveProjectRequest, Split, SplitRatios,
 };
-pub use registry::{BLOB_SCHEME, ImageFilter, Registry, SavedRevision, StoredBlob};
-pub use schema::{
-    AttributeDef, AttributeKind, GeometryKind, LabelClass, LabelSchema, LinkDef, floor_plan_classes,
-};
+pub use registry::Registry;
+pub use schema::{AttributeDef, AttributeKind, GeometryKind, LabelClass, LabelSchema, LinkDef};
 pub use shapes::{Annotation, Geometry, Keypoint, Origin, Point};
-pub use sources::{
-    DatasetSource, SourceAccess, SourceDirectory, SourceKind, SourcePage, SourceUsage,
-};
+pub use sources::{DatasetSource, SourceAccess, SourceCatalog, SourceDirectory, SourcePage};
 
-/// Names, ids and slugs. Long enough for `floor-plan/dom-projekt/ground-floor`.
+/// Names, ids and slugs.
 const MAX_NAME_BYTES: usize = 160;
-/// One drawing. Roughly 20 000 points — far above a floor plan, far below a
-/// corpus, and the same bounded-request decision ADR_0014 made for datasets.
+/// Control revision size
 const MAX_REVISION_BYTES: usize = 4 * 1024 * 1024;
-/// One upload. Above a 300 dpi catalogue plan, below a scanned drawing set.
+/// Size for uploaded files
 const MAX_BLOB_BYTES: usize = 16 * 1024 * 1024;
+
 const MAX_ANNOTATIONS: usize = 5_000;
 /// The most images one list request returns, matching the dataset viewer.
 pub const MAX_IMAGE_PAGE: usize = 200;

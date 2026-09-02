@@ -14,10 +14,98 @@ use std::sync::Arc;
 use aiwatcher_annotations::{
     Annotation, ExclusionReason, ExportRequest, Geometry, Keypoint, LabelClass, Origin,
     RegisterImageRequest, Registry, ReviewRequest, ReviewState, RightsPolicy, SaveProjectRequest,
-    SaveRevisionRequest, Split, SplitRatios, UsageRights, ViewType, floor_plan_classes, split_for,
+    SaveRevisionRequest, Split, SplitRatios, UsageRights, split_for,
 };
 use aiwatcher_prompts::adapters::memory::MemoryObjectStore;
 use serde_json::{Value, json};
+
+/// A vocabulary with no domain in it.
+///
+/// This crate ships none — a project brings its own — so the tests bring one
+/// too, and it is chosen to exercise the schema rather than to describe
+/// anything: a stroked polyline with a required enum and a required number, a
+/// filled region, a keypoint instance with required *and* optional positions
+/// plus links to both, and a class marked `ignore`. Between them they reach
+/// every rule `shapes::validate` enforces.
+///
+/// `mark` sits on layer 1: it overlays an `edge` and must not erase it, which
+/// is the one thing the layer field exists for.
+fn test_classes() -> Vec<LabelClass> {
+    use aiwatcher_annotations::{AttributeDef, AttributeKind, GeometryKind, LinkDef};
+
+    let plain = |name: &str, geometry: GeometryKind| LabelClass {
+        name: name.to_owned(),
+        geometry,
+        color: "#334155".to_owned(),
+        description: String::new(),
+        attributes: Vec::new(),
+        keypoints: Vec::new(),
+        optional_keypoints: Vec::new(),
+        links: Vec::new(),
+        ignore: false,
+        layer: 0,
+    };
+    let enumeration = |name: &str, values: &[&str], default: &str| AttributeDef {
+        name: name.to_owned(),
+        kind: AttributeKind::Enum,
+        values: values.iter().map(|value| (*value).to_owned()).collect(),
+        required: true,
+        default: Some(json!(default)),
+        description: String::new(),
+    };
+
+    vec![
+        LabelClass {
+            attributes: vec![
+                enumeration("role", &["outer", "inner", "unknown"], "unknown"),
+                AttributeDef {
+                    name: "thickness_px".to_owned(),
+                    kind: AttributeKind::Number,
+                    values: Vec::new(),
+                    required: true,
+                    default: None,
+                    description: String::new(),
+                },
+            ],
+            ..plain("edge", GeometryKind::Polyline)
+        },
+        plain("region", GeometryKind::Polygon),
+        LabelClass {
+            attributes: vec![enumeration(
+                "mark_type",
+                &["anchored", "sliding", "unknown"],
+                "anchored",
+            )],
+            keypoints: ["start", "end", "pivot", "tip"]
+                .into_iter()
+                .map(ToOwned::to_owned)
+                .collect(),
+            // A sliding mark has neither a pivot nor a tip, and a schema that
+            // demanded them would force a labeller to invent them.
+            optional_keypoints: vec!["pivot".to_owned(), "tip".to_owned()],
+            links: vec![
+                LinkDef {
+                    name: "edge".to_owned(),
+                    targets: vec!["edge".to_owned()],
+                    min: 0,
+                    max: 1,
+                },
+                LinkDef {
+                    name: "connects".to_owned(),
+                    targets: vec!["region".to_owned()],
+                    min: 0,
+                    max: 2,
+                },
+            ],
+            layer: 1,
+            ..plain("mark", GeometryKind::Keypoints)
+        },
+        LabelClass {
+            ignore: true,
+            ..plain("ignore", GeometryKind::Polygon)
+        },
+    ]
+}
 
 fn registry() -> Registry {
     Registry::new(Arc::new(MemoryObjectStore::new()), "annotations")
@@ -25,9 +113,9 @@ fn registry() -> Registry {
 
 fn project_request() -> SaveProjectRequest {
     SaveProjectRequest {
-        name: "floor-plans/dom-projekt".to_owned(),
-        description: "Catalogue plans".to_owned(),
-        classes: floor_plan_classes(),
+        name: "corpora/example".to_owned(),
+        description: "A corpus with no domain in it".to_owned(),
+        classes: test_classes(),
         splits: SplitRatios::default(),
         split_salt: "2026-09".to_owned(),
         split_overrides: BTreeMap::new(),
@@ -54,7 +142,7 @@ fn register(project: &str, seed: u8, group: &str, rights: UsageRights) -> Regist
         group_id: group.to_owned(),
         source: "dom-projekt".to_owned(),
         rights,
-        view: ViewType::FloorPlan,
+        view: "diagram".to_owned(),
         level: Some("ground_floor".to_owned()),
         metadata: BTreeMap::new(),
     }
@@ -66,13 +154,13 @@ fn owned() -> UsageRights {
     }
 }
 
-fn wall(id: &str, points: Vec<[f64; 2]>) -> Annotation {
+fn edge(id: &str, points: Vec<[f64; 2]>) -> Annotation {
     Annotation {
         id: id.to_owned(),
-        class: "wall".to_owned(),
+        class: "edge".to_owned(),
         geometry: Geometry::Polyline { points },
         attributes: BTreeMap::from([
-            ("role".to_owned(), json!("exterior")),
+            ("role".to_owned(), json!("outer")),
             ("thickness_px".to_owned(), json!(14.0)),
         ]),
         links: BTreeMap::new(),
@@ -95,18 +183,18 @@ fn keypoints(names: &[(&str, [f64; 2])]) -> Geometry {
     }
 }
 
-fn door(id: &str, wall_id: &str) -> Annotation {
+fn mark(id: &str, edge_id: &str) -> Annotation {
     Annotation {
         id: id.to_owned(),
-        class: "door".to_owned(),
+        class: "mark".to_owned(),
         geometry: keypoints(&[
-            ("opening_start", [120.0, 200.0]),
-            ("opening_end", [200.0, 200.0]),
-            ("hinge", [120.0, 200.0]),
-            ("leaf_end", [120.0, 280.0]),
+            ("start", [120.0, 200.0]),
+            ("end", [200.0, 200.0]),
+            ("pivot", [120.0, 200.0]),
+            ("tip", [120.0, 280.0]),
         ]),
-        attributes: BTreeMap::from([("door_type".to_owned(), json!("hinged"))]),
-        links: BTreeMap::from([("wall".to_owned(), vec![wall_id.to_owned()])]),
+        attributes: BTreeMap::from([("mark_type".to_owned(), json!("anchored"))]),
+        links: BTreeMap::from([("edge".to_owned(), vec![edge_id.to_owned()])]),
         origin: Origin::Human,
         confidence: None,
         text: None,
@@ -122,7 +210,7 @@ fn export_request(project: &str) -> ExportRequest {
         classes: Vec::new(),
         splits: None,
         split_salt: None,
-        all_view_types: false,
+        views: vec!["diagram".to_owned()],
     }
 }
 
@@ -177,8 +265,8 @@ async fn a_door_missing_a_required_keypoint_is_refused_and_the_message_names_it(
     // `hinge` and `leaf_end` are optional — a sliding door has neither.
     // `opening_end` is not, because an opening with one end has no width.
     let half_drawn = Annotation {
-        geometry: keypoints(&[("opening_start", [120.0, 200.0])]),
-        ..door("door_1", "wall_1")
+        geometry: keypoints(&[("start", [120.0, 200.0])]),
+        ..mark("mark_1", "edge_1")
     };
     let error = registry
         .save_revision(
@@ -186,7 +274,7 @@ async fn a_door_missing_a_required_keypoint_is_refused_and_the_message_names_it(
                 project,
                 image_id: image_id(1),
                 annotations: vec![
-                    wall("wall_1", vec![[100.0, 200.0], [400.0, 200.0]]),
+                    edge("edge_1", vec![[100.0, 200.0], [400.0, 200.0]]),
                     half_drawn,
                 ],
                 notes: String::new(),
@@ -196,7 +284,7 @@ async fn a_door_missing_a_required_keypoint_is_refused_and_the_message_names_it(
         )
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("opening_end"), "{error}");
+    assert!(error.to_string().contains("end"), "{error}");
 }
 
 #[tokio::test]
@@ -207,12 +295,9 @@ async fn a_sliding_door_with_no_hinge_is_accepted() {
         .await
         .unwrap();
     let sliding = Annotation {
-        geometry: keypoints(&[
-            ("opening_start", [120.0, 200.0]),
-            ("opening_end", [200.0, 200.0]),
-        ]),
-        attributes: BTreeMap::from([("door_type".to_owned(), json!("sliding"))]),
-        ..door("door_1", "wall_1")
+        geometry: keypoints(&[("start", [120.0, 200.0]), ("end", [200.0, 200.0])]),
+        attributes: BTreeMap::from([("mark_type".to_owned(), json!("sliding"))]),
+        ..mark("mark_1", "edge_1")
     };
     registry
         .save_revision(
@@ -220,7 +305,7 @@ async fn a_sliding_door_with_no_hinge_is_accepted() {
                 project,
                 image_id: image_id(21),
                 annotations: vec![
-                    wall("wall_1", vec![[100.0, 200.0], [400.0, 200.0]]),
+                    edge("edge_1", vec![[100.0, 200.0], [400.0, 200.0]]),
                     sliding,
                 ],
                 notes: String::new(),
@@ -244,7 +329,7 @@ async fn an_opening_pointing_at_a_wall_that_is_not_in_the_image_is_refused() {
             SaveRevisionRequest {
                 project,
                 image_id: image_id(2),
-                annotations: vec![door("door_1", "wall_that_does_not_exist")],
+                annotations: vec![mark("mark_1", "edge_that_does_not_exist")],
                 notes: String::new(),
                 accept: false,
             },
@@ -262,7 +347,7 @@ async fn drawing_the_same_shapes_twice_is_one_revision() {
         .register_image(register(&project, 3, "komancza-dws", owned()))
         .await
         .unwrap();
-    let shapes = vec![wall("wall_1", vec![[100.0, 200.0], [400.0, 200.0]])];
+    let shapes = vec![edge("edge_1", vec![[100.0, 200.0], [400.0, 200.0]])];
     let save = |annotations: Vec<Annotation>, notes: &str, author: &'static str| {
         let registry = &registry;
         let project = project.clone();
@@ -315,7 +400,7 @@ async fn a_commercial_export_leaves_out_a_research_only_image_and_says_so_by_nam
         ))
         .await
         .unwrap();
-    let shapes = vec![wall("wall_1", vec![[100.0, 200.0], [400.0, 200.0]])];
+    let shapes = vec![edge("edge_1", vec![[100.0, 200.0], [400.0, 200.0]])];
     accept(&registry, &project, 4, shapes.clone()).await;
     accept(&registry, &project, 5, shapes).await;
 
@@ -353,7 +438,7 @@ async fn an_image_nobody_accepted_is_excluded_rather_than_silently_dropped() {
             SaveRevisionRequest {
                 project: project.clone(),
                 image_id: image_id(6),
-                annotations: vec![wall("wall_1", vec![[10.0, 20.0], [400.0, 20.0]])],
+                annotations: vec![edge("edge_1", vec![[10.0, 20.0], [400.0, 20.0]])],
                 notes: String::new(),
                 accept: false,
             },
@@ -381,7 +466,7 @@ async fn a_revision_that_is_entirely_model_output_does_not_reach_a_reviewed_expo
     let proposed = Annotation {
         origin: Origin::Model,
         confidence: Some(0.91),
-        ..wall("wall_1", vec![[10.0, 20.0], [400.0, 20.0]])
+        ..edge("edge_1", vec![[10.0, 20.0], [400.0, 20.0]])
     };
     accept(&registry, &project, 7, vec![proposed]).await;
 
@@ -413,7 +498,7 @@ async fn rebuilding_an_unchanged_project_is_the_same_export() {
         &registry,
         &project,
         8,
-        vec![wall("wall_1", vec![[10.0, 20.0], [400.0, 20.0]])],
+        vec![edge("edge_1", vec![[10.0, 20.0], [400.0, 20.0]])],
     )
     .await;
 
@@ -438,13 +523,13 @@ async fn changing_the_schema_excludes_every_revision_drawn_under_the_old_one_by_
         &registry,
         &project,
         9,
-        vec![wall("wall_1", vec![[10.0, 20.0], [400.0, 20.0]])],
+        vec![edge("edge_1", vec![[10.0, 20.0], [400.0, 20.0]])],
     )
     .await;
 
-    let mut classes = floor_plan_classes();
+    let mut classes = test_classes();
     classes.push(LabelClass {
-        name: "chimney".to_owned(),
+        name: "extra".to_owned(),
         geometry: aiwatcher_annotations::GeometryKind::Polygon,
         color: "#000000".to_owned(),
         description: String::new(),
@@ -453,6 +538,7 @@ async fn changing_the_schema_excludes_every_revision_drawn_under_the_old_one_by_
         optional_keypoints: Vec::new(),
         links: Vec::new(),
         ignore: false,
+        layer: 0,
     });
     registry
         .save_project(SaveProjectRequest {
@@ -471,11 +557,11 @@ async fn changing_the_schema_excludes_every_revision_drawn_under_the_old_one_by_
 }
 
 #[tokio::test]
-async fn a_section_drawing_never_reaches_a_floor_plan_export() {
+async fn an_image_of_another_view_never_reaches_an_export_that_named_one() {
     let (registry, project) = seeded().await;
     registry
         .register_image(RegisterImageRequest {
-            view: ViewType::Section,
+            view: "photo".to_owned(),
             ..register(&project, 10, "house-e", owned())
         })
         .await
@@ -484,12 +570,12 @@ async fn a_section_drawing_never_reaches_a_floor_plan_export() {
         &registry,
         &project,
         10,
-        vec![wall("wall_1", vec![[10.0, 20.0], [400.0, 20.0]])],
+        vec![edge("edge_1", vec![[10.0, 20.0], [400.0, 20.0]])],
     )
     .await;
 
     let built = registry.export(export_request(&project)).await.unwrap();
-    assert_eq!(built.manifest.excluded[0].reason, ExclusionReason::ViewType);
+    assert_eq!(built.manifest.excluded[0].reason, ExclusionReason::View);
 }
 
 #[tokio::test]
@@ -504,8 +590,8 @@ async fn coco_category_ids_follow_the_schema_and_not_the_order_shapes_were_drawn
         &project,
         11,
         vec![
-            door("door_1", "wall_1"),
-            wall("wall_1", vec![[100.0, 200.0], [400.0, 200.0]]),
+            mark("mark_1", "edge_1"),
+            edge("edge_1", vec![[100.0, 200.0], [400.0, 200.0]]),
         ],
     )
     .await;
@@ -516,19 +602,19 @@ async fn coco_category_ids_follow_the_schema_and_not_the_order_shapes_were_drawn
         .await
         .unwrap();
     let categories = coco["categories"].as_array().unwrap();
-    assert_eq!(categories[0]["name"], json!("wall"));
+    assert_eq!(categories[0]["name"], json!("edge"));
     assert_eq!(categories[0]["id"], json!(1));
 
     let annotations = coco["annotations"].as_array().unwrap();
     assert_eq!(annotations.len(), 2);
-    let door = annotations
+    let mark = annotations
         .iter()
-        .find(|record| record["aiwatcher"]["annotation_id"] == json!("door_1"))
+        .find(|record| record["aiwatcher"]["annotation_id"] == json!("mark_1"))
         .unwrap();
     // Four declared keypoints, COCO's flat (x, y, v) triples, in schema order.
-    assert_eq!(door["keypoints"].as_array().unwrap().len(), 12);
-    assert_eq!(door["aiwatcher"]["geometry"]["kind"], json!("keypoints"));
-    assert_eq!(door["aiwatcher"]["links"]["wall"], json!(["wall_1"]));
+    assert_eq!(mark["keypoints"].as_array().unwrap().len(), 12);
+    assert_eq!(mark["aiwatcher"]["geometry"]["kind"], json!("keypoints"));
+    assert_eq!(mark["aiwatcher"]["links"]["edge"], json!(["edge_1"]));
 }
 
 #[tokio::test]
@@ -585,29 +671,6 @@ async fn an_identifier_that_could_walk_out_of_its_prefix_is_refused_before_it_re
     assert!(error.to_string().contains("SHA-256"), "{error}");
 }
 
-#[test]
-fn the_source_catalogue_can_be_narrowed_to_what_a_commercial_model_may_use() {
-    let page = aiwatcher_annotations::sources::search(
-        None,
-        Some(aiwatcher_annotations::SourceUsage::Commercial),
-        None,
-    );
-    assert!(!page.sources.is_empty());
-    assert!(
-        page.sources
-            .iter()
-            .all(|source| source.usage == aiwatcher_annotations::SourceUsage::Commercial)
-    );
-    assert!(page.total > page.sources.len());
-    // Every row says when somebody last read the licence at the other end.
-    assert!(
-        page.sources
-            .iter()
-            .all(|source| !source.verified_on.is_empty())
-    );
-    assert!(!page.directories.is_empty());
-}
-
 #[tokio::test]
 async fn the_project_summary_counts_instances_over_accepted_revisions_only() {
     let (registry, project) = seeded().await;
@@ -624,8 +687,8 @@ async fn the_project_summary_counts_instances_over_accepted_revisions_only() {
         &project,
         13,
         vec![
-            wall("wall_1", vec![[100.0, 200.0], [400.0, 200.0]]),
-            door("door_1", "wall_1"),
+            edge("edge_1", vec![[100.0, 200.0], [400.0, 200.0]]),
+            mark("mark_1", "edge_1"),
         ],
     )
     .await;
@@ -634,7 +697,7 @@ async fn the_project_summary_counts_instances_over_accepted_revisions_only() {
             SaveRevisionRequest {
                 project: project.clone(),
                 image_id: image_id(14),
-                annotations: vec![wall("wall_9", vec![[1.0, 2.0], [40.0, 2.0]])],
+                annotations: vec![edge("edge_9", vec![[1.0, 2.0], [40.0, 2.0]])],
                 notes: String::new(),
                 accept: false,
             },
@@ -648,8 +711,8 @@ async fn the_project_summary_counts_instances_over_accepted_revisions_only() {
     assert_eq!(summary.accepted, 1);
     assert_eq!(summary.groups, 2);
     assert_eq!(summary.instances, 2);
-    assert_eq!(summary.per_class.get("door"), Some(&1));
-    assert_eq!(summary.per_class.get("wall"), Some(&1));
+    assert_eq!(summary.per_class.get("mark"), Some(&1));
+    assert_eq!(summary.per_class.get("edge"), Some(&1));
 }
 
 #[tokio::test]
@@ -663,7 +726,7 @@ async fn an_export_reference_is_the_string_a_training_run_records() {
         &registry,
         &project,
         15,
-        vec![wall("wall_1", vec![[10.0, 20.0], [400.0, 20.0]])],
+        vec![edge("edge_1", vec![[10.0, 20.0], [400.0, 20.0]])],
     )
     .await;
     let built = registry.export(export_request(&project)).await.unwrap();
@@ -686,7 +749,7 @@ async fn a_shape_drawn_off_the_canvas_is_refused_with_the_image_size_in_the_mess
             SaveRevisionRequest {
                 project,
                 image_id: image_id(16),
-                annotations: vec![wall("wall_1", vec![[10.0, 20.0], [9_000.0, 20.0]])],
+                annotations: vec![edge("edge_1", vec![[10.0, 20.0], [9_000.0, 20.0]])],
                 notes: String::new(),
                 accept: false,
             },
@@ -758,7 +821,7 @@ async fn every_problem_in_a_drawing_is_reported_at_once() {
         .unwrap();
     let missing_thickness_and_a_bad_enum = Annotation {
         attributes: BTreeMap::from([("role".to_owned(), json!("bearing"))]),
-        ..wall("wall_1", vec![[10.0, 20.0], [400.0, 20.0]])
+        ..edge("edge_1", vec![[10.0, 20.0], [400.0, 20.0]])
     };
     let unknown_class = Annotation {
         id: "thing_1".to_owned(),
@@ -801,13 +864,13 @@ async fn the_generated_coco_carries_the_export_it_came_from() {
         &project,
         20,
         vec![Annotation {
-            id: "space_1".to_owned(),
-            class: "space".to_owned(),
+            id: "region_1".to_owned(),
+            class: "region".to_owned(),
             geometry: Geometry::Polygon {
                 exterior: vec![[0.0, 0.0], [100.0, 0.0], [100.0, 50.0], [0.0, 50.0]],
                 holes: Vec::new(),
             },
-            attributes: BTreeMap::from([("printed_area_m2".to_owned(), json!(49.01))]),
+            attributes: BTreeMap::new(),
             links: BTreeMap::new(),
             origin: Origin::Human,
             confidence: None,

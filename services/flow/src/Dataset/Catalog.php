@@ -155,7 +155,112 @@ final readonly class Catalog
             requiresRun: true,
         );
 
-        return ['runs' => $runs, 'spans' => $spans, 'events' => $events];
+        $hubDatasets = new Dataset(
+            name: 'hub_datasets',
+            path: '/api/v1/dataset-hubs/search',
+            rowsPath: 'results',
+            // The hub search is capped rather than paged: the answer to "four
+            // hundred matches" is a narrower query, not a cursor. There is no
+            // `next_cursor` in the body, so this parameter is never replayed.
+            cursorParam: 'unused',
+            grain: 'one row per dataset a hub says it has',
+            description: 'Kaggle and Hugging Face, searched live. A discovery surface, never a licence: every row is usage "unclear" unless it matches a corpus whose licence a human read at the original.',
+            columns: [
+                'hub' => 'string',
+                'id' => 'string',
+                'title' => 'string',
+                'owner' => 'string',
+                'url' => 'string',
+                // Named for what it is. A mirror's licence field is what
+                // somebody typed when uploading a copy.
+                'claimed_license' => 'string',
+                'usage' => 'string',
+                'curated_source' => 'string|null',
+                'downloads' => 'int|null',
+                'likes' => 'int|null',
+                'updated_at' => 'string',
+                'tags' => 'list<string>',
+            ],
+            hints: [
+                'license' =>
+                    'The column is "claimed_license", and the name is the point: it is the mirror\'s word, not a licence. '
+                        . '"usage" is aiwatcher\'s verdict and is "unclear" unless "curated_source" names a corpus somebody read at the original.',
+                'name' => 'The columns are "id" (owner/name, how the hub addresses it) and "title".',
+                'files' => 'The search does not list files. Open the dataset at its "url".',
+            ],
+            parameters: [
+                'search' => new Parameter(
+                    name: 'search',
+                    required: false,
+                    description: 'Free text. Omitted asks each hub what it considers popular, which is a worse question than any real one.',
+                ),
+                'hub' => new Parameter(
+                    name: 'hub',
+                    required: false,
+                    description: 'One hub instead of both.',
+                    values: ['kaggle', 'huggingface'],
+                ),
+                'limit' => new Parameter(
+                    name: 'limit',
+                    required: false,
+                    description: 'Rows per hub, capped at 50 by the API.',
+                ),
+            ],
+        );
+
+        $annotationImages = new Dataset(
+            name: 'annotation_images',
+            path: '/api/v1/annotation-images',
+            rowsPath: 'images',
+            cursorParam: 'offset',
+            grain: 'one row per registered image',
+            description: 'What an annotation project already holds. The dataset an import pipeline joins against so a second run of it does not re-register what the first one did.',
+            columns: [
+                'image_id' => 'string',
+                'uri' => 'string',
+                'width' => 'int',
+                'height' => 'int',
+                // The **subject**, not the picture. A mirrored or re-shot
+                // copy shares this with its original, which is what keeps them
+                // on one side of the split.
+                'group_id' => 'string',
+                'source' => 'string',
+                'review' => 'string',
+                'level' => 'string|null',
+            ],
+            hints: [
+                'project' => 'The project is a read() argument, not a column: read(annotation_images, project: \'corpora/first\').',
+                'rights' => 'Not projected here; rights is a tagged object rather than a column. Read one image for it.',
+                'family' => 'The column is "group_id" — the subject, however many pictures of it there are.',
+            ],
+            parameters: [
+                'project' => new Parameter(
+                    name: 'project',
+                    required: true,
+                    description: 'Which annotation project to read. There is no route without one.',
+                ),
+                'review' => new Parameter(
+                    name: 'review',
+                    required: false,
+                    description: 'Only images in this review state.',
+                    values: ['draft', 'in_review', 'accepted', 'rejected'],
+                ),
+                'split' => new Parameter(
+                    name: 'split',
+                    required: false,
+                    description: 'Only one side of the family split.',
+                    values: ['train', 'validation', 'test'],
+                ),
+            ],
+        );
+
+        return [
+            'runs' => $runs,
+            'spans' => $spans,
+            'events' => $events,
+            'hub_datasets' => $hubDatasets,
+            'annotation_images' => $annotationImages,
+        ];
     }
 
     /**
@@ -167,12 +272,23 @@ final readonly class Catalog
      * question. Datasets that do not take one are read whole — see
      * `Dataset::$windowed`.
      */
-    private static function query(Dataset $dataset, int $pageSize, ?int $windowSeconds): string
+    private static function query(Dataset $dataset, int $pageSize, ?int $windowSeconds, array $arguments = []): string
     {
         $parameters = ['limit' => $pageSize];
 
         if ($dataset->windowed && $windowSeconds !== null && $windowSeconds > 0) {
             $parameters['window_seconds'] = $windowSeconds;
+        }
+
+        // Only what the dataset declared. The API rejects unknown query
+        // parameters rather than ignoring them, so forwarding whatever a query
+        // happened to name would turn a typo into a 400 about the whole read.
+        foreach ($dataset->parameters as $name => $_) {
+            if (!isset($arguments[$name]) || $arguments[$name] === '') {
+                continue;
+            }
+
+            $parameters[$name] = $arguments[$name];
         }
 
         return \http_build_query($parameters);
@@ -199,15 +315,20 @@ final readonly class Catalog
      * the declared columns. Whoever writes the query sees run columns, never the
      * HTTP envelope.
      */
-    public function open(Dataset $dataset, ?string $run = null, ?int $windowSeconds = null): DataFrame
-    {
+    /** @param array<string, string> $arguments the read()'s declared named arguments */
+    public function open(
+        Dataset $dataset,
+        ?string $run = null,
+        ?int $windowSeconds = null,
+        array $arguments = [],
+    ): DataFrame {
         $path = $dataset->requiresRun
             ? \str_replace('{run}', \rawurlencode((string) $run), $dataset->path)
             : $dataset->path;
 
         $request = new Request(
             'GET',
-            $this->baseUrl . $path . '?' . self::query($dataset, $this->pageSize, $windowSeconds),
+            $this->baseUrl . $path . '?' . self::query($dataset, $this->pageSize, $windowSeconds, $arguments),
         );
 
         $frame = data_frame()
@@ -255,6 +376,16 @@ final readonly class Catalog
      */
     private static function source(Dataset $dataset, string $column): string
     {
+        if ($dataset->name === 'annotation_images') {
+            // An image head is `{project, image: {...}, review, ...}`. Reading
+            // the record's fields as columns is what lets a query say
+            // `ref('group_id')` rather than `array_get(ref('image'), 'group_id')`.
+            return match ($column) {
+                'review' => $column,
+                default => 'image.' . $column,
+            };
+        }
+
         if ($dataset->name !== 'events') {
             return $column;
         }

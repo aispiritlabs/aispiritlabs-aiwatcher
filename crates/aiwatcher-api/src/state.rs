@@ -3,6 +3,8 @@
 use std::sync::Arc;
 
 use aiwatcher_annotations::Registry as AnnotationRegistry;
+use aiwatcher_annotations::SourceCatalog;
+use aiwatcher_annotations::integrations::hubs::Hubs;
 use aiwatcher_auth::Authenticator;
 use aiwatcher_bus::{MessageSink, MessageSource};
 use aiwatcher_core::engine::WorkflowEngine;
@@ -41,6 +43,21 @@ pub struct AppState {
     /// than on the log: a training label has to outlive every run that used
     /// it. See ADR_0017.
     pub annotations: Option<Arc<AnnotationRegistry>>,
+    /// `None` when no dataset hub is configured, which makes
+    /// `/api/v1/dataset-hubs` answer 501 naming the variable. Unlike every
+    /// other option here this one is *outbound*: it is the only thing in this
+    /// state that reaches a service aiwatcher does not run, for a question
+    /// whose answer it deliberately refuses to trust — see
+    /// [`aiwatcher_annotations::integrations::hubs`].
+    pub hubs: Option<Arc<Hubs>>,
+    /// The corpora somebody read the licence of, loaded from
+    /// `AIWATCHER_DATASET_SOURCES`.
+    ///
+    /// Not an `Option`: an empty catalogue is a working state rather than a
+    /// disabled one. Nothing matches, every hub result stays `unclear`, and an
+    /// import records unknown rights — the safe direction, reached by
+    /// configuring nothing. See `aiwatcher_annotations::sources`.
+    pub sources: Arc<SourceCatalog>,
     /// Training runs and the model versions they produce. Same store, fourth
     /// prefix — and the one registry here whose contents never came from the
     /// event log at all. See ADR_0018.
@@ -77,6 +94,8 @@ impl std::fmt::Debug for AppState {
             .field("dataset_registry", &self.datasets.is_some())
             .field("annotation_registry", &self.annotations.is_some())
             .field("training_registry", &self.training.is_some())
+            .field("dataset_hubs", &self.hubs.is_some())
+            .field("dataset_sources", &self.sources.sources.len())
             .field("workflow_runner", &self.runner)
             .field("engine", &self.engine)
             .field("auth", &self.auth)

@@ -23,6 +23,8 @@ decision is made rather than reconstructed afterwards. The value is in the
 | [0015](ADR_0015_DATASET_EXPLORATION.md) | Dataset exploration uses slices and immutable dataset references |
 | [0016](ADR_0016_PIPELINE_ENGINE.md) | The orchestrator is read for its inventory and asked to start one entry; the graph still comes from the log |
 | [0017](ADR_0017_IMAGE_ANNOTATION.md) | An annotation is authored, vector-first, and split by family rather than by image |
-| [0018](ADR_0018_TRAINING_RUNS.md) | A training run rides the log; an epoch is a point, a step is a count, the profiler is not a trace |
+| [0018](ADR_0018_TRAINING_RUNS.md) | A training run is a record, not a trace, and it has its own module |
+| [0019](ADR_0019_DATASET_HUB_DISCOVERY.md) | A dataset hub is searched for what exists and never asked what is permitted |
+| [0020](ADR_0020_GENERIC_VISION_ANNOTATION.md) | The annotation tool ships no vocabulary; the schema carries the domain |
 
 Use [template.md](template.md) for a new one.

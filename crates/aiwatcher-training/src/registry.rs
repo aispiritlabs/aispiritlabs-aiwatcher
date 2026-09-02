@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use crate::model::{
-    ModelLabelRequest, ModelDetail, ModelHead, ModelPage, ModelVersion,
-    ModelVersionSummary, RegisterModelRequest, RegisteredModel,
+    ModelDetail, ModelHead, ModelLabelRequest, ModelPage, ModelVersion, ModelVersionSummary,
+    RegisterModelRequest, RegisteredModel,
 };
 use crate::run::{
     BestMetric, CheckpointRecord, EpochRecord, FinishRunRequest, ProfileRecord, ProgressRequest,
@@ -158,7 +158,9 @@ impl Registry {
                 best: input.best,
                 at: now,
             };
-            if record.best && let (Some(metric), Some(value)) = (&record.metric, record.value) {
+            if record.best
+                && let (Some(metric), Some(value)) = (&record.metric, record.value)
+            {
                 run.best = Some(BestMetric {
                     metric: metric.clone(),
                     value,
@@ -334,7 +336,10 @@ impl Registry {
         self.write_json(&head_key, &head).await?;
 
         Ok(RegisteredModel {
-            promotion_blocked: version.check_promotable().err().map(|error| error.to_string()),
+            promotion_blocked: version
+                .check_promotable()
+                .err()
+                .map(|error| error.to_string()),
             version,
             head,
             created,

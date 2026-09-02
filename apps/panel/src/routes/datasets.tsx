@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { createFileRoute, Link } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Database, ExternalLink, Play, Sparkles, Users } from 'lucide-react';
+import { Database, ExternalLink, Globe, Play, Sparkles, Users } from 'lucide-react';
 import { z } from 'zod';
 
 import {
@@ -13,11 +13,8 @@ import {
 import type { DatasetSummary, DimensionKind } from '@/api/generated/types.gen';
 import { DatasetExplorer, type DatasetView } from '@/components/dataset-explorer';
 import { FlowResultView } from '@/components/flow-preview';
-import {
-  DEFAULT_WINDOW_SECONDS,
-  TimeRange,
-  windowParam,
-} from '@/components/time-range';
+import { HubDiscovery } from '@/components/hub-discovery';
+import { DEFAULT_WINDOW_SECONDS, TimeRange, windowParam } from '@/components/time-range';
 import { Badge, Button, Card, EmptyState, Spinner } from '@/components/ui/primitives';
 import { isFlowAvailable, runQuery, simulateQuery } from '@/lib/flow';
 import { cn } from '@/lib/utils';
@@ -26,8 +23,11 @@ const searchSchema = z.object({
   window: z.number().int().nonnegative().optional(),
   dataset: z.string().optional(),
   version: z.string().optional(),
-  view: z.enum(['rows', 'evaluations', 'lineage', 'promote']).optional(),
+  view: z.enum(['rows', 'evaluations', 'lineage', 'promote', 'discover']).optional(),
   q: z.string().optional(),
+  /** Which annotation project a hub import lands in. In the URL so a link
+   *  to a half-configured import is a link somebody else can finish. */
+  project: z.string().optional(),
 });
 
 export const Route = createFileRoute('/datasets')({
@@ -106,7 +106,9 @@ function DatasetsPage() {
     mutationFn: async () => {
       const result = await runQuery(pipeline, windowParam(windowSeconds));
       if (result.truncated) {
-        throw new Error('More than 1,000 runs matched. Narrow the scope before saving the dataset.');
+        throw new Error(
+          'More than 1,000 runs matched. Narrow the scope before saving the dataset.',
+        );
       }
       const response = await publishDataset({
         body: {
@@ -138,21 +140,37 @@ function DatasetsPage() {
         <div>
           <h1 className="text-lg font-semibold">Datasets</h1>
           <p className="max-w-3xl text-sm text-muted-foreground">
-            Versioned cases for evaluation. Promote retained production runs by one session, one agent,
-            or any of several agents; review the generated Flow PHP before it writes a version.
+            Versioned cases for evaluation. Promote retained production runs by one session, one
+            agent, or any of several agents; review the generated Flow PHP before it writes a
+            version. Or discover a public corpus on Kaggle or Hugging Face and import it into an
+            annotation project &mdash; where what the mirror claims about a licence and what
+            somebody actually read stay two different fields.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <TimeRange
             value={windowSeconds}
-            onChange={(window) => void navigate({ search: (previous) => ({ ...previous, window }) })}
+            onChange={(window) =>
+              void navigate({ search: (previous) => ({ ...previous, window }) })
+            }
           />
           <Button
             size="sm"
             variant={activeView === 'promote' ? 'default' : 'outline'}
-            onClick={() => void navigate({ search: (previous) => ({ ...previous, view: 'promote' }) })}
+            onClick={() =>
+              void navigate({ search: (previous) => ({ ...previous, view: 'promote' }) })
+            }
           >
             Build dataset
+          </Button>
+          <Button
+            size="sm"
+            variant={activeView === 'discover' ? 'default' : 'outline'}
+            onClick={() =>
+              void navigate({ search: (previous) => ({ ...previous, view: 'discover' }) })
+            }
+          >
+            <Globe className="h-3.5 w-3.5" /> Discover
           </Button>
         </div>
       </div>
@@ -176,161 +194,209 @@ function DatasetsPage() {
           }
         />
 
-        {activeView === 'promote' ? (
-          <div className="flex min-w-0 flex-col gap-4">
-          <Card className="overflow-hidden">
-            <div className="flex items-start gap-3 border-b border-border p-4">
-              <div className="rounded-md bg-primary/10 p-2 text-primary"><Users className="h-4 w-4" /></div>
-              <div>
-                <h2 className="text-sm font-semibold">Promote conversations</h2>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  Each matching run becomes one source-linked item. Expected output stays open for review and labelling.
-                </p>
-              </div>
-            </div>
-
-            <div className="flex flex-col gap-4 p-4">
-              <div className="flex flex-wrap gap-1">
-                {([
-                  ['session', 'One session'],
-                  ['agent', 'One agent'],
-                  ['agents', 'Many agents'],
-                ] as const).map(([value, label]) => (
-                  <Button
-                    key={value}
-                    size="sm"
-                    variant={scope === value ? 'default' : 'outline'}
-                    onClick={() => setScope(value)}
-                  >
-                    {label}
-                  </Button>
-                ))}
-              </div>
-
-              {scope === 'session' ? (
-                <label className="flex flex-col gap-1 text-xs">
-                  <span className="text-muted-foreground">Session</span>
-                  <select value={session} onChange={(event) => setSession(event.target.value)} className={CONTROL}>
-                    <option value="">Choose a session</option>
-                    {conversations.data?.map((row) => (
-                      <option key={row.conversation_id} value={row.conversation_id}>
-                        {row.conversation_id} · {row.runs} runs · {row.agents.join(', ') || 'no agent'}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              ) : null}
-
-              {scope === 'agent' ? (
-                <label className="flex flex-col gap-1 text-xs">
-                  <span className="text-muted-foreground">Agent</span>
-                  <select value={agent} onChange={(event) => setAgent(event.target.value)} className={CONTROL}>
-                    <option value="">Choose an agent</option>
-                    {agentRows.data?.map((row) => (
-                      <option key={row.key} value={row.key}>{row.key} · {row.runs} runs</option>
-                    ))}
-                  </select>
-                </label>
-              ) : null}
-
-              {scope === 'agents' ? (
-                <div className="flex flex-col gap-1 text-xs">
-                  <span className="text-muted-foreground">Include runs involving any selected agent</span>
-                  <div className="grid max-h-40 gap-1 overflow-y-auto rounded-md border border-border p-2 sm:grid-cols-2">
-                    {agentRows.data?.map((row) => (
-                      <label key={row.key} className="flex items-center gap-2 rounded px-2 py-1 hover:bg-accent/40">
-                        <input
-                          type="checkbox"
-                          checked={agents.includes(row.key)}
-                          onChange={() =>
-                            setAgents((current) =>
-                              current.includes(row.key)
-                                ? current.filter((value) => value !== row.key)
-                                : [...current, row.key],
-                            )
-                          }
-                        />
-                        <span className="truncate text-sm">{row.key}</span>
-                        <span className="ml-auto text-[10px] text-muted-foreground">{row.runs}</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-
-              <label className="flex flex-col gap-1 text-xs">
-                <span className="text-muted-foreground">Dataset name · slashes create folders</span>
-                <input
-                  value={datasetName}
-                  onChange={(event) => setDatasetName(event.target.value)}
-                  className={CONTROL}
-                />
-              </label>
-
-              <div>
-                <div className="mb-1 flex items-center justify-between gap-2">
-                  <span className="text-xs text-muted-foreground">Generated Flow PHP</span>
-                  <Link
-                    to="/data-curation"
-                    search={{
-                      q: pipeline,
-                      name: `promotion/${scope}`,
-                      dataset: datasetName,
-                      window: search.window,
-                    }}
-                    className="flex items-center gap-1 text-xs text-primary hover:underline"
-                  >
-                    Edit in Data Curation <ExternalLink className="h-3 w-3" />
-                  </Link>
-                </div>
-                <pre className="id max-h-72 overflow-auto rounded-md border border-border bg-muted/30 p-3 text-xs">{pipeline}</pre>
-              </div>
-
-              {available.data === false ? (
-                <EmptyState title="Flow is not running" hint="Start it with `just flow-serve` to simulate or execute." />
-              ) : null}
-
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  variant="outline"
-                  onClick={() => simulate.mutate()}
-                  disabled={available.data !== true || !selectionReady || simulate.isPending || execute.isPending}
-                >
-                  {simulate.isPending ? <Spinner /> : <Sparkles className="h-3.5 w-3.5" />} Simulate
-                </Button>
-                <Button
-                  onClick={() => execute.mutate()}
-                  disabled={
-                    available.data !== true ||
-                    !selectionReady ||
-                    !datasetName.trim() ||
-                    simulate.isPending ||
-                    execute.isPending
-                  }
-                >
-                  {execute.isPending ? <Spinner /> : <Play className="h-3.5 w-3.5" />} Build dataset
-                </Button>
-              </div>
-            </div>
-          </Card>
-
-          {execute.data ? (
-            <Card className="border-success/40 p-3 text-sm">
-              Saved <strong>{execute.data.published.dataset.name}</strong>@
-              <code className="id">{execute.data.published.dataset.latest.version.slice(0, 12)}</code> ·{' '}
-              {execute.data.published.dataset.latest.row_count} items.
-            </Card>
-          ) : null}
-          <FlowResultView
-            result={execute.data?.result ?? simulate.data}
-            error={execute.error ?? simulate.error}
-            emptyTitle="No promotion simulated yet"
+        {activeView === 'discover' ? (
+          <HubDiscovery
+            project={search.project ?? ''}
+            onProjectChange={(project) =>
+              void navigate({ search: (previous) => ({ ...previous, project }), replace: true })
+            }
+            windowSeconds={windowSeconds}
           />
-          <Card className="p-3 text-xs leading-relaxed text-muted-foreground">
-            aiwatcher intentionally strips prompt and completion bodies from retained spans. Promotion keeps
-            source run, session and trace identifiers plus the selected metadata; add an expected output during
-            review, or use an events pipeline when the producer deliberately recorded a bounded input field.
-          </Card>
+        ) : activeView === 'promote' ? (
+          <div className="flex min-w-0 flex-col gap-4">
+            <Card className="overflow-hidden">
+              <div className="flex items-start gap-3 border-b border-border p-4">
+                <div className="rounded-md bg-primary/10 p-2 text-primary">
+                  <Users className="h-4 w-4" />
+                </div>
+                <div>
+                  <h2 className="text-sm font-semibold">Promote conversations</h2>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    Each matching run becomes one source-linked item. Expected output stays open for
+                    review and labelling.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-4 p-4">
+                <div className="flex flex-wrap gap-1">
+                  {(
+                    [
+                      ['session', 'One session'],
+                      ['agent', 'One agent'],
+                      ['agents', 'Many agents'],
+                    ] as const
+                  ).map(([value, label]) => (
+                    <Button
+                      key={value}
+                      size="sm"
+                      variant={scope === value ? 'default' : 'outline'}
+                      onClick={() => setScope(value)}
+                    >
+                      {label}
+                    </Button>
+                  ))}
+                </div>
+
+                {scope === 'session' ? (
+                  <label className="flex flex-col gap-1 text-xs">
+                    <span className="text-muted-foreground">Session</span>
+                    <select
+                      value={session}
+                      onChange={(event) => setSession(event.target.value)}
+                      className={CONTROL}
+                    >
+                      <option value="">Choose a session</option>
+                      {conversations.data?.map((row) => (
+                        <option key={row.conversation_id} value={row.conversation_id}>
+                          {row.conversation_id} · {row.runs} runs ·{' '}
+                          {row.agents.join(', ') || 'no agent'}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+
+                {scope === 'agent' ? (
+                  <label className="flex flex-col gap-1 text-xs">
+                    <span className="text-muted-foreground">Agent</span>
+                    <select
+                      value={agent}
+                      onChange={(event) => setAgent(event.target.value)}
+                      className={CONTROL}
+                    >
+                      <option value="">Choose an agent</option>
+                      {agentRows.data?.map((row) => (
+                        <option key={row.key} value={row.key}>
+                          {row.key} · {row.runs} runs
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+
+                {scope === 'agents' ? (
+                  <div className="flex flex-col gap-1 text-xs">
+                    <span className="text-muted-foreground">
+                      Include runs involving any selected agent
+                    </span>
+                    <div className="grid max-h-40 gap-1 overflow-y-auto rounded-md border border-border p-2 sm:grid-cols-2">
+                      {agentRows.data?.map((row) => (
+                        <label
+                          key={row.key}
+                          className="flex items-center gap-2 rounded px-2 py-1 hover:bg-accent/40"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={agents.includes(row.key)}
+                            onChange={() =>
+                              setAgents((current) =>
+                                current.includes(row.key)
+                                  ? current.filter((value) => value !== row.key)
+                                  : [...current, row.key],
+                              )
+                            }
+                          />
+                          <span className="truncate text-sm">{row.key}</span>
+                          <span className="ml-auto text-[10px] text-muted-foreground">
+                            {row.runs}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
+                <label className="flex flex-col gap-1 text-xs">
+                  <span className="text-muted-foreground">
+                    Dataset name · slashes create folders
+                  </span>
+                  <input
+                    value={datasetName}
+                    onChange={(event) => setDatasetName(event.target.value)}
+                    className={CONTROL}
+                  />
+                </label>
+
+                <div>
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <span className="text-xs text-muted-foreground">Generated Flow PHP</span>
+                    <Link
+                      to="/data-curation"
+                      search={{
+                        q: pipeline,
+                        name: `promotion/${scope}`,
+                        dataset: datasetName,
+                        window: search.window,
+                      }}
+                      className="flex items-center gap-1 text-xs text-primary hover:underline"
+                    >
+                      Edit in Data Curation <ExternalLink className="h-3 w-3" />
+                    </Link>
+                  </div>
+                  <pre className="id max-h-72 overflow-auto rounded-md border border-border bg-muted/30 p-3 text-xs">
+                    {pipeline}
+                  </pre>
+                </div>
+
+                {available.data === false ? (
+                  <EmptyState
+                    title="Flow is not running"
+                    hint="Start it with `just flow-serve` to simulate or execute."
+                  />
+                ) : null}
+
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => simulate.mutate()}
+                    disabled={
+                      available.data !== true ||
+                      !selectionReady ||
+                      simulate.isPending ||
+                      execute.isPending
+                    }
+                  >
+                    {simulate.isPending ? <Spinner /> : <Sparkles className="h-3.5 w-3.5" />}{' '}
+                    Simulate
+                  </Button>
+                  <Button
+                    onClick={() => execute.mutate()}
+                    disabled={
+                      available.data !== true ||
+                      !selectionReady ||
+                      !datasetName.trim() ||
+                      simulate.isPending ||
+                      execute.isPending
+                    }
+                  >
+                    {execute.isPending ? <Spinner /> : <Play className="h-3.5 w-3.5" />} Build
+                    dataset
+                  </Button>
+                </div>
+              </div>
+            </Card>
+
+            {execute.data ? (
+              <Card className="border-success/40 p-3 text-sm">
+                Saved <strong>{execute.data.published.dataset.name}</strong>@
+                <code className="id">
+                  {execute.data.published.dataset.latest.version.slice(0, 12)}
+                </code>{' '}
+                · {execute.data.published.dataset.latest.row_count} items.
+              </Card>
+            ) : null}
+            <FlowResultView
+              result={execute.data?.result ?? simulate.data}
+              error={execute.error ?? simulate.error}
+              emptyTitle="No promotion simulated yet"
+            />
+            <Card className="p-3 text-xs leading-relaxed text-muted-foreground">
+              aiwatcher intentionally strips prompt and completion bodies from retained spans.
+              Promotion keeps source run, session and trace identifiers plus the selected metadata;
+              add an expected output during review, or use an events pipeline when the producer
+              deliberately recorded a bounded input field.
+            </Card>
           </div>
         ) : selectedDataset && selectedVersion ? (
           <DatasetExplorer
@@ -393,7 +459,12 @@ function DatasetCatalog({
       ) : error ? (
         <p className="p-4 text-sm text-danger">{error.message}</p>
       ) : datasets.length === 0 ? (
-        <div className="p-4"><EmptyState title="No datasets yet" hint="Simulate a promotion, then build its first version." /></div>
+        <div className="p-4">
+          <EmptyState
+            title="No datasets yet"
+            hint="Simulate a promotion, then build its first version."
+          />
+        </div>
       ) : (
         <div className="divide-y divide-border/50">
           {datasets.map((dataset) => (
@@ -409,9 +480,13 @@ function DatasetCatalog({
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium">{dataset.name}</p>
-                  {dataset.description ? <p className="mt-0.5 text-xs text-muted-foreground">{dataset.description}</p> : null}
+                  {dataset.description ? (
+                    <p className="mt-0.5 text-xs text-muted-foreground">{dataset.description}</p>
+                  ) : null}
                 </div>
-                <Badge>{dataset.versions.length} version{dataset.versions.length === 1 ? '' : 's'}</Badge>
+                <Badge>
+                  {dataset.versions.length} version{dataset.versions.length === 1 ? '' : 's'}
+                </Badge>
               </div>
               <div className="mt-2 flex flex-wrap gap-x-2 text-[11px] text-muted-foreground">
                 <span>{dataset.latest.row_count} items</span>
@@ -482,7 +557,12 @@ function flowPeriod(seconds: number): string {
   return preset ? `'${preset}'` : String(seconds);
 }
 
-function promotionDescription(scope: PromotionScope, session: string, agent: string, agents: string[]): string {
+function promotionDescription(
+  scope: PromotionScope,
+  session: string,
+  agent: string,
+  agents: string[],
+): string {
   if (scope === 'session') return `Production runs promoted from session ${session}.`;
   if (scope === 'agent') return `Production runs involving agent ${agent}.`;
   return `Production runs involving any of: ${agents.join(', ')}.`;
@@ -493,7 +573,12 @@ function phpString(value: string): string {
 }
 
 function apiError(error: unknown, fallback: string): Error {
-  if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') {
+  if (
+    error &&
+    typeof error === 'object' &&
+    'message' in error &&
+    typeof error.message === 'string'
+  ) {
     return new Error(error.message);
   }
   return new Error(fallback);

@@ -16,6 +16,11 @@ dependencies = []
 # structurally, so this extra exists for a caller that wants both installed by
 # one name, not because the bridge needs it.
 deepeval = ["deepeval>=4.1,<5"]
+# `integrations.vision` turns an export's vector shapes into the grids a loss
+# function reads. numpy is not optional to that work and Pillow is not optional
+# to decoding a PNG, so unlike the deepeval extra this one is real: the module
+# imports them lazily and says this line when they are missing.
+vision = ["numpy>=1.26", "pillow>=10.0"]
 
 [project.urls]
 Homepage = "https://github.com/ai-spirit/aiwatcher"
@@ -34,7 +39,11 @@ packages = ["aiwatcher_sdk"]
 artifacts = ["aiwatcher_sdk/py.typed"]
 
 [dependency-groups]
-dev = ["mypy>=1.18,<2", "pytest>=8.4,<9", "ruff>=0.16.5,<0.17"]
+# numpy and Pillow are here rather than left to the extra because the
+# rasteriser is the one thing in this SDK that can be wrong without anything
+# raising: a mask that is subtly misaligned trains a model that scores well and
+# predicts nonsense. It gets tested, so the checker needs them.
+dev = ["mypy>=1.18,<2", "pytest>=8.4,<9", "ruff>=0.16.5,<0.17", "numpy>=1.26", "pillow>=10.0"]
 
 [tool.uv]
 # `uv` reads this and refuses to run under an older one, which is what keeps a

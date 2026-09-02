@@ -19,6 +19,28 @@ use serde::Deserialize;
 use crate::auth::Caller;
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
+use utoipa::OpenApi;
+
+/// This module's operations, as the contract they satisfy.
+///
+/// Derived here rather than listed in the root document, so a route added to
+/// `router` below and forgotten here is a change to one file rather than a
+/// change to two files that has to be noticed in the second.
+#[derive(OpenApi)]
+#[openapi(paths(
+    list_datasets,
+    get_dataset_rows,
+    publish_dataset,
+    list_recipes,
+    save_recipe,
+))]
+struct Api;
+
+/// The operations this module serves. Composed by [`crate::openapi`].
+#[must_use]
+pub fn openapi() -> utoipa::openapi::OpenApi {
+    Api::openapi()
+}
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -58,7 +80,7 @@ fn may_author(caller: &Caller) -> ApiResult<()> {
     ),
     tag = "datasets",
 )]
-pub async fn list_datasets(State(state): State<AppState>) -> ApiResult<Json<DatasetPage>> {
+async fn list_datasets(State(state): State<AppState>) -> ApiResult<Json<DatasetPage>> {
     Ok(Json(registry(&state)?.datasets().await?))
 }
 
@@ -75,7 +97,7 @@ pub async fn list_datasets(State(state): State<AppState>) -> ApiResult<Json<Data
     ),
     tag = "datasets",
 )]
-pub async fn get_dataset_rows(
+async fn get_dataset_rows(
     State(state): State<AppState>,
     Query(query): Query<DatasetRowsQuery>,
 ) -> ApiResult<Json<DatasetRowsPage>> {
@@ -106,7 +128,7 @@ pub async fn get_dataset_rows(
     ),
     tag = "datasets",
 )]
-pub async fn publish_dataset(
+async fn publish_dataset(
     State(state): State<AppState>,
     caller: Caller,
     Json(request): Json<PublishDatasetRequest>,
@@ -131,7 +153,7 @@ pub async fn publish_dataset(
     ),
     tag = "data-curation",
 )]
-pub async fn list_recipes(State(state): State<AppState>) -> ApiResult<Json<RecipePage>> {
+async fn list_recipes(State(state): State<AppState>) -> ApiResult<Json<RecipePage>> {
     Ok(Json(registry(&state)?.recipes().await?))
 }
 
@@ -149,7 +171,7 @@ pub async fn list_recipes(State(state): State<AppState>) -> ApiResult<Json<Recip
     ),
     tag = "data-curation",
 )]
-pub async fn save_recipe(
+async fn save_recipe(
     State(state): State<AppState>,
     caller: Caller,
     Json(request): Json<SaveRecipeRequest>,

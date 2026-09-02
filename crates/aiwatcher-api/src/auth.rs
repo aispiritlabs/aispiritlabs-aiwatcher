@@ -30,6 +30,22 @@ use aiwatcher_auth::{AuthMode, CookieSpec, Identity, PublicAuthConfig, Role};
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
+use utoipa::OpenApi;
+
+/// This module's operations, as the contract they satisfy.
+///
+/// Derived beside the router rather than listed in the root document, so
+/// adding a route and forgetting the contract is a change to one file rather
+/// than a change to two files that has to be noticed in the second.
+#[derive(OpenApi)]
+#[openapi(paths(auth_config, login, callback, logout, me,))]
+struct Api;
+
+/// The operations this module serves. Composed by [`crate::openapi`].
+#[must_use]
+pub fn openapi() -> utoipa::openapi::OpenApi {
+    Api::openapi()
+}
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -155,7 +171,7 @@ where
     responses((status = 200, body = PublicAuthConfig)),
     tag = "auth",
 )]
-pub async fn auth_config(State(state): State<AppState>) -> Json<PublicAuthConfig> {
+async fn auth_config(State(state): State<AppState>) -> Json<PublicAuthConfig> {
     Json(match &state.auth {
         Some(auth) => auth.public_config(),
         None => aiwatcher_auth::Authenticator::disabled_config(),
@@ -181,7 +197,7 @@ pub struct LoginQuery {
     ),
     tag = "auth",
 )]
-pub async fn login(
+async fn login(
     State(state): State<AppState>,
     query: Result<Query<LoginQuery>, QueryRejection>,
 ) -> ApiResult<Response> {
@@ -216,7 +232,7 @@ pub struct CallbackQuery {
     responses((status = 303, description = "Redirect back into the application")),
     tag = "auth",
 )]
-pub async fn callback(
+async fn callback(
     State(state): State<AppState>,
     headers: HeaderMap,
     query: Result<Query<CallbackQuery>, QueryRejection>,
@@ -269,7 +285,7 @@ pub struct LoggedOut {
     responses((status = 200, body = LoggedOut)),
     tag = "auth",
 )]
-pub async fn logout(State(state): State<AppState>) -> Response {
+async fn logout(State(state): State<AppState>) -> Response {
     let Some(auth) = state.auth.as_ref() else {
         return Json(LoggedOut { redirect_url: None }).into_response();
     };
@@ -289,7 +305,7 @@ pub async fn logout(State(state): State<AppState>) -> Response {
     ),
     tag = "auth",
 )]
-pub async fn me(caller: Caller) -> Json<Identity> {
+async fn me(caller: Caller) -> Json<Identity> {
     Json(caller.0)
 }
 

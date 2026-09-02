@@ -3,7 +3,7 @@
 
 The smallest thing that is not a mock. Twelve 64×48 plans are generated,
 labelled, exported, fetched back through the API, rasterised into a coarse
-wall/not-wall grid, and used to fit a **real** classifier by gradient descent —
+edge/not-edge grid, and used to fit a **real** classifier by gradient descent —
 seven weights, a few thousand samples, two seconds. It is a toy model and it
 genuinely learns: the script fails if the loss does not fall or the held-out
 IoU does not clear a floor, so a green run means the chain moved data rather
@@ -16,7 +16,7 @@ in EXAMPLES.md; what this proves is the plumbing on either side of it.
 What it checks, in order:
 
 1. an image is stored under the digest the *server* computed;
-2. drawings validate against the shipped floor-plan schema;
+2. drawings validate against the project's own schema;
 3. the export splits by family, so no building straddles train and test;
 4. COCO comes back carrying the geometry that was drawn;
 5. a training run records a curve that actually descends;
@@ -50,8 +50,8 @@ from aiwatcher_sdk.training import TrainingClient, TrainingError  # noqa: E402
 
 BASE = os.environ.get("AIWATCHER_URL", "http://127.0.0.1:8080")
 PANEL = os.environ.get("AIWATCHER_PANEL_URL", "http://127.0.0.1:5173")
-PROJECT = os.environ.get("AIWATCHER_E2E_PROJECT", "e2e/mini-floorplans")
-MODEL = os.environ.get("AIWATCHER_E2E_MODEL", "e2e.mini-wall-detector")
+PROJECT = os.environ.get("AIWATCHER_E2E_PROJECT", "e2e/mini-shapes")
+MODEL = os.environ.get("AIWATCHER_E2E_MODEL", "e2e.mini-edge-detector")
 WIDTH, HEIGHT = 64, 48
 #: The coarse grid the model predicts. One cell is 4×4 image pixels.
 COLUMNS, ROWS = 16, 12
@@ -149,7 +149,7 @@ def decode_png(body: bytes) -> list[list[int]]:
 
 
 def plan(seed: int) -> tuple[bytes, list[dict[str, Any]]]:
-    """One tiny plan: an outer rectangle, one interior wall, one piece of clutter.
+    """One tiny drawing: an outer rectangle, one inner edge, one piece of clutter.
 
     The image and the annotation are generated together, so the labels are
     *correct for these pixels* rather than approximately correct — the one
@@ -178,21 +178,21 @@ def plan(seed: int) -> tuple[bytes, list[dict[str, Any]]]:
         for x in range(box, box + 5):
             pixels[y][x] = 170
 
-    def wall(identifier: str, points: list[list[float]], role: str) -> dict[str, Any]:
+    def edge(identifier: str, points: list[list[float]], role: str) -> dict[str, Any]:
         return {
             "id": identifier,
-            "class": "wall",
+            "class": "edge",
             "geometry": {"kind": "polyline", "points": points},
             "attributes": {"role": role, "thickness_px": 1.0},
             "origin": "human",
         }
 
     annotations: list[dict[str, Any]] = [
-        wall("wall_n", [[left, top], [right, top]], "exterior"),
-        wall("wall_s", [[left, bottom], [right, bottom]], "exterior"),
-        wall("wall_w", [[left, top], [left, bottom]], "exterior"),
-        wall("wall_e", [[right, top], [right, bottom]], "exterior"),
-        wall("wall_div", [[divider, top], [divider, bottom]], "interior"),
+        edge("edge_n", [[left, top], [right, top]], "outer"),
+        edge("edge_s", [[left, bottom], [right, bottom]], "outer"),
+        edge("edge_w", [[left, top], [left, bottom]], "outer"),
+        edge("edge_e", [[right, top], [right, bottom]], "outer"),
+        edge("edge_div", [[divider, top], [divider, bottom]], "inner"),
         {
             "id": "ignore_1",
             "class": "ignore",
@@ -214,15 +214,15 @@ def plan(seed: int) -> tuple[bytes, list[dict[str, Any]]]:
 # ── Rasterisation: vector labels → the grid the model predicts ───────────────
 
 
-def target_grid(walls: list[list[list[float]]]) -> list[int]:
-    """Which cells a wall centreline passes through.
+def target_grid(edges: list[list[list[float]]]) -> list[int]:
+    """Which cells a edge centreline passes through.
 
     The step ADR_0017 exists to make possible: the raster target is *derived*
     from the vector label, so changing the grid is a re-derivation rather than
     a re-annotation.
     """
     grid = [0] * (COLUMNS * ROWS)
-    for points in walls:
+    for points in edges:
         for start, end in zip(points, points[1:], strict=False):
             x0, y0 = start
             x1, y1 = end
@@ -239,7 +239,7 @@ def target_grid(walls: list[list[list[float]]]) -> list[int]:
 def features(pixels: list[list[int]]) -> list[list[float]]:
     """Eight numbers per cell, and the second one is the whole trick.
 
-    Mean darkness alone does not separate a wall from furniture: a one-pixel
+    Mean darkness alone does not separate a edge from furniture: a one-pixel
     black line crossing a 4×4 cell averages *lighter* than a solid mid-grey
     block filling it. The darkest pixel in the cell does separate them — 20
     against 170 — and it is exactly the kind of local extremum a first
@@ -336,7 +336,23 @@ def main() -> int:  # noqa: PLR0911 - one early return per checked step, on purp
     try:
         annotations.save_project(
             PROJECT,
-            annotations.presets(),
+            [
+                {
+                    "name": "edge",
+                    "geometry": "polyline",
+                    "attributes": [
+                        {
+                            "name": "role",
+                            "kind": "enum",
+                            "values": ["outer", "inner", "unknown"],
+                            "required": True,
+                            "default": "unknown",
+                        },
+                        {"name": "thickness_px", "kind": "number", "required": True},
+                    ],
+                },
+                {"name": "ignore", "geometry": "polygon", "ignore": True},
+            ],
             description="End-to-end smoke corpus",
             split_salt="e2e",
             split_overrides=overrides,
@@ -394,18 +410,18 @@ def main() -> int:  # noqa: PLR0911 - one early return per checked step, on purp
     print("3. rasterise")
     coco = annotations.coco(export)
     image_ids = {image["id"]: image["aiwatcher"]["image_id"] for image in coco["images"]}
-    walls: dict[str, list[list[list[float]]]] = {}
+    edges: dict[str, list[list[list[float]]]] = {}
     for record in coco["annotations"]:
         extra = record["aiwatcher"]
-        if not extra["annotation_id"].startswith("wall"):
+        if not extra["annotation_id"].startswith("edge"):
             continue
-        walls.setdefault(image_ids[record["image_id"]], []).append(extra["geometry"]["points"])
+        edges.setdefault(image_ids[record["image_id"]], []).append(extra["geometry"]["points"])
 
     splits: dict[str, list[tuple[list[float], int]]] = {"train": [], "validation": [], "test": []}
     for sample in export.samples:
         pixels = decode_png(annotations.fetch_image(sample))
         rows = features(pixels)
-        labels = target_grid(walls.get(sample.image_id, []))
+        labels = target_grid(edges.get(sample.image_id, []))
         splits[sample.split].extend(zip(rows, labels, strict=True))
     print("   " + ", ".join(f"{name}: {len(rows)} cells" for name, rows in splits.items() if rows))
     if not splits["train"] or not splits["test"]:
@@ -481,7 +497,7 @@ def main() -> int:  # noqa: PLR0911 - one early return per checked step, on purp
         checkpoint_uri=f"file://{checkpoint}",
         validation={"iou": best},
         test={"iou": held_out["iou"]},
-        description="A seven-weight wall detector. It exists to prove the chain.",
+        description="A seven-weight edge detector. It exists to prove the chain.",
     )
     if registered.get("promotion_blocked"):
         print(f"✗ unexpectedly blocked: {registered['promotion_blocked']}", file=sys.stderr)
@@ -523,6 +539,10 @@ def main() -> int:  # noqa: PLR0911 - one early return per checked step, on purp
         return 1
 
     print(f"✓ end to end: {len(export.samples)} images → a model that learned something")
+    print(
+        "  the IoU is high because the task is separable by construction — this "
+        "measures the plumbing, not a model"
+    )
     print(f"  run     {PANEL}/training/runs?run={run_id}")
     print(f"  model   {PANEL}/training/models?model={MODEL}")
     return 0

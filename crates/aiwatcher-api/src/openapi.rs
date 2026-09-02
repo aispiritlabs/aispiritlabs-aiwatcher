@@ -15,78 +15,6 @@ use utoipa::OpenApi;
         version = env!("CARGO_PKG_VERSION"),
         description = "Observability for agent runs: events in, traces and live streams out.",
     ),
-    paths(
-        crate::routes::list_conversations,
-        crate::routes::list_dimension,
-        crate::routes::list_spans,
-        crate::routes::list_evaluations,
-        crate::routes::get_evaluation,
-        crate::routes::list_evaluation_suites,
-        crate::routes::get_metrics,
-        crate::routes::list_runs,
-        crate::routes::get_run,
-        crate::routes::get_run_events,
-        crate::routes::stream_events,
-        crate::routes::stream_run,
-        crate::routes::live_websocket,
-        crate::prompts::list_prompts,
-        crate::prompts::publish_prompt,
-        crate::prompts::get_prompt,
-        crate::prompts::get_prompt_version,
-        crate::prompts::set_prompt_label,
-        crate::prompts::record_optimization,
-        crate::prompts::get_optimization,
-        crate::prompts::rebuild_prompt,
-        crate::datasets::list_datasets,
-        crate::datasets::get_dataset_rows,
-        crate::datasets::publish_dataset,
-        crate::datasets::list_recipes,
-        crate::datasets::save_recipe,
-        crate::annotations::list_projects,
-        crate::annotations::get_project,
-        crate::annotations::save_project,
-        crate::annotations::list_presets,
-        crate::annotations::list_images,
-        crate::annotations::register_image,
-        crate::annotations::get_image,
-        crate::annotations::save_revision,
-        crate::annotations::review_image,
-        crate::annotations::list_exports,
-        crate::annotations::build_export,
-        crate::annotations::get_export,
-        crate::annotations::get_export_coco,
-        crate::annotations::upload_blob,
-        crate::annotations::get_blob,
-        crate::annotations::list_sources,
-        crate::training::list_training_runs,
-        crate::training::get_training_run,
-        crate::training::start_training_run,
-        crate::training::record_training_progress,
-        crate::training::finish_training_run,
-        crate::training::list_models,
-        crate::training::get_model,
-        crate::training::register_model,
-        crate::training::set_model_label,
-        crate::workflows::list_workflows,
-        crate::workflows::get_workflow,
-        crate::workflows::list_workflow_executions,
-        crate::workflows::get_workflow_execution,
-        crate::workflows::stream_workflow_execution,
-        crate::workflows::rerun_workflow,
-        crate::engine::describe_engine,
-        crate::engine::list_engine_workflows,
-        crate::engine::get_engine_workflow,
-        crate::engine::launch_workflow,
-        crate::engine::get_launch,
-        crate::auth::auth_config,
-        crate::auth::login,
-        crate::auth::callback,
-        crate::auth::logout,
-        crate::auth::me,
-        crate::routes::ingest,
-        crate::routes::livez,
-        crate::routes::readyz,
-    ),
     components(schemas(
         aiwatcher_auth::Identity,
         aiwatcher_auth::Role,
@@ -206,11 +134,21 @@ use utoipa::OpenApi;
         aiwatcher_annotations::Keypoint,
         aiwatcher_annotations::Origin,
         aiwatcher_annotations::Annotation,
-        aiwatcher_annotations::ViewType,
         aiwatcher_annotations::UsageRights,
         aiwatcher_annotations::RightsPolicy,
         aiwatcher_annotations::ImageRecord,
         aiwatcher_annotations::RegisterImageRequest,
+        aiwatcher_annotations::ImportRow,
+        aiwatcher_annotations::ImportSource,
+        aiwatcher_annotations::ImportRequest,
+        aiwatcher_annotations::RowOutcome,
+        aiwatcher_annotations::ImportReport,
+        aiwatcher_annotations::integrations::hubs::HubKind,
+        aiwatcher_annotations::integrations::hubs::HubFile,
+        aiwatcher_annotations::integrations::hubs::HubDataset,
+        aiwatcher_annotations::integrations::hubs::HubStatus,
+        aiwatcher_annotations::integrations::hubs::HubSearchPage,
+        crate::integrations::hubs::HubsPage,
         aiwatcher_annotations::ReviewState,
         aiwatcher_annotations::AnnotationRevision,
         aiwatcher_annotations::SaveRevisionRequest,
@@ -236,11 +174,11 @@ use utoipa::OpenApi;
         aiwatcher_annotations::ExportSummary,
         aiwatcher_annotations::ExportPage,
         aiwatcher_annotations::BuiltExport,
-        aiwatcher_annotations::SourceKind,
         aiwatcher_annotations::SourceUsage,
         aiwatcher_annotations::SourceAccess,
         aiwatcher_annotations::DatasetSource,
         aiwatcher_annotations::SourceDirectory,
+        aiwatcher_annotations::SourceCatalog,
         aiwatcher_annotations::SourcePage,
         aiwatcher_training::TrainingStatus,
         aiwatcher_training::EpochRecord,
@@ -267,9 +205,9 @@ use utoipa::OpenApi;
         aiwatcher_training::RegisterModelRequest,
         aiwatcher_training::RegisteredModel,
         aiwatcher_training::ModelLabelRequest,
-        crate::routes::EventPage,
-        crate::routes::IngestRequest,
-        crate::routes::IngestResponse,
+        crate::runs::EventPage,
+        crate::ingest::IngestRequest,
+        crate::ingest::IngestResponse,
         crate::stream::LiveFrame,
         crate::error::ErrorBody,
     )),
@@ -293,9 +231,40 @@ use utoipa::OpenApi;
 pub struct ApiDoc;
 
 impl ApiDoc {
+    /// The whole contract: this document's metadata, plus every module's own.
+    ///
+    /// The list is the API's areas, and adding one means adding a line here
+    /// and a `router()` line in [`crate::routes`] — the two places a new area
+    /// has to appear, and both of them fail loudly if only one is done.
+    #[must_use]
+    pub fn document() -> utoipa::openapi::OpenApi {
+        let mut document = <Self as OpenApi>::openapi();
+        for module in [
+            crate::runs::openapi(),
+            crate::metrics::openapi(),
+            crate::evaluations::openapi(),
+            crate::live::openapi(),
+            crate::ingest::openapi(),
+            crate::health::openapi(),
+            crate::prompts::openapi(),
+            crate::datasets::openapi(),
+            crate::annotations::openapi(),
+            crate::training::openapi(),
+            crate::workflows::openapi(),
+            crate::engine::openapi(),
+            crate::integrations::hubs::openapi(),
+            crate::auth::openapi(),
+        ] {
+            document.merge(module);
+        }
+        document
+    }
+}
+
+impl ApiDoc {
     /// The document as pretty-printed JSON.
     pub fn to_json() -> Result<String, serde_json::Error> {
-        serde_json::to_string_pretty(&<Self as OpenApi>::openapi())
+        serde_json::to_string_pretty(&Self::document())
     }
 }
 
@@ -305,7 +274,7 @@ mod tests {
 
     #[test]
     fn the_document_covers_every_route_the_panel_uses() {
-        let document = <ApiDoc as OpenApi>::openapi();
+        let document = ApiDoc::document();
         for path in [
             "/api/v1/conversations",
             "/api/v1/dimensions/{kind}",
@@ -348,6 +317,78 @@ mod tests {
                 "{path} is missing from the OpenAPI document, so the generated client will not have it"
             );
         }
+    }
+
+    /// Every operation a module's facade declares, as `METHOD /path`.
+    ///
+    /// Read off the serialised JSON rather than utoipa's structs, because
+    /// that is the artifact the panel's client is generated from — and a
+    /// check that agrees with the generator is worth more than one that
+    /// agrees with the library.
+    fn operations(document: &utoipa::openapi::OpenApi) -> std::collections::BTreeSet<String> {
+        let json: serde_json::Value =
+            serde_json::to_value(document).expect("the document serialises");
+        let mut found = std::collections::BTreeSet::new();
+        let Some(paths) = json.get("paths").and_then(serde_json::Value::as_object) else {
+            return found;
+        };
+        for (path, item) in paths {
+            let Some(item) = item.as_object() else {
+                continue;
+            };
+            for method in item.keys() {
+                found.insert(format!("{} {path}", method.to_uppercase()));
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn every_module_facade_reaches_the_document() {
+        // The failure this catches is the one the facade layout introduces: a
+        // module can have a perfectly good `router()` and `openapi()` and
+        // still be missing from `document()`, in which case its routes serve
+        // traffic the generated client has no method for. Nothing else in the
+        // build notices, because both halves compile.
+        let modules = [
+            ("runs", crate::runs::openapi()),
+            ("metrics", crate::metrics::openapi()),
+            ("evaluations", crate::evaluations::openapi()),
+            ("live", crate::live::openapi()),
+            ("ingest", crate::ingest::openapi()),
+            ("health", crate::health::openapi()),
+            ("prompts", crate::prompts::openapi()),
+            ("datasets", crate::datasets::openapi()),
+            ("annotations", crate::annotations::openapi()),
+            ("training", crate::training::openapi()),
+            ("workflows", crate::workflows::openapi()),
+            ("engine", crate::engine::openapi()),
+            ("hubs", crate::integrations::hubs::openapi()),
+            ("auth", crate::auth::openapi()),
+        ];
+        let merged = operations(&ApiDoc::document());
+
+        let mut declared = std::collections::BTreeSet::new();
+        for (name, module) in &modules {
+            let module = operations(module);
+            assert!(!module.is_empty(), "the {name} facade declares nothing");
+            for operation in module {
+                assert!(
+                    merged.contains(&operation),
+                    "{name} declares {operation}, which never reached the document"
+                );
+                declared.insert(operation);
+            }
+        }
+
+        // And nothing reached it from anywhere else. An operation in the
+        // document that no facade declares is an operation whose module
+        // nobody can find.
+        let orphans: Vec<_> = merged.difference(&declared).collect();
+        assert!(
+            orphans.is_empty(),
+            "the document holds operations no facade declares: {orphans:?}"
+        );
     }
 
     #[test]

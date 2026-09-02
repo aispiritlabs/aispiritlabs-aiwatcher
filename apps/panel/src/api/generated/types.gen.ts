@@ -380,35 +380,49 @@ export type DatasetRowsPage = {
  * One corpus.
  */
 export type DatasetSource = {
-    access: SourceAccess;
-    id: string;
-    item_label: string;
+    access?: SourceAccess;
+    /**
+     * Stable slug. What [`crate::integrations::hubs`] matches a mirror
+     * against, and what an import records as the row it was checked against.
+     */
+    id?: string;
+    /**
+     * What one item is: `images`, `scans`, `studies`.
+     */
+    item_label?: string;
     /**
      * Best published figure. `None` where the authors give a range.
      */
     items?: number | null;
-    kind: SourceKind;
     /**
-     * What it labels, in this crate's vocabulary: `walls`, `rooms`, `doors`,
-     * `windows`, `openings`, `stairs`, `text`, `scale`, `graph`, `furniture`,
-     * `symbols`.
+     * What kind of thing it contains, in the caller's own words —
+     * `floor_plan`, `satellite`, `radiograph`. Free text for the same reason
+     * [`crate::images::ImageRecord::view`] is: an enum here would be one
+     * domain's list.
      */
-    labels: Array<string>;
-    license: string;
+    kind?: string;
     /**
-     * `raster`, `vector`, `cad`, `panorama`.
+     * What it labels, in whatever vocabulary the corpus uses.
      */
-    media: Array<string>;
-    name: string;
-    notes: string;
+    labels?: Array<string>;
+    license?: string;
+    /**
+     * `raster`, `vector`, `video`, `point_cloud`.
+     */
+    media?: Array<string>;
+    name?: string;
+    notes?: string;
     paper?: string | null;
-    summary: string;
-    url: string;
-    usage: SourceUsage;
+    summary?: string;
+    url?: string;
+    usage?: SourceUsage;
     /**
      * When somebody last read the licence at `url`.
+     *
+     * The field that makes a row worth more than a guess, and the one that
+     * goes stale. A row with no date is a row nobody checked.
      */
-    verified_on: string;
+    verified_on?: string;
 };
 
 export type DatasetSummary = {
@@ -996,7 +1010,7 @@ export const ExclusionReason = {
     UNREVIEWED: 'unreviewed',
     EMPTY: 'empty',
     SCHEMA_MISMATCH: 'schema_mismatch',
-    VIEW_TYPE: 'view_type',
+    VIEW: 'view',
     MISSING: 'missing',
     NO_REQUESTED_CLASS: 'no_requested_class'
 } as const;
@@ -1143,7 +1157,6 @@ export type ExportExclusion = {
  * The immutable result.
  */
 export type ExportManifest = {
-    all_view_types: boolean;
     /**
      * In schema order. The index in this list is the category id COCO uses,
      * which is why the order is fixed by the schema and not by first sight.
@@ -1165,6 +1178,7 @@ export type ExportManifest = {
     schema_version: string;
     split_salt: string;
     splits: SplitRatios;
+    views?: Array<string>;
 };
 
 export type ExportPage = {
@@ -1175,10 +1189,6 @@ export type ExportPage = {
  * What a caller asks for.
  */
 export type ExportRequest = {
-    /**
-     * Include sections and elevations. Off by default.
-     */
-    all_view_types?: boolean;
     /**
      * Empty means every class in the schema.
      */
@@ -1197,6 +1207,15 @@ export type ExportRequest = {
      */
     split_salt?: string | null;
     splits?: null | SplitRatios;
+    /**
+     * Which [`views`](crate::images::ImageRecord::view) to include.
+     *
+     * Empty means every one, which is the right default for a corpus that
+     * has only one kind of picture — most of them. A corpus that mixes kinds
+     * names the ones a model reads, and every other image is excluded *by
+     * name* in the manifest rather than quietly.
+     */
+    views?: Array<string>;
 };
 
 /**
@@ -1287,6 +1306,119 @@ export const GeometryKind = {
  * image and a box in another produces a training target nothing can decode.
  */
 export type GeometryKind = typeof GeometryKind[keyof typeof GeometryKind];
+
+/**
+ * One dataset a hub says it has.
+ *
+ * Every field here is the hub's, not aiwatcher's, with two exceptions:
+ * [`usage`](Self::usage) and [`curated_source`](Self::curated_source), which
+ * this module decides — see `Hubs::reconcile`.
+ */
+export type HubDataset = {
+    /**
+     * What the *hub* says the licence is. Named for what it is.
+     *
+     * Empty is common and is not a licence: an unstated licence on a mirror
+     * means nobody filled the field in, never that the data is unencumbered.
+     */
+    claimed_license?: string;
+    /**
+     * The id of the [`DatasetSource`] row this matched, when it matched one.
+     *
+     * A match is on the *original's* URL, so it means "a human read this
+     * licence, at the source, on a date" — which is the only thing that ever
+     * justifies a usage other than unclear.
+     */
+    curated_source?: string | null;
+    downloads?: number | null;
+    files?: Array<HubFile>;
+    hub: HubKind;
+    /**
+     * `owner/name` on both hubs, which is also how each addresses a download.
+     */
+    id: string;
+    likes?: number | null;
+    owner?: string;
+    summary?: string;
+    tags?: Array<string>;
+    title: string;
+    updated_at?: string;
+    url: string;
+    /**
+     * Always [`SourceUsage::Unclear`] unless [`curated_source`](Self::curated_source)
+     * is set. This is the guardrail, expressed as a field that cannot say
+     * "commercial" on a hub's word.
+     */
+    usage: SourceUsage;
+};
+
+/**
+ * One file inside a hub dataset, as far as the hub will say.
+ *
+ * Only enough to tell a floor-plan corpus from a CSV of house prices before
+ * downloading either. Sizes are the hub's own and are not verified.
+ */
+export type HubFile = {
+    name: string;
+    size_bytes?: number | null;
+};
+
+/**
+ * Which mirror a row came from.
+ */
+export const HubKind = { KAGGLE: 'kaggle', HUGGINGFACE: 'huggingface' } as const;
+
+/**
+ * Which mirror a row came from.
+ */
+export type HubKind = typeof HubKind[keyof typeof HubKind];
+
+/**
+ * A page of results, and what each hub had to say about answering.
+ */
+export type HubSearchPage = {
+    hubs: Array<HubStatus>;
+    /**
+     * Repeated on every response rather than left to a tooltip, because it is
+     * the one thing a reader of this list has to know about it.
+     */
+    notice: string;
+    results: Array<HubDataset>;
+};
+
+/**
+ * Whether a hub answered, and if not, why.
+ */
+export type HubStatus = {
+    configured: boolean;
+    /**
+     * Present when the hub was asked and did not answer. A search with one
+     * hub down is a partial answer, and saying which half is missing beats
+     * both an error and a silently short list.
+     */
+    error?: string | null;
+    hub: HubKind;
+    /**
+     * Rows this hub contributed to the page.
+     */
+    results: number;
+    /**
+     * What to set when `configured` is false.
+     */
+    variable?: string | null;
+};
+
+/**
+ * What this instance can search, before anybody types a query.
+ */
+export type HubsPage = {
+    hubs: Array<HubStatus>;
+    /**
+     * The same sentence every search response carries. Repeated here so a
+     * panel that renders the hub list before the first search has it.
+     */
+    notice: string;
+};
 
 /**
  * An authenticated caller.
@@ -1400,8 +1532,123 @@ export type ImageRecord = {
      * Where the bytes are. `blob:<image_id>` for something uploaded here.
      */
     uri: string;
-    view?: ViewType;
+    /**
+     * What kind of picture this is, in the caller's own words.
+     *
+     * Free text for the same reason `level` is: the vocabulary differs per
+     * corpus, and an enum shipped here would be one project's list imposed on
+     * every other. An export selects the views it wants by name, so a corpus
+     * that mixes photographs with diagrams, or plans with elevations, keeps
+     * the ones a model reads out of the ones it does not — by saying so
+     * rather than by somebody remembering.
+     */
+    view?: string;
     width: number;
+};
+
+/**
+ * What an import did.
+ */
+export type ImportReport = {
+    accepted: number;
+    dry_run: boolean;
+    /**
+     * Distinct [`ImportRow::group_id`] values across the batch.
+     */
+    families: number;
+    outcomes: Array<RowOutcome>;
+    project: string;
+    rejected: number;
+    /**
+     * Things that are not errors and that somebody has to read anyway.
+     *
+     * Every one of these describes a state where the import succeeds and the
+     * resulting corpus is quietly worth less than it looks.
+     */
+    warnings?: Array<string>;
+};
+
+/**
+ * A bulk registration.
+ */
+export type ImportRequest = {
+    /**
+     * Check everything and register nothing.
+     *
+     * The default is false, but the panel always asks for a dry run first:
+     * six hundred rows with a group key mapped from the filename is not
+     * something anybody wants to discover after it is in the project.
+     */
+    dry_run?: boolean;
+    project: string;
+    /**
+     * What the caller asserts may be done with every image in this batch.
+     *
+     * One value for the batch rather than per row, because a licence is a
+     * property of the corpus and a per-row field invites a pipeline to derive
+     * it from a column — which is exactly the mirror's word, laundered
+     * through a `withEntry`.
+     */
+    rights?: UsageRights;
+    rows: Array<ImportRow>;
+    source?: ImportSource;
+};
+
+/**
+ * One image a pipeline produced.
+ *
+ * Deliberately the same field names as [`RegisterImageRequest`], minus what
+ * the request supplies once for the whole batch. A Flow query that renames
+ * its columns to these is the entire mapping layer.
+ */
+export type ImportRow = {
+    /**
+     * The **building**, not the drawing. See the module docstring.
+     */
+    group_id: string;
+    height: number;
+    /**
+     * SHA-256 of the bytes, when the pipeline has already fetched and stored
+     * them. Absent for a row that only points at a remote file.
+     */
+    image_id?: string | null;
+    level?: string | null;
+    metadata?: {
+        [key: string]: unknown;
+    };
+    uri: string;
+    view?: string;
+    width: number;
+};
+
+/**
+ * Where a batch came from, recorded on every image it produces.
+ */
+export type ImportSource = {
+    /**
+     * What the hub said the licence was. Kept verbatim and never believed —
+     * it is evidence about the mirror, not about the data.
+     */
+    claimed_license?: string;
+    /**
+     * The curated row this matched, if any. The presence of this is what lets
+     * [`check_rights`] refuse an over-claim.
+     */
+    curated_source?: string | null;
+    curated_usage?: null | SourceUsage;
+    dataset_id?: string;
+    /**
+     * `kaggle` or `huggingface`, or anything else for a pipeline that did not
+     * start at a hub.
+     */
+    hub?: string;
+    /**
+     * The Flow PHP that produced these rows. Provenance that survives the
+     * import: "where did these six hundred images come from" has an answer
+     * that is a script rather than a memory.
+     */
+    pipeline?: string;
+    url?: string;
 };
 
 export type IngestRequest = {
@@ -1460,6 +1707,21 @@ export type LabelClass = {
      * order the tool asks for them.
      */
     keypoints?: Array<string>;
+    /**
+     * Which grid this class paints into when a revision is rasterised.
+     *
+     * The generic form of a problem that does not look generic: some classes
+     * *overlay* others and must not erase them. An opening in a wall, a
+     * defect on a component, a marking on a road — in every case the thing
+     * underneath is still there, and one grid could only represent the
+     * overlay by deleting it.
+     *
+     * So the schema says so. Classes on the same layer share one integer grid
+     * and paint in declaration order, last wins; classes on different layers
+     * never contend, and a model reads one head per layer. Most vocabularies
+     * need exactly one layer and never set this.
+     */
+    layer?: number;
     /**
      * Named references this class may hold to other instances in the same
      * image: `wall` for an opening, `connects` for a door's two rooms.
@@ -2510,7 +2772,17 @@ export type RegisterImageRequest = {
     rights: UsageRights;
     source?: string;
     uri: string;
-    view?: ViewType;
+    /**
+     * What kind of picture this is, in the caller's own words.
+     *
+     * Free text for the same reason `level` is: the vocabulary differs per
+     * corpus, and an enum shipped here would be one project's list imposed on
+     * every other. An export selects the views it wants by name, so a corpus
+     * that mixes photographs with diagrams, or plans with elevations, keeps
+     * the ones a model reads out of the ones it does not — by saying so
+     * rather than by somebody remembering.
+     */
+    view?: string;
     width: number;
 };
 
@@ -2731,6 +3003,18 @@ export const Role = {
 export type Role = typeof Role[keyof typeof Role];
 
 /**
+ * What happened to one row.
+ */
+export type RowOutcome = {
+    image_id: string;
+    outcome: 'accepted';
+} | {
+    outcome: 'rejected';
+    reason: string;
+    uri: string;
+};
+
+/**
  * A run plus what is needed to draw it.
  */
 export type RunDetail = {
@@ -2925,28 +3209,25 @@ export const SourceAccess = {
 export type SourceAccess = typeof SourceAccess[keyof typeof SourceAccess];
 
 /**
+ * A loaded catalogue: the corpora somebody checked, and where to look for more.
+ *
+ * Cloneable and cheap to hold. An instance loads one at start-up and every
+ * reader shares it — the alternative, re-reading a file per request, would
+ * make the answer depend on when it was asked.
+ */
+export type SourceCatalog = {
+    directories?: Array<SourceDirectory>;
+    sources?: Array<DatasetSource>;
+};
+
+/**
  * A place to go looking, rather than a corpus.
  */
 export type SourceDirectory = {
     name: string;
-    notes: string;
+    notes?: string;
     url: string;
 };
-
-/**
- * What kind of thing a corpus contains.
- */
-export const SourceKind = {
-    FLOOR_PLAN: 'floor_plan',
-    VECTOR: 'vector',
-    CAD: 'cad',
-    CAPTURE: 'capture'
-} as const;
-
-/**
- * What kind of thing a corpus contains.
- */
-export type SourceKind = typeof SourceKind[keyof typeof SourceKind];
 
 export type SourcePage = {
     directories: Array<SourceDirectory>;
@@ -3343,30 +3624,6 @@ export type VersionOrigin = {
 };
 
 /**
- * What a drawing on a page actually is.
- *
- * A section and an elevation are the same house drawn a different way, and a
- * model trained to read plans reads neither. Recording the view is what keeps
- * them out of an export instead of out of somebody's memory.
- */
-export const ViewType = {
-    FLOOR_PLAN: 'floor_plan',
-    SECTION: 'section',
-    ELEVATION: 'elevation',
-    SITE_PLAN: 'site_plan',
-    OTHER: 'other'
-} as const;
-
-/**
- * What a drawing on a page actually is.
- *
- * A section and an elevation are the same house drawn a different way, and a
- * model trained to read plans reads neither. Recording the view is what keeps
- * them out of an export instead of out of somebody's memory.
- */
-export type ViewType = typeof ViewType[keyof typeof ViewType];
-
-/**
  * A workflow as the catalog holds it.
  */
 export type WorkflowDefinition = {
@@ -3666,18 +3923,30 @@ export type RegisterImageResponses = {
 
 export type RegisterImageResponse = RegisterImageResponses[keyof RegisterImageResponses];
 
-export type ListPresetsData = {
-    body?: never;
+export type ImportImagesData = {
+    body: ImportRequest;
     path?: never;
     query?: never;
-    url: '/api/v1/annotation-presets';
+    url: '/api/v1/annotation-imports';
 };
 
-export type ListPresetsResponses = {
-    200: Array<LabelClass>;
+export type ImportImagesErrors = {
+    /**
+     * The asserted rights contradict what a human recorded about this corpus
+     */
+    400: ErrorBody;
+    404: ErrorBody;
+    413: ErrorBody;
+    501: ErrorBody;
 };
 
-export type ListPresetsResponse = ListPresetsResponses[keyof ListPresetsResponses];
+export type ImportImagesError = ImportImagesErrors[keyof ImportImagesErrors];
+
+export type ImportImagesResponses = {
+    200: ImportReport;
+};
+
+export type ImportImagesResponse = ImportImagesResponses[keyof ImportImagesResponses];
 
 export type GetProjectData = {
     body?: never;
@@ -3975,6 +4244,56 @@ export type SaveRecipeResponses = {
 };
 
 export type SaveRecipeResponse = SaveRecipeResponses[keyof SaveRecipeResponses];
+
+export type ListHubsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/dataset-hubs';
+};
+
+export type ListHubsErrors = {
+    501: ErrorBody;
+};
+
+export type ListHubsError = ListHubsErrors[keyof ListHubsErrors];
+
+export type ListHubsResponses = {
+    200: HubsPage;
+};
+
+export type ListHubsResponse = ListHubsResponses[keyof ListHubsResponses];
+
+export type SearchHubsData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * Free text. Empty asks each hub for its own idea of what is popular,
+         * which is a worse question than any real one but a reasonable landing
+         * state for a search box nobody has typed in yet.
+         */
+        q?: string | null;
+        /**
+         * One hub, or both when absent.
+         */
+        hub?: null | HubKind;
+        limit?: number | null;
+    };
+    url: '/api/v1/dataset-hubs/search';
+};
+
+export type SearchHubsErrors = {
+    501: ErrorBody;
+};
+
+export type SearchHubsError = SearchHubsErrors[keyof SearchHubsErrors];
+
+export type SearchHubsResponses = {
+    200: HubSearchPage;
+};
+
+export type SearchHubsResponse = SearchHubsResponses[keyof SearchHubsResponses];
 
 export type GetDatasetRowsData = {
     body?: never;

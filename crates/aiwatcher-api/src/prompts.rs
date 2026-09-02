@@ -33,6 +33,31 @@ use aiwatcher_prompts::{
 use crate::auth::Caller;
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
+use utoipa::OpenApi;
+
+/// This module's operations, as the contract they satisfy.
+///
+/// Derived beside the router rather than listed in the root document, so
+/// adding a route and forgetting the contract is a change to one file rather
+/// than a change to two files that has to be noticed in the second.
+#[derive(OpenApi)]
+#[openapi(paths(
+    list_prompts,
+    publish_prompt,
+    get_prompt,
+    get_prompt_version,
+    set_prompt_label,
+    record_optimization,
+    get_optimization,
+    rebuild_prompt,
+))]
+struct Api;
+
+/// The operations this module serves. Composed by [`crate::openapi`].
+#[must_use]
+pub fn openapi() -> utoipa::openapi::OpenApi {
+    Api::openapi()
+}
 
 pub fn router() -> Router<AppState> {
     Router::new()

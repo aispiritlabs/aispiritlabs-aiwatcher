@@ -13,7 +13,7 @@ What it puts in front of you:
 * one CC BY-NC image, so a commercial export has something to exclude by name;
 * one image left as a draft, so the export has something to exclude for the
   other reason;
-* a walls/rooms/doors/windows/dimension drawing on each accepted image;
+* a regions/edges/markers drawing on each accepted image;
 * a built export, and a short training run recorded against its reference.
 
     just run                # in one terminal
@@ -38,7 +38,7 @@ from aiwatcher_sdk.annotations import AnnotationRegistry, RegistryError  # noqa:
 from aiwatcher_sdk.training import TrainingClient  # noqa: E402
 
 BASE = os.environ.get("AIWATCHER_URL", "http://127.0.0.1:8080")
-PROJECT = os.environ.get("AIWATCHER_ANNOTATION_PROJECT", "floor-plans/demo")
+PROJECT = os.environ.get("AIWATCHER_ANNOTATION_PROJECT", "corpora/demo")
 WIDTH, HEIGHT = 640, 480
 
 
@@ -138,20 +138,20 @@ def plan(seed: int, mirrored: bool) -> tuple[bytes, list[dict[str, Any]]]:
     # Furniture, so the ignore class has something to cover.
     canvas.rect((flip(left + 30), top + 40), (flip(left + 110), top + 100), GREY, 1)
 
-    def wall(identifier: str, points: list[list[float]], role: str) -> dict[str, Any]:
+    def edge(identifier: str, points: list[list[float]], role: str) -> dict[str, Any]:
         return {
             "id": identifier,
-            "class": "wall",
+            "class": "edge",
             "geometry": {"kind": "polyline", "points": [[flip(x), y] for x, y in points]},
             "attributes": {"role": role, "thickness_px": 3.0},
             "origin": "human",
         }
 
-    def room(identifier: str, x0: float, y0: float, x1: float, y1: float, use: str, area: float):
+    def region(identifier: str, x0: float, y0: float, x1: float, y1: float, label: str):
         return [
             {
                 "id": identifier,
-                "class": "space",
+                "class": "region",
                 "geometry": {
                     "kind": "polygon",
                     "exterior": [
@@ -161,73 +161,45 @@ def plan(seed: int, mirrored: bool) -> tuple[bytes, list[dict[str, Any]]]:
                         [flip(x0), y1],
                     ],
                 },
-                "attributes": {"room_id": identifier, "printed_area_m2": area},
-                "origin": "human",
-            },
-            {
-                "id": f"{identifier}_zone",
-                "class": "functional_zone",
-                "geometry": {
-                    "kind": "polygon",
-                    "exterior": [
-                        [flip(x0 + 5), y0 + 5],
-                        [flip(x1 - 5), y0 + 5],
-                        [flip(x1 - 5), y1 - 5],
-                        [flip(x0 + 5), y1 - 5],
-                    ],
-                },
-                "attributes": {"use": use},
-                "links": {"space": [identifier]},
+                "attributes": {"label": label},
                 "origin": "human",
             },
         ]
 
     annotations: list[dict[str, Any]] = [
-        wall("wall_north", [[left, top], [right, top]], "exterior"),
-        wall("wall_east", [[right, top], [right, bottom]], "exterior"),
-        wall("wall_south", [[right, bottom], [left, bottom]], "exterior"),
-        wall("wall_west", [[left, bottom], [left, top]], "exterior"),
-        wall("wall_divider", [[divider, top], [divider, bottom]], "interior"),
-        *room("space_1", left, top, divider, bottom, "living", 49.01),
-        *room("space_2", divider, top, right, bottom, "kitchen", 18.4),
+        edge("edge_north", [[left, top], [right, top]], "outer"),
+        edge("edge_east", [[right, top], [right, bottom]], "outer"),
+        edge("edge_south", [[right, bottom], [left, bottom]], "outer"),
+        edge("edge_west", [[left, bottom], [left, top]], "outer"),
+        edge("edge_divider", [[divider, top], [divider, bottom]], "inner"),
+        *region("region_1", left, top, divider, bottom, "left"),
+        *region("region_2", divider, top, right, bottom, "right"),
         {
-            "id": "door_1",
-            "class": "door",
+            # On layer 1, so it overlays `edge_divider` without erasing it —
+            # the one thing layers exist for.
+            "id": "marker_1",
+            "class": "marker",
             "geometry": {
                 "kind": "keypoints",
                 "points": [
-                    {"name": "opening_start", "at": [flip(divider), 180.0], "visible": True},
-                    {"name": "opening_end", "at": [flip(divider), 260.0], "visible": True},
-                    {"name": "hinge", "at": [flip(divider), 180.0], "visible": True},
-                    {"name": "leaf_end", "at": [flip(divider + 80), 180.0], "visible": True},
+                    {"name": "start", "at": [flip(divider), 180.0], "visible": True},
+                    {"name": "end", "at": [flip(divider), 260.0], "visible": True},
                 ],
             },
-            "attributes": {"door_type": "hinged", "exterior": False},
-            "links": {"wall": ["wall_divider"], "connects": ["space_1", "space_2"]},
+            "links": {"edge": ["edge_divider"]},
             "origin": "human",
         },
         {
-            "id": "window_1",
-            "class": "window",
+            "id": "marker_2",
+            "class": "marker",
             "geometry": {
                 "kind": "keypoints",
                 "points": [
-                    {"name": "opening_start", "at": [flip(160.0), top], "visible": True},
-                    {"name": "opening_end", "at": [flip(280.0), top], "visible": True},
+                    {"name": "start", "at": [flip(160.0), top], "visible": True},
+                    {"name": "end", "at": [flip(280.0), top], "visible": True},
                 ],
             },
-            "attributes": {"window_type": "window", "width_cm": 120.0},
-            "links": {"wall": ["wall_north"]},
-            "origin": "human",
-        },
-        {
-            "id": "dimension_1",
-            "class": "dimension",
-            "geometry": {
-                "kind": "polyline",
-                "points": [[flip(left), bottom + 30], [flip(right), bottom + 30]],
-            },
-            "attributes": {"value": 1260.0, "unit": "cm", "measures": "building"},
+            "links": {"edge": ["edge_north"]},
             "origin": "human",
         },
         {
@@ -245,11 +217,64 @@ def plan(seed: int, mirrored: bool) -> tuple[bytes, list[dict[str, Any]]]:
             "origin": "human",
         },
     ]
+
     return canvas.to_png(), annotations
 
 
 OWNED = {"kind": "owned", "grant": "demo"}
 RESEARCH = {"kind": "research_only", "license": "CC BY-NC 4.0"}
+
+
+def demo_classes() -> list[dict[str, Any]]:
+    """The vocabulary this demo draws with.
+
+    aiwatcher ships none — a project brings its own — so the demo brings one,
+    and it is chosen to show what the schema can express rather than to model
+    anything: a filled region, a stroked line carrying its own width, an
+    overlay on its own layer so it does not erase what it crosses, and a class
+    the loss must skip.
+    """
+    return [
+        {
+            "name": "region",
+            "geometry": "polygon",
+            "color": "#2563eb",
+            "description": "An enclosed area.",
+            "attributes": [{"name": "label", "kind": "text"}],
+        },
+        {
+            "name": "edge",
+            "geometry": "polyline",
+            "color": "#1f2937",
+            "description": "A boundary, drawn as a centreline with a width.",
+            "attributes": [
+                {
+                    "name": "role",
+                    "kind": "enum",
+                    "values": ["outer", "inner", "unknown"],
+                    "required": True,
+                    "default": "unknown",
+                },
+                {"name": "thickness_px", "kind": "number", "required": True},
+            ],
+        },
+        {
+            "name": "marker",
+            "geometry": "keypoints",
+            "color": "#f97316",
+            "description": "Something sitting on an edge. Its own layer, so it does not erase one.",
+            "keypoints": ["start", "end"],
+            "links": [{"name": "edge", "targets": ["edge"], "min": 0, "max": 1}],
+            "layer": 1,
+        },
+        {
+            "name": "ignore",
+            "geometry": "polygon",
+            "color": "#dc2626",
+            "description": "Excluded from every target and from the loss.",
+            "ignore": True,
+        },
+    ]
 
 
 def main() -> int:
@@ -261,7 +286,7 @@ def main() -> int:
 
     registry = AnnotationRegistry(BASE)
     try:
-        classes = registry.presets()
+        classes = demo_classes()
         registry.save_project(
             PROJECT,
             classes,
@@ -277,7 +302,7 @@ def main() -> int:
             return 1
         raise
 
-    families = ["komancza-dws", "wislok-a", "sanok-b"]
+    families = ["subject-a", "subject-b", "subject-c"]
     accepted = 0
     for index, family in enumerate(families):
         for mirrored in (False, True):
@@ -292,14 +317,13 @@ def main() -> int:
                 height=HEIGHT,
                 group_id=family,
                 source="synthetic",
-                level="ground_floor",
                 # One research-only image, so a commercial export has something
                 # to exclude by name rather than an empty exclusion table.
-                rights=RESEARCH if family == "sanok-b" and mirrored else OWNED,
+                rights=RESEARCH if family == "subject-c" and mirrored else OWNED,
                 metadata={"note": "generated by seed-demo-annotations.py"},
             )
             # One image left as a draft, for the other exclusion reason.
-            draft = family == "wislok-a" and mirrored
+            draft = family == "subject-b" and mirrored
             registry.save_revision(PROJECT, image_id, annotations, accept=not draft)
             accepted += 0 if draft else 1
             print(f"  {'draft ' if draft else 'accept'} {family}{' (mirror)' if mirrored else ''}")
@@ -321,7 +345,7 @@ def main() -> int:
     best = 0.0
     with training.run(
         run_id,
-        model="efficientnetv2-s",
+        model="unet-s",
         dataset=export.reference,
         framework="pytorch",
         device="cuda:0",
@@ -338,7 +362,7 @@ def main() -> int:
                 epoch.metrics(val_miou=best, val_loss=loss * 1.15)
             run.sample(lr=3e-4 * (0.9**index))
         run.checkpoint(
-            "s3://models/floor-plan/efficientnetv2s-e11.pt",
+            "s3://models/demo/unet-s-e11.pt",
             epoch=11,
             metric="val_miou",
             value=best,
@@ -354,20 +378,20 @@ def main() -> int:
                     {"name": "aten::batch_norm", "count": 960, "self_cpu_us": 180_000.0},
                 ],
             },
-            uri="s3://profiles/floor-plan/e0.trace.json",
+            uri="s3://profiles/demo/e0.trace.json",
         )
 
     # And the model it produced. Held-out is deliberately below validation:
     # that gap is the number worth watching across a series of versions.
     registered = training.register_model(
-        "floor-plan.segmenter",
+        "demo.segmenter",
         run_id=run_id,
-        checkpoint_uri="s3://models/floor-plan/efficientnetv2s-e11.pt",
+        checkpoint_uri="s3://models/demo/unet-s-e11.pt",
         validation={"miou": best},
         test={"miou": best - 0.06},
         description="Walls, rooms and openings from a catalogue plan",
     )
-    training.promote("floor-plan.segmenter", registered["version"]["version"])
+    training.promote("demo.segmenter", registered["version"]["version"])
 
     print(f"✓ training run {run_id} and one promoted model version")
     print("  look at both in the Training area")

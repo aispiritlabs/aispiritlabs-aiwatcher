@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { AuthConfigData, AuthConfigResponses, BuildExportData, BuildExportErrors, BuildExportResponses, CallbackData, DescribeEngineData, DescribeEngineErrors, DescribeEngineResponses, FinishTrainingRunData, FinishTrainingRunErrors, FinishTrainingRunResponses, GetBlobData, GetBlobErrors, GetBlobResponses, GetDatasetRowsData, GetDatasetRowsErrors, GetDatasetRowsResponses, GetEngineWorkflowData, GetEngineWorkflowErrors, GetEngineWorkflowResponses, GetEvaluationData, GetEvaluationErrors, GetEvaluationResponses, GetExportCocoData, GetExportCocoErrors, GetExportCocoResponses, GetExportData, GetExportErrors, GetExportResponses, GetImageData, GetImageErrors, GetImageResponses, GetLaunchData, GetLaunchErrors, GetLaunchResponses, GetMetricsData, GetMetricsResponses, GetModelData, GetModelErrors, GetModelResponses, GetOptimizationData, GetOptimizationErrors, GetOptimizationResponses, GetProjectData, GetProjectErrors, GetProjectResponses, GetPromptData, GetPromptErrors, GetPromptResponses, GetPromptVersionData, GetPromptVersionErrors, GetPromptVersionResponses, GetRunData, GetRunErrors, GetRunEventsData, GetRunEventsErrors, GetRunEventsResponses, GetRunResponses, GetTrainingRunData, GetTrainingRunErrors, GetTrainingRunResponses, GetWorkflowData, GetWorkflowErrors, GetWorkflowExecutionData, GetWorkflowExecutionErrors, GetWorkflowExecutionResponses, GetWorkflowResponses, IngestData, IngestErrors, IngestResponses, LaunchWorkflowData, LaunchWorkflowErrors, LaunchWorkflowResponses, ListConversationsData, ListConversationsResponses, ListDatasetsData, ListDatasetsErrors, ListDatasetsResponses, ListDimensionData, ListDimensionErrors, ListDimensionResponses, ListEngineWorkflowsData, ListEngineWorkflowsErrors, ListEngineWorkflowsResponses, ListEvaluationsData, ListEvaluationsResponses, ListEvaluationSuitesData, ListEvaluationSuitesResponses, ListExportsData, ListExportsErrors, ListExportsResponses, ListImagesData, ListImagesErrors, ListImagesResponses, ListModelsData, ListModelsErrors, ListModelsResponses, ListPresetsData, ListPresetsResponses, ListProjectsData, ListProjectsErrors, ListProjectsResponses, ListPromptsData, ListPromptsErrors, ListPromptsResponses, ListRecipesData, ListRecipesErrors, ListRecipesResponses, ListRunsData, ListRunsResponses, ListSourcesData, ListSourcesResponses, ListSpansData, ListSpansResponses, ListTrainingRunsData, ListTrainingRunsErrors, ListTrainingRunsResponses, ListWorkflowExecutionsData, ListWorkflowExecutionsResponses, ListWorkflowsData, ListWorkflowsResponses, LiveWebsocketData, LivezData, LivezResponses, LoginData, LoginErrors, LogoutData, LogoutResponses, MeData, MeErrors, MeResponses, PublishDatasetData, PublishDatasetErrors, PublishDatasetResponses, PublishPromptData, PublishPromptErrors, PublishPromptResponses, ReadyzData, ReadyzErrors, ReadyzResponses, RebuildPromptData, RebuildPromptErrors, RebuildPromptResponses, RecordOptimizationData, RecordOptimizationErrors, RecordOptimizationResponses, RecordTrainingProgressData, RecordTrainingProgressErrors, RecordTrainingProgressResponses, RegisterImageData, RegisterImageErrors, RegisterImageResponses, RegisterModelData, RegisterModelErrors, RegisterModelResponses, RerunWorkflowData, RerunWorkflowErrors, RerunWorkflowResponses, ReviewImageData, ReviewImageErrors, ReviewImageResponses, SaveProjectData, SaveProjectErrors, SaveProjectResponses, SaveRecipeData, SaveRecipeErrors, SaveRecipeResponses, SaveRevisionData, SaveRevisionErrors, SaveRevisionResponses, SetModelLabelData, SetModelLabelErrors, SetModelLabelResponses, SetPromptLabelData, SetPromptLabelErrors, SetPromptLabelResponses, StartTrainingRunData, StartTrainingRunErrors, StartTrainingRunResponses, StreamEventsData, StreamEventsResponses, StreamRunData, StreamRunResponses, StreamWorkflowExecutionData, StreamWorkflowExecutionResponses, UploadBlobData, UploadBlobErrors, UploadBlobResponses } from './types.gen';
+import type { AuthConfigData, AuthConfigResponses, BuildExportData, BuildExportErrors, BuildExportResponses, CallbackData, DescribeEngineData, DescribeEngineErrors, DescribeEngineResponses, FinishTrainingRunData, FinishTrainingRunErrors, FinishTrainingRunResponses, GetBlobData, GetBlobErrors, GetBlobResponses, GetDatasetRowsData, GetDatasetRowsErrors, GetDatasetRowsResponses, GetEngineWorkflowData, GetEngineWorkflowErrors, GetEngineWorkflowResponses, GetEvaluationData, GetEvaluationErrors, GetEvaluationResponses, GetExportCocoData, GetExportCocoErrors, GetExportCocoResponses, GetExportData, GetExportErrors, GetExportResponses, GetImageData, GetImageErrors, GetImageResponses, GetLaunchData, GetLaunchErrors, GetLaunchResponses, GetMetricsData, GetMetricsResponses, GetModelData, GetModelErrors, GetModelResponses, GetOptimizationData, GetOptimizationErrors, GetOptimizationResponses, GetProjectData, GetProjectErrors, GetProjectResponses, GetPromptData, GetPromptErrors, GetPromptResponses, GetPromptVersionData, GetPromptVersionErrors, GetPromptVersionResponses, GetRunData, GetRunErrors, GetRunEventsData, GetRunEventsErrors, GetRunEventsResponses, GetRunResponses, GetTrainingRunData, GetTrainingRunErrors, GetTrainingRunResponses, GetWorkflowData, GetWorkflowErrors, GetWorkflowExecutionData, GetWorkflowExecutionErrors, GetWorkflowExecutionResponses, GetWorkflowResponses, ImportImagesData, ImportImagesErrors, ImportImagesResponses, IngestData, IngestErrors, IngestResponses, LaunchWorkflowData, LaunchWorkflowErrors, LaunchWorkflowResponses, ListConversationsData, ListConversationsResponses, ListDatasetsData, ListDatasetsErrors, ListDatasetsResponses, ListDimensionData, ListDimensionErrors, ListDimensionResponses, ListEngineWorkflowsData, ListEngineWorkflowsErrors, ListEngineWorkflowsResponses, ListEvaluationsData, ListEvaluationsResponses, ListEvaluationSuitesData, ListEvaluationSuitesResponses, ListExportsData, ListExportsErrors, ListExportsResponses, ListHubsData, ListHubsErrors, ListHubsResponses, ListImagesData, ListImagesErrors, ListImagesResponses, ListModelsData, ListModelsErrors, ListModelsResponses, ListProjectsData, ListProjectsErrors, ListProjectsResponses, ListPromptsData, ListPromptsErrors, ListPromptsResponses, ListRecipesData, ListRecipesErrors, ListRecipesResponses, ListRunsData, ListRunsResponses, ListSourcesData, ListSourcesResponses, ListSpansData, ListSpansResponses, ListTrainingRunsData, ListTrainingRunsErrors, ListTrainingRunsResponses, ListWorkflowExecutionsData, ListWorkflowExecutionsResponses, ListWorkflowsData, ListWorkflowsResponses, LiveWebsocketData, LivezData, LivezResponses, LoginData, LoginErrors, LogoutData, LogoutResponses, MeData, MeErrors, MeResponses, PublishDatasetData, PublishDatasetErrors, PublishDatasetResponses, PublishPromptData, PublishPromptErrors, PublishPromptResponses, ReadyzData, ReadyzErrors, ReadyzResponses, RebuildPromptData, RebuildPromptErrors, RebuildPromptResponses, RecordOptimizationData, RecordOptimizationErrors, RecordOptimizationResponses, RecordTrainingProgressData, RecordTrainingProgressErrors, RecordTrainingProgressResponses, RegisterImageData, RegisterImageErrors, RegisterImageResponses, RegisterModelData, RegisterModelErrors, RegisterModelResponses, RerunWorkflowData, RerunWorkflowErrors, RerunWorkflowResponses, ReviewImageData, ReviewImageErrors, ReviewImageResponses, SaveProjectData, SaveProjectErrors, SaveProjectResponses, SaveRecipeData, SaveRecipeErrors, SaveRecipeResponses, SaveRevisionData, SaveRevisionErrors, SaveRevisionResponses, SearchHubsData, SearchHubsErrors, SearchHubsResponses, SetModelLabelData, SetModelLabelErrors, SetModelLabelResponses, SetPromptLabelData, SetPromptLabelErrors, SetPromptLabelResponses, StartTrainingRunData, StartTrainingRunErrors, StartTrainingRunResponses, StreamEventsData, StreamEventsResponses, StreamRunData, StreamRunResponses, StreamWorkflowExecutionData, StreamWorkflowExecutionResponses, UploadBlobData, UploadBlobErrors, UploadBlobResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -110,13 +110,29 @@ export const registerImage = <ThrowOnError extends boolean = false>(options: Opt
 });
 
 /**
- * The label schemas this build ships as a starting point.
+ * Register many images at once, from rows a Flow PHP pipeline produced.
  *
- * Not a database read: a project that starts from a blank vocabulary usually
- * invents one without a hinge point, and that is the vocabulary that has to be
- * re-drawn. Shipping one is cheaper than discovering that.
+ * The write half of dataset discovery. A hub search says a corpus exists; a
+ * Flow query maps its file listing onto this schema; this registers the
+ * result into a project somebody can draw on.
+ *
+ * Two things about the response are worth reading rather than skipping. One
+ * bad row does not fail the batch — `outcomes` names every refusal — and
+ * `warnings` carries the states that *succeed* and still leave the corpus
+ * worth less than it looks: unknown rights, and a group key that gave every
+ * image its own family.
+ *
+ * Always `dry_run` first from a UI. Six hundred images with the split key
+ * mapped from a filename is not something to discover after the fact.
  */
-export const listPresets = <ThrowOnError extends boolean = false>(options?: Options<ListPresetsData, ThrowOnError>): RequestResult<ListPresetsResponses, unknown, ThrowOnError> => (options?.client ?? client).get<ListPresetsResponses, unknown, ThrowOnError>({ url: '/api/v1/annotation-presets', ...options });
+export const importImages = <ThrowOnError extends boolean = false>(options: Options<ImportImagesData, ThrowOnError>): RequestResult<ImportImagesResponses, ImportImagesErrors, ThrowOnError> => (options.client ?? client).post<ImportImagesResponses, ImportImagesErrors, ThrowOnError>({
+    url: '/api/v1/annotation-imports',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
 
 /**
  * One project, with the counts that answer "is there enough data yet".
@@ -243,6 +259,21 @@ export const saveRecipe = <ThrowOnError extends boolean = false>(options: Option
         ...options.headers
     }
 });
+
+/**
+ * Which hubs are configured, and the variable to set for each that is not.
+ */
+export const listHubs = <ThrowOnError extends boolean = false>(options?: Options<ListHubsData, ThrowOnError>): RequestResult<ListHubsResponses, ListHubsErrors, ThrowOnError> => (options?.client ?? client).get<ListHubsResponses, ListHubsErrors, ThrowOnError>({ url: '/api/v1/dataset-hubs', ...options });
+
+/**
+ * Search the configured hubs.
+ *
+ * Always 200 when at least one hub is configured, even if every one of them
+ * failed: the per-hub status carries the failure. A search where Kaggle is
+ * rate-limited and Hugging Face answered is a partial result, and returning a
+ * 502 for it would throw away the half that worked.
+ */
+export const searchHubs = <ThrowOnError extends boolean = false>(options?: Options<SearchHubsData, ThrowOnError>): RequestResult<SearchHubsResponses, SearchHubsErrors, ThrowOnError> => (options?.client ?? client).get<SearchHubsResponses, SearchHubsErrors, ThrowOnError>({ url: '/api/v1/dataset-hubs/search', ...options });
 
 /**
  * One immutable dataset version, returned in small slices for an interactive viewer.

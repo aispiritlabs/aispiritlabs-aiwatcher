@@ -102,6 +102,15 @@ final readonly class QueryRunner
                 'grain' => $dataset->grain,
                 'description' => $dataset->description,
                 'requires_run' => $dataset->requiresRun,
+                // What a read() may carry beyond the dataset name. Listed for
+                // the same reason the columns are: the API rejects unknown
+                // query parameters, so this is the contract rather than a hint.
+                'parameters' => \array_values(\array_map(static fn($parameter): array => [
+                    'name' => $parameter->name,
+                    'required' => $parameter->required,
+                    'description' => $parameter->description,
+                    'values' => $parameter->values,
+                ], $dataset->parameters)),
                 'columns' => \array_map(
                     static fn(string $name, string $type): array => ['name' => $name, 'type' => $type],
                     \array_keys($dataset->columns),

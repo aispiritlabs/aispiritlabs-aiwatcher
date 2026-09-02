@@ -21,7 +21,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 
 use aiwatcher_training::{
-    FinishRunRequest, ModelLabelRequest, ModelDetail, ModelHead, ModelPage, ProgressRequest,
+    FinishRunRequest, ModelDetail, ModelHead, ModelLabelRequest, ModelPage, ProgressRequest,
     RegisterModelRequest, RegisteredModel, Registry, RunFilter, StartRunRequest, TrainingRun,
     TrainingRunPage, TrainingRunSummary, TrainingStatus,
 };
@@ -29,13 +29,48 @@ use aiwatcher_training::{
 use crate::auth::Caller;
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
+use utoipa::OpenApi;
+
+/// This module's operations, as the contract they satisfy.
+///
+/// Derived beside the router rather than listed in the root document, so
+/// adding a route and forgetting the contract is a change to one file rather
+/// than a change to two files that has to be noticed in the second.
+#[derive(OpenApi)]
+#[openapi(paths(
+    list_training_runs,
+    get_training_run,
+    start_training_run,
+    record_training_progress,
+    finish_training_run,
+    list_models,
+    get_model,
+    register_model,
+    set_model_label,
+))]
+struct Api;
+
+/// The operations this module serves. Composed by [`crate::openapi`].
+#[must_use]
+pub fn openapi() -> utoipa::openapi::OpenApi {
+    Api::openapi()
+}
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/api/v1/training-runs", get(list_training_runs).post(start_training_run))
+        .route(
+            "/api/v1/training-runs",
+            get(list_training_runs).post(start_training_run),
+        )
         .route("/api/v1/training-runs/{run_id}", get(get_training_run))
-        .route("/api/v1/training-runs/{run_id}/progress", post(record_training_progress))
-        .route("/api/v1/training-runs/{run_id}/finish", post(finish_training_run))
+        .route(
+            "/api/v1/training-runs/{run_id}/progress",
+            post(record_training_progress),
+        )
+        .route(
+            "/api/v1/training-runs/{run_id}/finish",
+            post(finish_training_run),
+        )
         .route("/api/v1/models", get(list_models).post(register_model))
         .route("/api/v1/models/{name}", get(get_model))
         .route("/api/v1/models/{name}/labels", post(set_model_label))
@@ -95,7 +130,7 @@ pub struct ModelVersionQuery {
     ),
     tag = "training",
 )]
-pub async fn list_training_runs(
+async fn list_training_runs(
     State(state): State<AppState>,
     Query(query): Query<TrainingRunsQuery>,
 ) -> ApiResult<Json<TrainingRunPage>> {
@@ -124,7 +159,7 @@ pub async fn list_training_runs(
     ),
     tag = "training",
 )]
-pub async fn get_training_run(
+async fn get_training_run(
     State(state): State<AppState>,
     Path(run_id): Path<String>,
 ) -> ApiResult<Json<TrainingRun>> {
@@ -150,7 +185,7 @@ pub async fn get_training_run(
     ),
     tag = "training",
 )]
-pub async fn start_training_run(
+async fn start_training_run(
     State(state): State<AppState>,
     caller: Caller,
     Json(request): Json<StartRunRequest>,
@@ -182,7 +217,7 @@ pub async fn start_training_run(
     ),
     tag = "training",
 )]
-pub async fn record_training_progress(
+async fn record_training_progress(
     State(state): State<AppState>,
     caller: Caller,
     Path(run_id): Path<String>,
@@ -208,7 +243,7 @@ pub async fn record_training_progress(
     ),
     tag = "training",
 )]
-pub async fn finish_training_run(
+async fn finish_training_run(
     State(state): State<AppState>,
     caller: Caller,
     Path(run_id): Path<String>,
@@ -231,7 +266,7 @@ pub async fn finish_training_run(
     ),
     tag = "training",
 )]
-pub async fn list_models(State(state): State<AppState>) -> ApiResult<Json<ModelPage>> {
+async fn list_models(State(state): State<AppState>) -> ApiResult<Json<ModelPage>> {
     Ok(Json(registry(&state)?.models().await?))
 }
 
@@ -248,7 +283,7 @@ pub async fn list_models(State(state): State<AppState>) -> ApiResult<Json<ModelP
     ),
     tag = "training",
 )]
-pub async fn get_model(
+async fn get_model(
     State(state): State<AppState>,
     Path(name): Path<String>,
     Query(query): Query<ModelVersionQuery>,
@@ -280,7 +315,7 @@ pub async fn get_model(
     ),
     tag = "training",
 )]
-pub async fn register_model(
+async fn register_model(
     State(state): State<AppState>,
     caller: Caller,
     Json(request): Json<RegisterModelRequest>,
@@ -316,7 +351,7 @@ pub async fn register_model(
     ),
     tag = "training",
 )]
-pub async fn set_model_label(
+async fn set_model_label(
     State(state): State<AppState>,
     caller: Caller,
     Path(name): Path<String>,

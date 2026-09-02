@@ -8,8 +8,8 @@ model on nothing and report a loss for it. Every method here raises.
     from aiwatcher_sdk.annotations import AnnotationRegistry
 
     registry = AnnotationRegistry("http://aiwatcher:8080")
-    export = registry.build_export("floor-plans/dom-projekt")
-    print(export.reference)          # floor-plans/dom-projekt@9f3c…
+    export = registry.build_export("corpora/plans")
+    print(export.reference)          # corpora/plans@9f3c…
     coco = registry.coco(export, split="train")
 
 Three things this client does that are easy to get wrong by hand:
@@ -196,18 +196,6 @@ class AnnotationRegistry:
     def projects(self) -> list[dict[str, Any]]:
         return list(self._request("GET", "/api/v1/annotation-projects").get("projects", []))
 
-    def presets(self) -> list[dict[str, Any]]:
-        """The label schema this build ships for residential floor plans.
-
-        Worth starting from. A vocabulary invented in the first hour of a
-        project is usually the one without a hinge point, and that is the one
-        that has to be re-drawn.
-        """
-        parsed = self._fetch("GET", "/api/v1/annotation-presets")
-        if not isinstance(parsed, list):  # pragma: no cover - server contract
-            raise RegistryError("expected a list of classes from /api/v1/annotation-presets")
-        return [dict(entry) for entry in parsed]
-
     def project(self, name: str) -> dict[str, Any]:
         """One project with its schema and the counts that say whether there is
         enough data yet."""
@@ -245,6 +233,33 @@ class AnnotationRegistry:
         if revision:
             query["revision"] = revision
         return self._request("GET", f"/api/v1/annotation-image?{urllib.parse.urlencode(query)}")
+
+    def revision_annotations(
+        self, project: str, image_id: str, *, revision: str | None = None
+    ) -> list[dict[str, Any]]:
+        """The shapes of one revision. Raises rather than returning nothing.
+
+        The one method here whose failure mode is silent by default and must
+        not be: an image whose revision the server could not resolve comes back
+        as a detail with no `revision` key, and a client that turned that into
+        `[]` would hand a trainer a blank target for a plan that is fully
+        drawn. A blank target is not an error anywhere downstream — it is a
+        plan the model is told contains no walls, and the loss it produces is
+        finite, so the run completes and the number is wrong.
+
+        Pass the revision an export pinned, never the project's current head.
+        The export is a claim about which drawings a run saw; re-reading the
+        head breaks it the moment somebody fixes a label mid-run.
+        """
+        detail = self.image(project, image_id, revision=revision)
+        found = detail.get("revision")
+        if not isinstance(found, Mapping):
+            raise RegistryError(
+                f"{image_id} in {project!r} has no "
+                f"{'revision ' + revision if revision else 'accepted revision'}; "
+                "training on it would train on an empty target"
+            )
+        return [dict(shape) for shape in found.get("annotations", [])]
 
     def exports(self, project: str) -> list[dict[str, Any]]:
         return list(
@@ -357,17 +372,21 @@ class AnnotationRegistry:
         group_id: str,
         rights: Mapping[str, Any],
         source: str = "",
-        view: str = "floor_plan",
+        view: str = "",
         level: str | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Register an image into a project.
 
-        ``group_id`` is the family — one building, however many renderings —
-        and it is what keeps a mirror out of the test set when its original is
-        in the training set. ``rights`` is required for the other expensive
-        mistake: a commercial export excludes anything that does not satisfy
-        its policy, by name.
+        ``group_id`` is the family — one subject, however many renderings of
+        it — and it is what keeps a mirrored or re-shot copy out of the test
+        set when its original is in the training set. ``rights`` is required
+        for the other expensive mistake: a commercial export excludes anything
+        that does not satisfy its policy, by name.
+
+        ``view`` is free text and empty by default. A corpus with one kind of
+        picture never needs it; one that mixes kinds names them, and an export
+        then selects the ones a model reads.
         """
         return self._request(
             "POST",
@@ -443,17 +462,26 @@ class AnnotationRegistry:
         rights_policy: RightsPolicy = "commercial",
         require_human_review: bool = True,
         classes: Sequence[str] = (),
-        all_view_types: bool = False,
+        views: Sequence[str] = (),
     ) -> Export:
-        """Freeze the project as it stands. Idempotent: an unchanged project is
-        the same export, so running this before every training run is free."""
+        """Freeze the project as it stands.
+
+        Idempotent: an unchanged project is the same export, so running this
+        before every training run is free.
+
+        ``views`` selects by :attr:`Sample.view`, and empty means every one —
+        the right default for a corpus with one kind of picture. A corpus that
+        mixes kinds names the ones a model reads, and every other image is
+        excluded *by name* in the manifest rather than quietly.
+        """
         body: dict[str, Any] = {
             "project": project,
             "note": note,
             "rights_policy": rights_policy,
             "require_human_review": require_human_review,
-            "all_view_types": all_view_types,
         }
+        if views:
+            body["views"] = list(views)
         if classes:
             body["classes"] = list(classes)
         return Export.from_json(
@@ -469,10 +497,13 @@ class AnnotationRegistry:
         usage: Literal["commercial", "non_commercial", "unclear"] | None = None,
         label: str | None = None,
     ) -> dict[str, Any]:
-        """The public floor-plan corpora and what their licences permit.
+        """The public public corpora and what their licences permit.
 
-        A dated table the server ships, not a search. Every row links its
-        original; the licence at that link is the only one that counts.
+        A dated table the instance was configured with, not a search — see
+        `AIWATCHER_DATASET_SOURCES`. Empty until somebody loads one, which is
+        a working state: nothing then outranks a mirror's claim. Every row
+        links its original; the licence at that link is the only one that
+        counts.
         """
         params: dict[str, str] = {}
         for key, value in (("q", query), ("usage", usage), ("label", label)):

@@ -6,6 +6,8 @@ use anyhow::{Context, Result};
 use tokio_util::sync::CancellationToken;
 
 use aiwatcher_annotations::Registry as AnnotationRegistry;
+use aiwatcher_annotations::SourceCatalog;
+use aiwatcher_annotations::integrations::hubs::{HubConfig, Hubs};
 use aiwatcher_api::state::{AppState, HealthState};
 use aiwatcher_auth::{AuthMode, Authenticator};
 use aiwatcher_bus::adapters::memory::InMemoryBus;
@@ -19,10 +21,10 @@ use aiwatcher_pipeline::{FlyteConfig, FlyteEngine};
 use aiwatcher_projector::pipeline::Outputs;
 use aiwatcher_projector::{FileDeadLetters, LiveHub, Projector, ProjectorConfig, ReadModel};
 use aiwatcher_prompts::{Registry, RegistryConfig};
-use aiwatcher_training::Registry as TrainingRegistry;
 use aiwatcher_runner::{HttpRunner, HttpRunnerConfig};
 use aiwatcher_trace::AssemblerConfig;
 use aiwatcher_trace::otlp::{OtlpConfig, OtlpMetricSink, OtlpTraceStore};
+use aiwatcher_training::Registry as TrainingRegistry;
 
 use crate::config::{BackendKind, Config, EngineKind, PromptStoreKind, WorkflowRunnerKind};
 
@@ -200,6 +202,73 @@ fn build_workflow_runner(
 /// Built as the concrete type rather than as `Arc<dyn WorkflowEngine>` so the
 /// same instance can serve `WorkflowRunner` as well — one connection pool, one
 /// cached token.
+/// The dataset hubs this instance may search, or `None`.
+///
+/// `None` is the default and makes `/api/v1/dataset-hubs` answer 501 naming
+/// the variables. That matters more here than for the other optional
+/// subsystems: an empty search result reads as "there is no such corpus",
+/// which is a claim about the world rather than about this deployment.
+///
+/// Note what is *not* configurable: whether a hub's licence is believed. It
+/// never is. See `aiwatcher_annotations::integrations::hubs`.
+/// The corpora somebody read the licence of, or an empty table.
+///
+/// Empty is the shipped default and it is a *working* state, not a degraded
+/// one: with no rows nothing matches a hub result, every one keeps
+/// `SourceUsage::Unclear`, and an import of one records unknown rights — which
+/// a commercial export excludes by name. The failure direction of configuring
+/// nothing is a smaller export and a line saying why.
+///
+/// A malformed file fails the start-up rather than being skipped. A catalogue
+/// that silently did not load would answer every licence question with
+/// "unclear" while looking exactly like one that had loaded.
+fn build_dataset_sources(config: &Config) -> Result<Arc<SourceCatalog>> {
+    let Some(path) = config.dataset_sources.as_deref() else {
+        tracing::info!(
+            "AIWATCHER_DATASET_SOURCES is unset; no corpus is curated, so every dataset hub \
+             result stays licence-unclear"
+        );
+        return Ok(Arc::new(SourceCatalog::default()));
+    };
+    let body = std::fs::read(path)
+        .with_context(|| format!("reading the dataset source catalogue at {path}"))?;
+    let catalog = SourceCatalog::parse(&body)
+        .with_context(|| format!("parsing the dataset source catalogue at {path}"))?;
+    tracing::info!(
+        sources = catalog.sources.len(),
+        directories = catalog.directories.len(),
+        %path,
+        "the dataset source catalogue is loaded"
+    );
+    Ok(Arc::new(catalog))
+}
+
+fn build_dataset_hubs(config: &Config, sources: &SourceCatalog) -> Result<Option<Arc<Hubs>>> {
+    let hub_config = HubConfig {
+        kaggle_username: config.kaggle_username.clone(),
+        kaggle_key: config.kaggle_key.clone(),
+        huggingface: config.huggingface_enabled,
+        huggingface_token: config.huggingface_token.clone(),
+    };
+    if !hub_config.any() {
+        tracing::info!(
+            "no dataset hub is configured; /api/v1/dataset-hubs answers 501 \
+             (AIWATCHER_HUGGINGFACE_ENABLED, AIWATCHER_KAGGLE_USERNAME/AIWATCHER_KAGGLE_KEY)"
+        );
+        return Ok(None);
+    }
+    tracing::info!(
+        huggingface = hub_config.huggingface,
+        kaggle = hub_config.kaggle().is_some(),
+        "dataset hub search is on; every result is licence-unclear unless it matches the \
+         curated table"
+    );
+    Ok(Some(Arc::new(
+        Hubs::with_catalog(hub_config, sources.sources.clone())
+            .context("the dataset hub HTTP client could not be built")?,
+    )))
+}
+
 fn build_engine(config: &Config) -> Result<Option<Arc<FlyteEngine>>> {
     match config.engine {
         EngineKind::None => {
@@ -492,6 +561,7 @@ pub async fn build(config: Config) -> Result<Runtime> {
     };
 
     let registries = build_registries(&config).await?;
+    let sources = build_dataset_sources(&config)?;
     let engine = build_engine(&config)?;
     let state = AppState {
         read_model,
@@ -501,6 +571,8 @@ pub async fn build(config: Config) -> Result<Runtime> {
         prompts: registries.prompts,
         datasets: registries.datasets,
         annotations: registries.annotations,
+        hubs: build_dataset_hubs(&config, &sources)?,
+        sources,
         training: registries.training,
         runner: build_workflow_runner(&config, engine.as_ref())?,
         engine: engine.map(|engine| engine as Arc<dyn aiwatcher_core::engine::WorkflowEngine>),

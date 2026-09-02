@@ -22,7 +22,7 @@ use serde::Deserialize;
 
 use aiwatcher_annotations::{
     AnnotationProject, BuiltExport, ExportManifest, ExportPage, ExportRequest, ImageDetail,
-    ImageFilter, ImageHead, ImagePage, LabelClass, ProjectPage, ProjectSummary,
+    ImageFilter, ImageHead, ImagePage, ImportReport, ImportRequest, ProjectPage, ProjectSummary,
     RegisterImageRequest, Registry, ReviewRequest, ReviewState, SaveProjectRequest,
     SaveRevisionRequest, SavedRevision, SourcePage, SourceUsage, Split, StoredBlob,
 };
@@ -30,11 +30,44 @@ use aiwatcher_annotations::{
 use crate::auth::Caller;
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
+use utoipa::OpenApi;
 
 /// Matches [`aiwatcher_annotations`]'s own blob cap. axum's default body limit
 /// is two megabytes, which is under a 300 dpi catalogue plan, so this route
 /// raises it — and only this route.
 const MAX_UPLOAD_BYTES: usize = 16 * 1024 * 1024;
+
+/// This module's operations, as the contract they satisfy.
+///
+/// Derived beside the router rather than listed in the root document, so
+/// adding a route and forgetting the contract is a change to one file rather
+/// than a change to two files that has to be noticed in the second.
+#[derive(OpenApi)]
+#[openapi(paths(
+    list_projects,
+    get_project,
+    save_project,
+    list_images,
+    register_image,
+    get_image,
+    save_revision,
+    review_image,
+    list_exports,
+    build_export,
+    get_export,
+    get_export_coco,
+    upload_blob,
+    get_blob,
+    list_sources,
+    import_images,
+))]
+struct Api;
+
+/// The operations this module serves. Composed by [`crate::openapi`].
+#[must_use]
+pub fn openapi() -> utoipa::openapi::OpenApi {
+    Api::openapi()
+}
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -48,6 +81,7 @@ pub fn router() -> Router<AppState> {
             get(list_images).post(register_image),
         )
         .route("/api/v1/annotation-image", get(get_image))
+        .route("/api/v1/annotation-imports", post(import_images))
         .route("/api/v1/annotation-revisions", post(save_revision))
         .route("/api/v1/annotation-reviews", post(review_image))
         .route(
@@ -62,7 +96,6 @@ pub fn router() -> Router<AppState> {
         )
         .route("/api/v1/annotation-blobs/{image_id}", get(get_blob))
         .route("/api/v1/annotation-sources", get(list_sources))
-        .route("/api/v1/annotation-presets", get(list_presets))
 }
 
 fn registry(state: &AppState) -> ApiResult<&Arc<Registry>> {
@@ -153,7 +186,7 @@ pub struct SourcesQuery {
     ),
     tag = "annotations",
 )]
-pub async fn list_projects(State(state): State<AppState>) -> ApiResult<Json<ProjectPage>> {
+async fn list_projects(State(state): State<AppState>) -> ApiResult<Json<ProjectPage>> {
     Ok(Json(registry(&state)?.projects().await?))
 }
 
@@ -169,7 +202,7 @@ pub async fn list_projects(State(state): State<AppState>) -> ApiResult<Json<Proj
     ),
     tag = "annotations",
 )]
-pub async fn get_project(
+async fn get_project(
     State(state): State<AppState>,
     Query(query): Query<ProjectQuery>,
 ) -> ApiResult<Json<ProjectSummary>> {
@@ -194,28 +227,13 @@ pub async fn get_project(
     ),
     tag = "annotations",
 )]
-pub async fn save_project(
+async fn save_project(
     State(state): State<AppState>,
     caller: Caller,
     Json(request): Json<SaveProjectRequest>,
 ) -> ApiResult<Json<AnnotationProject>> {
     may_author(&caller)?;
     Ok(Json(registry(&state)?.save_project(request).await?))
-}
-
-/// The label schemas this build ships as a starting point.
-///
-/// Not a database read: a project that starts from a blank vocabulary usually
-/// invents one without a hinge point, and that is the vocabulary that has to be
-/// re-drawn. Shipping one is cheaper than discovering that.
-#[utoipa::path(
-    get,
-    path = "/api/v1/annotation-presets",
-    responses((status = 200, body = Vec<LabelClass>)),
-    tag = "annotations",
-)]
-pub async fn list_presets() -> Json<Vec<LabelClass>> {
-    Json(aiwatcher_annotations::floor_plan_classes())
 }
 
 // ── Images ───────────────────────────────────────────────────────────────────
@@ -232,7 +250,7 @@ pub async fn list_presets() -> Json<Vec<LabelClass>> {
     ),
     tag = "annotations",
 )]
-pub async fn list_images(
+async fn list_images(
     State(state): State<AppState>,
     Query(query): Query<ImagesQuery>,
 ) -> ApiResult<Json<ImagePage>> {
@@ -272,13 +290,49 @@ pub async fn list_images(
     ),
     tag = "annotations",
 )]
-pub async fn register_image(
+async fn register_image(
     State(state): State<AppState>,
     caller: Caller,
     Json(request): Json<RegisterImageRequest>,
 ) -> ApiResult<Json<ImageHead>> {
     may_author(&caller)?;
     Ok(Json(registry(&state)?.register_image(request).await?))
+}
+
+/// Register many images at once, from rows a Flow PHP pipeline produced.
+///
+/// The write half of dataset discovery. A hub search says a corpus exists; a
+/// Flow query maps its file listing onto this schema; this registers the
+/// result into a project somebody can draw on.
+///
+/// Two things about the response are worth reading rather than skipping. One
+/// bad row does not fail the batch — `outcomes` names every refusal — and
+/// `warnings` carries the states that *succeed* and still leave the corpus
+/// worth less than it looks: unknown rights, and a group key that gave every
+/// image its own family.
+///
+/// Always `dry_run` first from a UI. Six hundred images with the split key
+/// mapped from a filename is not something to discover after the fact.
+#[utoipa::path(
+    post,
+    path = "/api/v1/annotation-imports",
+    request_body = ImportRequest,
+    responses(
+        (status = 200, body = ImportReport),
+        (status = 400, body = crate::error::ErrorBody, description = "The asserted rights contradict what a human recorded about this corpus"),
+        (status = 404, body = crate::error::ErrorBody),
+        (status = 413, body = crate::error::ErrorBody),
+        (status = 501, body = crate::error::ErrorBody),
+    ),
+    tag = "annotations",
+)]
+async fn import_images(
+    State(state): State<AppState>,
+    caller: Caller,
+    Json(request): Json<ImportRequest>,
+) -> ApiResult<Json<ImportReport>> {
+    may_author(&caller)?;
+    Ok(Json(registry(&state)?.import_images(request).await?))
 }
 
 /// One image, its revision history, one revision's shapes, and the side of the
@@ -295,7 +349,7 @@ pub async fn register_image(
     ),
     tag = "annotations",
 )]
-pub async fn get_image(
+async fn get_image(
     State(state): State<AppState>,
     Query(query): Query<ImageQuery>,
 ) -> ApiResult<Json<ImageDetail>> {
@@ -329,7 +383,7 @@ pub async fn get_image(
     ),
     tag = "annotations",
 )]
-pub async fn save_revision(
+async fn save_revision(
     State(state): State<AppState>,
     caller: Caller,
     Json(request): Json<SaveRevisionRequest>,
@@ -360,7 +414,7 @@ pub async fn save_revision(
     ),
     tag = "annotations",
 )]
-pub async fn review_image(
+async fn review_image(
     State(state): State<AppState>,
     caller: Caller,
     Json(request): Json<ReviewRequest>,
@@ -384,7 +438,7 @@ pub async fn review_image(
     ),
     tag = "annotations",
 )]
-pub async fn list_exports(
+async fn list_exports(
     State(state): State<AppState>,
     Query(query): Query<ProjectQuery>,
 ) -> ApiResult<Json<ExportPage>> {
@@ -411,7 +465,7 @@ pub async fn list_exports(
     ),
     tag = "annotations",
 )]
-pub async fn build_export(
+async fn build_export(
     State(state): State<AppState>,
     caller: Caller,
     Json(request): Json<ExportRequest>,
@@ -440,7 +494,7 @@ pub async fn build_export(
     ),
     tag = "annotations",
 )]
-pub async fn get_export(
+async fn get_export(
     State(state): State<AppState>,
     Query(query): Query<ExportQuery>,
 ) -> ApiResult<Json<ExportManifest>> {
@@ -469,7 +523,7 @@ pub async fn get_export(
     ),
     tag = "annotations",
 )]
-pub async fn get_export_coco(
+async fn get_export_coco(
     State(state): State<AppState>,
     Query(query): Query<ExportQuery>,
 ) -> ApiResult<Json<serde_json::Value>> {
@@ -501,7 +555,7 @@ pub async fn get_export_coco(
     ),
     tag = "annotations",
 )]
-pub async fn upload_blob(
+async fn upload_blob(
     State(state): State<AppState>,
     caller: Caller,
     headers: HeaderMap,
@@ -540,7 +594,7 @@ pub async fn upload_blob(
     ),
     tag = "annotations",
 )]
-pub async fn get_blob(
+async fn get_blob(
     State(state): State<AppState>,
     Path(image_id): Path<String>,
 ) -> ApiResult<Response> {
@@ -572,10 +626,13 @@ pub async fn get_blob(
     responses((status = 200, body = SourcePage)),
     tag = "annotations",
 )]
-pub async fn list_sources(Query(query): Query<SourcesQuery>) -> Json<SourcePage> {
-    Json(aiwatcher_annotations::sources::search(
-        query.q.as_deref(),
-        query.usage,
-        query.label.as_deref(),
-    ))
+async fn list_sources(
+    State(state): State<AppState>,
+    Query(query): Query<SourcesQuery>,
+) -> Json<SourcePage> {
+    Json(
+        state
+            .sources
+            .search(query.q.as_deref(), query.usage, query.label.as_deref()),
+    )
 }

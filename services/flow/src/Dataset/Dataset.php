@@ -19,8 +19,9 @@ namespace Aiwatcher\Flow\Dataset;
 final readonly class Dataset
 {
     /**
-     * @param array<string, string> $columns column name => type, for /flow/datasets
-     * @param array<string, string> $hints   column name => what to write instead, for near-misses
+     * @param array<string, string>    $columns    column name => type, for /flow/datasets
+     * @param array<string, string>    $hints      column name => what to write instead, for near-misses
+     * @param array<string, Parameter> $parameters named read() arguments this route accepts
      */
     public function __construct(
         public string $name,
@@ -50,7 +51,30 @@ final readonly class Dataset
          * and has no window: a run's log is bounded by the run.
          */
         public bool $windowed = false,
+        /**
+         * Named arguments `read()` may carry, beyond `run:` and `period:`.
+         *
+         * The hub search takes a query string; the annotation list takes a
+         * project. Both are ordinary query parameters on the API, and both are
+         * useless as a filter applied after the fact — reading every row to
+         * throw most of them away is the thing the catalog exists to avoid.
+         */
+        public array $parameters = [],
     ) {}
+
+    /** What to tell someone who wrote an argument this route has no idea about. */
+    public function explainUnknownParameter(string $name): string
+    {
+        $declared = \array_keys($this->parameters);
+        $available = $declared === []
+            ? 'It takes a dataset name, and period: when it is windowed.'
+            : \sprintf('It takes: %s.', \implode(', ', \array_map(
+                static fn(string $key): string => $key . ':',
+                $declared,
+            )));
+
+        return \sprintf('Dataset "%s" has no read() argument "%s". %s', $this->name, $name, $available);
+    }
 
     public function hasColumn(string $name): bool
     {

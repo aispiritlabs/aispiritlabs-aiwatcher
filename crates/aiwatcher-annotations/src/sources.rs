@@ -1,63 +1,41 @@
-//! Where floor-plan training data comes from, and what may be done with it.
+//! Where training data comes from, and what a human recorded about its licence.
 //!
-//! A table a human wrote and dated, not a client. Hugging Face, Kaggle and
-//! Roboflow Universe all mirror these corpora and all of them routinely
-//! restate the licence wrongly — a CC BY-NC dataset re-uploaded as MIT is
-//! common enough that fetching a licence live would be worse than useless,
-//! because it would arrive looking authoritative.
+//! A table somebody wrote and dated, not a client. Public mirrors — Hugging
+//! Face, Kaggle, Roboflow Universe — routinely restate a corpus's licence
+//! wrongly, and a CC BY-NC dataset re-uploaded as MIT is common enough that
+//! fetching a licence live would be worse than useless: it would arrive
+//! looking authoritative. See [`crate::integrations::hubs`], which searches
+//! those mirrors and is never allowed to believe them.
 //!
-//! So every row here says what it says *as of* a date, links the original, and
-//! errs towards [`SourceUsage::Unclear`]. It is a signpost. It is never a
-//! permission, and the only thing that is is the licence text at the other end
-//! of the link.
+//! Every row says what it says *as of* a date, links the original, and errs
+//! towards [`SourceUsage::Unclear`]. It is a signpost. The only thing that is
+//! a permission is the licence text at the other end of the link.
+//!
+//! # This build ships no rows
+//!
+//! The table is domain content, not code: which corpora exist and what their
+//! licences permit is a question about one field of vision, and a list shipped
+//! here would be one project's homework imposed on everybody else's. So the
+//! default catalogue is **empty**, and an instance loads its own from a JSON
+//! file named by `AIWATCHER_DATASET_SOURCES`.
+//!
+//! Empty is a safe default rather than a degraded one. With no rows nothing
+//! matches, every hub result stays `unclear`, and an import of one registers
+//! its images with unknown rights — which a commercial export excludes by
+//! name, in a manifest, forever. The cost of an empty table is a smaller
+//! export and a line saying why; the cost of a wrong row is a licence claim.
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-/// What kind of thing a corpus contains.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum SourceKind {
-    /// Rendered or scanned plans with pixel or vector labels.
-    FloorPlan,
-    /// Geometry and topology with no source raster. Useful by rendering it.
-    Vector,
-    /// CAD drawings and symbol libraries.
-    Cad,
-    /// Captured interiors: panoramas, point clouds, and a plan derived from
-    /// them.
-    Capture,
-}
-
-/// What the licence permits, stated conservatively.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum SourceUsage {
-    /// The licence permits commercial use of the data and of a model trained
-    /// on it.
-    Commercial,
-    /// Research or non-commercial only.
-    NonCommercial,
-    /// Mixed, unstated, or stated by the authors as not theirs to give.
-    Unclear,
-}
-
-impl SourceUsage {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Commercial => "commercial",
-            Self::NonCommercial => "non_commercial",
-            Self::Unclear => "unclear",
-        }
-    }
-}
+use crate::license::SourceUsage;
 
 /// How the bytes are obtained.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceAccess {
     /// Downloadable.
+    #[default]
     Open,
     /// A form, an agreement, or an email.
     Request,
@@ -66,38 +44,55 @@ pub enum SourceAccess {
 }
 
 /// One corpus.
-#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, ToSchema)]
+#[serde(default)]
 pub struct DatasetSource {
+    /// Stable slug. What [`crate::integrations::hubs`] matches a mirror
+    /// against, and what an import records as the row it was checked against.
     pub id: String,
     pub name: String,
-    pub kind: SourceKind,
+    /// What kind of thing it contains, in the caller's own words —
+    /// `floor_plan`, `satellite`, `radiograph`. Free text for the same reason
+    /// [`crate::images::ImageRecord::view`] is: an enum here would be one
+    /// domain's list.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub kind: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub summary: String,
     /// Best published figure. `None` where the authors give a range.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub items: Option<u64>,
+    /// What one item is: `images`, `scans`, `studies`.
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub item_label: String,
-    /// What it labels, in this crate's vocabulary: `walls`, `rooms`, `doors`,
-    /// `windows`, `openings`, `stairs`, `text`, `scale`, `graph`, `furniture`,
-    /// `symbols`.
+    /// What it labels, in whatever vocabulary the corpus uses.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<String>,
-    /// `raster`, `vector`, `cad`, `panorama`.
+    /// `raster`, `vector`, `video`, `point_cloud`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub media: Vec<String>,
     pub license: String,
     pub usage: SourceUsage,
     pub access: SourceAccess,
     pub url: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub paper: Option<String>,
     /// When somebody last read the licence at `url`.
+    ///
+    /// The field that makes a row worth more than a guess, and the one that
+    /// goes stale. A row with no date is a row nobody checked.
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub verified_on: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub notes: String,
 }
 
 /// A place to go looking, rather than a corpus.
-#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, ToSchema)]
 pub struct SourceDirectory {
     pub name: String,
     pub url: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub notes: String,
 }
 
@@ -110,307 +105,127 @@ pub struct SourcePage {
     pub total: usize,
 }
 
-/// The fields every row shares, so a row states only what is specific to it.
-fn row() -> DatasetSource {
-    DatasetSource {
-        id: String::new(),
-        name: String::new(),
-        kind: SourceKind::FloorPlan,
-        summary: String::new(),
-        items: None,
-        item_label: "floor plans".to_owned(),
-        labels: Vec::new(),
-        media: Vec::new(),
-        license: String::new(),
-        usage: SourceUsage::Unclear,
-        access: SourceAccess::Open,
-        url: String::new(),
-        paper: None,
-        verified_on: VERIFIED_ON.to_owned(),
-        notes: String::new(),
+/// A loaded catalogue: the corpora somebody checked, and where to look for more.
+///
+/// Cloneable and cheap to hold. An instance loads one at start-up and every
+/// reader shares it — the alternative, re-reading a file per request, would
+/// make the answer depend on when it was asked.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, ToSchema)]
+pub struct SourceCatalog {
+    #[serde(default)]
+    pub sources: Vec<DatasetSource>,
+    #[serde(default)]
+    pub directories: Vec<SourceDirectory>,
+}
+
+impl SourceCatalog {
+    /// Parse a catalogue from the JSON an instance was pointed at.
+    ///
+    /// # Errors
+    /// When the document is not a catalogue, or a row has no `id` — the field
+    /// a hub match is made on, and the one whose absence would make a row
+    /// unreachable rather than wrong.
+    pub fn parse(body: &[u8]) -> crate::Result<Self> {
+        let catalog: Self = serde_json::from_slice(body).map_err(|error| {
+            crate::Error::Invalid(format!(
+                "the dataset source catalogue is not valid: {error}"
+            ))
+        })?;
+        for source in &catalog.sources {
+            if source.id.trim().is_empty() {
+                return Err(crate::Error::Invalid(
+                    "every dataset source needs an id; it is what a hub result is matched against"
+                        .to_owned(),
+                ));
+            }
+        }
+        Ok(catalog)
+    }
+
+    /// The rows matching a filter, with the total before it.
+    #[must_use]
+    pub fn search(
+        &self,
+        query: Option<&str>,
+        usage: Option<SourceUsage>,
+        label: Option<&str>,
+    ) -> SourcePage {
+        let needle = query.map(str::to_lowercase);
+        let label = label.map(str::to_lowercase);
+        let sources = self
+            .sources
+            .iter()
+            .filter(|source| usage.is_none_or(|wanted| source.usage == wanted))
+            .filter(|source| {
+                label
+                    .as_ref()
+                    .is_none_or(|wanted| source.labels.iter().any(|held| held == wanted))
+            })
+            .filter(|source| {
+                needle.as_ref().is_none_or(|needle| {
+                    source.id.to_lowercase().contains(needle)
+                        || source.name.to_lowercase().contains(needle)
+                        || source.summary.to_lowercase().contains(needle)
+                        || source.notes.to_lowercase().contains(needle)
+                        || source.license.to_lowercase().contains(needle)
+                        || source.labels.iter().any(|value| value.contains(needle))
+                        || source.media.iter().any(|value| value.contains(needle))
+                })
+            })
+            .cloned()
+            .collect();
+        SourcePage {
+            sources,
+            directories: self.directories.clone(),
+            total: self.sources.len(),
+        }
     }
 }
 
-fn words(values: &[&str]) -> Vec<String> {
-    values.iter().map(|value| (*value).to_owned()).collect()
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-/// The date every row below was last checked against its original.
-const VERIFIED_ON: &str = "2026-09-01";
+    #[test]
+    fn an_instance_that_loaded_nothing_answers_with_an_empty_table() {
+        // Not an error state. Nothing matches, every hub row stays unclear,
+        // and an import records unknown rights — which a commercial export
+        // excludes by name. The safe direction, reached by doing nothing.
+        let page = SourceCatalog::default().search(None, None, None);
+        assert!(page.sources.is_empty());
+        assert_eq!(page.total, 0);
+    }
 
-/// Every corpus this build knows about.
-#[must_use]
-pub fn catalog() -> Vec<DatasetSource> {
-    use SourceAccess::{Academic, Open, Request};
-    use SourceKind::{Cad, Capture, FloorPlan, Vector};
-    use SourceUsage::{Commercial, NonCommercial, Unclear};
+    #[test]
+    fn a_row_with_no_id_is_refused_because_nothing_could_ever_match_it() {
+        let refused = SourceCatalog::parse(br#"{"sources":[{"name":"a corpus"}]}"#);
+        assert!(refused.is_err());
+    }
 
-    vec![
-        DatasetSource {
-            id: "cubicasa5k".to_owned(),
-            name: "CubiCasa5K".to_owned(),
-            kind: FloorPlan,
-            summary: "5,000 Finnish plans as raster plus SVG annotations, with walls, openings, rooms and fixtures as separate layers."
-                .to_owned(),
-            items: Some(5_000),
-            labels: words(&["walls", "rooms", "doors", "windows", "furniture"]),
-            media: words(&["raster", "vector"]),
-            license: "CC BY-NC 4.0".to_owned(),
-            usage: NonCommercial,
-            access: Open,
-            url: "https://github.com/CubiCasa/CubiCasa5k".to_owned(),
-            paper: Some("https://arxiv.org/abs/1904.01920".to_owned()),
-            notes: "The best pre-training corpus for this task and the one that cannot ship in a commercial product. Pre-train on it, fine-tune on licensed data, and keep the weights lineage recorded."
-                .to_owned(),
-            ..row()
-        },
-        DatasetSource {
-            id: "resplan".to_owned(),
-            name: "ResPlan".to_owned(),
-            kind: Vector,
-            summary: "17,000 residential layouts as polygons for walls, doors, windows and rooms, with a room-connectivity graph and a metric scale."
-                .to_owned(),
-            items: Some(17_000),
-            item_label: "layouts".to_owned(),
-            labels: words(&["walls", "rooms", "doors", "windows", "graph", "scale"]),
-            media: words(&["vector"]),
-            license: "CC BY 4.0 (data), MIT (code)".to_owned(),
-            usage: Commercial,
-            access: Open,
-            url: "https://github.com/gsr-lab/ResPlan".to_owned(),
-            paper: None,
-            notes: "Ships geometry, not source rasters. Its value here is synthetic pre-training: render it in the target drawing style and you have exact raster-to-JSON pairs for free."
-                .to_owned(),
-            ..row()
-        },
-        DatasetSource {
-            id: "msd".to_owned(),
-            name: "Modified Swiss Dwellings".to_owned(),
-            kind: FloorPlan,
-            summary: "5,372 plans covering 18,900 apartments, with geometry, room types and an access graph."
-                .to_owned(),
-            items: Some(5_372),
-            labels: words(&["walls", "rooms", "doors", "windows", "graph"]),
-            media: words(&["raster", "vector"]),
-            license: "check the Zenodo record".to_owned(),
-            usage: Unclear,
-            access: Open,
-            url: "https://zenodo.org/records/11073900".to_owned(),
-            paper: None,
-            notes: "Large Swiss apartment buildings — good for topology and irregular rooms, a weak match for single-family catalogue houses. Read the record's own licence field before using it."
-                .to_owned(),
-            ..row()
-        },
-        DatasetSource {
-            id: "cvc-fp".to_owned(),
-            name: "CVC-FP".to_owned(),
-            kind: FloorPlan,
-            summary: "122 scanned plans in four drawing styles, annotated with structural elements."
-                .to_owned(),
-            items: Some(122),
-            item_label: "scanned plans".to_owned(),
-            labels: words(&["walls", "doors", "windows", "rooms"]),
-            media: words(&["raster"]),
-            license: "research use, see the site".to_owned(),
-            usage: NonCommercial,
-            access: Open,
-            url: "http://dag.cvc.uab.es/resources/floorplans/".to_owned(),
-            paper: None,
-            notes: "Too small to train on and unusually useful as a generalisation test: four styles means four ways for a model that memorised one supplier to fail."
-                .to_owned(),
-            ..row()
-        },
-        DatasetSource {
-            id: "floorplancad".to_owned(),
-            name: "FloorPlanCAD".to_owned(),
-            kind: Cad,
-            summary: "15,663 CAD drawings with panoptic symbol annotations over line primitives."
-                .to_owned(),
-            items: Some(15_663),
-            item_label: "CAD drawings".to_owned(),
-            labels: words(&["symbols", "walls", "doors", "windows"]),
-            media: words(&["cad", "vector"]),
-            license: "CC BY-NC 4.0 (annotations)".to_owned(),
-            usage: NonCommercial,
-            access: Open,
-            url: "https://floorplancad.github.io/".to_owned(),
-            paper: Some("https://arxiv.org/abs/2105.07147".to_owned()),
-            notes: "The authors state the annotations are theirs and the drawings are not. Two separate rights questions, and the second has no answer on the site."
-                .to_owned(),
-            ..row()
-        },
-        DatasetSource {
-            id: "waffle".to_owned(),
-            name: "WAFFLE".to_owned(),
-            kind: FloorPlan,
-            summary: "Roughly 20,000 plans scraped from the open web with metadata and OCR, of which only a small subset carries segmentation masks."
-                .to_owned(),
-            items: Some(20_000),
-            labels: words(&["text", "rooms"]),
-            media: words(&["raster"]),
-            license: "per-item, mostly Wikimedia".to_owned(),
-            usage: Unclear,
-            access: Open,
-            url: "https://github.com/tau-vailab/WAFFLE".to_owned(),
-            paper: Some("https://arxiv.org/abs/2406.12734".to_owned()),
-            notes: "Style diversity is what it is for: it is the corpus that tells you whether a model learned floor plans or learned one publisher. Its licences are per-item and have to be resolved per-item."
-                .to_owned(),
-            ..row()
-        },
-        DatasetSource {
-            id: "r2v".to_owned(),
-            name: "Raster-to-Vector (R2V) and R3D".to_owned(),
-            kind: FloorPlan,
-            summary: "The two benchmark splits most floor-plan segmentation papers report on, including DeepFloorplan and the M&M line of work."
-                .to_owned(),
-            items: None,
-            labels: words(&["walls", "rooms", "openings"]),
-            media: words(&["raster"]),
-            license: "unstated for the source images".to_owned(),
-            usage: Unclear,
-            access: Open,
-            url: "https://github.com/art-programmer/FloorplanTransformation".to_owned(),
-            paper: None,
-            notes: "Report on these to be comparable with the literature. Note that their 'opening' class merges doors and windows, so a model trained on them alone cannot tell one from the other."
-                .to_owned(),
-            ..row()
-        },
-        DatasetSource {
-            id: "zind".to_owned(),
-            name: "Zillow Indoor Dataset".to_owned(),
-            kind: Capture,
-            summary: "1,575 homes as panoramas with room layouts, merged floor plans and window, door and opening annotations."
-                .to_owned(),
-            items: Some(1_575),
-            item_label: "homes".to_owned(),
-            labels: words(&["rooms", "doors", "windows", "openings", "scale"]),
-            media: words(&["panorama", "vector"]),
-            license: "non-commercial research licence".to_owned(),
-            usage: NonCommercial,
-            access: Request,
-            url: "https://github.com/zillow/zind".to_owned(),
-            paper: Some("https://arxiv.org/abs/2109.13748".to_owned()),
-            notes: "Captured rather than drawn, so it teaches geometry and not draughting convention. Useful for the metric-scale half of the problem."
-                .to_owned(),
-            ..row()
-        },
-        DatasetSource {
-            id: "rplan".to_owned(),
-            name: "RPLAN".to_owned(),
-            kind: Vector,
-            summary: "Tens of thousands of vectorised residential plans, widely used for layout generation."
-                .to_owned(),
-            items: None,
-            labels: words(&["rooms", "walls", "graph"]),
-            media: words(&["vector", "raster"]),
-            license: "agreement required, research use".to_owned(),
-            usage: NonCommercial,
-            access: Request,
-            url: "http://staff.ustc.edu.cn/~fuxm/projects/DeepLayout/index.html".to_owned(),
-            paper: None,
-            notes: "Access is by signed agreement. Built for generation rather than extraction, so its labels are room-level and it says little about openings."
-                .to_owned(),
-            ..row()
-        },
-        DatasetSource {
-            id: "lifull".to_owned(),
-            name: "LIFULL HOME'S".to_owned(),
-            kind: FloorPlan,
-            summary: "Over five million high-resolution Japanese listing plans."
-                .to_owned(),
-            items: Some(5_300_000),
-            labels: words(&["text"]),
-            media: words(&["raster"]),
-            license: "academic access only".to_owned(),
-            usage: NonCommercial,
-            access: Academic,
-            url: "https://www.nii.ac.jp/dsc/idr/lifull/".to_owned(),
-            paper: None,
-            notes: "Restricted to universities and public research institutions. Effectively unavailable to a company, whatever its size makes it look like."
-                .to_owned(),
-            ..row()
-        },
-    ]
-}
+    #[test]
+    fn a_catalogue_round_trips_and_is_searchable_by_what_it_labels() {
+        let catalog = SourceCatalog::parse(
+            br#"{"sources":[
+                {"id":"corpus-a","name":"Corpus A","labels":["cells"],
+                 "license":"CC BY-NC 4.0","usage":"non_commercial","access":"open",
+                 "url":"https://example.test/a","verified_on":"2026-09-02"},
+                {"id":"corpus-b","name":"Corpus B","labels":["roads"],
+                 "license":"CC0","usage":"commercial","access":"open",
+                 "url":"https://example.test/b","verified_on":"2026-09-02"}
+            ]}"#,
+        )
+        .expect("a catalogue");
 
-/// Places to look for something this table does not list.
-#[must_use]
-pub fn directories() -> Vec<SourceDirectory> {
-    [
-        (
-            "IAPR TC10 document datasets",
-            "https://iapr-tc10.univ-lr.fr/index.php/resources/datasets/",
-            "The graphics-recognition community's own list. Where CVC-FP and the older symbol datasets are catalogued.",
-        ),
-        (
-            "Zenodo",
-            "https://zenodo.org/search?q=floor+plan+dataset",
-            "Where a paper's dataset is deposited when the authors intend it to be citable. Each record states its own licence.",
-        ),
-        (
-            "Hugging Face Datasets",
-            "https://huggingface.co/datasets?search=floorplan",
-            "Fast to try and unreliable on provenance: many entries are re-uploads whose declared licence does not match the original.",
-        ),
-        (
-            "Kaggle",
-            "https://www.kaggle.com/datasets?search=floor+plan",
-            "Same caveat as Hugging Face, more strongly. Treat every licence field as a claim by the uploader.",
-        ),
-        (
-            "Roboflow Universe",
-            "https://universe.roboflow.com/search?q=floor+plan",
-            "Good for a same-day detection experiment. Not a source of rights: most projects are somebody's re-annotation of images they did not own.",
-        ),
-        (
-            "Papers with Code — floor plan analysis",
-            "https://paperswithcode.com/task/floorplan-analysis",
-            "The fastest way to find which benchmark a new method reports on, which is usually R2V or R3D.",
-        ),
-    ]
-    .into_iter()
-    .map(|(name, url, notes)| SourceDirectory {
-        name: name.to_owned(),
-        url: url.to_owned(),
-        notes: notes.to_owned(),
-    })
-    .collect()
-}
-
-/// Filter the table.
-///
-/// `usage` is the filter that matters: "show me only what a commercial model
-/// may be trained on" is the question that should be one click, because the
-/// alternative is finding out after the training run.
-#[must_use]
-pub fn search(query: Option<&str>, usage: Option<SourceUsage>, label: Option<&str>) -> SourcePage {
-    let all = catalog();
-    let total = all.len();
-    let needle = query.map(str::to_lowercase);
-    let label = label.map(str::to_lowercase);
-    let sources = all
-        .into_iter()
-        .filter(|source| usage.is_none_or(|wanted| source.usage == wanted))
-        .filter(|source| {
-            label
-                .as_ref()
-                .is_none_or(|wanted| source.labels.iter().any(|held| held == wanted))
-        })
-        .filter(|source| {
-            needle.as_ref().is_none_or(|needle| {
-                source.id.to_lowercase().contains(needle)
-                    || source.name.to_lowercase().contains(needle)
-                    || source.summary.to_lowercase().contains(needle)
-                    || source.notes.to_lowercase().contains(needle)
-                    || source.license.to_lowercase().contains(needle)
-                    || source.labels.iter().any(|value| value.contains(needle))
-                    || source.media.iter().any(|value| value.contains(needle))
-            })
-        })
-        .collect();
-    SourcePage {
-        sources,
-        directories: directories(),
-        total,
+        assert_eq!(catalog.search(None, None, Some("cells")).sources.len(), 1);
+        assert_eq!(
+            catalog
+                .search(None, Some(SourceUsage::Commercial), None)
+                .sources
+                .len(),
+            1
+        );
+        // The total is before the filter, so an empty result reads as "nothing
+        // matched" rather than as "nothing is loaded".
+        assert_eq!(catalog.search(Some("nothing"), None, None).total, 2);
     }
 }

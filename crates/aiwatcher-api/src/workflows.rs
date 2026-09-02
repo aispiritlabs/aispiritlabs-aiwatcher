@@ -39,9 +39,32 @@ use aiwatcher_projector::{
 
 use crate::auth::Caller;
 use crate::error::{ApiError, ApiResult};
-use crate::routes::{StreamQuery, resume_point};
+use crate::live::{StreamQuery, resume_point};
 use crate::state::AppState;
 use crate::stream::{Scope, as_sse, catch_up, live_tail};
+use utoipa::OpenApi;
+
+/// This module's operations, as the contract they satisfy.
+///
+/// Derived beside the router rather than listed in the root document, so
+/// adding a route and forgetting the contract is a change to one file rather
+/// than a change to two files that has to be noticed in the second.
+#[derive(OpenApi)]
+#[openapi(paths(
+    list_workflows,
+    get_workflow,
+    list_workflow_executions,
+    get_workflow_execution,
+    stream_workflow_execution,
+    rerun_workflow,
+))]
+struct Api;
+
+/// The operations this module serves. Composed by [`crate::openapi`].
+#[must_use]
+pub fn openapi() -> utoipa::openapi::OpenApi {
+    Api::openapi()
+}
 
 pub fn router() -> Router<AppState> {
     Router::new()

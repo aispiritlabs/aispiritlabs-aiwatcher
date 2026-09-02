@@ -114,6 +114,8 @@ final class PipelineBuilder
         $name = null;
         $run = null;
         $periodWasSet = false;
+        /** @var array<string, array{value: string, column: int}> */
+        $named = [];
 
         foreach ($step->args as $argument) {
             if ($argument->name === 'run') {
@@ -134,13 +136,16 @@ final class PipelineBuilder
             }
 
             if ($argument->name !== null) {
-                throw new ParseError(
-                    \sprintf(
-                        'read() has no argument "%s". It takes a dataset, optionally run: and period:.',
-                        $argument->name,
-                    ),
-                    $argument->value->column(),
-                );
+                // Held rather than checked here: which arguments are legal
+                // depends on the dataset, and the dataset name may come after
+                // them. `read(search: 'plans', hub_datasets)` is odd but valid,
+                // and refusing it would be refusing it for the wrong reason.
+                $named[$argument->name] = [
+                    'value' => (string) $this->scalar($argument->value, $argument->name),
+                    'column' => $argument->value->column(),
+                ];
+
+                continue;
             }
 
             $value = $argument->value;
@@ -188,10 +193,77 @@ final class PipelineBuilder
             );
         }
 
+        $arguments = $this->readArguments($dataset, $named, $step->column);
+
         $this->dataset = $dataset;
         $this->known = \array_fill_keys(\array_keys($dataset->columns), true);
 
-        return $this->catalog->open($dataset, \is_string($run) ? $run : null, $this->effectiveWindowSeconds);
+        return $this->catalog->open(
+            $dataset,
+            \is_string($run) ? $run : null,
+            $this->effectiveWindowSeconds,
+            $arguments,
+        );
+    }
+
+    /**
+     * The named arguments a `read()` may carry into this dataset's route.
+     *
+     * Checked against what the dataset declares rather than forwarded. The
+     * aiwatcher API rejects unknown query parameters, so an undeclared one
+     * would come back as a 400 about the whole request with nothing pointing
+     * at the word that caused it — and a *misspelled value* would come back as
+     * an empty result, which reads as "no matches" rather than as a typo.
+     *
+     * @param  array<string, array{value: string, column: int}> $named
+     * @return array<string, string>
+     */
+    private function readArguments(Dataset $dataset, array $named, int $column): array
+    {
+        $arguments = [];
+
+        foreach ($named as $key => $entry) {
+            $parameter = $dataset->parameters[$key] ?? null;
+
+            if ($parameter === null) {
+                throw new ParseError($dataset->explainUnknownParameter($key), $entry['column']);
+            }
+
+            if (!$parameter->accepts($entry['value'])) {
+                throw new ParseError(
+                    \sprintf(
+                        '%s: takes one of %s, not "%s".',
+                        $key,
+                        \implode(', ', \array_map(
+                            static fn(string $value): string => "'" . $value . "'",
+                            $parameter->values,
+                        )),
+                        $entry['value'],
+                    ),
+                    $entry['column'],
+                );
+            }
+
+            $arguments[$key] = $entry['value'];
+        }
+
+        foreach ($dataset->parameters as $key => $parameter) {
+            if ($parameter->required && ($arguments[$key] ?? '') === '') {
+                throw new ParseError(
+                    \sprintf(
+                        'The "%s" dataset needs %s: — %s Write read(%s, %s: \'…\').',
+                        $dataset->name,
+                        $key,
+                        $parameter->description,
+                        $dataset->name,
+                        $key,
+                    ),
+                    $column,
+                );
+            }
+        }
+
+        return $arguments;
     }
 
     /**

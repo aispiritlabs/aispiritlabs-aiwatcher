@@ -192,7 +192,6 @@ pub fn is_reproducible(dataset: &str) -> bool {
 }
 
 impl TrainingRun {
-
     #[must_use]
     pub fn duration_ms(&self) -> Option<f64> {
         let end = self.ended_at?;
@@ -307,7 +306,9 @@ impl StartRunRequest {
     pub fn validate(&self) -> Result<()> {
         validate_slug(&self.run_id, "a run id")?;
         if self.model.trim().is_empty() {
-            return Err(Error::Invalid("a training run needs a model name".to_owned()));
+            return Err(Error::Invalid(
+                "a training run needs a model name".to_owned(),
+            ));
         }
         if self.dataset.trim().is_empty() {
             return Err(Error::Invalid(
