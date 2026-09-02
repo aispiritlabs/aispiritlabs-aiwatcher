@@ -62,6 +62,46 @@ final class HubDatasetTest extends TestCase
                     ],
                 ],
             ]],
+            '/api/v1/dataset-hubs/rows' => [[
+                'hub' => 'huggingface',
+                'dataset' => 'someone/floor-plans',
+                'config' => 'default',
+                'split' => 'train',
+                'columns' => [
+                    ['name' => 'image', 'kind' => 'Image', 'dtype' => ''],
+                    ['name' => 'image_content', 'kind' => 'Value', 'dtype' => 'binary'],
+                    ['name' => 'indices', 'kind' => 'Value', 'dtype' => 'string'],
+                ],
+                'rows' => [
+                    [
+                        'row_index' => 0,
+                        'row' => [
+                            'image' => [
+                                'src' => 'https://datasets-server.huggingface.co/a.jpg',
+                                'width' => 1080,
+                                'height' => 1537,
+                            ],
+                            // A column the hub sent as bytes: the API swapped
+                            // the base64 for an address it can resolve.
+                            'image_content' => '/api/v1/dataset-hubs/image?dataset=someone%2Ffloor-plans&config=default&split=train&row=0&column=image_content',
+                            'indices' => 'house-a',
+                        ],
+                    ],
+                    [
+                        'row_index' => 1,
+                        'row' => [
+                            'image' => [
+                                'src' => 'https://datasets-server.huggingface.co/b.jpg',
+                                'width' => 900,
+                                'height' => 1200,
+                            ],
+                            'image_content' => '/api/v1/dataset-hubs/image?dataset=someone%2Ffloor-plans&config=default&split=train&row=1&column=image_content',
+                            'indices' => 'house-a',
+                        ],
+                        'omitted' => ['json'],
+                    ],
+                ],
+            ]],
             '/api/v1/annotation-images' => [[
                 'images' => [
                     [
@@ -92,7 +132,7 @@ final class HubDatasetTest extends TestCase
     public function test_a_hub_search_comes_back_as_flat_rows(): void
     {
         $api = $this->api();
-        $rows = $this->rows("data_frame()->read(hub_datasets, search: 'floor plan')->fetch()", $api);
+        $rows = $this->rows("data_frame()->read(hub_datasets, q: 'floor plan')->fetch()", $api);
 
         self::assertCount(2, $rows);
         self::assertSame('someone/curated-corpus', $rows[0]['id']);
@@ -106,10 +146,86 @@ final class HubDatasetTest extends TestCase
     public function test_the_search_reaches_the_route_rather_than_filtering_afterwards(): void
     {
         $api = $this->api();
-        $this->rows("data_frame()->read(hub_datasets, search: 'floor plan', hub: 'kaggle')->fetch()", $api);
+        $this->rows("data_frame()->read(hub_datasets, q: 'floor plan', hub: 'kaggle')->fetch()", $api);
 
-        self::assertStringContainsString('search=floor+plan', $api->requested[0]);
+        // `q`, which is how this route spells it — the annotation routes spell
+        // theirs `search`, and a parameter declared under the wrong one reaches
+        // aiwatcher as a 400 naming a word nobody wrote. FakeApi answers on the
+        // path alone, so this assertion is the only thing that sees it.
+        self::assertStringContainsString('q=floor+plan', $api->requested[0]);
         self::assertStringContainsString('hub=kaggle', $api->requested[0]);
+    }
+
+    public function test_the_rows_dataset_hands_over_the_corpus_own_columns(): void
+    {
+        $api = $this->api();
+        $rows = $this->rows("data_frame()->read(hub_rows, dataset: 'someone/floor-plans')->fetch()", $api);
+
+        self::assertCount(2, $rows);
+        self::assertSame(0, $rows[0]['row_index']);
+        // Nothing was flattened or renamed on the way through: the corpus's
+        // own column names are what a script writes against.
+        self::assertSame(['image', 'image_content', 'indices'], \array_keys($rows[0]['row']));
+        self::assertStringContainsString('dataset=someone%2Ffloor-plans', $api->requested[0]);
+    }
+
+    /// The mapping a query does, rather than one this service did for it.
+    public function test_a_query_names_the_columns_an_import_reads(): void
+    {
+        $rows = $this->rows(
+            "data_frame()->read(hub_rows, dataset: 'someone/floor-plans')"
+            . "->withEntry('uri', array_get(ref('row'), 'image.src'))"
+            . "->withEntry('width', array_get(ref('row'), 'image.width'))"
+            . "->withEntry('height', array_get(ref('row'), 'image.height'))"
+            . "->withEntry('group_id', array_get(ref('row'), 'indices'))"
+            . "->select(ref('uri'), ref('width'), ref('height'), ref('group_id'))"
+            . '->fetch()',
+            $this->api(),
+        );
+
+        self::assertSame('https://datasets-server.huggingface.co/a.jpg', $rows[0]['uri']);
+        self::assertSame(1080, $rows[0]['width']);
+        self::assertSame(1537, $rows[0]['height']);
+        // Two renderings of one building share a family, which is the whole
+        // reason this is written here and not decided by a route.
+        self::assertSame('house-a', $rows[0]['group_id']);
+        self::assertSame('house-a', $rows[1]['group_id']);
+    }
+
+    /// A picture the hub keeps as bytes: the row carries an address instead,
+    /// and the query points `uri` at it exactly the same way.
+    public function test_a_column_sent_as_bytes_is_addressable_from_a_query(): void
+    {
+        $api = $this->api();
+        $rows = $this->rows(
+            "data_frame()->read(hub_rows, dataset: 'someone/floor-plans', address: 'image_content')"
+            . "->withEntry('uri', array_get(ref('row'), 'image_content'))"
+            . "->select(ref('uri'))"
+            . '->fetch()',
+            $api,
+        );
+
+        // The column the query named is the one the API was asked to address.
+        self::assertStringContainsString('address=image_content', $api->requested[0]);
+        self::assertStringStartsWith('/api/v1/dataset-hubs/image?', $rows[0]['uri']);
+        self::assertStringContainsString('column=image_content', $rows[0]['uri']);
+    }
+
+    /// What a query is written against, readable as rows of its own. The
+    /// picking still happens in whoever writes the read() — this is the list
+    /// they pick from.
+    public function test_the_columns_a_corpus_declares_are_readable_as_rows(): void
+    {
+        $rows = $this->rows("data_frame()->read(hub_columns, dataset: 'someone/floor-plans')->fetch()", $this->api());
+
+        self::assertSame(
+            [
+                ['name' => 'image', 'kind' => 'Image', 'dtype' => ''],
+                ['name' => 'image_content', 'kind' => 'Value', 'dtype' => 'binary'],
+                ['name' => 'indices', 'kind' => 'Value', 'dtype' => 'string'],
+            ],
+            $rows,
+        );
     }
 
     public function test_an_argument_the_dataset_never_declared_is_a_parse_error(): void

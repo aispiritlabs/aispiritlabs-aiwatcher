@@ -1308,6 +1308,26 @@ export const GeometryKind = {
 export type GeometryKind = typeof GeometryKind[keyof typeof GeometryKind];
 
 /**
+ * One column a hub dataset declares, in the hub's own words.
+ *
+ * Carried verbatim and not interpreted. aiwatcher does not know which column
+ * of somebody else's corpus is the picture, what the caption is called, or
+ * whether `indices` is an id or a label — and a route that decided would be
+ * deciding it for every corpus. This is what a script is written against.
+ */
+export type HubColumn = {
+    /**
+     * The dtype a `Value` carries: `string`, `binary`, `int32`, …
+     */
+    dtype?: string;
+    /**
+     * The hub's type tag: `Image`, `Value`, `Sequence`, and so on.
+     */
+    kind: string;
+    name: string;
+};
+
+/**
  * One dataset a hub says it has.
  *
  * Every field here is the hub's, not aiwatcher's, with two exceptions:
@@ -1372,6 +1392,59 @@ export const HubKind = { KAGGLE: 'kaggle', HUGGINGFACE: 'huggingface' } as const
  * Which mirror a row came from.
  */
 export type HubKind = typeof HubKind[keyof typeof HubKind];
+
+/**
+ * One row of a hub dataset, as the hub sent it.
+ */
+export type HubRow = {
+    /**
+     * Columns left out, and why they would have been.
+     *
+     * Named, because a column that is simply absent reads as a column the
+     * corpus does not have.
+     */
+    omitted?: Array<string>;
+    /**
+     * Every column, under the corpus's own name for it.
+     *
+     * Two substitutions, and both are about size rather than meaning: a cell
+     * the hub sent as bytes becomes a path back into this process that
+     * resolves them (see [`Hubs::cell`]), because a hundred rows of base64 is
+     * a result heavier than the pictures it describes; and a cell too large
+     * to carry is left out and named in [`omitted`](Self::omitted).
+     */
+    row: {
+        [key: string]: unknown;
+    };
+    /**
+     * Where it sat in the split. The only name a row has that the corpus did
+     * not choose, and the one a family key is usually built from.
+     */
+    row_index: number;
+};
+
+/**
+ * One page of a hub dataset's rows.
+ */
+export type HubRowsPage = {
+    /**
+     * What the corpus declares it holds. A script is written from this.
+     */
+    columns: Array<HubColumn>;
+    /**
+     * Resolved, never echoed: what was actually read, which is what makes the
+     * same call repeatable after a dataset gains a second split.
+     */
+    config: string;
+    dataset: string;
+    hub: HubKind;
+    rows: Array<HubRow>;
+    split: string;
+    /**
+     * The split's own count, when the hub reports one.
+     */
+    total_rows?: number | null;
+};
 
 /**
  * A page of results, and what each hub had to say about answering.
@@ -1556,6 +1629,15 @@ export type ImportReport = {
      * Distinct [`ImportRow::group_id`] values across the batch.
      */
     families: number;
+    /**
+     * Rows whose bytes were downloaded from a hub and stored here.
+     *
+     * Set by the caller that did the downloading, not by the import: this
+     * module writes an object store and reaches nothing. Zero for a batch
+     * whose pipeline had already stored its own bytes, which is every batch
+     * that carries an `image_id`.
+     */
+    fetched?: number;
     outcomes: Array<RowOutcome>;
     project: string;
     rejected: number;
@@ -4263,6 +4345,100 @@ export type ListHubsResponses = {
 };
 
 export type ListHubsResponse = ListHubsResponses[keyof ListHubsResponses];
+
+export type GetHubImageData = {
+    body?: never;
+    path?: never;
+    query: {
+        dataset: string;
+        hub?: HubKind;
+        config: string;
+        split: string;
+        /**
+         * Which row of the split, counting from zero.
+         */
+        row: number;
+        /**
+         * Which column of it.
+         */
+        column: string;
+    };
+    url: '/api/v1/dataset-hubs/image';
+};
+
+export type GetHubImageErrors = {
+    501: ErrorBody;
+    /**
+     * The hub refused, shortened the cell, or it is not a picture
+     */
+    502: ErrorBody;
+};
+
+export type GetHubImageError = GetHubImageErrors[keyof GetHubImageErrors];
+
+export type GetHubImageResponses = {
+    /**
+     * The image bytes
+     */
+    200: unknown;
+};
+
+export type ListHubRowsData = {
+    body?: never;
+    path?: never;
+    query: {
+        /**
+         * `owner/name`, exactly as a search result addresses it.
+         */
+        dataset: string;
+        /**
+         * Which hub holds it. Only Hugging Face serves rows; see [`Hubs::images`].
+         */
+        hub?: HubKind;
+        /**
+         * The dataset's configuration and split. Both are discovered when absent,
+         * which is the common case — a corpus published as one `train` split has
+         * names nobody should have to look up in order to see it.
+         */
+        config?: string;
+        split?: string;
+        offset?: number;
+        limit?: number;
+        /**
+         * Columns to hand over as an address rather than as a value,
+         * comma-separated.
+         *
+         * This is where "which column is bytes" is decided, and the caller
+         * decides it. A hub declares a column `binary` and that is the *hub's*
+         * word for a byte string; whether those bytes are a picture, a PDF or an
+         * OCR dump is a question about the corpus, and answering it here would be
+         * answering it for every corpus. A script that names nothing gets every
+         * column as it came.
+         *
+         * What the substitution is for is size, not meaning: a column of base64
+         * pictures is megabytes per page, and an address is resolved by
+         * [`Hubs::cell`] only when somebody actually wants the bytes.
+         */
+        address?: string;
+    };
+    url: '/api/v1/dataset-hubs/rows';
+};
+
+export type ListHubRowsErrors = {
+    501: ErrorBody;
+    /**
+     * The hub refused, or does not serve rows
+     */
+    502: ErrorBody;
+};
+
+export type ListHubRowsError = ListHubRowsErrors[keyof ListHubRowsErrors];
+
+export type ListHubRowsResponses = {
+    200: HubRowsPage;
+};
+
+export type ListHubRowsResponse = ListHubRowsResponses[keyof ListHubRowsResponses];
 
 export type SearchHubsData = {
     body?: never;

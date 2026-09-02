@@ -35,6 +35,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::ToSchema;
 
+use crate::integrations::pixels;
 use crate::license::SourceUsage;
 use crate::sources::DatasetSource;
 
@@ -44,6 +45,28 @@ use crate::sources::DatasetSource;
 /// the other one feel broken — [`Hubs::search`] reports the timeout as that
 /// hub's status and returns the results it did get.
 const SEARCH_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// How long a hub gets to hand over one image.
+///
+/// Longer than [`SEARCH_TIMEOUT`], and for the opposite reason: a search is an
+/// interactive control that must feel fast, while this runs inside an import
+/// somebody has already decided to wait for. A megabyte over a slow link is
+/// normal here and is not a hub that is down.
+const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The most images one call may list.
+///
+/// Hugging Face's own rows endpoint caps a page at 100.
+const MAX_IMAGES: usize = 100;
+
+/// The most one carried column may weigh, serialised.
+///
+/// A row is handed over whole so a script can reach any of it, and one column
+/// is occasionally a document: `pixparse/idl-wds` publishes a `json` column
+/// holding every word box on the page. Carrying that for a hundred rows would
+/// make a preview heavier than the pictures it is previewing, so an oversized
+/// column is named instead of sent.
+const MAX_COLUMN_BYTES: usize = 4096;
 
 /// The most rows one hub may contribute.
 ///
@@ -242,6 +265,136 @@ impl HubConfig {
     }
 }
 
+/// What to list inside one hub dataset.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, ToSchema, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct HubRowsQuery {
+    /// `owner/name`, exactly as a search result addresses it.
+    pub dataset: String,
+    /// Which hub holds it. Only Hugging Face serves rows; see [`Hubs::images`].
+    #[serde(default)]
+    pub hub: Option<HubKind>,
+    /// The dataset's configuration and split. Both are discovered when absent,
+    /// which is the common case — a corpus published as one `train` split has
+    /// names nobody should have to look up in order to see it.
+    #[serde(default)]
+    pub config: Option<String>,
+    #[serde(default)]
+    pub split: Option<String>,
+    #[serde(default)]
+    pub offset: Option<u64>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+    /// Columns to hand over as an address rather than as a value,
+    /// comma-separated.
+    ///
+    /// This is where "which column is bytes" is decided, and the caller
+    /// decides it. A hub declares a column `binary` and that is the *hub's*
+    /// word for a byte string; whether those bytes are a picture, a PDF or an
+    /// OCR dump is a question about the corpus, and answering it here would be
+    /// answering it for every corpus. A script that names nothing gets every
+    /// column as it came.
+    ///
+    /// What the substitution is for is size, not meaning: a column of base64
+    /// pictures is megabytes per page, and an address is resolved by
+    /// [`Hubs::cell`] only when somebody actually wants the bytes.
+    #[serde(default)]
+    pub address: Option<String>,
+}
+
+impl HubRowsQuery {
+    fn limit(&self) -> usize {
+        self.limit.unwrap_or(25).clamp(1, MAX_IMAGES)
+    }
+
+    /// The columns the caller asked to have as addresses.
+    fn addressed(&self) -> BTreeSet<&str> {
+        self.address
+            .as_deref()
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .collect()
+    }
+}
+
+/// One cell of one row, as an address rather than as bytes.
+///
+/// What a row carries when the hub has no URL for its picture — a `binary`
+/// column is bytes in the response and nothing else. Small enough to sit in a
+/// query result, resolvable by [`Hubs::cell`], and stable in a way a signed
+/// asset URL is not.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, ToSchema, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct HubCellQuery {
+    pub dataset: String,
+    #[serde(default)]
+    pub hub: Option<HubKind>,
+    pub config: String,
+    pub split: String,
+    /// Which row of the split, counting from zero.
+    pub row: u64,
+    /// Which column of it.
+    pub column: String,
+}
+
+/// One column a hub dataset declares, in the hub's own words.
+///
+/// Carried verbatim and not interpreted. aiwatcher does not know which column
+/// of somebody else's corpus is the picture, what the caption is called, or
+/// whether `indices` is an id or a label — and a route that decided would be
+/// deciding it for every corpus. This is what a script is written against.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, ToSchema)]
+pub struct HubColumn {
+    pub name: String,
+    /// The hub's type tag: `Image`, `Value`, `Sequence`, and so on.
+    pub kind: String,
+    /// The dtype a `Value` carries: `string`, `binary`, `int32`, …
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub dtype: String,
+}
+
+/// One row of a hub dataset, as the hub sent it.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, ToSchema)]
+pub struct HubRow {
+    /// Where it sat in the split. The only name a row has that the corpus did
+    /// not choose, and the one a family key is usually built from.
+    pub row_index: u64,
+    /// Every column, under the corpus's own name for it.
+    ///
+    /// Two substitutions, and both are about size rather than meaning: a cell
+    /// the hub sent as bytes becomes a path back into this process that
+    /// resolves them (see [`Hubs::cell`]), because a hundred rows of base64 is
+    /// a result heavier than the pictures it describes; and a cell too large
+    /// to carry is left out and named in [`omitted`](Self::omitted).
+    #[schema(value_type = Object)]
+    pub row: BTreeMap<String, Value>,
+    /// Columns left out, and why they would have been.
+    ///
+    /// Named, because a column that is simply absent reads as a column the
+    /// corpus does not have.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub omitted: Vec<String>,
+}
+
+/// One page of a hub dataset's rows.
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
+pub struct HubRowsPage {
+    pub hub: HubKind,
+    pub dataset: String,
+    /// Resolved, never echoed: what was actually read, which is what makes the
+    /// same call repeatable after a dataset gains a second split.
+    pub config: String,
+    pub split: String,
+    /// What the corpus declares it holds. A script is written from this.
+    pub columns: Vec<HubColumn>,
+    pub rows: Vec<HubRow>,
+    /// The split's own count, when the hub reports one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_rows: Option<u64>,
+}
+
 /// The search surface. Holds one HTTP client and the curated table.
 pub struct Hubs {
     http: reqwest::Client,
@@ -408,6 +561,337 @@ impl Hubs {
             .collect::<Vec<_>>())
     }
 
+    /// The rows inside one hub dataset, as the hub sent them.
+    ///
+    /// A search answers "which corpora exist"; this answers "what is in this
+    /// one". Nothing here decides which column is a picture, what a caption is
+    /// called, or what a family key should be built from — those are questions
+    /// about somebody else's corpus, and a route that answered them would be
+    /// answering them for every corpus. It reports the columns the dataset
+    /// declares and hands over the rows; the script does the rest.
+    ///
+    /// Two substitutions, both about size and neither about meaning. A cell
+    /// the hub sent as bytes becomes an address [`Self::cell`] resolves, so a
+    /// hundred rows of base64 do not travel through the query service and the
+    /// browser to be looked at once. A cell too large to carry, or one the hub
+    /// itself shortened, is left out and named.
+    ///
+    /// Hugging Face only. Kaggle publishes archives rather than rows: seeing
+    /// inside one means downloading and unpacking it, which is a different
+    /// operation with a different cost, and pretending otherwise here would
+    /// mean a route that silently takes minutes on one hub and milliseconds on
+    /// the other.
+    ///
+    /// # Errors
+    /// When the hub is not configured, does not serve rows, or did not answer.
+    pub async fn rows(&self, query: &HubRowsQuery) -> Result<HubRowsPage, String> {
+        if query.hub == Some(HubKind::Kaggle) {
+            return Err(
+                "Kaggle serves archives rather than rows; open the dataset and import \
+                        the files, or search Hugging Face for a mirror"
+                    .to_owned(),
+            );
+        }
+        if !self.config.huggingface {
+            return Err(format!(
+                "Hugging Face is not configured; set {}",
+                HubKind::HuggingFace.variable()
+            ));
+        }
+        let dataset = query.dataset.trim();
+        if dataset.is_empty() {
+            return Err("name the dataset to read, as `owner/name`".to_owned());
+        }
+
+        let (config, split) = match (query.config.clone(), query.split.clone()) {
+            (Some(config), Some(split)) => (config, split),
+            _ => self.huggingface_split(dataset, query).await?,
+        };
+
+        let body = send(
+            self.request("https://datasets-server.huggingface.co/rows")
+                .query(&[("dataset", dataset), ("config", &config), ("split", &split)])
+                .query(&[
+                    ("offset", query.offset.unwrap_or(0).to_string()),
+                    ("length", query.limit().to_string()),
+                ]),
+            HubKind::HuggingFace,
+        )
+        .await?;
+
+        let columns: Vec<HubColumn> = body
+            .get("features")
+            .and_then(Value::as_array)
+            .map(|features| {
+                features
+                    .iter()
+                    .filter_map(|feature| {
+                        let name = feature.get("name").and_then(Value::as_str)?;
+                        let kind = feature.get("type");
+                        Some(HubColumn {
+                            name: name.to_owned(),
+                            kind: kind
+                                .and_then(|kind| kind.get("_type"))
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_owned(),
+                            dtype: kind
+                                .and_then(|kind| kind.get("dtype"))
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_owned(),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let mut page = HubRowsPage {
+            hub: HubKind::HuggingFace,
+            dataset: dataset.to_owned(),
+            config,
+            split,
+            columns,
+            total_rows: number(&body, "num_rows_total"),
+            rows: Vec::new(),
+        };
+
+        let addressed = query.addressed();
+
+        for entry in body
+            .get("rows")
+            .and_then(Value::as_array)
+            .unwrap_or(&vec![])
+        {
+            let row_index = number(entry, "row_idx").unwrap_or_default();
+            let Some(cells) = entry.get("row").and_then(Value::as_object) else {
+                continue;
+            };
+            // A cell the hub shortened is not the value. Carrying the fragment
+            // would be handing a script half a picture under a whole name.
+            let shortened: Vec<&str> = entry
+                .get("truncated_cells")
+                .and_then(Value::as_array)
+                .map(|names| names.iter().filter_map(Value::as_str).collect())
+                .unwrap_or_default();
+
+            let mut carried = BTreeMap::new();
+            let mut omitted = Vec::new();
+            for (name, value) in cells {
+                if shortened.contains(&name.as_str()) {
+                    omitted.push(name.clone());
+                    continue;
+                }
+                // A column the caller named comes back as an address. Which
+                // ones those are is not decided here — see
+                // [`HubRowsQuery::address`].
+                if addressed.contains(name.as_str()) {
+                    carried.insert(
+                        name.clone(),
+                        Value::from(cell_address(&HubCellQuery {
+                            dataset: dataset.to_owned(),
+                            hub: Some(HubKind::HuggingFace),
+                            config: page.config.clone(),
+                            split: page.split.clone(),
+                            row: row_index,
+                            column: name.clone(),
+                        })),
+                    );
+                    continue;
+                }
+                if value.to_string().len() > MAX_COLUMN_BYTES {
+                    omitted.push(name.clone());
+                    continue;
+                }
+                carried.insert(name.clone(), value.clone());
+            }
+
+            page.rows.push(HubRow {
+                row_index,
+                row: carried,
+                omitted,
+            });
+        }
+        Ok(page)
+    }
+
+    /// The bytes of one cell, whichever shape it is in.
+    ///
+    /// The other half of [`HubImage::uri`]: a row that named a cell rather
+    /// than a URL is resolved here, by re-reading that single row. One row
+    /// rather than the page it came from, deliberately — the hub shortens a
+    /// response that grows too large and names the casualties, and a request
+    /// for one cell is the one least likely to be shortened.
+    ///
+    /// # Errors
+    /// When the hub is not configured, the cell is not there, the hub
+    /// shortened it, or it is not a picture.
+    pub async fn cell(&self, query: &HubCellQuery) -> Result<(Vec<u8>, String), String> {
+        if !self.config.huggingface {
+            return Err(format!(
+                "Hugging Face is not configured; set {}",
+                HubKind::HuggingFace.variable()
+            ));
+        }
+        let body = send(
+            self.request("https://datasets-server.huggingface.co/rows")
+                .query(&[
+                    ("dataset", query.dataset.as_str()),
+                    ("config", query.config.as_str()),
+                    ("split", query.split.as_str()),
+                ])
+                .query(&[
+                    ("offset", query.row.to_string()),
+                    ("length", "1".to_owned()),
+                ]),
+            HubKind::HuggingFace,
+        )
+        .await?;
+
+        let entry = body
+            .get("rows")
+            .and_then(Value::as_array)
+            .and_then(|rows| rows.first())
+            .ok_or_else(|| format!("row {} is past the end of the split", query.row))?;
+
+        if entry
+            .get("truncated_cells")
+            .and_then(Value::as_array)
+            .is_some_and(|cells| {
+                cells
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .any(|name| name == query.column)
+            })
+        {
+            return Err(format!(
+                "the hub shortened {} on row {}; the whole picture is not available through the \
+                 rows endpoint",
+                query.column, query.row
+            ));
+        }
+
+        let cell = entry
+            .get("row")
+            .and_then(|row| row.get(&query.column))
+            .ok_or_else(|| format!("row {} has no column {}", query.row, query.column))?;
+
+        // A typed image cell is a URL to follow; the allowlist in `fetch` is
+        // what keeps that from being an address a caller chose.
+        let src = string(cell, "src");
+        if !src.is_empty() {
+            let (bytes, header) = self.fetch(&src).await?;
+            // The bytes outrank the header. Hugging Face serves its cached
+            // assets as `binary/octet-stream`, and a browser handed that for
+            // something it is about to draw is being told less than the first
+            // four bytes already say.
+            let content_type =
+                pixels::describe(&bytes).map_or(header, |found| found.content_type.to_owned());
+            return Ok((bytes, content_type));
+        }
+
+        let bytes = inline_bytes(cell)
+            .ok_or_else(|| format!("{} on row {} is not bytes", query.column, query.row))?;
+        let found = pixels::describe(&bytes).ok_or_else(|| {
+            format!(
+                "{} on row {} is not a picture this can read",
+                query.column, query.row
+            )
+        })?;
+        Ok((bytes, found.content_type.to_owned()))
+    }
+
+    /// The dataset's first configuration and split.
+    ///
+    /// Asked rather than assumed. `default`/`train` is the common shape and is
+    /// not the only one, and a wrong guess reaches the caller as somebody
+    /// else's 404 about a split they never named.
+    async fn huggingface_split(
+        &self,
+        dataset: &str,
+        query: &HubRowsQuery,
+    ) -> Result<(String, String), String> {
+        let body = send(
+            self.request("https://datasets-server.huggingface.co/splits")
+                .query(&[("dataset", dataset)]),
+            HubKind::HuggingFace,
+        )
+        .await?;
+
+        body.get("splits")
+            .and_then(Value::as_array)
+            .and_then(|splits| {
+                splits
+                    .iter()
+                    .find(|split| {
+                        query
+                            .split
+                            .as_deref()
+                            .is_none_or(|wanted| string(split, "split") == wanted)
+                            && query
+                                .config
+                                .as_deref()
+                                .is_none_or(|wanted| string(split, "config") == wanted)
+                    })
+                    .map(|split| (string(split, "config"), string(split, "split")))
+            })
+            .ok_or_else(|| format!("{dataset} has no split matching that request"))
+    }
+
+    /// The bytes behind one hub image.
+    ///
+    /// Restricted to the hosts this module hands out, and that restriction is
+    /// the point rather than a detail. The alternative — fetching whatever URI
+    /// a caller put in an import row — is a request-forgery primitive: this
+    /// process runs inside a cluster, so "download this address for me" is a
+    /// request to reach the cluster's own network on the caller's behalf. Same
+    /// rule as the rerun target, which may only come from configuration.
+    ///
+    /// # Errors
+    /// When the host is not a hub's, or the download failed.
+    pub async fn fetch(&self, uri: &str) -> Result<(Vec<u8>, String), String> {
+        if !is_hub_asset(uri) {
+            return Err(format!(
+                "{uri} is not a Hugging Face address; only a hub's own asset host may be fetched"
+            ));
+        }
+        let response = self
+            .request(uri)
+            .timeout(FETCH_TIMEOUT)
+            .send()
+            .await
+            .map_err(|error| format!("the image did not download: {error}"))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            // An expired signature is the failure worth naming: these URLs
+            // last hours, so a batch previewed yesterday and imported today
+            // fails here rather than anywhere that would explain itself.
+            return Err(format!(
+                "the image answered {status}; a hub asset URL expires within hours of being listed"
+            ));
+        }
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("application/octet-stream")
+            .to_owned();
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|error| format!("the image did not download: {error}"))?;
+        Ok((bytes.to_vec(), content_type))
+    }
+
+    fn request(&self, url: &str) -> reqwest::RequestBuilder {
+        let request = self.http.get(url);
+        match self.config.huggingface_token.as_deref() {
+            Some(token) => request.bearer_auth(token),
+            None => request,
+        }
+    }
+
     fn huggingface_row(&self, row: &Value) -> HubDataset {
         let id = string(row, "id");
         let owner = id.split('/').next().unwrap_or_default().to_owned();
@@ -569,6 +1053,97 @@ pub fn rights_provenance(row: &HubDataset) -> &'static str {
         }
         _ => "mirror: nobody has checked this licence at its source",
     }
+}
+
+/// The bytes of a cell the hub sent inline.
+///
+/// Two spellings, both base64: a plain `binary` column is the string itself,
+/// and an image feature the hub could not serve as an asset arrives as
+/// `{"bytes": …, "path": …}`.
+fn inline_bytes(cell: &Value) -> Option<Vec<u8>> {
+    use base64::Engine as _;
+
+    let encoded = cell
+        .as_str()
+        .or_else(|| cell.get("bytes").and_then(Value::as_str))?;
+    base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .ok()
+}
+
+/// A path back into this process naming one cell.
+///
+/// Built with a URL type rather than by formatting, because a dataset id, a
+/// config and a column name are all somebody else's strings: `owner/name`
+/// alone would end the query parameter and start a path segment.
+fn cell_address(query: &HubCellQuery) -> String {
+    let Ok(url) = reqwest::Url::parse_with_params(
+        "https://aiwatcher.invalid/api/v1/dataset-hubs/image",
+        [
+            ("dataset", query.dataset.as_str()),
+            ("config", query.config.as_str()),
+            ("split", query.split.as_str()),
+            ("row", &query.row.to_string()),
+            ("column", query.column.as_str()),
+        ],
+    ) else {
+        return String::new();
+    };
+    match url.query() {
+        Some(parameters) => format!("{}?{parameters}", url.path()),
+        None => url.path().to_owned(),
+    }
+}
+
+/// The cell a row's `uri` names, when it names one.
+///
+/// The other end of [`cell_address`], and the reason an import can resolve
+/// bytes without ever following an address a caller chose: what comes back is
+/// a parsed query, not a URL to fetch. `None` for anything else, which is how
+/// a row carrying an ordinary hub URL keeps taking the allowlisted path.
+#[must_use]
+pub fn parse_cell_address(uri: &str) -> Option<HubCellQuery> {
+    let (path, query) = uri.split_once('?')?;
+    if path != "/api/v1/dataset-hubs/image" {
+        return None;
+    }
+    let url = reqwest::Url::parse(&format!("https://aiwatcher.invalid/?{query}")).ok()?;
+    let mut found = HubCellQuery {
+        hub: Some(HubKind::HuggingFace),
+        ..HubCellQuery::default()
+    };
+    for (key, value) in url.query_pairs() {
+        match key.as_ref() {
+            "dataset" => found.dataset = value.into_owned(),
+            "config" => found.config = value.into_owned(),
+            "split" => found.split = value.into_owned(),
+            "column" => found.column = value.into_owned(),
+            "row" => found.row = value.parse().ok()?,
+            _ => return None,
+        }
+    }
+    if found.dataset.is_empty() || found.split.is_empty() || found.column.is_empty() {
+        return None;
+    }
+    Some(found)
+}
+
+/// Whether a URI is one this module could have produced.
+///
+/// A prefix match on the scheme *and* a suffix match on the host, split on the
+/// first `/` after the authority — never a `contains`. `https://evil.test/?x=huggingface.co`
+/// contains the host and is not it, and the same mistake in the curated-source
+/// matcher is what invented a licence claim out of a coincidence of spelling.
+fn is_hub_asset(uri: &str) -> bool {
+    let Some(rest) = uri.strip_prefix("https://") else {
+        return false;
+    };
+    let authority = rest.split('/').next().unwrap_or_default();
+    // Credentials in the authority would put anything before an `@`, and the
+    // host is what comes after it.
+    let host = authority.rsplit('@').next().unwrap_or_default();
+    let host = host.split(':').next().unwrap_or_default();
+    host == "huggingface.co" || host.ends_with(".huggingface.co")
 }
 
 async fn send(request: reqwest::RequestBuilder, hub: HubKind) -> Result<Value, String> {
@@ -818,6 +1393,122 @@ mod tests {
         assert!(page.results.is_empty());
         assert!(page.hubs.iter().all(|status| status.error.is_none()));
         assert!(page.notice.contains("unclear"));
+    }
+
+    #[tokio::test]
+    async fn kaggle_is_refused_for_rows_rather_than_asked_for_them() {
+        let error = hubs()
+            .rows(&HubRowsQuery {
+                dataset: "someone/floor-plans".to_owned(),
+                hub: Some(HubKind::Kaggle),
+                ..HubRowsQuery::default()
+            })
+            .await
+            .expect_err("Kaggle serves archives, not rows");
+
+        assert!(error.contains("archives"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn reading_rows_needs_hugging_face_configured() {
+        let error = Hubs::new(HubConfig::default())
+            .expect("the client builds")
+            .rows(&HubRowsQuery {
+                dataset: "someone/floor-plans".to_owned(),
+                ..HubRowsQuery::default()
+            })
+            .await
+            .expect_err("nothing is configured");
+
+        assert!(error.contains("AIWATCHER_HUGGINGFACE_ENABLED"), "{error}");
+    }
+
+    /// Which columns come back as addresses is the caller's list and nothing
+    /// else. A hub declaring a column `binary` says the cell is a byte string;
+    /// whether those bytes are a picture, a PDF or an OCR dump is a question
+    /// about the corpus, and this crate does not answer it.
+    #[test]
+    fn only_the_columns_a_caller_named_are_addressed() {
+        let named = HubRowsQuery {
+            address: Some(" tif , image_content ,, ".to_owned()),
+            ..HubRowsQuery::default()
+        };
+        let addressed = named.addressed();
+        assert!(addressed.contains("tif"));
+        assert!(addressed.contains("image_content"));
+        // Whitespace and empty entries are not column names.
+        assert!(!addressed.contains(""));
+        assert_eq!(addressed.len(), 2);
+
+        // A `binary` column nobody named stays a value: the default is to hand
+        // the corpus over as it came.
+        assert!(!addressed.contains("pdf"));
+        assert!(HubRowsQuery::default().addressed().is_empty());
+    }
+
+    /// A cell address has to survive the round trip through a query result and
+    /// an import row, with the punctuation a dataset id and a column name are
+    /// free to contain.
+    #[test]
+    fn a_cell_address_parses_back_into_the_cell_it_named() {
+        let query = HubCellQuery {
+            dataset: "pixparse/idl-wds".to_owned(),
+            hub: Some(HubKind::HuggingFace),
+            config: "default".to_owned(),
+            split: "train".to_owned(),
+            row: 41,
+            column: "image_content".to_owned(),
+        };
+        let address = cell_address(&query);
+        assert!(
+            address.starts_with("/api/v1/dataset-hubs/image?"),
+            "{address}"
+        );
+        // The slash in the dataset id would otherwise start a path segment.
+        assert!(address.contains("pixparse%2Fidl-wds"), "{address}");
+
+        let parsed = parse_cell_address(&address).expect("it parses back");
+        assert_eq!(parsed.dataset, query.dataset);
+        assert_eq!(parsed.row, 41);
+        assert_eq!(parsed.column, "image_content");
+
+        // Anything else is not a cell address, and must keep taking the
+        // allowlisted path rather than being resolved as one.
+        assert!(parse_cell_address("https://huggingface.co/a.png").is_none());
+        assert!(parse_cell_address("/api/v1/dataset-hubs/image?dataset=x").is_none());
+        assert!(
+            parse_cell_address("/api/v1/annotation-blobs/x?dataset=a&split=b&column=c&row=1")
+                .is_none()
+        );
+    }
+
+    /// The whole point of the allowlist: an import row is caller-supplied, and
+    /// this process sits inside a cluster.
+    #[tokio::test]
+    async fn only_a_hubs_own_host_may_be_downloaded() {
+        let hubs = hubs();
+        for uri in [
+            "http://169.254.169.254/latest/meta-data/",
+            "https://aiwatcher.internal/api/v1/events",
+            // Contains the host and is not it.
+            "https://evil.test/x?next=huggingface.co",
+            "https://nothuggingface.co/a.png",
+            // Credentials in the authority do not move the host.
+            "https://huggingface.co@evil.test/a.png",
+        ] {
+            let error = hubs.fetch(uri).await.expect_err("refused: {uri}");
+            assert!(
+                error.contains("not a Hugging Face address"),
+                "{uri}: {error}"
+            );
+        }
+
+        assert!(is_hub_asset(
+            "https://datasets-server.huggingface.co/cached-assets/x/image.jpg?Expires=1"
+        ));
+        assert!(is_hub_asset(
+            "https://huggingface.co/datasets/x/resolve/main/a.png"
+        ));
     }
 
     #[test]

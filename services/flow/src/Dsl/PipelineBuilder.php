@@ -138,7 +138,7 @@ final class PipelineBuilder
             if ($argument->name !== null) {
                 // Held rather than checked here: which arguments are legal
                 // depends on the dataset, and the dataset name may come after
-                // them. `read(search: 'plans', hub_datasets)` is odd but valid,
+                // them. `read(q: 'plans', hub_datasets)` is odd but valid,
                 // and refusing it would be refusing it for the wrong reason.
                 $named[$argument->name] = [
                     'value' => (string) $this->scalar($argument->value, $argument->name),

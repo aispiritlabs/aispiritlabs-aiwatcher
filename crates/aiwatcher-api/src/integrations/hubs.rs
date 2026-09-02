@@ -13,10 +13,14 @@
 use std::sync::Arc;
 
 use axum::extract::{Query, State};
+use axum::http::header;
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 
-use aiwatcher_annotations::integrations::hubs::{HubQuery, HubSearchPage, HubStatus, Hubs};
+use aiwatcher_annotations::integrations::hubs::{
+    HubCellQuery, HubQuery, HubRowsPage, HubRowsQuery, HubSearchPage, HubStatus, Hubs,
+};
 use serde::Serialize;
 
 use crate::error::{ApiError, ApiResult};
@@ -29,7 +33,7 @@ use utoipa::OpenApi;
 /// adding a route and forgetting the contract is a change to one file rather
 /// than a change to two files that has to be noticed in the second.
 #[derive(OpenApi)]
-#[openapi(paths(list_hubs, search_hubs,))]
+#[openapi(paths(list_hubs, search_hubs, list_hub_rows, get_hub_image,))]
 struct Api;
 
 /// The operations this module serves. Composed by [`crate::openapi`].
@@ -42,6 +46,78 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/dataset-hubs", get(list_hubs))
         .route("/api/v1/dataset-hubs/search", get(search_hubs))
+        .route("/api/v1/dataset-hubs/rows", get(list_hub_rows))
+        .route("/api/v1/dataset-hubs/image", get(get_hub_image))
+}
+
+/// The rows inside one hub dataset.
+///
+/// The other half of discovery, and a different question from the search: that
+/// one answers "which corpora exist", this one "what is in this one". An
+/// import built from a search result alone registers a single row pointing at
+/// a web page — the corpus is the *rows*, and until this route existed there
+/// was no way for a pipeline to read them.
+///
+/// It reports the columns the corpus declares and hands the rows over as they
+/// came. Which of them is a picture, what a caption is called and what a
+/// family key is built from are decided in the script, because they are
+/// questions about that corpus rather than about this one.
+///
+/// A hub that cannot answer is a 502 carrying its sentence rather than an
+/// empty list, for the same reason the search route's 501 is not one: "no
+/// rows" is a claim about the corpus, and this is a claim about the request.
+#[utoipa::path(
+    get,
+    path = "/api/v1/dataset-hubs/rows",
+    params(HubRowsQuery),
+    responses(
+        (status = 200, body = HubRowsPage),
+        (status = 502, body = crate::error::ErrorBody, description = "The hub refused, or does not serve rows"),
+        (status = 501, body = crate::error::ErrorBody),
+    ),
+    tag = "datasets",
+)]
+async fn list_hub_rows(
+    State(state): State<AppState>,
+    Query(query): Query<HubRowsQuery>,
+) -> ApiResult<Json<HubRowsPage>> {
+    let page = hubs(&state)?
+        .rows(&query)
+        .await
+        .map_err(ApiError::HubUnreachable)?;
+    Ok(Json(page))
+}
+
+/// The bytes of one picture inside a hub dataset.
+///
+/// Exists because a hub does not always have an address for its own pictures.
+/// A corpus that keeps them in a `binary` column hands over base64 in the row
+/// and nothing else, so the row a query returns names the *cell* and this
+/// resolves it — which is also what lets the panel draw such a picture at all,
+/// same-origin and with no expiry.
+///
+/// Not cached: it is a preview of somebody else's corpus, and the copy that is
+/// meant to last is the blob an import writes.
+#[utoipa::path(
+    get,
+    path = "/api/v1/dataset-hubs/image",
+    params(HubCellQuery),
+    responses(
+        (status = 200, description = "The image bytes", content_type = "image/*"),
+        (status = 502, body = crate::error::ErrorBody, description = "The hub refused, shortened the cell, or it is not a picture"),
+        (status = 501, body = crate::error::ErrorBody),
+    ),
+    tag = "datasets",
+)]
+async fn get_hub_image(
+    State(state): State<AppState>,
+    Query(query): Query<HubCellQuery>,
+) -> ApiResult<Response> {
+    let (bytes, content_type) = hubs(&state)?
+        .cell(&query)
+        .await
+        .map_err(ApiError::HubUnreachable)?;
+    Ok(([(header::CONTENT_TYPE, content_type)], bytes).into_response())
 }
 
 /// What this instance can search, before anybody types a query.

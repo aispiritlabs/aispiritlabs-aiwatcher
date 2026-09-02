@@ -168,6 +168,14 @@ pub struct ImportReport {
     pub rejected: usize,
     /// Distinct [`ImportRow::group_id`] values across the batch.
     pub families: usize,
+    /// Rows whose bytes were downloaded from a hub and stored here.
+    ///
+    /// Set by the caller that did the downloading, not by the import: this
+    /// module writes an object store and reaches nothing. Zero for a batch
+    /// whose pipeline had already stored its own bytes, which is every batch
+    /// that carries an `image_id`.
+    #[serde(default)]
+    pub fetched: usize,
     pub outcomes: Vec<RowOutcome>,
     /// Things that are not errors and that somebody has to read anyway.
     ///

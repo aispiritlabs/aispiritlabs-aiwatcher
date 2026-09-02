@@ -40,6 +40,14 @@ pub enum ApiError {
     )]
     HubsDisabled,
 
+    /// A configured hub answered badly, or cannot answer this question at all.
+    ///
+    /// Distinct from [`Self::HubsDisabled`] because the two send a reader to
+    /// different places: that one is an environment variable somebody has to
+    /// set, this one is a corpus, a credential or a hub having a bad morning.
+    #[error("{0}")]
+    HubUnreachable(String),
+
     #[error("this instance has no workflow runner configured (AIWATCHER_WORKFLOW_RUNNER)")]
     RunnerDisabled,
 
@@ -147,6 +155,11 @@ impl ApiError {
             // which is a fact about the world rather than about this
             // deployment's configuration.
             Self::HubsDisabled => (StatusCode::NOT_IMPLEMENTED, "hubs_disabled"),
+            // The hub is configured and did not deliver. A 502 rather than an
+            // empty page: "this corpus has no images" and "Hugging Face
+            // answered 404" are different answers, and only one of them is
+            // about the corpus.
+            Self::HubUnreachable(_) => (StatusCode::BAD_GATEWAY, "hub_unreachable"),
             // Same reasoning, and the message names the variable to set. A
             // null runner that answered 202 would be worse than this: it would
             // report success for a rerun that never happened.

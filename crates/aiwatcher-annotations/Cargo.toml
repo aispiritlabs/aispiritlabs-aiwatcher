@@ -9,6 +9,9 @@ repository.workspace = true
 
 [dependencies]
 aiwatcher-core.workspace = true
+# A hub returns a binary column as base64 in the row itself, so decoding one is
+# how a picture stored as bytes rather than as a URL is read at all.
+base64.workspace = true
 hex.workspace = true
 # The hub search reaches Kaggle and Hugging Face. It is an adapter living
 # beside the curated table it reconciles against — the same shape as the

@@ -189,8 +189,13 @@ final readonly class Catalog
                 'files' => 'The search does not list files. Open the dataset at its "url".',
             ],
             parameters: [
-                'search' => new Parameter(
-                    name: 'search',
+                // `q`, not `search`: a parameter's name is what goes on the
+                // wire, and this route spells it `q` where the annotation
+                // routes spell theirs `search`. Declared wrongly it is a 400
+                // from aiwatcher rather than a parse error here, which is the
+                // failure this class exists to prevent.
+                'q' => new Parameter(
+                    name: 'q',
                     required: false,
                     description: 'Free text. Omitted asks each hub what it considers popular, which is a worse question than any real one.',
                 ),
@@ -204,6 +209,110 @@ final readonly class Catalog
                     name: 'limit',
                     required: false,
                     description: 'Rows per hub, capped at 50 by the API.',
+                ),
+            ],
+        );
+
+        $hubRows = new Dataset(
+            name: 'hub_rows',
+            path: '/api/v1/dataset-hubs/rows',
+            rowsPath: 'rows',
+            // Hugging Face's rows endpoint pages by offset and reports no
+            // cursor, and a corpus is read in one bite here rather than
+            // walked: a batch somebody is about to import is a batch somebody
+            // is about to look at.
+            cursorParam: 'unused',
+            grain: 'one row of one hub dataset, as the hub sent it',
+            description: 'The contents of one Hugging Face dataset. The search says which corpora exist; this says what is in one — with the corpus\'s own columns under the corpus\'s own names. Which column is the picture, what the caption is called and what a family key is built from are decided here, in the query, because they are questions about that corpus.',
+            columns: [
+                // Where the row sat in the split: the only name it has that
+                // the corpus did not choose, and usually what a per-picture
+                // family key is built from.
+                'row_index' => 'int',
+                // Every column of the corpus, under its own name. Reached with
+                // array_get, which takes a dot path.
+                'row' => 'array',
+                // Columns the API left out, by name: one the hub itself
+                // shortened, or one too large to carry.
+                'omitted' => 'list<string>',
+            ],
+            hints: [
+                'columns' => 'The corpus\'s own columns are inside "row", under its own names, and are not listed here because they belong to the dataset being read rather than to this catalog. Reach one with array_get(ref(\'row\'), \'<name>\'), which takes a dot path into a structure. A column holding bytes is named in address: on the read() and comes back as an address this API resolves.',
+                'uri' => 'Whatever you name it. The import reads "uri", "width", "height" and "group_id" from the columns this query produces.',
+                'license' => 'Not here. A licence is a property of the corpus, which is the hub_datasets row.',
+            ],
+            parameters: [
+                'dataset' => new Parameter(
+                    name: 'dataset',
+                    required: true,
+                    description: 'owner/name, exactly as a hub_datasets row addresses it.',
+                ),
+                'hub' => new Parameter(
+                    name: 'hub',
+                    required: false,
+                    description: 'Only Hugging Face serves rows; Kaggle publishes archives and is refused.',
+                    values: ['kaggle', 'huggingface'],
+                ),
+                'config' => new Parameter(
+                    name: 'config',
+                    required: false,
+                    description: 'The dataset configuration. Discovered when absent.',
+                ),
+                'split' => new Parameter(
+                    name: 'split',
+                    required: false,
+                    description: 'The split to read. Discovered when absent.',
+                ),
+                'offset' => new Parameter(name: 'offset', required: false, description: 'Where in the split to start.'),
+                'limit' => new Parameter(
+                    name: 'limit',
+                    required: false,
+                    description: 'How many rows, capped at 100 by the API.',
+                ),
+                'address' => new Parameter(
+                    name: 'address',
+                    required: false,
+                    description: 'Columns to receive as an address instead of a value, comma-separated. This is where "which column holds bytes" is decided, and it is decided here: a hub calling a column binary says it is a byte string, not that it is a picture. Without it every column comes as it came — and a column of base64 pictures is then dropped for its size and named in "omitted".',
+                ),
+            ],
+        );
+
+        $hubColumns = new Dataset(
+            name: 'hub_columns',
+            // The same route, read for its envelope instead of its rows: what
+            // the corpus declares it holds, which is the thing a hub_rows
+            // query has to be written against.
+            path: '/api/v1/dataset-hubs/rows',
+            rowsPath: 'columns',
+            cursorParam: 'unused',
+            grain: 'one row per column a hub dataset declares',
+            description: 'What a Hugging Face dataset says its columns are, in its own words. Read this first when writing a hub_rows query: it is where the column names come from, and it is the hub\'s answer rather than aiwatcher\'s.',
+            columns: [
+                'name' => 'string',
+                // The hub's own type tag, verbatim. Empty where the hub
+                // describes a column with a nested structure instead of a tag.
+                'kind' => 'string',
+                'dtype' => 'string',
+            ],
+            hints: [
+                'image' => 'There is no such column here either. "kind" and "dtype" are the hub\'s words — Image, Value, binary, string — and which of them holds a picture is a judgement about the corpus.',
+                'type' => 'The columns are "kind" (the hub\'s type tag) and "dtype" (what a Value carries).',
+            ],
+            parameters: [
+                'dataset' => new Parameter(
+                    name: 'dataset',
+                    required: true,
+                    description: 'owner/name, exactly as a hub_datasets row addresses it.',
+                ),
+                'config' => new Parameter(
+                    name: 'config',
+                    required: false,
+                    description: 'The dataset configuration. Discovered when absent.',
+                ),
+                'split' => new Parameter(
+                    name: 'split',
+                    required: false,
+                    description: 'The split to read. Discovered when absent.',
                 ),
             ],
         );
@@ -259,6 +368,8 @@ final readonly class Catalog
             'spans' => $spans,
             'events' => $events,
             'hub_datasets' => $hubDatasets,
+            'hub_rows' => $hubRows,
+            'hub_columns' => $hubColumns,
             'annotation_images' => $annotationImages,
         ];
     }

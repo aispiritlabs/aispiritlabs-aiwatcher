@@ -287,7 +287,12 @@ flow-install:
 
 # The query service on :8081, against the aiwatcher API on :8080.
 flow-serve port="8081":
+    # `php -S` handles one request at a time unless told otherwise, and the
+    # panel polls this service's health while a query is running — so the
+    # single-worker default deadlocks the two against each other and the Query
+    # tab reports the service as down mid-query.
     cd {{flow}} && AIWATCHER_URL="${AIWATCHER_URL:-http://127.0.0.1:8080}" \
+      PHP_CLI_SERVER_WORKERS="${PHP_CLI_SERVER_WORKERS:-4}" \
       php -S 127.0.0.1:{{port}} -t public
 
 flow-test:
