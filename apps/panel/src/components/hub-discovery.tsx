@@ -6,16 +6,18 @@ import {
   ExternalLink,
   Heart,
   Play,
+  Image as ImageIcon,
   Search,
   ShieldCheck,
   Sparkles,
+  Table2,
 } from 'lucide-react';
 
 import { importImages, listHubs, publishDataset, searchHubs } from '@/api/generated/sdk.gen';
 import type { HubDataset, HubKind, UsageRights } from '@/api/generated/types.gen';
 import { FlowResultView } from '@/components/flow-preview';
 import { Badge, Button, Card, EmptyState, Spinner } from '@/components/ui/primitives';
-import { runQuery, simulateQuery } from '@/lib/flow';
+import { runQuery, simulateQuery, type FlowResult } from '@/lib/flow';
 import { cn } from '@/lib/utils';
 
 /**
@@ -109,10 +111,23 @@ export function HubDiscovery({
     return () => clearTimeout(timer);
   }, [draft]);
 
-  const pipeline = React.useMemo(
+  // The pipeline is generated from the selection and then editable, and the
+  // two have to stay distinguishable. Every hub lays its files out differently
+  // — a search result names a *dataset*, so the generated mapping can only
+  // point `uri` at the dataset's page, and turning that into one row per image
+  // is a query somebody writes. `edited` holds what they wrote; null means
+  // "still following the selection".
+  const generated = React.useMemo(
     () => discoveryPipeline(query, hub, selected),
     [query, hub, selected],
   );
+  const [edited, setEdited] = React.useState<string | null>(null);
+  const [view, setView] = React.useState<'rows' | 'images'>('rows');
+  const pipeline = edited ?? generated;
+  // An edit made against one dataset, still on screen after picking another.
+  // Regenerating silently would discard typed work; following the selection
+  // silently would import from the wrong place. So it says so and offers both.
+  const drifted = edited !== null && edited !== generated;
 
   const simulate = useMutation({
     mutationFn: () => simulateQuery(pipeline, windowSeconds || undefined),
@@ -269,8 +284,10 @@ export function HubDiscovery({
             <div>
               <h2 className="text-sm font-semibold">Import into an annotation project</h2>
               <p className="mt-0.5 text-xs text-muted-foreground">
-                The Flow pipeline below produces the rows. Always dry-run first — a group key mapped
-                from a filename gives every image its own family, which turns the split back into a
+                The Flow pipeline below produces the rows, and it is editable: a search names a
+                dataset rather than its files, so what is generated is a starting point that imports
+                one row for the corpus itself. Always dry-run first — a group key mapped from a
+                filename gives every image its own family, which turns the split back into a
                 per-image one with nothing in the numbers to say so.
               </p>
             </div>
@@ -331,10 +348,33 @@ export function HubDiscovery({
             </div>
 
             <div>
-              <span className="mb-1 block text-xs text-muted-foreground">Generated Flow PHP</span>
-              <pre className="id max-h-60 overflow-auto rounded-md border border-border bg-muted/30 p-3 text-xs">
-                {pipeline}
-              </pre>
+              <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+                <span className="text-xs text-muted-foreground">
+                  Flow PHP · {edited === null ? 'generated from the selection' : 'edited by hand'}
+                </span>
+                {edited === null ? null : (
+                  <button
+                    type="button"
+                    onClick={() => setEdited(null)}
+                    className="text-xs text-primary hover:underline"
+                  >
+                    Regenerate from the selection
+                  </button>
+                )}
+              </div>
+              <textarea
+                value={pipeline}
+                onChange={(event) => setEdited(event.target.value)}
+                spellCheck={false}
+                rows={14}
+                className="id w-full resize-y rounded-md border border-border bg-muted/30 p-3 text-xs outline-none focus-visible:ring-2 focus-visible:ring-primary"
+              />
+              {drifted ? (
+                <p className="mt-1 text-xs text-warning">
+                  The search or the selected dataset has moved on since this was edited. What runs
+                  is what is written here, not what the selection would generate.
+                </p>
+              ) : null}
             </div>
 
             <div className="flex flex-wrap gap-2">
@@ -372,12 +412,113 @@ export function HubDiscovery({
         </Card>
       ) : null}
 
-      <FlowResultView
-        result={simulate.data}
-        error={simulate.error}
-        emptyTitle="No rows previewed yet"
-      />
+      {simulate.data ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant={view === 'rows' ? 'default' : 'outline'} onClick={() => setView('rows')}>
+            <Table2 className="h-3.5 w-3.5" /> Rows
+          </Button>
+          <Button
+            variant={view === 'images' ? 'default' : 'outline'}
+            onClick={() => setView('images')}
+          >
+            <ImageIcon className="h-3.5 w-3.5" /> Images
+          </Button>
+        </div>
+      ) : null}
+
+      {simulate.data && view === 'images' ? (
+        <ImageStrip result={simulate.data} />
+      ) : (
+        <FlowResultView
+          result={simulate.data}
+          error={simulate.error}
+          emptyTitle="No rows previewed yet"
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * The previewed rows as pictures.
+ *
+ * Not a gallery: `uri` is the column the import reads, so this is a direct
+ * check of the mapping. A tile that will not load is a `uri` pointing at
+ * something that is not an image, and the commonest reason is the generated
+ * pipeline itself — a hub search names a *dataset*, so `uri` starts out on the
+ * dataset's page and turning that into one row per image is the edit the
+ * textarea above exists for. Saying "not an image" is the finding; a broken
+ * image icon would be a rendering accident.
+ *
+ * The browser loads these from the hub directly. Nothing is proxied through
+ * aiwatcher and nothing is stored — an import records the URI, never bytes.
+ *
+ * A `.map` rather than a virtual list, and eager images, because a simulation
+ * is capped by the Flow service — the ceiling this grid needs is one somebody
+ * else already enforces.
+ */
+function ImageStrip({ result }: { result: FlowResult }) {
+  // Only failure is tracked. A placeholder sits *behind* every tile and the
+  // image paints over it when it arrives, so nothing has to observe a `load`
+  // event to show a picture — a state machine gated on one renders a permanent
+  // "loading…" wherever that event does not arrive, which is a lie told by the
+  // thing meant to prevent one.
+  const [failed, setFailed] = React.useState<Record<string, true>>({});
+
+  const tiles = result.rows
+    .map((row) => ({
+      uri: typeof row.uri === 'string' ? row.uri : '',
+      caption: String(row.group_id ?? ''),
+    }))
+    .filter((tile) => tile.uri !== '');
+
+  if (tiles.length === 0) {
+    return (
+      <EmptyState
+        title="No uri to show"
+        hint="The preview renders what `uri` points at, and these rows carry none."
+      />
+    );
+  }
+
+  return (
+    <Card className="overflow-hidden">
+      <div className="border-b border-border px-3 py-2 text-xs text-muted-foreground">
+        {tiles.length} of {result.rows.length} rows carry a uri
+      </div>
+      <div className="grid gap-3 p-3 [grid-template-columns:repeat(auto-fill,minmax(9rem,1fr))]">
+        {tiles.map((tile, index) => (
+          <figure key={`${tile.uri}-${index}`} className="min-w-0">
+            <div className="relative h-28 rounded-md border border-dashed border-border bg-muted/20">
+              <div className="absolute inset-0 flex items-center justify-center px-2 text-center text-[11px] text-muted-foreground">
+                {failed[tile.uri] ? 'not an image' : null}
+              </div>
+              <img
+                src={tile.uri}
+                alt=""
+                hidden={Boolean(failed[tile.uri])}
+                onError={() => setFailed((previous) => ({ ...previous, [tile.uri]: true }))}
+                className="relative h-28 w-full object-contain"
+              />
+            </div>
+            <figcaption
+              className="mt-1 truncate text-[11px] text-muted-foreground"
+              title={tile.caption || tile.uri}
+            >
+              {tile.caption || tile.uri}
+            </figcaption>
+            <a
+              href={tile.uri}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 text-[11px] text-primary hover:underline"
+            >
+              open <ExternalLink className="h-3 w-3" />
+            </a>
+          </figure>
+        ))}
+      </div>
+    </Card>
   );
 }
 
