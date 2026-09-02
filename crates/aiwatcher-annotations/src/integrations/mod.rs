@@ -12,3 +12,8 @@
 //! override.
 
 pub mod hubs;
+/// The one thing here that reaches nothing: reading a picture's size out of
+/// its own first bytes. It lives beside [`hubs`] because a hub is what hands
+/// over bytes it has said nothing about — a `binary` column is just bytes —
+/// and the registry requires a width and a height.
+pub mod pixels;

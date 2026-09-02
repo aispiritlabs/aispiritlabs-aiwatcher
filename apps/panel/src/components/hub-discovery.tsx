@@ -469,6 +469,10 @@ function ImageStrip({ result }: { result: FlowResult }) {
   const tiles = result.rows
     .map((row) => ({
       uri: typeof row.uri === 'string' ? row.uri : '',
+      // Where a person is sent, which is not always where the bytes are: a
+      // picture the hub stores in a binary column has no address of its own,
+      // and the link then points at the same route that draws it.
+      open: typeof row.hub_uri === 'string' && row.hub_uri ? row.hub_uri : '',
       caption: String(row.group_id ?? ''),
     }))
     .filter((tile) => tile.uri !== '');
@@ -509,7 +513,7 @@ function ImageStrip({ result }: { result: FlowResult }) {
               {tile.caption || tile.uri}
             </figcaption>
             <a
-              href={tile.uri}
+              href={tile.open || tile.uri}
               target="_blank"
               rel="noreferrer"
               className="inline-flex items-center gap-1 text-[11px] text-primary hover:underline"

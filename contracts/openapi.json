@@ -1514,6 +1514,98 @@
         }
       }
     },
+    "/api/v1/dataset-hubs/image": {
+      "get": {
+        "tags": [
+          "datasets"
+        ],
+        "summary": "The bytes of one picture inside a hub dataset.",
+        "description": "Exists because a hub does not always have an address for its own pictures.\nA corpus that keeps them in a `binary` column hands over base64 in the row\nand nothing else, so the row a query returns names the *cell* and this\nresolves it — which is also what lets the panel draw such a picture at all,\nsame-origin and with no expiry.\n\nNot cached: it is a preview of somebody else's corpus, and the copy that is\nmeant to last is the blob an import writes.",
+        "operationId": "get_hub_image",
+        "parameters": [
+          {
+            "name": "dataset",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "hub",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/HubKind"
+            }
+          },
+          {
+            "name": "config",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "split",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "row",
+            "in": "query",
+            "description": "Which row of the split, counting from zero.",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "column",
+            "in": "query",
+            "description": "Which column of it.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The image bytes",
+            "content": {
+              "image/*": {}
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The hub refused, shortened the cell, or it is not a picture",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/dataset-hubs/images": {
       "get": {
         "tags": [
@@ -7832,6 +7924,10 @@
             "format": "int32",
             "minimum": 0
           },
+          "hub_uri": {
+            "type": "string",
+            "description": "The hub's own address for it, when there is one.\n\nKept separate from [`uri`](Self::uri) so a link out of the panel always\npoints at something a person can open, even when the bytes have to come\nback through this process."
+          },
           "image_key": {
             "type": "string",
             "description": "`dataset/row_index`. A **per-image** family key, which is the honest\ndefault when a hub row is one unrelated picture and the wrong one the\nmoment a corpus publishes several renderings of one subject. It is a\ncolumn rather than a decision: the import pipeline writes `group_id`\nfrom it explicitly, so changing that is an edit to a query somebody can\nread. See [`crate::images::import`], which warns when every row of a\nbatch is its own family.\n\nSpelled with a slash because a group name is segmented on one and every\nsegment is `[A-Za-z0-9._-]` — see [`crate::validate_name`]. A key the\nregistry refuses is not a default, it is a batch that rejects every\nrow."
@@ -7844,12 +7940,12 @@
           },
           "uri": {
             "type": "string",
-            "description": "Where the bytes are, **for now**. On Hugging Face this is a signed\nasset URL with an expiry measured in hours, which is why an import\nstores the bytes rather than the address — see [`Hubs::fetch`]."
+            "description": "Where the bytes are.\n\nTwo shapes, and which one it is depends on what the hub gave. A column\nthe hub typed as an image comes with a signed asset URL, expiring in\nhours — which is why an import stores the bytes rather than the address\n(see [`Hubs::fetch`]). A `binary` column comes with no address at all,\nso this is a path back into aiwatcher naming the cell, which\n[`Hubs::cell`] resolves. Neither is a durable name for a picture; the\ndurable name is the content address the import writes."
           },
           "width": {
             "type": "integer",
             "format": "int32",
-            "description": "The hub's, not measured here. Both are what the registry requires and\nwhat a hub search cannot answer.",
+            "description": "What the registry requires and a hub search cannot answer.\n\nThe hub's own numbers for a column it typed as an image. For a `binary`\ncolumn the hub says nothing, so they are read out of the bytes' header\n— see [`crate::integrations::pixels`] — and a cell whose header says it\nis not a picture is skipped rather than imported as a zero.",
             "minimum": 0
           }
         }

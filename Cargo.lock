@@ -63,6 +63,7 @@ version = "0.1.0"
 dependencies = [
  "aiwatcher-core",
  "aiwatcher-prompts",
+ "base64",
  "hex",
  "reqwest",
  "serde",

@@ -229,6 +229,9 @@ final readonly class Catalog
                 // import downloads it and stores the bytes rather than keeping
                 // the address; nothing downstream should treat this as durable.
                 'uri' => 'string',
+                // The hub's own address, when it has one. Empty for a picture
+                // stored as bytes, which has no address anywhere but here.
+                'hub_uri' => 'string',
                 'width' => 'int',
                 'height' => 'int',
                 'row_index' => 'int',
@@ -241,7 +244,7 @@ final readonly class Catalog
                 'image_key' => 'string',
             ],
             hints: [
-                'image' => 'The bytes are at "uri", and it expires. An import stores them here; nothing else should hold on to it.',
+                'image' => 'The bytes are at "uri": a hub URL that expires, or a path back into aiwatcher for a picture the hub stores as bytes. Either way an import stores the bytes; nothing else should hold on to it. "hub_uri" is the page a person can open.',
                 'group_id' => 'Not a column of the hub\'s. Write it from "image_key" for one family per picture, or from something in "caption" when a corpus repeats a subject.',
                 'license' => 'Not here. A licence is a property of the corpus, which is the hub_datasets row.',
             ],

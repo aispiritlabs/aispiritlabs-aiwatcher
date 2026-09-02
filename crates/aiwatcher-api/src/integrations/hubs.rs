@@ -13,11 +13,13 @@
 use std::sync::Arc;
 
 use axum::extract::{Query, State};
+use axum::http::header;
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 
 use aiwatcher_annotations::integrations::hubs::{
-    HubImagePage, HubQuery, HubRowsQuery, HubSearchPage, HubStatus, Hubs,
+    HubCellQuery, HubImagePage, HubQuery, HubRowsQuery, HubSearchPage, HubStatus, Hubs,
 };
 use serde::Serialize;
 
@@ -31,7 +33,7 @@ use utoipa::OpenApi;
 /// adding a route and forgetting the contract is a change to one file rather
 /// than a change to two files that has to be noticed in the second.
 #[derive(OpenApi)]
-#[openapi(paths(list_hubs, search_hubs, list_hub_images,))]
+#[openapi(paths(list_hubs, search_hubs, list_hub_images, get_hub_image,))]
 struct Api;
 
 /// The operations this module serves. Composed by [`crate::openapi`].
@@ -45,6 +47,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/dataset-hubs", get(list_hubs))
         .route("/api/v1/dataset-hubs/search", get(search_hubs))
         .route("/api/v1/dataset-hubs/images", get(list_hub_images))
+        .route("/api/v1/dataset-hubs/image", get(get_hub_image))
 }
 
 /// The images inside one hub dataset.
@@ -78,6 +81,38 @@ async fn list_hub_images(
         .await
         .map_err(ApiError::HubUnreachable)?;
     Ok(Json(page))
+}
+
+/// The bytes of one picture inside a hub dataset.
+///
+/// Exists because a hub does not always have an address for its own pictures.
+/// A corpus that keeps them in a `binary` column hands over base64 in the row
+/// and nothing else, so the row a query returns names the *cell* and this
+/// resolves it — which is also what lets the panel draw such a picture at all,
+/// same-origin and with no expiry.
+///
+/// Not cached: it is a preview of somebody else's corpus, and the copy that is
+/// meant to last is the blob an import writes.
+#[utoipa::path(
+    get,
+    path = "/api/v1/dataset-hubs/image",
+    params(HubCellQuery),
+    responses(
+        (status = 200, description = "The image bytes", content_type = "image/*"),
+        (status = 502, body = crate::error::ErrorBody, description = "The hub refused, shortened the cell, or it is not a picture"),
+        (status = 501, body = crate::error::ErrorBody),
+    ),
+    tag = "datasets",
+)]
+async fn get_hub_image(
+    State(state): State<AppState>,
+    Query(query): Query<HubCellQuery>,
+) -> ApiResult<Response> {
+    let (bytes, content_type) = hubs(&state)?
+        .cell(&query)
+        .await
+        .map_err(ApiError::HubUnreachable)?;
+    Ok(([(header::CONTENT_TYPE, content_type)], bytes).into_response())
 }
 
 /// What this instance can search, before anybody types a query.

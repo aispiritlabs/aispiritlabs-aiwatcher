@@ -153,10 +153,22 @@ function Cell({ value, preview = false }: { value: unknown; preview?: boolean })
   if (value === null || value === undefined)
     return <span className="text-muted-foreground">—</span>;
   if (typeof value === 'object') return <span className="id">{JSON.stringify(value)}</span>;
-  if (preview && typeof value === 'string' && value.startsWith('https://')) {
+  if (preview && typeof value === 'string' && isDrawable(value)) {
     return <Thumbnail uri={value} />;
   }
   return <>{String(value)}</>;
+}
+
+/**
+ * Whether a cell is something the browser could draw.
+ *
+ * An absolute hub URL, or a path back into this API — which is what a row
+ * carries for a picture the hub keeps as bytes rather than as a file. Any
+ * other relative path is left alone: a cell that merely starts with a slash is
+ * not a claim about what it is.
+ */
+function isDrawable(value: string): boolean {
+  return value.startsWith('https://') || value.startsWith('/api/v1/dataset-hubs/image?');
 }
 
 /**

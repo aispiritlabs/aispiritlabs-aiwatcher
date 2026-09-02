@@ -27,6 +27,9 @@ use aiwatcher_annotations::{
     SaveRevisionRequest, SavedRevision, SourcePage, SourceUsage, Split, StoredBlob,
 };
 
+use aiwatcher_annotations::integrations::hubs::parse_cell_address;
+use aiwatcher_annotations::integrations::pixels;
+
 use crate::auth::Caller;
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
@@ -380,16 +383,35 @@ async fn hydrate(
         if row.image_id.is_some() {
             continue;
         }
-        let outcome = match hubs.fetch(&row.uri).await {
-            // A URI this instance cannot fetch is not a problem yet: it may be
-            // a perfectly good address somebody else already stored, and the
-            // registry says so in its own words if it is not.
-            Err(_) if !row.uri.starts_with("https://") => continue,
+        // Two shapes reach here and only one of them is an address. A row
+        // that names a *cell* is resolved from its parts, so nothing follows a
+        // URL a caller chose; a row that carries a hub URL goes through the
+        // allowlist. Anything else is left alone — it may be a perfectly good
+        // address somebody else already stored, and the registry says so in
+        // its own words if it is not.
+        let bytes = match parse_cell_address(&row.uri) {
+            Some(cell) => hubs.cell(&cell).await,
+            None if row.uri.starts_with("https://") => hubs.fetch(&row.uri).await,
+            None => continue,
+        };
+
+        let outcome = match bytes {
             Err(error) => Err(error),
-            Ok((bytes, content_type)) => registry
-                .put_blob(bytes, &content_type)
-                .await
-                .map_err(|error| error.to_string()),
+            Ok((bytes, content_type)) => {
+                // A hub says nothing about a binary column, so the row arrived
+                // with zeroes the registry would refuse. The bytes are here
+                // and their header knows.
+                if (row.width == 0 || row.height == 0)
+                    && let Some(found) = pixels::describe(&bytes)
+                {
+                    row.width = found.width;
+                    row.height = found.height;
+                }
+                registry
+                    .put_blob(bytes, &content_type)
+                    .await
+                    .map_err(|error| error.to_string())
+            }
         };
 
         match outcome {

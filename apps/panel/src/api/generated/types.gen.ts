@@ -1384,6 +1384,14 @@ export type HubImage = {
     column: string;
     height: number;
     /**
+     * The hub's own address for it, when there is one.
+     *
+     * Kept separate from [`uri`](Self::uri) so a link out of the panel always
+     * points at something a person can open, even when the bytes have to come
+     * back through this process.
+     */
+    hub_uri?: string;
+    /**
      * `dataset/row_index`. A **per-image** family key, which is the honest
      * default when a hub row is one unrelated picture and the wrong one the
      * moment a corpus publishes several renderings of one subject. It is a
@@ -1403,14 +1411,24 @@ export type HubImage = {
      */
     row_index: number;
     /**
-     * Where the bytes are, **for now**. On Hugging Face this is a signed
-     * asset URL with an expiry measured in hours, which is why an import
-     * stores the bytes rather than the address — see [`Hubs::fetch`].
+     * Where the bytes are.
+     *
+     * Two shapes, and which one it is depends on what the hub gave. A column
+     * the hub typed as an image comes with a signed asset URL, expiring in
+     * hours — which is why an import stores the bytes rather than the address
+     * (see [`Hubs::fetch`]). A `binary` column comes with no address at all,
+     * so this is a path back into aiwatcher naming the cell, which
+     * [`Hubs::cell`] resolves. Neither is a durable name for a picture; the
+     * durable name is the content address the import writes.
      */
     uri: string;
     /**
-     * The hub's, not measured here. Both are what the registry requires and
-     * what a hub search cannot answer.
+     * What the registry requires and a hub search cannot answer.
+     *
+     * The hub's own numbers for a column it typed as an image. For a `binary`
+     * column the hub says nothing, so they are read out of the bytes' header
+     * — see [`crate::integrations::pixels`] — and a cell whose header says it
+     * is not a picture is skipped rather than imported as a zero.
      */
     width: number;
 };
@@ -4343,6 +4361,43 @@ export type ListHubsResponses = {
 };
 
 export type ListHubsResponse = ListHubsResponses[keyof ListHubsResponses];
+
+export type GetHubImageData = {
+    body?: never;
+    path?: never;
+    query: {
+        dataset: string;
+        hub?: HubKind;
+        config: string;
+        split: string;
+        /**
+         * Which row of the split, counting from zero.
+         */
+        row: number;
+        /**
+         * Which column of it.
+         */
+        column: string;
+    };
+    url: '/api/v1/dataset-hubs/image';
+};
+
+export type GetHubImageErrors = {
+    501: ErrorBody;
+    /**
+     * The hub refused, shortened the cell, or it is not a picture
+     */
+    502: ErrorBody;
+};
+
+export type GetHubImageError = GetHubImageErrors[keyof GetHubImageErrors];
+
+export type GetHubImageResponses = {
+    /**
+     * The image bytes
+     */
+    200: unknown;
+};
 
 export type ListHubImagesData = {
     body?: never;
