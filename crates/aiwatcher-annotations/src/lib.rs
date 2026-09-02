@@ -75,8 +75,8 @@ pub use images::{
     SavedRevision, StoredBlob,
 };
 pub use integrations::hubs::{
-    HubCellQuery, HubConfig, HubDataset, HubFile, HubImage, HubImagePage, HubKind, HubQuery,
-    HubRowsQuery, HubSearchPage, HubStatus, Hubs,
+    HubCellQuery, HubColumn, HubConfig, HubDataset, HubFile, HubKind, HubQuery, HubRow,
+    HubRowsPage, HubRowsQuery, HubSearchPage, HubStatus, Hubs,
 };
 pub use license::{RightsPolicy, SourceUsage, UsageRights, check_rights};
 pub use project::{

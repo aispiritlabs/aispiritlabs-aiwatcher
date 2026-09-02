@@ -13,8 +13,14 @@ import {
   Table2,
 } from 'lucide-react';
 
-import { importImages, listHubs, publishDataset, searchHubs } from '@/api/generated/sdk.gen';
-import type { HubDataset, HubKind, UsageRights } from '@/api/generated/types.gen';
+import {
+  importImages,
+  listHubRows,
+  listHubs,
+  publishDataset,
+  searchHubs,
+} from '@/api/generated/sdk.gen';
+import type { HubColumn, HubDataset, HubKind, UsageRights } from '@/api/generated/types.gen';
 import { FlowResultView } from '@/components/flow-preview';
 import { Badge, Button, Card, EmptyState, Spinner } from '@/components/ui/primitives';
 import { runQuery, simulateQuery, type FlowResult } from '@/lib/flow';
@@ -117,9 +123,23 @@ export function HubDiscovery({
   // point `uri` at the dataset's page, and turning that into one row per image
   // is a query somebody writes. `edited` holds what they wrote; null means
   // "still following the selection".
+  // What the corpus says it holds. The generated script is written from this
+  // rather than from a shape assumed here, because there is no such shape: a
+  // hub dataset's columns are its author's.
+  const columns = useQuery({
+    queryKey: ['hub-columns', selected?.hub, selected?.id],
+    enabled: selected?.hub === 'huggingface',
+    retry: false,
+    queryFn: async () => {
+      const response = await listHubRows({ query: { dataset: selected?.id ?? '', limit: 1 } });
+      if (!response.data) throw disabled(response.error);
+      return response.data.columns;
+    },
+  });
+
   const generated = React.useMemo(
-    () => discoveryPipeline(query, hub, selected),
-    [query, hub, selected],
+    () => discoveryPipeline(query, hub, selected, columns.data ?? []),
+    [query, hub, selected, columns.data],
   );
   const [edited, setEdited] = React.useState<string | null>(null);
   const [view, setView] = React.useState<'rows' | 'images'>('rows');
@@ -468,11 +488,11 @@ function ImageStrip({ result }: { result: FlowResult }) {
 
   const tiles = result.rows
     .map((row) => ({
+      // `uri` and `group_id` are the *import's* column names, not the
+      // corpus's — they are what the query above was written to produce and
+      // what `toImportRows` reads. A row that named them something else is a
+      // pipeline that has not been pointed at an import yet.
       uri: typeof row.uri === 'string' ? row.uri : '',
-      // Where a person is sent, which is not always where the bytes are: a
-      // picture the hub stores in a binary column has no address of its own,
-      // and the link then points at the same route that draws it.
-      open: typeof row.hub_uri === 'string' && row.hub_uri ? row.hub_uri : '',
       caption: String(row.group_id ?? ''),
     }))
     .filter((tile) => tile.uri !== '');
@@ -513,7 +533,7 @@ function ImageStrip({ result }: { result: FlowResult }) {
               {tile.caption || tile.uri}
             </figcaption>
             <a
-              href={tile.open || tile.uri}
+              href={tile.uri}
               target="_blank"
               rel="noreferrer"
               className="inline-flex items-center gap-1 text-[11px] text-primary hover:underline"
@@ -644,49 +664,90 @@ function ImportReportView({
 }
 
 /**
- * The pipeline that turns a hub dataset into rows the import route accepts.
+ * A first draft of the pipeline that turns a hub dataset into import rows.
  *
- * Generated rather than hand-written so the common case is one click, and
- * shown rather than hidden so the uncommon case is an edit.
+ * Every column name in it comes from the corpus, and every mapping decision is
+ * a line somebody can read and change. That is the point rather than a
+ * convenience: aiwatcher does not know which column of somebody else's dataset
+ * is the picture, whether `indices` is an id or a label, or whether two rows
+ * are two buildings or two photographs of one. It guesses here, out loud, in
+ * text the reader is already looking at — and a guess in a script is a
+ * different thing from a guess in a route, because only one of them can be
+ * corrected by the person who knows.
  *
- * It reads `hub_images` rather than `hub_datasets`, and that is the whole
- * difference between an import that works and one that does not: a search
- * result names a *corpus*, so a pipeline built from it registers one row whose
- * `uri` is a web page and whose dimensions are zero — which the registry
- * refuses, correctly, on all three counts.
- *
- * `group_id` is written from `image_key`, which is one family per picture.
- * True for a corpus of unrelated plans and false the moment one publishes a
- * mirrored copy or a second storey of the same building; it is a visible line
- * in a script rather than a decision made in Rust, so the day it is wrong it
- * is also editable.
- *
- * Kaggle has no equivalent — it publishes archives, not rows — so a Kaggle
- * selection still generates the dataset-level shape, with its uri marked.
+ * The guesses are: the first column the hub typed as an image, or failing that
+ * the first it sent as bytes; the first string column as a caption; and one
+ * family per row. The last is the one worth checking — see the import route's
+ * own warning about it.
  */
 function discoveryPipeline(
   query: string,
   hub: HubKind | 'all',
   selected: HubDataset | null,
+  columns: HubColumn[],
 ): string {
-  if (selected && selected.hub === 'huggingface') {
-    return [
+  if (selected && selected.hub === 'huggingface' && columns.length > 0) {
+    const picture =
+      columns.find((column) => column.kind === 'Image') ??
+      columns.find((column) => column.dtype === 'binary');
+    const caption = columns.find(
+      (column) => column.dtype === 'string' && column.name !== picture?.name,
+    );
+    if (!picture) {
+      return [
+        'data_frame()',
+        `    ->read(hub_rows, dataset: '${phpString(selected.id)}', limit: ${IMPORT_LIMIT})`,
+        '    // This corpus declares no image or binary column. Its columns are:',
+        `    //   ${columns.map((column) => column.name).join(', ')}`,
+        "    // Point 'uri' at whichever one addresses a picture.",
+        '    ->write(to_output(truncate: false))',
+        '    ->run();',
+      ].join('\n');
+    }
+
+    const lines = [
       'data_frame()',
-      `    ->read(hub_images, dataset: '${phpString(selected.id)}', limit: ${IMPORT_LIMIT})`,
-      // One family per picture. Right for a corpus of unrelated plans, wrong
-      // for one that publishes a mirror or a second storey of the same
-      // building — and a line to edit when it is.
-      "    ->withEntry('group_id', ref('image_key'))",
-      '    ->select(',
-      "        ref('uri'),",
-      "        ref('width'),",
-      "        ref('height'),",
-      "        ref('group_id'),",
-      "        ref('caption')",
-      '    )',
-      '    ->write(to_output(truncate: false))',
-      '    ->run();',
-    ].join('\n');
+      `    ->read(hub_rows, dataset: '${phpString(selected.id)}', limit: ${IMPORT_LIMIT})`,
+      `    // '${picture.name}' is this corpus's ${picture.kind === 'Image' ? 'image column' : 'binary column'}, of: ${columns.map((column) => column.name).join(', ')}`,
+      picture.kind === 'Image'
+        ? `    ->withEntry('uri', array_get(ref('row'), '${picture.name}.src'))`
+        : `    ->withEntry('uri', array_get(ref('row'), '${picture.name}'))`,
+    ];
+
+    if (picture.kind === 'Image') {
+      lines.push(
+        `    ->withEntry('width', array_get(ref('row'), '${picture.name}.width'))`,
+        `    ->withEntry('height', array_get(ref('row'), '${picture.name}.height'))`,
+      );
+    } else {
+      // A binary column carries no size, and nothing here can measure a
+      // picture it has not downloaded. The import reads it out of the bytes it
+      // stores.
+      lines.push("    ->withEntry('width', lit(0))", "    ->withEntry('height', lit(0))");
+    }
+
+    // One family per row. Right for a corpus of unrelated pictures, wrong the
+    // moment one publishes a mirror or a second storey of the same building —
+    // and then this is the line to change, to whichever column names the
+    // subject.
+    lines.push(
+      `    ->withEntry('group_id', concat(lit('${phpString(selected.id)}/'), ref('row_index')))`,
+    );
+
+    const selects = [
+      "        ref('uri')",
+      "        ref('width')",
+      "        ref('height')",
+      "        ref('group_id')",
+    ];
+    if (caption) {
+      lines.push(`    ->withEntry('caption', array_get(ref('row'), '${caption.name}'))`);
+      selects.push("        ref('caption')");
+    }
+
+    lines.push('    ->select(', selects.join(',\n'), '    )');
+    lines.push('    ->write(to_output(truncate: false))', '    ->run();');
+    return lines.join('\n');
   }
 
   const lines = ['data_frame()'];
@@ -699,11 +760,10 @@ function discoveryPipeline(
   }
 
   lines.push(
-    // Kaggle publishes archives rather than rows, so there is nothing to read
-    // one picture at a time. This is the corpus itself, and the registry
-    // refuses it: `uri` is a web page and the dimensions are zero. Left
-    // generating rather than blanked because it is the shape somebody edits
-    // once they have the files somewhere aiwatcher can address.
+    // The corpus itself rather than its contents, which is all there is for a
+    // hub that publishes archives instead of rows. The registry refuses it —
+    // `uri` is a web page and the dimensions are zero — and that refusal is
+    // the honest state until somebody points this at the files.
     "    ->withEntry('uri', ref('url'))",
     "    ->withEntry('group_id', ref('id'))",
     "    ->withEntry('width', lit(0))",

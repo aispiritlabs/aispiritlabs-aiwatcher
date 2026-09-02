@@ -62,29 +62,43 @@ final class HubDatasetTest extends TestCase
                     ],
                 ],
             ]],
-            '/api/v1/dataset-hubs/images' => [[
+            '/api/v1/dataset-hubs/rows' => [[
                 'hub' => 'huggingface',
                 'dataset' => 'someone/floor-plans',
                 'config' => 'default',
                 'split' => 'train',
-                'images' => [
+                'columns' => [
+                    ['name' => 'image', 'kind' => 'Image', 'dtype' => ''],
+                    ['name' => 'image_content', 'kind' => 'Value', 'dtype' => 'binary'],
+                    ['name' => 'indices', 'kind' => 'Value', 'dtype' => 'string'],
+                ],
+                'rows' => [
                     [
-                        'uri' => 'https://datasets-server.huggingface.co/a.jpg?Expires=1',
-                        'width' => 1080,
-                        'height' => 1537,
                         'row_index' => 0,
-                        'column' => 'image',
-                        'caption' => 'A floor plan of a house.',
-                        'image_key' => 'someone/floor-plans/0',
+                        'row' => [
+                            'image' => [
+                                'src' => 'https://datasets-server.huggingface.co/a.jpg',
+                                'width' => 1080,
+                                'height' => 1537,
+                            ],
+                            // A column the hub sent as bytes: the API swapped
+                            // the base64 for an address it can resolve.
+                            'image_content' => '/api/v1/dataset-hubs/image?dataset=someone%2Ffloor-plans&config=default&split=train&row=0&column=image_content',
+                            'indices' => 'house-a',
+                        ],
                     ],
                     [
-                        'uri' => 'https://datasets-server.huggingface.co/b.jpg?Expires=1',
-                        'width' => 900,
-                        'height' => 1200,
                         'row_index' => 1,
-                        'column' => 'image',
-                        'caption' => '',
-                        'image_key' => 'someone/floor-plans/1',
+                        'row' => [
+                            'image' => [
+                                'src' => 'https://datasets-server.huggingface.co/b.jpg',
+                                'width' => 900,
+                                'height' => 1200,
+                            ],
+                            'image_content' => '/api/v1/dataset-hubs/image?dataset=someone%2Ffloor-plans&config=default&split=train&row=1&column=image_content',
+                            'indices' => 'house-a',
+                        ],
+                        'omitted' => ['json'],
                     ],
                 ],
             ]],
@@ -142,18 +156,56 @@ final class HubDatasetTest extends TestCase
         self::assertStringContainsString('hub=kaggle', $api->requested[0]);
     }
 
-    public function test_the_images_dataset_reads_one_row_per_picture(): void
+    public function test_the_rows_dataset_hands_over_the_corpus_own_columns(): void
     {
         $api = $this->api();
-        $rows = $this->rows("data_frame()->read(hub_images, dataset: 'someone/floor-plans')->fetch()", $api);
+        $rows = $this->rows("data_frame()->read(hub_rows, dataset: 'someone/floor-plans')->fetch()", $api);
 
         self::assertCount(2, $rows);
-        self::assertSame('https://datasets-server.huggingface.co/a.jpg?Expires=1', $rows[0]['uri']);
-        self::assertSame(1080, $rows[0]['width']);
-        // The per-image family key, which the import pipeline writes group_id
-        // from. Composed by the API, never by the file name.
-        self::assertSame('someone/floor-plans/0', $rows[0]['image_key']);
+        self::assertSame(0, $rows[0]['row_index']);
+        // Nothing was flattened or renamed on the way through: the corpus's
+        // own column names are what a script writes against.
+        self::assertSame(['image', 'image_content', 'indices'], \array_keys($rows[0]['row']));
         self::assertStringContainsString('dataset=someone%2Ffloor-plans', $api->requested[0]);
+    }
+
+    /// The mapping a query does, rather than one this service did for it.
+    public function test_a_query_names_the_columns_an_import_reads(): void
+    {
+        $rows = $this->rows(
+            "data_frame()->read(hub_rows, dataset: 'someone/floor-plans')"
+            . "->withEntry('uri', array_get(ref('row'), 'image.src'))"
+            . "->withEntry('width', array_get(ref('row'), 'image.width'))"
+            . "->withEntry('height', array_get(ref('row'), 'image.height'))"
+            . "->withEntry('group_id', array_get(ref('row'), 'indices'))"
+            . "->select(ref('uri'), ref('width'), ref('height'), ref('group_id'))"
+            . '->fetch()',
+            $this->api(),
+        );
+
+        self::assertSame('https://datasets-server.huggingface.co/a.jpg', $rows[0]['uri']);
+        self::assertSame(1080, $rows[0]['width']);
+        self::assertSame(1537, $rows[0]['height']);
+        // Two renderings of one building share a family, which is the whole
+        // reason this is written here and not decided by a route.
+        self::assertSame('house-a', $rows[0]['group_id']);
+        self::assertSame('house-a', $rows[1]['group_id']);
+    }
+
+    /// A picture the hub keeps as bytes: the row carries an address instead,
+    /// and the query points `uri` at it exactly the same way.
+    public function test_a_column_sent_as_bytes_is_addressable_from_a_query(): void
+    {
+        $rows = $this->rows(
+            "data_frame()->read(hub_rows, dataset: 'someone/floor-plans')"
+            . "->withEntry('uri', array_get(ref('row'), 'image_content'))"
+            . "->select(ref('uri'))"
+            . '->fetch()',
+            $this->api(),
+        );
+
+        self::assertStringStartsWith('/api/v1/dataset-hubs/image?', $rows[0]['uri']);
+        self::assertStringContainsString('column=image_content', $rows[0]['uri']);
     }
 
     public function test_an_argument_the_dataset_never_declared_is_a_parse_error(): void

@@ -1606,14 +1606,14 @@
         }
       }
     },
-    "/api/v1/dataset-hubs/images": {
+    "/api/v1/dataset-hubs/rows": {
       "get": {
         "tags": [
           "datasets"
         ],
-        "summary": "The images inside one hub dataset.",
-        "description": "The other half of discovery, and a different question from the search: that\none answers \"which corpora exist\", this one \"what is in this one\". An\nimport built from a search result alone registers a single row pointing at\na web page — the corpus is the *rows*, and until this route existed there\nwas no way for a pipeline to read them.\n\nA hub that cannot answer is a 502 carrying its sentence rather than an\nempty list, for the same reason the search route's 501 is not one: \"no\nimages\" is a claim about the corpus, and this is a claim about the request.",
-        "operationId": "list_hub_images",
+        "summary": "The rows inside one hub dataset.",
+        "description": "The other half of discovery, and a different question from the search: that\none answers \"which corpora exist\", this one \"what is in this one\". An\nimport built from a search result alone registers a single row pointing at\na web page — the corpus is the *rows*, and until this route existed there\nwas no way for a pipeline to read them.\n\nIt reports the columns the corpus declares and hands the rows over as they\ncame. Which of them is a picture, what a caption is called and what a\nfamily key is built from are decided in the script, because they are\nquestions about that corpus rather than about this one.\n\nA hub that cannot answer is a 502 carrying its sentence rather than an\nempty list, for the same reason the search route's 501 is not one: \"no\nrows\" is a claim about the corpus, and this is a claim about the request.",
+        "operationId": "list_hub_rows",
         "parameters": [
           {
             "name": "dataset",
@@ -1676,7 +1676,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HubImagePage"
+                  "$ref": "#/components/schemas/HubRowsPage"
                 }
               }
             }
@@ -7801,6 +7801,27 @@
           "keypoints"
         ]
       },
+      "HubColumn": {
+        "type": "object",
+        "description": "One column a hub dataset declares, in the hub's own words.\n\nCarried verbatim and not interpreted. aiwatcher does not know which column\nof somebody else's corpus is the picture, what the caption is called, or\nwhether `indices` is an id or a label — and a route that decided would be\ndeciding it for every corpus. This is what a script is written against.",
+        "required": [
+          "name",
+          "kind"
+        ],
+        "properties": {
+          "dtype": {
+            "type": "string",
+            "description": "The dtype a `Value` carries: `string`, `binary`, `int32`, …"
+          },
+          "kind": {
+            "type": "string",
+            "description": "The hub's type tag: `Image`, `Value`, `Sequence`, and so on."
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "HubDataset": {
         "type": "object",
         "description": "One dataset a hub says it has.\n\nEvery field here is the hub's, not aiwatcher's, with two exceptions:\n[`usage`](Self::usage) and [`curated_source`](Self::curated_source), which\nthis module decides — see `Hubs::reconcile`.",
@@ -7899,68 +7920,60 @@
           }
         }
       },
-      "HubImage": {
+      "HubKind": {
+        "type": "string",
+        "description": "Which mirror a row came from.",
+        "enum": [
+          "kaggle",
+          "huggingface"
+        ]
+      },
+      "HubRow": {
         "type": "object",
-        "description": "One picture inside a hub's dataset.\n\nEvery field is the hub's own except [`image_key`](Self::image_key), which\nthis module composes.",
+        "description": "One row of a hub dataset, as the hub sent it.",
         "required": [
-          "uri",
-          "width",
-          "height",
           "row_index",
-          "column",
-          "image_key"
+          "row"
         ],
         "properties": {
-          "caption": {
-            "type": "string",
-            "description": "The first text feature on the same row, when there is one.\n\nCarried because it is usually a description worth reading before\nimporting. It is never a label: nothing downstream reads it, and a\ncaption written by whoever uploaded the copy is not an annotation."
+          "omitted": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Columns left out, and why they would have been.\n\nNamed, because a column that is simply absent reads as a column the\ncorpus does not have."
           },
-          "column": {
-            "type": "string",
-            "description": "The feature it came from — a dataset may carry several image columns."
-          },
-          "height": {
-            "type": "integer",
-            "format": "int32",
-            "minimum": 0
-          },
-          "hub_uri": {
-            "type": "string",
-            "description": "The hub's own address for it, when there is one.\n\nKept separate from [`uri`](Self::uri) so a link out of the panel always\npoints at something a person can open, even when the bytes have to come\nback through this process."
-          },
-          "image_key": {
-            "type": "string",
-            "description": "`dataset/row_index`. A **per-image** family key, which is the honest\ndefault when a hub row is one unrelated picture and the wrong one the\nmoment a corpus publishes several renderings of one subject. It is a\ncolumn rather than a decision: the import pipeline writes `group_id`\nfrom it explicitly, so changing that is an edit to a query somebody can\nread. See [`crate::images::import`], which warns when every row of a\nbatch is its own family.\n\nSpelled with a slash because a group name is segmented on one and every\nsegment is `[A-Za-z0-9._-]` — see [`crate::validate_name`]. A key the\nregistry refuses is not a default, it is a batch that rejects every\nrow."
+          "row": {
+            "type": "object",
+            "description": "Every column, under the corpus's own name for it.\n\nTwo substitutions, and both are about size rather than meaning: a cell\nthe hub sent as bytes becomes a path back into this process that\nresolves them (see [`Hubs::cell`]), because a hundred rows of base64 is\na result heavier than the pictures it describes; and a cell too large\nto carry is left out and named in [`omitted`](Self::omitted)."
           },
           "row_index": {
             "type": "integer",
             "format": "int64",
-            "description": "Where it sat in the split, which is the only stable name it has.",
-            "minimum": 0
-          },
-          "uri": {
-            "type": "string",
-            "description": "Where the bytes are.\n\nTwo shapes, and which one it is depends on what the hub gave. A column\nthe hub typed as an image comes with a signed asset URL, expiring in\nhours — which is why an import stores the bytes rather than the address\n(see [`Hubs::fetch`]). A `binary` column comes with no address at all,\nso this is a path back into aiwatcher naming the cell, which\n[`Hubs::cell`] resolves. Neither is a durable name for a picture; the\ndurable name is the content address the import writes."
-          },
-          "width": {
-            "type": "integer",
-            "format": "int32",
-            "description": "What the registry requires and a hub search cannot answer.\n\nThe hub's own numbers for a column it typed as an image. For a `binary`\ncolumn the hub says nothing, so they are read out of the bytes' header\n— see [`crate::integrations::pixels`] — and a cell whose header says it\nis not a picture is skipped rather than imported as a zero.",
+            "description": "Where it sat in the split. The only name a row has that the corpus did\nnot choose, and the one a family key is usually built from.",
             "minimum": 0
           }
         }
       },
-      "HubImagePage": {
+      "HubRowsPage": {
         "type": "object",
-        "description": "The images one call found, and where they came from.",
+        "description": "One page of a hub dataset's rows.",
         "required": [
           "hub",
           "dataset",
           "config",
           "split",
-          "images"
+          "columns",
+          "rows"
         ],
         "properties": {
+          "columns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HubColumn"
+            },
+            "description": "What the corpus declares it holds. A script is written from this."
+          },
           "config": {
             "type": "string",
             "description": "Resolved, never echoed: what was actually read, which is what makes the\nsame call repeatable after a dataset gains a second split."
@@ -7971,10 +7984,10 @@
           "hub": {
             "$ref": "#/components/schemas/HubKind"
           },
-          "images": {
+          "rows": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/HubImage"
+              "$ref": "#/components/schemas/HubRow"
             }
           },
           "split": {
@@ -7990,14 +8003,6 @@
             "minimum": 0
           }
         }
-      },
-      "HubKind": {
-        "type": "string",
-        "description": "Which mirror a row came from.",
-        "enum": [
-          "kaggle",
-          "huggingface"
-        ]
       },
       "HubSearchPage": {
         "type": "object",

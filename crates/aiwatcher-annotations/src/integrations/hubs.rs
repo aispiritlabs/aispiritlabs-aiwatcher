@@ -59,6 +59,15 @@ const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 /// Hugging Face's own rows endpoint caps a page at 100.
 const MAX_IMAGES: usize = 100;
 
+/// The most one carried column may weigh, serialised.
+///
+/// A row is handed over whole so a script can reach any of it, and one column
+/// is occasionally a document: `pixparse/idl-wds` publishes a `json` column
+/// holding every word box on the page. Carrying that for a hundred rows would
+/// make a preview heavier than the pictures it is previewing, so an oversized
+/// column is named instead of sent.
+const MAX_COLUMN_BYTES: usize = 4096;
+
 /// The most rows one hub may contribute.
 ///
 /// A cap rather than a page. This is a discovery surface: the answer to "there
@@ -304,73 +313,57 @@ pub struct HubCellQuery {
     pub column: String,
 }
 
-/// One picture inside a hub's dataset.
+/// One column a hub dataset declares, in the hub's own words.
 ///
-/// Every field is the hub's own except [`image_key`](Self::image_key), which
-/// this module composes.
+/// Carried verbatim and not interpreted. aiwatcher does not know which column
+/// of somebody else's corpus is the picture, what the caption is called, or
+/// whether `indices` is an id or a label — and a route that decided would be
+/// deciding it for every corpus. This is what a script is written against.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, ToSchema)]
-pub struct HubImage {
-    /// Where the bytes are.
-    ///
-    /// Two shapes, and which one it is depends on what the hub gave. A column
-    /// the hub typed as an image comes with a signed asset URL, expiring in
-    /// hours — which is why an import stores the bytes rather than the address
-    /// (see [`Hubs::fetch`]). A `binary` column comes with no address at all,
-    /// so this is a path back into aiwatcher naming the cell, which
-    /// [`Hubs::cell`] resolves. Neither is a durable name for a picture; the
-    /// durable name is the content address the import writes.
-    pub uri: String,
-    /// The hub's own address for it, when there is one.
-    ///
-    /// Kept separate from [`uri`](Self::uri) so a link out of the panel always
-    /// points at something a person can open, even when the bytes have to come
-    /// back through this process.
+pub struct HubColumn {
+    pub name: String,
+    /// The hub's type tag: `Image`, `Value`, `Sequence`, and so on.
+    pub kind: String,
+    /// The dtype a `Value` carries: `string`, `binary`, `int32`, …
     #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub hub_uri: String,
-    /// What the registry requires and a hub search cannot answer.
-    ///
-    /// The hub's own numbers for a column it typed as an image. For a `binary`
-    /// column the hub says nothing, so they are read out of the bytes' header
-    /// — see [`crate::integrations::pixels`] — and a cell whose header says it
-    /// is not a picture is skipped rather than imported as a zero.
-    pub width: u32,
-    pub height: u32,
-    /// Where it sat in the split, which is the only stable name it has.
-    pub row_index: u64,
-    /// The feature it came from — a dataset may carry several image columns.
-    pub column: String,
-    /// The first text feature on the same row, when there is one.
-    ///
-    /// Carried because it is usually a description worth reading before
-    /// importing. It is never a label: nothing downstream reads it, and a
-    /// caption written by whoever uploaded the copy is not an annotation.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub caption: String,
-    /// `dataset/row_index`. A **per-image** family key, which is the honest
-    /// default when a hub row is one unrelated picture and the wrong one the
-    /// moment a corpus publishes several renderings of one subject. It is a
-    /// column rather than a decision: the import pipeline writes `group_id`
-    /// from it explicitly, so changing that is an edit to a query somebody can
-    /// read. See [`crate::images::import`], which warns when every row of a
-    /// batch is its own family.
-    ///
-    /// Spelled with a slash because a group name is segmented on one and every
-    /// segment is `[A-Za-z0-9._-]` — see [`crate::validate_name`]. A key the
-    /// registry refuses is not a default, it is a batch that rejects every
-    /// row.
-    pub image_key: String,
+    pub dtype: String,
 }
 
-/// The images one call found, and where they came from.
+/// One row of a hub dataset, as the hub sent it.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, ToSchema)]
+pub struct HubRow {
+    /// Where it sat in the split. The only name a row has that the corpus did
+    /// not choose, and the one a family key is usually built from.
+    pub row_index: u64,
+    /// Every column, under the corpus's own name for it.
+    ///
+    /// Two substitutions, and both are about size rather than meaning: a cell
+    /// the hub sent as bytes becomes a path back into this process that
+    /// resolves them (see [`Hubs::cell`]), because a hundred rows of base64 is
+    /// a result heavier than the pictures it describes; and a cell too large
+    /// to carry is left out and named in [`omitted`](Self::omitted).
+    #[schema(value_type = Object)]
+    pub row: BTreeMap<String, Value>,
+    /// Columns left out, and why they would have been.
+    ///
+    /// Named, because a column that is simply absent reads as a column the
+    /// corpus does not have.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub omitted: Vec<String>,
+}
+
+/// One page of a hub dataset's rows.
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
-pub struct HubImagePage {
+pub struct HubRowsPage {
     pub hub: HubKind,
     pub dataset: String,
     /// Resolved, never echoed: what was actually read, which is what makes the
     /// same call repeatable after a dataset gains a second split.
     pub config: String,
     pub split: String,
-    pub images: Vec<HubImage>,
+    /// What the corpus declares it holds. A script is written from this.
+    pub columns: Vec<HubColumn>,
+    pub rows: Vec<HubRow>,
     /// The split's own count, when the hub reports one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_rows: Option<u64>,
@@ -542,13 +535,20 @@ impl Hubs {
             .collect::<Vec<_>>())
     }
 
-    /// The images inside one hub dataset.
+    /// The rows inside one hub dataset, as the hub sent them.
     ///
     /// A search answers "which corpora exist"; this answers "what is in this
-    /// one", and they are different enough to be different routes. A search
-    /// result names a *dataset*, so an import built from one registers a
-    /// single row pointing at a web page — which is a corpus of one image that
-    /// is not an image.
+    /// one". Nothing here decides which column is a picture, what a caption is
+    /// called, or what a family key should be built from — those are questions
+    /// about somebody else's corpus, and a route that answered them would be
+    /// answering them for every corpus. It reports the columns the dataset
+    /// declares and hands over the rows; the script does the rest.
+    ///
+    /// Two substitutions, both about size and neither about meaning. A cell
+    /// the hub sent as bytes becomes an address [`Self::cell`] resolves, so a
+    /// hundred rows of base64 do not travel through the query service and the
+    /// browser to be looked at once. A cell too large to carry, or one the hub
+    /// itself shortened, is left out and named.
     ///
     /// Hugging Face only. Kaggle publishes archives rather than rows: seeing
     /// inside one means downloading and unpacking it, which is a different
@@ -558,7 +558,7 @@ impl Hubs {
     ///
     /// # Errors
     /// When the hub is not configured, does not serve rows, or did not answer.
-    pub async fn images(&self, query: &HubRowsQuery) -> Result<HubImagePage, String> {
+    pub async fn rows(&self, query: &HubRowsQuery) -> Result<HubRowsPage, String> {
         if query.hub == Some(HubKind::Kaggle) {
             return Err(
                 "Kaggle serves archives rather than rows; open the dataset and import \
@@ -593,53 +593,48 @@ impl Hubs {
         )
         .await?;
 
-        // Which columns might hold pictures is declared by the response rather
-        // than guessed from a name: a corpus is free to call one `photo`,
-        // `page`, `content` or `image_content`, and matching on any of those
-        // would be this crate deciding a vocabulary — the thing ADR_0020
-        // exists to stop.
-        //
-        // Two kinds qualify and they arrive differently. A column the hub has
-        // *typed* as an image comes back as an object with a signed URL and
-        // the size already measured. A `binary` column comes back as base64 in
-        // the row, with nothing said about it — which is how a corpus that
-        // stores its pictures as bytes looks, and reading only the first kind
-        // is how such a corpus reports "no image column" and stops there.
-        let candidates: Vec<&str> = body
+        let columns: Vec<HubColumn> = body
             .get("features")
             .and_then(Value::as_array)
             .map(|features| {
                 features
                     .iter()
-                    .filter(|feature| {
+                    .filter_map(|feature| {
+                        let name = feature.get("name").and_then(Value::as_str)?;
                         let kind = feature.get("type");
-                        let tag = kind
-                            .and_then(|kind| kind.get("_type"))
-                            .and_then(Value::as_str);
-                        let dtype = kind
-                            .and_then(|kind| kind.get("dtype"))
-                            .and_then(Value::as_str);
-                        tag == Some("Image") || (tag == Some("Value") && dtype == Some("binary"))
+                        Some(HubColumn {
+                            name: name.to_owned(),
+                            kind: kind
+                                .and_then(|kind| kind.get("_type"))
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_owned(),
+                            dtype: kind
+                                .and_then(|kind| kind.get("dtype"))
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_owned(),
+                        })
                     })
-                    .filter_map(|feature| feature.get("name").and_then(Value::as_str))
                     .collect()
             })
             .unwrap_or_default();
 
-        if candidates.is_empty() {
-            return Err(format!(
-                "{dataset} declares no image or binary column in {config}/{split}"
-            ));
-        }
-
-        let mut page = HubImagePage {
+        let mut page = HubRowsPage {
             hub: HubKind::HuggingFace,
             dataset: dataset.to_owned(),
             config,
             split,
+            columns,
             total_rows: number(&body, "num_rows_total"),
-            images: Vec::new(),
+            rows: Vec::new(),
         };
+
+        let declared: BTreeMap<&str, &HubColumn> = page
+            .columns
+            .iter()
+            .map(|column| (column.name.as_str(), column))
+            .collect();
 
         for entry in body
             .get("rows")
@@ -647,116 +642,55 @@ impl Hubs {
             .unwrap_or(&vec![])
         {
             let row_index = number(entry, "row_idx").unwrap_or_default();
-            let Some(row) = entry.get("row") else {
+            let Some(cells) = entry.get("row").and_then(Value::as_object) else {
                 continue;
             };
-            // A caption is the row's first text column that is not one of the
-            // candidates. Never a label — see the field's docstring.
-            let caption = row
-                .as_object()
-                .and_then(|columns| {
-                    columns
-                        .iter()
-                        .find(|(name, value)| {
-                            value.is_string() && !candidates.contains(&name.as_str())
-                        })
-                        .and_then(|(_, value)| value.as_str())
-                })
-                .unwrap_or_default();
-
-            // A cell the hub shortened is not the picture. Measuring the
-            // fragment would report a size for an image nobody has, and
-            // importing it would store a broken file under a content address
-            // that looks exactly as trustworthy as a whole one.
-            let truncated: Vec<&str> = entry
+            // A cell the hub shortened is not the value. Carrying the fragment
+            // would be handing a script half a picture under a whole name.
+            let shortened: Vec<&str> = entry
                 .get("truncated_cells")
                 .and_then(Value::as_array)
-                .map(|cells| cells.iter().filter_map(Value::as_str).collect())
+                .map(|names| names.iter().filter_map(Value::as_str).collect())
                 .unwrap_or_default();
 
-            for column in &candidates {
-                let Some(cell) = row.get(column) else {
-                    continue;
-                };
-                if truncated.contains(column) {
+            let mut carried = BTreeMap::new();
+            let mut omitted = Vec::new();
+            for (name, value) in cells {
+                if shortened.contains(&name.as_str()) {
+                    omitted.push(name.clone());
                     continue;
                 }
-                let Some(found) =
-                    self.describe_cell(dataset, &page.config, &page.split, cell, column, row_index)
-                else {
+                // Bytes become an address. Which cells are bytes is a question
+                // about the shape the hub sent, not about what the column is
+                // called or what it is for.
+                if is_inline_bytes(declared.get(name.as_str()).copied(), value) {
+                    carried.insert(
+                        name.clone(),
+                        Value::from(cell_address(&HubCellQuery {
+                            dataset: dataset.to_owned(),
+                            hub: Some(HubKind::HuggingFace),
+                            config: page.config.clone(),
+                            split: page.split.clone(),
+                            row: row_index,
+                            column: name.clone(),
+                        })),
+                    );
                     continue;
-                };
-                page.images.push(HubImage {
-                    caption: caption.chars().take(500).collect(),
-                    row_index,
-                    column: (*column).to_owned(),
-                    image_key: image_key(dataset, row_index),
-                    ..found
-                });
+                }
+                if value.to_string().len() > MAX_COLUMN_BYTES {
+                    omitted.push(name.clone());
+                    continue;
+                }
+                carried.insert(name.clone(), value.clone());
             }
-        }
-        Ok(page)
-    }
 
-    /// What one cell is, from the shape the hub sent it in.
-    ///
-    /// The two shapes are the whole reason this exists. A typed image cell is
-    /// an object carrying a URL and a size, and is taken at its word. A binary
-    /// cell is base64 and says nothing, so its bytes are decoded here and
-    /// measured from their own header — which is also the test of whether the
-    /// column holds pictures at all: `pixparse/idl-wds` publishes a `pdf` and
-    /// an `ocr` column beside its images, both `binary`, and neither is a
-    /// picture. `None` skips the cell rather than failing the listing.
-    ///
-    /// The decoded bytes are dropped. They are in the response either way, and
-    /// putting a megabyte of base64 into a query result would mean every row
-    /// of every preview carrying its own picture through the query service and
-    /// the browser — see [`Self::cell`], which is how they are fetched when
-    /// somebody actually wants them.
-    fn describe_cell(
-        &self,
-        dataset: &str,
-        config: &str,
-        split: &str,
-        cell: &Value,
-        column: &str,
-        row_index: u64,
-    ) -> Option<HubImage> {
-        let address = cell_address(&HubCellQuery {
-            dataset: dataset.to_owned(),
-            hub: Some(HubKind::HuggingFace),
-            config: config.to_owned(),
-            split: split.to_owned(),
-            row: row_index,
-            column: column.to_owned(),
-        });
-
-        let hub_uri = string(cell, "src");
-        if !hub_uri.is_empty() {
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "an image larger than 4 billion pixels on a side is not one"
-            )]
-            return Some(HubImage {
-                uri: hub_uri.clone(),
-                hub_uri,
-                width: number(cell, "width").unwrap_or_default() as u32,
-                height: number(cell, "height").unwrap_or_default() as u32,
-                ..HubImage::default()
+            page.rows.push(HubRow {
+                row_index,
+                row: carried,
+                omitted,
             });
         }
-
-        let bytes = inline_bytes(cell)?;
-        let found = pixels::describe(&bytes)?;
-        Some(HubImage {
-            // No hub address exists for these bytes, so the row carries a way
-            // back into this process instead.
-            uri: address,
-            hub_uri: String::new(),
-            width: found.width,
-            height: found.height,
-            ..HubImage::default()
-        })
+        Ok(page)
     }
 
     /// The bytes of one cell, whichever shape it is in.
@@ -1099,6 +1033,24 @@ pub fn rights_provenance(row: &HubDataset) -> &'static str {
     }
 }
 
+/// Whether a cell is bytes the hub inlined.
+///
+/// The hub's own declaration decides, never the value. A `binary` column
+/// arrives as base64 and so does nothing else — but plenty of ordinary strings
+/// *decode* as base64, and the first corpus this met proved it: `idl-wds`
+/// publishes a `__key__` column whose value `klpb0135` is eight valid base64
+/// characters. Reading the value would have turned an id into an image
+/// address.
+///
+/// The other shape needs no declaration: `{"bytes": …, "path": …}` is what an
+/// image feature the hub could not serve as an asset arrives as, and nothing
+/// else has that shape. Neither test says what the column is *for* — that is
+/// the script's question.
+fn is_inline_bytes(column: Option<&HubColumn>, cell: &Value) -> bool {
+    let declared_binary = column.is_some_and(|column| column.dtype == "binary");
+    (declared_binary && cell.is_string()) || cell.get("bytes").and_then(Value::as_str).is_some()
+}
+
 /// The bytes of a cell the hub sent inline.
 ///
 /// Two spellings, both base64: a plain `binary` column is the string itself,
@@ -1170,16 +1122,6 @@ pub fn parse_cell_address(uri: &str) -> Option<HubCellQuery> {
         return None;
     }
     Some(found)
-}
-
-/// The per-image family key a hub row gets by default.
-///
-/// A slash, because [`crate::validate_name`] segments a group name on one and
-/// allows only `[A-Za-z0-9._-]` inside a segment. The first version of this
-/// used `#`, which the registry refuses — a default nobody can import is not a
-/// default, and the failure lands on every row of the batch at once.
-fn image_key(dataset: &str, row_index: u64) -> String {
-    format!("{dataset}/{row_index}")
 }
 
 /// Whether a URI is one this module could have produced.
@@ -1452,7 +1394,7 @@ mod tests {
     #[tokio::test]
     async fn kaggle_is_refused_for_rows_rather_than_asked_for_them() {
         let error = hubs()
-            .images(&HubRowsQuery {
+            .rows(&HubRowsQuery {
                 dataset: "someone/floor-plans".to_owned(),
                 hub: Some(HubKind::Kaggle),
                 ..HubRowsQuery::default()
@@ -1467,7 +1409,7 @@ mod tests {
     async fn reading_rows_needs_hugging_face_configured() {
         let error = Hubs::new(HubConfig::default())
             .expect("the client builds")
-            .images(&HubRowsQuery {
+            .rows(&HubRowsQuery {
                 dataset: "someone/floor-plans".to_owned(),
                 ..HubRowsQuery::default()
             })
@@ -1477,101 +1419,59 @@ mod tests {
         assert!(error.contains("AIWATCHER_HUGGINGFACE_ENABLED"), "{error}");
     }
 
-    /// The default family key has to be one the registry accepts. It reaches
-    /// `group_id` through a generated pipeline, so a key it refuses rejects
-    /// every row of a batch rather than one.
+    /// The two shapes a hub sends bytes in, neither of which says anything
+    /// about what the column is for. A corpus is free to call it `content`,
+    /// `image_content` or `pdf`; what makes it bytes is the shape, and what
+    /// makes it a picture is decided by whoever writes the script.
     #[test]
-    fn the_default_family_key_is_a_name_the_registry_accepts() {
-        for dataset in [
-            "Ahmed167/floor-plans-dataset",
-            "zimhe/pseudo-floor-plan-12k",
-        ] {
-            let key = image_key(dataset, 17);
-            crate::validate_name(&key, "a group").expect("the registry accepts it");
-            assert!(key.ends_with("/17"), "{key}");
-        }
-    }
-
-    /// The case a hub types as an image and the case it types as bytes, which
-    /// are the two ways a corpus publishes pictures. The second one arrives
-    /// with no address and nothing said about it: skipping it is how a corpus
-    /// whose column is called `content` or `image_content` reports "no image
-    /// column" and stops there.
-    #[test]
-    fn a_picture_stored_as_bytes_is_read_as_one() {
+    fn bytes_are_recognised_by_shape_rather_than_by_column_name() {
         use base64::Engine as _;
 
-        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
-        png.extend_from_slice(&[0; 8]);
-        png.extend_from_slice(&800_u32.to_be_bytes());
-        png.extend_from_slice(&600_u32.to_be_bytes());
-        let encoded = base64::engine::general_purpose::STANDARD.encode(&png);
+        let encoded = base64::engine::general_purpose::STANDARD.encode(b"\x89PNG\r\n\x1a\n");
+        let binary = HubColumn {
+            name: "image_content".to_owned(),
+            kind: "Value".to_owned(),
+            dtype: "binary".to_owned(),
+        };
+        let text = HubColumn {
+            name: "__key__".to_owned(),
+            kind: "Value".to_owned(),
+            dtype: "string".to_owned(),
+        };
 
-        let hubs = hubs();
-        // A bare base64 string, which is how a `binary` column arrives.
-        let bare = hubs
-            .describe_cell(
-                "someone/plans",
-                "default",
-                "train",
-                &Value::from(encoded.clone()),
-                "image_content",
-                7,
-            )
-            .expect("bytes that are a picture");
-        assert_eq!((bare.width, bare.height), (800, 600));
-        // No hub address exists, so the row names the cell instead.
-        assert_eq!(
-            parse_cell_address(&bare.uri).map(|cell| (cell.row, cell.column)),
-            Some((7, "image_content".to_owned()))
-        );
-        assert!(bare.hub_uri.is_empty());
+        // A column the hub declared as bytes.
+        assert!(is_inline_bytes(
+            Some(&binary),
+            &Value::from(encoded.clone())
+        ));
+        // An image feature the hub could not serve as an asset needs no
+        // declaration: nothing else has that shape.
+        assert!(is_inline_bytes(
+            None,
+            &serde_json::json!({ "bytes": encoded, "path": "0.png" })
+        ));
 
-        // `{bytes, path}`, which is how an image feature the hub could not
-        // serve as an asset arrives.
-        let wrapped = hubs
-            .describe_cell(
-                "someone/plans",
-                "default",
-                "train",
-                &serde_json::json!({ "bytes": encoded, "path": "0.png" }),
-                "image",
-                7,
-            )
-            .expect("bytes that are a picture");
-        assert_eq!((wrapped.width, wrapped.height), (800, 600));
+        // The bug this rule exists for: `klpb0135` is a real id from
+        // `pixparse/idl-wds` and eight valid base64 characters. Read as a
+        // value it is bytes; read as what the hub declared it is a string.
+        assert!(!is_inline_bytes(Some(&text), &Value::from("klpb0135")));
 
-        // A typed image cell keeps the hub's own address and its numbers.
-        let typed = hubs
-            .describe_cell(
-                "someone/plans",
-                "default",
-                "train",
-                &serde_json::json!({
-                    "src": "https://datasets-server.huggingface.co/a.jpg",
-                    "width": 1080,
-                    "height": 1537,
-                }),
-                "image",
-                7,
-            )
-            .expect("a typed image cell");
-        assert_eq!((typed.width, typed.height), (1080, 1537));
-        assert_eq!(typed.uri, typed.hub_uri);
-
-        // A `binary` column that is not a picture is skipped rather than
-        // imported with a made-up size. `pixparse/idl-wds` ships two.
-        assert!(
-            hubs.describe_cell(
-                "someone/plans",
-                "default",
-                "train",
-                &Value::from(base64::engine::general_purpose::STANDARD.encode(b"%PDF-1.3\n")),
-                "pdf",
-                7,
-            )
-            .is_none()
-        );
+        // A typed image cell is an address the hub already has, not bytes.
+        assert!(!is_inline_bytes(
+            None,
+            &serde_json::json!({
+                "src": "https://datasets-server.huggingface.co/a.jpg",
+                "width": 1080,
+                "height": 1537,
+            })
+        ));
+        // Ordinary values stay ordinary.
+        assert!(!is_inline_bytes(
+            Some(&text),
+            &Value::from("a floor plan of a house")
+        ));
+        assert!(!is_inline_bytes(None, &Value::from(4)));
+        assert!(!is_inline_bytes(None, &serde_json::json!({ "pages": [] })));
     }
 
     /// A cell address has to survive the round trip through a query result and

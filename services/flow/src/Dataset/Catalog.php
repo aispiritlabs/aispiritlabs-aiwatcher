@@ -213,39 +213,33 @@ final readonly class Catalog
             ],
         );
 
-        $hubImages = new Dataset(
-            name: 'hub_images',
-            path: '/api/v1/dataset-hubs/images',
-            rowsPath: 'images',
+        $hubRows = new Dataset(
+            name: 'hub_rows',
+            path: '/api/v1/dataset-hubs/rows',
+            rowsPath: 'rows',
             // Hugging Face's rows endpoint pages by offset and reports no
             // cursor, and a corpus is read in one bite here rather than
             // walked: a batch somebody is about to import is a batch somebody
             // is about to look at.
             cursorParam: 'unused',
-            grain: 'one row per image inside one hub dataset',
-            description: 'The pictures in one Hugging Face dataset. The search says which corpora exist; this says what is in one of them — and it is the dataset an import reads, because a search result names a corpus rather than its files.',
+            grain: 'one row of one hub dataset, as the hub sent it',
+            description: 'The contents of one Hugging Face dataset. The search says which corpora exist; this says what is in one — with the corpus\'s own columns under the corpus\'s own names. Which column is the picture, what the caption is called and what a family key is built from are decided here, in the query, because they are questions about that corpus.',
             columns: [
-                // The hub's signed asset URL, which expires within hours. The
-                // import downloads it and stores the bytes rather than keeping
-                // the address; nothing downstream should treat this as durable.
-                'uri' => 'string',
-                // The hub's own address, when it has one. Empty for a picture
-                // stored as bytes, which has no address anywhere but here.
-                'hub_uri' => 'string',
-                'width' => 'int',
-                'height' => 'int',
+                // Where the row sat in the split: the only name it has that
+                // the corpus did not choose, and usually what a per-picture
+                // family key is built from.
                 'row_index' => 'int',
-                'column' => 'string',
-                'caption' => 'string',
-                // dataset#row_index. A per-image family key, which is right
-                // for a corpus of unrelated pictures and wrong the moment one
-                // publishes several renderings of one subject — write
-                // group_id from something else when it does.
-                'image_key' => 'string',
+                // Every column of the corpus, under its own name. Reached with
+                // array_get, which takes a dot path.
+                'row' => 'array',
+                // Columns the API left out, by name: one the hub itself
+                // shortened, or one too large to carry.
+                'omitted' => 'list<string>',
             ],
             hints: [
-                'image' => 'The bytes are at "uri": a hub URL that expires, or a path back into aiwatcher for a picture the hub stores as bytes. Either way an import stores the bytes; nothing else should hold on to it. "hub_uri" is the page a person can open.',
-                'group_id' => 'Not a column of the hub\'s. Write it from "image_key" for one family per picture, or from something in "caption" when a corpus repeats a subject.',
+                'image' => 'There is no image column here, because that is a fact about the corpus rather than about this route. Read it out of "row": array_get(ref(\'row\'), \'image.src\') for a column the hub typed as an image, or array_get(ref(\'row\'), \'<name>\') for one it sent as bytes — that value is an address this API resolves.',
+                'width' => 'array_get(ref(\'row\'), \'image.width\') where the hub measured it. A column sent as bytes has no size here; the import reads it out of the bytes it stores.',
+                'uri' => 'Whatever you name it. The import reads "uri", "width", "height" and "group_id" from the columns this query produces.',
                 'license' => 'Not here. A licence is a property of the corpus, which is the hub_datasets row.',
             ],
             parameters: [
@@ -274,7 +268,7 @@ final readonly class Catalog
                 'limit' => new Parameter(
                     name: 'limit',
                     required: false,
-                    description: 'How many images, capped at 100 by the API.',
+                    description: 'How many rows, capped at 100 by the API.',
                 ),
             ],
         );
@@ -330,7 +324,7 @@ final readonly class Catalog
             'spans' => $spans,
             'events' => $events,
             'hub_datasets' => $hubDatasets,
-            'hub_images' => $hubImages,
+            'hub_rows' => $hubRows,
             'annotation_images' => $annotationImages,
         ];
     }

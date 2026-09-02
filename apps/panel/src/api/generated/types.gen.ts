@@ -1308,6 +1308,26 @@ export const GeometryKind = {
 export type GeometryKind = typeof GeometryKind[keyof typeof GeometryKind];
 
 /**
+ * One column a hub dataset declares, in the hub's own words.
+ *
+ * Carried verbatim and not interpreted. aiwatcher does not know which column
+ * of somebody else's corpus is the picture, what the caption is called, or
+ * whether `indices` is an id or a label — and a route that decided would be
+ * deciding it for every corpus. This is what a script is written against.
+ */
+export type HubColumn = {
+    /**
+     * The dtype a `Value` carries: `string`, `binary`, `int32`, …
+     */
+    dtype?: string;
+    /**
+     * The hub's type tag: `Image`, `Value`, `Sequence`, and so on.
+     */
+    kind: string;
+    name: string;
+};
+
+/**
  * One dataset a hub says it has.
  *
  * Every field here is the hub's, not aiwatcher's, with two exceptions:
@@ -1364,95 +1384,6 @@ export type HubFile = {
 };
 
 /**
- * One picture inside a hub's dataset.
- *
- * Every field is the hub's own except [`image_key`](Self::image_key), which
- * this module composes.
- */
-export type HubImage = {
-    /**
-     * The first text feature on the same row, when there is one.
-     *
-     * Carried because it is usually a description worth reading before
-     * importing. It is never a label: nothing downstream reads it, and a
-     * caption written by whoever uploaded the copy is not an annotation.
-     */
-    caption?: string;
-    /**
-     * The feature it came from — a dataset may carry several image columns.
-     */
-    column: string;
-    height: number;
-    /**
-     * The hub's own address for it, when there is one.
-     *
-     * Kept separate from [`uri`](Self::uri) so a link out of the panel always
-     * points at something a person can open, even when the bytes have to come
-     * back through this process.
-     */
-    hub_uri?: string;
-    /**
-     * `dataset/row_index`. A **per-image** family key, which is the honest
-     * default when a hub row is one unrelated picture and the wrong one the
-     * moment a corpus publishes several renderings of one subject. It is a
-     * column rather than a decision: the import pipeline writes `group_id`
-     * from it explicitly, so changing that is an edit to a query somebody can
-     * read. See [`crate::images::import`], which warns when every row of a
-     * batch is its own family.
-     *
-     * Spelled with a slash because a group name is segmented on one and every
-     * segment is `[A-Za-z0-9._-]` — see [`crate::validate_name`]. A key the
-     * registry refuses is not a default, it is a batch that rejects every
-     * row.
-     */
-    image_key: string;
-    /**
-     * Where it sat in the split, which is the only stable name it has.
-     */
-    row_index: number;
-    /**
-     * Where the bytes are.
-     *
-     * Two shapes, and which one it is depends on what the hub gave. A column
-     * the hub typed as an image comes with a signed asset URL, expiring in
-     * hours — which is why an import stores the bytes rather than the address
-     * (see [`Hubs::fetch`]). A `binary` column comes with no address at all,
-     * so this is a path back into aiwatcher naming the cell, which
-     * [`Hubs::cell`] resolves. Neither is a durable name for a picture; the
-     * durable name is the content address the import writes.
-     */
-    uri: string;
-    /**
-     * What the registry requires and a hub search cannot answer.
-     *
-     * The hub's own numbers for a column it typed as an image. For a `binary`
-     * column the hub says nothing, so they are read out of the bytes' header
-     * — see [`crate::integrations::pixels`] — and a cell whose header says it
-     * is not a picture is skipped rather than imported as a zero.
-     */
-    width: number;
-};
-
-/**
- * The images one call found, and where they came from.
- */
-export type HubImagePage = {
-    /**
-     * Resolved, never echoed: what was actually read, which is what makes the
-     * same call repeatable after a dataset gains a second split.
-     */
-    config: string;
-    dataset: string;
-    hub: HubKind;
-    images: Array<HubImage>;
-    split: string;
-    /**
-     * The split's own count, when the hub reports one.
-     */
-    total_rows?: number | null;
-};
-
-/**
  * Which mirror a row came from.
  */
 export const HubKind = { KAGGLE: 'kaggle', HUGGINGFACE: 'huggingface' } as const;
@@ -1461,6 +1392,59 @@ export const HubKind = { KAGGLE: 'kaggle', HUGGINGFACE: 'huggingface' } as const
  * Which mirror a row came from.
  */
 export type HubKind = typeof HubKind[keyof typeof HubKind];
+
+/**
+ * One row of a hub dataset, as the hub sent it.
+ */
+export type HubRow = {
+    /**
+     * Columns left out, and why they would have been.
+     *
+     * Named, because a column that is simply absent reads as a column the
+     * corpus does not have.
+     */
+    omitted?: Array<string>;
+    /**
+     * Every column, under the corpus's own name for it.
+     *
+     * Two substitutions, and both are about size rather than meaning: a cell
+     * the hub sent as bytes becomes a path back into this process that
+     * resolves them (see [`Hubs::cell`]), because a hundred rows of base64 is
+     * a result heavier than the pictures it describes; and a cell too large
+     * to carry is left out and named in [`omitted`](Self::omitted).
+     */
+    row: {
+        [key: string]: unknown;
+    };
+    /**
+     * Where it sat in the split. The only name a row has that the corpus did
+     * not choose, and the one a family key is usually built from.
+     */
+    row_index: number;
+};
+
+/**
+ * One page of a hub dataset's rows.
+ */
+export type HubRowsPage = {
+    /**
+     * What the corpus declares it holds. A script is written from this.
+     */
+    columns: Array<HubColumn>;
+    /**
+     * Resolved, never echoed: what was actually read, which is what makes the
+     * same call repeatable after a dataset gains a second split.
+     */
+    config: string;
+    dataset: string;
+    hub: HubKind;
+    rows: Array<HubRow>;
+    split: string;
+    /**
+     * The split's own count, when the hub reports one.
+     */
+    total_rows?: number | null;
+};
 
 /**
  * A page of results, and what each hub had to say about answering.
@@ -4399,7 +4383,7 @@ export type GetHubImageResponses = {
     200: unknown;
 };
 
-export type ListHubImagesData = {
+export type ListHubRowsData = {
     body?: never;
     path?: never;
     query: {
@@ -4421,10 +4405,10 @@ export type ListHubImagesData = {
         offset?: number;
         limit?: number;
     };
-    url: '/api/v1/dataset-hubs/images';
+    url: '/api/v1/dataset-hubs/rows';
 };
 
-export type ListHubImagesErrors = {
+export type ListHubRowsErrors = {
     501: ErrorBody;
     /**
      * The hub refused, or does not serve rows
@@ -4432,13 +4416,13 @@ export type ListHubImagesErrors = {
     502: ErrorBody;
 };
 
-export type ListHubImagesError = ListHubImagesErrors[keyof ListHubImagesErrors];
+export type ListHubRowsError = ListHubRowsErrors[keyof ListHubRowsErrors];
 
-export type ListHubImagesResponses = {
-    200: HubImagePage;
+export type ListHubRowsResponses = {
+    200: HubRowsPage;
 };
 
-export type ListHubImagesResponse = ListHubImagesResponses[keyof ListHubImagesResponses];
+export type ListHubRowsResponse = ListHubRowsResponses[keyof ListHubRowsResponses];
 
 export type SearchHubsData = {
     body?: never;
