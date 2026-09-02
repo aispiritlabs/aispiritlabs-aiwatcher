@@ -48,6 +48,37 @@ run "cargo fmt"    cargo fmt --all --check
 run "cargo clippy" cargo clippy --workspace --all-targets --all-features -- -Dwarnings
 run "cargo test"   cargo test --workspace --all-targets
 
+# ── Image ────────────────────────────────────────────────────────────────────
+#
+# The Dockerfile copies one manifest per crate before the sources, so a
+# source-only change reuses the dependency layer. That list is the one place in
+# the repository that has to be edited when a crate is added, and nothing in a
+# `cargo` build notices when it is not: the failure is a `docker build` that
+# pulls a 285 MB base image and *then* says a workspace member is missing.
+#
+# Four crates went in without it once. This is the check that would have caught
+# them in a second rather than in CI's build stage.
+dockerfile_lists_every_crate() {
+  local missing=() extra=() crate
+  for crate in crates/*/; do
+    crate="${crate#crates/}"; crate="${crate%/}"
+    grep -q "^COPY crates/${crate}/Cargo.toml " deploy/Dockerfile || missing+=("$crate")
+  done
+  while read -r crate; do
+    [[ -d "crates/${crate}" ]] || extra+=("$crate")
+  done < <(sed -n 's|^COPY crates/\([^/]*\)/Cargo.toml .*|\1|p' deploy/Dockerfile)
+
+  if ((${#missing[@]})); then
+    printf 'deploy/Dockerfile never copies: %s\n' "${missing[*]}"
+    printf 'Add "COPY crates/<name>/Cargo.toml crates/<name>/" for each, in dependency order.\n'
+  fi
+  if ((${#extra[@]})); then
+    printf 'deploy/Dockerfile copies crates that no longer exist: %s\n' "${extra[*]}"
+  fi
+  ((${#missing[@]} + ${#extra[@]} == 0))
+}
+run "dockerfile lists every crate" dockerfile_lists_every_crate
+
 # ── Contract ─────────────────────────────────────────────────────────────────
 # The panel's client is generated from contracts/openapi.json. A stale contract
 # means the generated client and the Rust routes have silently diverged.
