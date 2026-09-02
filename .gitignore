@@ -42,6 +42,17 @@ sdk/python/dist/
 !.env.example
 *.pem
 *.key
+# One exception, and it is the kind worth being explicit about. The OIDC flow
+# test signs tokens with a throwaway RSA key, over a loopback socket, in a
+# process that exits when the test does — and the *public* half of that key is
+# already committed beside it as `signing-key.modulus`, because the fake
+# provider serves it as a JWK. Without the key the crate does not compile,
+# which is how this was found: it built for everyone who had generated one
+# locally and for nobody else.
+#
+# The blanket rules above stay. This negation names one path, so a `.pem` that
+# turns up anywhere else is still an accident.
+!crates/aiwatcher-auth/tests/fixtures/signing-key.pem
 # A kubeconfig names a cluster and carries a credential for it. The install
 # scripts read $KUBECONFIG rather than a file in the tree, so one appearing here
 # is an accident.
