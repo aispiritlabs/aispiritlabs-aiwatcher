@@ -38,6 +38,14 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::prompts::router())
         .merge(crate::datasets::router())
         .merge(crate::annotations::router())
+        // The asynchronous half of the same store: a staged batch and the job
+        // that reads it. Its own module because a job is a different noun from
+        // a picture — it outlives the request that queued it. See ADR_0022.
+        .merge(crate::imports::router())
+        // The fifth authored artifact, and the one that is not like the other
+        // four: its content is encrypted, expires on a clock of its own and can
+        // be erased on request. See ADR_0021.
+        .merge(crate::conversations::router())
         // Training is the one of the four whose contents never came from the
         // log at all: a run is a record that grows in place. See ADR_0018.
         .merge(crate::training::router())

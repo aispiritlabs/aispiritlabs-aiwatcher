@@ -9,6 +9,12 @@ repository.workspace = true
 
 [dependencies]
 aiwatcher-core.workspace = true
+# The lease, the cursor, the shard and the content address a finished job is
+# named by, shared with the conversation archive's export. See ADR_0022.
+aiwatcher-jobs.workspace = true
+# One port in this crate is async: `ImageSource`, which is what lets the import
+# job run without knowing a hub exists.
+async-trait.workspace = true
 # A hub returns a binary column as base64 in the row itself, so decoding one is
 # how a picture stored as bytes rather than as a URL is read at all.
 base64.workspace = true
@@ -22,6 +28,9 @@ serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 time.workspace = true
+# `lookup_host`: every address a fetch would connect to is checked before the
+# connection is made. See `integrations::fetch`.
+tokio.workspace = true
 utoipa.workspace = true
 
 [dev-dependencies]

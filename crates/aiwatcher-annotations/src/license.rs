@@ -77,6 +77,57 @@ impl UsageRights {
     }
 }
 
+/// Who checked a rights assertion, where, and when.
+///
+/// The missing half of [`UsageRights`]. That type records *what* somebody
+/// claimed; this records the claim's provenance — and the two are separate
+/// because a claim with nothing behind it is still the claim that was made,
+/// and pretending otherwise would mean either refusing it (which teaches
+/// people to invent a licence to get past the dialog) or believing it.
+///
+/// Every field is optional and the whole thing is recorded rather than
+/// enforced. What it changes is what a later reader can do: "why is this
+/// corpus marked commercial" has an answer that is a URL and a name and a
+/// date, instead of a `git blame` on a JSON file. The one hard rule stays
+/// where it was — [`check_rights`] refuses a claim the curated table
+/// contradicts, because there a human already read the licence at the source.
+///
+/// [`primary_source_url`](Self::primary_source_url) is deliberately named for
+/// the *original*, never the mirror. ADR_0019's whole finding is that a hub
+/// restates licences wrongly often enough that its card is evidence about the
+/// mirror rather than about the data, so evidence pointing back at the hub
+/// result somebody clicked is not evidence at all.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RightsEvidence {
+    /// Where the licence was read: the paper, the project page, the repository
+    /// the corpus was published from. Not the Hugging Face or Kaggle card.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub primary_source_url: String,
+    /// Who read it. A person, because a rights assertion is a person's.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reviewed_by: String,
+    /// When they read it. A licence at a URL is a licence on a date.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(with = "time::serde::rfc3339::option")]
+    #[schema(value_type = Option<String>)]
+    pub reviewed_at: Option<time::OffsetDateTime>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub note: String,
+}
+
+impl RightsEvidence {
+    /// Whether anybody actually recorded anything.
+    ///
+    /// A name with no source, or a source with no name, is half an answer and
+    /// counts: the point is to be able to go back and ask, and either half
+    /// makes that possible.
+    #[must_use]
+    pub fn is_stated(&self) -> bool {
+        !self.primary_source_url.is_empty() || !self.reviewed_by.is_empty()
+    }
+}
+
 /// What an export claims about itself.
 ///
 /// `Commercial` is the default, because the failure this guards against is

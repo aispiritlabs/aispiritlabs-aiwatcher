@@ -35,6 +35,15 @@ pub enum ApiError {
     #[error("this instance has no training registry configured (AIWATCHER_PROMPT_STORE)")]
     TrainingRegistryDisabled,
 
+    /// The one registry whose absence is the *default*, and deliberately so:
+    /// a deployment that has not decided how it governs conversation content
+    /// must not be quietly holding any. See ADR_0021.
+    #[error(
+        "this instance keeps no conversation archive (AIWATCHER_CONVERSATION_ARCHIVE, \
+         AIWATCHER_CONVERSATION_KEYS)"
+    )]
+    ConversationArchiveDisabled,
+
     #[error(
         "this instance searches no dataset hubs (AIWATCHER_HUGGINGFACE_ENABLED, AIWATCHER_KAGGLE_USERNAME/AIWATCHER_KAGGLE_KEY)"
     )]
@@ -90,6 +99,9 @@ pub enum ApiError {
 
     #[error(transparent)]
     TrainingRegistry(#[from] aiwatcher_training::Error),
+
+    #[error(transparent)]
+    ConversationArchive(#[from] aiwatcher_conversations::Error),
 
     /// A rerun the orchestrator would not take. Distinct from every other
     /// variant here in one way that matters: it is the only failure that is
@@ -149,7 +161,10 @@ impl ApiError {
             Self::RegistryDisabled
             | Self::DatasetRegistryDisabled
             | Self::AnnotationRegistryDisabled
-            | Self::TrainingRegistryDisabled => (StatusCode::NOT_IMPLEMENTED, "registry_disabled"),
+            | Self::TrainingRegistryDisabled
+            | Self::ConversationArchiveDisabled => {
+                (StatusCode::NOT_IMPLEMENTED, "registry_disabled")
+            }
             // Same shape once more, with the sharpest reason of the set: an
             // empty search result would read as "there is no such corpus",
             // which is a fact about the world rather than about this
@@ -184,6 +199,7 @@ impl ApiError {
             Self::DatasetRegistry(error) => dataset_registry_parts(error),
             Self::AnnotationRegistry(error) => annotation_registry_parts(error),
             Self::TrainingRegistry(error) => training_registry_parts(error),
+            Self::ConversationArchive(error) => conversation_archive_parts(error),
             // The same retryable/not split the registry makes, for the same
             // reason: an orchestrator that is down is a 503 worth repeating,
             // and one that refused the request is a 502 that will refuse it
@@ -295,6 +311,38 @@ fn training_registry_parts(error: &aiwatcher_training::Error) -> (StatusCode, &'
     }
 }
 
+/// A conversation archive failure, as a status the caller can act on.
+///
+/// Two outcomes no other registry here has. Erased content is a **410**: the
+/// turn was there, it is gone, and a 404 would make a completed erasure
+/// indistinguishable from a turn that never existed — which is exactly the
+/// distinction an auditor came for. And a key this deployment no longer holds
+/// is a 500 rather than a 404, because it is a configuration problem in this
+/// process: the content is intact and unreadable, and telling the caller it is
+/// missing would send them to look for a backup that would not help.
+fn conversation_archive_parts(
+    error: &aiwatcher_conversations::Error,
+) -> (StatusCode, &'static str) {
+    use aiwatcher_conversations::Error;
+    match error {
+        Error::NotFound(_) => (StatusCode::NOT_FOUND, "not_found"),
+        Error::Erased(_, _) => (StatusCode::GONE, "erased"),
+        Error::Invalid(_) => (StatusCode::BAD_REQUEST, "bad_request"),
+        // The same 422 the annotation registry uses, and for the same reason:
+        // the request was well formed and its *content* was refused, with every
+        // problem at once rather than the first.
+        Error::Rejected(_) => (StatusCode::UNPROCESSABLE_ENTITY, "turn_rejected"),
+        Error::Refused(_) => (StatusCode::UNPROCESSABLE_ENTITY, "export_refused"),
+        Error::TooLarge { .. } => (StatusCode::PAYLOAD_TOO_LARGE, "too_large"),
+        Error::Crypto(_) => (StatusCode::INTERNAL_SERVER_ERROR, "archive_key_missing"),
+        Error::Store(store) if store.is_retryable() => {
+            (StatusCode::SERVICE_UNAVAILABLE, "registry_unavailable")
+        }
+        Error::Store(_) => (StatusCode::BAD_GATEWAY, "registry_rejected"),
+        Error::Corrupt { .. } => (StatusCode::INTERNAL_SERVER_ERROR, "registry_corrupt"),
+    }
+}
+
 fn dataset_registry_parts(error: &aiwatcher_datasets::RegistryError) -> (StatusCode, &'static str) {
     use aiwatcher_datasets::RegistryError;
     match error {
@@ -319,6 +367,11 @@ impl IntoResponse for ApiError {
         }
         let details = match &self {
             Self::AnnotationRegistry(aiwatcher_annotations::Error::Rejected(problems)) => {
+                problems.clone()
+            }
+            // Same reason: a producer fixing one policy problem per round trip
+            // learns to send a basis it does not mean.
+            Self::ConversationArchive(aiwatcher_conversations::Error::Rejected(problems)) => {
                 problems.clone()
             }
             _ => Vec::new(),

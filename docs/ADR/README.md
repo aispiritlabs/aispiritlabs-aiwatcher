@@ -26,5 +26,8 @@ decision is made rather than reconstructed afterwards. The value is in the
 | [0018](ADR_0018_TRAINING_RUNS.md) | A training run is a record, not a trace, and it has its own module |
 | [0019](ADR_0019_DATASET_HUB_DISCOVERY.md) | A dataset hub is searched for what exists and never asked what is permitted |
 | [0020](ADR_0020_GENERIC_VISION_ANNOTATION.md) | The annotation tool ships no vocabulary; the schema carries the domain |
+| [0021](ADR_0021_CONVERSATION_ARCHIVE.md) | Conversation content is an encrypted archive with its own retention, not events on the log |
+| [0022](ADR_0022_STAGED_IMPORT_JOBS.md) | A long job over an object store is one primitive, and a corpus is staged before it is imported |
+| [0023](ADR_0023_MODEL_PACKAGE.md) | A serving runtime is handed a declared package, and a checkpoint URI is not one |
 
 Use [template.md](template.md) for a new one.

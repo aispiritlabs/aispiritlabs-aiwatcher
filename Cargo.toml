@@ -5,10 +5,12 @@
 #   aiwatcher-core       domain types: ids, envelope, correlation, catalog, ports
 #   aiwatcher-bus        MessageSource / MessageSink / Checkpointer + adapters
 #   aiwatcher-trace      span assembly + OTLP/JSON exporters
+#   aiwatcher-jobs       lease, cursor, shards: what a long job over a store is
 #   aiwatcher-prompts    the prompt registry, over an object store
 #   aiwatcher-datasets   curation recipes + versioned dataset artifacts
 #   aiwatcher-annotations vector image annotations + immutable training exports
 #   aiwatcher-training   training runs and the model versions they produce
+#   aiwatcher-conversations  the encrypted conversation archive and its exports
 #   aiwatcher-runner     the workflow rerun dispatcher, over HTTP
 #   aiwatcher-pipeline   pipeline engines: the launchable catalog, and starting one
 #   aiwatcher-auth       OIDC relying party: discovery, JWKS, sessions, roles
@@ -33,10 +35,12 @@ repository = "https://github.com/ai-spirit/aiwatcher"
 aiwatcher-core = { path = "crates/aiwatcher-core", version = "0.1.0" }
 aiwatcher-bus = { path = "crates/aiwatcher-bus", version = "0.1.0" }
 aiwatcher-trace = { path = "crates/aiwatcher-trace", version = "0.1.0" }
+aiwatcher-jobs = { path = "crates/aiwatcher-jobs", version = "0.1.0" }
 aiwatcher-prompts = { path = "crates/aiwatcher-prompts", version = "0.1.0" }
 aiwatcher-datasets = { path = "crates/aiwatcher-datasets", version = "0.1.0" }
 aiwatcher-annotations = { path = "crates/aiwatcher-annotations", version = "0.1.0" }
 aiwatcher-training = { path = "crates/aiwatcher-training", version = "0.1.0" }
+aiwatcher-conversations = { path = "crates/aiwatcher-conversations", version = "0.1.0" }
 aiwatcher-runner = { path = "crates/aiwatcher-runner", version = "0.1.0" }
 aiwatcher-pipeline = { path = "crates/aiwatcher-pipeline", version = "0.1.0" }
 aiwatcher-auth = { path = "crates/aiwatcher-auth", version = "0.1.0" }

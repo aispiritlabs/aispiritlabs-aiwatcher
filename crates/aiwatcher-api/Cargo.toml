@@ -12,6 +12,7 @@ aiwatcher-core.workspace = true
 aiwatcher-auth.workspace = true
 aiwatcher-bus.workspace = true
 aiwatcher-annotations.workspace = true
+aiwatcher-conversations.workspace = true
 aiwatcher-datasets.workspace = true
 aiwatcher-projector.workspace = true
 aiwatcher-prompts.workspace = true

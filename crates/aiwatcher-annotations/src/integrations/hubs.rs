@@ -35,7 +35,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::ToSchema;
 
-use crate::integrations::pixels;
+use crate::integrations::fetch::{FetchPolicy, FetchedImage, Fetcher, ImageSource};
 use crate::license::SourceUsage;
 use crate::sources::DatasetSource;
 
@@ -52,8 +52,6 @@ const SEARCH_TIMEOUT: Duration = Duration::from_secs(8);
 /// interactive control that must feel fast, while this runs inside an import
 /// somebody has already decided to wait for. A megabyte over a slow link is
 /// normal here and is not a hub that is down.
-const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
-
 /// The most images one call may list.
 ///
 /// Hugging Face's own rows endpoint caps a page at 100.
@@ -398,6 +396,11 @@ pub struct HubRowsPage {
 /// The search surface. Holds one HTTP client and the curated table.
 pub struct Hubs {
     http: reqwest::Client,
+    /// The bounded downloader. Separate from `http` on purpose: that client
+    /// follows redirects and talks to APIs whose answers are parsed, and this
+    /// one follows none and returns bytes that are about to be stored. See
+    /// [`crate::integrations::fetch`].
+    fetcher: Fetcher,
     config: HubConfig,
     curated: Vec<DatasetSource>,
 }
@@ -439,6 +442,7 @@ impl Hubs {
                 .timeout(SEARCH_TIMEOUT)
                 .user_agent(concat!("aiwatcher/", env!("CARGO_PKG_VERSION")))
                 .build()?,
+            fetcher: Fetcher::new(FetchPolicy::for_hubs())?,
             config,
             curated,
         })
@@ -780,25 +784,20 @@ impl Hubs {
         // what keeps that from being an address a caller chose.
         let src = string(cell, "src");
         if !src.is_empty() {
-            let (bytes, header) = self.fetch(&src).await?;
-            // The bytes outrank the header. Hugging Face serves its cached
-            // assets as `binary/octet-stream`, and a browser handed that for
-            // something it is about to draw is being told less than the first
-            // four bytes already say.
-            let content_type =
-                pixels::describe(&bytes).map_or(header, |found| found.content_type.to_owned());
-            return Ok((bytes, content_type));
+            let found = self.fetch(&src, None).await?;
+            return Ok((found.bytes, found.content_type));
         }
 
+        // An inline cell never crossed the network and still goes through the
+        // same two gates: it has to be a picture, and it has to be a picture
+        // of a size something can decode. A `binary` column is bytes somebody
+        // uploaded, and a corpus is exactly where a decompression bomb would
+        // be waiting.
         let bytes = inline_bytes(cell)
             .ok_or_else(|| format!("{} on row {} is not bytes", query.column, query.row))?;
-        let found = pixels::describe(&bytes).ok_or_else(|| {
-            format!(
-                "{} on row {} is not a picture this can read",
-                query.column, query.row
-            )
-        })?;
-        Ok((bytes, found.content_type.to_owned()))
+        let what = format!("{} on row {}", query.column, query.row);
+        let found = self.fetcher.accept(bytes, &what, None, String::new())?;
+        Ok((found.bytes, found.content_type))
     }
 
     /// The dataset's first configuration and split.
@@ -840,48 +839,20 @@ impl Hubs {
 
     /// The bytes behind one hub image.
     ///
-    /// Restricted to the hosts this module hands out, and that restriction is
-    /// the point rather than a detail. The alternative — fetching whatever URI
-    /// a caller put in an import row — is a request-forgery primitive: this
-    /// process runs inside a cluster, so "download this address for me" is a
-    /// request to reach the cluster's own network on the caller's behalf. Same
-    /// rule as the rerun target, which may only come from configuration.
+    /// Every gate lives in [`Fetcher`] rather than here, and that is the point
+    /// of the split: this module knows *which hosts are a hub's*, and the
+    /// fetcher knows what may be downloaded from a host at all. Before the
+    /// split, "only a hub's own asset host" was the whole of the policy — a
+    /// redirect, a fifty-gigabyte body and a login page served as a PNG all
+    /// went through.
     ///
     /// # Errors
-    /// When the host is not a hub's, or the download failed.
-    pub async fn fetch(&self, uri: &str) -> Result<(Vec<u8>, String), String> {
-        if !is_hub_asset(uri) {
-            return Err(format!(
-                "{uri} is not a Hugging Face address; only a hub's own asset host may be fetched"
-            ));
-        }
-        let response = self
-            .request(uri)
-            .timeout(FETCH_TIMEOUT)
-            .send()
+    /// When the host is not a hub's, the address resolves inside the network,
+    /// the download failed, or what came back is not a picture.
+    pub async fn fetch(&self, uri: &str, expected: Option<&str>) -> Result<FetchedImage, String> {
+        self.fetcher
+            .fetch_image(uri, expected, self.config.huggingface_token.as_deref())
             .await
-            .map_err(|error| format!("the image did not download: {error}"))?;
-
-        let status = response.status();
-        if !status.is_success() {
-            // An expired signature is the failure worth naming: these URLs
-            // last hours, so a batch previewed yesterday and imported today
-            // fails here rather than anywhere that would explain itself.
-            return Err(format!(
-                "the image answered {status}; a hub asset URL expires within hours of being listed"
-            ));
-        }
-        let content_type = response
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or("application/octet-stream")
-            .to_owned();
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|error| format!("the image did not download: {error}"))?;
-        Ok((bytes.to_vec(), content_type))
     }
 
     fn request(&self, url: &str) -> reqwest::RequestBuilder {
@@ -1095,6 +1066,32 @@ fn cell_address(query: &HubCellQuery) -> String {
     }
 }
 
+/// A hub, as the thing an import job asks for bytes.
+///
+/// Two shapes reach here and only one of them is an address. A row that names
+/// a *cell* is resolved from its parts, so nothing follows a URL a caller
+/// chose; a row that carries a hub URL goes through the allowlist and every
+/// other gate in [`Fetcher`]. Anything else is refused by name rather than
+/// attempted, because "download this address for me" from inside a cluster is
+/// a request to reach that cluster's network on the caller's behalf.
+#[async_trait::async_trait]
+impl ImageSource for Hubs {
+    async fn fetch(&self, uri: &str, expected: Option<&str>) -> Result<FetchedImage, String> {
+        if let Some(cell) = parse_cell_address(uri) {
+            let (bytes, content_type) = Self::cell(self, &cell).await?;
+            return self.fetcher.accept(bytes, uri, expected, content_type);
+        }
+        if uri.starts_with("https://") {
+            return Self::fetch(self, uri, expected).await;
+        }
+        Err(format!(
+            "{uri} is not an address this instance fetches. A row either carries an image_id \
+             whose bytes are already stored, names a hub cell, or is an https address on a hub's \
+             own asset host"
+        ))
+    }
+}
+
 /// The cell a row's `uri` names, when it names one.
 ///
 /// The other end of [`cell_address`], and the reason an import can resolve
@@ -1126,24 +1123,6 @@ pub fn parse_cell_address(uri: &str) -> Option<HubCellQuery> {
         return None;
     }
     Some(found)
-}
-
-/// Whether a URI is one this module could have produced.
-///
-/// A prefix match on the scheme *and* a suffix match on the host, split on the
-/// first `/` after the authority — never a `contains`. `https://evil.test/?x=huggingface.co`
-/// contains the host and is not it, and the same mistake in the curated-source
-/// matcher is what invented a licence claim out of a coincidence of spelling.
-fn is_hub_asset(uri: &str) -> bool {
-    let Some(rest) = uri.strip_prefix("https://") else {
-        return false;
-    };
-    let authority = rest.split('/').next().unwrap_or_default();
-    // Credentials in the authority would put anything before an `@`, and the
-    // host is what comes after it.
-    let host = authority.rsplit('@').next().unwrap_or_default();
-    let host = host.split(':').next().unwrap_or_default();
-    host == "huggingface.co" || host.ends_with(".huggingface.co")
 }
 
 async fn send(request: reqwest::RequestBuilder, hub: HubKind) -> Result<Value, String> {
@@ -1496,19 +1475,20 @@ mod tests {
             // Credentials in the authority do not move the host.
             "https://huggingface.co@evil.test/a.png",
         ] {
-            let error = hubs.fetch(uri).await.expect_err("refused: {uri}");
+            let error = Hubs::fetch(&hubs, uri, None)
+                .await
+                .expect_err("refused: {uri}");
             assert!(
-                error.contains("not a Hugging Face address"),
+                error.contains("only https is fetched")
+                    || error.contains("is not a host this instance may fetch from")
+                    || error.contains("credentials in its authority"),
                 "{uri}: {error}"
             );
         }
 
-        assert!(is_hub_asset(
-            "https://datasets-server.huggingface.co/cached-assets/x/image.jpg?Expires=1"
-        ));
-        assert!(is_hub_asset(
-            "https://huggingface.co/datasets/x/resolve/main/a.png"
-        ));
+        let policy = hubs.fetcher.policy();
+        assert!(policy.allows_host("datasets-server.huggingface.co"));
+        assert!(policy.allows_host("huggingface.co"));
     }
 
     #[test]

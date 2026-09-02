@@ -1,19 +1,25 @@
 # aiwatcher, in screenshots
 
-Every screenshot below is the panel against a running server — no mockups. The
-data behind them comes from the seed scripts in `scripts/`, so all of it is
-reproducible in about a minute; the commands are at the [bottom](#reproducing-these).
+Every screenshot below is the panel against a running server — no mockups. Most
+data comes from the seed scripts in `scripts/` and is reproducible in about a
+minute; the Hub screens capture a live Hugging Face search, whose results may
+change. The commands are at the [bottom](#reproducing-these).
 
-The panel is six areas, not eleven pages: watching runs, watching the pipelines
-those runs are stages of, judging them, keeping the prompts they run on,
-curating what they are judged against, and changing the thing being run. Two of
-those six are not built yet, and say so rather than rendering plausible rows.
+The panel follows one lifecycle: observe agent work, curate reproducible data,
+label it where needed, train against an immutable revision, promote only after
+a held-out measurement, and resolve that promoted checkpoint in a serving
+process. The screenshots show the current implementation, including the
+boundaries that still need production work.
 
 - [Observability](#observability) — [Runs](#runs) · [A run's trace](#a-runs-trace) · [The same run, still running](#the-same-run-still-running) · [Explore](#explore) · [Metrics](#metrics) · [Query](#query)
 - [Workflows](#workflows)
 - [Evaluation](#evaluation)
 - [Prompts](#prompts)
-- [What is not built yet](#what-is-not-built-yet)
+- [Datasets and data curation](#datasets-and-data-curation)
+- [Annotations](#annotations)
+- [Training](#training)
+- [Serving the promoted demo](#serving-the-promoted-demo)
+- [Remaining product boundary](#remaining-product-boundary)
 
 ## Observability
 
@@ -195,6 +201,45 @@ refused, and for the two different reasons a candidate gets refused:
 Publishing a new version and moving the `production` label are two separate
 acts, because storing a prompt and deploying it are two decisions.
 
+## Datasets and data curation
+
+![Immutable datasets and their rows](docs/screenshots/datasets.png)
+
+Every saved result is a content-addressed version. The row viewer reads lazy
+slices, searches across the whole version, and keeps the exact Flow pipeline
+beside the rows. An evaluation should record `name@version`, never only the
+mutable dataset name.
+
+![Promoting tracked conversations](docs/screenshots/dataset-build.png)
+
+The Build tab turns selected sessions or agents into a generated Flow recipe.
+That path keeps run, session and trace identifiers for selection and audit, and
+run summaries deliberately contain no conversation bodies — the words are a
+different artifact with a different lifetime, and they live in the Conversations
+area rather than here. See [ADR_0021](docs/ADR/ADR_0021_CONVERSATION_ARCHIVE.md).
+
+![Testing and simulating a Flow curation recipe](docs/screenshots/data-curation.png)
+
+The Data Curation page makes the four stages separate: validate a pipeline
+without reading data, simulate a small bounded result, execute it, then publish
+that exact output. Saved recipes preserve the transformation rather than only
+its result.
+
+![Searching a configured dataset hub](docs/screenshots/dataset-hub.png)
+
+Discover searches Hugging Face, and Kaggle when credentials are configured.
+The mirror's `claimed_license` is shown as a claim, never converted into a
+permission. Actual usage stays `unclear` until a maintained source record says
+otherwise.
+
+![A generated Hugging Face row mapping](docs/screenshots/dataset-hub-import.png)
+
+Opening a result reads its schema and a sample of rows, then generates an
+editable `hub_rows(...)` Flow mapping into aiwatcher's own image structure:
+`uri`, `width`, `height`, `group_id`, optional view/level, and metadata. The UI
+always dry-runs the import before writing it, and the submitted rights value is
+an explicit human assertion for the batch.
+
 ## Annotations
 
 The one area that draws. Everything else here is a fold over the log and is
@@ -205,6 +250,8 @@ object store as prompts, under its own prefix
 
 **Label** is a canvas over one image, with the three columns in the order
 attention moves: which image, the picture, what the selected shape says.
+
+![Labelling an image with the project's schema](docs/screenshots/annotation-label.png)
 
 **It ships no vocabulary** ([ADR_0020](docs/ADR/ADR_0020_GENERIC_VISION_ANNOTATION.md)).
 The project's label schema is the domain — its classes, their geometry, which
@@ -285,10 +332,43 @@ unconfigured is a 501 naming the variable rather than an empty list. An empty
 search result is a claim about the world, and a deployment that never searched
 must not make it.
 
+**Imports** is the same operation at corpus size, and a different shape for it.
+The route above takes every row in one body, capped at five thousand; a corpus
+is staged instead — pages of rows written to the object store, each hashed, the
+batch sealed into a content address — and then read by a job that survives the
+process that started it.
+
+```bash
+just seed-import   # stage twelve pictures in three pages, then import them
+```
+
+Four things about that screen are worth more than the count of what registered:
+
+- **the refusals come first.** An import that registered four hundred thousand
+  of six hundred thousand pictures looks, from a success response, exactly like
+  one that worked. The counts are grouped by reason — `address_refused`,
+  `unreachable`, `not_an_image`, `invalid`, `store_failed` — and the rows behind
+  one reason are a click away, each with the sentence that says what to fix.
+- **there is a progress bar**, unlike Training, and the difference is honest:
+  the pages were counted when the batch was sealed, so the denominator is a
+  fact rather than a guess.
+- **the revision is pinned.** A batch naming a dataset id and no commit comes
+  back with a warning, because `main` is whatever the uploader pushed last and a
+  model naming that import would be naming nothing anybody can go back to.
+- **every byte went through one bounded fetcher**: `https` with the host parsed
+  rather than matched, an allowlist of a hub's own asset hosts, a check that
+  every resolved address is public, no redirects, a byte ceiling applied while
+  the body streams, a pixel ceiling read out of the image's own header, and a
+  verified content address. A row naming `169.254.169.254` is a rejected row
+  with a sentence, not a request. See
+  [ADR_0022](docs/ADR/ADR_0022_STAGED_IMPORT_JOBS.md).
+
 **Exports** freezes a project into an immutable, content-addressed manifest.
 Its id is the string a training run records — `project@export-sha256`, the same
 shape as `dataset@version` — and two exports of an unchanged project are one
 export, so building it before every run costs nothing.
+
+![An immutable export with exclusions and split counts](docs/screenshots/annotation-exports.png)
 
 Two things on that page are worth more than the headline counts:
 
@@ -476,6 +556,10 @@ between them, which is the number to follow across a series: a version that
 gained on validation and not on held-out gained on the split its own selection
 ran against.
 
+![A real training run and its measured curve](docs/screenshots/training-run.png)
+
+![The promoted model and a version blocked by the gate](docs/screenshots/training-model.png)
+
 ### Seeing it work
 
 ```bash
@@ -491,6 +575,54 @@ that every call returned 200. It also pins two buildings to each side of the
 split and checks both renderings of each stayed together, and it registers a
 version with no held-out score to confirm the promotion is refused.
 
+## Serving the promoted demo
+
+The registry is the control plane: it decides which immutable version the
+`production` label names. The runnable demo serving process resolves that
+label, loads the local JSON checkpoint produced by `just e2e-train`, and starts
+an inference endpoint:
+
+```bash
+just serve-mini-model                         # http://127.0.0.1:8091
+curl -s http://127.0.0.1:8091/v1/model
+curl -s -X POST http://127.0.0.1:8091/v1/predict \
+  -H 'content-type: application/json' \
+  -d '{"instances":[[1,0.9,0.1,0,0,0,0,0.81]]}'
+```
+
+What it does before it answers a single request is the part worth reading. It
+refuses a registry that resolved a version the label does not name; it hashes
+every artifact the version's **package** declares and refuses a mismatch — an
+address is not an identity, and `s3://models/latest.pt` is different bytes
+tomorrow; it runs one synthetic request through the loaded model; and only then
+does `/readyz` stop answering 503.
+
+It then watches the label. Moving `production` downloads, verifies and warms the
+candidate **while the old version keeps serving**, and swaps only if all three
+succeed — so a version whose weights do not hash to what its package says never
+becomes ready, and the reason lands on `/v1/model` rather than on a pager. The
+previous version stays loaded, so going back is a request rather than a rebuild:
+
+```bash
+curl -s -X POST http://127.0.0.1:8091/v1/rollback
+```
+
+Every request emits `run.started → llm.started → llm.completed` carrying the
+model, the version, the label, the rows, the latency and the outcome — a served
+model is a model, so an inference lands in the same traces and the same `model`
+dimension as an agent's model call. What those events never carry is the
+instances or the predictions: **inference inputs and outputs do not go on the
+event log**, and a runtime that wants to keep them writes turns to the
+conversation archive with consent and a retention clock, exactly as an agent
+does.
+
+The limit is the loader, and only the loader. This profile implements one
+runtime — `weights`, the JSON vector the demo trainer produces — refuses every
+other **by name** rather than attempting it, and reads `file://` only. An ONNX
+or TorchScript loader and a signed reader for an object store plug into a
+manifest that already exists; both are sequenced in [plan.md](plan.md). See
+[ADR_0023](docs/ADR/ADR_0023_MODEL_PACKAGE.md).
+
 ## Starting the work, not only watching it
 
 Data Curation and Experiments both carry a picker over the orchestrator's own
@@ -505,9 +637,56 @@ Nothing has run when the acknowledgement appears, and the panel says so: it
 shows the engine's phase as a second opinion and links to aiwatcher's own live
 view of the execution, which fills in once the workflow's producer publishes.
 
-## What is not built yet
+## Conversations
 
-![The datasets placeholder](docs/screenshots/datasets.png)
+![The review queue](docs/screenshots/conversation-review.png)
+
+What people said to your agents, kept on purpose and only when a deployment has
+said so. The list on this page decrypts nothing: every badge, count and finding
+comes from a turn's plaintext head, which is why a review queue over a corpus
+nobody may read is still a usable screen. Reading the words is one explicit
+click and needs the `admin` role; a viewer sees that a turn exists, what shape
+it is, whose consent covers it and what the scanner found, and never what it
+says.
+
+The findings are the useful part. A producer's own redaction hook runs before
+anything leaves its process, and the server scans again — because a hook that
+was misconfigured reports exactly the same record as one that worked. The
+demo's third turn is recorded through a producer whose hook was never wired to
+tool output, which is the realistic misconfiguration, and the credential in it
+is caught here rather than in a corpus.
+
+Rejecting needs a reason, and the reason is the record. The preference field
+beside it is a *separate* axis: approving says the content may be used at all,
+and choosing between two sibling answers says which was better. Keeping them
+apart is what stops a turn rejected for holding somebody's address becoming the
+rejected half of a preference pair.
+
+![An export job and the corpus it produced](docs/screenshots/conversation-corpora.png)
+
+An export is a job rather than a request somebody holds open. It pins the
+conversations it will read, writes sealed shards, and advances its cursor only
+after each one is stored — so a process killed mid-export resumes at the last
+shard it committed and reaches the same version an uninterrupted run would.
+Four shapes come out of the same turns: a lossless chat transcript, a
+prompt/response pair, an SFT row with its context, and a preference pair built
+only from what a reviewer explicitly labelled.
+
+The exclusion table is the part worth reading. An export that quietly produced
+forty rows from four thousand turns looks exactly like one that worked; the
+counts are what turn that into "three thousand nine hundred are still waiting
+for review". Every reason is named — not reviewed, review rejected, consent
+missing, scope not permitted, a finding, erased — and the manifest says whether
+its sample list is the whole story.
+
+What comes out is `training/agent-turns@sha256`, which is the reference a
+training run records and the one a model promotion is refused without. An
+erasure request later takes the words out of the archive **and** out of every
+corpus that already had them: the manifest survives with its counts and
+digests, so the reference still resolves and says what happened to it, and the
+rows answer 410.
+
+## Remaining product boundary
 
 Experiments can start a training, evaluation or inference workflow, and cannot
 yet *compare* two of them: the join from a variant to the traces it produced —
@@ -515,6 +694,12 @@ where latency and token cost live — needs `variant` to become a dimension
 first. That half of the area renders a placeholder naming what is missing,
 rather than mocked rows: a plausible fake reads as working software, and this
 one does not.
+
+Large resumable Hub imports and a general deployment runtime still require
+explicit design work. The exact gaps, security constraints and acceptance
+criteria are in [plan.md](plan.md); the small local bridges described above are
+working now. Governed conversation capture is no longer among them — see the
+Conversations section above.
 
 ## Reproducing these
 
@@ -530,9 +715,22 @@ just seed             # one run: ~35 events in, 5 spans out
 just seed-evaluation  # two comparable reports of one suite on one dataset
 just seed-prompts     # a prompt, three optimisations, one of them admitted
 just seed-workflow    # two executions of one declared graph: one done, one live
+just seed-curation    # 80 runs, saved Flow recipes and two immutable datasets
 just seed-annotations # six synthetic plans, three families, an export, a training run
 just e2e-train        # the same chain, end to end, with a real (tiny) model
 ```
+
+The conversation archive is off by default and needs its own server, because
+turning it on is a decision rather than a flag:
+
+```bash
+just run-conversations   # in place of `just run`; writes a dev key into ./.data
+just seed-conversations  # record, review, export, and read one row back
+```
+
+See [instructions.md](instructions.md) for both complete paths: tracked agent
+conversation → dataset, and Hugging Face discovery → mapped annotation project
+→ export → training → serving.
 
 `seed-annotations` draws its own plans in pure Python — no Pillow, no numpy —
 so the labels are correct for the pixels rather than approximately correct,

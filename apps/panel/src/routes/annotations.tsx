@@ -3,10 +3,11 @@ import { Link, Outlet, createFileRoute } from '@tanstack/react-router';
 /**
  * The annotation area: where the data a vision model is trained on is made.
  *
- * Three views, in the order the work happens. **Label** is where a plan is
+ * Four views, in the order the work happens. **Label** is where a plan is
  * drawn on; **Sources** is where the images come from, including the public
- * corpora and what their licences permit; **Exports** is the immutable
- * manifest a training run names.
+ * corpora and what their licences permit; **Imports** is a corpus arriving —
+ * staged in pages, read by a job, with every refused row named; **Exports** is
+ * the immutable manifest a training run names.
  *
  * It sits between Datasets and Experiments in the navigation for a reason: a
  * curated dataset is rows folded out of the log, and an annotation export is
@@ -21,6 +22,7 @@ export const Route = createFileRoute('/annotations')({
 const VIEWS = [
   { to: '/annotations/label', label: 'Label' },
   { to: '/annotations/sources', label: 'Sources' },
+  { to: '/annotations/imports', label: 'Imports' },
   { to: '/annotations/exports', label: 'Exports' },
 ] as const;
 

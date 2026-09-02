@@ -36,12 +36,17 @@
 //! images/      SLICE — one picture: its head, revisions, review, bytes
 //!   store        what the registry does to one
 //!   import       many at once, from rows a Flow pipeline produced
+//! imports/     SLICE — the queued import: a staged batch, read a page at a
+//!              time by a job that survives the process that started it
+//!   staging      the staged artifact: pages, digests, sealing
 //! export       freezing a project into an immutable manifest, and COCO
 //! license      what may be done with the data. One question, one module.
 //! schema       the label vocabulary a drawing is checked against
 //! shapes       the geometry itself, and what makes a drawing finished
 //! sources      the dated table of public corpora somebody read the licence of
 //! integrations/  what this crate reaches *out* to
+//!   fetch        the bounded downloader: the only place bytes an outside
+//!                party chose are fetched, and every gate that bounds it
 //!   hubs         Kaggle and Hugging Face — asked what exists, never what is
 //!                permitted
 //! store        (private) the key layout every slice reads and writes through
@@ -53,6 +58,7 @@ use sha2::{Digest, Sha256};
 
 pub mod export;
 pub mod images;
+pub mod imports;
 pub mod integrations;
 pub mod license;
 pub mod project;
@@ -67,18 +73,26 @@ pub use export::{
     ExportRequest, ExportSample, ExportSummary, split_for, to_coco,
 };
 pub use images::import::{
-    ImportReport, ImportRequest, ImportRow, ImportSource, MAX_IMPORT_ROWS, RowOutcome,
+    ImportReport, ImportRequest, ImportRow, ImportSource, MAX_IMPORT_ROWS, RowOutcome, SourceFile,
 };
 pub use images::{
     AnnotationRevision, BLOB_SCHEME, ImageDetail, ImageFilter, ImageHead, ImagePage, ImageRecord,
     RegisterImageRequest, ReviewRequest, ReviewState, RevisionSummary, SaveRevisionRequest,
     SavedRevision, StoredBlob,
 };
+pub use imports::staging::{
+    AppendReport, AppendRowsRequest, BatchPage, MAX_BATCH_PAGES, MAX_PAGE_ROWS, StageBatchRequest,
+    StagedBatch,
+};
+pub use imports::{
+    ImportCounts, ImportIndex, ImportJob, ImportJobPage, ImportJobRequest, ImportManifest,
+    ImportSummary, MAX_REJECT_PAGE, RejectPage, RejectReason, RejectedRow,
+};
 pub use integrations::hubs::{
     HubCellQuery, HubColumn, HubConfig, HubDataset, HubFile, HubKind, HubQuery, HubRow,
     HubRowsPage, HubRowsQuery, HubSearchPage, HubStatus, Hubs,
 };
-pub use license::{RightsPolicy, SourceUsage, UsageRights, check_rights};
+pub use license::{RightsEvidence, RightsPolicy, SourceUsage, UsageRights, check_rights};
 pub use project::{
     AnnotationProject, ProjectPage, ProjectSummary, SaveProjectRequest, Split, SplitRatios,
 };

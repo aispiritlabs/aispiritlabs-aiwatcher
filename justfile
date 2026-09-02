@@ -147,6 +147,29 @@ run-hubs:
     AIWATCHER_LOG=info,aiwatcher=debug \
     cargo run --bin aiwatcher
 
+# The server with the encrypted conversation archive on, keyed from ./.data.
+run-conversations:
+    #!/usr/bin/env bash
+    # The archive is off by default and needs a key, so this generates one on
+    # first use and reuses it after. That file is the only thing that can read
+    # the archive: delete it and everything sealed under it is unreadable,
+    # which is also how a key is destroyed on purpose. A deployment gets its
+    # key from a secret manager, never from a file beside the data.
+    set -euo pipefail
+    mkdir -p ./.data
+    key_file=./.data/conversation-key
+    if [ ! -f "$key_file" ]; then
+      python3 -c "import base64,os;print('dev:'+base64.urlsafe_b64encode(os.urandom(32)).decode().rstrip('='))" > "$key_file"
+      chmod 600 "$key_file"
+      echo "generated a development archive key in $key_file"
+    fi
+    AIWATCHER_BUS=wal \
+    AIWATCHER_INGEST_ENABLED=true \
+    AIWATCHER_CONVERSATION_ARCHIVE=on \
+    AIWATCHER_CONVERSATION_KEYS="$(cat "$key_file")" \
+    AIWATCHER_LOG=info,aiwatcher=debug \
+    cargo run --bin aiwatcher
+
 # Points at whatever control plane AIWATCHER_FLYTE_ENDPOINT names — `flytectl
 # demo start` serves one on :30080. With none running the engine routes answer
 # 503 rather than 501: "configured and unreachable" against "not configured",
@@ -246,12 +269,37 @@ seed-workflow stamp="":
 seed-annotations:
     ./scripts/seed-demo-annotations.py
 
+# Stage a corpus in pages and import it with the queued job. Needs `just run`.
+seed-import:
+    python3 ./scripts/seed-staged-import.py
+
+# Seed runs, saved Flow recipes and two immutable datasets for the curation UI.
+seed-curation:
+    python3 ./scripts/seed-demo-curation.py
+
+# Record, review and export one conversation. Needs `just run-conversations`.
+seed-conversations:
+    python3 ./scripts/seed-demo-conversations.py
+
+# Move legacy data.input/data.output pairs off the log into the archive.
+import-conversation conversation subject basis reference:
+    python3 ./scripts/import-conversation-turns.py {{quote(conversation)}} \
+      --subject {{quote(subject)}} --basis {{quote(basis)}} --reference {{quote(reference)}}
+
 # The whole chain against a running server: annotate, export, fit a real
 # (tiny) model, register it, and check the guardrail refuses an unmeasured one.
 # Fails if the loss does not fall — a green run means data moved, not that
 # every call returned 200.
 e2e-train:
     ./scripts/e2e-mini-train.py
+
+# It watches the `production` label: moving it downloads, verifies and warms
+# the new version while the old one keeps serving, and only then swaps.
+# `POST /v1/rollback` puts the previous one back with nothing to rebuild.
+
+# Verify the promoted package's digest, load it, and serve it on :8091.
+serve-mini-model port="8091":
+    python3 ./scripts/serve-mini-model.py --port {{quote(port)}}
 
 # ── Python SDK ───────────────────────────────────────────────────────────────
 

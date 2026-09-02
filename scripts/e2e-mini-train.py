@@ -4,7 +4,7 @@
 The smallest thing that is not a mock. Twelve 64×48 plans are generated,
 labelled, exported, fetched back through the API, rasterised into a coarse
 edge/not-edge grid, and used to fit a **real** classifier by gradient descent —
-seven weights, a few thousand samples, two seconds. It is a toy model and it
+eight weights, a few thousand samples, two seconds. It is a toy model and it
 genuinely learns: the script fails if the loss does not fall or the held-out
 IoU does not clear a floor, so a green run means the chain moved data rather
 than that every call returned 200.
@@ -32,6 +32,7 @@ What it checks, in order:
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import os
 import struct
@@ -243,7 +244,7 @@ def features(pixels: list[list[int]]) -> list[list[float]]:
     black line crossing a 4×4 cell averages *lighter* than a solid mid-grey
     block filling it. The darkest pixel in the cell does separate them — 20
     against 170 — and it is exactly the kind of local extremum a first
-    convolutional layer learns on its own. Handing it to a seven-weight linear
+    convolutional layer learns on its own. Handing it to an eight-weight linear
     model is the same information, arrived at by hand.
     """
     mean: list[list[float]] = []
@@ -465,7 +466,7 @@ def main() -> int:  # noqa: PLR0911 - one early return per checked step, on purp
             best = max(best, validation["iou"])
             run.sample(lr=LEARNING_RATE)
 
-        checkpoint.write_text(repr(weights))
+        checkpoint.write_text(json.dumps(weights))
         run.checkpoint(
             f"file://{checkpoint}", epoch=EPOCHS - 1, metric="val_iou", value=best, best=True
         )
@@ -491,13 +492,51 @@ def main() -> int:  # noqa: PLR0911 - one early return per checked step, on purp
     print(f"   loss {first_loss:.4f} → {last_loss:.4f}   held-out IoU {held_out['iou']:.3f}")
 
     print("5. register and promote")
+    # The package is what a serving runtime is handed, and the digest in it is
+    # what stops `file:///tmp/whatever.json` from being a promise. The server
+    # hashes these bytes before it loads them and refuses a mismatch, so this
+    # is the field that makes "the weights this version was measured on" a
+    # checkable claim rather than an address.
+    package = {
+        "runtime": "weights",
+        "runtime_version": "1",
+        "entry_point": checkpoint.name,
+        "inputs": [
+            {
+                "name": "features",
+                "dtype": "float32",
+                "shape": [None, len(weights)],
+                "description": "the coarse edge-grid features the rasteriser produces",
+            }
+        ],
+        "outputs": [
+            {
+                "name": "probability",
+                "dtype": "float32",
+                "shape": [None],
+                "classes": ["background", "edge"],
+            }
+        ],
+        "preprocessing": [f"edge-grid:{COLUMNS}x{ROWS}", f"cell:{CELL}"],
+        "artifacts": [
+            {
+                "name": "weights",
+                "uri": f"file://{checkpoint}",
+                "digest": hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
+                "size_bytes": checkpoint.stat().st_size,
+                "content_type": "application/json",
+            }
+        ],
+        "resources": {"cpu_millis": 100, "memory_mb": 64},
+    }
     registered = training.register_model(
         MODEL,
         run_id=run_id,
         checkpoint_uri=f"file://{checkpoint}",
         validation={"iou": best},
         test={"iou": held_out["iou"]},
-        description="A seven-weight edge detector. It exists to prove the chain.",
+        package=package,
+        description="An eight-weight edge detector. It exists to prove the chain.",
     )
     if registered.get("promotion_blocked"):
         print(f"✗ unexpectedly blocked: {registered['promotion_blocked']}", file=sys.stderr)

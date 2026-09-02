@@ -38,10 +38,7 @@ export function pointsOf(geometry: Geometry): Point[] {
     case 'polyline':
       return geometry.points as Point[];
     case 'polygon':
-      return [
-        ...(geometry.exterior as Point[]),
-        ...((geometry.holes ?? []) as Point[][]).flat(),
-      ];
+      return [...(geometry.exterior as Point[]), ...((geometry.holes ?? []) as Point[][]).flat()];
     case 'keypoints':
       return geometry.points.map((keypoint) => keypoint.at as Point);
   }
@@ -246,6 +243,37 @@ export function rejectionDetails(error: unknown): string[] {
   if (!body) return [];
   if (body.details?.length) return body.details;
   return body.message ? [body.message] : [];
+}
+
+/**
+ * Whether two drawings are the same drawing.
+ *
+ * A `JSON.stringify` comparison of the two is wrong in both directions, which
+ * is what left the "unsaved" marker lit after a save that had already
+ * succeeded. The registry omits `holes`, `attributes` and `links` when they
+ * are empty, so a revision read back never matches the draft it was made
+ * from; and serde writes fields in declaration order, which is not the order
+ * this panel builds an object in. Neither difference is a change somebody
+ * made, so neither may read as one.
+ */
+export function sameAnnotations(left: Annotation[], right: Annotation[]): boolean {
+  return JSON.stringify(canonical(left)) === JSON.stringify(canonical(right));
+}
+
+function canonical(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value === null || typeof value !== 'object') return value;
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+    const entry = canonical((value as Record<string, unknown>)[key]);
+    if (entry === undefined || entry === null) continue;
+    // An absent optional container and an empty one say the same thing, and
+    // the registry answers with the absent one.
+    if (Array.isArray(entry) && entry.length === 0) continue;
+    if (typeof entry === 'object' && Object.keys(entry as object).length === 0) continue;
+    out[key] = entry;
+  }
+  return out;
 }
 
 export const REVIEW_TONES: Record<ReviewState, 'neutral' | 'running' | 'success' | 'danger'> = {

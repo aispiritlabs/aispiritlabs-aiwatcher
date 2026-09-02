@@ -1,0 +1,36 @@
+[package]
+name = "aiwatcher-conversations"
+description = "Governed conversation training data: an encrypted archive with its own retention, and the resumable exports built from it"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+aiwatcher-core.workspace = true
+# The lease, the cursor, the shard and the content address a finished job is
+# named by. Extracted when the Hub importer became the second caller — see
+# ADR_0022.
+aiwatcher-jobs.workspace = true
+base64.workspace = true
+hex.workspace = true
+# AES-256-GCM and HKDF for the archive, and the CSPRNG the nonces come from.
+# Already in this graph under rustls and already the answer in `aiwatcher-auth`
+# for the session signature; encryption is the other place in this workspace
+# where "write it by hand" is the wrong answer.
+ring.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tracing.workspace = true
+utoipa.workspace = true
+
+[dev-dependencies]
+aiwatcher-prompts.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

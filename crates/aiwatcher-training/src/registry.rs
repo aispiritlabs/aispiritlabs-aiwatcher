@@ -281,6 +281,9 @@ impl Registry {
         request.validate()?;
         let run = self.run(&request.run_id).await?;
         let metrics = request.metrics;
+        // The package's digest joins the identity: two versions differing
+        // only in which weights they name are two versions, and collapsing
+        // them would let a promotion point at bytes nobody measured.
         let identity = serde_json::to_vec(&(
             &request.name,
             &request.run_id,
@@ -288,6 +291,10 @@ impl Registry {
             &run.dataset,
             &metrics.validation,
             &metrics.test,
+            request
+                .package
+                .as_ref()
+                .map(super::package::ModelPackage::digest),
         ))
         .map_err(|error| Error::Invalid(format!("the version could not be encoded: {error}")))?;
 
@@ -306,6 +313,7 @@ impl Registry {
                 framework: run.framework.clone(),
                 code: run.code.clone(),
                 metrics,
+                package: request.package,
                 reproducible: run.reproducible,
                 notes: request.notes,
                 created_at: OffsetDateTime::now_utc(),

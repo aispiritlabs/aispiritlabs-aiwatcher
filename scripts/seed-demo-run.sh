@@ -56,7 +56,9 @@ emit llm.first_token    "$AGENT" '{"call_id":"c1","provider":"anthropic","model"
 for i in $(seq 1 24); do
   emit llm.chunk        "$AGENT" "{\"call_id\":\"c1\",\"text\":\"token-$i \"}"
 done
-emit llm.completed      "$AGENT" '{"call_id":"c1","provider":"anthropic","model":"claude-opus-5","prompt_tokens":812,"completion_tokens":193,"cached_tokens":400,"finish_reason":"stop"}'
+# Training content is opt-in. Production telemetry should keep bodies out unless
+# the conversation has passed consent, redaction and retention checks.
+emit llm.completed      "$AGENT" '{"call_id":"c1","provider":"anthropic","model":"claude-opus-5","prompt_tokens":812,"completion_tokens":193,"cached_tokens":400,"finish_reason":"stop","input":"Find three reliable sources about residential heat-pump efficiency in cold climates.","output":"I found three primary sources: an IEA overview, a US DOE field study, and an NREL cold-climate performance report."}'
 
 emit tool.started       "$AGENT" '{"call_id":"t1","tool_name":"web_search"}'
 sleep 0.3
@@ -64,7 +66,7 @@ emit tool.completed     "$AGENT" '{"call_id":"t1","tool_name":"web_search","resu
 
 emit llm.started        "$AGENT" '{"call_id":"c2","provider":"anthropic","model":"claude-opus-5"}'
 sleep 0.2
-emit llm.completed      "$AGENT" '{"call_id":"c2","provider":"anthropic","model":"claude-opus-5","prompt_tokens":1420,"completion_tokens":88,"cached_tokens":812,"finish_reason":"stop"}'
+emit llm.completed      "$AGENT" '{"call_id":"c2","provider":"anthropic","model":"claude-opus-5","prompt_tokens":1420,"completion_tokens":88,"cached_tokens":812,"finish_reason":"stop","input":"Synthesize the evidence into a concise answer and distinguish measured results from recommendations.","output":"Cold-climate heat pumps remain efficient below freezing in measured field studies; size the system from a heat-loss calculation and retain backup heat for design-temperature extremes."}'
 
 emit agent.completed    "$AGENT" '{}'
 emit run.completed      - '{"status":"succeeded"}'

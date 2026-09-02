@@ -27,8 +27,12 @@ import { cn } from '@/lib/utils';
  *
  * * wheel zooms at the cursor, shift-drag pans, and so does a drag on empty
  *   canvas while the select tool is active;
- * * a draw tool takes clicks; `Enter` finishes, `Backspace` removes the last
- *   point, `Escape` abandons the shape;
+ * * a draw tool takes clicks, and the shape ends four ways: click the vertex
+ *   it would close on, double-click, press `Enter`, or press the button on
+ *   the bar the canvas shows while a shape is open. `Backspace` removes the
+ *   last point, `Escape` abandons the shape. Four ways because a labeller who
+ *   cannot find the first one concludes the tool will not let them stop —
+ *   which is the bug this bar exists to close;
  * * a selected shape shows its vertices, which drag; the shape itself drags
  *   with `alt` held, so a stray drag does not silently move a wall.
  *
@@ -100,6 +104,10 @@ export function AnnotationCanvas({
 
   const definition = classOf(classes, activeClass);
   const geometryKind = definition?.geometry ?? 'polygon';
+  // What `finishDraft` will actually accept. The bar reads it to disable its
+  // own button, so "finish" is never an action that silently discards the
+  // shape somebody just drew.
+  const minimumPoints = geometryKind === 'polygon' ? 3 : geometryKind === 'polyline' ? 2 : 1;
   const invalidIds = React.useMemo(() => new Set(invalid ?? []), [invalid]);
   const linkIds = React.useMemo(() => new Set(linkTargets ?? []), [linkTargets]);
 
@@ -173,10 +181,7 @@ export function AnnotationCanvas({
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
       const box = element.getBoundingClientRect();
-      zoomAt(
-        [event.clientX - box.left, event.clientY - box.top],
-        Math.exp(-event.deltaY * 0.0015),
-      );
+      zoomAt([event.clientX - box.left, event.clientY - box.top], Math.exp(-event.deltaY * 0.0015));
     };
     element.addEventListener('wheel', onWheel, { passive: false });
     return () => element.removeEventListener('wheel', onWheel);
@@ -235,11 +240,34 @@ export function AnnotationCanvas({
         setDraft([at, at]);
         return;
       }
+      // A click on a vertex the shape already has finishes it: the first one
+      // closes a ring, the last one ends a line. Both are dead clicks
+      // otherwise — a polygon gains a duplicate point, a polyline a
+      // zero-length segment — so the gesture costs nothing and is the one
+      // every other tool of this kind answers.
+      const closing =
+        geometryKind === 'polygon'
+          ? draft[0]
+          : geometryKind === 'polyline'
+            ? draft[draft.length - 1]
+            : undefined;
+      if (
+        closing &&
+        draft.length >= minimumPoints &&
+        Math.hypot(closing[0] - at[0], closing[1] - at[1]) <= tolerance
+      ) {
+        finishDraft(draft);
+        return;
+      }
       const next = [...draft, at];
       // A point instance and a keypoint set both finish on their own: one
       // click, or one per declared keypoint.
       const target =
-        geometryKind === 'point' ? 1 : geometryKind === 'keypoints' ? (definition?.keypoints?.length ?? 0) : 0;
+        geometryKind === 'point'
+          ? 1
+          : geometryKind === 'keypoints'
+            ? (definition?.keypoints?.length ?? 0)
+            : 0;
       if (target > 0 && next.length >= target) {
         finishDraft(next);
       } else {
@@ -299,7 +327,10 @@ export function AnnotationCanvas({
       case 'shape': {
         const annotation = annotations.find((entry) => entry.id === drag.id);
         if (annotation) {
-          onChange(drag.id, translate(annotation.geometry, at[0] - drag.from[0], at[1] - drag.from[1]));
+          onChange(
+            drag.id,
+            translate(annotation.geometry, at[0] - drag.from[0], at[1] - drag.from[1]),
+          );
           setDrag({ ...drag, from: at });
         }
         return;
@@ -346,6 +377,11 @@ export function AnnotationCanvas({
     return () => window.removeEventListener('keydown', onKey);
   }, [draft, finishDraft]);
 
+  const canFinish = draft.length >= minimumPoints;
+  // A bbox is a drag and a keypoint set counts itself down, so neither has a
+  // moment where somebody is waiting to be told how to stop. Only the two
+  // shapes that end when the labeller says so get the bar.
+  const openEnded = geometryKind === 'polygon' || geometryKind === 'polyline';
   const nextKeypoint =
     tool === 'draw' && geometryKind === 'keypoints'
       ? definition?.keypoints?.[draft.length]
@@ -361,7 +397,15 @@ export function AnnotationCanvas({
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerLeave={() => setCursor(null)}
-      onDoubleClick={() => draft.length > 0 && finishDraft(draft)}
+      onDoubleClick={() => {
+        // Both presses of a double click have already placed a point, because
+        // a pointer event carries no click count (`detail` is 0 by spec). The
+        // second sits on top of the first, so it is dropped rather than saved
+        // as a vertex nobody drew — which is what put a duplicate last point
+        // on every shape finished this way.
+        if (draft.length === 0) return;
+        finishDraft(draft.length > 1 ? draft.slice(0, -1) : draft);
+      }}
       onContextMenu={(event) => event.preventDefault()}
       className={cn(
         'relative select-none overflow-hidden rounded-lg border border-border bg-muted/40 outline-none focus-visible:ring-2 focus-visible:ring-primary',
@@ -409,10 +453,66 @@ export function AnnotationCanvas({
               kind={geometryKind}
               color={classColor(classes, activeClass)}
               scale={view.scale}
+              closesOn={
+                !canFinish
+                  ? null
+                  : geometryKind === 'polygon'
+                    ? 'first'
+                    : geometryKind === 'polyline'
+                      ? 'last'
+                      : null
+              }
             />
           )}
         </svg>
       </div>
+
+      {draft.length > 0 && openEnded && (
+        // The shape in progress, and how to end it. It is here rather than in
+        // a legend because the answer is needed with the eyes on the plan, and
+        // a keyboard hint nobody reads is the same as no way to finish at all.
+        // `stopPropagation` keeps a press on the bar off the canvas, which
+        // would otherwise place a vertex behind it.
+        <div
+          onPointerDown={(event) => event.stopPropagation()}
+          onDoubleClick={(event) => event.stopPropagation()}
+          className="absolute left-2 top-2 flex items-center gap-2 rounded-md border border-border bg-background/90 px-2 py-1 text-[11px] shadow-sm backdrop-blur"
+        >
+          <span className="font-medium">{activeClass}</span>
+          <span className="text-muted-foreground">
+            {draft.length} {draft.length === 1 ? 'point' : 'points'}
+          </span>
+          <button
+            type="button"
+            disabled={!canFinish}
+            onClick={() => finishDraft(draft)}
+            className="rounded bg-primary px-2 py-0.5 font-medium text-primary-foreground disabled:opacity-40"
+          >
+            Finish
+          </button>
+          <button
+            type="button"
+            onClick={() => setDraft(draft.slice(0, -1))}
+            className="rounded border border-border px-2 py-0.5 hover:bg-accent"
+          >
+            Undo
+          </button>
+          <button
+            type="button"
+            onClick={() => setDraft([])}
+            className="rounded border border-border px-2 py-0.5 hover:bg-accent"
+          >
+            Cancel
+          </button>
+          <span className="text-muted-foreground">
+            {!canFinish
+              ? `${minimumPoints - draft.length} more to go`
+              : geometryKind === 'polygon'
+                ? 'or click the first point · Enter · double-click'
+                : 'or click the last point · Enter · double-click'}
+          </span>
+        </div>
+      )}
 
       <div className="pointer-events-none absolute bottom-2 left-2 flex gap-2 text-[11px]">
         <span className="rounded bg-background/80 px-2 py-1 font-mono text-muted-foreground shadow-sm">
@@ -571,7 +671,11 @@ function Outline({
       return (
         <>
           {points.length > 1 && (
-            <polyline points={points.map((point) => point.join(',')).join(' ')} fill="none" {...common} />
+            <polyline
+              points={points.map((point) => point.join(',')).join(' ')}
+              fill="none"
+              {...common}
+            />
           )}
           {points.map((point, index) => (
             <circle
@@ -596,12 +700,15 @@ function DraftShape({
   kind,
   color,
   scale,
+  closesOn,
 }: {
   points: Point[];
   cursor: Point | null;
   kind: LabelClass['geometry'];
   color: string;
   scale: number;
+  /** Which vertex a click would finish on, drawn as a ring. */
+  closesOn?: 'first' | 'last' | null;
 }) {
   const stroke = 2 / scale;
   if (kind === 'bbox') {
@@ -621,6 +728,8 @@ function DraftShape({
     );
   }
   const chain = cursor ? [...points, cursor] : points;
+  const closer =
+    closesOn === 'first' ? points[0] : closesOn === 'last' ? points[points.length - 1] : undefined;
   return (
     <>
       <polyline
@@ -633,6 +742,16 @@ function DraftShape({
       {points.map((point, index) => (
         <circle key={index} cx={point[0]} cy={point[1]} r={4 / scale} fill={color} />
       ))}
+      {closer && (
+        <circle
+          cx={closer[0]}
+          cy={closer[1]}
+          r={8 / scale}
+          fill="none"
+          stroke={color}
+          strokeWidth={2 / scale}
+        />
+      )}
     </>
   );
 }

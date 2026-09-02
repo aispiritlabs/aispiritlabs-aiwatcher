@@ -15,7 +15,14 @@
 //! * **Annotations** (`/api/v1/annotation-*`) are authored in the same sense
 //!   and go further: they are the only routes here that accept image bytes,
 //!   and the only ones whose refusal carries a list rather than a sentence.
-//!   See [`annotations`].
+//!   See [`annotations`]. Their bulk half (`/api/v1/annotation-import-*`) is
+//!   a staged batch and a resumable job rather than a request somebody holds
+//!   open — see [`imports`] and ADR_0022.
+//! * **The conversation archive** (`/api/v1/conversation-*`) is the one group
+//!   whose content is encrypted, separately retained and erasable, and the one
+//!   where a role decides whether words are returned at all: `admin` reads
+//!   content, `editor` writes it, `viewer` sees everything about a turn except
+//!   what it says. See [`conversations`] and ADR_0021.
 //! * **Training** (`/api/v1/training-runs`, `/api/v1/models`) is the group
 //!   that touches none of the machinery above: no log, no live hub, no span
 //!   assembler. A training run is a record that grows in place and a model
@@ -37,11 +44,13 @@
 
 pub mod annotations;
 pub mod auth;
+pub mod conversations;
 pub mod datasets;
 pub mod engine;
 pub mod error;
 pub mod evaluations;
 pub mod health;
+pub mod imports;
 pub mod ingest;
 pub mod integrations;
 pub mod live;

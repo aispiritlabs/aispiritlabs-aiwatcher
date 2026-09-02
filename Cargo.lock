@@ -62,7 +62,9 @@ name = "aiwatcher-annotations"
 version = "0.1.0"
 dependencies = [
  "aiwatcher-core",
+ "aiwatcher-jobs",
  "aiwatcher-prompts",
+ "async-trait",
  "base64",
  "hex",
  "reqwest",
@@ -82,6 +84,7 @@ dependencies = [
  "aiwatcher-annotations",
  "aiwatcher-auth",
  "aiwatcher-bus",
+ "aiwatcher-conversations",
  "aiwatcher-core",
  "aiwatcher-datasets",
  "aiwatcher-projector",
@@ -142,6 +145,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "aiwatcher-conversations"
+version = "0.1.0"
+dependencies = [
+ "aiwatcher-core",
+ "aiwatcher-jobs",
+ "aiwatcher-prompts",
+ "base64",
+ "hex",
+ "ring",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "time",
+ "tokio",
+ "tracing",
+ "utoipa",
+]
+
+[[package]]
 name = "aiwatcher-core"
 version = "0.1.0"
 dependencies = [
@@ -169,6 +192,16 @@ dependencies = [
  "thiserror",
  "time",
  "tokio",
+ "utoipa",
+]
+
+[[package]]
+name = "aiwatcher-jobs"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "sha2",
+ "time",
  "utoipa",
 ]
 
@@ -247,8 +280,10 @@ dependencies = [
  "aiwatcher-api",
  "aiwatcher-auth",
  "aiwatcher-bus",
+ "aiwatcher-conversations",
  "aiwatcher-core",
  "aiwatcher-datasets",
+ "aiwatcher-jobs",
  "aiwatcher-pipeline",
  "aiwatcher-projector",
  "aiwatcher-prompts",

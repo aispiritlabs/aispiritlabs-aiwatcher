@@ -40,6 +40,16 @@ async fn main() -> Result<()> {
         tokio::spawn(async move { projector.run(shutdown).await })
     };
 
+    // The archive's own two background jobs: the export worker and the
+    // retention sweep. `None` when this deployment keeps no archive, which is
+    // the default.
+    let archive_task = aiwatcher_server::conversations::spawn(&state, &config, shutdown.clone());
+
+    // The annotation registry's own background job: the import queue. `None`
+    // when no object store is configured, which is when there is no registry
+    // to import into either.
+    let import_task = aiwatcher_server::imports::spawn(&state, &config, shutdown.clone());
+
     // Ready once the projector is consuming. Before this, `/readyz` reports
     // 503 so a rolling deploy does not send traffic to an instance whose read
     // model is still empty.
@@ -68,6 +78,24 @@ async fn main() -> Result<()> {
     // Give the projector a moment to drain its open spans before exiting.
     state.health.mark_unready();
     shutdown.cancel();
+    if let Some(task) = archive_task {
+        match tokio::time::timeout(Duration::from_secs(10), task).await {
+            Ok(Ok(())) => tracing::info!("the conversation archive worker stopped"),
+            Ok(Err(error)) => tracing::error!(%error, "the conversation archive worker panicked"),
+            // An export in flight has committed every shard it finished, so
+            // whichever process picks the job up next resumes from there.
+            Err(_) => tracing::warn!("the conversation archive worker did not stop within 10s"),
+        }
+    }
+    if let Some(task) = import_task {
+        match tokio::time::timeout(Duration::from_secs(10), task).await {
+            Ok(Ok(())) => tracing::info!("the annotation import worker stopped"),
+            Ok(Err(error)) => tracing::error!(%error, "the annotation import worker panicked"),
+            // An import in flight has committed every page it finished, so
+            // whichever process picks the job up next resumes from there.
+            Err(_) => tracing::warn!("the annotation import worker did not stop within 10s"),
+        }
+    }
     match tokio::time::timeout(Duration::from_secs(30), projector_task).await {
         Ok(Ok(Ok(()))) => tracing::info!("projector drained cleanly"),
         Ok(Ok(Err(error))) => tracing::error!(%error, "projector stopped with an error"),

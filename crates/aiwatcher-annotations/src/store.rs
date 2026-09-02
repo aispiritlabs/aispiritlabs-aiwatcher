@@ -91,6 +91,61 @@ impl Backend {
         )
     }
 
+    // ── Staged imports ───────────────────────────────────────────────────
+    //
+    // Outside the per-project prefix on purpose. A batch and its job are
+    // *about* a project and are not part of it: they hold rows that may never
+    // become images, they outlive the import as a receipt, and a project
+    // listing that had to skip them would be a listing with a filter in it.
+
+    pub(crate) fn batch_key(&self, batch_id: &str) -> String {
+        format!("{}/imports/batches/{batch_id}/manifest.json", self.prefix)
+    }
+
+    pub(crate) fn batches_prefix(&self) -> String {
+        format!("{}/imports/batches/", self.prefix)
+    }
+
+    /// Zero-padded, because these are listed and a store lists them as
+    /// strings: `page-10` sorts before `page-9` and the shard order *is* the
+    /// row order.
+    pub(crate) fn batch_page_key(&self, batch_id: &str, page: usize) -> String {
+        format!(
+            "{}/imports/batches/{batch_id}/pages/{page:06}.jsonl",
+            self.prefix
+        )
+    }
+
+    pub(crate) fn import_job_key(&self, job_id: &str) -> String {
+        format!("{}/imports/jobs/{job_id}/job.json", self.prefix)
+    }
+
+    pub(crate) fn import_jobs_prefix(&self) -> String {
+        format!("{}/imports/jobs/", self.prefix)
+    }
+
+    pub(crate) fn import_result_key(&self, job_id: &str, page: usize) -> String {
+        format!(
+            "{}/imports/jobs/{job_id}/results/{page:06}.jsonl",
+            self.prefix
+        )
+    }
+
+    pub(crate) fn import_reject_key(&self, job_id: &str, page: usize) -> String {
+        format!(
+            "{}/imports/jobs/{job_id}/rejects/{page:06}.jsonl",
+            self.prefix
+        )
+    }
+
+    pub(crate) fn import_manifest_key(&self, version: &str) -> String {
+        format!("{}/imports/manifests/{version}.json", self.prefix)
+    }
+
+    pub(crate) fn import_index_key(&self) -> String {
+        format!("{}/imports/manifests/index.json", self.prefix)
+    }
+
     /// Blobs are keyed by content and shared across projects: the same plan
     /// registered into two projects is one copy of the bytes.
     pub(crate) fn blob_key(&self, image_id: &str) -> String {

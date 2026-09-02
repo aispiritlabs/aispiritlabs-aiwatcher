@@ -113,6 +113,37 @@ impl FromStr for PromptStoreKind {
     }
 }
 
+/// How strict the conversation archive is about consent provenance.
+///
+/// `Protected` is the default, which is the reverse of the usual arrangement
+/// and deliberate: the safe configuration must not be the one somebody has to
+/// remember. See `aiwatcher_conversations::policy`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ConversationPolicyMode {
+    /// A turn with no consent record and no redaction record is refused.
+    #[default]
+    Protected,
+    /// Whatever arrives is recorded as it arrived, gaps and all — which an
+    /// export then excludes by name, in a manifest, forever.
+    Open,
+}
+
+impl FromStr for ConversationPolicyMode {
+    type Err = ConfigError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "protected" | "strict" => Ok(Self::Protected),
+            "open" | "permissive" => Ok(Self::Open),
+            other => Err(ConfigError::Invalid {
+                name: "AIWATCHER_CONVERSATION_POLICY",
+                value: other.to_owned(),
+                expected: "one of protected, open",
+            }),
+        }
+    }
+}
+
 /// Whether this deployment can ask an orchestrator to run a workflow again.
 ///
 /// `None` is the default, and deliberately so: everything else aiwatcher does
@@ -233,6 +264,36 @@ pub struct Config {
     pub prompt_s3_region: String,
     /// Create the bucket at start-up when it is missing.
     pub prompt_s3_create_bucket: bool,
+    /// Whether this instance keeps conversation content at all.
+    ///
+    /// Off by default, and the only authored store here for which that is
+    /// true. Every other one is off because a deployment has not wired an
+    /// object store; this one is off because holding somebody's words is a
+    /// decision that has to be made rather than inherited. See ADR_0021.
+    pub conversation_archive: bool,
+    /// The keys the archive seals and opens with: `id:key[,id:key]`, active
+    /// first, each key 32 base64url bytes. Required when the archive is on —
+    /// an archive with no key would be a plaintext archive, which is the one
+    /// thing this must never quietly become.
+    pub conversation_keys: Option<String>,
+    /// Key prefix inside the same object store the other registries use.
+    pub conversation_prefix: String,
+    /// Whether consent provenance is demanded of a producer.
+    pub conversation_policy: ConversationPolicyMode,
+    /// The longest retention this deployment will apply. A producer asking for
+    /// more is shortened to this, and the turn records that it was.
+    pub conversation_max_ttl_days: u32,
+    /// Whether the server's own scan refusing content is fatal. Off by
+    /// default: a scanner is a heuristic, and one that rejects a write throws
+    /// away the only copy of an exchange because a hex string looked like a
+    /// key. A finding always blocks the export, which is the gate that matters.
+    pub conversation_reject_on_finding: bool,
+    /// How often the retention sweep runs.
+    pub conversation_sweep_interval: Duration,
+    /// How often the export worker looks for a job, when nothing has nudged it.
+    pub conversation_export_poll: Duration,
+    /// The same, for the annotation import queue.
+    pub import_poll: Duration,
     /// Executions kept in the workflow projection. Its own cap: a graph is
     /// held per execution, and an execution can outlive several runs.
     pub max_workflow_executions: usize,
@@ -329,6 +390,26 @@ impl Default for Config {
             prompt_s3_session_token: None,
             prompt_s3_region: "us-east-1".to_owned(),
             prompt_s3_create_bucket: true,
+            // Off. The one default in this file chosen so that doing nothing
+            // keeps nothing.
+            conversation_archive: false,
+            conversation_keys: None,
+            conversation_prefix: "conversations".to_owned(),
+            conversation_policy: ConversationPolicyMode::default(),
+            conversation_max_ttl_days: 365,
+            conversation_reject_on_finding: false,
+            // An hour. Retention is measured in days, so a finer sweep would
+            // only be a busier one.
+            conversation_sweep_interval: Duration::from_secs(3_600),
+            // Fifteen seconds, and mostly irrelevant: queueing an export nudges
+            // the worker directly. This is what catches a job another replica
+            // queued, and a job left running by a process that died.
+            conversation_export_poll: Duration::from_secs(15),
+            // The same fifteen seconds, and mostly irrelevant for the same
+            // reason: queueing an import nudges the worker directly. This is
+            // what catches a job another replica queued, and a job left
+            // running by a process that died.
+            import_poll: Duration::from_secs(15),
             max_workflow_executions: 1_000,
             workflow_runner: WorkflowRunnerKind::default(),
             workflow_runner_url: None,
@@ -477,6 +558,35 @@ impl Config {
         if let Some(raw) = var("AIWATCHER_PROMPT_S3_CREATE_BUCKET") {
             config.prompt_s3_create_bucket = parse_bool("AIWATCHER_PROMPT_S3_CREATE_BUCKET", &raw)?;
         }
+        if let Some(raw) = var("AIWATCHER_CONVERSATION_ARCHIVE") {
+            config.conversation_archive = parse_bool("AIWATCHER_CONVERSATION_ARCHIVE", &raw)?;
+        }
+        config.conversation_keys = var("AIWATCHER_CONVERSATION_KEYS");
+        if let Some(raw) = var("AIWATCHER_CONVERSATION_PREFIX") {
+            config.conversation_prefix = raw.trim_matches('/').to_owned();
+        }
+        if let Some(raw) = var("AIWATCHER_CONVERSATION_POLICY") {
+            config.conversation_policy = raw.parse()?;
+        }
+        if let Some(raw) = var("AIWATCHER_CONVERSATION_MAX_TTL_DAYS") {
+            config.conversation_max_ttl_days = raw.parse().map_err(|_| ConfigError::Invalid {
+                name: "AIWATCHER_CONVERSATION_MAX_TTL_DAYS",
+                value: raw,
+                expected: "whole number of days",
+            })?;
+        }
+        if let Some(raw) = var("AIWATCHER_CONVERSATION_REJECT_ON_FINDING") {
+            config.conversation_reject_on_finding =
+                parse_bool("AIWATCHER_CONVERSATION_REJECT_ON_FINDING", &raw)?;
+        }
+        if let Some(raw) = var("AIWATCHER_CONVERSATION_SWEEP_SECONDS") {
+            config.conversation_sweep_interval =
+                Duration::from_secs(raw.parse().map_err(|_| ConfigError::Invalid {
+                    name: "AIWATCHER_CONVERSATION_SWEEP_SECONDS",
+                    value: raw,
+                    expected: "whole number of seconds",
+                })?);
+        }
         if let Some(raw) = var("AIWATCHER_MAX_WORKFLOW_EXECUTIONS") {
             config.max_workflow_executions = raw.parse().map_err(|_| ConfigError::Invalid {
                 name: "AIWATCHER_MAX_WORKFLOW_EXECUTIONS",
@@ -553,7 +663,24 @@ impl Config {
             };
         }
 
-        if config.bus == BackendKind::Laser && config.laser_connection_string.is_none() {
+        config.validate()?;
+
+        Ok(config)
+    }
+
+    /// Every rule that decides whether this configuration can start.
+    ///
+    /// A method rather than a block inside `from_env`, because a test cannot
+    /// touch the environment — they share one process — and a test that
+    /// re-implemented these rules would be a second copy of them, agreeing with
+    /// the first only until somebody changed one.
+    ///
+    /// # Errors
+    ///
+    /// [`ConfigError`] naming the variable that is missing or unusable, and
+    /// what made it required.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.bus == BackendKind::Laser && self.laser_connection_string.is_none() {
             return Err(ConfigError::Missing {
                 name: "AIWATCHER_LASER_CONNECTION_STRING",
                 bus: "laser",
@@ -564,17 +691,11 @@ impl Config {
         // unauthenticated S3 endpoint answers 403 to every request, and
         // finding that out when somebody saves a prompt means the failure
         // surfaces to whoever was writing rather than to whoever deployed.
-        if config.prompt_store == PromptStoreKind::S3 {
+        if self.prompt_store == PromptStoreKind::S3 {
             for (name, value) in [
-                ("AIWATCHER_PROMPT_S3_ENDPOINT", &config.prompt_s3_endpoint),
-                (
-                    "AIWATCHER_PROMPT_S3_ACCESS_KEY",
-                    &config.prompt_s3_access_key,
-                ),
-                (
-                    "AIWATCHER_PROMPT_S3_SECRET_KEY",
-                    &config.prompt_s3_secret_key,
-                ),
+                ("AIWATCHER_PROMPT_S3_ENDPOINT", &self.prompt_s3_endpoint),
+                ("AIWATCHER_PROMPT_S3_ACCESS_KEY", &self.prompt_s3_access_key),
+                ("AIWATCHER_PROMPT_S3_SECRET_KEY", &self.prompt_s3_secret_key),
             ] {
                 if value.is_none() {
                     return Err(ConfigError::Required {
@@ -585,13 +706,31 @@ impl Config {
             }
         }
 
+        // An archive with no key would hold conversation content in plaintext
+        // in a bucket several other things already read. Refusing to start says
+        // which variable is missing, once, to whoever deployed it — rather than
+        // discovering it when somebody asks where the encryption went.
+        if self.conversation_archive && self.conversation_keys.is_none() {
+            return Err(ConfigError::Required {
+                name: "AIWATCHER_CONVERSATION_KEYS",
+                because: "AIWATCHER_CONVERSATION_ARCHIVE=on",
+            });
+        }
+        // And an archive with nowhere to put anything is the same class of
+        // mistake one layer down: every route would answer 501 while the
+        // deployment believed it had turned capture on.
+        if self.conversation_archive && self.prompt_store == PromptStoreKind::None {
+            return Err(ConfigError::Required {
+                name: "AIWATCHER_PROMPT_STORE",
+                because: "AIWATCHER_CONVERSATION_ARCHIVE=on",
+            });
+        }
+
         // Same reasoning as the S3 check above, one step sharper: a runner
         // with no endpoint would answer every rerun with a connection error
         // that looks like the orchestrator being down. Refusing to start says
         // which variable is missing, once, to whoever deployed it.
-        if config.workflow_runner == WorkflowRunnerKind::Http
-            && config.workflow_runner_url.is_none()
-        {
+        if self.workflow_runner == WorkflowRunnerKind::Http && self.workflow_runner_url.is_none() {
             return Err(ConfigError::Required {
                 name: "AIWATCHER_WORKFLOW_RUNNER_URL",
                 because: "AIWATCHER_WORKFLOW_RUNNER=http",
@@ -601,7 +740,7 @@ impl Config {
         // The engine's endpoint, on the same reasoning as the runner's: an
         // engine with no address answers every catalog request with a
         // connection error that reads as the orchestrator being down.
-        if config.engine == EngineKind::Flyte && config.flyte_endpoint.is_none() {
+        if self.engine == EngineKind::Flyte && self.flyte_endpoint.is_none() {
             return Err(ConfigError::Required {
                 name: "AIWATCHER_FLYTE_ENDPOINT",
                 because: "AIWATCHER_ENGINE=flyte",
@@ -612,9 +751,9 @@ impl Config {
         // symptom is a 401 from Flyte on the first catalog request rather than
         // anything naming the variable that was left out.
         let credentials = [
-            ("AIWATCHER_FLYTE_CLIENT_ID", &config.flyte_client_id),
-            ("AIWATCHER_FLYTE_CLIENT_SECRET", &config.flyte_client_secret),
-            ("AIWATCHER_FLYTE_TOKEN_URL", &config.flyte_token_url),
+            ("AIWATCHER_FLYTE_CLIENT_ID", &self.flyte_client_id),
+            ("AIWATCHER_FLYTE_CLIENT_SECRET", &self.flyte_client_secret),
+            ("AIWATCHER_FLYTE_TOKEN_URL", &self.flyte_token_url),
         ];
         if credentials.iter().any(|(_, value)| value.is_some()) {
             for (name, value) in credentials {
@@ -630,15 +769,14 @@ impl Config {
         // A rerun routed through an engine that is not configured would answer
         // 501 from one route and 502 from the other, which is two different
         // stories about one missing variable.
-        if config.workflow_runner == WorkflowRunnerKind::Engine && config.engine == EngineKind::None
-        {
+        if self.workflow_runner == WorkflowRunnerKind::Engine && self.engine == EngineKind::None {
             return Err(ConfigError::Required {
                 name: "AIWATCHER_ENGINE",
                 because: "AIWATCHER_WORKFLOW_RUNNER=engine",
             });
         }
 
-        config.auth.validate()?;
+        self.auth.validate()?;
 
         // A wildcard CORS policy on an instance that has a login says "every
         // origin may call this API" on the one deployment whose whole point is
@@ -646,7 +784,7 @@ impl Config {
         // anyway — nothing here sets `Access-Control-Allow-Credentials` — but
         // an operator who wrote both of these meant one of them, and starting
         // anyway would pick for them silently.
-        if config.auth.mode != AuthMode::None && config.cors_origins.iter().any(|o| o == "*") {
+        if self.auth.mode != AuthMode::None && self.cors_origins.iter().any(|o| o == "*") {
             return Err(ConfigError::Invalid {
                 name: "AIWATCHER_CORS_ORIGINS",
                 value: "*".to_owned(),
@@ -654,7 +792,7 @@ impl Config {
             });
         }
 
-        Ok(config)
+        Ok(())
     }
 
     #[must_use]
@@ -864,6 +1002,83 @@ mod tests {
     }
 
     #[test]
+    fn the_conversation_archive_is_off_until_somebody_turns_it_on() {
+        // The one default in this file chosen so that doing nothing keeps
+        // nothing. Every other store is on because there is somewhere to put
+        // it; this one holds somebody's words.
+        let config = Config::default();
+        assert!(!config.conversation_archive);
+        assert!(config.conversation_keys.is_none());
+        assert_eq!(
+            config.conversation_policy,
+            ConversationPolicyMode::Protected
+        );
+    }
+
+    #[test]
+    fn an_archive_with_no_key_refuses_to_start_rather_than_holding_plaintext() {
+        let missing_key = Config {
+            conversation_archive: true,
+            ..Config::default()
+        };
+        let error = missing_key.validate().expect_err("refused");
+        assert!(
+            matches!(
+                error,
+                ConfigError::Required {
+                    name: "AIWATCHER_CONVERSATION_KEYS",
+                    ..
+                }
+            ),
+            "{error}"
+        );
+
+        // And with nowhere to write, the same class of mistake one layer down:
+        // every route would answer 501 while the deployment believed capture
+        // was on.
+        let no_store = Config {
+            conversation_archive: true,
+            conversation_keys: Some("k:0000".to_owned()),
+            prompt_store: PromptStoreKind::None,
+            ..Config::default()
+        };
+        let error = no_store.validate().expect_err("refused");
+        assert!(
+            matches!(
+                error,
+                ConfigError::Required {
+                    name: "AIWATCHER_PROMPT_STORE",
+                    ..
+                }
+            ),
+            "{error}"
+        );
+
+        assert!(
+            Config {
+                conversation_archive: true,
+                conversation_keys: Some("k:0000".to_owned()),
+                ..Config::default()
+            }
+            .validate()
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn the_conversation_policy_accepts_its_common_spellings() {
+        for (raw, expected) in [
+            ("protected", ConversationPolicyMode::Protected),
+            ("strict", ConversationPolicyMode::Protected),
+            ("open", ConversationPolicyMode::Open),
+            ("permissive", ConversationPolicyMode::Open),
+        ] {
+            assert_eq!(raw.parse::<ConversationPolicyMode>().expect(raw), expected);
+        }
+        assert!("whatever".parse::<ConversationPolicyMode>().is_err());
+    }
+
+    #[test]
     fn prompt_store_names_accept_their_common_spellings() {
         for (raw, expected) in [
             ("none", PromptStoreKind::None),
@@ -918,13 +1133,9 @@ mod tests {
         assert!(!required_field_is_missing(&base));
     }
 
-    /// The validation `from_env` applies, without touching the environment —
-    /// which no test may do, because they share one process.
+    /// The real validation, rather than a second copy of it.
     fn required_field_is_missing(config: &Config) -> bool {
-        config.prompt_store == PromptStoreKind::S3
-            && (config.prompt_s3_endpoint.is_none()
-                || config.prompt_s3_access_key.is_none()
-                || config.prompt_s3_secret_key.is_none())
+        config.validate().is_err()
     }
 
     #[test]

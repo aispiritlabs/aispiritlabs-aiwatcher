@@ -415,6 +415,7 @@ class TrainingClient:
         checkpoint_uri: str,
         validation: Mapping[str, float] | None = None,
         test: Mapping[str, float] | None = None,
+        package: Mapping[str, Any] | None = None,
         description: str = "",
         notes: str = "",
     ) -> dict[str, Any]:
@@ -425,6 +426,13 @@ class TrainingClient:
         nothing was allowed to look at. A version with no `test` measurement is
         recorded and cannot be promoted, and the reason comes back in
         `promotion_blocked`.
+
+        `package` is what a serving runtime will be handed: the runtime, the
+        entry point, the input and output shapes, the dependencies, and every
+        artifact with its `sha256`. Optional, because a version registered
+        before packages existed has none — and validated when given, because a
+        declared runtime whose weights carry no digest reads like provenance
+        and is not. See `ModelPackage` in `aiwatcher-training`.
         """
         return self.request(
             "POST",
@@ -439,6 +447,7 @@ class TrainingClient:
                     "validation": {key: float(v) for key, v in (validation or {}).items()},
                     "test": {key: float(v) for key, v in (test or {}).items()},
                 },
+                **({"package": dict(package)} if package else {}),
             },
         )
 

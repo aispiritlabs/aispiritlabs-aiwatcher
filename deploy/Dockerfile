@@ -25,10 +25,12 @@ COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates/aiwatcher-core/Cargo.toml crates/aiwatcher-core/
 COPY crates/aiwatcher-bus/Cargo.toml crates/aiwatcher-bus/
 COPY crates/aiwatcher-trace/Cargo.toml crates/aiwatcher-trace/
+COPY crates/aiwatcher-jobs/Cargo.toml crates/aiwatcher-jobs/
 COPY crates/aiwatcher-prompts/Cargo.toml crates/aiwatcher-prompts/
 COPY crates/aiwatcher-annotations/Cargo.toml crates/aiwatcher-annotations/
 COPY crates/aiwatcher-datasets/Cargo.toml crates/aiwatcher-datasets/
 COPY crates/aiwatcher-training/Cargo.toml crates/aiwatcher-training/
+COPY crates/aiwatcher-conversations/Cargo.toml crates/aiwatcher-conversations/
 COPY crates/aiwatcher-runner/Cargo.toml crates/aiwatcher-runner/
 COPY crates/aiwatcher-pipeline/Cargo.toml crates/aiwatcher-pipeline/
 COPY crates/aiwatcher-auth/Cargo.toml crates/aiwatcher-auth/

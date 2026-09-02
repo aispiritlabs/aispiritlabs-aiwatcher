@@ -120,6 +120,130 @@ export type AnnotationRevision = {
 };
 
 /**
+ * What one append did.
+ */
+export type AppendReport = {
+    batch_id: string;
+    /**
+     * False when this exact page was already stored — an acknowledged retry
+     * rather than a second copy of the rows.
+     */
+    created: boolean;
+    digest: string;
+    page: number;
+    rows: number;
+    /**
+     * Rows in the whole batch so far.
+     */
+    total_rows: number;
+};
+
+/**
+ * A page of rows for an already-staged batch.
+ */
+export type AppendRowsRequest = {
+    batch: string;
+    /**
+     * Which page this is, when the caller is numbering them.
+     *
+     * Supplying it makes the append idempotent, which is the difference
+     * between a client that can retry and one that has to reconcile. Omitting
+     * it appends at the end, which is what a single-threaded uploader wants.
+     */
+    page?: number | null;
+    rows: Array<ImportRow>;
+};
+
+/**
+ * What this deployment demands of a producer, and which keys it can open.
+ *
+ * Answered before anything is sent, on purpose: a producer that discovers the
+ * consent requirement from a 422 has already put a megabyte of content on the
+ * wire, and the panel needs it to render the archive's state rather than an
+ * empty list that looks like "nothing has happened yet".
+ */
+export type ArchiveConfig = ArchivePolicy & {
+    /**
+     * Key ids this deployment can decrypt with, newest first. Never the keys.
+     * Present so an operator can see that a rotation reached this process
+     * before they retire the old key and make everything sealed under it
+     * unreadable.
+     */
+    key_ids: Array<string>;
+};
+
+/**
+ * What this deployment demands, and the only thing here that outranks a
+ * caller.
+ */
+export type ArchivePolicy = {
+    /**
+     * A `ttl_days` above this is clamped rather than refused, and the clamp is
+     * recorded on the turn. Refusing would push a producer to send the number
+     * this deployment happens to accept, which is a worse record than the
+     * truth plus a clamp.
+     */
+    max_ttl_days: number;
+    mode: PolicyMode;
+    /**
+     * Whether the server's own scan refusing content is fatal.
+     *
+     * Off by default, and the reason is worth stating: a scanner is a
+     * heuristic, and one that rejects a write throws away the only copy of an
+     * exchange because a hex string looked like a key. A finding always blocks
+     * the *export* — see [`crate::review`] — which is the gate that matters.
+     */
+    reject_on_finding: boolean;
+};
+
+/**
+ * A turn as the archive holds it: everything except the words.
+ */
+export type ArchivedTurn = {
+    content_bytes: number;
+    /**
+     * `sha256` of the canonical content. What makes a re-send idempotent, what
+     * a duplicate is detected on, and what an export version is built from.
+     */
+    content_digest: string;
+    conversation_id: string;
+    erasure?: null | Erasure;
+    expires_at?: string | null;
+    findings?: Array<Finding>;
+    /**
+     * Which index shard lists this turn, once one does.
+     *
+     * `None` is the window between writing a head and appending its index
+     * entry. A re-send repairs it, which is why this is on the head rather
+     * than being inferred: without it, a retry would find the head present,
+     * skip the append, and leave the turn invisible to every export forever.
+     */
+    index_shard?: number | null;
+    message_id: string;
+    occurred_at?: string | null;
+    ordinal: number;
+    parent_message_id?: string | null;
+    /**
+     * The shape of the message, with none of it.
+     */
+    parts?: Array<PartSummary>;
+    policy: ContentPolicy;
+    provenance?: Provenance;
+    received_at: string;
+    /**
+     * True when this deployment shortened the retention the producer asked
+     * for. Recorded rather than silent: a corpus built under a policy nobody
+     * noticed had changed is the thing an audit is looking for.
+     */
+    retention_clamped?: boolean;
+    review?: TurnReview;
+    role: ConversationRole;
+    state?: TurnState;
+    tool_results?: number;
+    turn_id: string;
+};
+
+/**
  * Something a node produced, by reference.
  *
  * The bytes stay wherever the producer put them. aiwatcher keeps the pointer
@@ -136,6 +260,28 @@ export type Artifact = {
     name: string;
     produced_at: string;
     size_bytes?: number | null;
+    uri: string;
+};
+
+/**
+ * One file a package is made of.
+ */
+export type ArtifactRef = {
+    content_type?: string;
+    /**
+     * `sha256` of the bytes, lowercase hex. Required, and the reason this
+     * type exists: an address is not an identity.
+     */
+    digest: string;
+    /**
+     * What the runtime calls it: `weights`, `tokenizer`, `config`.
+     */
+    name: string;
+    size_bytes?: number | null;
+    /**
+     * Where the bytes are. A pointer, like every other artifact in this
+     * workspace — the registry stores no weights.
+     */
     uri: string;
 };
 
@@ -186,6 +332,10 @@ export const AuthMode = {
  * Where identity comes from.
  */
 export type AuthMode = typeof AuthMode[keyof typeof AuthMode];
+
+export type BatchPage = {
+    batches: Array<StagedBatch>;
+};
 
 /**
  * The number a run is judged on.
@@ -261,6 +411,222 @@ export type CheckpointRecord = {
     value?: number | null;
 };
 
+/**
+ * Who this is about, on what basis, and what that permits.
+ */
+export type ConsentRecord = {
+    basis?: LawfulBasis;
+    granted_at?: string | null;
+    /**
+     * Where the record lives: a ticket, a policy id, a URL. Free text on
+     * purpose — the shape differs per organisation and a schema here would
+     * only be worked around.
+     */
+    reference?: string;
+    /**
+     * Empty means nothing was permitted, not everything. An export demanding
+     * [`TrainingScope::Train`] excludes it by name.
+     */
+    scope?: Array<TrainingScope>;
+    /**
+     * Whose data this is: an account id, a tenant, `synthetic`. Not a name —
+     * a pseudonymous handle is what makes an erasure request answerable
+     * without the archive holding a second copy of the identity.
+     */
+    subject?: string;
+};
+
+/**
+ * One piece of a message.
+ *
+ * A list rather than a string, because a modern turn is not one: an assistant
+ * message can be reasoning, then a tool call, then prose, and a training shape
+ * that has to guess which part was which guesses wrong on the interesting
+ * examples.
+ *
+ * [`Self::Reference`] is the guardrail the annotation registry already keeps
+ * for artifacts: a pointer to bytes somebody else stored, never the bytes. An
+ * image or a PDF inlined here would put a file in an archive that is meant to
+ * hold messages, and would put it under an encryption key sized for text.
+ */
+export type ContentPart = {
+    kind: 'text';
+    text: string;
+} | {
+    kind: 'reasoning';
+    text: string;
+} | {
+    arguments: string;
+    call_id: string;
+    kind: 'tool_call';
+    name: string;
+} | {
+    kind: 'redacted';
+    original_bytes: number;
+    original_digest: string;
+    reason: string;
+} | {
+    digest?: string;
+    kind: 'reference';
+    media_type?: string;
+    uri: string;
+};
+
+/**
+ * Everything a producer asserts about one turn.
+ */
+export type ContentPolicy = {
+    consent?: ConsentRecord;
+    redaction?: null | RedactionRecord;
+    retention?: RetentionPolicy;
+};
+
+export type ConversationArchivePage = {
+    conversations: Array<ConversationHead>;
+};
+
+/**
+ * Why a turn did not reach the corpus.
+ */
+export const ConversationExclusionReason = {
+    NOT_REVIEWED: 'not_reviewed',
+    REVIEW_REJECTED: 'review_rejected',
+    ERASED: 'erased',
+    CONSENT_MISSING: 'consent_missing',
+    SCOPE_NOT_PERMITTED: 'scope_not_permitted',
+    FINDING: 'finding',
+    ROLE_FILTERED: 'role_filtered',
+    CONTENT_MISSING: 'content_missing'
+} as const;
+
+/**
+ * Why a turn did not reach the corpus.
+ */
+export type ConversationExclusionReason = typeof ConversationExclusionReason[keyof typeof ConversationExclusionReason];
+
+export type ConversationExportCounts = {
+    conversations: number;
+    rows: number;
+    turns_considered: number;
+    turns_excluded: number;
+    turns_included: number;
+};
+
+/**
+ * One turn that was left out, named.
+ */
+export type ConversationExportExclusion = {
+    conversation_id: string;
+    /**
+     * The rule that fired, for a [`ExclusionReason::Finding`].
+     */
+    detail?: string;
+    reason: ConversationExclusionReason;
+    turn_id: string;
+};
+
+/**
+ * What a finished export is, forever.
+ */
+export type ConversationExportManifest = {
+    built_at: string;
+    /**
+     * The conversations this export read, pinned when the job was created.
+     *
+     * Kept on the manifest rather than only on the job, because it is what an
+     * erasure searches: "which published corpora hold this person's words" has
+     * to be answerable from the manifests alone.
+     */
+    conversations?: Array<string>;
+    counts: ConversationExportCounts;
+    /**
+     * A sample of the excluded turns. `excluded_truncated` says whether the
+     * counts above are larger than this list.
+     */
+    excluded?: Array<ConversationExportExclusion>;
+    excluded_truncated?: boolean;
+    exclusions: {
+        [key: string]: number;
+    };
+    job_id: string;
+    name: string;
+    request: ConversationExportRequest;
+    request_digest: string;
+    shards: Array<ShardRef>;
+    version: string;
+    withdrawn?: null | Withdrawal;
+};
+
+export type ConversationExportPage = {
+    exports: Array<ExportIndex>;
+};
+
+/**
+ * What was asked for. The identity of an export, along with the archive's
+ * content at the time.
+ */
+export type ConversationExportRequest = {
+    description?: string;
+    /**
+     * Finding kinds that exclude a turn. Defaults to the three that make
+     * content unsafe to train on rather than merely awkward.
+     */
+    exclude_findings?: Array<FindingKind>;
+    format?: ExportFormat;
+    /**
+     * `training/agent-turns`. The mutable half of `name@version`.
+     */
+    name: string;
+    /**
+     * Whether a turn nobody approved may be included. Defaults to `true`,
+     * which means "no" — the annotation registry's rule, and the reason the
+     * review queue exists.
+     */
+    require_human_review?: boolean;
+    /**
+     * What the recorded consent has to permit. Defaults to
+     * [`TrainingScope::Train`], the widest of the three.
+     */
+    required_scope?: TrainingScope;
+    /**
+     * Roles to include. Empty means every role, which is what a chat shape
+     * wants; a prompt/response shape ignores this and takes what it needs.
+     */
+    roles?: Array<ConversationRole>;
+    selection?: ExportSelection;
+};
+
+/**
+ * One conversation's counts. The review queue reads these and nothing else.
+ */
+export type ConversationHead = {
+    approved: number;
+    conversation_id: string;
+    /**
+     * The soonest any of this conversation's content expires.
+     *
+     * A hint the sweep uses to decide whether to open this conversation at
+     * all, recomputed whenever it does. Being stale costs one wasted read;
+     * being absent would cost a scan of every turn in the archive.
+     */
+    earliest_expiry?: string | null;
+    entries?: number;
+    erased: number;
+    /**
+     * Findings by kind, so "which conversations hold a credential" is a list
+     * rather than a scan.
+     */
+    findings?: {
+        [key: string]: number;
+    };
+    first_seen: string;
+    last_seen: string;
+    pending: number;
+    rejected: number;
+    shards?: number;
+    turns: number;
+};
+
 export type ConversationPage = {
     conversations: Array<ConversationSummary>;
     total: number;
@@ -271,6 +637,32 @@ export type ConversationPage = {
      */
     ungrouped_runs: number;
 };
+
+/**
+ * Who spoke.
+ *
+ * `Developer` is separate from `System` because the two have different
+ * retention answers: a developer instruction is the product's own text and a
+ * system prompt may be a customer's. An export can drop one and keep the
+ * other, which it could not do if they were one role.
+ */
+export const ConversationRole = {
+    SYSTEM: 'system',
+    DEVELOPER: 'developer',
+    USER: 'user',
+    ASSISTANT: 'assistant',
+    TOOL: 'tool'
+} as const;
+
+/**
+ * Who spoke.
+ *
+ * `Developer` is separate from `System` because the two have different
+ * retention answers: a developer instruction is the product's own text and a
+ * system prompt may be a customer's. An export can drop one and keep the
+ * other, which it could not do if they were one role.
+ */
+export type ConversationRole = typeof ConversationRole[keyof typeof ConversationRole];
 
 export type ConversationSummary = {
     /**
@@ -720,6 +1112,57 @@ export type EpochRecord = {
 };
 
 /**
+ * Why content was removed.
+ */
+export type Erasure = {
+    at: string;
+    by?: string;
+    reason: ErasureReason;
+};
+
+/**
+ * An erasure request: a subject, or a whole conversation.
+ *
+ * A POST rather than a DELETE, because it is a request somebody files with a
+ * body and gets a report back — and because the subject it names is personal
+ * data that has no business in a URL. Exactly one of the two fields.
+ */
+export type ErasureBody = {
+    conversation_id?: string | null;
+    /**
+     * The consent subject, as recorded on the turns. What a person's request
+     * actually names.
+     */
+    subject?: string | null;
+};
+
+export const ErasureReason = { EXPIRED: 'expired', REQUEST: 'request' } as const;
+
+export type ErasureReason = typeof ErasureReason[keyof typeof ErasureReason];
+
+/**
+ * What a sweep or an erasure removed.
+ */
+export type ErasureReport = {
+    /**
+     * Turns whose retention had run out but whose content was already gone.
+     * Counted so a repeated sweep is visibly a no-op rather than silently one.
+     */
+    already_erased: number;
+    conversations_touched: number;
+    /**
+     * Published corpora whose rows this erasure took away.
+     *
+     * The half of an erasure that is easy to forget: erasing the archive and
+     * leaving the corpus is an erasure in name only. Their manifests survive,
+     * so a training run naming one still resolves to something that can say
+     * what happened to it.
+     */
+    corpora_withdrawn: number;
+    turns_erased: number;
+};
+
+/**
  * The body every error response carries.
  */
 export type ErrorBody = {
@@ -1154,6 +1597,103 @@ export type ExportExclusion = {
 };
 
 /**
+ * The shape a row is written in.
+ */
+export const ExportFormat = {
+    CHAT: 'chat',
+    PROMPT_RESPONSE: 'prompt_response',
+    SFT: 'sft',
+    DPO: 'dpo'
+} as const;
+
+/**
+ * The shape a row is written in.
+ */
+export type ExportFormat = typeof ExportFormat[keyof typeof ExportFormat];
+
+/**
+ * Which versions of one name exist.
+ */
+export type ExportIndex = {
+    name: string;
+    versions?: Array<ExportVersionSummary>;
+};
+
+/**
+ * A resumable export, as it sits in the store.
+ */
+export type ExportJob = {
+    attempts?: number;
+    claimed_at?: string | null;
+    /**
+     * The worker currently holding this job: a pod name in a cluster.
+     *
+     * Not an owner — a lease. It expires, which is what lets a job survive the
+     * process that was running it, and it is re-checked at every shard, which
+     * is what stops the process it outlived from writing beside its
+     * replacement.
+     */
+    claimed_by?: string;
+    /**
+     * The conversations this job will read, resolved once and never re-read.
+     */
+    conversations?: Array<string>;
+    counts?: ConversationExportCounts;
+    created_at: string;
+    created_by?: string;
+    /**
+     * How many of them are already in a written shard. The resume point.
+     */
+    cursor?: number;
+    error?: string | null;
+    /**
+     * A sample, capped at [`MAX_EXCLUSION_SAMPLES`].
+     */
+    excluded?: Array<ConversationExportExclusion>;
+    /**
+     * Complete. Keyed by [`ExclusionReason::as_str`].
+     */
+    exclusions?: {
+        [key: string]: number;
+    };
+    finished_at?: string | null;
+    job_id: string;
+    request: ConversationExportRequest;
+    request_digest: string;
+    shards?: Array<ShardRef>;
+    state: JobState;
+    updated_at: string;
+    /**
+     * The immutable reference, once there is one.
+     */
+    version?: string | null;
+};
+
+export type ExportJobPage = {
+    jobs: Array<ExportJobSummary>;
+};
+
+export type ExportJobSummary = {
+    /**
+     * Which worker holds it, while one does. Answers "why has this been
+     * running for twenty minutes" without opening a log.
+     */
+    claimed_by?: string;
+    conversations: number;
+    counts: ConversationExportCounts;
+    created_at: string;
+    cursor: number;
+    error?: string | null;
+    finished_at?: string | null;
+    format: ExportFormat;
+    job_id: string;
+    name: string;
+    state: JobState;
+    updated_at: string;
+    version?: string | null;
+};
+
+/**
  * The immutable result.
  */
 export type ExportManifest = {
@@ -1218,6 +1758,14 @@ export type ExportRequest = {
     views?: Array<string>;
 };
 
+export type ExportRowsPage = {
+    next_offset?: number | null;
+    rows: Array<{
+        [key: string]: unknown;
+    }>;
+    total: number;
+};
+
 /**
  * One image in an export, pinned to the revision that was accepted when the
  * export was built.
@@ -1240,6 +1788,22 @@ export type ExportSample = {
     width: number;
 };
 
+/**
+ * Which conversations an export considers.
+ */
+export type ExportSelection = {
+    /**
+     * Named explicitly. Empty means every conversation in the archive, which
+     * is the common case and the one that needs the window below.
+     */
+    conversations?: Array<string>;
+    /**
+     * Only conversations last active at or after this moment.
+     */
+    since?: string | null;
+    until?: string | null;
+};
+
 export type ExportSummary = {
     counts: ExportCounts;
     created_at: string;
@@ -1249,6 +1813,61 @@ export type ExportSummary = {
     rights_policy: RightsPolicy;
     schema_version: string;
 };
+
+export type ExportVersionSummary = {
+    built_at: string;
+    format: ExportFormat;
+    rows: number;
+    version: string;
+    /**
+     * True once an erasure has taken this corpus' rows away.
+     */
+    withdrawn?: boolean;
+};
+
+/**
+ * One problem, located but not quoted.
+ */
+export type Finding = {
+    /**
+     * Who found it: `scanner`, or a reviewer's identity.
+     */
+    found_by: string;
+    kind: FindingKind;
+    length?: number | null;
+    /**
+     * Which content part, by index. `None` for a finding about the turn as a
+     * whole — a duplicate, a policy gap.
+     */
+    part?: number | null;
+    /**
+     * The rule that fired: `email`, `aws-access-key-id`, or a reviewer's own
+     * word when a human recorded it.
+     */
+    rule: string;
+    /**
+     * Byte offset and length inside that part's text. Enough for the review
+     * UI to highlight it once the content is decrypted, and useless to anyone
+     * who only has the head.
+     */
+    start?: number | null;
+};
+
+/**
+ * What kind of problem a finding is.
+ */
+export const FindingKind = {
+    PII: 'pii',
+    SECRET: 'secret',
+    UNSAFE: 'unsafe',
+    DUPLICATE: 'duplicate',
+    POLICY: 'policy'
+} as const;
+
+/**
+ * What kind of problem a finding is.
+ */
+export type FindingKind = typeof FindingKind[keyof typeof FindingKind];
 
 /**
  * What closes a run.
@@ -1494,6 +2113,19 @@ export type HubsPage = {
 };
 
 /**
+ * A finding a person recorded.
+ *
+ * Deliberately narrower than [`Finding`]: no byte offsets, because a reviewer
+ * is describing a judgement rather than a match, and no `found_by`, because
+ * the registry fills that in from the caller's identity. A client that could
+ * name its own reviewer could file somebody else's approval.
+ */
+export type HumanFinding = {
+    kind: FindingKind;
+    rule: string;
+};
+
+/**
  * An authenticated caller.
  */
 export type Identity = {
@@ -1619,6 +2251,136 @@ export type ImageRecord = {
     width: number;
 };
 
+export type ImportCounts = {
+    accepted: number;
+    /**
+     * Bytes stored. The number that answers "why is the bucket bigger".
+     */
+    bytes_stored: number;
+    /**
+     * Rows whose bytes this job downloaded and stored.
+     */
+    fetched: number;
+    rejected: number;
+    rows_considered: number;
+};
+
+export type ImportIndex = {
+    imports?: Array<ImportSummary>;
+};
+
+/**
+ * A resumable import, as it sits in the store.
+ */
+export type ImportJob = {
+    attempts: number;
+    batch_id: string;
+    claimed_at?: string | null;
+    claimed_by?: string;
+    counts: ImportCounts;
+    created_at: string;
+    created_by?: string;
+    /**
+     * Pages already registered *and* whose result shard is stored. The resume
+     * point.
+     */
+    cursor: number;
+    error?: string | null;
+    finished_at?: string | null;
+    job_id: string;
+    /**
+     * Pages this job will read, pinned when it was created.
+     */
+    pages: number;
+    project: string;
+    /**
+     * Pages that wrote a reject shard, so reading them is a seek rather than
+     * a scan of every page of a million-row import.
+     */
+    reject_pages: Array<number>;
+    /**
+     * Complete, keyed by [`RejectReason::as_str`].
+     */
+    rejects: {
+        [key: string]: number;
+    };
+    request: ImportJobRequest;
+    request_digest: string;
+    /**
+     * Rows across those pages. The denominator a progress bar may use,
+     * because it was counted rather than guessed.
+     */
+    rows: number;
+    /**
+     * One per finished page: what was registered, hashed. The version
+     * material.
+     */
+    shards: Array<ShardRef>;
+    state: JobState;
+    updated_at: string;
+    /**
+     * `project@version`, once there is one.
+     */
+    version?: string | null;
+    /**
+     * Things that are not errors and that somebody has to read anyway.
+     *
+     * Always present, even when empty: a client that has to distinguish
+     * "no warnings" from "the field is missing" is a client with a bug
+     * waiting in it.
+     */
+    warnings: Array<string>;
+};
+
+export type ImportJobPage = {
+    jobs: Array<ImportJob>;
+};
+
+/**
+ * What a job was asked to do.
+ */
+export type ImportJobRequest = {
+    /**
+     * The staged batch to read. Sealed by queueing, so its rows are pinned.
+     */
+    batch: string;
+    /**
+     * Check every row and register nothing.
+     *
+     * It still downloads: a row with no content address is refused by the
+     * registry, so a dry run that skipped the fetch would reject every row
+     * and teach the reader nothing about the batch. Blobs are addressed by
+     * their content, so a dry run followed by a real import stores each
+     * picture once.
+     */
+    dry_run?: boolean;
+};
+
+/**
+ * What a finished import is, forever.
+ */
+export type ImportManifest = {
+    /**
+     * The batch's own content address. Two manifests naming the same one read
+     * the same rows.
+     */
+    batch_digest: string;
+    batch_id: string;
+    built_at: string;
+    counts: ImportCounts;
+    evidence?: RightsEvidence;
+    job_id: string;
+    project: string;
+    rejects: {
+        [key: string]: number;
+    };
+    rights: UsageRights;
+    shards: Array<ShardRef>;
+    source?: ImportSource;
+    version: string;
+    warnings?: Array<string>;
+};
+
 /**
  * What an import did.
  */
@@ -1662,6 +2424,11 @@ export type ImportRequest = {
      * something anybody wants to discover after it is in the project.
      */
     dry_run?: boolean;
+    /**
+     * Who checked that assertion, where, and when. Recorded, never enforced —
+     * see [`RightsEvidence`].
+     */
+    evidence?: RightsEvidence;
     project: string;
     /**
      * What the caller asserts may be done with every image in this batch.
@@ -1713,12 +2480,29 @@ export type ImportSource = {
      */
     claimed_license?: string;
     /**
+     * The configuration and split the rows came from. `default`/`train` is
+     * the common shape and not the only one, and a corpus whose `test` split
+     * was imported as if it were `train` is a leak nothing downstream can
+     * see.
+     */
+    config?: string;
+    /**
      * The curated row this matched, if any. The presence of this is what lets
      * [`check_rights`] refuse an over-claim.
      */
     curated_source?: string | null;
     curated_usage?: null | SourceUsage;
     dataset_id?: string;
+    /**
+     * The files this batch was read out of, with whatever digest the hub
+     * stated for each.
+     *
+     * The hub's word, kept as the hub's word — like `claimed_license`, and
+     * unlike the per-image content address, which is computed here from bytes
+     * this process hashed. Both are worth having: one says what the mirror
+     * thinks it is serving, the other says what actually arrived.
+     */
+    files?: Array<SourceFile>;
     /**
      * `kaggle` or `huggingface`, or anything else for a pipeline that did not
      * start at a hub.
@@ -1730,7 +2514,31 @@ export type ImportSource = {
      * that is a script rather than a memory.
      */
     pipeline?: string;
+    /**
+     * The commit the rows were read at.
+     *
+     * A dataset id is a moving target: `main` is whatever the uploader
+     * pushed last, so a corpus re-read a month later is a different corpus
+     * under the same name — and a training run naming it is naming nothing
+     * anybody can go back to. This is the field that makes "the images this
+     * model learned from" a question with an answer.
+     *
+     * Empty when the hub did not report one, which is recorded rather than
+     * invented: a blank revision says the provenance is a name, and a made-up
+     * one would say it is a commit.
+     */
+    revision?: string;
+    split?: string;
     url?: string;
+};
+
+export type ImportSummary = {
+    accepted: number;
+    built_at: string;
+    job_id: string;
+    project: string;
+    rejected: number;
+    version: string;
 };
 
 export type IngestRequest = {
@@ -1749,6 +2557,22 @@ export type IngestResponse = {
      */
     last_checkpoint: Checkpoint;
 };
+
+/**
+ * Where a job is.
+ */
+export const JobState = {
+    QUEUED: 'queued',
+    RUNNING: 'running',
+    COMPLETED: 'completed',
+    FAILED: 'failed',
+    CANCELLED: 'cancelled'
+} as const;
+
+/**
+ * Where a job is.
+ */
+export type JobState = typeof JobState[keyof typeof JobState];
 
 /**
  * One named position inside a keypoint instance.
@@ -1906,6 +2730,32 @@ export type LaunchBody = {
      */
     workflow_run_id?: string | null;
 };
+
+/**
+ * What makes keeping this lawful, in the producer's own words.
+ *
+ * aiwatcher cannot check any of it and does not pretend to. What it can do is
+ * refuse to hold content that never claimed one, and record the claim
+ * verbatim so that an auditor asking "why was this row eligible" gets the
+ * answer somebody actually gave rather than one reconstructed afterwards.
+ */
+export const LawfulBasis = {
+    UNKNOWN: 'unknown',
+    CONSENT: 'consent',
+    CONTRACT: 'contract',
+    LEGITIMATE_INTEREST: 'legitimate_interest',
+    SYNTHETIC: 'synthetic'
+} as const;
+
+/**
+ * What makes keeping this lawful, in the producer's own words.
+ *
+ * aiwatcher cannot check any of it and does not pretend to. What it can do is
+ * refuse to hold content that never claimed one, and record the claim
+ * verbatim so that an auditor asking "why was this row eligible" gets the
+ * answer somebody actually gave rather than one reconstructed afterwards.
+ */
+export type LawfulBasis = typeof LawfulBasis[keyof typeof LawfulBasis];
 
 /**
  * One named reference from an instance to another instance.
@@ -2106,6 +2956,50 @@ export type ModelMetrics = {
     };
 };
 
+/**
+ * Everything a serving runtime needs and is not allowed to guess.
+ */
+export type ModelPackage = {
+    /**
+     * Every file, each with its digest. At least one.
+     */
+    artifacts: Array<ArtifactRef>;
+    /**
+     * Package name to version specifier. What has to be present for the
+     * entry point to import.
+     */
+    dependencies?: {
+        [key: string]: string;
+    };
+    /**
+     * What inside the package to load: a file name, a module path, a
+     * `module:function`. Interpreted by the loader for that runtime and by
+     * nothing else.
+     */
+    entry_point?: string;
+    inputs?: Array<TensorSpec>;
+    outputs?: Array<TensorSpec>;
+    /**
+     * What the trainer did to its inputs, in its own words: `resize:512`,
+     * `normalize:imagenet`, `edge-grid:8`.
+     *
+     * Free text and deliberately not executable. A package that shipped
+     * preprocessing *code* would be a package that runs code in whatever
+     * opens it, which is the thing [`Runtime::executes_packaged_code`] exists
+     * to keep visible.
+     */
+    preprocessing?: Array<string>;
+    resources?: ResourceRequest;
+    runtime: Runtime;
+    /**
+     * The build of that runtime the artifact was written by: `2.4.1`,
+     * `1.17`. An ONNX graph using an opset the server's runtime does not have
+     * fails at load; saying which one it needs turns that into a deployment
+     * decision rather than a crash loop.
+     */
+    runtime_version?: string;
+};
+
 export type ModelPage = {
     models: Array<ModelHead>;
 };
@@ -2128,6 +3022,7 @@ export type ModelVersion = {
     metrics?: ModelMetrics;
     name: string;
     notes?: string;
+    package?: null | ModelPackage;
     /**
      * False when the dataset is a mutable name rather than an immutable
      * export reference. Recorded rather than refused, and it is what blocks
@@ -2152,6 +3047,7 @@ export type ModelVersionSummary = {
     metrics?: ModelMetrics;
     reproducible: boolean;
     run_id: string;
+    runtime?: null | Runtime;
     version: string;
 };
 
@@ -2429,6 +3325,18 @@ export const ParameterKind = {
 export type ParameterKind = typeof ParameterKind[keyof typeof ParameterKind];
 
 /**
+ * One part's shape, with none of its content.
+ *
+ * What makes a tombstoned turn still legible: "an assistant message of three
+ * parts, 4 kB of text and a tool call" is an auditable fact that survives the
+ * erasure of the words.
+ */
+export type PartSummary = {
+    bytes: number;
+    kind: string;
+};
+
+/**
  * Nearest-rank percentiles, in milliseconds.
  */
 export type Percentiles = {
@@ -2468,6 +3376,26 @@ export const PipelineStage = {
  * depend on it.
  */
 export type PipelineStage = typeof PipelineStage[keyof typeof PipelineStage];
+
+/**
+ * How strict this deployment is.
+ */
+export const PolicyMode = { PROTECTED: 'protected', OPEN: 'open' } as const;
+
+/**
+ * How strict this deployment is.
+ */
+export type PolicyMode = typeof PolicyMode[keyof typeof PolicyMode];
+
+/**
+ * Which of two answers a reviewer preferred.
+ */
+export const PreferenceLabel = { CHOSEN: 'chosen', REJECTED: 'rejected' } as const;
+
+/**
+ * Which of two answers a reviewer preferred.
+ */
+export type PreferenceLabel = typeof PreferenceLabel[keyof typeof PreferenceLabel];
 
 export type ProfileInput = {
     summary: {
@@ -2675,6 +3603,28 @@ export type PromptVersionSummary = VersionOrigin & {
 };
 
 /**
+ * Where this turn came from, in the telemetry that is still on the log.
+ *
+ * Every field is a join back. The archive expires on its own clock, and when
+ * it does these ids are what is left — which is the point of keeping them out
+ * of the encrypted half. "This run used a model that answered badly" stays
+ * answerable after the words are gone.
+ */
+export type Provenance = {
+    agent_id?: string;
+    call_id?: string;
+    model?: string;
+    /**
+     * The prompt version this turn ran on, where the producer knows it —
+     * `planner.floor-plan.system@sha256`. The join ADR_0011 exists for.
+     */
+    prompt?: string;
+    run_id?: string;
+    span_id?: string;
+    trace_id?: string;
+};
+
+/**
  * What the panel is told before anybody has signed in.
  *
  * Public on purpose, and it is the only route reachable unauthenticated
@@ -2791,6 +3741,52 @@ export type RecipePage = {
 };
 
 /**
+ * What a producer sends.
+ */
+export type RecordTurnRequest = {
+    content: TurnContent;
+    /**
+     * The same `conversation_id` the telemetry carries. This is the join, and
+     * a turn that invents one is a turn nothing can be traced back from.
+     */
+    conversation_id: string;
+    /**
+     * The producer's stable id for this message. Sending it twice replaces the
+     * turn rather than adding one — a retried flush must not double a corpus.
+     */
+    message_id: string;
+    /**
+     * When the message was said, rather than when it arrived. Ordering within
+     * a conversation uses arrival, because a producer's clock is not something
+     * an export's determinism can depend on.
+     */
+    occurred_at?: string | null;
+    /**
+     * Position among siblings. Ties are broken by `message_id`, so a producer
+     * that sends every turn at ordinal 0 still gets a deterministic order —
+     * just not the one it meant.
+     */
+    ordinal?: number;
+    parent_message_id?: string | null;
+    /**
+     * Consent, retention and what the producer says it redacted. Required in
+     * a protected deployment; recorded as `unknown` in an open one, which an
+     * export then excludes by name.
+     */
+    policy?: ContentPolicy;
+    provenance?: Provenance;
+    role: ConversationRole;
+};
+
+export type RecordTurnsBody = {
+    /**
+     * One exchange, as a producer flushes it. Not a transaction — see
+     * `Registry::record_batch`.
+     */
+    turns: Array<RecordTurnRequest>;
+};
+
+/**
  * An event as a consumer sees it.
  */
 export type RecordedEvent = {
@@ -2840,6 +3836,53 @@ export type RecordedMetadata = {
 };
 
 /**
+ * What a write answers with.
+ */
+export type RecordedTurn = {
+    content_digest: string;
+    /**
+     * False when this exact content was already stored under this turn id.
+     */
+    created: boolean;
+    expires_at?: string | null;
+    /**
+     * What the server's own scan found, whatever the producer claimed. Empty
+     * is the common case and the one worth not celebrating: a clean scan is
+     * the absence of a match, not evidence there is nothing to find.
+     */
+    findings?: Array<Finding>;
+    review: TurnReview;
+    turn_id: string;
+};
+
+export type RecordedTurns = {
+    turns: Array<RecordedTurn>;
+};
+
+/**
+ * What a producer says its own redaction hook did.
+ */
+export type RedactionRecord = {
+    applied_at?: string | null;
+    /**
+     * The hook, versioned: `acme-scrubber@2.1`. A bare name is accepted and
+     * is worth less — "which version of the scrubber ran" is the question
+     * asked after something gets through.
+     */
+    redactor: string;
+    /**
+     * How many spans it replaced. Recorded rather than derived, because the
+     * server sees only what is left.
+     */
+    replaced?: number;
+    /**
+     * The rule ids that fired. Empty is meaningful and common: the hook ran
+     * and found nothing.
+     */
+    rules?: Array<string>;
+};
+
+/**
  * What is being asked for when an image is registered.
  */
 export type RegisterImageRequest = {
@@ -2874,6 +3917,7 @@ export type RegisterModelRequest = {
     metrics?: ModelMetrics;
     name: string;
     notes?: string;
+    package?: null | ModelPackage;
     /**
      * The run that produced it. Read for its dataset, framework and code, so
      * a version cannot claim provenance the run does not have.
@@ -2897,6 +3941,55 @@ export type RegisteredModel = {
      */
     promotion_blocked?: string | null;
     version: ModelVersion;
+};
+
+export type RejectPage = {
+    next_offset?: number | null;
+    rows: Array<RejectedRow>;
+    /**
+     * Complete, even when [`rows`](Self::rows) is a page of a sample.
+     */
+    total: number;
+};
+
+/**
+ * Why a row did not become an image.
+ *
+ * Coarser than the message, on purpose: a reason with a row count is what
+ * somebody reads first, and "38 000 rows had no readable picture at the
+ * address they named" points at a mapping mistake in a way that thirty-eight
+ * thousand distinct sentences do not.
+ */
+export const RejectReason = {
+    ADDRESS_REFUSED: 'address_refused',
+    UNREACHABLE: 'unreachable',
+    NOT_AN_IMAGE: 'not_an_image',
+    INVALID: 'invalid',
+    STORE_FAILED: 'store_failed'
+} as const;
+
+/**
+ * Why a row did not become an image.
+ *
+ * Coarser than the message, on purpose: a reason with a row count is what
+ * somebody reads first, and "38 000 rows had no readable picture at the
+ * address they named" points at a mapping mistake in a way that thirty-eight
+ * thousand distinct sentences do not.
+ */
+export type RejectReason = typeof RejectReason[keyof typeof RejectReason];
+
+/**
+ * One row that did not make it, kept whole.
+ */
+export type RejectedRow = {
+    /**
+     * The sentence, verbatim. A count says how many; this says what to fix.
+     */
+    detail: string;
+    group_id: string;
+    page: number;
+    reason: RejectReason;
+    uri: string;
 };
 
 export const RejectionReason = {
@@ -2985,6 +4078,42 @@ export type RerunRequest = {
 };
 
 /**
+ * What a package needs in order to run at all.
+ *
+ * Declared so a scheduler can refuse rather than thrash. A model that needs
+ * 24 GB of accelerator memory placed on a node with 16 does not fail at load
+ * — it fails at the first request under load, at which point the previous
+ * version is already gone.
+ */
+export type ResourceRequest = {
+    cpu_millis?: number | null;
+    gpu_memory_mb?: number | null;
+    /**
+     * Accelerators, and how much memory each needs. `None` means it runs on a
+     * CPU, which is a claim rather than a default: a package that needs one
+     * and says nothing gets scheduled somewhere it cannot run.
+     */
+    gpus?: number | null;
+    memory_mb?: number | null;
+};
+
+/**
+ * How long the content may be held, on a clock of its own.
+ *
+ * Deliberately unrelated to the event log's retention. The log holds
+ * operational fields and is sized for a volume; this holds somebody's words
+ * and is bounded by what they were told. Tying them together would mean
+ * raising the log's retention silently extends a consent nobody re-asked for.
+ */
+export type RetentionPolicy = {
+    /**
+     * Which written policy this is. Recorded, never interpreted.
+     */
+    policy_id?: string;
+    ttl_days: number;
+};
+
+/**
  * A change to an image's review state.
  */
 export type ReviewRequest = {
@@ -3015,6 +4144,12 @@ export const ReviewState = {
  */
 export type ReviewState = typeof ReviewState[keyof typeof ReviewState];
 
+export type ReviewTurnBody = {
+    conversation_id: string;
+    review: TurnReviewRequest;
+    turn_id: string;
+};
+
 /**
  * A revision as it appears in a list, without its shapes.
  */
@@ -3038,6 +4173,45 @@ export type RevisionSummary = {
     revision: string;
     schema_version: string;
     shape_count: number;
+};
+
+/**
+ * Who checked a rights assertion, where, and when.
+ *
+ * The missing half of [`UsageRights`]. That type records *what* somebody
+ * claimed; this records the claim's provenance — and the two are separate
+ * because a claim with nothing behind it is still the claim that was made,
+ * and pretending otherwise would mean either refusing it (which teaches
+ * people to invent a licence to get past the dialog) or believing it.
+ *
+ * Every field is optional and the whole thing is recorded rather than
+ * enforced. What it changes is what a later reader can do: "why is this
+ * corpus marked commercial" has an answer that is a URL and a name and a
+ * date, instead of a `git blame` on a JSON file. The one hard rule stays
+ * where it was — [`check_rights`] refuses a claim the curated table
+ * contradicts, because there a human already read the licence at the source.
+ *
+ * [`primary_source_url`](Self::primary_source_url) is deliberately named for
+ * the *original*, never the mirror. ADR_0019's whole finding is that a hub
+ * restates licences wrongly often enough that its card is evidence about the
+ * mirror rather than about the data, so evidence pointing back at the hub
+ * result somebody clicked is not evidence at all.
+ */
+export type RightsEvidence = {
+    note?: string;
+    /**
+     * Where the licence was read: the paper, the project page, the repository
+     * the corpus was published from. Not the Hugging Face or Kaggle card.
+     */
+    primary_source_url?: string;
+    /**
+     * When they read it. A licence at a URL is a licence on a date.
+     */
+    reviewed_at?: string | null;
+    /**
+     * Who read it. A person, because a rights assertion is a person's.
+     */
+    reviewed_by?: string;
 };
 
 /**
@@ -3175,6 +4349,30 @@ export type RunSummary = {
     workflow?: string | null;
 };
 
+/**
+ * Which loader reads this, and therefore what it is allowed to do.
+ *
+ * Deliberately small, and deliberately ordered by how much of somebody else's
+ * code runs when the artifact is opened. The first two are data formats with
+ * a fixed interpreter; the third is a program.
+ */
+export const Runtime = {
+    WEIGHTS: 'weights',
+    ONNX: 'onnx',
+    TORCH_SCRIPT: 'torch_script',
+    PYTHON: 'python',
+    UNSPECIFIED: 'unspecified'
+} as const;
+
+/**
+ * Which loader reads this, and therefore what it is allowed to do.
+ *
+ * Deliberately small, and deliberately ordered by how much of somebody else's
+ * code runs when the artifact is opened. The first two are data formats with
+ * a fixed interpreter; the third is a program.
+ */
+export type Runtime = typeof Runtime[keyof typeof Runtime];
+
 export type SampleInput = {
     metrics: {
         [key: string]: number;
@@ -3268,6 +4466,24 @@ export type Sdk = 'Python' | 'Typescript' | 'Rust' | {
 };
 
 /**
+ * One written shard of a staged artifact.
+ *
+ * The unit of resume and the unit of proof. `digest` is over the shard's
+ * plaintext bytes — before any encryption, so an archive that seals its
+ * shards and an importer that does not produce comparable references — and it
+ * is what [`version_of`] builds the artifact's identity from.
+ */
+export type ShardRef = {
+    /**
+     * `sha256` of the shard's plaintext JSONL. What proves a shard was not
+     * swapped for another.
+     */
+    digest: string;
+    index: number;
+    rows: number;
+};
+
+/**
  * Who sent the event. Enough to find the process that produced a bad batch.
  */
 export type Source = {
@@ -3309,6 +4525,21 @@ export type SourceDirectory = {
     name: string;
     notes?: string;
     url: string;
+};
+
+/**
+ * One file a batch was read out of, as the hub described it.
+ */
+export type SourceFile = {
+    /**
+     * Whatever the hub published: an LFS `sha256`, a git blob id, an ETag.
+     * Never verified here, because these bytes are not the bytes this
+     * registry stores — an image is hashed on arrival and *that* digest is
+     * its identity.
+     */
+    digest?: string;
+    name: string;
+    size_bytes?: number | null;
 };
 
 export type SourcePage = {
@@ -3424,6 +4655,76 @@ export type SplitRatios = {
 };
 
 /**
+ * What a batch is for, decided once and pinned.
+ *
+ * Rights, evidence and source sit here rather than on each page because they
+ * are properties of the *corpus*: a per-page field would invite a pipeline to
+ * derive them from a column, which is the mirror's word laundered through a
+ * `withEntry`. This is also the "pinned source" half of "re-running the same
+ * pinned source and pipeline yields the same version".
+ */
+export type StageBatchRequest = {
+    description?: string;
+    /**
+     * Who checked that, where and when. Recorded, never enforced.
+     */
+    evidence?: RightsEvidence;
+    project: string;
+    /**
+     * What the caller asserts may be done with every image in this batch.
+     */
+    rights?: UsageRights;
+    source?: ImportSource;
+};
+
+/**
+ * A batch as it sits in the store.
+ */
+export type StagedBatch = {
+    batch_id: string;
+    created_at: string;
+    created_by?: string;
+    description: string;
+    /**
+     * `sha256(request ‖ every page digest, in order)`, once sealed.
+     */
+    digest?: string | null;
+    evidence: RightsEvidence;
+    /**
+     * One entry per stored page, in order. The same [`ShardRef`] the
+     * conversation export writes, because it is the same thing: an ordered,
+     * digested piece of a staged artifact.
+     */
+    pages: Array<ShardRef>;
+    project: string;
+    /**
+     * What was asked for, hashed. Half of the batch's content address.
+     */
+    request_digest: string;
+    rights: UsageRights;
+    rows: number;
+    /**
+     * True once the batch takes no more rows. Set by queueing a job.
+     */
+    sealed: boolean;
+    /**
+     * Pages on which no two rows shared a `group_id`.
+     *
+     * The family split is the one mistake an import cannot detect afterwards:
+     * a `group_id` mapped from the file name gives every image its own
+     * family, the test score then measures memorisation, and nothing in the
+     * numbers says so. Counted per page rather than over the whole batch
+     * because the alternative is a set of every group id a million-row import
+     * has seen, held in a manifest — so what this supports is the exact
+     * statement "every page of this batch gave each row its own family",
+     * which is what a filename mapping produces and what a real one does not.
+     */
+    singleton_pages: number;
+    source: ImportSource;
+    updated_at: string;
+};
+
+/**
  * What opens a run.
  */
 export type StartRunRequest = {
@@ -3523,11 +4824,59 @@ export type SuiteSummary = {
     suite: string;
 };
 
+/**
+ * A number a request has to look like.
+ *
+ * The shape is a list rather than a string so a server can check it; `None`
+ * in a dimension is "any", which is how a batch axis is written. A runtime
+ * that validates against this refuses a wrong request instead of reshaping it
+ * into something that predicts confidently and wrongly.
+ */
+export type TensorSpec = {
+    /**
+     * For a classifier: what index 0, 1, 2 … mean.
+     *
+     * On the package rather than in the serving code, because a label order
+     * that lives in a deployment is a label order that silently permutes when
+     * somebody retrains — every metric stays finite and nothing says so. The
+     * same failure `ExportDataset` checks `schema_version` for.
+     */
+    classes?: Array<string>;
+    description?: string;
+    /**
+     * `float32`, `int64`, `uint8`. Free text, because the vocabulary is the
+     * runtime's and an enum here would be one framework's list imposed on
+     * every other.
+     */
+    dtype?: string;
+    name: string;
+    /**
+     * `[null, 3, 224, 224]`. A `null` is a free dimension.
+     */
+    shape?: Array<number | null>;
+};
+
 export type ToolBreakdown = {
     calls: number;
     failures: number;
     latency: Percentiles;
     tool_name: string;
+};
+
+/**
+ * What a tool handed back.
+ *
+ * Attached to the turn rather than folded into a `Text` part, because a
+ * failure is a training signal and a stringified error is not: an SFT shape
+ * wants the successful ones, a preference shape often wants exactly the pairs
+ * where one branch failed.
+ */
+export type ToolResult = {
+    call_id: string;
+    content: string;
+    error?: string;
+    name: string;
+    ok: boolean;
 };
 
 export type Totals = {
@@ -3646,6 +4995,30 @@ export type TrainingRunSummary = {
 };
 
 /**
+ * What the consent covers.
+ *
+ * Separate scopes rather than one "may train" flag, because they are
+ * genuinely different permissions and the difference is where the accidents
+ * happen: an evaluation set that quietly becomes a training set is the same
+ * mistake as a research-licensed corpus in a commercial model, one field over.
+ */
+export const TrainingScope = {
+    TRAIN: 'train',
+    EVALUATE: 'evaluate',
+    SHARE: 'share'
+} as const;
+
+/**
+ * What the consent covers.
+ *
+ * Separate scopes rather than one "may train" flag, because they are
+ * genuinely different permissions and the difference is where the accidents
+ * happen: an evaluation set that quietly becomes a training set is the same
+ * mistake as a research-licensed corpus in a commercial model, one field over.
+ */
+export type TrainingScope = typeof TrainingScope[keyof typeof TrainingScope];
+
+/**
  * Where a run is.
  *
  * `Running` is the *absence* of an end, not a claim that anything is
@@ -3671,6 +5044,79 @@ export const TrainingStatus = {
  * [`TrainingRun::last_heard_from`] is what a reader draws the line from.
  */
 export type TrainingStatus = typeof TrainingStatus[keyof typeof TrainingStatus];
+
+/**
+ * The half that is encrypted.
+ *
+ * A type of its own rather than two fields on the head, because the split is
+ * the security boundary: everything in here is sealed, everything outside it
+ * is readable by anyone who may list the archive, and a field that moved
+ * across the line by accident would be a leak nobody could see in a diff.
+ */
+export type TurnContent = {
+    parts?: Array<ContentPart>;
+    tool_results?: Array<ToolResult>;
+};
+
+export type TurnPage = {
+    /**
+     * Where to resume. Absent at the end of the conversation.
+     */
+    next_offset?: number | null;
+    total: number;
+    turns: Array<ArchivedTurn>;
+};
+
+/**
+ * Who decided, when, and why.
+ */
+export type TurnReview = {
+    decided_at?: string | null;
+    note?: string;
+    preference?: null | PreferenceLabel;
+    reviewer?: string;
+    state?: TurnReviewState;
+};
+
+/**
+ * One reviewer's decision about one turn.
+ */
+export type TurnReviewRequest = {
+    /**
+     * What the reviewer saw that the scanner did not — an unsafe answer, a
+     * name the rules do not recognise. Appended to the turn's findings rather
+     * than replacing them: a scanner finding a human disagreed with is a fact
+     * about both of them.
+     */
+    findings?: Array<HumanFinding>;
+    note?: string;
+    preference?: null | PreferenceLabel;
+    state: TurnReviewState;
+};
+
+/**
+ * Whether a human has decided about this turn.
+ */
+export const TurnReviewState = {
+    PENDING: 'pending',
+    APPROVED: 'approved',
+    REJECTED: 'rejected'
+} as const;
+
+/**
+ * Whether a human has decided about this turn.
+ */
+export type TurnReviewState = typeof TurnReviewState[keyof typeof TurnReviewState];
+
+/**
+ * Whether the content is still there.
+ */
+export const TurnState = { HELD: 'held', ERASED: 'erased' } as const;
+
+/**
+ * Whether the content is still there.
+ */
+export type TurnState = typeof TurnState[keyof typeof TurnState];
 
 /**
  * What may be done with an image, and therefore with a model trained on it.
@@ -3703,6 +5149,24 @@ export type VersionOrigin = {
     algorithm: string;
     optimization_id: string;
     origin: 'optimized';
+};
+
+/**
+ * Why a corpus was withdrawn, and when.
+ *
+ * An export is immutable and a withdrawal does not change that: the manifest
+ * keeps every count, digest and exclusion it had. What is gone is the rows,
+ * because the alternative is a published corpus holding words somebody asked
+ * to have deleted — and an erasure that stopped at the archive would be an
+ * erasure in name only.
+ */
+export type Withdrawal = {
+    at: string;
+    by?: string;
+    /**
+     * The conversations whose erasure caused this.
+     */
+    conversations: Array<string>;
 };
 
 /**
@@ -4005,6 +5469,256 @@ export type RegisterImageResponses = {
 
 export type RegisterImageResponse = RegisterImageResponses[keyof RegisterImageResponses];
 
+export type GetImportBatchData = {
+    body?: never;
+    path?: never;
+    query: {
+        batch: string;
+    };
+    url: '/api/v1/annotation-import-batch';
+};
+
+export type GetImportBatchErrors = {
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type GetImportBatchError = GetImportBatchErrors[keyof GetImportBatchErrors];
+
+export type GetImportBatchResponses = {
+    200: StagedBatch;
+};
+
+export type GetImportBatchResponse = GetImportBatchResponses[keyof GetImportBatchResponses];
+
+export type ListImportBatchesData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/annotation-import-batches';
+};
+
+export type ListImportBatchesErrors = {
+    501: ErrorBody;
+};
+
+export type ListImportBatchesError = ListImportBatchesErrors[keyof ListImportBatchesErrors];
+
+export type ListImportBatchesResponses = {
+    200: BatchPage;
+};
+
+export type ListImportBatchesResponse = ListImportBatchesResponses[keyof ListImportBatchesResponses];
+
+export type StageImportBatchData = {
+    body: StageBatchRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/annotation-import-batches';
+};
+
+export type StageImportBatchErrors = {
+    400: ErrorBody;
+    403: ErrorBody;
+    /**
+     * No such project
+     */
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type StageImportBatchError = StageImportBatchErrors[keyof StageImportBatchErrors];
+
+export type StageImportBatchResponses = {
+    200: StagedBatch;
+};
+
+export type StageImportBatchResponse = StageImportBatchResponses[keyof StageImportBatchResponses];
+
+export type GetImportJobData = {
+    body?: never;
+    path?: never;
+    query: {
+        job_id: string;
+    };
+    url: '/api/v1/annotation-import-job';
+};
+
+export type GetImportJobErrors = {
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type GetImportJobError = GetImportJobErrors[keyof GetImportJobErrors];
+
+export type GetImportJobResponses = {
+    200: ImportJob;
+};
+
+export type GetImportJobResponse = GetImportJobResponses[keyof GetImportJobResponses];
+
+export type CancelImportJobData = {
+    body?: never;
+    path?: never;
+    query: {
+        job_id: string;
+    };
+    url: '/api/v1/annotation-import-job/cancel';
+};
+
+export type CancelImportJobErrors = {
+    /**
+     * It already finished
+     */
+    400: ErrorBody;
+    403: ErrorBody;
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type CancelImportJobError = CancelImportJobErrors[keyof CancelImportJobErrors];
+
+export type CancelImportJobResponses = {
+    200: ImportJob;
+};
+
+export type CancelImportJobResponse = CancelImportJobResponses[keyof CancelImportJobResponses];
+
+export type ListImportJobsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/annotation-import-jobs';
+};
+
+export type ListImportJobsErrors = {
+    501: ErrorBody;
+};
+
+export type ListImportJobsError = ListImportJobsErrors[keyof ListImportJobsErrors];
+
+export type ListImportJobsResponses = {
+    200: ImportJobPage;
+};
+
+export type ListImportJobsResponse = ListImportJobsResponses[keyof ListImportJobsResponses];
+
+export type QueueImportJobData = {
+    body: ImportJobRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/annotation-import-jobs';
+};
+
+export type QueueImportJobErrors = {
+    /**
+     * Empty batch, wrong project, or rights the curated table contradicts
+     */
+    400: ErrorBody;
+    403: ErrorBody;
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type QueueImportJobError = QueueImportJobErrors[keyof QueueImportJobErrors];
+
+export type QueueImportJobResponses = {
+    200: ImportJob;
+};
+
+export type QueueImportJobResponse = QueueImportJobResponses[keyof QueueImportJobResponses];
+
+export type GetImportManifestData = {
+    body?: never;
+    path?: never;
+    query: {
+        version: string;
+    };
+    url: '/api/v1/annotation-import-manifest';
+};
+
+export type GetImportManifestErrors = {
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type GetImportManifestError = GetImportManifestErrors[keyof GetImportManifestErrors];
+
+export type GetImportManifestResponses = {
+    200: ImportManifest;
+};
+
+export type GetImportManifestResponse = GetImportManifestResponses[keyof GetImportManifestResponses];
+
+export type ListImportManifestsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/annotation-import-manifests';
+};
+
+export type ListImportManifestsErrors = {
+    501: ErrorBody;
+};
+
+export type ListImportManifestsError = ListImportManifestsErrors[keyof ListImportManifestsErrors];
+
+export type ListImportManifestsResponses = {
+    200: ImportIndex;
+};
+
+export type ListImportManifestsResponse = ListImportManifestsResponses[keyof ListImportManifestsResponses];
+
+export type ListImportRejectsData = {
+    body?: never;
+    path?: never;
+    query: {
+        job_id: string;
+        offset?: number | null;
+        limit?: number | null;
+    };
+    url: '/api/v1/annotation-import-rejects';
+};
+
+export type ListImportRejectsErrors = {
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type ListImportRejectsError = ListImportRejectsErrors[keyof ListImportRejectsErrors];
+
+export type ListImportRejectsResponses = {
+    200: RejectPage;
+};
+
+export type ListImportRejectsResponse = ListImportRejectsResponses[keyof ListImportRejectsResponses];
+
+export type AppendImportRowsData = {
+    body: AppendRowsRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/annotation-import-rows';
+};
+
+export type AppendImportRowsErrors = {
+    /**
+     * Sealed, out of order, or a page rewritten with different rows
+     */
+    400: ErrorBody;
+    403: ErrorBody;
+    404: ErrorBody;
+    413: ErrorBody;
+    501: ErrorBody;
+};
+
+export type AppendImportRowsError = AppendImportRowsErrors[keyof AppendImportRowsErrors];
+
+export type AppendImportRowsResponses = {
+    200: AppendReport;
+};
+
+export type AppendImportRowsResponse = AppendImportRowsResponses[keyof AppendImportRowsResponses];
+
 export type ImportImagesData = {
     body: ImportRequest;
     path?: never;
@@ -4253,6 +5967,326 @@ export type MeResponses = {
 };
 
 export type MeResponse = MeResponses[keyof MeResponses];
+
+export type ListConversationArchiveData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/conversation-archive';
+};
+
+export type ListConversationArchiveErrors = {
+    501: ErrorBody;
+};
+
+export type ListConversationArchiveError = ListConversationArchiveErrors[keyof ListConversationArchiveErrors];
+
+export type ListConversationArchiveResponses = {
+    200: ConversationArchivePage;
+};
+
+export type ListConversationArchiveResponse = ListConversationArchiveResponses[keyof ListConversationArchiveResponses];
+
+export type GetConversationDatasetRowsData = {
+    body?: never;
+    path?: never;
+    query: {
+        name: string;
+        version: string;
+        offset?: number | null;
+        limit?: number | null;
+    };
+    url: '/api/v1/conversation-dataset-rows';
+};
+
+export type GetConversationDatasetRowsErrors = {
+    400: ErrorBody;
+    /**
+     * Reading rows needs the admin role
+     */
+    403: ErrorBody;
+    404: ErrorBody;
+    /**
+     * Withdrawn: an erasure took this corpus' rows
+     */
+    410: ErrorBody;
+    501: ErrorBody;
+};
+
+export type GetConversationDatasetRowsError = GetConversationDatasetRowsErrors[keyof GetConversationDatasetRowsErrors];
+
+export type GetConversationDatasetRowsResponses = {
+    200: ExportRowsPage;
+};
+
+export type GetConversationDatasetRowsResponse = GetConversationDatasetRowsResponses[keyof GetConversationDatasetRowsResponses];
+
+export type ListConversationDatasetsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/conversation-datasets';
+};
+
+export type ListConversationDatasetsErrors = {
+    501: ErrorBody;
+};
+
+export type ListConversationDatasetsError = ListConversationDatasetsErrors[keyof ListConversationDatasetsErrors];
+
+export type ListConversationDatasetsResponses = {
+    200: ConversationExportPage;
+};
+
+export type ListConversationDatasetsResponse = ListConversationDatasetsResponses[keyof ListConversationDatasetsResponses];
+
+export type EraseConversationContentData = {
+    body: ErasureBody;
+    path?: never;
+    query?: never;
+    url: '/api/v1/conversation-erasures';
+};
+
+export type EraseConversationContentErrors = {
+    400: ErrorBody;
+    /**
+     * Erasing needs the admin role
+     */
+    403: ErrorBody;
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type EraseConversationContentError = EraseConversationContentErrors[keyof EraseConversationContentErrors];
+
+export type EraseConversationContentResponses = {
+    200: ErasureReport;
+};
+
+export type EraseConversationContentResponse = EraseConversationContentResponses[keyof EraseConversationContentResponses];
+
+export type ListConversationExportsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/conversation-exports';
+};
+
+export type ListConversationExportsErrors = {
+    501: ErrorBody;
+};
+
+export type ListConversationExportsError = ListConversationExportsErrors[keyof ListConversationExportsErrors];
+
+export type ListConversationExportsResponses = {
+    200: ExportJobPage;
+};
+
+export type ListConversationExportsResponse = ListConversationExportsResponses[keyof ListConversationExportsResponses];
+
+export type CreateConversationExportData = {
+    body: ConversationExportRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/conversation-exports';
+};
+
+export type CreateConversationExportErrors = {
+    400: ErrorBody;
+    /**
+     * The selection matched no conversation
+     */
+    422: ErrorBody;
+    501: ErrorBody;
+};
+
+export type CreateConversationExportError = CreateConversationExportErrors[keyof CreateConversationExportErrors];
+
+export type CreateConversationExportResponses = {
+    /**
+     * Queued, or the job this request already started
+     */
+    202: ExportJob;
+};
+
+export type CreateConversationExportResponse = CreateConversationExportResponses[keyof CreateConversationExportResponses];
+
+export type GetConversationExportData = {
+    body?: never;
+    path: {
+        job_id: string;
+    };
+    query?: never;
+    url: '/api/v1/conversation-exports/{job_id}';
+};
+
+export type GetConversationExportErrors = {
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type GetConversationExportError = GetConversationExportErrors[keyof GetConversationExportErrors];
+
+export type GetConversationExportResponses = {
+    200: ExportJob;
+};
+
+export type GetConversationExportResponse = GetConversationExportResponses[keyof GetConversationExportResponses];
+
+export type CancelConversationExportData = {
+    body?: never;
+    path: {
+        job_id: string;
+    };
+    query?: never;
+    url: '/api/v1/conversation-exports/{job_id}/cancel';
+};
+
+export type CancelConversationExportErrors = {
+    404: ErrorBody;
+    /**
+     * It already finished
+     */
+    422: ErrorBody;
+    501: ErrorBody;
+};
+
+export type CancelConversationExportError = CancelConversationExportErrors[keyof CancelConversationExportErrors];
+
+export type CancelConversationExportResponses = {
+    200: ExportJob;
+};
+
+export type CancelConversationExportResponse = CancelConversationExportResponses[keyof CancelConversationExportResponses];
+
+export type ConversationPolicyData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/conversation-policy';
+};
+
+export type ConversationPolicyErrors = {
+    501: ErrorBody;
+};
+
+export type ConversationPolicyError = ConversationPolicyErrors[keyof ConversationPolicyErrors];
+
+export type ConversationPolicyResponses = {
+    200: ArchiveConfig;
+};
+
+export type ConversationPolicyResponse = ConversationPolicyResponses[keyof ConversationPolicyResponses];
+
+export type ConversationTurnContentData = {
+    body?: never;
+    path?: never;
+    query: {
+        conversation_id: string;
+        turn_id: string;
+    };
+    url: '/api/v1/conversation-turn-content';
+};
+
+export type ConversationTurnContentErrors = {
+    /**
+     * Reading content needs the admin role
+     */
+    403: ErrorBody;
+    404: ErrorBody;
+    /**
+     * Erased: the head remains, the words do not
+     */
+    410: ErrorBody;
+    501: ErrorBody;
+};
+
+export type ConversationTurnContentError = ConversationTurnContentErrors[keyof ConversationTurnContentErrors];
+
+export type ConversationTurnContentResponses = {
+    200: TurnContent;
+};
+
+export type ConversationTurnContentResponse = ConversationTurnContentResponses[keyof ConversationTurnContentResponses];
+
+export type ReviewConversationTurnData = {
+    body: ReviewTurnBody;
+    path?: never;
+    query?: never;
+    url: '/api/v1/conversation-turn-reviews';
+};
+
+export type ReviewConversationTurnErrors = {
+    400: ErrorBody;
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type ReviewConversationTurnError = ReviewConversationTurnErrors[keyof ReviewConversationTurnErrors];
+
+export type ReviewConversationTurnResponses = {
+    200: ArchivedTurn;
+};
+
+export type ReviewConversationTurnResponse = ReviewConversationTurnResponses[keyof ReviewConversationTurnResponses];
+
+export type ListConversationTurnsData = {
+    body?: never;
+    path?: never;
+    query: {
+        conversation_id: string;
+        /**
+         * Narrow to one review state — what the review queue asks for.
+         */
+        review?: null | TurnReviewState;
+        /**
+         * Narrow to turns carrying a finding of this kind.
+         */
+        finding?: null | FindingKind;
+        role?: null | ConversationRole;
+        offset?: number | null;
+        limit?: number | null;
+    };
+    url: '/api/v1/conversation-turns';
+};
+
+export type ListConversationTurnsErrors = {
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type ListConversationTurnsError = ListConversationTurnsErrors[keyof ListConversationTurnsErrors];
+
+export type ListConversationTurnsResponses = {
+    200: TurnPage;
+};
+
+export type ListConversationTurnsResponse = ListConversationTurnsResponses[keyof ListConversationTurnsResponses];
+
+export type RecordConversationTurnsData = {
+    body: RecordTurnsBody;
+    path?: never;
+    query?: never;
+    url: '/api/v1/conversation-turns';
+};
+
+export type RecordConversationTurnsErrors = {
+    400: ErrorBody;
+    413: ErrorBody;
+    /**
+     * Refused: every policy problem at once
+     */
+    422: ErrorBody;
+    501: ErrorBody;
+};
+
+export type RecordConversationTurnsError = RecordConversationTurnsErrors[keyof RecordConversationTurnsErrors];
+
+export type RecordConversationTurnsResponses = {
+    201: RecordedTurns;
+};
+
+export type RecordConversationTurnsResponse = RecordConversationTurnsResponses[keyof RecordConversationTurnsResponses];
 
 export type ListConversationsData = {
     body?: never;

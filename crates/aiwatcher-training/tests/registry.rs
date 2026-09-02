@@ -208,6 +208,7 @@ async fn a_model_version_takes_its_provenance_from_the_run_rather_than_the_reque
                 validation: BTreeMap::from([("miou".to_owned(), 0.81)]),
                 test: BTreeMap::from([("miou".to_owned(), 0.74)]),
             },
+            package: None,
             notes: String::new(),
         })
         .await
@@ -240,6 +241,7 @@ async fn registering_the_same_thing_twice_is_one_version() {
             validation: BTreeMap::from([("miou".to_owned(), 0.81)]),
             test: BTreeMap::from([("miou".to_owned(), 0.74)]),
         },
+        package: None,
         notes: String::new(),
     };
     let first = registry.register_model(request()).await.unwrap();
@@ -267,6 +269,7 @@ async fn a_model_with_no_held_out_score_is_recorded_and_refused_a_label() {
                 validation: BTreeMap::from([("miou".to_owned(), 0.91)]),
                 test: BTreeMap::new(),
             },
+            package: None,
             notes: String::new(),
         })
         .await
@@ -305,6 +308,7 @@ async fn a_model_trained_on_a_mutable_dataset_name_is_refused_a_label() {
                 validation: BTreeMap::new(),
                 test: BTreeMap::from([("miou".to_owned(), 0.74)]),
             },
+            package: None,
             notes: String::new(),
         })
         .await
@@ -329,6 +333,7 @@ async fn a_promotable_version_takes_the_label_and_the_head_answers_with_it() {
                 validation: BTreeMap::from([("miou".to_owned(), 0.81)]),
                 test: BTreeMap::from([("miou".to_owned(), 0.74)]),
             },
+            package: None,
             notes: String::new(),
         })
         .await
@@ -487,4 +492,125 @@ async fn a_checkpoint_marked_best_becomes_the_run_s_headline_number() {
     assert_eq!(best.value, 0.812);
     assert_eq!(best.epoch, Some(12));
     assert_eq!(run.summary().best.map(|entry| entry.value), Some(0.812));
+}
+
+#[tokio::test]
+async fn a_version_may_declare_what_a_runtime_needs_and_a_half_declaration_is_refused() {
+    use aiwatcher_training::{ArtifactRef, ModelPackage, ResourceRequest, Runtime};
+
+    let registry = registry();
+    finished(&registry, "run-packaged", EXPORT).await;
+
+    let package = |digest: &str| ModelPackage {
+        runtime: Runtime::Onnx,
+        runtime_version: "1.17".to_owned(),
+        entry_point: "model.onnx".to_owned(),
+        inputs: Vec::new(),
+        outputs: Vec::new(),
+        preprocessing: vec!["resize:512".to_owned()],
+        dependencies: std::collections::BTreeMap::new(),
+        artifacts: vec![ArtifactRef {
+            name: "weights".to_owned(),
+            uri: "s3://models/edge/model.onnx".to_owned(),
+            digest: digest.to_owned(),
+            size_bytes: Some(4096),
+            content_type: String::new(),
+        }],
+        resources: ResourceRequest::default(),
+    };
+
+    let registered = registry
+        .register_model(RegisterModelRequest {
+            name: "edge.finder".to_owned(),
+            run_id: "run-packaged".to_owned(),
+            checkpoint_uri: "s3://models/edge/model.onnx".to_owned(),
+            description: String::new(),
+            metrics: ModelMetrics {
+                validation: BTreeMap::from([("loss".to_owned(), 0.2)]),
+                test: BTreeMap::from([("iou".to_owned(), 0.8)]),
+            },
+            package: Some(package(&"ab".repeat(32))),
+            notes: String::new(),
+        })
+        .await
+        .unwrap();
+    let declared = registered
+        .version
+        .package
+        .as_ref()
+        .expect("the package is kept on the version");
+    assert_eq!(declared.runtime, Runtime::Onnx);
+    assert!(!declared.runtime.executes_packaged_code());
+    assert_eq!(
+        registered.head.versions[0].runtime,
+        Some(Runtime::Onnx),
+        "a list answers 'could anything serve this' without opening every version"
+    );
+
+    let error = registry
+        .register_model(RegisterModelRequest {
+            name: "edge.finder".to_owned(),
+            run_id: "run-packaged".to_owned(),
+            checkpoint_uri: "s3://models/edge/model.onnx".to_owned(),
+            description: String::new(),
+            metrics: ModelMetrics::default(),
+            package: Some(ModelPackage {
+                artifacts: vec![ArtifactRef {
+                    digest: String::new(),
+                    ..package("").artifacts.remove(0)
+                }],
+                ..package("")
+            }),
+            notes: String::new(),
+        })
+        .await
+        .expect_err("weights nobody can check are not a package");
+    assert!(error.to_string().contains("an identity"), "{error}");
+}
+
+#[tokio::test]
+async fn two_versions_that_name_different_weights_are_two_versions() {
+    use aiwatcher_training::{ArtifactRef, ModelPackage, ResourceRequest, Runtime};
+
+    let registry = registry();
+    finished(&registry, "run-weights-swap", EXPORT).await;
+    let package = |digest: &str| ModelPackage {
+        runtime: Runtime::TorchScript,
+        runtime_version: "2.4".to_owned(),
+        entry_point: "model.pt".to_owned(),
+        inputs: Vec::new(),
+        outputs: Vec::new(),
+        preprocessing: Vec::new(),
+        dependencies: std::collections::BTreeMap::new(),
+        artifacts: vec![ArtifactRef {
+            name: "weights".to_owned(),
+            uri: "s3://models/edge/latest.pt".to_owned(),
+            digest: digest.to_owned(),
+            size_bytes: None,
+            content_type: String::new(),
+        }],
+        resources: ResourceRequest::default(),
+    };
+    let register = async |digest: &str| {
+        registry
+            .register_model(RegisterModelRequest {
+                name: "edge.mover".to_owned(),
+                run_id: "run-weights-swap".to_owned(),
+                checkpoint_uri: "s3://models/edge/latest.pt".to_owned(),
+                description: String::new(),
+                metrics: ModelMetrics::default(),
+                package: Some(package(digest)),
+                notes: String::new(),
+            })
+            .await
+            .unwrap()
+    };
+
+    let first = register(&"ab".repeat(32)).await;
+    let second = register(&"cd".repeat(32)).await;
+    assert_ne!(
+        first.version.version, second.version.version,
+        "the same URI holding different bytes is not the same version; collapsing them would let \
+         a promotion point at weights nobody measured"
+    );
 }

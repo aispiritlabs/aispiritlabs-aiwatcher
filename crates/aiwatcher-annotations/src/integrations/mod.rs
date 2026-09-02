@@ -11,6 +11,12 @@
 //! permits. See ADR_0019, and [`crate::license`] for the rule it must not
 //! override.
 
+/// The bounded downloader every outbound byte goes through: an allowlist, a
+/// public-address check, no redirects, a streamed byte ceiling, a header-only
+/// pixel ceiling and a verified content address. The only piece here that
+/// fetches bytes somebody outside chose, which is why it is its own module
+/// rather than four lines inside [`hubs`].
+pub mod fetch;
 pub mod hubs;
 /// The one thing here that reaches nothing: reading a picture's size out of
 /// its own first bytes. It lives beside [`hubs`] because a hub is what hands

@@ -25,11 +25,7 @@ import type {
   UsageRights,
 } from '@/api/generated/types.gen';
 import { AnnotationCanvas, type Tool } from '@/components/annotation-canvas';
-import {
-  ClassPalette,
-  ShapeInspector,
-  ShapeList,
-} from '@/components/annotation-inspector';
+import { ClassPalette, ShapeInspector, ShapeList } from '@/components/annotation-inspector';
 import { RegistryDisabled, isRegistryDisabled } from '@/components/registry-disabled';
 import { Badge, Button, Card, EmptyState, Spinner } from '@/components/ui/primitives';
 import {
@@ -39,6 +35,7 @@ import {
   defaultAttributes,
   nextId,
   rejectionDetails,
+  sameAnnotations,
 } from '@/lib/annotations';
 import { cn } from '@/lib/utils';
 
@@ -343,9 +340,7 @@ function Workspace({
     return ids;
   }, [annotations, problems]);
 
-  const dirty =
-    draft !== null &&
-    JSON.stringify(draft) !== JSON.stringify(detail.data?.revision?.annotations ?? []);
+  const dirty = draft !== null && !sameAnnotations(draft, detail.data?.revision?.annotations ?? []);
 
   return (
     <div className="flex flex-col gap-3">
@@ -363,8 +358,8 @@ function Workspace({
         </select>
         {project.data && (
           <span className="text-xs text-muted-foreground">
-            {project.data.accepted}/{project.data.images} accepted · {project.data.groups}{' '}
-            families · {project.data.instances} instances
+            {project.data.accepted}/{project.data.images} accepted · {project.data.groups} families
+            · {project.data.instances} instances
           </span>
         )}
         {/* `relative`, because the import panel below is absolutely positioned
@@ -912,12 +907,14 @@ function FirstProject({ onCreated }: { onCreated: (name: string) => void }) {
           </Badge>
         ))}
       </div>
-      <Button onClick={() => create.mutate()} disabled={!name || create.isPending} className="self-start">
+      <Button
+        onClick={() => create.mutate()}
+        disabled={!name || create.isPending}
+        className="self-start"
+      >
         Create project
       </Button>
-      {create.isError && (
-        <p className="text-xs text-danger">{rejectionDetails(create.error)[0]}</p>
-      )}
+      {create.isError && <p className="text-xs text-danger">{rejectionDetails(create.error)[0]}</p>}
     </Card>
   );
 }

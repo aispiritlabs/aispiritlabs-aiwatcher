@@ -26,15 +26,23 @@ use crate::images::{
     AnnotationRevision, ImageDetail, ImageFilter, ImageHead, ImagePage, RegisterImageRequest,
     ReviewRequest, SaveRevisionRequest, SavedRevision, StoredBlob,
 };
+use crate::imports::staging::{
+    AppendReport, AppendRowsRequest, BatchPage, StageBatchRequest, StagedBatch,
+};
+use crate::imports::{
+    ImportIndex, ImportJob, ImportJobPage, ImportJobRequest, ImportManifest, RejectPage,
+};
+use crate::integrations::fetch::ImageSource;
 use crate::project::{AnnotationProject, ProjectPage, ProjectSummary, SaveProjectRequest, Split};
 use crate::schema::LabelSchema;
 use crate::store::Backend;
-use crate::{Error, Result, images, validate_digest, validate_name};
+use crate::{Error, Result, images, imports, validate_digest, validate_name};
 
 /// One namespace in the configured authored object store.
 #[derive(Clone, Debug)]
 pub struct Registry {
     backend: Backend,
+    images: Option<Arc<dyn ImageSource>>,
 }
 
 impl Registry {
@@ -42,7 +50,22 @@ impl Registry {
     pub fn new(store: Arc<dyn ObjectStore>, prefix: impl Into<String>) -> Self {
         Self {
             backend: Backend::new(store, prefix),
+            images: None,
         }
+    }
+
+    /// Where an import job gets bytes from, when this deployment has one.
+    ///
+    /// `None` is a working state and not a broken one: a pipeline that stored
+    /// its own images sends rows carrying a content address, and those rows
+    /// need nothing fetched. What it is not is a silent state — a row with no
+    /// `image_id` is rejected saying no source is configured, rather than
+    /// rejected saying the registry wanted an `image_id`, which is true and
+    /// unhelpful.
+    #[must_use]
+    pub fn with_image_source(mut self, images: Arc<dyn ImageSource>) -> Self {
+        self.images = Some(images);
+        self
     }
 
     // ── Projects ─────────────────────────────────────────────────────────────
@@ -163,6 +186,136 @@ impl Registry {
     pub async fn import_images(&self, request: ImportRequest) -> Result<ImportReport> {
         let project = self.project(&request.project).await?;
         images::import(&self.backend, &project, request).await
+    }
+
+    // ── Staged imports ───────────────────────────────────────────────────
+    //
+    // The asynchronous half of the same operation. `import_images` above is
+    // the bounded one: five thousand rows in one body, answered when it is
+    // done. These are for the corpus-sized case, where the rows are staged
+    // first and a job reads them a page at a time — see [`crate::imports`].
+
+    /// Open a staged batch. Nothing is read and nothing is registered yet.
+    ///
+    /// # Errors
+    /// When the project does not exist.
+    pub async fn stage_import(
+        &self,
+        request: StageBatchRequest,
+        created_by: &str,
+    ) -> Result<StagedBatch> {
+        self.project(&request.project).await?;
+        imports::staging::stage(&self.backend, request, created_by).await
+    }
+
+    /// Add one page of rows to an open batch.
+    ///
+    /// # Errors
+    /// When the batch does not exist, is sealed, the page is over
+    /// [`MAX_PAGE_ROWS`](crate::imports::staging::MAX_PAGE_ROWS), or a numbered
+    /// page was already stored with different rows.
+    pub async fn append_import_rows(&self, request: AppendRowsRequest) -> Result<AppendReport> {
+        imports::staging::append(&self.backend, request)
+            .await
+            .map(|(_, report)| report)
+    }
+
+    /// # Errors
+    /// When the batch does not exist.
+    pub async fn import_batch(&self, batch_id: &str) -> Result<StagedBatch> {
+        imports::staging::batch(&self.backend, batch_id).await
+    }
+
+    /// # Errors
+    /// When the store cannot be listed.
+    pub async fn import_batches(&self) -> Result<BatchPage> {
+        imports::staging::batches(&self.backend).await
+    }
+
+    /// Seal a batch and queue the job that reads it.
+    ///
+    /// # Errors
+    /// When the batch does not exist, holds no rows, was staged for another
+    /// project, or asserts rights the curated table contradicts.
+    pub async fn queue_import(
+        &self,
+        request: ImportJobRequest,
+        created_by: &str,
+    ) -> Result<ImportJob> {
+        let batch = self.import_batch(&request.batch).await?;
+        let project = self.project(&batch.project).await?;
+        imports::create(&self.backend, &project, request, created_by).await
+    }
+
+    /// # Errors
+    /// When the job does not exist.
+    pub async fn import_job(&self, job_id: &str) -> Result<ImportJob> {
+        imports::job(&self.backend, job_id).await
+    }
+
+    /// # Errors
+    /// When the store cannot be listed.
+    pub async fn import_jobs(&self) -> Result<ImportJobPage> {
+        imports::jobs(&self.backend).await
+    }
+
+    /// # Errors
+    /// When the job does not exist or has already finished.
+    pub async fn cancel_import(&self, job_id: &str) -> Result<ImportJob> {
+        imports::cancel(&self.backend, job_id).await
+    }
+
+    /// Import jobs nobody is demonstrably working on, oldest first.
+    ///
+    /// # Errors
+    /// When the store cannot be listed.
+    pub async fn claimable_imports(&self) -> Result<Vec<String>> {
+        imports::claimable(&self.backend, OffsetDateTime::now_utc()).await
+    }
+
+    /// Run one import job to completion, or until it is cancelled, fails, or
+    /// is taken over.
+    ///
+    /// # Errors
+    /// When the job or its project does not exist. A row's own failure is
+    /// recorded on the job rather than returned: one unreachable image in six
+    /// hundred thousand is a row to report, not an import to abandon.
+    pub async fn run_import(&self, job_id: &str, worker: &str) -> Result<ImportJob> {
+        let job = self.import_job(job_id).await?;
+        let project = self.project(&job.project).await?;
+        imports::run(
+            &self.backend,
+            &project,
+            job_id,
+            worker,
+            self.images.as_deref(),
+        )
+        .await
+    }
+
+    /// The rows a job refused, and why.
+    ///
+    /// # Errors
+    /// When the job does not exist.
+    pub async fn import_rejects(
+        &self,
+        job_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<RejectPage> {
+        imports::rejects(&self.backend, job_id, offset, limit).await
+    }
+
+    /// # Errors
+    /// When nothing is stored under that version.
+    pub async fn import_manifest(&self, version: &str) -> Result<ImportManifest> {
+        imports::manifest(&self.backend, version).await
+    }
+
+    /// # Errors
+    /// When the store cannot be read.
+    pub async fn imports(&self) -> Result<ImportIndex> {
+        imports::manifests(&self.backend).await
     }
 
     /// One page of a project's images, newest registration first.

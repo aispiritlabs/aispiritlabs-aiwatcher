@@ -2,7 +2,7 @@
 
 import type { Client, ClientMeta, Options as Options2, RequestResult, TDataShape } from './client';
 import { client } from './client.gen';
-import type { AuthConfigData, AuthConfigResponses, BuildExportData, BuildExportErrors, BuildExportResponses, CallbackData, DescribeEngineData, DescribeEngineErrors, DescribeEngineResponses, FinishTrainingRunData, FinishTrainingRunErrors, FinishTrainingRunResponses, GetBlobData, GetBlobErrors, GetBlobResponses, GetDatasetRowsData, GetDatasetRowsErrors, GetDatasetRowsResponses, GetEngineWorkflowData, GetEngineWorkflowErrors, GetEngineWorkflowResponses, GetEvaluationData, GetEvaluationErrors, GetEvaluationResponses, GetExportCocoData, GetExportCocoErrors, GetExportCocoResponses, GetExportData, GetExportErrors, GetExportResponses, GetHubImageData, GetHubImageErrors, GetHubImageResponses, GetImageData, GetImageErrors, GetImageResponses, GetLaunchData, GetLaunchErrors, GetLaunchResponses, GetMetricsData, GetMetricsResponses, GetModelData, GetModelErrors, GetModelResponses, GetOptimizationData, GetOptimizationErrors, GetOptimizationResponses, GetProjectData, GetProjectErrors, GetProjectResponses, GetPromptData, GetPromptErrors, GetPromptResponses, GetPromptVersionData, GetPromptVersionErrors, GetPromptVersionResponses, GetRunData, GetRunErrors, GetRunEventsData, GetRunEventsErrors, GetRunEventsResponses, GetRunResponses, GetTrainingRunData, GetTrainingRunErrors, GetTrainingRunResponses, GetWorkflowData, GetWorkflowErrors, GetWorkflowExecutionData, GetWorkflowExecutionErrors, GetWorkflowExecutionResponses, GetWorkflowResponses, ImportImagesData, ImportImagesErrors, ImportImagesResponses, IngestData, IngestErrors, IngestResponses, LaunchWorkflowData, LaunchWorkflowErrors, LaunchWorkflowResponses, ListConversationsData, ListConversationsResponses, ListDatasetsData, ListDatasetsErrors, ListDatasetsResponses, ListDimensionData, ListDimensionErrors, ListDimensionResponses, ListEngineWorkflowsData, ListEngineWorkflowsErrors, ListEngineWorkflowsResponses, ListEvaluationsData, ListEvaluationsResponses, ListEvaluationSuitesData, ListEvaluationSuitesResponses, ListExportsData, ListExportsErrors, ListExportsResponses, ListHubRowsData, ListHubRowsErrors, ListHubRowsResponses, ListHubsData, ListHubsErrors, ListHubsResponses, ListImagesData, ListImagesErrors, ListImagesResponses, ListModelsData, ListModelsErrors, ListModelsResponses, ListProjectsData, ListProjectsErrors, ListProjectsResponses, ListPromptsData, ListPromptsErrors, ListPromptsResponses, ListRecipesData, ListRecipesErrors, ListRecipesResponses, ListRunsData, ListRunsResponses, ListSourcesData, ListSourcesResponses, ListSpansData, ListSpansResponses, ListTrainingRunsData, ListTrainingRunsErrors, ListTrainingRunsResponses, ListWorkflowExecutionsData, ListWorkflowExecutionsResponses, ListWorkflowsData, ListWorkflowsResponses, LiveWebsocketData, LivezData, LivezResponses, LoginData, LoginErrors, LogoutData, LogoutResponses, MeData, MeErrors, MeResponses, PublishDatasetData, PublishDatasetErrors, PublishDatasetResponses, PublishPromptData, PublishPromptErrors, PublishPromptResponses, ReadyzData, ReadyzErrors, ReadyzResponses, RebuildPromptData, RebuildPromptErrors, RebuildPromptResponses, RecordOptimizationData, RecordOptimizationErrors, RecordOptimizationResponses, RecordTrainingProgressData, RecordTrainingProgressErrors, RecordTrainingProgressResponses, RegisterImageData, RegisterImageErrors, RegisterImageResponses, RegisterModelData, RegisterModelErrors, RegisterModelResponses, RerunWorkflowData, RerunWorkflowErrors, RerunWorkflowResponses, ReviewImageData, ReviewImageErrors, ReviewImageResponses, SaveProjectData, SaveProjectErrors, SaveProjectResponses, SaveRecipeData, SaveRecipeErrors, SaveRecipeResponses, SaveRevisionData, SaveRevisionErrors, SaveRevisionResponses, SearchHubsData, SearchHubsErrors, SearchHubsResponses, SetModelLabelData, SetModelLabelErrors, SetModelLabelResponses, SetPromptLabelData, SetPromptLabelErrors, SetPromptLabelResponses, StartTrainingRunData, StartTrainingRunErrors, StartTrainingRunResponses, StreamEventsData, StreamEventsResponses, StreamRunData, StreamRunResponses, StreamWorkflowExecutionData, StreamWorkflowExecutionResponses, UploadBlobData, UploadBlobErrors, UploadBlobResponses } from './types.gen';
+import type { AppendImportRowsData, AppendImportRowsErrors, AppendImportRowsResponses, AuthConfigData, AuthConfigResponses, BuildExportData, BuildExportErrors, BuildExportResponses, CallbackData, CancelConversationExportData, CancelConversationExportErrors, CancelConversationExportResponses, CancelImportJobData, CancelImportJobErrors, CancelImportJobResponses, ConversationPolicyData, ConversationPolicyErrors, ConversationPolicyResponses, ConversationTurnContentData, ConversationTurnContentErrors, ConversationTurnContentResponses, CreateConversationExportData, CreateConversationExportErrors, CreateConversationExportResponses, DescribeEngineData, DescribeEngineErrors, DescribeEngineResponses, EraseConversationContentData, EraseConversationContentErrors, EraseConversationContentResponses, FinishTrainingRunData, FinishTrainingRunErrors, FinishTrainingRunResponses, GetBlobData, GetBlobErrors, GetBlobResponses, GetConversationDatasetRowsData, GetConversationDatasetRowsErrors, GetConversationDatasetRowsResponses, GetConversationExportData, GetConversationExportErrors, GetConversationExportResponses, GetDatasetRowsData, GetDatasetRowsErrors, GetDatasetRowsResponses, GetEngineWorkflowData, GetEngineWorkflowErrors, GetEngineWorkflowResponses, GetEvaluationData, GetEvaluationErrors, GetEvaluationResponses, GetExportCocoData, GetExportCocoErrors, GetExportCocoResponses, GetExportData, GetExportErrors, GetExportResponses, GetHubImageData, GetHubImageErrors, GetHubImageResponses, GetImageData, GetImageErrors, GetImageResponses, GetImportBatchData, GetImportBatchErrors, GetImportBatchResponses, GetImportJobData, GetImportJobErrors, GetImportJobResponses, GetImportManifestData, GetImportManifestErrors, GetImportManifestResponses, GetLaunchData, GetLaunchErrors, GetLaunchResponses, GetMetricsData, GetMetricsResponses, GetModelData, GetModelErrors, GetModelResponses, GetOptimizationData, GetOptimizationErrors, GetOptimizationResponses, GetProjectData, GetProjectErrors, GetProjectResponses, GetPromptData, GetPromptErrors, GetPromptResponses, GetPromptVersionData, GetPromptVersionErrors, GetPromptVersionResponses, GetRunData, GetRunErrors, GetRunEventsData, GetRunEventsErrors, GetRunEventsResponses, GetRunResponses, GetTrainingRunData, GetTrainingRunErrors, GetTrainingRunResponses, GetWorkflowData, GetWorkflowErrors, GetWorkflowExecutionData, GetWorkflowExecutionErrors, GetWorkflowExecutionResponses, GetWorkflowResponses, ImportImagesData, ImportImagesErrors, ImportImagesResponses, IngestData, IngestErrors, IngestResponses, LaunchWorkflowData, LaunchWorkflowErrors, LaunchWorkflowResponses, ListConversationArchiveData, ListConversationArchiveErrors, ListConversationArchiveResponses, ListConversationDatasetsData, ListConversationDatasetsErrors, ListConversationDatasetsResponses, ListConversationExportsData, ListConversationExportsErrors, ListConversationExportsResponses, ListConversationsData, ListConversationsResponses, ListConversationTurnsData, ListConversationTurnsErrors, ListConversationTurnsResponses, ListDatasetsData, ListDatasetsErrors, ListDatasetsResponses, ListDimensionData, ListDimensionErrors, ListDimensionResponses, ListEngineWorkflowsData, ListEngineWorkflowsErrors, ListEngineWorkflowsResponses, ListEvaluationsData, ListEvaluationsResponses, ListEvaluationSuitesData, ListEvaluationSuitesResponses, ListExportsData, ListExportsErrors, ListExportsResponses, ListHubRowsData, ListHubRowsErrors, ListHubRowsResponses, ListHubsData, ListHubsErrors, ListHubsResponses, ListImagesData, ListImagesErrors, ListImagesResponses, ListImportBatchesData, ListImportBatchesErrors, ListImportBatchesResponses, ListImportJobsData, ListImportJobsErrors, ListImportJobsResponses, ListImportManifestsData, ListImportManifestsErrors, ListImportManifestsResponses, ListImportRejectsData, ListImportRejectsErrors, ListImportRejectsResponses, ListModelsData, ListModelsErrors, ListModelsResponses, ListProjectsData, ListProjectsErrors, ListProjectsResponses, ListPromptsData, ListPromptsErrors, ListPromptsResponses, ListRecipesData, ListRecipesErrors, ListRecipesResponses, ListRunsData, ListRunsResponses, ListSourcesData, ListSourcesResponses, ListSpansData, ListSpansResponses, ListTrainingRunsData, ListTrainingRunsErrors, ListTrainingRunsResponses, ListWorkflowExecutionsData, ListWorkflowExecutionsResponses, ListWorkflowsData, ListWorkflowsResponses, LiveWebsocketData, LivezData, LivezResponses, LoginData, LoginErrors, LogoutData, LogoutResponses, MeData, MeErrors, MeResponses, PublishDatasetData, PublishDatasetErrors, PublishDatasetResponses, PublishPromptData, PublishPromptErrors, PublishPromptResponses, QueueImportJobData, QueueImportJobErrors, QueueImportJobResponses, ReadyzData, ReadyzErrors, ReadyzResponses, RebuildPromptData, RebuildPromptErrors, RebuildPromptResponses, RecordConversationTurnsData, RecordConversationTurnsErrors, RecordConversationTurnsResponses, RecordOptimizationData, RecordOptimizationErrors, RecordOptimizationResponses, RecordTrainingProgressData, RecordTrainingProgressErrors, RecordTrainingProgressResponses, RegisterImageData, RegisterImageErrors, RegisterImageResponses, RegisterModelData, RegisterModelErrors, RegisterModelResponses, RerunWorkflowData, RerunWorkflowErrors, RerunWorkflowResponses, ReviewConversationTurnData, ReviewConversationTurnErrors, ReviewConversationTurnResponses, ReviewImageData, ReviewImageErrors, ReviewImageResponses, SaveProjectData, SaveProjectErrors, SaveProjectResponses, SaveRecipeData, SaveRecipeErrors, SaveRecipeResponses, SaveRevisionData, SaveRevisionErrors, SaveRevisionResponses, SearchHubsData, SearchHubsErrors, SearchHubsResponses, SetModelLabelData, SetModelLabelErrors, SetModelLabelResponses, SetPromptLabelData, SetPromptLabelErrors, SetPromptLabelResponses, StageImportBatchData, StageImportBatchErrors, StageImportBatchResponses, StartTrainingRunData, StartTrainingRunErrors, StartTrainingRunResponses, StreamEventsData, StreamEventsResponses, StreamRunData, StreamRunResponses, StreamWorkflowExecutionData, StreamWorkflowExecutionResponses, UploadBlobData, UploadBlobErrors, UploadBlobResponses } from './types.gen';
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean, TResponse = unknown> = Options2<TData, ThrowOnError, TResponse> & {
     /**
@@ -102,6 +102,102 @@ export const listImages = <ThrowOnError extends boolean = false>(options: Option
  */
 export const registerImage = <ThrowOnError extends boolean = false>(options: Options<RegisterImageData, ThrowOnError>): RequestResult<RegisterImageResponses, RegisterImageErrors, ThrowOnError> => (options.client ?? client).post<RegisterImageResponses, RegisterImageErrors, ThrowOnError>({
     url: '/api/v1/annotation-images',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+export const getImportBatch = <ThrowOnError extends boolean = false>(options: Options<GetImportBatchData, ThrowOnError>): RequestResult<GetImportBatchResponses, GetImportBatchErrors, ThrowOnError> => (options.client ?? client).get<GetImportBatchResponses, GetImportBatchErrors, ThrowOnError>({ url: '/api/v1/annotation-import-batch', ...options });
+
+export const listImportBatches = <ThrowOnError extends boolean = false>(options?: Options<ListImportBatchesData, ThrowOnError>): RequestResult<ListImportBatchesResponses, ListImportBatchesErrors, ThrowOnError> => (options?.client ?? client).get<ListImportBatchesResponses, ListImportBatchesErrors, ThrowOnError>({ url: '/api/v1/annotation-import-batches', ...options });
+
+/**
+ * Open a batch: what it is for, what may be done with it, and where it came
+ * from.
+ *
+ * Rights, evidence and the Hub pin are decided here rather than per page,
+ * because they are properties of the corpus. `revision` is the one worth
+ * filling in even when it feels redundant: a dataset id is a moving target,
+ * and an import that recorded only the name has recorded provenance nobody
+ * can go back to.
+ */
+export const stageImportBatch = <ThrowOnError extends boolean = false>(options: Options<StageImportBatchData, ThrowOnError>): RequestResult<StageImportBatchResponses, StageImportBatchErrors, ThrowOnError> => (options.client ?? client).post<StageImportBatchResponses, StageImportBatchErrors, ThrowOnError>({
+    url: '/api/v1/annotation-import-batches',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+export const getImportJob = <ThrowOnError extends boolean = false>(options: Options<GetImportJobData, ThrowOnError>): RequestResult<GetImportJobResponses, GetImportJobErrors, ThrowOnError> => (options.client ?? client).get<GetImportJobResponses, GetImportJobErrors, ThrowOnError>({ url: '/api/v1/annotation-import-job', ...options });
+
+/**
+ * Stop a job. What it already registered stays registered.
+ *
+ * Images are content-addressed, so nothing is half-written; what a cancelled
+ * job does not get is a manifest, which is what stops it appearing as a
+ * completed import.
+ */
+export const cancelImportJob = <ThrowOnError extends boolean = false>(options: Options<CancelImportJobData, ThrowOnError>): RequestResult<CancelImportJobResponses, CancelImportJobErrors, ThrowOnError> => (options.client ?? client).post<CancelImportJobResponses, CancelImportJobErrors, ThrowOnError>({ url: '/api/v1/annotation-import-job/cancel', ...options });
+
+export const listImportJobs = <ThrowOnError extends boolean = false>(options?: Options<ListImportJobsData, ThrowOnError>): RequestResult<ListImportJobsResponses, ListImportJobsErrors, ThrowOnError> => (options?.client ?? client).get<ListImportJobsResponses, ListImportJobsErrors, ThrowOnError>({ url: '/api/v1/annotation-import-jobs', ...options });
+
+/**
+ * Seal the batch and queue the job that reads it.
+ *
+ * A 200 rather than a 201: what comes back is a job, and the thing it will
+ * produce does not exist yet. The rights check runs here, before anything is
+ * registered — a claim contradicting what a human recorded about the corpus
+ * is a decision to reverse, not a row to skip — so a 400 from this route is
+ * about the corpus rather than about the request's shape.
+ *
+ * Always queue a `dry_run` first from a UI. Six hundred thousand images with
+ * the split key mapped from a filename is not something to discover after the
+ * fact, and a dry run costs the downloads and nothing else.
+ */
+export const queueImportJob = <ThrowOnError extends boolean = false>(options: Options<QueueImportJobData, ThrowOnError>): RequestResult<QueueImportJobResponses, QueueImportJobErrors, ThrowOnError> => (options.client ?? client).post<QueueImportJobResponses, QueueImportJobErrors, ThrowOnError>({
+    url: '/api/v1/annotation-import-jobs',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * One import's receipt: what it read, what it registered, what it refused,
+ * and on what terms.
+ */
+export const getImportManifest = <ThrowOnError extends boolean = false>(options: Options<GetImportManifestData, ThrowOnError>): RequestResult<GetImportManifestResponses, GetImportManifestErrors, ThrowOnError> => (options.client ?? client).get<GetImportManifestResponses, GetImportManifestErrors, ThrowOnError>({ url: '/api/v1/annotation-import-manifest', ...options });
+
+/**
+ * Every published import, newest first.
+ */
+export const listImportManifests = <ThrowOnError extends boolean = false>(options?: Options<ListImportManifestsData, ThrowOnError>): RequestResult<ListImportManifestsResponses, ListImportManifestsErrors, ThrowOnError> => (options?.client ?? client).get<ListImportManifestsResponses, ListImportManifestsErrors, ThrowOnError>({ url: '/api/v1/annotation-import-manifests', ...options });
+
+/**
+ * The rows a job refused, and why.
+ *
+ * The dead-letter half, and the reason it is a route rather than a field on
+ * the job: an import that rejected four hundred thousand rows cannot put them
+ * in a response, and "read the counts, then page the rows" is the difference
+ * between a diagnosable import and a number.
+ */
+export const listImportRejects = <ThrowOnError extends boolean = false>(options: Options<ListImportRejectsData, ThrowOnError>): RequestResult<ListImportRejectsResponses, ListImportRejectsErrors, ThrowOnError> => (options.client ?? client).get<ListImportRejectsResponses, ListImportRejectsErrors, ThrowOnError>({ url: '/api/v1/annotation-import-rejects', ...options });
+
+/**
+ * Add one page of rows to an open batch.
+ *
+ * Number the page when the client can. A numbered append is idempotent —
+ * identical bytes are an acknowledged retry, different bytes for a page
+ * already stored are a 400 naming it — which is what makes a million rows
+ * over a flaky link a thing that can be re-sent rather than reconciled.
+ */
+export const appendImportRows = <ThrowOnError extends boolean = false>(options: Options<AppendImportRowsData, ThrowOnError>): RequestResult<AppendImportRowsResponses, AppendImportRowsErrors, ThrowOnError> => (options.client ?? client).post<AppendImportRowsResponses, AppendImportRowsErrors, ThrowOnError>({
+    url: '/api/v1/annotation-import-rows',
     ...options,
     headers: {
         'Content-Type': 'application/json',
@@ -234,6 +330,120 @@ export const logout = <ThrowOnError extends boolean = false>(options?: Options<L
  * The current caller.
  */
 export const me = <ThrowOnError extends boolean = false>(options?: Options<MeData, ThrowOnError>): RequestResult<MeResponses, MeErrors, ThrowOnError> => (options?.client ?? client).get<MeResponses, MeErrors, ThrowOnError>({ url: '/api/v1/auth/me', ...options });
+
+/**
+ * Every conversation the archive holds, newest activity first.
+ */
+export const listConversationArchive = <ThrowOnError extends boolean = false>(options?: Options<ListConversationArchiveData, ThrowOnError>): RequestResult<ListConversationArchiveResponses, ListConversationArchiveErrors, ThrowOnError> => (options?.client ?? client).get<ListConversationArchiveResponses, ListConversationArchiveErrors, ThrowOnError>({ url: '/api/v1/conversation-archive', ...options });
+
+/**
+ * One page of a corpus. Content, so `admin` — the same gate as reading a turn.
+ *
+ * A corpus an erasure has withdrawn answers 410, exactly as an erased turn
+ * does: its manifest, counts and digests survive so a training run naming the
+ * reference still resolves to something that can say what happened to it, and
+ * only the rows are gone.
+ */
+export const getConversationDatasetRows = <ThrowOnError extends boolean = false>(options: Options<GetConversationDatasetRowsData, ThrowOnError>): RequestResult<GetConversationDatasetRowsResponses, GetConversationDatasetRowsErrors, ThrowOnError> => (options.client ?? client).get<GetConversationDatasetRowsResponses, GetConversationDatasetRowsErrors, ThrowOnError>({ url: '/api/v1/conversation-dataset-rows', ...options });
+
+/**
+ * Every immutable corpus this archive has produced.
+ */
+export const listConversationDatasets = <ThrowOnError extends boolean = false>(options?: Options<ListConversationDatasetsData, ThrowOnError>): RequestResult<ListConversationDatasetsResponses, ListConversationDatasetsErrors, ThrowOnError> => (options?.client ?? client).get<ListConversationDatasetsResponses, ListConversationDatasetsErrors, ThrowOnError>({ url: '/api/v1/conversation-datasets', ...options });
+
+/**
+ * Erase conversation content, wherever it has reached.
+ *
+ * Two steps, and the second is the one that is easy to forget: the archive's
+ * content is removed, and then every published corpus that read one of these
+ * conversations has its rows deleted too. Erasing the archive and leaving the
+ * corpus would be an erasure in name only.
+ *
+ * What remains everywhere is the record: heads, digests, review decisions and
+ * export manifests. That is what lets an auditor still be told what was there.
+ */
+export const eraseConversationContent = <ThrowOnError extends boolean = false>(options: Options<EraseConversationContentData, ThrowOnError>): RequestResult<EraseConversationContentResponses, EraseConversationContentErrors, ThrowOnError> => (options.client ?? client).post<EraseConversationContentResponses, EraseConversationContentErrors, ThrowOnError>({
+    url: '/api/v1/conversation-erasures',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * Every export job, newest first.
+ */
+export const listConversationExports = <ThrowOnError extends boolean = false>(options?: Options<ListConversationExportsData, ThrowOnError>): RequestResult<ListConversationExportsResponses, ListConversationExportsErrors, ThrowOnError> => (options?.client ?? client).get<ListConversationExportsResponses, ListConversationExportsErrors, ThrowOnError>({ url: '/api/v1/conversation-exports', ...options });
+
+/**
+ * Queue an export of the archive into an immutable corpus.
+ *
+ * 202, not 201: what comes back is a job, and the corpus it will produce does
+ * not exist yet. A 201 would be this API claiming a dataset that a worker has
+ * not built.
+ */
+export const createConversationExport = <ThrowOnError extends boolean = false>(options: Options<CreateConversationExportData, ThrowOnError>): RequestResult<CreateConversationExportResponses, CreateConversationExportErrors, ThrowOnError> => (options.client ?? client).post<CreateConversationExportResponses, CreateConversationExportErrors, ThrowOnError>({
+    url: '/api/v1/conversation-exports',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * One job: where it is, what it has counted, and what it left out.
+ */
+export const getConversationExport = <ThrowOnError extends boolean = false>(options: Options<GetConversationExportData, ThrowOnError>): RequestResult<GetConversationExportResponses, GetConversationExportErrors, ThrowOnError> => (options.client ?? client).get<GetConversationExportResponses, GetConversationExportErrors, ThrowOnError>({ url: '/api/v1/conversation-exports/{job_id}', ...options });
+
+/**
+ * Stop a job. What it has written stays written; there is no version.
+ */
+export const cancelConversationExport = <ThrowOnError extends boolean = false>(options: Options<CancelConversationExportData, ThrowOnError>): RequestResult<CancelConversationExportResponses, CancelConversationExportErrors, ThrowOnError> => (options.client ?? client).post<CancelConversationExportResponses, CancelConversationExportErrors, ThrowOnError>({ url: '/api/v1/conversation-exports/{job_id}/cancel', ...options });
+
+/**
+ * What this instance demands before it will hold conversation content.
+ */
+export const conversationPolicy = <ThrowOnError extends boolean = false>(options?: Options<ConversationPolicyData, ThrowOnError>): RequestResult<ConversationPolicyResponses, ConversationPolicyErrors, ThrowOnError> => (options?.client ?? client).get<ConversationPolicyResponses, ConversationPolicyErrors, ThrowOnError>({ url: '/api/v1/conversation-policy', ...options });
+
+/**
+ * What was actually said. The one route that leaves the encryption boundary.
+ *
+ * A turn whose content has been erased answers 410 rather than 404: "it was
+ * here and it is gone" is the answer an auditor came for, and a 404 would make
+ * a completed erasure indistinguishable from a turn that never existed.
+ */
+export const conversationTurnContent = <ThrowOnError extends boolean = false>(options: Options<ConversationTurnContentData, ThrowOnError>): RequestResult<ConversationTurnContentResponses, ConversationTurnContentErrors, ThrowOnError> => (options.client ?? client).get<ConversationTurnContentResponses, ConversationTurnContentErrors, ThrowOnError>({ url: '/api/v1/conversation-turn-content', ...options });
+
+/**
+ * Approve or reject one turn, attributed to whoever is asking.
+ */
+export const reviewConversationTurn = <ThrowOnError extends boolean = false>(options: Options<ReviewConversationTurnData, ThrowOnError>): RequestResult<ReviewConversationTurnResponses, ReviewConversationTurnErrors, ThrowOnError> => (options.client ?? client).post<ReviewConversationTurnResponses, ReviewConversationTurnErrors, ThrowOnError>({
+    url: '/api/v1/conversation-turn-reviews',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
+
+/**
+ * One conversation's turns. Heads only: nothing here is decrypted.
+ */
+export const listConversationTurns = <ThrowOnError extends boolean = false>(options: Options<ListConversationTurnsData, ThrowOnError>): RequestResult<ListConversationTurnsResponses, ListConversationTurnsErrors, ThrowOnError> => (options.client ?? client).get<ListConversationTurnsResponses, ListConversationTurnsErrors, ThrowOnError>({ url: '/api/v1/conversation-turns', ...options });
+
+/**
+ * Record conversation content, with the consent and retention that permit it.
+ */
+export const recordConversationTurns = <ThrowOnError extends boolean = false>(options: Options<RecordConversationTurnsData, ThrowOnError>): RequestResult<RecordConversationTurnsResponses, RecordConversationTurnsErrors, ThrowOnError> => (options.client ?? client).post<RecordConversationTurnsResponses, RecordConversationTurnsErrors, ThrowOnError>({
+    url: '/api/v1/conversation-turns',
+    ...options,
+    headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+    }
+});
 
 /**
  * Sessions, each grouping the runs it produced.

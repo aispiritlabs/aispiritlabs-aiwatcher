@@ -25,6 +25,9 @@ laser = ["aiwatcher-bus/laser"]
 aiwatcher-core.workspace = true
 aiwatcher-bus.workspace = true
 aiwatcher-annotations.workspace = true
+# For the one line the import worker logs a job state with.
+aiwatcher-jobs.workspace = true
+aiwatcher-conversations.workspace = true
 aiwatcher-training.workspace = true
 aiwatcher-datasets.workspace = true
 aiwatcher-trace.workspace = true

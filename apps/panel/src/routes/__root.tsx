@@ -5,6 +5,7 @@ import {
   Database,
   FlaskConical,
   LineChart,
+  MessagesSquare,
   ScrollText,
   Shapes,
   Sigma,
@@ -54,6 +55,10 @@ const AREAS = [
   // Between curating and experimenting: an annotation export is the other kind
   // of training input — authored rather than folded, and outside retention.
   { to: '/annotations', label: 'Annotations', icon: Shapes },
+  // The other authored training input, and the one that holds somebody's
+  // words: encrypted, separately retained, erasable. Beside Annotations
+  // because it is the same job — review, then freeze — on text. See ADR_0021.
+  { to: '/conversations', label: 'Conversations', icon: MessagesSquare },
   // And the thing those annotations are for. Its own area rather than a tab
   // inside Experiments, because a training run reads nothing folded from the
   // log and shares no machinery with anything above it — see ADR_0018.
@@ -84,7 +89,11 @@ function RootLayout() {
                 // The tab is active for anything below it, so a run detail
                 // three levels deep still shows which area it belongs to.
                 activeOptions={{ exact: false }}
-                className="flex items-center gap-1.5 border-b-2 border-transparent px-3 py-3 text-sm text-muted-foreground transition-colors hover:text-foreground [&.active]:border-primary [&.active]:text-foreground"
+                // `whitespace-nowrap`: with ten areas the nav is wider than a
+                // laptop, and a two-word label breaking across lines makes the
+                // header taller for everything else. Scrolling is the intended
+                // overflow here, not wrapping.
+                className="flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 border-transparent px-3 py-3 text-sm text-muted-foreground transition-colors hover:text-foreground [&.active]:border-primary [&.active]:text-foreground"
               >
                 <Icon className="h-3.5 w-3.5" />
                 {label}

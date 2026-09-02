@@ -23,6 +23,7 @@ Python / TypeScript agents
 
    prompt registry ──► RustFS (S3)   authored, and outside retention entirely
    annotations     ──► RustFS (S3)   drawn, versioned, exported for training
+   conversations   ──► RustFS (S3)   encrypted, its own retention, erasable
    training runs   ──► RustFS (S3)   a curve and a model registry; off the log
    pipeline engine ──► Flyte 2       what could be started; read, and asked
    dataset hubs    ──► Kaggle, HF    what exists; never what is permitted
@@ -44,7 +45,11 @@ just seed-evaluation  # publish two comparable evaluation reports
 just seed-prompts  # publish a prompt plus three optimisations, one admitted
 just seed-workflow    # publish two executions of one declared graph
 just seed-annotations # six synthetic plans, three families, an export, a training run
+just seed-import      # stage a corpus in pages, import it with the queued job
+just run-conversations # the server with the encrypted conversation archive on
+just seed-conversations # one reviewed exchange, an export job, an immutable corpus
 just e2e-train        # the whole chain: annotate → export → fit a real tiny model → promote
+just serve-mini-model # verify the promoted package's digest, load it, serve it, watch the label
 just stack-up      # docker compose: VictoriaTraces, VictoriaMetrics, Collector, Grafana
 just tilt-up       # the same stack on a local Kubernetes, rebuilt on save
 ```
@@ -108,9 +113,11 @@ Crates, in dependency order. A crate may only depend on ones above it.
 | `aiwatcher-core` | Domain: ids, envelope, correlation, event catalog, ports. Knows nothing about Laser, HTTP or OTLP. |
 | `aiwatcher-bus` | `MessageSource` / `MessageSink` / `Checkpointer` + memory, write-ahead-log, Laser and generic-broker adapters |
 | `aiwatcher-trace` | `SpanAssembler` and the OTLP/JSON exporters |
+| `aiwatcher-jobs` | What a long job over an object store *is*: `JobState`, `ShardRef`, the lease, the retry decision, and `version_of` — the content address a finished job is named by. The rules, not the records; both callers keep their own shape and call these (ADR_0022). |
 | `aiwatcher-prompts` | The prompt registry: content-addressed versions, optimisation records, and the RustFS/S3 and filesystem adapters behind `ObjectStore`. Includes a hand-written SigV4 signer. |
-| `aiwatcher-annotations` | Vector image annotations for **any** vision domain — it ships no vocabulary, and the project's label schema carries the domain (ADR_0020). Sliced by noun: `images/` (one picture — head, revisions, review, bytes, bulk import), `project`, `export`, `license` (what may be done with the data), `schema`, `shapes`, `sources` (a catalogue an instance loads), `integrations/hubs` (Kaggle and Hugging Face). `registry` is the facade and the only public door; `store` is the private key layout every slice reads through. |
-| `aiwatcher-training` | Training runs and the model versions they produce. The one registry here whose contents never came from the event log: a run is a record that grows in place, and a promotion is refused without a held-out score. |
+| `aiwatcher-annotations` | Vector image annotations for **any** vision domain — it ships no vocabulary, and the project's label schema carries the domain (ADR_0020). Sliced by noun: `images/` (one picture — head, revisions, review, bytes, bulk import), `imports/` (the staged batch and the queued job that reads it, ADR_0022), `project`, `export`, `license` (what may be done with the data), `schema`, `shapes`, `sources` (a catalogue an instance loads), `integrations/` — `hubs` (Kaggle and Hugging Face) and `fetch`, the bounded downloader every outbound byte goes through. `registry` is the facade and the only public door; `store` is the private key layout every slice reads through. |
+| `aiwatcher-conversations` | Governed conversation training data: the `turn` contract, consent and retention, the **encrypted** archive, the human review gate, and the resumable export job that freezes a corpus. The one authored store that is off by default, whose content is sealed, and whose deletions delete. Sliced by noun: `turn`, `policy`, `redaction`, `review`, `archive/` (the store and its retention clock, `crypt` beneath it), `export/` (the job, `format` beneath it). `registry` is the facade and the only public door; `store` is the private key layout. |
+| `aiwatcher-training` | Training runs and the model versions they produce. The one registry here whose contents never came from the event log: a run is a record that grows in place, and a promotion is refused without a held-out score. `package` is what a serving runtime is handed — the runtime, the entry point, the shapes, and every artifact with its digest (ADR_0023). |
 | `aiwatcher-runner` | The workflow rerun dispatcher: one HTTP POST to one configured endpoint, behind `core::ports::WorkflowRunner`. |
 | `aiwatcher-pipeline` | Pipeline engines behind `core::engine::WorkflowEngine`: the orchestrator's launchable catalog, the inputs each entry declares, and starting one. Flyte 2 over its `/api/v1/` gateway, plus the literal encoder that binds a form's JSON to Flyte's declared types. With the runner, the second and last thing here that asks another system to do work. |
 | `aiwatcher-auth` | Single sign-on: OIDC discovery, a JWKS cache, the authorization-code flow with PKCE, HMAC-signed session cookies, authentik's forward-auth headers, and the group-to-role mapping. Knows nothing about axum. |
@@ -298,6 +305,47 @@ area.
    validation score is what early stopping maximised — and refused on a mutable
    dataset name.
 
+17. **Conversation content is encrypted, separately retained and erasable**
+   ([ADR_0021](docs/ADR/ADR_0021_CONVERSATION_ARCHIVE.md)). The build before
+   this one kept training pairs by putting `input` and `output` on
+   `llm.completed`, which wrote somebody's words into the durable log the
+   Collector exists to keep them out of, on a retention clock sized for volume
+   rather than for what they were told, in a store where a deletion cannot
+   delete. So a turn is not an event. `aiwatcher-conversations` is the fifth
+   authored registry and the only one that is **off by default**: content is
+   sealed with AES-256-GCM under a per-object derived key, the head beside it
+   is plaintext so a review queue and an exclusion report need no decryption,
+   retention is this module's own clock, and an erasure request names a
+   *subject*. An export is an asynchronous job whose cursor advances only after
+   a shard is stored, and whose version is a content address over those shards.
+
+18. **A long job over an object store is one primitive, and a corpus is
+   staged before it is imported** ([ADR_0022](docs/ADR/ADR_0022_STAGED_IMPORT_JOBS.md)).
+   The conversation export was the first job of this shape; the Hub importer is
+   the second, and the plan said to decide before writing it rather than after.
+   `aiwatcher-jobs` holds the **rules** — shard before cursor, lease per shard,
+   retryable versus rejected, `version_of` — and not the records, because an
+   export counts exclusions by policy reason and an import counts rejected rows
+   by what was wrong with them. A corpus is now staged as digested JSONL pages
+   and sealed into a content address before a job reads it, so a million rows
+   are resumable rather than a body somebody holds open; and every outbound byte
+   goes through `integrations::fetch`, which is the only place in this system
+   that downloads bytes an outside party chose.
+
+19. **A serving runtime is handed a declared package, and a checkpoint URI is
+   not one** ([ADR_0023](docs/ADR/ADR_0023_MODEL_PACKAGE.md)). A version's
+   `ModelPackage` names the runtime, the entry point, the input and output
+   shapes, the dependencies and **every artifact with its `sha256`** — because
+   `s3://models/latest.pt` is different bytes tomorrow and the registry's whole
+   promise is that a span naming a version can be traced to what it learned
+   from. A runtime is declared, never sniffed, and `Runtime::executes_packaged_code`
+   is what a host answers *before* it opens anything.
+   `scripts/serve-mini-model.py` is the first hardened profile against it:
+   verify, warm, bound, validate, watch the label, roll forward in two phases,
+   keep the previous version for a rollback — and report each inference as
+   `run.started → llm.started → llm.completed` carrying model, version, latency
+   and outcome, and no inputs and no outputs.
+
 ## Conventions
 
 ### Rust
@@ -419,6 +467,22 @@ not an SDK release.
   licence claim and aiwatcher's verdict as two separate things — never one
   badge, and the rights selector is never pre-filled from a hub's word. A hub
   nobody configured renders the 501 with its variable, not an empty list.
+- `conversations` is the one area that shows content, and the one where a role
+  decides whether it is shown at all. Its list decrypts nothing — every badge,
+  count and finding comes from the plaintext head — and a turn's words are
+  fetched one at a time by an explicit click, which the API answers only for an
+  `admin`. A 403 there renders as "reading content needs the admin role" rather
+  than as a failure, because it is not one. It draws a progress bar for a
+  running export and Training draws none, and the difference is honest: an
+  export's denominator is a conversation list that was pinned when the job was
+  created, while nothing knows how many epochs a run intends.
+- `annotations` gained a fourth view, **Imports**, and it is the one screen
+  here where the refusals come before the successes. An import of six hundred
+  thousand pictures that registered four hundred thousand looks, from a success
+  response, exactly like one that worked; the counts by reason and the rows
+  behind them are the whole story. It draws a progress bar and Training does
+  not, for the same reason Conversations does: the pages were counted when the
+  batch was sealed, so the denominator is a fact.
 - `annotations` is the one area that draws. Its canvas puts an `<img>` and an
   `<svg>` in one transformed container, both sized to the image's *natural*
   pixels, so SVG user units are image coordinates and no shape ever carries a
@@ -465,6 +529,77 @@ not an SDK release.
   and says why. `oidc` is the mode where the identity is proved to this process
   rather than asserted to it, and it is what a deployment that needs a real
   boundary uses.
+- **Never put conversation content on the event log.** It was there once, as
+  `data.input` and `data.output` on `llm.completed`, and it wrote somebody's
+  words into the durable log the Collector's redaction exists to keep them out
+  of. `conversation.turn` is not in the event catalog and adding it means
+  re-reading ADR_0021. The archive names the log — `run_id`, `trace_id`,
+  `span_id`, `model`, `prompt` — and the log does not know the archive exists.
+- **Never retain conversation content by default.**
+  `AIWATCHER_CONVERSATION_ARCHIVE` is off unless a deployment says otherwise,
+  and it is the only default in the configuration chosen so that doing nothing
+  keeps nothing. A release that started holding content on an upgrade is the
+  failure ADR_0021 is about. The routes answer 501 naming the variable, never
+  an empty list.
+- **Never run the archive without a key.** `AIWATCHER_CONVERSATION_KEYS` is
+  required whenever the archive is on, and the server refuses to start without
+  it — because an archive with no key is a plaintext archive in a bucket that
+  prompts, datasets, annotations and training all already read. Object-store
+  encryption is not a substitute: it protects the disk, and every process
+  holding the bucket's credentials still reads the content in the clear.
+- **Never put content in a turn's head.** The head is plaintext by design so a
+  review queue, a finding count and an export's exclusion report need no
+  decryption; the body is sealed. A finding therefore carries a part index, a
+  byte range and a rule id and *never the text it matched* — a finding that
+  quoted the secret it found would put that secret in every list response.
+- **Never authenticate a sealed object by its ciphertext alone.** The object's
+  key path is HKDF `info` and the AEAD's associated data, so a ciphertext copied
+  from one turn to another does not open. Without it, anyone who can write to
+  the bucket substitutes one person's words for another's and every digest still
+  checks out — the plaintext digest is of a real message, just not that one.
+- **Never let a turn's approval survive an edit.** Re-sending the same
+  `message_id` with different content resets the review to pending. Carrying it
+  across is how reviewed text becomes unreviewed text with a tick beside it.
+  A *human's* findings do survive a re-scan, because a scanner replacing a
+  reviewer's judgement is the same mistake in the other direction.
+- **Never infer a preference pair from a review rejection.** A rejection has
+  several reasons and only one of them is "the other answer was better".
+  `TurnReview::preference` is a separate, explicit field, and a DPO export pairs
+  only siblings a reviewer actually labelled — otherwise a turn rejected for
+  holding somebody's address becomes the rejected half of a pair and puts that
+  address in the corpus.
+- **Never ship an unsafe-output classifier and call it a scan.**
+  `conversations::redaction::scan` matches credential and identifier *shapes*
+  and nothing else; `FindingKind::Unsafe` exists so a human can record one and
+  is never produced by the scanner. A keyword list would produce a green tick
+  nobody should trust, and the whole reason the review gate exists is that this
+  judgement is not automatable. The same reasoning rules out an entropy
+  heuristic: at any threshold that catches real keys it also catches base64
+  images, and a reviewer who has learned to dismiss findings dismisses the true
+  one.
+- **Never advance an export's cursor before its shard is stored.** Same
+  ordering as the pipeline's checkpoint and the prompt registry's head, and the
+  sharpest consequence of the three: a crash the right way round re-does one
+  shard and writes byte-identical bytes, and a crash the wrong way round leaves
+  a corpus missing rows that nothing can tell you about.
+- **Never erase a turn and leave the corpus that already has it.** An erasure —
+  and the retention sweep, which is the same problem arriving more quietly —
+  deletes the shards of every published corpus whose pinned conversation list it
+  touched. The manifest survives with its counts and digests, so the reference
+  still answers; only the rows are gone, and the answer is a 410 rather than a
+  404. Stopping at the archive would be an erasure in name only.
+- **Never write an export shard without re-checking the lease.** A worker
+  claims a job under its own name for five minutes and renews with every shard;
+  `interrupted` re-reads the record at each boundary and stops the worker that
+  no longer holds it. Two deterministic workers over an unchanged archive
+  converge on identical bytes, so this is not about the common case — it is
+  about the archive changing under them, where the last job record written
+  would name shard digests that do not describe the stored shards, and the
+  version would stop being a content address of anything.
+- **Never let a conversation export decide it is finished early.** A job that is
+  cancelled or fails has no manifest and therefore no version, which is what
+  stops an interrupted export appearing as a completed dataset. The shards it
+  wrote stay written and are re-read by the resume; they are never indexed.
 - **Never let an ingest token be more than an editor.** `AIWATCHER_AUTH_INGEST_TOKENS`
   is a shared secret sitting in an agent's environment. It exists because a
   producer reaches the Service directly, never passes the ingress that
@@ -730,6 +865,58 @@ not an SDK release.
   commercial export excludes by name, in a manifest, forever. Refusing an
   unknown-rights import outright was considered and rejected: it would teach
   people to claim a licence in order to get past the dialog.
+- **Never fetch a byte outside `integrations::fetch`.** It is the only place in
+  this system that downloads content an outside party chose, and it carries
+  seven gates: https with the host *parsed* rather than matched, an allowlist,
+  a public-address check on every resolved address, no redirects, a byte
+  ceiling applied while streaming, a header-only pixel ceiling, and a verified
+  content address. Both import routes go through the same `ImageSource` port,
+  because a fetcher wired into one and not the other is the one somebody routes
+  around. The gate that is easiest to under-rate is the redirect: an
+  allowlisted host answering `302 → http://169.254.169.254/` walks past every
+  check that ran against the address the caller named.
+- **Never advance an import's cursor before its page's shards are stored.**
+  ADR_0022, and the same ordering as the export's, the pipeline's checkpoint and
+  the prompt registry's head — [`aiwatcher_jobs::ORDERING`] states it once. The
+  counts move with the cursor for the same reason: a page that was registered
+  and whose shard was never written *will be done again*, and counts already
+  folded into the job record would then describe that page twice.
+- **Never take an import's version from the batch id.** It is
+  `sha256(batch content digest ‖ dry-run flag ‖ every result shard digest)`, so
+  two people who staged the same rows on the same terms reach the same
+  reference. A version derived from the id would change because somebody
+  clicked twice, and would then be a content address of nothing.
+- **Never let an interrupted import publish a manifest.** A cancelled or failed
+  job has no version and no index entry; the images it registered stay
+  registered, because an image id is the content address of its bytes and
+  re-running writes the same ones. Same rule as a conversation export, same
+  reason: an interrupted job must not appear as a completed dataset.
+- **Never register a model package whose artifacts carry no digest.** ADR_0023.
+  An address is not an identity: `s3://models/latest.pt` is different bytes
+  tomorrow, and a version whose weights cannot be checked is a provenance chain
+  with a hole in it. A *half* package — a declared runtime with an undigested
+  artifact — is refused rather than accepted, because it reads as provenance
+  and is not.
+- **Never sniff a model's runtime.** A loader chosen by looking at the file is a
+  loader chosen by whoever wrote the file. `Runtime` is declared,
+  `Runtime::Unspecified` is refused rather than guessed at, and
+  `Runtime::executes_packaged_code` is what a host answers *before* it opens
+  anything — a package that runs its own code is never loaded in the API
+  process, which holds the object store's credentials and every registry behind
+  them.
+- **Never put an inference's inputs or outputs on the event log.** The serving
+  profile reports `run.started → llm.started → llm.completed` carrying model,
+  version, label, rows, latency and outcome — a served model is a model, so an
+  inference joins the same traces and the same model dimension as everything
+  else. What it never carries is what was said. A runtime that wants to retain
+  that writes turns to the conversation archive, with consent and a retention
+  clock, exactly as an agent does. See ADR_0021 and ADR_0023.
+- **Never let a broken new label remove a ready old version.** The rollout is
+  two-phase: download, verify and warm the candidate while the current version
+  keeps serving, and swap only if all three succeed. The previous version stays
+  loaded, so a rollback needs no rebuild and no fetch — and the version being
+  left is pinned out, because a rollback the next poll undoes is not a
+  rollback.
 - **Never derive an import's `group_id` from the file name.** It is the
   *building*, and a per-file key silently turns the family split back into a
   per-image one — after which the test score measures memorisation and nothing

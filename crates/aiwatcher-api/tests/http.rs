@@ -14,6 +14,7 @@ use tower::ServiceExt;
 use aiwatcher_annotations::Registry as AnnotationRegistry;
 use aiwatcher_bus::MessageSink;
 use aiwatcher_bus::adapters::memory::InMemoryBus;
+use aiwatcher_conversations::Registry as ConversationArchive;
 use aiwatcher_core::engine::{
     CatalogQuery, EngineCatalog, EngineDescription, EngineExecution, EngineParameter, EnginePhase,
     EngineRef, EngineWorkflow, EntityKind, LaunchAccepted, LaunchRequest, ParameterKind,
@@ -142,6 +143,22 @@ impl Fixture {
                     "training",
                 ))
             }),
+            // On whenever the other registries are, with a fixed key: these
+            // tests assert the role split and the 501, and both need a real
+            // archive behind them. A deployment's default is still off — see
+            // `build_conversation_archive`.
+            conversations: registry_enabled.then(|| {
+                Arc::new(ConversationArchive::new(
+                    Arc::new(MemoryObjectStore::new()),
+                    "conversations",
+                    aiwatcher_conversations::Keyring::single("test", [7; 32]),
+                    aiwatcher_conversations::ArchivePolicy::default(),
+                ))
+            }),
+            // No worker: a router built for a test runs no background task, and
+            // an export here is driven by the test rather than by a tick.
+            export_worker: None,
+            import_worker: None,
             // Empty, like the shipped default: nothing is curated, so no hub
             // result can be promoted past `unclear`.
             sources: Arc::new(aiwatcher_annotations::SourceCatalog::default()),
@@ -3136,4 +3153,322 @@ async fn an_imported_image_carries_where_it_came_from_and_what_the_mirror_claime
             .is_some_and(|value| value.contains("hub_datasets")),
         "the Flow script that produced the row is the provenance: {body}"
     );
+}
+
+// ── The governed conversation archive ────────────────────────────────────────
+//
+// Three things are worth asserting at this layer rather than in the crate's own
+// tests: the role split (this is the only area where a role decides whether
+// content comes back at all), the 501 an unconfigured deployment answers, and
+// that an export is accepted as a *job* rather than as a dataset.
+
+/// A turn whose consent record is complete, as a producer would send it.
+fn conversation_turn(message_id: &str, role: &str, text: &str) -> Value {
+    json!({
+        "conversation_id": "training-demo",
+        "message_id": message_id,
+        "role": role,
+        "content": { "parts": [{ "kind": "text", "text": text }] },
+        "provenance": { "run_id": "run-1", "model": "provider-model" },
+        "policy": {
+            "consent": {
+                "subject": "tenant-17",
+                "basis": "consent",
+                "reference": "ticket-4102",
+                "scope": ["train"],
+            },
+            "retention": { "ttl_days": 30 },
+            "redaction": { "redactor": "acme-scrubber@2.1" },
+        },
+    })
+}
+
+#[tokio::test]
+async fn every_conversation_route_answers_501_when_this_instance_keeps_no_archive() {
+    // The default, and the acceptance criterion it satisfies: a deployment
+    // that has decided nothing retains nothing. 501 rather than 404 so a
+    // client can tell "nobody can here" from "you may not".
+    let fixture = Fixture::without_registry();
+    for uri in [
+        "/api/v1/conversation-policy",
+        "/api/v1/conversation-archive",
+        "/api/v1/conversation-turns?conversation_id=x",
+        "/api/v1/conversation-exports",
+        "/api/v1/conversation-datasets",
+    ] {
+        let (status, body) = fixture.get(uri).await;
+        assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{uri}: {body}");
+        assert_eq!(body["code"], json!("registry_disabled"), "{uri}");
+        assert!(
+            body["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("AIWATCHER_CONVERSATION_ARCHIVE")),
+            "the 501 names the variable to set: {body}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_turn_with_no_consent_record_is_refused_with_every_problem_at_once() {
+    let fixture = Fixture::behind_a_proxy(false).await;
+    let mut turn = conversation_turn("m1", "user", "hello");
+    turn["policy"] = json!({});
+
+    let (status, body) = fixture
+        .post_as(
+            "/api/v1/conversation-turns",
+            "agent",
+            "aiwatcher-editors",
+            json!({ "turns": [turn] }),
+        )
+        .await;
+
+    // 422, not 400: the request was well formed and its content was refused.
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(body["code"], json!("turn_rejected"));
+    let details = body["details"].as_array().expect("a list of problems");
+    assert_eq!(details.len(), 5, "{body}");
+}
+
+#[tokio::test]
+async fn a_viewer_sees_everything_about_a_turn_except_what_it_says() {
+    let fixture = Fixture::behind_a_proxy(false).await;
+    let (status, recorded) = fixture
+        .post_as(
+            "/api/v1/conversation-turns",
+            "agent",
+            "aiwatcher-editors",
+            json!({ "turns": [conversation_turn("m1", "user", "my card is 4111 1111 1111 1111")] }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{recorded}");
+    let turn_id = recorded["turns"][0]["turn_id"]
+        .as_str()
+        .expect("a turn id")
+        .to_owned();
+
+    // The head: role, ordering, policy, findings, review state.
+    let (status, body) = fixture
+        .get_as(
+            "/api/v1/conversation-turns?conversation_id=training-demo",
+            "bob",
+            "aiwatcher-viewers",
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["turns"][0]["role"], json!("user"));
+    assert_eq!(body["turns"][0]["review"]["state"], json!("pending"));
+    assert_eq!(
+        body["turns"][0]["findings"][0]["rule"],
+        json!("payment-card")
+    );
+    // And nowhere in it, the card number the finding is about.
+    assert!(!body.to_string().contains("4111"), "{body}");
+
+    // The words: admin only.
+    let uri = format!(
+        "/api/v1/conversation-turn-content?conversation_id=training-demo&turn_id={turn_id}"
+    );
+    let (status, body) = fixture.get_as(&uri, "bob", "aiwatcher-viewers").await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    let (status, body) = fixture.get_as(&uri, "ada", "aiwatcher-admins").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["parts"][0]["text"],
+        json!("my card is 4111 1111 1111 1111")
+    );
+}
+
+#[tokio::test]
+async fn an_ingest_token_can_record_a_turn_and_never_read_one_back() {
+    // The guardrail, at the one route where breaking it would matter most: an
+    // ingest token is a shared secret in an agent's environment, and it exists
+    // so a producer can write. A leaked one must not be able to read the
+    // archive back out.
+    let fixture = Fixture::behind_a_proxy(false).await;
+    let (status, body) = fixture
+        .request(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/conversation-turns")
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(header::AUTHORIZATION, format!("Bearer {INGEST_SECRET}"))
+                .body(Body::from(
+                    json!({ "turns": [conversation_turn("m1", "user", "hello")] }).to_string(),
+                ))
+                .expect("request"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let turn_id = body["turns"][0]["turn_id"].as_str().expect("a turn id");
+
+    let (status, body) = fixture
+        .request(
+            Request::builder()
+                .uri(format!(
+                    "/api/v1/conversation-turn-content?conversation_id=training-demo&turn_id={turn_id}"
+                ))
+                .header(header::AUTHORIZATION, format!("Bearer {INGEST_SECRET}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["code"], json!("forbidden"));
+}
+
+#[tokio::test]
+async fn an_export_is_accepted_as_a_job_rather_than_announced_as_a_dataset() {
+    let fixture = Fixture::behind_a_proxy(false).await;
+    for (message_id, role, text) in [
+        ("m1", "user", "what is the weather?"),
+        ("m2", "assistant", "nine degrees"),
+    ] {
+        let (status, recorded) = fixture
+            .post_as(
+                "/api/v1/conversation-turns",
+                "agent",
+                "aiwatcher-editors",
+                json!({ "turns": [conversation_turn(message_id, role, text)] }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{recorded}");
+        let (status, body) = fixture
+            .post_as(
+                "/api/v1/conversation-turn-reviews",
+                "ada",
+                "aiwatcher-editors",
+                json!({
+                    "conversation_id": "training-demo",
+                    "turn_id": recorded["turns"][0]["turn_id"],
+                    "review": { "state": "approved" },
+                }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        // The reviewer is the caller, never the request body.
+        assert_eq!(body["review"]["reviewer"], json!("ada"));
+    }
+
+    // 202: what comes back is a job, and the corpus does not exist yet.
+    let (status, job) = fixture
+        .post_as(
+            "/api/v1/conversation-exports",
+            "ada",
+            "aiwatcher-editors",
+            json!({ "name": "training/agent-turns", "format": "chat" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{job}");
+    assert_eq!(job["state"], json!("queued"));
+    assert!(
+        job["version"].is_null(),
+        "a queued job has no version: {job}"
+    );
+
+    // Nothing runs a worker in a test, so the job stays queued and the
+    // dataset list stays empty — which is the property worth asserting: an
+    // interrupted job never appears as a completed dataset version.
+    let (status, body) = fixture
+        .get_as("/api/v1/conversation-datasets", "bob", "aiwatcher-viewers")
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["exports"], json!([]));
+}
+
+#[tokio::test]
+async fn erasing_content_needs_the_admin_role_and_names_exactly_one_target() {
+    let fixture = Fixture::behind_a_proxy(false).await;
+    fixture
+        .post_as(
+            "/api/v1/conversation-turns",
+            "agent",
+            "aiwatcher-editors",
+            json!({ "turns": [conversation_turn("m1", "user", "hello")] }),
+        )
+        .await;
+
+    let (status, body) = fixture
+        .post_as(
+            "/api/v1/conversation-erasures",
+            "eve",
+            "aiwatcher-editors",
+            json!({ "subject": "tenant-17" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+
+    let (status, body) = fixture
+        .post_as(
+            "/api/v1/conversation-erasures",
+            "ada",
+            "aiwatcher-admins",
+            json!({ "subject": "tenant-17", "conversation_id": "training-demo" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+    let (status, body) = fixture
+        .post_as(
+            "/api/v1/conversation-erasures",
+            "ada",
+            "aiwatcher-admins",
+            json!({ "subject": "tenant-17" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["turns_erased"], json!(1));
+}
+
+#[tokio::test]
+async fn reading_content_that_was_erased_is_a_410_rather_than_a_404() {
+    // The distinction an auditor came for: "it was here and it is gone" is an
+    // answer, and a 404 would make a completed erasure indistinguishable from
+    // a turn that never existed.
+    let fixture = Fixture::behind_a_proxy(false).await;
+    let (_, recorded) = fixture
+        .post_as(
+            "/api/v1/conversation-turns",
+            "agent",
+            "aiwatcher-editors",
+            json!({ "turns": [conversation_turn("m1", "user", "hello")] }),
+        )
+        .await;
+    let turn_id = recorded["turns"][0]["turn_id"]
+        .as_str()
+        .expect("a turn id")
+        .to_owned();
+    fixture
+        .post_as(
+            "/api/v1/conversation-erasures",
+            "ada",
+            "aiwatcher-admins",
+            json!({ "conversation_id": "training-demo" }),
+        )
+        .await;
+
+    let (status, body) = fixture
+        .get_as(
+            &format!(
+                "/api/v1/conversation-turn-content?conversation_id=training-demo&turn_id={turn_id}"
+            ),
+            "ada",
+            "aiwatcher-admins",
+        )
+        .await;
+    assert_eq!(status, StatusCode::GONE, "{body}");
+    assert_eq!(body["code"], json!("erased"));
+
+    // And the head is still there, with the reason.
+    let (status, body) = fixture
+        .get_as(
+            "/api/v1/conversation-turns?conversation_id=training-demo",
+            "bob",
+            "aiwatcher-viewers",
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["turns"][0]["state"], json!("erased"));
+    assert_eq!(body["turns"][0]["erasure"]["reason"], json!("request"));
+    assert_eq!(body["turns"][0]["erasure"]["by"], json!("ada"));
 }

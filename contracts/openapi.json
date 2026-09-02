@@ -721,6 +721,618 @@
         }
       }
     },
+    "/api/v1/annotation-import-batch": {
+      "get": {
+        "tags": [
+          "annotations"
+        ],
+        "operationId": "get_import_batch",
+        "parameters": [
+          {
+            "name": "batch",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StagedBatch"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/annotation-import-batches": {
+      "get": {
+        "tags": [
+          "annotations"
+        ],
+        "operationId": "list_import_batches",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchPage"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "annotations"
+        ],
+        "summary": "Open a batch: what it is for, what may be done with it, and where it came\nfrom.",
+        "description": "Rights, evidence and the Hub pin are decided here rather than per page,\nbecause they are properties of the corpus. `revision` is the one worth\nfilling in even when it feels redundant: a dataset id is a moving target,\nand an import that recorded only the name has recorded provenance nobody\ncan go back to.",
+        "operationId": "stage_import_batch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StageBatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StagedBatch"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/annotation-import-job": {
+      "get": {
+        "tags": [
+          "annotations"
+        ],
+        "operationId": "get_import_job",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportJob"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/annotation-import-job/cancel": {
+      "post": {
+        "tags": [
+          "annotations"
+        ],
+        "summary": "Stop a job. What it already registered stays registered.",
+        "description": "Images are content-addressed, so nothing is half-written; what a cancelled\njob does not get is a manifest, which is what stops it appearing as a\ncompleted import.",
+        "operationId": "cancel_import_job",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportJob"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "It already finished",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/annotation-import-jobs": {
+      "get": {
+        "tags": [
+          "annotations"
+        ],
+        "operationId": "list_import_jobs",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportJobPage"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "annotations"
+        ],
+        "summary": "Seal the batch and queue the job that reads it.",
+        "description": "A 200 rather than a 201: what comes back is a job, and the thing it will\nproduce does not exist yet. The rights check runs here, before anything is\nregistered — a claim contradicting what a human recorded about the corpus\nis a decision to reverse, not a row to skip — so a 400 from this route is\nabout the corpus rather than about the request's shape.\n\nAlways queue a `dry_run` first from a UI. Six hundred thousand images with\nthe split key mapped from a filename is not something to discover after the\nfact, and a dry run costs the downloads and nothing else.",
+        "operationId": "queue_import_job",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportJob"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty batch, wrong project, or rights the curated table contradicts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/annotation-import-manifest": {
+      "get": {
+        "tags": [
+          "annotations"
+        ],
+        "summary": "One import's receipt: what it read, what it registered, what it refused,\nand on what terms.",
+        "operationId": "get_import_manifest",
+        "parameters": [
+          {
+            "name": "version",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportManifest"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/annotation-import-manifests": {
+      "get": {
+        "tags": [
+          "annotations"
+        ],
+        "summary": "Every published import, newest first.",
+        "operationId": "list_import_manifests",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportIndex"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/annotation-import-rejects": {
+      "get": {
+        "tags": [
+          "annotations"
+        ],
+        "summary": "The rows a job refused, and why.",
+        "description": "The dead-letter half, and the reason it is a route rather than a field on\nthe job: an import that rejected four hundred thousand rows cannot put them\nin a response, and \"read the counts, then page the rows\" is the difference\nbetween a diagnosable import and a number.",
+        "operationId": "list_import_rejects",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RejectPage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/annotation-import-rows": {
+      "post": {
+        "tags": [
+          "annotations"
+        ],
+        "summary": "Add one page of rows to an open batch.",
+        "description": "Number the page when the client can. A numbered append is idempotent —\nidentical bytes are an acknowledged retry, different bytes for a page\nalready stored are a 400 naming it — which is what makes a million rows\nover a flaky link a thing that can be re-sent rather than reconciled.",
+        "operationId": "append_import_rows",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppendRowsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppendReport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Sealed, out of order, or a page rewritten with different rows",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/annotation-imports": {
       "post": {
         "tags": [
@@ -1307,6 +1919,820 @@
           },
           "401": {
             "description": "Not signed in"
+          }
+        }
+      }
+    },
+    "/api/v1/conversation-archive": {
+      "get": {
+        "tags": [
+          "conversations"
+        ],
+        "summary": "Every conversation the archive holds, newest activity first.",
+        "operationId": "list_conversation_archive",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationArchivePage"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/conversation-dataset-rows": {
+      "get": {
+        "tags": [
+          "conversations"
+        ],
+        "summary": "One page of a corpus. Content, so `admin` — the same gate as reading a turn.",
+        "description": "A corpus an erasure has withdrawn answers 410, exactly as an erased turn\ndoes: its manifest, counts and digests survive so a training run naming the\nreference still resolves to something that can say what happened to it, and\nonly the rows are gone.",
+        "operationId": "get_conversation_dataset_rows",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportRowsPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Reading rows needs the admin role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Withdrawn: an erasure took this corpus' rows",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/conversation-datasets": {
+      "get": {
+        "tags": [
+          "conversations"
+        ],
+        "summary": "Every immutable corpus this archive has produced.",
+        "operationId": "list_conversation_datasets",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationExportPage"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/conversation-erasures": {
+      "post": {
+        "tags": [
+          "conversations"
+        ],
+        "summary": "Erase conversation content, wherever it has reached.",
+        "description": "Two steps, and the second is the one that is easy to forget: the archive's\ncontent is removed, and then every published corpus that read one of these\nconversations has its rows deleted too. Erasing the archive and leaving the\ncorpus would be an erasure in name only.\n\nWhat remains everywhere is the record: heads, digests, review decisions and\nexport manifests. That is what lets an auditor still be told what was there.",
+        "operationId": "erase_conversation_content",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErasureBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErasureReport"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Erasing needs the admin role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/conversation-exports": {
+      "get": {
+        "tags": [
+          "conversations"
+        ],
+        "summary": "Every export job, newest first.",
+        "operationId": "list_conversation_exports",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportJobPage"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "conversations"
+        ],
+        "summary": "Queue an export of the archive into an immutable corpus.",
+        "description": "202, not 201: what comes back is a job, and the corpus it will produce does\nnot exist yet. A 201 would be this API claiming a dataset that a worker has\nnot built.",
+        "operationId": "create_conversation_export",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConversationExportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Queued, or the job this request already started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportJob"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The selection matched no conversation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/conversation-exports/{job_id}": {
+      "get": {
+        "tags": [
+          "conversations"
+        ],
+        "summary": "One job: where it is, what it has counted, and what it left out.",
+        "operationId": "get_conversation_export",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportJob"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/conversation-exports/{job_id}/cancel": {
+      "post": {
+        "tags": [
+          "conversations"
+        ],
+        "summary": "Stop a job. What it has written stays written; there is no version.",
+        "operationId": "cancel_conversation_export",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportJob"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "It already finished",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/conversation-policy": {
+      "get": {
+        "tags": [
+          "conversations"
+        ],
+        "summary": "What this instance demands before it will hold conversation content.",
+        "operationId": "conversation_policy",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArchiveConfig"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/conversation-turn-content": {
+      "get": {
+        "tags": [
+          "conversations"
+        ],
+        "summary": "What was actually said. The one route that leaves the encryption boundary.",
+        "description": "A turn whose content has been erased answers 410 rather than 404: \"it was\nhere and it is gone\" is the answer an auditor came for, and a 404 would make\na completed erasure indistinguishable from a turn that never existed.",
+        "operationId": "conversation_turn_content",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "turn_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TurnContent"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Reading content needs the admin role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Erased: the head remains, the words do not",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/conversation-turn-reviews": {
+      "post": {
+        "tags": [
+          "conversations"
+        ],
+        "summary": "Approve or reject one turn, attributed to whoever is asking.",
+        "operationId": "review_conversation_turn",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewTurnBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArchivedTurn"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/conversation-turns": {
+      "get": {
+        "tags": [
+          "conversations"
+        ],
+        "summary": "One conversation's turns. Heads only: nothing here is decrypted.",
+        "operationId": "list_conversation_turns",
+        "parameters": [
+          {
+            "name": "conversation_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "review",
+            "in": "query",
+            "description": "Narrow to one review state — what the review queue asks for.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/TurnReviewState"
+                }
+              ]
+            }
+          },
+          {
+            "name": "finding",
+            "in": "query",
+            "description": "Narrow to turns carrying a finding of this kind.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/FindingKind"
+                }
+              ]
+            }
+          },
+          {
+            "name": "role",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/ConversationRole"
+                }
+              ]
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TurnPage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "conversations"
+        ],
+        "summary": "Record conversation content, with the consent and retention that permit it.",
+        "operationId": "record_conversation_turns",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordTurnsBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordedTurns"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused: every policy problem at once",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         }
       }
@@ -5221,6 +6647,233 @@
           }
         }
       },
+      "AppendReport": {
+        "type": "object",
+        "description": "What one append did.",
+        "required": [
+          "batch_id",
+          "page",
+          "rows",
+          "total_rows",
+          "digest",
+          "created"
+        ],
+        "properties": {
+          "batch_id": {
+            "type": "string"
+          },
+          "created": {
+            "type": "boolean",
+            "description": "False when this exact page was already stored — an acknowledged retry\nrather than a second copy of the rows."
+          },
+          "digest": {
+            "type": "string"
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "rows": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total_rows": {
+            "type": "integer",
+            "description": "Rows in the whole batch so far.",
+            "minimum": 0
+          }
+        }
+      },
+      "AppendRowsRequest": {
+        "type": "object",
+        "description": "A page of rows for an already-staged batch.",
+        "required": [
+          "batch",
+          "rows"
+        ],
+        "properties": {
+          "batch": {
+            "type": "string"
+          },
+          "page": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Which page this is, when the caller is numbering them.\n\nSupplying it makes the append idempotent, which is the difference\nbetween a client that can retry and one that has to reconcile. Omitting\nit appends at the end, which is what a single-threaded uploader wants.",
+            "minimum": 0
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportRow"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "ArchiveConfig": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ArchivePolicy"
+          },
+          {
+            "type": "object",
+            "required": [
+              "key_ids"
+            ],
+            "properties": {
+              "key_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Key ids this deployment can decrypt with, newest first. Never the keys.\nPresent so an operator can see that a rotation reached this process\nbefore they retire the old key and make everything sealed under it\nunreadable."
+              }
+            }
+          }
+        ],
+        "description": "What this deployment demands of a producer, and which keys it can open.\n\nAnswered before anything is sent, on purpose: a producer that discovers the\nconsent requirement from a 422 has already put a megabyte of content on the\nwire, and the panel needs it to render the archive's state rather than an\nempty list that looks like \"nothing has happened yet\"."
+      },
+      "ArchivePolicy": {
+        "type": "object",
+        "description": "What this deployment demands, and the only thing here that outranks a\ncaller.",
+        "required": [
+          "mode",
+          "max_ttl_days",
+          "reject_on_finding"
+        ],
+        "properties": {
+          "max_ttl_days": {
+            "type": "integer",
+            "format": "int32",
+            "description": "A `ttl_days` above this is clamped rather than refused, and the clamp is\nrecorded on the turn. Refusing would push a producer to send the number\nthis deployment happens to accept, which is a worse record than the\ntruth plus a clamp.",
+            "minimum": 0
+          },
+          "mode": {
+            "$ref": "#/components/schemas/PolicyMode"
+          },
+          "reject_on_finding": {
+            "type": "boolean",
+            "description": "Whether the server's own scan refusing content is fatal.\n\nOff by default, and the reason is worth stating: a scanner is a\nheuristic, and one that rejects a write throws away the only copy of an\nexchange because a hex string looked like a key. A finding always blocks\nthe *export* — see [`crate::review`] — which is the gate that matters."
+          }
+        }
+      },
+      "ArchivedTurn": {
+        "type": "object",
+        "description": "A turn as the archive holds it: everything except the words.",
+        "required": [
+          "turn_id",
+          "conversation_id",
+          "message_id",
+          "ordinal",
+          "role",
+          "content_digest",
+          "content_bytes",
+          "policy",
+          "received_at"
+        ],
+        "properties": {
+          "content_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "content_digest": {
+            "type": "string",
+            "description": "`sha256` of the canonical content. What makes a re-send idempotent, what\na duplicate is detected on, and what an export version is built from."
+          },
+          "conversation_id": {
+            "type": "string"
+          },
+          "erasure": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Erasure",
+                "description": "Why the content is gone, when it is."
+              }
+            ]
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Finding"
+            }
+          },
+          "index_shard": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Which index shard lists this turn, once one does.\n\n`None` is the window between writing a head and appending its index\nentry. A re-send repairs it, which is why this is on the head rather\nthan being inferred: without it, a retry would find the head present,\nskip the append, and leave the turn invisible to every export forever.",
+            "minimum": 0
+          },
+          "message_id": {
+            "type": "string"
+          },
+          "occurred_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ordinal": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "parent_message_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "parts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PartSummary"
+            },
+            "description": "The shape of the message, with none of it."
+          },
+          "policy": {
+            "$ref": "#/components/schemas/ContentPolicy"
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/Provenance"
+          },
+          "received_at": {
+            "type": "string"
+          },
+          "retention_clamped": {
+            "type": "boolean",
+            "description": "True when this deployment shortened the retention the producer asked\nfor. Recorded rather than silent: a corpus built under a policy nobody\nnoticed had changed is the thing an audit is looking for."
+          },
+          "review": {
+            "$ref": "#/components/schemas/TurnReview"
+          },
+          "role": {
+            "$ref": "#/components/schemas/ConversationRole"
+          },
+          "state": {
+            "$ref": "#/components/schemas/TurnState"
+          },
+          "tool_results": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "turn_id": {
+            "type": "string"
+          }
+        }
+      },
       "Artifact": {
         "type": "object",
         "description": "Something a node produced, by reference.\n\nThe bytes stay wherever the producer put them. aiwatcher keeps the pointer\nbecause a pointer is bounded and a floor-plan PDF is not — see the\nartifact guardrail in `CLAUDE.md`.",
@@ -5261,6 +6914,41 @@
             "type": "string"
           }
         }
+      },
+      "ArtifactRef": {
+        "type": "object",
+        "description": "One file a package is made of.",
+        "required": [
+          "name",
+          "uri",
+          "digest"
+        ],
+        "properties": {
+          "content_type": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string",
+            "description": "`sha256` of the bytes, lowercase hex. Required, and the reason this\ntype exists: an address is not an identity."
+          },
+          "name": {
+            "type": "string",
+            "description": "What the runtime calls it: `weights`, `tokenizer`, `config`."
+          },
+          "size_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "uri": {
+            "type": "string",
+            "description": "Where the bytes are. A pointer, like every other artifact in this\nworkspace — the registry stores no weights."
+          }
+        },
+        "additionalProperties": false
       },
       "AttributeDef": {
         "type": "object",
@@ -5311,6 +6999,20 @@
           "oidc",
           "proxy"
         ]
+      },
+      "BatchPage": {
+        "type": "object",
+        "required": [
+          "batches"
+        ],
+        "properties": {
+          "batches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StagedBatch"
+            }
+          }
+        }
       },
       "BestMetric": {
         "type": "object",
@@ -5532,6 +7234,477 @@
           }
         }
       },
+      "ConsentRecord": {
+        "type": "object",
+        "description": "Who this is about, on what basis, and what that permits.",
+        "properties": {
+          "basis": {
+            "$ref": "#/components/schemas/LawfulBasis"
+          },
+          "granted_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reference": {
+            "type": "string",
+            "description": "Where the record lives: a ticket, a policy id, a URL. Free text on\npurpose — the shape differs per organisation and a schema here would\nonly be worked around."
+          },
+          "scope": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TrainingScope"
+            },
+            "description": "Empty means nothing was permitted, not everything. An export demanding\n[`TrainingScope::Train`] excludes it by name."
+          },
+          "subject": {
+            "type": "string",
+            "description": "Whose data this is: an account id, a tenant, `synthetic`. Not a name —\na pseudonymous handle is what makes an erasure request answerable\nwithout the archive holding a second copy of the identity."
+          }
+        }
+      },
+      "ContentPart": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "text",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "text"
+                ]
+              },
+              "text": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The model's own reasoning, where a provider exposes it. Its own variant\nbecause most training shapes must *not* include it, and a `Text` part\ncarrying it would be indistinguishable from the answer.",
+            "required": [
+              "text",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "reasoning"
+                ]
+              },
+              "text": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A call the assistant asked for. `arguments` is the JSON the model\nproduced, kept verbatim: a re-serialised copy is a different string and\nwould break the content digest for no reason.",
+            "required": [
+              "call_id",
+              "name",
+              "arguments",
+              "kind"
+            ],
+            "properties": {
+              "arguments": {
+                "type": "string"
+              },
+              "call_id": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "tool_call"
+                ]
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "What a producer removed before sending. The digest is of the original,\nso a reviewer can tell two different redactions apart, and an export can\nexclude a turn whose redaction ate the answer.",
+            "required": [
+              "reason",
+              "original_bytes",
+              "original_digest",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "redacted"
+                ]
+              },
+              "original_bytes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "original_digest": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Bytes somebody else stored. Never the bytes themselves.",
+            "required": [
+              "uri",
+              "kind"
+            ],
+            "properties": {
+              "digest": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "reference"
+                ]
+              },
+              "media_type": {
+                "type": "string"
+              },
+              "uri": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "One piece of a message.\n\nA list rather than a string, because a modern turn is not one: an assistant\nmessage can be reasoning, then a tool call, then prose, and a training shape\nthat has to guess which part was which guesses wrong on the interesting\nexamples.\n\n[`Self::Reference`] is the guardrail the annotation registry already keeps\nfor artifacts: a pointer to bytes somebody else stored, never the bytes. An\nimage or a PDF inlined here would put a file in an archive that is meant to\nhold messages, and would put it under an encryption key sized for text."
+      },
+      "ContentPolicy": {
+        "type": "object",
+        "description": "Everything a producer asserts about one turn.",
+        "properties": {
+          "consent": {
+            "$ref": "#/components/schemas/ConsentRecord"
+          },
+          "redaction": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RedactionRecord",
+                "description": "What the producer's own redaction hook removed. `None` means none ran,\nwhich a protected deployment refuses — see [`ArchivePolicy::check`]."
+              }
+            ]
+          },
+          "retention": {
+            "$ref": "#/components/schemas/RetentionPolicy"
+          }
+        }
+      },
+      "ConversationArchivePage": {
+        "type": "object",
+        "required": [
+          "conversations"
+        ],
+        "properties": {
+          "conversations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConversationHead"
+            }
+          }
+        }
+      },
+      "ConversationExclusionReason": {
+        "type": "string",
+        "description": "Why a turn did not reach the corpus.",
+        "enum": [
+          "not_reviewed",
+          "review_rejected",
+          "erased",
+          "consent_missing",
+          "scope_not_permitted",
+          "finding",
+          "role_filtered",
+          "content_missing"
+        ]
+      },
+      "ConversationExportCounts": {
+        "type": "object",
+        "required": [
+          "conversations",
+          "turns_considered",
+          "turns_included",
+          "turns_excluded",
+          "rows"
+        ],
+        "properties": {
+          "conversations": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "rows": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "turns_considered": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "turns_excluded": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "turns_included": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "ConversationExportExclusion": {
+        "type": "object",
+        "description": "One turn that was left out, named.",
+        "required": [
+          "turn_id",
+          "conversation_id",
+          "reason"
+        ],
+        "properties": {
+          "conversation_id": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string",
+            "description": "The rule that fired, for a [`ExclusionReason::Finding`]."
+          },
+          "reason": {
+            "$ref": "#/components/schemas/ConversationExclusionReason"
+          },
+          "turn_id": {
+            "type": "string"
+          }
+        }
+      },
+      "ConversationExportManifest": {
+        "type": "object",
+        "description": "What a finished export is, forever.",
+        "required": [
+          "name",
+          "version",
+          "job_id",
+          "request",
+          "request_digest",
+          "counts",
+          "exclusions",
+          "shards",
+          "built_at"
+        ],
+        "properties": {
+          "built_at": {
+            "type": "string"
+          },
+          "conversations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The conversations this export read, pinned when the job was created.\n\nKept on the manifest rather than only on the job, because it is what an\nerasure searches: \"which published corpora hold this person's words\" has\nto be answerable from the manifests alone."
+          },
+          "counts": {
+            "$ref": "#/components/schemas/ConversationExportCounts"
+          },
+          "excluded": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConversationExportExclusion"
+            },
+            "description": "A sample of the excluded turns. `excluded_truncated` says whether the\ncounts above are larger than this list."
+          },
+          "excluded_truncated": {
+            "type": "boolean"
+          },
+          "exclusions": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "request": {
+            "$ref": "#/components/schemas/ConversationExportRequest"
+          },
+          "request_digest": {
+            "type": "string"
+          },
+          "shards": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ShardRef"
+            }
+          },
+          "version": {
+            "type": "string"
+          },
+          "withdrawn": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Withdrawal",
+                "description": "Set when an erasure took this corpus' rows away. The manifest remains."
+              }
+            ]
+          }
+        }
+      },
+      "ConversationExportPage": {
+        "type": "object",
+        "required": [
+          "exports"
+        ],
+        "properties": {
+          "exports": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExportIndex"
+            }
+          }
+        }
+      },
+      "ConversationExportRequest": {
+        "type": "object",
+        "description": "What was asked for. The identity of an export, along with the archive's\ncontent at the time.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "exclude_findings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FindingKind"
+            },
+            "description": "Finding kinds that exclude a turn. Defaults to the three that make\ncontent unsafe to train on rather than merely awkward."
+          },
+          "format": {
+            "$ref": "#/components/schemas/ExportFormat"
+          },
+          "name": {
+            "type": "string",
+            "description": "`training/agent-turns`. The mutable half of `name@version`."
+          },
+          "require_human_review": {
+            "type": "boolean",
+            "description": "Whether a turn nobody approved may be included. Defaults to `true`,\nwhich means \"no\" — the annotation registry's rule, and the reason the\nreview queue exists."
+          },
+          "required_scope": {
+            "$ref": "#/components/schemas/TrainingScope",
+            "description": "What the recorded consent has to permit. Defaults to\n[`TrainingScope::Train`], the widest of the three."
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConversationRole"
+            },
+            "description": "Roles to include. Empty means every role, which is what a chat shape\nwants; a prompt/response shape ignores this and takes what it needs."
+          },
+          "selection": {
+            "$ref": "#/components/schemas/ExportSelection"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ConversationHead": {
+        "type": "object",
+        "description": "One conversation's counts. The review queue reads these and nothing else.",
+        "required": [
+          "conversation_id",
+          "turns",
+          "pending",
+          "approved",
+          "rejected",
+          "erased",
+          "first_seen",
+          "last_seen"
+        ],
+        "properties": {
+          "approved": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "conversation_id": {
+            "type": "string"
+          },
+          "earliest_expiry": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The soonest any of this conversation's content expires.\n\nA hint the sweep uses to decide whether to open this conversation at\nall, recomputed whenever it does. Being stale costs one wasted read;\nbeing absent would cost a scan of every turn in the archive."
+          },
+          "entries": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "erased": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "findings": {
+            "type": "object",
+            "description": "Findings by kind, so \"which conversations hold a credential\" is a list\nrather than a scan.",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "first_seen": {
+            "type": "string"
+          },
+          "last_seen": {
+            "type": "string"
+          },
+          "pending": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "rejected": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "shards": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "turns": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
       "ConversationPage": {
         "type": "object",
         "required": [
@@ -5557,6 +7730,17 @@
             "minimum": 0
           }
         }
+      },
+      "ConversationRole": {
+        "type": "string",
+        "description": "Who spoke.\n\n`Developer` is separate from `System` because the two have different\nretention answers: a developer instruction is the product's own text and a\nsystem prompt may be a customer's. An export can drop one and keep the\nother, which it could not do if they were one role.",
+        "enum": [
+          "system",
+          "developer",
+          "user",
+          "assistant",
+          "tool"
+        ]
       },
       "ConversationSummary": {
         "type": "object",
@@ -6427,6 +8611,82 @@
             "type": "integer",
             "format": "int64",
             "description": "Optimiser steps inside this epoch. Counted by the client, never sent\none by one — a step is arithmetic, not a request.",
+            "minimum": 0
+          }
+        }
+      },
+      "Erasure": {
+        "type": "object",
+        "description": "Why content was removed.",
+        "required": [
+          "reason",
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "by": {
+            "type": "string"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/ErasureReason"
+          }
+        }
+      },
+      "ErasureBody": {
+        "type": "object",
+        "description": "An erasure request: a subject, or a whole conversation.\n\nA POST rather than a DELETE, because it is a request somebody files with a\nbody and gets a report back — and because the subject it names is personal\ndata that has no business in a URL. Exactly one of the two fields.",
+        "properties": {
+          "conversation_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The consent subject, as recorded on the turns. What a person's request\nactually names."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ErasureReason": {
+        "type": "string",
+        "enum": [
+          "expired",
+          "request"
+        ]
+      },
+      "ErasureReport": {
+        "type": "object",
+        "description": "What a sweep or an erasure removed.",
+        "required": [
+          "turns_erased",
+          "conversations_touched",
+          "already_erased",
+          "corpora_withdrawn"
+        ],
+        "properties": {
+          "already_erased": {
+            "type": "integer",
+            "description": "Turns whose retention had run out but whose content was already gone.\nCounted so a repeated sweep is visibly a no-op rather than silently one.",
+            "minimum": 0
+          },
+          "conversations_touched": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "corpora_withdrawn": {
+            "type": "integer",
+            "description": "Published corpora whose rows this erasure took away.\n\nThe half of an erasure that is easy to forget: erasing the archive and\nleaving the corpus is an erasure in name only. Their manifests survive,\nso a training run naming one still resolves to something that can say\nwhat happened to it.",
+            "minimum": 0
+          },
+          "turns_erased": {
+            "type": "integer",
             "minimum": 0
           }
         }
@@ -7387,6 +9647,223 @@
           }
         }
       },
+      "ExportFormat": {
+        "type": "string",
+        "description": "The shape a row is written in.",
+        "enum": [
+          "chat",
+          "prompt_response",
+          "sft",
+          "dpo"
+        ]
+      },
+      "ExportIndex": {
+        "type": "object",
+        "description": "Which versions of one name exist.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "versions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExportVersionSummary"
+            }
+          }
+        }
+      },
+      "ExportJob": {
+        "type": "object",
+        "description": "A resumable export, as it sits in the store.",
+        "required": [
+          "job_id",
+          "request",
+          "request_digest",
+          "state",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "claimed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "claimed_by": {
+            "type": "string",
+            "description": "The worker currently holding this job: a pod name in a cluster.\n\nNot an owner — a lease. It expires, which is what lets a job survive the\nprocess that was running it, and it is re-checked at every shard, which\nis what stops the process it outlived from writing beside its\nreplacement."
+          },
+          "conversations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The conversations this job will read, resolved once and never re-read."
+          },
+          "counts": {
+            "$ref": "#/components/schemas/ConversationExportCounts"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "integer",
+            "description": "How many of them are already in a written shard. The resume point.",
+            "minimum": 0
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "excluded": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConversationExportExclusion"
+            },
+            "description": "A sample, capped at [`MAX_EXCLUSION_SAMPLES`]."
+          },
+          "exclusions": {
+            "type": "object",
+            "description": "Complete. Keyed by [`ExclusionReason::as_str`].",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "request": {
+            "$ref": "#/components/schemas/ConversationExportRequest"
+          },
+          "request_digest": {
+            "type": "string"
+          },
+          "shards": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ShardRef"
+            }
+          },
+          "state": {
+            "$ref": "#/components/schemas/JobState"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The immutable reference, once there is one."
+          }
+        }
+      },
+      "ExportJobPage": {
+        "type": "object",
+        "required": [
+          "jobs"
+        ],
+        "properties": {
+          "jobs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExportJobSummary"
+            }
+          }
+        }
+      },
+      "ExportJobSummary": {
+        "type": "object",
+        "required": [
+          "job_id",
+          "name",
+          "format",
+          "state",
+          "conversations",
+          "cursor",
+          "counts",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "claimed_by": {
+            "type": "string",
+            "description": "Which worker holds it, while one does. Answers \"why has this been\nrunning for twenty minutes\" without opening a log."
+          },
+          "conversations": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "counts": {
+            "$ref": "#/components/schemas/ConversationExportCounts"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "format": {
+            "$ref": "#/components/schemas/ExportFormat"
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/JobState"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "ExportManifest": {
         "type": "object",
         "description": "The immutable result.",
@@ -7533,6 +10010,32 @@
         },
         "additionalProperties": false
       },
+      "ExportRowsPage": {
+        "type": "object",
+        "required": [
+          "rows",
+          "total"
+        ],
+        "properties": {
+          "next_offset": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
       "ExportSample": {
         "type": "object",
         "description": "One image in an export, pinned to the revision that was accepted when the\nexport was built.",
@@ -7592,6 +10095,33 @@
           }
         }
       },
+      "ExportSelection": {
+        "type": "object",
+        "description": "Which conversations an export considers.",
+        "properties": {
+          "conversations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Named explicitly. Empty means every conversation in the archive, which\nis the common case and the one that needs the window below."
+          },
+          "since": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Only conversations last active at or after this moment."
+          },
+          "until": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "ExportSummary": {
         "type": "object",
         "required": [
@@ -7626,6 +10156,90 @@
             "type": "string"
           }
         }
+      },
+      "ExportVersionSummary": {
+        "type": "object",
+        "required": [
+          "version",
+          "format",
+          "rows",
+          "built_at"
+        ],
+        "properties": {
+          "built_at": {
+            "type": "string"
+          },
+          "format": {
+            "$ref": "#/components/schemas/ExportFormat"
+          },
+          "rows": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "version": {
+            "type": "string"
+          },
+          "withdrawn": {
+            "type": "boolean",
+            "description": "True once an erasure has taken this corpus' rows away."
+          }
+        }
+      },
+      "Finding": {
+        "type": "object",
+        "description": "One problem, located but not quoted.",
+        "required": [
+          "kind",
+          "rule",
+          "found_by"
+        ],
+        "properties": {
+          "found_by": {
+            "type": "string",
+            "description": "Who found it: `scanner`, or a reviewer's identity."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/FindingKind"
+          },
+          "length": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "part": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Which content part, by index. `None` for a finding about the turn as a\nwhole — a duplicate, a policy gap.",
+            "minimum": 0
+          },
+          "rule": {
+            "type": "string",
+            "description": "The rule that fired: `email`, `aws-access-key-id`, or a reviewer's own\nword when a human recorded it."
+          },
+          "start": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Byte offset and length inside that part's text. Enough for the review\nUI to highlight it once the content is decrypted, and useless to anyone\nwho only has the head.",
+            "minimum": 0
+          }
+        }
+      },
+      "FindingKind": {
+        "type": "string",
+        "description": "What kind of problem a finding is.",
+        "enum": [
+          "pii",
+          "secret",
+          "unsafe",
+          "duplicate",
+          "policy"
+        ]
       },
       "FinishRunRequest": {
         "type": "object",
@@ -8096,6 +10710,23 @@
           }
         }
       },
+      "HumanFinding": {
+        "type": "object",
+        "description": "A finding a person recorded.\n\nDeliberately narrower than [`Finding`]: no byte offsets, because a reviewer\nis describing a judgement rather than a match, and no `found_by`, because\nthe registry fills that in from the caller's identity. A client that could\nname its own reviewer could file somebody else's approval.",
+        "required": [
+          "kind",
+          "rule"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/FindingKind"
+          },
+          "rule": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "Identity": {
         "type": "object",
         "description": "An authenticated caller.",
@@ -8334,6 +10965,291 @@
           }
         }
       },
+      "ImportCounts": {
+        "type": "object",
+        "required": [
+          "rows_considered",
+          "accepted",
+          "rejected",
+          "fetched",
+          "bytes_stored"
+        ],
+        "properties": {
+          "accepted": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "bytes_stored": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Bytes stored. The number that answers \"why is the bucket bigger\".",
+            "minimum": 0
+          },
+          "fetched": {
+            "type": "integer",
+            "description": "Rows whose bytes this job downloaded and stored.",
+            "minimum": 0
+          },
+          "rejected": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "rows_considered": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "ImportIndex": {
+        "type": "object",
+        "properties": {
+          "imports": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportSummary"
+            }
+          }
+        }
+      },
+      "ImportJob": {
+        "type": "object",
+        "description": "A resumable import, as it sits in the store.",
+        "required": [
+          "job_id",
+          "batch_id",
+          "project",
+          "request",
+          "request_digest",
+          "state",
+          "pages",
+          "rows",
+          "cursor",
+          "attempts",
+          "counts",
+          "rejects",
+          "reject_pages",
+          "shards",
+          "warnings",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "batch_id": {
+            "type": "string"
+          },
+          "claimed_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "claimed_by": {
+            "type": "string"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/ImportCounts"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "cursor": {
+            "type": "integer",
+            "description": "Pages already registered *and* whose result shard is stored. The resume\npoint.",
+            "minimum": 0
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "pages": {
+            "type": "integer",
+            "description": "Pages this job will read, pinned when it was created.",
+            "minimum": 0
+          },
+          "project": {
+            "type": "string"
+          },
+          "reject_pages": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "description": "Pages that wrote a reject shard, so reading them is a seek rather than\na scan of every page of a million-row import."
+          },
+          "rejects": {
+            "type": "object",
+            "description": "Complete, keyed by [`RejectReason::as_str`].",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "request": {
+            "$ref": "#/components/schemas/ImportJobRequest"
+          },
+          "request_digest": {
+            "type": "string"
+          },
+          "rows": {
+            "type": "integer",
+            "description": "Rows across those pages. The denominator a progress bar may use,\nbecause it was counted rather than guessed.",
+            "minimum": 0
+          },
+          "shards": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ShardRef"
+            },
+            "description": "One per finished page: what was registered, hashed. The version\nmaterial."
+          },
+          "state": {
+            "$ref": "#/components/schemas/JobState"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`project@version`, once there is one."
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Things that are not errors and that somebody has to read anyway.\n\nAlways present, even when empty: a client that has to distinguish\n\"no warnings\" from \"the field is missing\" is a client with a bug\nwaiting in it."
+          }
+        }
+      },
+      "ImportJobPage": {
+        "type": "object",
+        "required": [
+          "jobs"
+        ],
+        "properties": {
+          "jobs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImportJob"
+            }
+          }
+        }
+      },
+      "ImportJobRequest": {
+        "type": "object",
+        "description": "What a job was asked to do.",
+        "required": [
+          "batch"
+        ],
+        "properties": {
+          "batch": {
+            "type": "string",
+            "description": "The staged batch to read. Sealed by queueing, so its rows are pinned."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "Check every row and register nothing.\n\nIt still downloads: a row with no content address is refused by the\nregistry, so a dry run that skipped the fetch would reject every row\nand teach the reader nothing about the batch. Blobs are addressed by\ntheir content, so a dry run followed by a real import stores each\npicture once."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ImportManifest": {
+        "type": "object",
+        "description": "What a finished import is, forever.",
+        "required": [
+          "project",
+          "version",
+          "job_id",
+          "batch_id",
+          "batch_digest",
+          "rights",
+          "counts",
+          "rejects",
+          "shards",
+          "built_at"
+        ],
+        "properties": {
+          "batch_digest": {
+            "type": "string",
+            "description": "The batch's own content address. Two manifests naming the same one read\nthe same rows."
+          },
+          "batch_id": {
+            "type": "string"
+          },
+          "built_at": {
+            "type": "string"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/ImportCounts"
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/RightsEvidence"
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "project": {
+            "type": "string"
+          },
+          "rejects": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "rights": {
+            "$ref": "#/components/schemas/UsageRights"
+          },
+          "shards": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ShardRef"
+            }
+          },
+          "source": {
+            "$ref": "#/components/schemas/ImportSource"
+          },
+          "version": {
+            "type": "string"
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "ImportReport": {
         "type": "object",
         "description": "What an import did.",
@@ -8396,6 +11312,10 @@
           "dry_run": {
             "type": "boolean",
             "description": "Check everything and register nothing.\n\nThe default is false, but the panel always asks for a dry run first:\nsix hundred rows with a group key mapped from the filename is not\nsomething anybody wants to discover after it is in the project."
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/RightsEvidence",
+            "description": "Who checked that assertion, where, and when. Recorded, never enforced —\nsee [`RightsEvidence`]."
           },
           "project": {
             "type": "string"
@@ -8473,6 +11393,10 @@
             "type": "string",
             "description": "What the hub said the licence was. Kept verbatim and never believed —\nit is evidence about the mirror, not about the data."
           },
+          "config": {
+            "type": "string",
+            "description": "The configuration and split the rows came from. `default`/`train` is\nthe common shape and not the only one, and a corpus whose `test` split\nwas imported as if it were `train` is a leak nothing downstream can\nsee."
+          },
           "curated_source": {
             "type": [
               "string",
@@ -8494,6 +11418,13 @@
           "dataset_id": {
             "type": "string"
           },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SourceFile"
+            },
+            "description": "The files this batch was read out of, with whatever digest the hub\nstated for each.\n\nThe hub's word, kept as the hub's word — like `claimed_license`, and\nunlike the per-image content address, which is computed here from bytes\nthis process hashed. Both are worth having: one says what the mirror\nthinks it is serving, the other says what actually arrived."
+          },
           "hub": {
             "type": "string",
             "description": "`kaggle` or `huggingface`, or anything else for a pipeline that did not\nstart at a hub."
@@ -8502,11 +11433,51 @@
             "type": "string",
             "description": "The Flow PHP that produced these rows. Provenance that survives the\nimport: \"where did these six hundred images come from\" has an answer\nthat is a script rather than a memory."
           },
+          "revision": {
+            "type": "string",
+            "description": "The commit the rows were read at.\n\nA dataset id is a moving target: `main` is whatever the uploader\npushed last, so a corpus re-read a month later is a different corpus\nunder the same name — and a training run naming it is naming nothing\nanybody can go back to. This is the field that makes \"the images this\nmodel learned from\" a question with an answer.\n\nEmpty when the hub did not report one, which is recorded rather than\ninvented: a blank revision says the provenance is a name, and a made-up\none would say it is a commit."
+          },
+          "split": {
+            "type": "string"
+          },
           "url": {
             "type": "string"
           }
         },
         "additionalProperties": false
+      },
+      "ImportSummary": {
+        "type": "object",
+        "required": [
+          "project",
+          "version",
+          "job_id",
+          "accepted",
+          "rejected",
+          "built_at"
+        ],
+        "properties": {
+          "accepted": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "built_at": {
+            "type": "string"
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "project": {
+            "type": "string"
+          },
+          "rejected": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "version": {
+            "type": "string"
+          }
+        }
       },
       "IngestRequest": {
         "type": "object",
@@ -8539,6 +11510,17 @@
             "description": "The checkpoint of the last event written. A client can hand this to the\nlive stream to pick up exactly where its own write landed."
           }
         }
+      },
+      "JobState": {
+        "type": "string",
+        "description": "Where a job is.",
+        "enum": [
+          "queued",
+          "running",
+          "completed",
+          "failed",
+          "cancelled"
+        ]
       },
       "Keypoint": {
         "type": "object",
@@ -8742,6 +11724,17 @@
           }
         },
         "additionalProperties": false
+      },
+      "LawfulBasis": {
+        "type": "string",
+        "description": "What makes keeping this lawful, in the producer's own words.\n\naiwatcher cannot check any of it and does not pretend to. What it can do is\nrefuse to hold content that never claimed one, and record the claim\nverbatim so that an auditor asking \"why was this row eligible\" gets the\nanswer somebody actually gave rather than one reconstructed afterwards.",
+        "enum": [
+          "unknown",
+          "consent",
+          "contract",
+          "legitimate_interest",
+          "synthetic"
+        ]
       },
       "LinkDef": {
         "type": "object",
@@ -9197,6 +12190,67 @@
           }
         }
       },
+      "ModelPackage": {
+        "type": "object",
+        "description": "Everything a serving runtime needs and is not allowed to guess.",
+        "required": [
+          "runtime",
+          "artifacts"
+        ],
+        "properties": {
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ArtifactRef"
+            },
+            "description": "Every file, each with its digest. At least one."
+          },
+          "dependencies": {
+            "type": "object",
+            "description": "Package name to version specifier. What has to be present for the\nentry point to import.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "entry_point": {
+            "type": "string",
+            "description": "What inside the package to load: a file name, a module path, a\n`module:function`. Interpreted by the loader for that runtime and by\nnothing else."
+          },
+          "inputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TensorSpec"
+            }
+          },
+          "outputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TensorSpec"
+            }
+          },
+          "preprocessing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "What the trainer did to its inputs, in its own words: `resize:512`,\n`normalize:imagenet`, `edge-grid:8`.\n\nFree text and deliberately not executable. A package that shipped\npreprocessing *code* would be a package that runs code in whatever\nopens it, which is the thing [`Runtime::executes_packaged_code`] exists\nto keep visible."
+          },
+          "resources": {
+            "$ref": "#/components/schemas/ResourceRequest"
+          },
+          "runtime": {
+            "$ref": "#/components/schemas/Runtime"
+          },
+          "runtime_version": {
+            "type": "string",
+            "description": "The build of that runtime the artifact was written by: `2.4.1`,\n`1.17`. An ONNX graph using an opset the server's runtime does not have\nfails at load; saying which one it needs turns that into a deployment\ndecision rather than a crash loop."
+          }
+        },
+        "additionalProperties": false
+      },
       "ModelPage": {
         "type": "object",
         "required": [
@@ -9251,6 +12305,17 @@
           "notes": {
             "type": "string"
           },
+          "package": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ModelPackage",
+                "description": "What a serving runtime is handed, when the trainer declared one.\n\n`None` for a version registered before packages existed, and for one\nwhose producer only had a checkpoint URI. A runtime that meets `None`\nsays so rather than guessing a loader — the same choice ADR_0019 makes\nabout a licence nobody recorded. See [`crate::package`]."
+              }
+            ]
+          },
           "reproducible": {
             "type": "boolean",
             "description": "False when the dataset is a mutable name rather than an immutable\nexport reference. Recorded rather than refused, and it is what blocks\na promotion."
@@ -9290,6 +12355,17 @@
           },
           "run_id": {
             "type": "string"
+          },
+          "runtime": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Runtime",
+                "description": "Which loader this needs, when the trainer said. On the summary rather\nthan only on the version so that \"is there anything here a runtime\ncould serve\" is a list read rather than a fan-out."
+              }
+            ]
           },
           "version": {
             "type": "string"
@@ -9748,6 +12824,23 @@
           "json"
         ]
       },
+      "PartSummary": {
+        "type": "object",
+        "description": "One part's shape, with none of its content.\n\nWhat makes a tombstoned turn still legible: \"an assistant message of three\nparts, 4 kB of text and a tool call\" is an auditable fact that survives the\nerasure of the words.",
+        "required": [
+          "kind",
+          "bytes"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "kind": {
+            "type": "string"
+          }
+        }
+      },
       "Percentiles": {
         "type": "object",
         "description": "Nearest-rank percentiles, in milliseconds.",
@@ -9785,6 +12878,22 @@
           "training",
           "evaluation",
           "inference"
+        ]
+      },
+      "PolicyMode": {
+        "type": "string",
+        "description": "How strict this deployment is.",
+        "enum": [
+          "protected",
+          "open"
+        ]
+      },
+      "PreferenceLabel": {
+        "type": "string",
+        "description": "Which of two answers a reviewer preferred.",
+        "enum": [
+          "chosen",
+          "rejected"
         ]
       },
       "ProfileInput": {
@@ -10261,6 +13370,34 @@
         ],
         "description": "A version without its text.\n\nThe list view's row. Kept separate so listing a prompt with two hundred\nversions does not transfer two hundred prompts."
       },
+      "Provenance": {
+        "type": "object",
+        "description": "Where this turn came from, in the telemetry that is still on the log.\n\nEvery field is a join back. The archive expires on its own clock, and when\nit does these ids are what is left — which is the point of keeping them out\nof the encrypted half. \"This run used a model that answered badly\" stays\nanswerable after the words are gone.",
+        "properties": {
+          "agent_id": {
+            "type": "string"
+          },
+          "call_id": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": "string",
+            "description": "The prompt version this turn ran on, where the producer knows it —\n`planner.floor-plan.system@sha256`. The join ADR_0011 exists for."
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "span_id": {
+            "type": "string"
+          },
+          "trace_id": {
+            "type": "string"
+          }
+        }
+      },
       "PublicAuthConfig": {
         "type": "object",
         "description": "What the panel is told before anybody has signed in.\n\nPublic on purpose, and it is the only route reachable unauthenticated\nbesides the health probes: a panel that cannot ask \"is there a login here,\nand what is it called\" has to guess, and guessing wrong means either a\nsign-in screen on an instance with no provider or an endless 401 loop on\none that has.",
@@ -10489,6 +13626,75 @@
           }
         }
       },
+      "RecordTurnRequest": {
+        "type": "object",
+        "description": "What a producer sends.",
+        "required": [
+          "conversation_id",
+          "message_id",
+          "role",
+          "content"
+        ],
+        "properties": {
+          "content": {
+            "$ref": "#/components/schemas/TurnContent"
+          },
+          "conversation_id": {
+            "type": "string",
+            "description": "The same `conversation_id` the telemetry carries. This is the join, and\na turn that invents one is a turn nothing can be traced back from."
+          },
+          "message_id": {
+            "type": "string",
+            "description": "The producer's stable id for this message. Sending it twice replaces the\nturn rather than adding one — a retried flush must not double a corpus."
+          },
+          "occurred_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the message was said, rather than when it arrived. Ordering within\na conversation uses arrival, because a producer's clock is not something\nan export's determinism can depend on."
+          },
+          "ordinal": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Position among siblings. Ties are broken by `message_id`, so a producer\nthat sends every turn at ordinal 0 still gets a deterministic order —\njust not the one it meant.",
+            "minimum": 0
+          },
+          "parent_message_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "policy": {
+            "$ref": "#/components/schemas/ContentPolicy",
+            "description": "Consent, retention and what the producer says it redacted. Required in\na protected deployment; recorded as `unknown` in an open one, which an\nexport then excludes by name."
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/Provenance"
+          },
+          "role": {
+            "$ref": "#/components/schemas/ConversationRole"
+          }
+        },
+        "additionalProperties": false
+      },
+      "RecordTurnsBody": {
+        "type": "object",
+        "required": [
+          "turns"
+        ],
+        "properties": {
+          "turns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecordTurnRequest"
+            },
+            "description": "One exchange, as a producer flushes it. Not a transaction — see\n`Registry::record_batch`."
+          }
+        },
+        "additionalProperties": false
+      },
       "RecordedEvent": {
         "type": "object",
         "description": "An event as a consumer sees it.",
@@ -10633,6 +13839,90 @@
           }
         }
       },
+      "RecordedTurn": {
+        "type": "object",
+        "description": "What a write answers with.",
+        "required": [
+          "turn_id",
+          "content_digest",
+          "created",
+          "review"
+        ],
+        "properties": {
+          "content_digest": {
+            "type": "string"
+          },
+          "created": {
+            "type": "boolean",
+            "description": "False when this exact content was already stored under this turn id."
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Finding"
+            },
+            "description": "What the server's own scan found, whatever the producer claimed. Empty\nis the common case and the one worth not celebrating: a clean scan is\nthe absence of a match, not evidence there is nothing to find."
+          },
+          "review": {
+            "$ref": "#/components/schemas/TurnReview"
+          },
+          "turn_id": {
+            "type": "string"
+          }
+        }
+      },
+      "RecordedTurns": {
+        "type": "object",
+        "required": [
+          "turns"
+        ],
+        "properties": {
+          "turns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecordedTurn"
+            }
+          }
+        }
+      },
+      "RedactionRecord": {
+        "type": "object",
+        "description": "What a producer says its own redaction hook did.",
+        "required": [
+          "redactor"
+        ],
+        "properties": {
+          "applied_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "redactor": {
+            "type": "string",
+            "description": "The hook, versioned: `acme-scrubber@2.1`. A bare name is accepted and\nis worth less — \"which version of the scrubber ran\" is the question\nasked after something gets through."
+          },
+          "replaced": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many spans it replaced. Recorded rather than derived, because the\nserver sees only what is left.",
+            "minimum": 0
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The rule ids that fired. Empty is meaningful and common: the hook ran\nand found nothing."
+          }
+        }
+      },
       "RegisterImageRequest": {
         "type": "object",
         "description": "What is being asked for when an image is registered.",
@@ -10717,6 +14007,17 @@
           "notes": {
             "type": "string"
           },
+          "package": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ModelPackage",
+                "description": "What a serving runtime will need. Optional, and validated when given:\na half-declared package is worse than none, because it reads as one."
+              }
+            ]
+          },
           "run_id": {
             "type": "string",
             "description": "The run that produced it. Read for its dataset, framework and code, so\na version cannot claim provenance the run does not have."
@@ -10749,6 +14050,74 @@
           },
           "version": {
             "$ref": "#/components/schemas/ModelVersion"
+          }
+        }
+      },
+      "RejectPage": {
+        "type": "object",
+        "required": [
+          "rows",
+          "total"
+        ],
+        "properties": {
+          "next_offset": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RejectedRow"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "description": "Complete, even when [`rows`](Self::rows) is a page of a sample.",
+            "minimum": 0
+          }
+        }
+      },
+      "RejectReason": {
+        "type": "string",
+        "description": "Why a row did not become an image.\n\nCoarser than the message, on purpose: a reason with a row count is what\nsomebody reads first, and \"38 000 rows had no readable picture at the\naddress they named\" points at a mapping mistake in a way that thirty-eight\nthousand distinct sentences do not.",
+        "enum": [
+          "address_refused",
+          "unreachable",
+          "not_an_image",
+          "invalid",
+          "store_failed"
+        ]
+      },
+      "RejectedRow": {
+        "type": "object",
+        "description": "One row that did not make it, kept whole.",
+        "required": [
+          "page",
+          "uri",
+          "group_id",
+          "reason",
+          "detail"
+        ],
+        "properties": {
+          "detail": {
+            "type": "string",
+            "description": "The sentence, verbatim. A count says how many; this says what to fix."
+          },
+          "group_id": {
+            "type": "string"
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "reason": {
+            "$ref": "#/components/schemas/RejectReason"
+          },
+          "uri": {
+            "type": "string"
           }
         }
       },
@@ -10836,6 +14205,64 @@
           }
         }
       },
+      "ResourceRequest": {
+        "type": "object",
+        "description": "What a package needs in order to run at all.\n\nDeclared so a scheduler can refuse rather than thrash. A model that needs\n24 GB of accelerator memory placed on a node with 16 does not fail at load\n— it fails at the first request under load, at which point the previous\nversion is already gone.",
+        "properties": {
+          "cpu_millis": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "gpu_memory_mb": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "gpus": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Accelerators, and how much memory each needs. `None` means it runs on a\nCPU, which is a claim rather than a default: a package that needs one\nand says nothing gets scheduled somewhere it cannot run.",
+            "minimum": 0
+          },
+          "memory_mb": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "RetentionPolicy": {
+        "type": "object",
+        "description": "How long the content may be held, on a clock of its own.\n\nDeliberately unrelated to the event log's retention. The log holds\noperational fields and is sized for a volume; this holds somebody's words\nand is bounded by what they were told. Tying them together would mean\nraising the log's retention silently extends a consent nobody re-asked for.",
+        "required": [
+          "ttl_days"
+        ],
+        "properties": {
+          "policy_id": {
+            "type": "string",
+            "description": "Which written policy this is. Recorded, never interpreted."
+          },
+          "ttl_days": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
       "ReviewRequest": {
         "type": "object",
         "description": "A change to an image's review state.",
@@ -10876,6 +14303,26 @@
           "accepted",
           "rejected"
         ]
+      },
+      "ReviewTurnBody": {
+        "type": "object",
+        "required": [
+          "conversation_id",
+          "turn_id",
+          "review"
+        ],
+        "properties": {
+          "conversation_id": {
+            "type": "string"
+          },
+          "review": {
+            "$ref": "#/components/schemas/TurnReviewRequest"
+          },
+          "turn_id": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
       },
       "RevisionSummary": {
         "type": "object",
@@ -10929,6 +14376,31 @@
             "minimum": 0
           }
         }
+      },
+      "RightsEvidence": {
+        "type": "object",
+        "description": "Who checked a rights assertion, where, and when.\n\nThe missing half of [`UsageRights`]. That type records *what* somebody\nclaimed; this records the claim's provenance — and the two are separate\nbecause a claim with nothing behind it is still the claim that was made,\nand pretending otherwise would mean either refusing it (which teaches\npeople to invent a licence to get past the dialog) or believing it.\n\nEvery field is optional and the whole thing is recorded rather than\nenforced. What it changes is what a later reader can do: \"why is this\ncorpus marked commercial\" has an answer that is a URL and a name and a\ndate, instead of a `git blame` on a JSON file. The one hard rule stays\nwhere it was — [`check_rights`] refuses a claim the curated table\ncontradicts, because there a human already read the licence at the source.\n\n[`primary_source_url`](Self::primary_source_url) is deliberately named for\nthe *original*, never the mirror. ADR_0019's whole finding is that a hub\nrestates licences wrongly often enough that its card is evidence about the\nmirror rather than about the data, so evidence pointing back at the hub\nresult somebody clicked is not evidence at all.",
+        "properties": {
+          "note": {
+            "type": "string"
+          },
+          "primary_source_url": {
+            "type": "string",
+            "description": "Where the licence was read: the paper, the project page, the repository\nthe corpus was published from. Not the Hugging Face or Kaggle card."
+          },
+          "reviewed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When they read it. A licence at a URL is a licence on a date."
+          },
+          "reviewed_by": {
+            "type": "string",
+            "description": "Who read it. A person, because a rights assertion is a person's."
+          }
+        },
+        "additionalProperties": false
       },
       "RightsPolicy": {
         "type": "string",
@@ -11164,6 +14636,17 @@
             "description": "The orchestration this run executes, when the producer names one."
           }
         }
+      },
+      "Runtime": {
+        "type": "string",
+        "description": "Which loader reads this, and therefore what it is allowed to do.\n\nDeliberately small, and deliberately ordered by how much of somebody else's\ncode runs when the artifact is opened. The first two are data formats with\na fixed interpreter; the third is a program.",
+        "enum": [
+          "weights",
+          "onnx",
+          "torch_script",
+          "python",
+          "unspecified"
+        ]
       },
       "SampleInput": {
         "type": "object",
@@ -11408,6 +14891,29 @@
         ],
         "description": "Which SDK produced an event.\n\nSerialised as a plain string with an unknown value passing through: an SDK\nthis backend has never heard of must still be able to publish."
       },
+      "ShardRef": {
+        "type": "object",
+        "description": "One written shard of a staged artifact.\n\nThe unit of resume and the unit of proof. `digest` is over the shard's\nplaintext bytes — before any encryption, so an archive that seals its\nshards and an importer that does not produce comparable references — and it\nis what [`version_of`] builds the artifact's identity from.",
+        "required": [
+          "index",
+          "rows",
+          "digest"
+        ],
+        "properties": {
+          "digest": {
+            "type": "string",
+            "description": "`sha256` of the shard's plaintext JSONL. What proves a shard was not\nswapped for another."
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "rows": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
       "Source": {
         "type": "object",
         "description": "Who sent the event. Enough to find the process that produced a bad batch.",
@@ -11475,6 +14981,31 @@
             "type": "string"
           }
         }
+      },
+      "SourceFile": {
+        "type": "object",
+        "description": "One file a batch was read out of, as the hub described it.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "digest": {
+            "type": "string",
+            "description": "Whatever the hub published: an LFS `sha256`, a git blob id, an ETag.\nNever verified here, because these bytes are not the bytes this\nregistry stores — an image is hashed on arrival and *that* digest is\nits identity."
+          },
+          "name": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
       },
       "SourcePage": {
         "type": "object",
@@ -11733,6 +15264,112 @@
           }
         }
       },
+      "StageBatchRequest": {
+        "type": "object",
+        "description": "What a batch is for, decided once and pinned.\n\nRights, evidence and source sit here rather than on each page because they\nare properties of the *corpus*: a per-page field would invite a pipeline to\nderive them from a column, which is the mirror's word laundered through a\n`withEntry`. This is also the \"pinned source\" half of \"re-running the same\npinned source and pipeline yields the same version\".",
+        "required": [
+          "project"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/RightsEvidence",
+            "description": "Who checked that, where and when. Recorded, never enforced."
+          },
+          "project": {
+            "type": "string"
+          },
+          "rights": {
+            "$ref": "#/components/schemas/UsageRights",
+            "description": "What the caller asserts may be done with every image in this batch."
+          },
+          "source": {
+            "$ref": "#/components/schemas/ImportSource"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StagedBatch": {
+        "type": "object",
+        "description": "A batch as it sits in the store.",
+        "required": [
+          "batch_id",
+          "project",
+          "description",
+          "rights",
+          "evidence",
+          "source",
+          "request_digest",
+          "pages",
+          "rows",
+          "singleton_pages",
+          "sealed",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "batch_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "digest": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`sha256(request ‖ every page digest, in order)`, once sealed."
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/RightsEvidence"
+          },
+          "pages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ShardRef"
+            },
+            "description": "One entry per stored page, in order. The same [`ShardRef`] the\nconversation export writes, because it is the same thing: an ordered,\ndigested piece of a staged artifact."
+          },
+          "project": {
+            "type": "string"
+          },
+          "request_digest": {
+            "type": "string",
+            "description": "What was asked for, hashed. Half of the batch's content address."
+          },
+          "rights": {
+            "$ref": "#/components/schemas/UsageRights"
+          },
+          "rows": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "sealed": {
+            "type": "boolean",
+            "description": "True once the batch takes no more rows. Set by queueing a job."
+          },
+          "singleton_pages": {
+            "type": "integer",
+            "description": "Pages on which no two rows shared a `group_id`.\n\nThe family split is the one mistake an import cannot detect afterwards:\na `group_id` mapped from the file name gives every image its own\nfamily, the test score then measures memorisation, and nothing in the\nnumbers says so. Counted per page rather than over the whole batch\nbecause the alternative is a set of every group id a million-row import\nhas seen, held in a manifest — so what this supports is the exact\nstatement \"every page of this batch gave each row its own family\",\nwhich is what a filename mapping produces and what a real one does not.",
+            "minimum": 0
+          },
+          "source": {
+            "$ref": "#/components/schemas/ImportSource"
+          },
+          "updated_at": {
+            "type": "string"
+          }
+        }
+      },
       "StartRunRequest": {
         "type": "object",
         "description": "What opens a run.",
@@ -11967,6 +15604,45 @@
           }
         }
       },
+      "TensorSpec": {
+        "type": "object",
+        "description": "A number a request has to look like.\n\nThe shape is a list rather than a string so a server can check it; `None`\nin a dimension is \"any\", which is how a batch axis is written. A runtime\nthat validates against this refuses a wrong request instead of reshaping it\ninto something that predicts confidently and wrongly.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "classes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "For a classifier: what index 0, 1, 2 … mean.\n\nOn the package rather than in the serving code, because a label order\nthat lives in a deployment is a label order that silently permutes when\nsomebody retrains — every metric stays finite and nothing says so. The\nsame failure `ExportDataset` checks `schema_version` for."
+          },
+          "description": {
+            "type": "string"
+          },
+          "dtype": {
+            "type": "string",
+            "description": "`float32`, `int64`, `uint8`. Free text, because the vocabulary is the\nruntime's and an enum here would be one framework's list imposed on\nevery other."
+          },
+          "name": {
+            "type": "string"
+          },
+          "shape": {
+            "type": "array",
+            "items": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64",
+              "minimum": 0
+            },
+            "description": "`[null, 3, 224, 224]`. A `null` is a free dimension."
+          }
+        },
+        "additionalProperties": false
+      },
       "ToolBreakdown": {
         "type": "object",
         "required": [
@@ -11991,6 +15667,33 @@
           },
           "tool_name": {
             "type": "string"
+          }
+        }
+      },
+      "ToolResult": {
+        "type": "object",
+        "description": "What a tool handed back.\n\nAttached to the turn rather than folded into a `Text` part, because a\nfailure is a training signal and a stringified error is not: an SFT shape\nwants the successful ones, a preference shape often wants exactly the pairs\nwhere one branch failed.",
+        "required": [
+          "call_id",
+          "name",
+          "ok",
+          "content"
+        ],
+        "properties": {
+          "call_id": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean"
           }
         }
       },
@@ -12298,6 +16001,15 @@
           }
         }
       },
+      "TrainingScope": {
+        "type": "string",
+        "description": "What the consent covers.\n\nSeparate scopes rather than one \"may train\" flag, because they are\ngenuinely different permissions and the difference is where the accidents\nhappen: an evaluation set that quietly becomes a training set is the same\nmistake as a research-licensed corpus in a commercial model, one field over.",
+        "enum": [
+          "train",
+          "evaluate",
+          "share"
+        ]
+      },
       "TrainingStatus": {
         "type": "string",
         "description": "Where a run is.\n\n`Running` is the *absence* of an end, not a claim that anything is\nhappening — exactly the rule the projector follows for agent runs. A\ntrainer killed by an OOM and a trainer thinking for twenty minutes look\nidentical from here, so nothing in this crate decides which one it is.\n[`TrainingRun::last_heard_from`] is what a reader draws the line from.",
@@ -12306,6 +16018,134 @@
           "succeeded",
           "failed",
           "cancelled"
+        ]
+      },
+      "TurnContent": {
+        "type": "object",
+        "description": "The half that is encrypted.\n\nA type of its own rather than two fields on the head, because the split is\nthe security boundary: everything in here is sealed, everything outside it\nis readable by anyone who may list the archive, and a field that moved\nacross the line by accident would be a leak nobody could see in a diff.",
+        "properties": {
+          "parts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContentPart"
+            }
+          },
+          "tool_results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ToolResult"
+            }
+          }
+        }
+      },
+      "TurnPage": {
+        "type": "object",
+        "required": [
+          "turns",
+          "total"
+        ],
+        "properties": {
+          "next_offset": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Where to resume. Absent at the end of the conversation.",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "turns": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ArchivedTurn"
+            }
+          }
+        }
+      },
+      "TurnReview": {
+        "type": "object",
+        "description": "Who decided, when, and why.",
+        "properties": {
+          "decided_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "note": {
+            "type": "string"
+          },
+          "preference": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PreferenceLabel",
+                "description": "Which of two answers was better, where a reviewer said.\n\nA different axis from [`Self::state`], and keeping them separate is the\npoint. `state` answers \"may this content be used at all\" — the safety\ngate. This answers \"was it a good answer\" — the quality one. A\npreference pair is built from two turns that both passed the first and\ndisagree on the second, which is what stops a turn rejected for holding\nsomebody's address becoming the rejected half of a preference pair and\nputting that address in the corpus anyway."
+              }
+            ]
+          },
+          "reviewer": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/TurnReviewState"
+          }
+        }
+      },
+      "TurnReviewRequest": {
+        "type": "object",
+        "description": "One reviewer's decision about one turn.",
+        "required": [
+          "state"
+        ],
+        "properties": {
+          "findings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HumanFinding"
+            },
+            "description": "What the reviewer saw that the scanner did not — an unsafe answer, a\nname the rules do not recognise. Appended to the turn's findings rather\nthan replacing them: a scanner finding a human disagreed with is a fact\nabout both of them."
+          },
+          "note": {
+            "type": "string"
+          },
+          "preference": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PreferenceLabel",
+                "description": "The quality judgement, where the reviewer is making one. Only a turn\nthis is set on can take part in a preference export, and nothing infers\nit — a rejection has many reasons and only one of them is \"the other\nanswer was better\"."
+              }
+            ]
+          },
+          "state": {
+            "$ref": "#/components/schemas/TurnReviewState"
+          }
+        },
+        "additionalProperties": false
+      },
+      "TurnReviewState": {
+        "type": "string",
+        "description": "Whether a human has decided about this turn.",
+        "enum": [
+          "pending",
+          "approved",
+          "rejected"
+        ]
+      },
+      "TurnState": {
+        "type": "string",
+        "description": "Whether the content is still there.",
+        "enum": [
+          "held",
+          "erased"
         ]
       },
       "UsageRights": {
@@ -12438,6 +16278,29 @@
           }
         ],
         "description": "Where a version came from.\n\nThe distinction the panel needs to answer \"did a person write this, or did\nan optimiser?\" — which is the first question asked about a prompt that is\nbehaving strangely."
+      },
+      "Withdrawal": {
+        "type": "object",
+        "description": "Why a corpus was withdrawn, and when.\n\nAn export is immutable and a withdrawal does not change that: the manifest\nkeeps every count, digest and exclusion it had. What is gone is the rows,\nbecause the alternative is a published corpus holding words somebody asked\nto have deleted — and an erasure that stopped at the archive would be an\nerasure in name only.",
+        "required": [
+          "conversations",
+          "at"
+        ],
+        "properties": {
+          "at": {
+            "type": "string"
+          },
+          "by": {
+            "type": "string"
+          },
+          "conversations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The conversations whose erasure caused this."
+          }
+        }
       },
       "WorkflowDefinition": {
         "type": "object",
@@ -12617,6 +16480,10 @@
     {
       "name": "annotations",
       "description": "Image annotation projects, drawings, reviews and training exports"
+    },
+    {
+      "name": "conversations",
+      "description": "The governed conversation archive: encrypted content, consent and retention, review, erasure, and the corpora exported from it"
     },
     {
       "name": "training",

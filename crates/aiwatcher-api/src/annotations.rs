@@ -27,8 +27,7 @@ use aiwatcher_annotations::{
     SaveRevisionRequest, SavedRevision, SourcePage, SourceUsage, Split, StoredBlob,
 };
 
-use aiwatcher_annotations::integrations::hubs::parse_cell_address;
-use aiwatcher_annotations::integrations::pixels;
+use aiwatcher_annotations::integrations::fetch::ImageSource;
 
 use crate::auth::Caller;
 use crate::error::{ApiError, ApiResult};
@@ -343,8 +342,8 @@ async fn import_images(
     Ok(Json(report))
 }
 
-/// Download the bytes for rows that name a hub asset and carry no content
-/// address, and store them here.
+/// Download the bytes for rows that carry no content address, and store them
+/// here.
 ///
 /// This is the composition the import route exists to make, and it lives in
 /// the API layer because it is the only place that holds both halves: the
@@ -361,9 +360,12 @@ async fn import_images(
 ///
 /// * a row that already carries an `image_id` is left alone, which is every
 ///   batch whose pipeline did its own fetching;
-/// * only a hub's own asset host is fetched — `Hubs::fetch` refuses the rest,
-///   because "download this address for me" from inside a cluster is a
-///   request-forgery primitive;
+/// * every byte goes through [`ImageSource`], which is the same port the
+///   queued importer uses and carries the same gates — allowlisted host,
+///   public address, no redirects, a streamed byte ceiling, a header-only
+///   pixel ceiling and a verified content address. One fetcher, both routes:
+///   a gate wired into one and not the other is the gate somebody routes
+///   around;
 /// * a failure is a warning naming the row, never a failed batch. A hub asset
 ///   URL expires within hours of being listed, so the interesting case is a
 ///   preview from yesterday, and the reader needs to be told that rather than
@@ -376,6 +378,7 @@ async fn hydrate(
     let Some(hubs) = state.hubs.as_ref() else {
         return (0, Vec::new());
     };
+    let images: &dyn ImageSource = hubs.as_ref();
 
     let mut fetched = 0;
     let mut problems = Vec::new();
@@ -383,32 +386,18 @@ async fn hydrate(
         if row.image_id.is_some() {
             continue;
         }
-        // Two shapes reach here and only one of them is an address. A row
-        // that names a *cell* is resolved from its parts, so nothing follows a
-        // URL a caller chose; a row that carries a hub URL goes through the
-        // allowlist. Anything else is left alone — it may be a perfectly good
-        // address somebody else already stored, and the registry says so in
-        // its own words if it is not.
-        let bytes = match parse_cell_address(&row.uri) {
-            Some(cell) => hubs.cell(&cell).await,
-            None if row.uri.starts_with("https://") => hubs.fetch(&row.uri).await,
-            None => continue,
-        };
-
-        let outcome = match bytes {
+        let outcome = match images.fetch(&row.uri, None).await {
             Err(error) => Err(error),
-            Ok((bytes, content_type)) => {
+            Ok(found) => {
                 // A hub says nothing about a binary column, so the row arrived
                 // with zeroes the registry would refuse. The bytes are here
                 // and their header knows.
-                if (row.width == 0 || row.height == 0)
-                    && let Some(found) = pixels::describe(&bytes)
-                {
+                if row.width == 0 || row.height == 0 {
                     row.width = found.width;
                     row.height = found.height;
                 }
                 registry
-                    .put_blob(bytes, &content_type)
+                    .put_blob(found.bytes, &found.content_type)
                     .await
                     .map_err(|error| error.to_string())
             }

@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use utoipa::ToSchema;
 
+use crate::package::{ModelPackage, Runtime};
 use crate::{Error, Result, validate_slug};
 
 /// What a version measured, split by which data measured it.
@@ -74,6 +75,14 @@ pub struct ModelVersion {
     pub code: String,
     #[serde(default)]
     pub metrics: ModelMetrics,
+    /// What a serving runtime is handed, when the trainer declared one.
+    ///
+    /// `None` for a version registered before packages existed, and for one
+    /// whose producer only had a checkpoint URI. A runtime that meets `None`
+    /// says so rather than guessing a loader — the same choice ADR_0019 makes
+    /// about a licence nobody recorded. See [`crate::package`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<ModelPackage>,
     /// False when the dataset is a mutable name rather than an immutable
     /// export reference. Recorded rather than refused, and it is what blocks
     /// a promotion.
@@ -120,6 +129,11 @@ pub struct ModelVersionSummary {
     pub run_id: String,
     pub dataset: String,
     pub reproducible: bool,
+    /// Which loader this needs, when the trainer said. On the summary rather
+    /// than only on the version so that "is there anything here a runtime
+    /// could serve" is a list read rather than a fan-out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<Runtime>,
     #[serde(default)]
     pub metrics: ModelMetrics,
     #[serde(with = "time::serde::rfc3339")]
@@ -134,6 +148,7 @@ impl ModelVersionSummary {
             run_id: version.run_id.clone(),
             dataset: version.dataset.clone(),
             reproducible: version.reproducible,
+            runtime: version.package.as_ref().map(|package| package.runtime),
             metrics: version.metrics.clone(),
             created_at: version.created_at,
         }
@@ -204,6 +219,10 @@ pub struct RegisterModelRequest {
     pub description: String,
     #[serde(default)]
     pub metrics: ModelMetrics,
+    /// What a serving runtime will need. Optional, and validated when given:
+    /// a half-declared package is worse than none, because it reads as one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<ModelPackage>,
     #[serde(default)]
     pub notes: String,
 }
@@ -216,6 +235,9 @@ impl RegisterModelRequest {
             return Err(Error::Invalid(
                 "a model version needs the checkpoint it came from".to_owned(),
             ));
+        }
+        if let Some(package) = &self.package {
+            package.validate()?;
         }
         Ok(())
     }

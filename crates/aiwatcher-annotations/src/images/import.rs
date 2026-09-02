@@ -49,7 +49,7 @@ use serde_json::Value;
 use utoipa::ToSchema;
 
 use crate::images::RegisterImageRequest;
-use crate::license::{SourceUsage, UsageRights, check_rights};
+use crate::license::{RightsEvidence, SourceUsage, UsageRights, check_rights};
 use crate::project::AnnotationProject;
 use crate::store::Backend;
 use crate::{Error, Result};
@@ -111,11 +111,56 @@ pub struct ImportSource {
     /// The curated verdict, when there was one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub curated_usage: Option<SourceUsage>,
+    /// The commit the rows were read at.
+    ///
+    /// A dataset id is a moving target: `main` is whatever the uploader
+    /// pushed last, so a corpus re-read a month later is a different corpus
+    /// under the same name — and a training run naming it is naming nothing
+    /// anybody can go back to. This is the field that makes "the images this
+    /// model learned from" a question with an answer.
+    ///
+    /// Empty when the hub did not report one, which is recorded rather than
+    /// invented: a blank revision says the provenance is a name, and a made-up
+    /// one would say it is a commit.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub revision: String,
+    /// The configuration and split the rows came from. `default`/`train` is
+    /// the common shape and not the only one, and a corpus whose `test` split
+    /// was imported as if it were `train` is a leak nothing downstream can
+    /// see.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub config: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub split: String,
+    /// The files this batch was read out of, with whatever digest the hub
+    /// stated for each.
+    ///
+    /// The hub's word, kept as the hub's word — like `claimed_license`, and
+    /// unlike the per-image content address, which is computed here from bytes
+    /// this process hashed. Both are worth having: one says what the mirror
+    /// thinks it is serving, the other says what actually arrived.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<SourceFile>,
     /// The Flow PHP that produced these rows. Provenance that survives the
     /// import: "where did these six hundred images come from" has an answer
     /// that is a script rather than a memory.
     #[serde(default)]
     pub pipeline: String,
+}
+
+/// One file a batch was read out of, as the hub described it.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SourceFile {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<u64>,
+    /// Whatever the hub published: an LFS `sha256`, a git blob id, an ETag.
+    /// Never verified here, because these bytes are not the bytes this
+    /// registry stores — an image is hashed on arrival and *that* digest is
+    /// its identity.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub digest: String,
 }
 
 /// A bulk registration.
@@ -131,6 +176,10 @@ pub struct ImportRequest {
     /// through a `withEntry`.
     #[serde(default = "unknown_rights")]
     pub rights: UsageRights,
+    /// Who checked that assertion, where, and when. Recorded, never enforced —
+    /// see [`RightsEvidence`].
+    #[serde(default)]
+    pub evidence: RightsEvidence,
     #[serde(default)]
     pub source: ImportSource,
     pub rows: Vec<ImportRow>,
@@ -217,6 +266,22 @@ pub fn warnings(request: &ImportRequest, families: usize) -> Vec<String> {
             request.source.claimed_license
         ));
     }
+    if !matches!(request.rights, UsageRights::Unknown) && !request.evidence.is_stated() {
+        warnings.push(format!(
+            "these images are asserted as '{}' with nobody named and no primary source recorded. \
+             The assertion stands — it is a person's to make — but the next person to ask why \
+             will have nowhere to look.",
+            request.rights.summary()
+        ));
+    }
+    if !request.source.dataset_id.is_empty() && request.source.revision.is_empty() {
+        warnings.push(format!(
+            "{} was read without a revision, so the provenance is a name that moves. Re-reading \
+             it next month may produce a different corpus under the same id, and a model naming \
+             this import would be naming nothing anybody can go back to.",
+            request.source.dataset_id
+        ));
+    }
     warnings
 }
 
@@ -259,6 +324,24 @@ pub fn to_request(
             "import.claimed_license".to_owned(),
             Value::from(source.claimed_license.clone()),
         );
+    }
+    if !source.revision.is_empty() {
+        // On the image rather than only on the batch: an image outlives the
+        // import that created it, and "which commit was this read at" is a
+        // question asked about one picture far more often than about a batch.
+        metadata.insert(
+            "import.revision".to_owned(),
+            Value::from(source.revision.clone()),
+        );
+    }
+    if !source.config.is_empty() {
+        metadata.insert(
+            "import.config".to_owned(),
+            Value::from(source.config.clone()),
+        );
+    }
+    if !source.split.is_empty() {
+        metadata.insert("import.split".to_owned(), Value::from(source.split.clone()));
     }
     if let Some(curated) = &source.curated_source {
         metadata.insert(
@@ -409,6 +492,7 @@ mod tests {
                 license: "CC BY-NC 4.0".to_owned(),
                 url: None,
             },
+            evidence: RightsEvidence::default(),
             source: source(None),
             rows: vec![row("plan-1"), row("plan-2"), row("plan-3")],
             dry_run: false,
@@ -429,6 +513,7 @@ mod tests {
             rights: UsageRights::Owned {
                 grant: "supplied under contract".to_owned(),
             },
+            evidence: RightsEvidence::default(),
             source: source(None),
             rows,
             dry_run: false,

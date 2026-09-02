@@ -27,6 +27,7 @@ use aiwatcher_core::prompts::ObjectStore;
 use sha2::{Digest, Sha256};
 
 pub mod model;
+pub mod package;
 pub mod registry;
 pub mod run;
 
@@ -34,6 +35,7 @@ pub use model::{
     ModelDetail, ModelHead, ModelLabelRequest, ModelMetrics, ModelPage, ModelVersion,
     ModelVersionSummary, PRODUCTION, RegisterModelRequest, RegisteredModel,
 };
+pub use package::{ArtifactRef, MAX_ARTIFACTS, ModelPackage, ResourceRequest, Runtime, TensorSpec};
 pub use registry::Registry;
 pub use run::{
     BestMetric, CheckpointInput, CheckpointRecord, EpochInput, EpochRecord, FinishRunRequest,

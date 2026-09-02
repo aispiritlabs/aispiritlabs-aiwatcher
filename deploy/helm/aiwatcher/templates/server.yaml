@@ -4,6 +4,12 @@
 {{- if and (eq .Values.auth.mode "proxy") (not .Values.networkPolicy.enabled) -}}
 {{- fail "auth.mode is \"proxy\" but networkPolicy.enabled is false. That mode takes the caller's identity from request headers, which is only sound while nothing but the authenticating proxy can reach the server. With no policy, any pod in the namespace can claim to be an admin. Turn the policy on, or use auth.mode \"oidc\", where the identity is proved to this process rather than asserted to it." -}}
 {{- end -}}
+{{- if and .Values.conversationArchive.enabled (not .Values.conversationArchive.keysSecret.name) -}}
+{{- fail "conversationArchive.enabled is true but conversationArchive.keysSecret.name is empty. The archive holds what people said to your agents, sealed with that key, in the same bucket prompts, datasets, annotations and training already read — so an archive with no key is a plaintext archive. The chart will not generate one: a key it invented would be a key nobody could restore from. Create a Secret holding `id:key` (32 base64url bytes) and name it here." -}}
+{{- end -}}
+{{- if and .Values.conversationArchive.enabled (not $promptStore) -}}
+{{- fail "conversationArchive.enabled is true but promptStore.mode is \"none\". The archive writes to the same object store as the other authored registries; with none configured, every /api/v1/conversation-* route would answer 501 while the deployment believed capture was on." -}}
+{{- end -}}
 {{- if and (eq .Values.server.bus "laser") (not .Values.server.laser.connectionStringSecret.name) -}}
 {{- fail "server.bus is \"laser\" but server.laser.connectionStringSecret.name is empty. The connection string carries a password, so it comes from a Secret." -}}
 {{- end -}}
@@ -119,6 +125,19 @@ spec:
             # No store: every /api/v1/prompts route answers 501, and the panel
             # says which variable is unset rather than showing an empty list.
             - { name: AIWATCHER_PROMPT_STORE, value: "none" }
+            {{- end }}
+            {{- if .Values.conversationArchive.enabled }}
+            - { name: AIWATCHER_CONVERSATION_ARCHIVE, value: "on" }
+            - { name: AIWATCHER_CONVERSATION_PREFIX, value: {{ .Values.conversationArchive.prefix | quote }} }
+            - { name: AIWATCHER_CONVERSATION_POLICY, value: {{ .Values.conversationArchive.policy | quote }} }
+            - { name: AIWATCHER_CONVERSATION_MAX_TTL_DAYS, value: {{ .Values.conversationArchive.maxTtlDays | quote }} }
+            - { name: AIWATCHER_CONVERSATION_REJECT_ON_FINDING, value: {{ .Values.conversationArchive.rejectOnFinding | quote }} }
+            - { name: AIWATCHER_CONVERSATION_SWEEP_SECONDS, value: {{ .Values.conversationArchive.sweepSeconds | quote }} }
+            - name: AIWATCHER_CONVERSATION_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.conversationArchive.keysSecret.name | quote }}
+                  key: {{ .Values.conversationArchive.keysSecret.key | quote }}
             {{- end }}
             {{- if eq .Values.engine.mode "flyte" }}
             - { name: AIWATCHER_ENGINE, value: "flyte" }

@@ -13,6 +13,9 @@ use aiwatcher_auth::{AuthMode, Authenticator};
 use aiwatcher_bus::adapters::memory::InMemoryBus;
 use aiwatcher_bus::adapters::wal::FileWal;
 use aiwatcher_bus::{Checkpointer, MessageSink, MessageSource};
+use aiwatcher_conversations::{
+    ArchivePolicy, Keyring, PolicyMode, Registry as ConversationArchive,
+};
 use aiwatcher_core::ports::{
     CompletedSpan, DeadLetterSink, MetricSample, MetricSink, PortResult, TraceStore, WorkflowRunner,
 };
@@ -26,7 +29,9 @@ use aiwatcher_trace::AssemblerConfig;
 use aiwatcher_trace::otlp::{OtlpConfig, OtlpMetricSink, OtlpTraceStore};
 use aiwatcher_training::Registry as TrainingRegistry;
 
-use crate::config::{BackendKind, Config, EngineKind, PromptStoreKind, WorkflowRunnerKind};
+use crate::config::{
+    BackendKind, Config, ConversationPolicyMode, EngineKind, PromptStoreKind, WorkflowRunnerKind,
+};
 
 /// Discards what it is given, loudly enough to notice at startup and quietly
 /// enough not to fill a log.
@@ -69,6 +74,11 @@ struct Registries {
     datasets: Option<Arc<DatasetRegistry>>,
     annotations: Option<Arc<AnnotationRegistry>>,
     training: Option<Arc<TrainingRegistry>>,
+    /// The fifth, and the one this struct's doc comment does not describe: it
+    /// shares the store and nothing else. Its content is encrypted, its
+    /// retention is its own, and it is absent unless a deployment asked for it
+    /// — so it has a second switch above the store's.
+    conversations: Option<Arc<ConversationArchive>>,
 }
 
 /// The authored-data registries, or empty when this deployment has no object store.
@@ -78,7 +88,10 @@ struct Registries {
 /// discovering that when somebody saves a prompt puts the failure in front of
 /// the wrong person. `AIWATCHER_PROMPT_STORE=none` is how a deployment says it
 /// does not want one.
-async fn build_registries(config: &Config) -> Result<Registries> {
+async fn build_registries(
+    config: &Config,
+    images: Option<Arc<dyn aiwatcher_annotations::integrations::fetch::ImageSource>>,
+) -> Result<Registries> {
     let registry_config = RegistryConfig {
         prefix: config.prompt_prefix.clone(),
         ..RegistryConfig::default()
@@ -133,14 +146,86 @@ async fn build_registries(config: &Config) -> Result<Registries> {
 
     let prompts = Arc::new(Registry::new(Arc::clone(&store), registry_config));
     let datasets = Arc::new(DatasetRegistry::new(Arc::clone(&store), "datasets"));
-    let annotations = Arc::new(AnnotationRegistry::new(Arc::clone(&store), "annotations"));
-    let training = Arc::new(TrainingRegistry::new(store, "training"));
+    // The image source is handed to the registry rather than fetched by it:
+    // the queued importer runs inside `aiwatcher-annotations`, which knows
+    // nothing about hubs, and this is the one process that holds both halves.
+    // `None` is a working state — a pipeline that stored its own bytes sends
+    // rows carrying a content address — and it is never a silent one, because
+    // a row with no `image_id` is then rejected saying exactly that.
+    let annotations = {
+        let registry = AnnotationRegistry::new(Arc::clone(&store), "annotations");
+        Arc::new(match images {
+            Some(images) => registry.with_image_source(images),
+            None => registry,
+        })
+    };
+    let training = Arc::new(TrainingRegistry::new(Arc::clone(&store), "training"));
+    let conversations = build_conversation_archive(config, &store)?;
     Ok(Registries {
         prompts: Some(prompts),
         datasets: Some(datasets),
         annotations: Some(annotations),
         training: Some(training),
+        conversations,
     })
+}
+
+/// The conversation archive, or `None` — which is the default.
+///
+/// The one authored store here that a deployment has to ask for. The others
+/// exist because there is somewhere to put them; this one exists because
+/// somebody decided to keep conversation content, and a system that started
+/// holding it on an upgrade would be the failure ADR_0021 is about.
+///
+/// A missing key is a start-up failure rather than a plaintext archive. The
+/// config layer already refuses that combination; this is the second check, and
+/// it is here because the two failures have different fixes and only one of
+/// them is "set a variable".
+fn build_conversation_archive(
+    config: &Config,
+    store: &Arc<dyn aiwatcher_core::prompts::ObjectStore>,
+) -> Result<Option<Arc<ConversationArchive>>> {
+    if !config.conversation_archive {
+        tracing::info!(
+            "AIWATCHER_CONVERSATION_ARCHIVE is off; no conversation content is retained and \
+             every /api/v1/conversation-* route answers 501"
+        );
+        return Ok(None);
+    }
+    let spec = config
+        .conversation_keys
+        .as_deref()
+        .context("AIWATCHER_CONVERSATION_KEYS is required for AIWATCHER_CONVERSATION_ARCHIVE=on")?;
+    let keyring = Keyring::parse("AIWATCHER_CONVERSATION_KEYS", spec)
+        .context("reading the conversation archive's keyring")?;
+    let policy = ArchivePolicy {
+        mode: match config.conversation_policy {
+            ConversationPolicyMode::Protected => PolicyMode::Protected,
+            ConversationPolicyMode::Open => PolicyMode::Open,
+        },
+        max_ttl_days: config.conversation_max_ttl_days,
+        reject_on_finding: config.conversation_reject_on_finding,
+    };
+    if policy.mode == PolicyMode::Open {
+        tracing::warn!(
+            "AIWATCHER_CONVERSATION_POLICY=open; turns with no consent record are accepted and \
+             every export excludes them by name"
+        );
+    }
+    tracing::info!(
+        prefix = %config.conversation_prefix,
+        policy = policy.mode.as_str(),
+        max_ttl_days = policy.max_ttl_days,
+        active_key = keyring.active(),
+        keys = keyring.key_ids().len(),
+        "the conversation archive is on"
+    );
+    Ok(Some(Arc::new(ConversationArchive::new(
+        Arc::clone(store),
+        config.conversation_prefix.clone(),
+        keyring,
+        policy,
+    ))))
 }
 
 /// The workflow runner, or `None`.
@@ -560,8 +645,17 @@ pub async fn build(config: Config) -> Result<Runtime> {
         }
     };
 
-    let registries = build_registries(&config).await?;
+    // Hubs before registries: the annotation registry's import job needs
+    // somewhere to fetch bytes from, and a hub is the only thing in this
+    // process that has one.
     let sources = build_dataset_sources(&config)?;
+    let hubs = build_dataset_hubs(&config, &sources)?;
+    let registries = build_registries(
+        &config,
+        hubs.clone()
+            .map(|hubs| hubs as Arc<dyn aiwatcher_annotations::integrations::fetch::ImageSource>),
+    )
+    .await?;
     let engine = build_engine(&config)?;
     let state = AppState {
         read_model,
@@ -571,7 +665,10 @@ pub async fn build(config: Config) -> Result<Runtime> {
         prompts: registries.prompts,
         datasets: registries.datasets,
         annotations: registries.annotations,
-        hubs: build_dataset_hubs(&config, &sources)?,
+        conversations: registries.conversations,
+        export_worker: Some(Arc::new(tokio::sync::Notify::new())),
+        import_worker: Some(Arc::new(tokio::sync::Notify::new())),
+        hubs,
         sources,
         training: registries.training,
         runner: build_workflow_runner(&config, engine.as_ref())?,

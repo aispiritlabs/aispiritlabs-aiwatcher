@@ -81,7 +81,9 @@ just dev        # server on :8080 with an in-memory bus, panel on :5173
 just seed       # publish a demo run into it
 ```
 
-What that gets you, screen by screen: [EXAMPLES.md](EXAMPLES.md).
+What that gets you, screen by screen: [EXAMPLES.md](EXAMPLES.md). For the two
+complete data-to-model paths — tracked conversation and Hugging Face import —
+follow [instructions.md](instructions.md).
 
 `just dev` keeps nothing across a restart, which is what makes it fast to
 iterate against. For a server whose data survives one:
@@ -187,7 +189,7 @@ Every view below, with screenshots of it against real data and what each one is
 for: [EXAMPLES.md](EXAMPLES.md).
 
 The product areas are served from aiwatcher's own read model — except authored
-artifacts such as Prompts, Datasets and Annotations, which
+artifacts such as Prompts, Datasets, Annotations and Conversations, which
 read the registry. Every one of them carries the same time window — 15m, 1h,
 6h, 24h, 7d or everything — in the URL, so a link carries the period with it,
 and a run is in the window when it was last *heard from* rather than when it
@@ -225,6 +227,15 @@ started:
   in lazy 50-row slices, search runs across the whole version, and tabs show
   every linked evaluation plus the Flow PHP lineage. Evaluations should pin the
   exact reference as `dataset-name@version-sha256`.
+- **Conversations** — what people said to your agents, kept on purpose. Off by
+  default; when it is on, the archive holds each turn as a plaintext head and an
+  encrypted body, so the review queue, the finding counts and an export's
+  exclusion report are all readable without decrypting anything. **Review** is
+  the gate — reading a turn's words needs the `admin` role and is one explicit
+  click, never a page load. **Corpora** queues an asynchronous export and shows
+  what it left out, by reason; what comes out is one immutable
+  `name@sha256` a training run can record. An erasure request removes the words
+  from the archive *and* from every corpus that already had them.
 - **Data Curation** — two ways to produce a dataset, on one page. Either write
   the transformation in Flow PHP with four explicit stages — test without
   reading, simulate 25 rows, execute the full bounded result, save that exact
@@ -253,7 +264,17 @@ started:
   a service loads next. That label is refused on a version nothing measured on
   held-out data, and refused on one trained against a dataset name rather than
   an immutable export. From a bad agent run back to the labelled images is two
-  clicks: model → version → export.
+  clicks: model → version → export. A version also declares a **model
+  package** — the runtime, the entry point, the input and output shapes, and
+  every artifact with its `sha256` — because an address is not an identity and
+  `s3://models/latest.pt` is different bytes tomorrow.
+  `just serve-mini-model` is the runnable proof: it resolves `production`,
+  verifies those digests before loading, warms before reporting ready, watches
+  the label and rolls forward in two phases while the old version keeps
+  serving, keeps that version for a rollback that needs no rebuild, and reports
+  every inference with the model, the version, the latency and the outcome —
+  and never with what went in or came out. The loaders for other frameworks are
+  in [plan.md](plan.md).
 - **Experiments** — the same picker over training, evaluation and inference
   workflows: the other three legs of the feature/training/inference cycle,
   started from here and watched in Workflows. The comparison half of the area
@@ -298,6 +319,7 @@ In dependency order. A crate may only depend on ones above it.
 | `aiwatcher-trace` | `SpanAssembler` and the OTLP/JSON exporters |
 | `aiwatcher-prompts` | The prompt registry over an `ObjectStore` port: content-addressed versions, optimisation verdicts, RustFS/S3 and filesystem adapters, and a hand-written SigV4 signer |
 | `aiwatcher-annotations` | Vector image annotations for any vision domain, over the same `ObjectStore` port. Ships no vocabulary — the project's label schema carries the domain. Sliced by noun: `images/` (head, revisions, review, bytes, bulk import), `project`, `export` and COCO, `license`, `schema`, `shapes`, the loaded corpus table in `sources`, and `integrations/hubs` for the Kaggle/Hugging Face search that is reconciled against it and never believed over it |
+| `aiwatcher-conversations` | Governed conversation training data over the same `ObjectStore` port, and the only one that is off by default: the `turn` contract, consent and retention, **encrypted** content beside a plaintext head, the human review gate, and a resumable export job whose version is a content address. An erasure reaches the published corpora too |
 | `aiwatcher-training` | Training runs and the model versions they produce, over the same `ObjectStore` port and none of the log's machinery: a curve, a checkpoint pointer, a profiler summary, and a promotion that is refused without a held-out score |
 | `aiwatcher-pipeline` | Pipeline engines behind a `WorkflowEngine` port: an orchestrator's launchable catalog, the inputs each entry declares, and starting one. Flyte 2 over its `/api/v1/` gateway |
 | `aiwatcher-auth` | Single sign-on: OIDC discovery, a JWKS cache, the authorization-code flow with PKCE, signed session cookies, authentik's forward-auth headers, group-to-role mapping |
@@ -352,6 +374,16 @@ that matters in every one of them is what would make the decision wrong.
   a per-pod orchestrator scatters across four runs. That is what makes a stage
   nothing has started drawable, and what makes swapping the orchestrator a
   change aiwatcher never notices.
+- **Conversation content is an encrypted archive, not events on the log**
+  ([0021](docs/ADR/ADR_0021_CONVERSATION_ARCHIVE.md)). Putting `input` and
+  `output` on `llm.completed` wrote somebody's words into the durable log the
+  Collector's redaction exists to keep them out of, on a retention clock sized
+  for volume, in a store where a deletion cannot delete. So a turn is not an
+  event: content is sealed with AES-256-GCM beside a plaintext head, retention
+  is this module's own clock, an erasure names a *person* and reaches the
+  published corpora too, and reading the words needs the `admin` role. It is
+  the one authored store that is off by default, because holding somebody's
+  words is a decision rather than something to inherit on an upgrade.
 - **An annotation is vector-first, and split by family**
   ([0017](docs/ADR/ADR_0017_IMAGE_ANNOTATION.md)). A mask cannot say which wall
   an opening sits on or which way a door swings, so the shape is the source and
@@ -443,8 +475,13 @@ just check         # everything CI runs; green here means green there
 just test          # cargo test --workspace --all-targets
 just test-one PAT  # one test by name, e.g. `just test-one two_parallel`
 just openapi       # regenerate contracts/openapi.json and the panel's client
+just seed-curation # 80 runs, saved Flow recipes and two immutable datasets
 just seed-annotations  # six synthetic plans, three families, an export, a training run
+just seed-import   # stage a corpus in pages and import it with the queued job
+just run-conversations # the server with the encrypted conversation archive on
+just seed-conversations  # record, review and export one conversation end to end
 just e2e-train     # the whole chain, end to end, against a running server
+just serve-mini-model  # serve its production-labelled checkpoint on :8091
 just run-hubs      # the server with Kaggle/Hugging Face dataset search on
 just stack-up      # docker compose: VictoriaTraces, VictoriaMetrics, Collector, Grafana
 just tilt-up       # the same stack on a local Kubernetes, rebuilt on save

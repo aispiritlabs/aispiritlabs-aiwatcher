@@ -7,6 +7,7 @@ use aiwatcher_annotations::SourceCatalog;
 use aiwatcher_annotations::integrations::hubs::Hubs;
 use aiwatcher_auth::Authenticator;
 use aiwatcher_bus::{MessageSink, MessageSource};
+use aiwatcher_conversations::Registry as ConversationArchive;
 use aiwatcher_core::engine::WorkflowEngine;
 use aiwatcher_core::ports::WorkflowRunner;
 use aiwatcher_datasets::Registry as DatasetRegistry;
@@ -43,6 +44,25 @@ pub struct AppState {
     /// than on the log: a training label has to outlive every run that used
     /// it. See ADR_0017.
     pub annotations: Option<Arc<AnnotationRegistry>>,
+    /// The governed conversation archive, and the one authored store whose
+    /// absence is the *default*. Every other `Option` here is off because a
+    /// deployment did not wire something; this one is off because keeping
+    /// somebody's words is a decision that has to be made rather than
+    /// inherited. See ADR_0021.
+    pub conversations: Option<Arc<ConversationArchive>>,
+    /// How a handler tells the export worker that there is something to do.
+    ///
+    /// `None` outside the server binary — a router built for a test has no
+    /// worker, and a notify nobody waits on would be a silent no-op rather
+    /// than an obvious one.
+    pub export_worker: Option<Arc<tokio::sync::Notify>>,
+    /// The same, for the annotation import queue.
+    ///
+    /// A second notify rather than a shared one: the two queues live in
+    /// different stores behind different configuration, and a deployment that
+    /// imports corpora while keeping no conversation archive is the ordinary
+    /// case rather than an odd one.
+    pub import_worker: Option<Arc<tokio::sync::Notify>>,
     /// `None` when no dataset hub is configured, which makes
     /// `/api/v1/dataset-hubs` answer 501 naming the variable. Unlike every
     /// other option here this one is *outbound*: it is the only thing in this
@@ -85,6 +105,27 @@ pub struct AppState {
     pub health: HealthState,
 }
 
+impl AppState {
+    /// Wake the export worker, if this process runs one.
+    ///
+    /// Queueing an export and then waiting for a poll interval would make the
+    /// panel's "queued" state last fifteen seconds for no reason. A missing
+    /// worker is not an error: the job is durable, and whichever process does
+    /// run one will pick it up.
+    pub fn notify_export_worker(&self) {
+        if let Some(worker) = &self.export_worker {
+            worker.notify_one();
+        }
+    }
+
+    /// Wake the import worker, if this process runs one.
+    pub fn notify_import_worker(&self) {
+        if let Some(worker) = &self.import_worker {
+            worker.notify_one();
+        }
+    }
+}
+
 impl std::fmt::Debug for AppState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AppState")
@@ -93,6 +134,7 @@ impl std::fmt::Debug for AppState {
             .field("prompt_registry", &self.prompts.is_some())
             .field("dataset_registry", &self.datasets.is_some())
             .field("annotation_registry", &self.annotations.is_some())
+            .field("conversation_archive", &self.conversations.is_some())
             .field("training_registry", &self.training.is_some())
             .field("dataset_hubs", &self.hubs.is_some())
             .field("dataset_sources", &self.sources.sources.len())
