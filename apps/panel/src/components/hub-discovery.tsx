@@ -433,6 +433,7 @@ export function HubDiscovery({
           result={simulate.data}
           error={simulate.error}
           emptyTitle="No rows previewed yet"
+          previewImages
         />
       )}
     </div>
