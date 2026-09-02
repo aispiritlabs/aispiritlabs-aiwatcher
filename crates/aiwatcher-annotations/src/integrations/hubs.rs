@@ -285,11 +285,37 @@ pub struct HubRowsQuery {
     pub offset: Option<u64>,
     #[serde(default)]
     pub limit: Option<usize>,
+    /// Columns to hand over as an address rather than as a value,
+    /// comma-separated.
+    ///
+    /// This is where "which column is bytes" is decided, and the caller
+    /// decides it. A hub declares a column `binary` and that is the *hub's*
+    /// word for a byte string; whether those bytes are a picture, a PDF or an
+    /// OCR dump is a question about the corpus, and answering it here would be
+    /// answering it for every corpus. A script that names nothing gets every
+    /// column as it came.
+    ///
+    /// What the substitution is for is size, not meaning: a column of base64
+    /// pictures is megabytes per page, and an address is resolved by
+    /// [`Hubs::cell`] only when somebody actually wants the bytes.
+    #[serde(default)]
+    pub address: Option<String>,
 }
 
 impl HubRowsQuery {
     fn limit(&self) -> usize {
         self.limit.unwrap_or(25).clamp(1, MAX_IMAGES)
+    }
+
+    /// The columns the caller asked to have as addresses.
+    fn addressed(&self) -> BTreeSet<&str> {
+        self.address
+            .as_deref()
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .collect()
     }
 }
 
@@ -630,11 +656,7 @@ impl Hubs {
             rows: Vec::new(),
         };
 
-        let declared: BTreeMap<&str, &HubColumn> = page
-            .columns
-            .iter()
-            .map(|column| (column.name.as_str(), column))
-            .collect();
+        let addressed = query.addressed();
 
         for entry in body
             .get("rows")
@@ -660,10 +682,10 @@ impl Hubs {
                     omitted.push(name.clone());
                     continue;
                 }
-                // Bytes become an address. Which cells are bytes is a question
-                // about the shape the hub sent, not about what the column is
-                // called or what it is for.
-                if is_inline_bytes(declared.get(name.as_str()).copied(), value) {
+                // A column the caller named comes back as an address. Which
+                // ones those are is not decided here — see
+                // [`HubRowsQuery::address`].
+                if addressed.contains(name.as_str()) {
                     carried.insert(
                         name.clone(),
                         Value::from(cell_address(&HubCellQuery {
@@ -1031,24 +1053,6 @@ pub fn rights_provenance(row: &HubDataset) -> &'static str {
         }
         _ => "mirror: nobody has checked this licence at its source",
     }
-}
-
-/// Whether a cell is bytes the hub inlined.
-///
-/// The hub's own declaration decides, never the value. A `binary` column
-/// arrives as base64 and so does nothing else — but plenty of ordinary strings
-/// *decode* as base64, and the first corpus this met proved it: `idl-wds`
-/// publishes a `__key__` column whose value `klpb0135` is eight valid base64
-/// characters. Reading the value would have turned an id into an image
-/// address.
-///
-/// The other shape needs no declaration: `{"bytes": …, "path": …}` is what an
-/// image feature the hub could not serve as an asset arrives as, and nothing
-/// else has that shape. Neither test says what the column is *for* — that is
-/// the script's question.
-fn is_inline_bytes(column: Option<&HubColumn>, cell: &Value) -> bool {
-    let declared_binary = column.is_some_and(|column| column.dtype == "binary");
-    (declared_binary && cell.is_string()) || cell.get("bytes").and_then(Value::as_str).is_some()
 }
 
 /// The bytes of a cell the hub sent inline.
@@ -1419,59 +1423,27 @@ mod tests {
         assert!(error.contains("AIWATCHER_HUGGINGFACE_ENABLED"), "{error}");
     }
 
-    /// The two shapes a hub sends bytes in, neither of which says anything
-    /// about what the column is for. A corpus is free to call it `content`,
-    /// `image_content` or `pdf`; what makes it bytes is the shape, and what
-    /// makes it a picture is decided by whoever writes the script.
+    /// Which columns come back as addresses is the caller's list and nothing
+    /// else. A hub declaring a column `binary` says the cell is a byte string;
+    /// whether those bytes are a picture, a PDF or an OCR dump is a question
+    /// about the corpus, and this crate does not answer it.
     #[test]
-    fn bytes_are_recognised_by_shape_rather_than_by_column_name() {
-        use base64::Engine as _;
-
-        let encoded = base64::engine::general_purpose::STANDARD.encode(b"\x89PNG\r\n\x1a\n");
-        let binary = HubColumn {
-            name: "image_content".to_owned(),
-            kind: "Value".to_owned(),
-            dtype: "binary".to_owned(),
+    fn only_the_columns_a_caller_named_are_addressed() {
+        let named = HubRowsQuery {
+            address: Some(" tif , image_content ,, ".to_owned()),
+            ..HubRowsQuery::default()
         };
-        let text = HubColumn {
-            name: "__key__".to_owned(),
-            kind: "Value".to_owned(),
-            dtype: "string".to_owned(),
-        };
+        let addressed = named.addressed();
+        assert!(addressed.contains("tif"));
+        assert!(addressed.contains("image_content"));
+        // Whitespace and empty entries are not column names.
+        assert!(!addressed.contains(""));
+        assert_eq!(addressed.len(), 2);
 
-        // A column the hub declared as bytes.
-        assert!(is_inline_bytes(
-            Some(&binary),
-            &Value::from(encoded.clone())
-        ));
-        // An image feature the hub could not serve as an asset needs no
-        // declaration: nothing else has that shape.
-        assert!(is_inline_bytes(
-            None,
-            &serde_json::json!({ "bytes": encoded, "path": "0.png" })
-        ));
-
-        // The bug this rule exists for: `klpb0135` is a real id from
-        // `pixparse/idl-wds` and eight valid base64 characters. Read as a
-        // value it is bytes; read as what the hub declared it is a string.
-        assert!(!is_inline_bytes(Some(&text), &Value::from("klpb0135")));
-
-        // A typed image cell is an address the hub already has, not bytes.
-        assert!(!is_inline_bytes(
-            None,
-            &serde_json::json!({
-                "src": "https://datasets-server.huggingface.co/a.jpg",
-                "width": 1080,
-                "height": 1537,
-            })
-        ));
-        // Ordinary values stay ordinary.
-        assert!(!is_inline_bytes(
-            Some(&text),
-            &Value::from("a floor plan of a house")
-        ));
-        assert!(!is_inline_bytes(None, &Value::from(4)));
-        assert!(!is_inline_bytes(None, &serde_json::json!({ "pages": [] })));
+        // A `binary` column nobody named stays a value: the default is to hand
+        // the corpus over as it came.
+        assert!(!addressed.contains("pdf"));
+        assert!(HubRowsQuery::default().addressed().is_empty());
     }
 
     /// A cell address has to survive the round trip through a query result and

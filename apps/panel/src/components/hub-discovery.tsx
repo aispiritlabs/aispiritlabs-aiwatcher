@@ -676,9 +676,15 @@ function ImportReportView({
  * corrected by the person who knows.
  *
  * The guesses are: the first column the hub typed as an image, or failing that
- * the first it sent as bytes; the first string column as a caption; and one
- * family per row. The last is the one worth checking — see the import route's
- * own warning about it.
+ * the first it declared as bytes; the first string column as a caption; and
+ * one family per row. The last is the one worth checking — see the import
+ * route's own warning about it.
+ *
+ * Note where the byte column is named: in `address:` on the `read()`, which is
+ * the *query* telling the API which column to hand over as an address. The API
+ * has no opinion about it — a hub calling a column `binary` says it is a byte
+ * string, not that it is a picture, and only somebody looking at the corpus
+ * knows which.
  */
 function discoveryPipeline(
   query: string,
@@ -697,18 +703,27 @@ function discoveryPipeline(
       return [
         'data_frame()',
         `    ->read(hub_rows, dataset: '${phpString(selected.id)}', limit: ${IMPORT_LIMIT})`,
-        '    // This corpus declares no image or binary column. Its columns are:',
+        '    // Nothing here is declared an image or a byte string. Its columns are:',
         `    //   ${columns.map((column) => column.name).join(', ')}`,
-        "    // Point 'uri' at whichever one addresses a picture.",
+        "    // Point 'uri' at whichever one addresses a picture, and add",
+        "    // address: '<column>' to the read() if that column holds bytes.",
         '    ->write(to_output(truncate: false))',
         '    ->run();',
       ].join('\n');
     }
 
+    // `address:` is what says "this column holds bytes" — the API decides
+    // nothing about it, so a corpus whose pictures live in a binary column is
+    // read by naming that column here.
+    const read =
+      picture.kind === 'Image'
+        ? `    ->read(hub_rows, dataset: '${phpString(selected.id)}', limit: ${IMPORT_LIMIT})`
+        : `    ->read(hub_rows, dataset: '${phpString(selected.id)}', address: '${picture.name}', limit: ${IMPORT_LIMIT})`;
+
     const lines = [
       'data_frame()',
-      `    ->read(hub_rows, dataset: '${phpString(selected.id)}', limit: ${IMPORT_LIMIT})`,
-      `    // '${picture.name}' is this corpus's ${picture.kind === 'Image' ? 'image column' : 'binary column'}, of: ${columns.map((column) => column.name).join(', ')}`,
+      read,
+      `    // '${picture.name}' is where this corpus keeps its pictures, of: ${columns.map((column) => column.name).join(', ')}`,
       picture.kind === 'Image'
         ? `    ->withEntry('uri', array_get(ref('row'), '${picture.name}.src'))`
         : `    ->withEntry('uri', array_get(ref('row'), '${picture.name}'))`,

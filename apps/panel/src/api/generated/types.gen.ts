@@ -4404,6 +4404,22 @@ export type ListHubRowsData = {
         split?: string;
         offset?: number;
         limit?: number;
+        /**
+         * Columns to hand over as an address rather than as a value,
+         * comma-separated.
+         *
+         * This is where "which column is bytes" is decided, and the caller
+         * decides it. A hub declares a column `binary` and that is the *hub's*
+         * word for a byte string; whether those bytes are a picture, a PDF or an
+         * OCR dump is a question about the corpus, and answering it here would be
+         * answering it for every corpus. A script that names nothing gets every
+         * column as it came.
+         *
+         * What the substitution is for is size, not meaning: a column of base64
+         * pictures is megabytes per page, and an address is resolved by
+         * [`Hubs::cell`] only when somebody actually wants the bytes.
+         */
+        address?: string;
     };
     url: '/api/v1/dataset-hubs/rows';
 };

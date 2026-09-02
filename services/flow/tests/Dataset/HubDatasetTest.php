@@ -196,14 +196,17 @@ final class HubDatasetTest extends TestCase
     /// and the query points `uri` at it exactly the same way.
     public function test_a_column_sent_as_bytes_is_addressable_from_a_query(): void
     {
+        $api = $this->api();
         $rows = $this->rows(
-            "data_frame()->read(hub_rows, dataset: 'someone/floor-plans')"
+            "data_frame()->read(hub_rows, dataset: 'someone/floor-plans', address: 'image_content')"
             . "->withEntry('uri', array_get(ref('row'), 'image_content'))"
             . "->select(ref('uri'))"
             . '->fetch()',
-            $this->api(),
+            $api,
         );
 
+        // The column the query named is the one the API was asked to address.
+        self::assertStringContainsString('address=image_content', $api->requested[0]);
         self::assertStringStartsWith('/api/v1/dataset-hubs/image?', $rows[0]['uri']);
         self::assertStringContainsString('column=image_content', $rows[0]['uri']);
     }

@@ -237,8 +237,7 @@ final readonly class Catalog
                 'omitted' => 'list<string>',
             ],
             hints: [
-                'image' => 'There is no image column here, because that is a fact about the corpus rather than about this route. Read it out of "row": array_get(ref(\'row\'), \'image.src\') for a column the hub typed as an image, or array_get(ref(\'row\'), \'<name>\') for one it sent as bytes — that value is an address this API resolves.',
-                'width' => 'array_get(ref(\'row\'), \'image.width\') where the hub measured it. A column sent as bytes has no size here; the import reads it out of the bytes it stores.',
+                'columns' => 'The corpus\'s own columns are inside "row", under its own names, and are not listed here because they belong to the dataset being read rather than to this catalog. Reach one with array_get(ref(\'row\'), \'<name>\'), which takes a dot path into a structure. A column holding bytes is named in address: on the read() and comes back as an address this API resolves.',
                 'uri' => 'Whatever you name it. The import reads "uri", "width", "height" and "group_id" from the columns this query produces.',
                 'license' => 'Not here. A licence is a property of the corpus, which is the hub_datasets row.',
             ],
@@ -269,6 +268,11 @@ final readonly class Catalog
                     name: 'limit',
                     required: false,
                     description: 'How many rows, capped at 100 by the API.',
+                ),
+                'address' => new Parameter(
+                    name: 'address',
+                    required: false,
+                    description: 'Columns to receive as an address instead of a value, comma-separated. This is where "which column holds bytes" is decided, and it is decided here: a hub calling a column binary says it is a byte string, not that it is a picture. Without it every column comes as it came — and a column of base64 pictures is then dropped for its size and named in "omitted".',
                 ),
             ],
         );
