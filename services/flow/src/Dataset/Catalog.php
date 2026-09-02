@@ -213,6 +213,69 @@ final readonly class Catalog
             ],
         );
 
+        $hubImages = new Dataset(
+            name: 'hub_images',
+            path: '/api/v1/dataset-hubs/images',
+            rowsPath: 'images',
+            // Hugging Face's rows endpoint pages by offset and reports no
+            // cursor, and a corpus is read in one bite here rather than
+            // walked: a batch somebody is about to import is a batch somebody
+            // is about to look at.
+            cursorParam: 'unused',
+            grain: 'one row per image inside one hub dataset',
+            description: 'The pictures in one Hugging Face dataset. The search says which corpora exist; this says what is in one of them — and it is the dataset an import reads, because a search result names a corpus rather than its files.',
+            columns: [
+                // The hub's signed asset URL, which expires within hours. The
+                // import downloads it and stores the bytes rather than keeping
+                // the address; nothing downstream should treat this as durable.
+                'uri' => 'string',
+                'width' => 'int',
+                'height' => 'int',
+                'row_index' => 'int',
+                'column' => 'string',
+                'caption' => 'string',
+                // dataset#row_index. A per-image family key, which is right
+                // for a corpus of unrelated pictures and wrong the moment one
+                // publishes several renderings of one subject — write
+                // group_id from something else when it does.
+                'image_key' => 'string',
+            ],
+            hints: [
+                'image' => 'The bytes are at "uri", and it expires. An import stores them here; nothing else should hold on to it.',
+                'group_id' => 'Not a column of the hub\'s. Write it from "image_key" for one family per picture, or from something in "caption" when a corpus repeats a subject.',
+                'license' => 'Not here. A licence is a property of the corpus, which is the hub_datasets row.',
+            ],
+            parameters: [
+                'dataset' => new Parameter(
+                    name: 'dataset',
+                    required: true,
+                    description: 'owner/name, exactly as a hub_datasets row addresses it.',
+                ),
+                'hub' => new Parameter(
+                    name: 'hub',
+                    required: false,
+                    description: 'Only Hugging Face serves rows; Kaggle publishes archives and is refused.',
+                    values: ['kaggle', 'huggingface'],
+                ),
+                'config' => new Parameter(
+                    name: 'config',
+                    required: false,
+                    description: 'The dataset configuration. Discovered when absent.',
+                ),
+                'split' => new Parameter(
+                    name: 'split',
+                    required: false,
+                    description: 'The split to read. Discovered when absent.',
+                ),
+                'offset' => new Parameter(name: 'offset', required: false, description: 'Where in the split to start.'),
+                'limit' => new Parameter(
+                    name: 'limit',
+                    required: false,
+                    description: 'How many images, capped at 100 by the API.',
+                ),
+            ],
+        );
+
         $annotationImages = new Dataset(
             name: 'annotation_images',
             path: '/api/v1/annotation-images',
@@ -264,6 +327,7 @@ final readonly class Catalog
             'spans' => $spans,
             'events' => $events,
             'hub_datasets' => $hubDatasets,
+            'hub_images' => $hubImages,
             'annotation_images' => $annotationImages,
         ];
     }

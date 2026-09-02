@@ -1514,6 +1514,104 @@
         }
       }
     },
+    "/api/v1/dataset-hubs/images": {
+      "get": {
+        "tags": [
+          "datasets"
+        ],
+        "summary": "The images inside one hub dataset.",
+        "description": "The other half of discovery, and a different question from the search: that\none answers \"which corpora exist\", this one \"what is in this one\". An\nimport built from a search result alone registers a single row pointing at\na web page — the corpus is the *rows*, and until this route existed there\nwas no way for a pipeline to read them.\n\nA hub that cannot answer is a 502 carrying its sentence rather than an\nempty list, for the same reason the search route's 501 is not one: \"no\nimages\" is a claim about the corpus, and this is a claim about the request.",
+        "operationId": "list_hub_images",
+        "parameters": [
+          {
+            "name": "dataset",
+            "in": "query",
+            "description": "`owner/name`, exactly as a search result addresses it.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "hub",
+            "in": "query",
+            "description": "Which hub holds it. Only Hugging Face serves rows; see [`Hubs::images`].",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/HubKind"
+            }
+          },
+          {
+            "name": "config",
+            "in": "query",
+            "description": "The dataset's configuration and split. Both are discovered when absent,\nwhich is the common case — a corpus published as one `train` split has\nnames nobody should have to look up in order to see it.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "split",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubImagePage"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The hub refused, or does not serve rows",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/dataset-hubs/search": {
       "get": {
         "tags": [
@@ -7709,6 +7807,94 @@
           }
         }
       },
+      "HubImage": {
+        "type": "object",
+        "description": "One picture inside a hub's dataset.\n\nEvery field is the hub's own except [`image_key`](Self::image_key), which\nthis module composes.",
+        "required": [
+          "uri",
+          "width",
+          "height",
+          "row_index",
+          "column",
+          "image_key"
+        ],
+        "properties": {
+          "caption": {
+            "type": "string",
+            "description": "The first text feature on the same row, when there is one.\n\nCarried because it is usually a description worth reading before\nimporting. It is never a label: nothing downstream reads it, and a\ncaption written by whoever uploaded the copy is not an annotation."
+          },
+          "column": {
+            "type": "string",
+            "description": "The feature it came from — a dataset may carry several image columns."
+          },
+          "height": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "image_key": {
+            "type": "string",
+            "description": "`dataset/row_index`. A **per-image** family key, which is the honest\ndefault when a hub row is one unrelated picture and the wrong one the\nmoment a corpus publishes several renderings of one subject. It is a\ncolumn rather than a decision: the import pipeline writes `group_id`\nfrom it explicitly, so changing that is an edit to a query somebody can\nread. See [`crate::images::import`], which warns when every row of a\nbatch is its own family.\n\nSpelled with a slash because a group name is segmented on one and every\nsegment is `[A-Za-z0-9._-]` — see [`crate::validate_name`]. A key the\nregistry refuses is not a default, it is a batch that rejects every\nrow."
+          },
+          "row_index": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Where it sat in the split, which is the only stable name it has.",
+            "minimum": 0
+          },
+          "uri": {
+            "type": "string",
+            "description": "Where the bytes are, **for now**. On Hugging Face this is a signed\nasset URL with an expiry measured in hours, which is why an import\nstores the bytes rather than the address — see [`Hubs::fetch`]."
+          },
+          "width": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The hub's, not measured here. Both are what the registry requires and\nwhat a hub search cannot answer.",
+            "minimum": 0
+          }
+        }
+      },
+      "HubImagePage": {
+        "type": "object",
+        "description": "The images one call found, and where they came from.",
+        "required": [
+          "hub",
+          "dataset",
+          "config",
+          "split",
+          "images"
+        ],
+        "properties": {
+          "config": {
+            "type": "string",
+            "description": "Resolved, never echoed: what was actually read, which is what makes the\nsame call repeatable after a dataset gains a second split."
+          },
+          "dataset": {
+            "type": "string"
+          },
+          "hub": {
+            "$ref": "#/components/schemas/HubKind"
+          },
+          "images": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HubImage"
+            }
+          },
+          "split": {
+            "type": "string"
+          },
+          "total_rows": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The split's own count, when the hub reports one.",
+            "minimum": 0
+          }
+        }
+      },
       "HubKind": {
         "type": "string",
         "description": "Which mirror a row came from.",
@@ -8060,6 +8246,11 @@
           "families": {
             "type": "integer",
             "description": "Distinct [`ImportRow::group_id`] values across the batch.",
+            "minimum": 0
+          },
+          "fetched": {
+            "type": "integer",
+            "description": "Rows whose bytes were downloaded from a hub and stored here.\n\nSet by the caller that did the downloading, not by the import: this\nmodule writes an object store and reaches nothing. Zero for a batch\nwhose pipeline had already stored its own bytes, which is every batch\nthat carries an `image_id`.",
             "minimum": 0
           },
           "outcomes": {

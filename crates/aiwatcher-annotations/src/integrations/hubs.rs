@@ -45,6 +45,19 @@ use crate::sources::DatasetSource;
 /// hub's status and returns the results it did get.
 const SEARCH_TIMEOUT: Duration = Duration::from_secs(8);
 
+/// How long a hub gets to hand over one image.
+///
+/// Longer than [`SEARCH_TIMEOUT`], and for the opposite reason: a search is an
+/// interactive control that must feel fast, while this runs inside an import
+/// somebody has already decided to wait for. A megabyte over a slow link is
+/// normal here and is not a hub that is down.
+const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The most images one call may list.
+///
+/// Hugging Face's own rows endpoint caps a page at 100.
+const MAX_IMAGES: usize = 100;
+
 /// The most rows one hub may contribute.
 ///
 /// A cap rather than a page. This is a discovery surface: the answer to "there
@@ -242,6 +255,89 @@ impl HubConfig {
     }
 }
 
+/// What to list inside one hub dataset.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, ToSchema, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct HubRowsQuery {
+    /// `owner/name`, exactly as a search result addresses it.
+    pub dataset: String,
+    /// Which hub holds it. Only Hugging Face serves rows; see [`Hubs::images`].
+    #[serde(default)]
+    pub hub: Option<HubKind>,
+    /// The dataset's configuration and split. Both are discovered when absent,
+    /// which is the common case — a corpus published as one `train` split has
+    /// names nobody should have to look up in order to see it.
+    #[serde(default)]
+    pub config: Option<String>,
+    #[serde(default)]
+    pub split: Option<String>,
+    #[serde(default)]
+    pub offset: Option<u64>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+impl HubRowsQuery {
+    fn limit(&self) -> usize {
+        self.limit.unwrap_or(25).clamp(1, MAX_IMAGES)
+    }
+}
+
+/// One picture inside a hub's dataset.
+///
+/// Every field is the hub's own except [`image_key`](Self::image_key), which
+/// this module composes.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, ToSchema)]
+pub struct HubImage {
+    /// Where the bytes are, **for now**. On Hugging Face this is a signed
+    /// asset URL with an expiry measured in hours, which is why an import
+    /// stores the bytes rather than the address — see [`Hubs::fetch`].
+    pub uri: String,
+    /// The hub's, not measured here. Both are what the registry requires and
+    /// what a hub search cannot answer.
+    pub width: u32,
+    pub height: u32,
+    /// Where it sat in the split, which is the only stable name it has.
+    pub row_index: u64,
+    /// The feature it came from — a dataset may carry several image columns.
+    pub column: String,
+    /// The first text feature on the same row, when there is one.
+    ///
+    /// Carried because it is usually a description worth reading before
+    /// importing. It is never a label: nothing downstream reads it, and a
+    /// caption written by whoever uploaded the copy is not an annotation.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub caption: String,
+    /// `dataset/row_index`. A **per-image** family key, which is the honest
+    /// default when a hub row is one unrelated picture and the wrong one the
+    /// moment a corpus publishes several renderings of one subject. It is a
+    /// column rather than a decision: the import pipeline writes `group_id`
+    /// from it explicitly, so changing that is an edit to a query somebody can
+    /// read. See [`crate::images::import`], which warns when every row of a
+    /// batch is its own family.
+    ///
+    /// Spelled with a slash because a group name is segmented on one and every
+    /// segment is `[A-Za-z0-9._-]` — see [`crate::validate_name`]. A key the
+    /// registry refuses is not a default, it is a batch that rejects every
+    /// row.
+    pub image_key: String,
+}
+
+/// The images one call found, and where they came from.
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
+pub struct HubImagePage {
+    pub hub: HubKind,
+    pub dataset: String,
+    /// Resolved, never echoed: what was actually read, which is what makes the
+    /// same call repeatable after a dataset gains a second split.
+    pub config: String,
+    pub split: String,
+    pub images: Vec<HubImage>,
+    /// The split's own count, when the hub reports one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_rows: Option<u64>,
+}
+
 /// The search surface. Holds one HTTP client and the curated table.
 pub struct Hubs {
     http: reqwest::Client,
@@ -408,6 +504,234 @@ impl Hubs {
             .collect::<Vec<_>>())
     }
 
+    /// The images inside one hub dataset.
+    ///
+    /// A search answers "which corpora exist"; this answers "what is in this
+    /// one", and they are different enough to be different routes. A search
+    /// result names a *dataset*, so an import built from one registers a
+    /// single row pointing at a web page — which is a corpus of one image that
+    /// is not an image.
+    ///
+    /// Hugging Face only. Kaggle publishes archives rather than rows: seeing
+    /// inside one means downloading and unpacking it, which is a different
+    /// operation with a different cost, and pretending otherwise here would
+    /// mean a route that silently takes minutes on one hub and milliseconds on
+    /// the other.
+    ///
+    /// # Errors
+    /// When the hub is not configured, does not serve rows, or did not answer.
+    pub async fn images(&self, query: &HubRowsQuery) -> Result<HubImagePage, String> {
+        if query.hub == Some(HubKind::Kaggle) {
+            return Err(
+                "Kaggle serves archives rather than rows; open the dataset and import \
+                        the files, or search Hugging Face for a mirror"
+                    .to_owned(),
+            );
+        }
+        if !self.config.huggingface {
+            return Err(format!(
+                "Hugging Face is not configured; set {}",
+                HubKind::HuggingFace.variable()
+            ));
+        }
+        let dataset = query.dataset.trim();
+        if dataset.is_empty() {
+            return Err("name the dataset to read, as `owner/name`".to_owned());
+        }
+
+        let (config, split) = match (query.config.clone(), query.split.clone()) {
+            (Some(config), Some(split)) => (config, split),
+            _ => self.huggingface_split(dataset, query).await?,
+        };
+
+        let body = send(
+            self.request("https://datasets-server.huggingface.co/rows")
+                .query(&[("dataset", dataset), ("config", &config), ("split", &split)])
+                .query(&[
+                    ("offset", query.offset.unwrap_or(0).to_string()),
+                    ("length", query.limit().to_string()),
+                ]),
+            HubKind::HuggingFace,
+        )
+        .await?;
+
+        // Which columns hold pictures is declared by the response rather than
+        // guessed from a name: a corpus is free to call one `photo`, `page` or
+        // `img`, and matching on any of those would be this crate deciding a
+        // vocabulary — the thing ADR_0020 exists to stop.
+        let images: Vec<&str> = body
+            .get("features")
+            .and_then(Value::as_array)
+            .map(|features| {
+                features
+                    .iter()
+                    .filter(|feature| {
+                        feature
+                            .get("type")
+                            .and_then(|kind| kind.get("_type"))
+                            .and_then(Value::as_str)
+                            == Some("Image")
+                    })
+                    .filter_map(|feature| feature.get("name").and_then(Value::as_str))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if images.is_empty() {
+            return Err(format!(
+                "{dataset} declares no image column in {config}/{split}"
+            ));
+        }
+
+        let mut page = HubImagePage {
+            hub: HubKind::HuggingFace,
+            dataset: dataset.to_owned(),
+            config,
+            split,
+            total_rows: number(&body, "num_rows_total"),
+            images: Vec::new(),
+        };
+
+        for entry in body
+            .get("rows")
+            .and_then(Value::as_array)
+            .unwrap_or(&vec![])
+        {
+            let row_index = number(entry, "row_idx").unwrap_or_default();
+            let Some(row) = entry.get("row") else {
+                continue;
+            };
+            let caption = row
+                .as_object()
+                .and_then(|columns| {
+                    columns
+                        .iter()
+                        .find(|(name, value)| value.is_string() && !images.contains(&name.as_str()))
+                        .and_then(|(_, value)| value.as_str())
+                })
+                .unwrap_or_default();
+
+            for column in &images {
+                let Some(cell) = row.get(column) else {
+                    continue;
+                };
+                let uri = string(cell, "src");
+                if uri.is_empty() {
+                    continue;
+                }
+                page.images.push(HubImage {
+                    uri,
+                    #[expect(
+                        clippy::cast_possible_truncation,
+                        reason = "an image wider than 4 billion pixels is not one"
+                    )]
+                    width: number(cell, "width").unwrap_or_default() as u32,
+                    #[expect(
+                        clippy::cast_possible_truncation,
+                        reason = "an image taller than 4 billion pixels is not one"
+                    )]
+                    height: number(cell, "height").unwrap_or_default() as u32,
+                    row_index,
+                    column: (*column).to_owned(),
+                    caption: caption.chars().take(500).collect(),
+                    image_key: image_key(dataset, row_index),
+                });
+            }
+        }
+        Ok(page)
+    }
+
+    /// The dataset's first configuration and split.
+    ///
+    /// Asked rather than assumed. `default`/`train` is the common shape and is
+    /// not the only one, and a wrong guess reaches the caller as somebody
+    /// else's 404 about a split they never named.
+    async fn huggingface_split(
+        &self,
+        dataset: &str,
+        query: &HubRowsQuery,
+    ) -> Result<(String, String), String> {
+        let body = send(
+            self.request("https://datasets-server.huggingface.co/splits")
+                .query(&[("dataset", dataset)]),
+            HubKind::HuggingFace,
+        )
+        .await?;
+
+        body.get("splits")
+            .and_then(Value::as_array)
+            .and_then(|splits| {
+                splits
+                    .iter()
+                    .find(|split| {
+                        query
+                            .split
+                            .as_deref()
+                            .is_none_or(|wanted| string(split, "split") == wanted)
+                            && query
+                                .config
+                                .as_deref()
+                                .is_none_or(|wanted| string(split, "config") == wanted)
+                    })
+                    .map(|split| (string(split, "config"), string(split, "split")))
+            })
+            .ok_or_else(|| format!("{dataset} has no split matching that request"))
+    }
+
+    /// The bytes behind one hub image.
+    ///
+    /// Restricted to the hosts this module hands out, and that restriction is
+    /// the point rather than a detail. The alternative — fetching whatever URI
+    /// a caller put in an import row — is a request-forgery primitive: this
+    /// process runs inside a cluster, so "download this address for me" is a
+    /// request to reach the cluster's own network on the caller's behalf. Same
+    /// rule as the rerun target, which may only come from configuration.
+    ///
+    /// # Errors
+    /// When the host is not a hub's, or the download failed.
+    pub async fn fetch(&self, uri: &str) -> Result<(Vec<u8>, String), String> {
+        if !is_hub_asset(uri) {
+            return Err(format!(
+                "{uri} is not a Hugging Face address; only a hub's own asset host may be fetched"
+            ));
+        }
+        let response = self
+            .request(uri)
+            .timeout(FETCH_TIMEOUT)
+            .send()
+            .await
+            .map_err(|error| format!("the image did not download: {error}"))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            // An expired signature is the failure worth naming: these URLs
+            // last hours, so a batch previewed yesterday and imported today
+            // fails here rather than anywhere that would explain itself.
+            return Err(format!(
+                "the image answered {status}; a hub asset URL expires within hours of being listed"
+            ));
+        }
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("application/octet-stream")
+            .to_owned();
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|error| format!("the image did not download: {error}"))?;
+        Ok((bytes.to_vec(), content_type))
+    }
+
+    fn request(&self, url: &str) -> reqwest::RequestBuilder {
+        let request = self.http.get(url);
+        match self.config.huggingface_token.as_deref() {
+            Some(token) => request.bearer_auth(token),
+            None => request,
+        }
+    }
+
     fn huggingface_row(&self, row: &Value) -> HubDataset {
         let id = string(row, "id");
         let owner = id.split('/').next().unwrap_or_default().to_owned();
@@ -569,6 +893,34 @@ pub fn rights_provenance(row: &HubDataset) -> &'static str {
         }
         _ => "mirror: nobody has checked this licence at its source",
     }
+}
+
+/// The per-image family key a hub row gets by default.
+///
+/// A slash, because [`crate::validate_name`] segments a group name on one and
+/// allows only `[A-Za-z0-9._-]` inside a segment. The first version of this
+/// used `#`, which the registry refuses — a default nobody can import is not a
+/// default, and the failure lands on every row of the batch at once.
+fn image_key(dataset: &str, row_index: u64) -> String {
+    format!("{dataset}/{row_index}")
+}
+
+/// Whether a URI is one this module could have produced.
+///
+/// A prefix match on the scheme *and* a suffix match on the host, split on the
+/// first `/` after the authority — never a `contains`. `https://evil.test/?x=huggingface.co`
+/// contains the host and is not it, and the same mistake in the curated-source
+/// matcher is what invented a licence claim out of a coincidence of spelling.
+fn is_hub_asset(uri: &str) -> bool {
+    let Some(rest) = uri.strip_prefix("https://") else {
+        return false;
+    };
+    let authority = rest.split('/').next().unwrap_or_default();
+    // Credentials in the authority would put anything before an `@`, and the
+    // host is what comes after it.
+    let host = authority.rsplit('@').next().unwrap_or_default();
+    let host = host.split(':').next().unwrap_or_default();
+    host == "huggingface.co" || host.ends_with(".huggingface.co")
 }
 
 async fn send(request: reqwest::RequestBuilder, hub: HubKind) -> Result<Value, String> {
@@ -818,6 +1170,78 @@ mod tests {
         assert!(page.results.is_empty());
         assert!(page.hubs.iter().all(|status| status.error.is_none()));
         assert!(page.notice.contains("unclear"));
+    }
+
+    #[tokio::test]
+    async fn kaggle_is_refused_for_rows_rather_than_asked_for_them() {
+        let error = hubs()
+            .images(&HubRowsQuery {
+                dataset: "someone/floor-plans".to_owned(),
+                hub: Some(HubKind::Kaggle),
+                ..HubRowsQuery::default()
+            })
+            .await
+            .expect_err("Kaggle serves archives, not rows");
+
+        assert!(error.contains("archives"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn reading_rows_needs_hugging_face_configured() {
+        let error = Hubs::new(HubConfig::default())
+            .expect("the client builds")
+            .images(&HubRowsQuery {
+                dataset: "someone/floor-plans".to_owned(),
+                ..HubRowsQuery::default()
+            })
+            .await
+            .expect_err("nothing is configured");
+
+        assert!(error.contains("AIWATCHER_HUGGINGFACE_ENABLED"), "{error}");
+    }
+
+    /// The default family key has to be one the registry accepts. It reaches
+    /// `group_id` through a generated pipeline, so a key it refuses rejects
+    /// every row of a batch rather than one.
+    #[test]
+    fn the_default_family_key_is_a_name_the_registry_accepts() {
+        for dataset in [
+            "Ahmed167/floor-plans-dataset",
+            "zimhe/pseudo-floor-plan-12k",
+        ] {
+            let key = image_key(dataset, 17);
+            crate::validate_name(&key, "a group").expect("the registry accepts it");
+            assert!(key.ends_with("/17"), "{key}");
+        }
+    }
+
+    /// The whole point of the allowlist: an import row is caller-supplied, and
+    /// this process sits inside a cluster.
+    #[tokio::test]
+    async fn only_a_hubs_own_host_may_be_downloaded() {
+        let hubs = hubs();
+        for uri in [
+            "http://169.254.169.254/latest/meta-data/",
+            "https://aiwatcher.internal/api/v1/events",
+            // Contains the host and is not it.
+            "https://evil.test/x?next=huggingface.co",
+            "https://nothuggingface.co/a.png",
+            // Credentials in the authority do not move the host.
+            "https://huggingface.co@evil.test/a.png",
+        ] {
+            let error = hubs.fetch(uri).await.expect_err("refused: {uri}");
+            assert!(
+                error.contains("not a Hugging Face address"),
+                "{uri}: {error}"
+            );
+        }
+
+        assert!(is_hub_asset(
+            "https://datasets-server.huggingface.co/cached-assets/x/image.jpg?Expires=1"
+        ));
+        assert!(is_hub_asset(
+            "https://huggingface.co/datasets/x/resolve/main/a.png"
+        ));
     }
 
     #[test]

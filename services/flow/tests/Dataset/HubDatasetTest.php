@@ -62,6 +62,32 @@ final class HubDatasetTest extends TestCase
                     ],
                 ],
             ]],
+            '/api/v1/dataset-hubs/images' => [[
+                'hub' => 'huggingface',
+                'dataset' => 'someone/floor-plans',
+                'config' => 'default',
+                'split' => 'train',
+                'images' => [
+                    [
+                        'uri' => 'https://datasets-server.huggingface.co/a.jpg?Expires=1',
+                        'width' => 1080,
+                        'height' => 1537,
+                        'row_index' => 0,
+                        'column' => 'image',
+                        'caption' => 'A floor plan of a house.',
+                        'image_key' => 'someone/floor-plans/0',
+                    ],
+                    [
+                        'uri' => 'https://datasets-server.huggingface.co/b.jpg?Expires=1',
+                        'width' => 900,
+                        'height' => 1200,
+                        'row_index' => 1,
+                        'column' => 'image',
+                        'caption' => '',
+                        'image_key' => 'someone/floor-plans/1',
+                    ],
+                ],
+            ]],
             '/api/v1/annotation-images' => [[
                 'images' => [
                     [
@@ -114,6 +140,20 @@ final class HubDatasetTest extends TestCase
         // path alone, so this assertion is the only thing that sees it.
         self::assertStringContainsString('q=floor+plan', $api->requested[0]);
         self::assertStringContainsString('hub=kaggle', $api->requested[0]);
+    }
+
+    public function test_the_images_dataset_reads_one_row_per_picture(): void
+    {
+        $api = $this->api();
+        $rows = $this->rows("data_frame()->read(hub_images, dataset: 'someone/floor-plans')->fetch()", $api);
+
+        self::assertCount(2, $rows);
+        self::assertSame('https://datasets-server.huggingface.co/a.jpg?Expires=1', $rows[0]['uri']);
+        self::assertSame(1080, $rows[0]['width']);
+        // The per-image family key, which the import pipeline writes group_id
+        // from. Composed by the API, never by the file name.
+        self::assertSame('someone/floor-plans/0', $rows[0]['image_key']);
+        self::assertStringContainsString('dataset=someone%2Ffloor-plans', $api->requested[0]);
     }
 
     public function test_an_argument_the_dataset_never_declared_is_a_parse_error(): void

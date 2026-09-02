@@ -522,6 +522,15 @@ function ImageStrip({ result }: { result: FlowResult }) {
   );
 }
 
+/**
+ * How many pictures one generated import reads.
+ *
+ * The API caps it at 100 and this asks for that: a corpus is imported once,
+ * and the number nobody has to think about is the one that reaches the cap the
+ * route already enforces. Narrowing it is an edit in the script.
+ */
+const IMPORT_LIMIT = 100;
+
 const CONTROL =
   'h-9 rounded-md border border-border bg-card px-3 text-card-foreground text-sm outline-none focus-visible:ring-2 focus-visible:ring-primary';
 
@@ -630,20 +639,51 @@ function ImportReportView({
 }
 
 /**
- * The pipeline that turns a hub search into rows the import route accepts.
+ * The pipeline that turns a hub dataset into rows the import route accepts.
  *
  * Generated rather than hand-written so the common case is one click, and
- * shown rather than hidden so the uncommon case is an edit. It is deliberately
- * incomplete for a real corpus: a hub's *file listing* is what carries image
- * dimensions and the building a plan belongs to, and no two hubs expose it the
- * same way. What this produces is the shape, with the three columns somebody
- * has to map themselves marked as such.
+ * shown rather than hidden so the uncommon case is an edit.
+ *
+ * It reads `hub_images` rather than `hub_datasets`, and that is the whole
+ * difference between an import that works and one that does not: a search
+ * result names a *corpus*, so a pipeline built from it registers one row whose
+ * `uri` is a web page and whose dimensions are zero — which the registry
+ * refuses, correctly, on all three counts.
+ *
+ * `group_id` is written from `image_key`, which is one family per picture.
+ * True for a corpus of unrelated plans and false the moment one publishes a
+ * mirrored copy or a second storey of the same building; it is a visible line
+ * in a script rather than a decision made in Rust, so the day it is wrong it
+ * is also editable.
+ *
+ * Kaggle has no equivalent — it publishes archives, not rows — so a Kaggle
+ * selection still generates the dataset-level shape, with its uri marked.
  */
 function discoveryPipeline(
   query: string,
   hub: HubKind | 'all',
   selected: HubDataset | null,
 ): string {
+  if (selected && selected.hub === 'huggingface') {
+    return [
+      'data_frame()',
+      `    ->read(hub_images, dataset: '${phpString(selected.id)}', limit: ${IMPORT_LIMIT})`,
+      // One family per picture. Right for a corpus of unrelated plans, wrong
+      // for one that publishes a mirror or a second storey of the same
+      // building — and a line to edit when it is.
+      "    ->withEntry('group_id', ref('image_key'))",
+      '    ->select(',
+      "        ref('uri'),",
+      "        ref('width'),",
+      "        ref('height'),",
+      "        ref('group_id'),",
+      "        ref('caption')",
+      '    )',
+      '    ->write(to_output(truncate: false))',
+      '    ->run();',
+    ].join('\n');
+  }
+
   const lines = ['data_frame()'];
   const args = [`q: '${phpString(query)}'`];
   if (hub !== 'all') args.push(`hub: '${phpString(hub)}'`);
@@ -654,9 +694,11 @@ function discoveryPipeline(
   }
 
   lines.push(
-    // The three columns a hub search cannot answer, spelled out rather than
-    // guessed. `group_id` in particular: derived from `id` it would give every
-    // image its own family, which is the mistake the import route warns about.
+    // Kaggle publishes archives rather than rows, so there is nothing to read
+    // one picture at a time. This is the corpus itself, and the registry
+    // refuses it: `uri` is a web page and the dimensions are zero. Left
+    // generating rather than blanked because it is the shape somebody edits
+    // once they have the files somewhere aiwatcher can address.
     "    ->withEntry('uri', ref('url'))",
     "    ->withEntry('group_id', ref('id'))",
     "    ->withEntry('width', lit(0))",

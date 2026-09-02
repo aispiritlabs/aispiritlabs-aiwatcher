@@ -329,10 +329,81 @@ async fn register_image(
 async fn import_images(
     State(state): State<AppState>,
     caller: Caller,
-    Json(request): Json<ImportRequest>,
+    Json(mut request): Json<ImportRequest>,
 ) -> ApiResult<Json<ImportReport>> {
     may_author(&caller)?;
-    Ok(Json(registry(&state)?.import_images(request).await?))
+    let registry = registry(&state)?;
+    let (fetched, problems) = hydrate(&state, registry, &mut request).await;
+    let mut report = registry.import_images(request).await?;
+    report.fetched = fetched;
+    report.warnings.extend(problems);
+    Ok(Json(report))
+}
+
+/// Download the bytes for rows that name a hub asset and carry no content
+/// address, and store them here.
+///
+/// This is the composition the import route exists to make, and it lives in
+/// the API layer because it is the only place that holds both halves: the
+/// registry writes an object store and reaches nothing, and `Hubs` reaches a
+/// hub and writes nothing.
+///
+/// It runs for a dry run too. A row with no `image_id` is refused by
+/// `images::check`, so a preview that skipped the download would reject every
+/// row and teach the reader nothing about the batch — and blobs are addressed
+/// by their content, so a dry run followed by an import stores each picture
+/// once.
+///
+/// Three things bound it, and none of them is a flag:
+///
+/// * a row that already carries an `image_id` is left alone, which is every
+///   batch whose pipeline did its own fetching;
+/// * only a hub's own asset host is fetched — `Hubs::fetch` refuses the rest,
+///   because "download this address for me" from inside a cluster is a
+///   request-forgery primitive;
+/// * a failure is a warning naming the row, never a failed batch. A hub asset
+///   URL expires within hours of being listed, so the interesting case is a
+///   preview from yesterday, and the reader needs to be told that rather than
+///   handed a 502.
+async fn hydrate(
+    state: &AppState,
+    registry: &Registry,
+    request: &mut ImportRequest,
+) -> (usize, Vec<String>) {
+    let Some(hubs) = state.hubs.as_ref() else {
+        return (0, Vec::new());
+    };
+
+    let mut fetched = 0;
+    let mut problems = Vec::new();
+    for row in &mut request.rows {
+        if row.image_id.is_some() {
+            continue;
+        }
+        let outcome = match hubs.fetch(&row.uri).await {
+            // A URI this instance cannot fetch is not a problem yet: it may be
+            // a perfectly good address somebody else already stored, and the
+            // registry says so in its own words if it is not.
+            Err(_) if !row.uri.starts_with("https://") => continue,
+            Err(error) => Err(error),
+            Ok((bytes, content_type)) => registry
+                .put_blob(bytes, &content_type)
+                .await
+                .map_err(|error| error.to_string()),
+        };
+
+        match outcome {
+            Ok(stored) => {
+                fetched += 1;
+                row.metadata
+                    .insert("import.hub_uri".to_owned(), row.uri.clone().into());
+                row.uri = stored.uri;
+                row.image_id = Some(stored.image_id);
+            }
+            Err(error) => problems.push(format!("{}: {error}", row.uri)),
+        }
+    }
+    (fetched, problems)
 }
 
 /// One image, its revision history, one revision's shapes, and the side of the

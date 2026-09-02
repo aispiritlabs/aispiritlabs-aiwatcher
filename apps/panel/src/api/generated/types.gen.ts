@@ -1364,6 +1364,77 @@ export type HubFile = {
 };
 
 /**
+ * One picture inside a hub's dataset.
+ *
+ * Every field is the hub's own except [`image_key`](Self::image_key), which
+ * this module composes.
+ */
+export type HubImage = {
+    /**
+     * The first text feature on the same row, when there is one.
+     *
+     * Carried because it is usually a description worth reading before
+     * importing. It is never a label: nothing downstream reads it, and a
+     * caption written by whoever uploaded the copy is not an annotation.
+     */
+    caption?: string;
+    /**
+     * The feature it came from — a dataset may carry several image columns.
+     */
+    column: string;
+    height: number;
+    /**
+     * `dataset/row_index`. A **per-image** family key, which is the honest
+     * default when a hub row is one unrelated picture and the wrong one the
+     * moment a corpus publishes several renderings of one subject. It is a
+     * column rather than a decision: the import pipeline writes `group_id`
+     * from it explicitly, so changing that is an edit to a query somebody can
+     * read. See [`crate::images::import`], which warns when every row of a
+     * batch is its own family.
+     *
+     * Spelled with a slash because a group name is segmented on one and every
+     * segment is `[A-Za-z0-9._-]` — see [`crate::validate_name`]. A key the
+     * registry refuses is not a default, it is a batch that rejects every
+     * row.
+     */
+    image_key: string;
+    /**
+     * Where it sat in the split, which is the only stable name it has.
+     */
+    row_index: number;
+    /**
+     * Where the bytes are, **for now**. On Hugging Face this is a signed
+     * asset URL with an expiry measured in hours, which is why an import
+     * stores the bytes rather than the address — see [`Hubs::fetch`].
+     */
+    uri: string;
+    /**
+     * The hub's, not measured here. Both are what the registry requires and
+     * what a hub search cannot answer.
+     */
+    width: number;
+};
+
+/**
+ * The images one call found, and where they came from.
+ */
+export type HubImagePage = {
+    /**
+     * Resolved, never echoed: what was actually read, which is what makes the
+     * same call repeatable after a dataset gains a second split.
+     */
+    config: string;
+    dataset: string;
+    hub: HubKind;
+    images: Array<HubImage>;
+    split: string;
+    /**
+     * The split's own count, when the hub reports one.
+     */
+    total_rows?: number | null;
+};
+
+/**
  * Which mirror a row came from.
  */
 export const HubKind = { KAGGLE: 'kaggle', HUGGINGFACE: 'huggingface' } as const;
@@ -1556,6 +1627,15 @@ export type ImportReport = {
      * Distinct [`ImportRow::group_id`] values across the batch.
      */
     families: number;
+    /**
+     * Rows whose bytes were downloaded from a hub and stored here.
+     *
+     * Set by the caller that did the downloading, not by the import: this
+     * module writes an object store and reaches nothing. Zero for a batch
+     * whose pipeline had already stored its own bytes, which is every batch
+     * that carries an `image_id`.
+     */
+    fetched?: number;
     outcomes: Array<RowOutcome>;
     project: string;
     rejected: number;
@@ -4263,6 +4343,47 @@ export type ListHubsResponses = {
 };
 
 export type ListHubsResponse = ListHubsResponses[keyof ListHubsResponses];
+
+export type ListHubImagesData = {
+    body?: never;
+    path?: never;
+    query: {
+        /**
+         * `owner/name`, exactly as a search result addresses it.
+         */
+        dataset: string;
+        /**
+         * Which hub holds it. Only Hugging Face serves rows; see [`Hubs::images`].
+         */
+        hub?: HubKind;
+        /**
+         * The dataset's configuration and split. Both are discovered when absent,
+         * which is the common case — a corpus published as one `train` split has
+         * names nobody should have to look up in order to see it.
+         */
+        config?: string;
+        split?: string;
+        offset?: number;
+        limit?: number;
+    };
+    url: '/api/v1/dataset-hubs/images';
+};
+
+export type ListHubImagesErrors = {
+    501: ErrorBody;
+    /**
+     * The hub refused, or does not serve rows
+     */
+    502: ErrorBody;
+};
+
+export type ListHubImagesError = ListHubImagesErrors[keyof ListHubImagesErrors];
+
+export type ListHubImagesResponses = {
+    200: HubImagePage;
+};
+
+export type ListHubImagesResponse = ListHubImagesResponses[keyof ListHubImagesResponses];
 
 export type SearchHubsData = {
     body?: never;

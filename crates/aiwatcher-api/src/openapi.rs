@@ -148,6 +148,8 @@ use utoipa::OpenApi;
         aiwatcher_annotations::integrations::hubs::HubDataset,
         aiwatcher_annotations::integrations::hubs::HubStatus,
         aiwatcher_annotations::integrations::hubs::HubSearchPage,
+        aiwatcher_annotations::integrations::hubs::HubImage,
+        aiwatcher_annotations::integrations::hubs::HubImagePage,
         crate::integrations::hubs::HubsPage,
         aiwatcher_annotations::ReviewState,
         aiwatcher_annotations::AnnotationRevision,
