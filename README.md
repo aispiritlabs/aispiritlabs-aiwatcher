@@ -268,13 +268,20 @@ started:
   package** — the runtime, the entry point, the input and output shapes, and
   every artifact with its `sha256` — because an address is not an identity and
   `s3://models/latest.pt` is different bytes tomorrow.
-  `just serve-mini-model` is the runnable proof: it resolves `production`,
+  `just serve-model` is the runnable proof: it resolves `production`,
   verifies those digests before loading, warms before reporting ready, watches
   the label and rolls forward in two phases while the old version keeps
   serving, keeps that version for a rollback that needs no rebuild, and reports
   every inference with the model, the version, the latency and the outcome —
-  and never with what went in or came out. The loaders for other frameworks are
-  in [plan.md](plan.md).
+  and never with what went in or came out. Two runtimes load: a weight vector
+  and an **ONNX** graph, whose declared shapes are cross-checked against what
+  the graph says about itself, because a package describing a different model
+  is a version whose scores belong to something else. Every other runtime is
+  refused by name. Artifacts may be local or fetched from one configured S3
+  bucket with SigV4, a streaming byte ceiling and an atomic, digest-verified
+  version cache. An optional second label receives bounded, no-queue shadow
+  calls whose answers are discarded and whose runtime health is reported per
+  version. The rest are in [plan.md](plan.md).
 - **Experiments** — the same picker over training, evaluation and inference
   workflows: the other three legs of the feature/training/inference cycle,
   started from here and watched in Workflows. The comparison half of the area
@@ -481,7 +488,8 @@ just seed-import   # stage a corpus in pages and import it with the queued job
 just run-conversations # the server with the encrypted conversation archive on
 just seed-conversations  # record, review and export one conversation end to end
 just e2e-train     # the whole chain, end to end, against a running server
-just serve-mini-model  # serve its production-labelled checkpoint on :8091
+just serve-model   # serve its production-labelled package on :8091
+just onnx-version  # the same model as an ONNX graph, and the label moves to it
 just run-hubs      # the server with Kaggle/Hugging Face dataset search on
 just stack-up      # docker compose: VictoriaTraces, VictoriaMetrics, Collector, Grafana
 just tilt-up       # the same stack on a local Kubernetes, rebuilt on save

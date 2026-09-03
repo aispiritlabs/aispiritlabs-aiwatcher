@@ -402,7 +402,7 @@ terminal:
 
 ```bash
 just e2e-train
-just serve-mini-model
+just serve-model
 ```
 
 The server asks the registry which version the `production` label names,
@@ -466,9 +466,47 @@ curl -s -X POST http://127.0.0.1:8091/v1/predict \
 
 Expected classes are `edge` and `background`. `/livez` is the liveness probe and
 `/readyz` is 503 until a version is loaded *and* warmed. Use
-`just serve-mini-model 8092` to select another port, `--token` (or
+`just serve-model 8092` to select another port, `--token` (or
 `AIWATCHER_SERVE_TOKEN`) to require a bearer token on `/v1/*` — the probes stay
 public — and `--max-concurrency` to bound work in flight.
+
+The local demo reads `file://`. A serving host adds signed `s3://` reads by
+configuring one endpoint and one approved bucket; credentials stay in the
+environment rather than in the package:
+
+```bash
+export AIWATCHER_MODEL_S3_ENDPOINT=https://s3.example.internal
+export AIWATCHER_MODEL_S3_BUCKET=models
+export AIWATCHER_MODEL_S3_ACCESS_KEY=…
+export AIWATCHER_MODEL_S3_SECRET_KEY=…
+export AIWATCHER_MODEL_S3_REGION=us-east-1
+just serve-model
+```
+
+`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` and
+`AWS_REGION` are the credential fallbacks. Remote artifacts are limited to
+4096 MiB each and cached under `~/.cache/aiwatcher/models` by immutable version
+and digest, with a 10240 MiB LRU budget. Override those with
+`AIWATCHER_SERVE_MAX_ARTIFACT_MB`, `AIWATCHER_SERVE_CACHE_DIR` and
+`AIWATCHER_SERVE_CACHE_MB`, or use `--no-cache`. `/v1/model` reports the reader,
+approved bucket and non-secret cache settings.
+
+To mirror production-shaped requests without exposing a candidate's answers,
+point another model label at that version and start with a shadow label:
+
+```bash
+AIWATCHER_SERVE_SHADOW_LABEL=candidate \
+AIWATCHER_SERVE_SHADOW_CONCURRENCY=1 \
+just serve-model
+```
+
+The shadow is resolved, verified and warmed independently. Its work uses a
+separate non-blocking concurrency bound, so excess mirrors are counted as
+`dropped` rather than queued; its predictions are always discarded. Inspect
+`/v1/model` → `shadow` for the exact version, requests, failure rate, dropped
+mirrors and mean latency. Shadow telemetry carries `traffic=shadow` and no
+inputs or outputs. These are runtime-health signals, not an accuracy measure,
+so canary percentages and automatic rollback remain deliberately disabled.
 
 ### Moving the label
 
@@ -494,11 +532,11 @@ undoes is not a rollback.
 
 ### What it reports, and what it never reports
 
-Every request emits `run.started → llm.started → llm.completed` carrying the
-model, the version, the label, the row count, the latency and the outcome. A
-served model is a model, so an inference joins the same traces and the same
-model dimension as an agent's model call — open **Observability → Explore** and
-the `model` dimension has it.
+Every executed model call emits `run.started → llm.started → llm.completed`
+carrying the model, version, label, traffic (`primary|shadow`), row count,
+latency and outcome. A model call joins the same traces and the same model
+dimension as an agent's — open **Observability → Explore** and the `model`
+dimension has it.
 
 What those events never carry is `instances` or `predictions`. **Inference
 inputs and outputs do not go on the event log**, the same rule and for the same
@@ -506,13 +544,46 @@ reason as ADR_0021: a runtime that wants to retain what was said writes turns
 to the conversation archive, with consent and a retention clock, exactly as an
 agent does. `--no-telemetry` turns the reporting off entirely.
 
-This profile implements one runtime — `weights`, the JSON vector the demo
-trainer produces — and refuses every other **by name** rather than attempting
-it, because a loader chosen by looking at the file is a loader chosen by
-whoever wrote the file. It reads `file://` only. What a second profile adds is
-an ONNX or TorchScript loader and a signed reader for an object store; both are
-sequenced in [plan.md](plan.md), and both plug into a manifest that already
-exists. See [ADR_0023](docs/ADR/ADR_0023_MODEL_PACKAGE.md).
+### A second runtime
+
+Two loaders ship: `weights`, the JSON vector the demo trainer produces, and
+`onnx`. Everything else is refused **by name** rather than attempted, because a
+loader chosen by looking at the file is a loader chosen by whoever wrote the
+file.
+
+```bash
+pip install 'aiwatcher-sdk[onnx]'
+just onnx-version
+```
+
+That re-expresses the promoted weight vector as an ONNX graph, checks the two
+compute the same function over 261 rows before claiming the vector's held-out
+score, registers it and moves the label. The running server rolls forward
+across the runtime change with the same two phases, and `/v1/model` then
+carries the graph's own shapes, its providers and the entry point that was
+resolved.
+
+The ONNX loader is where a package stops being taken on trust. A graph declares
+its own input and output names, element types and shapes, so the package's
+`inputs` and `outputs` are **cross-checked** against it and a disagreement is a
+refusal naming both — a package whose shape is wrong describes a different
+model, and that version's score belongs to something else. So are the declared
+`classes` against the width of the head that produces them. And what this
+request surface can feed is settled at load rather than at the first request: a
+graph with two inputs, an image-shaped one, a string input, a pinned batch axis
+or an onnxruntime older than the one that wrote it are all refused before
+anything is serving.
+
+`entry_point` is acted on, read as a name in the package — an artifact's name
+or the last segment of its URI. `preprocessing` is reported and never applied:
+it is what the trainer did in its own words, and a package that shipped
+preprocessing code would be a package that runs code in whatever opens it.
+
+What remains is a TorchScript or `python` loader — the second needs a
+subprocess boundary, not just a loader — plus an allowlisted, revision-pinned
+Hugging Face reader. Signed S3 and its verified version cache are delivered
+behind `ArtifactReader`. The remaining work is sequenced in [plan.md](plan.md).
+See [ADR_0023](docs/ADR/ADR_0023_MODEL_PACKAGE.md).
 
 ## 5. Reproduce the full populated UI
 
@@ -528,6 +599,7 @@ just seed-annotations
 just seed-import
 just seed-conversations   # needs `just run-conversations` rather than `just run`
 just e2e-train
+just onnx-version         # a second runtime for the same model, if `[onnx]` is installed
 ```
 
 The resulting screens are documented in [EXAMPLES.md](EXAMPLES.md). Before a

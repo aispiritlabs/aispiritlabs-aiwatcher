@@ -218,15 +218,17 @@ def main() -> int:
         print("✗ the worker did not finish in 60s", file=sys.stderr)
         return 1
 
-    print(f"   {found['state']}: {found['counts']['accepted']} registered, "
-          f"{found['counts']['rejected']} refused")
+    print(
+        f"   {found['state']}: {found['counts']['accepted']} registered, "
+        f"{found['counts']['rejected']} refused"
+    )
     for warning in found.get("warnings", []):
         print(f"   ! {warning}")
 
     if found["counts"]["rejected"]:
         print("6. what it refused")
         for reason, count in found["rejects"].items():
-            print(f"   {count} × {reason}")
+            print(f"   {count} x {reason}")
         refused = call(
             "GET",
             f"/api/v1/annotation-import-rejects?job_id={job['job_id']}&limit=10",

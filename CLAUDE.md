@@ -49,7 +49,8 @@ just seed-import      # stage a corpus in pages, import it with the queued job
 just run-conversations # the server with the encrypted conversation archive on
 just seed-conversations # one reviewed exchange, an export job, an immutable corpus
 just e2e-train        # the whole chain: annotate → export → fit a real tiny model → promote
-just serve-mini-model # verify the promoted package's digest, load it, serve it, watch the label
+just serve-model      # verify the promoted package's digests, load it, serve it, watch the label
+just onnx-version     # re-express that model as an ONNX graph, check it agrees, move the label
 just stack-up      # docker compose: VictoriaTraces, VictoriaMetrics, Collector, Grafana
 just tilt-up       # the same stack on a local Kubernetes, rebuilt on save
 ```
@@ -340,11 +341,20 @@ area.
    promise is that a span naming a version can be traced to what it learned
    from. A runtime is declared, never sniffed, and `Runtime::executes_packaged_code`
    is what a host answers *before* it opens anything.
-   `scripts/serve-mini-model.py` is the first hardened profile against it:
-   verify, warm, bound, validate, watch the label, roll forward in two phases,
-   keep the previous version for a rollback — and report each inference as
-   `run.started → llm.started → llm.completed` carrying model, version, latency
-   and outcome, and no inputs and no outputs.
+   `aiwatcher_sdk.serving` is the hardened profile against it, behind
+   `scripts/serve-model.py`: verify, warm, bound, validate, watch the label,
+   roll forward in two phases, keep the previous version for a rollback — and
+   report each inference as `run.started → llm.started → llm.completed`
+   carrying model, version, runtime, latency and outcome, and no inputs and no
+   outputs. Two runtimes load, `weights` and `onnx`, and the split is the
+   design: the hardened half is the same for every framework and a runtime is
+   four members. Where an artifact describes itself, the package's declaration
+   is **cross-checked** against it rather than trusted. `file://` and signed,
+   bounded `s3://` meet behind `ArtifactReader`; the persistent cache is keyed
+   by immutable version and digest, admits only verified bytes and evicts LRU.
+   An optional shadow label loads through the same gates; mirrored work has its
+   own no-queue concurrency bound, its answers are discarded, and its health
+   window resets per candidate version.
 
 ## Conventions
 
@@ -436,6 +446,18 @@ run on is the work, so every `PromptRegistry` method raises.
 `aiwatcher_sdk/integrations/deepeval.py` never imports deepeval — it reads the
 report structurally, so the SDK stays dependency-free and a DeepEval release is
 not an SDK release.
+
+`aiwatcher_sdk/serving` is the one thing here that reads a decision back out and
+acts on it rather than recording one: it resolves the `production` label and
+serves what it names. Its shape is a split — `serving/server.py` holds what
+every framework needs (resolve, verify, warm, bound, validate, watch, roll back,
+report) and `serving/runtimes/` holds what one framework needs, which is four
+members and a loader. That is why a runtime is cheap to add and why the rollout
+exists once. `weights` needs nothing; `onnx` needs the `[onnx]` extra and is
+imported lazily, so a host that registers no ONNX loader never sees the wheel.
+Its gates are tested against a stub session rather than the real one — they are
+pure functions of what a session says about itself, and `just onnx-version` is
+what runs a real graph.
 
 ### Panel
 
@@ -904,13 +926,41 @@ not an SDK release.
   anything — a package that runs its own code is never loaded in the API
   process, which holds the object store's credentials and every registry behind
   them.
+- **Never trust a declared shape an artifact could be asked about.** An ONNX
+  graph carries its own input and output names, element types and shapes, so
+  `serving.runtimes.onnx` cross-checks the package's `inputs` and `outputs`
+  against it and refuses a disagreement naming both sides. This is the one
+  declaration in this system that is checked rather than believed, and the
+  reason is that a wrong shape is not a typo: it means the package describes a
+  *different model*, so the version's held-out score, its dataset lineage and
+  its label order all belong to something else. The same check settles
+  `classes` — `n` classes over a width-`n` head, or two over a binary one, and
+  anything else is refused because nothing at load can tell a mislabelled head
+  from a mistrained one.
+- **Never let a serving profile discover at the first request what it could
+  refuse at load.** `instances` is one rank-2 tensor with a free batch axis, so
+  a graph with two inputs, an image tensor, a string input or a pinned batch
+  dimension is refused *by name* when it is loaded, each naming the profile it
+  would need. `runtime_version` is compared before the bytes are read for the
+  same reason. "It loaded and every request 500s" is the outcome these gates
+  exist to turn into a deployment decision, and by then the previous version is
+  already gone.
+- **Never make `preprocessing` executable.** It is what the trainer did in its
+  own words, reported on `/v1/model` and applied by nothing. A package that
+  shipped preprocessing *code* would be a package that runs code in whatever
+  opens it, which is exactly what `Runtime::executes_packaged_code` exists to
+  keep visible. The caller holds the raw input, so the caller is the side that
+  must already have done it. `entry_point` is the opposite and *is* acted on,
+  because it is read as a name in this package — an artifact's name or the last
+  segment of its URI — and a value naming neither is a refusal rather than a
+  guess.
 - **Never put an inference's inputs or outputs on the event log.** The serving
   profile reports `run.started → llm.started → llm.completed` carrying model,
-  version, label, rows, latency and outcome — a served model is a model, so an
-  inference joins the same traces and the same model dimension as everything
-  else. What it never carries is what was said. A runtime that wants to retain
-  that writes turns to the conversation archive, with consent and a retention
-  clock, exactly as an agent does. See ADR_0021 and ADR_0023.
+  version, label, traffic, rows, latency and outcome — a primary or shadow
+  invocation is a model call, so it joins the same traces and model dimension
+  as everything else. What it never carries is what was said. A runtime that
+  wants to retain that writes turns to the conversation archive, with consent
+  and a retention clock, exactly as an agent does. See ADR_0021 and ADR_0023.
 - **Never let a broken new label remove a ready old version.** The rollout is
   two-phase: download, verify and warm the candidate while the current version
   keeps serving, and swap only if all three succeed. The previous version stays

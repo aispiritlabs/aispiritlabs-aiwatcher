@@ -72,13 +72,21 @@ pub enum Runtime {
     ///
     /// The smallest thing that is still a runtime, and it is here because this
     /// repository ships one: `just e2e-train` fits an eight-weight classifier
-    /// and `just serve-mini-model` loads it. Having a name for it is what
+    /// and `just serve-model` loads it. Having a name for it is what
     /// keeps the demo from declaring itself as ONNX in order to be loadable,
     /// which would make the first example anybody reads a lie about the field
     /// that decides which loader runs.
     Weights,
     /// A serialized graph plus weights, read by one interpreter with a fixed
     /// operator set.
+    ///
+    /// The second profile `aiwatcher_sdk.serving` implements, and the one that
+    /// showed what a package is for when the artifact describes *itself*: a
+    /// graph carries its own input and output names, element types and shapes,
+    /// so the loader **cross-checks** [`ModelPackage::inputs`] and
+    /// [`ModelPackage::outputs`] against it rather than trusting them. A
+    /// disagreement is not a typo — it means the package describes a different
+    /// model, and this version's held-out score belongs to that one.
     Onnx,
     /// TorchScript: a graph, not a pickle. Still torch's own deserializer.
     TorchScript,

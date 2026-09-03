@@ -578,12 +578,13 @@ version with no held-out score to confirm the promotion is refused.
 ## Serving the promoted demo
 
 The registry is the control plane: it decides which immutable version the
-`production` label names. The runnable demo serving process resolves that
-label, loads the local JSON checkpoint produced by `just e2e-train`, and starts
-an inference endpoint:
+`production` label names. The serving process resolves that label, loads
+whichever runtime the version's package declares — the JSON weight vector
+`just e2e-train` produces, or the ONNX graph below — and starts an inference
+endpoint:
 
 ```bash
-just serve-mini-model                         # http://127.0.0.1:8091
+just serve-model                         # http://127.0.0.1:8091
 curl -s http://127.0.0.1:8091/v1/model
 curl -s -X POST http://127.0.0.1:8091/v1/predict \
   -H 'content-type: application/json' \
@@ -607,21 +608,82 @@ previous version stays loaded, so going back is a request rather than a rebuild:
 curl -s -X POST http://127.0.0.1:8091/v1/rollback
 ```
 
-Every request emits `run.started → llm.started → llm.completed` carrying the
-model, the version, the label, the rows, the latency and the outcome — a served
-model is a model, so an inference lands in the same traces and the same `model`
-dimension as an agent's model call. What those events never carry is the
-instances or the predictions: **inference inputs and outputs do not go on the
-event log**, and a runtime that wants to keep them writes turns to the
-conversation archive with consent and a retention clock, exactly as an agent
-does.
+Every executed model call emits `run.started → llm.started → llm.completed`
+carrying the model, version, label, traffic (`primary|shadow`), rows, latency
+and outcome — so it lands in the same traces and the same `model` dimension as
+an agent's model call. What those events never carry is the instances or the
+predictions: **inference inputs and outputs do not go on the event log**, and a
+runtime that wants to keep them writes turns to the conversation archive with
+consent and a retention clock, exactly as an agent does.
 
-The limit is the loader, and only the loader. This profile implements one
-runtime — `weights`, the JSON vector the demo trainer produces — refuses every
-other **by name** rather than attempting it, and reads `file://` only. An ONNX
-or TorchScript loader and a signed reader for an object store plug into a
-manifest that already exists; both are sequenced in [plan.md](plan.md). See
-[ADR_0023](docs/ADR/ADR_0023_MODEL_PACKAGE.md).
+### The same model, as a graph
+
+Two runtimes load. `just onnx-version` takes the version `production` already
+names and writes the *same function* as an ONNX graph, checks the two against
+each other row by row, and moves the label:
+
+```bash
+just onnx-version          # needs `pip install 'aiwatcher-sdk[onnx]'`
+```
+
+```text
+4. check they agree before claiming the same score
+   261 rows, worst disagreement 3.68e-07 — the same function
+6. move the label
+   production → fe16caa60271
+```
+
+That check is the licence for what follows: the graph is registered with the
+weight vector's held-out score, and the reason that is honest is that it
+computes the same function to six decimal places. A running `just serve-model`
+then rolls forward **across a runtime change** — same three phases, different
+loader on the far side — and answers with the same probabilities to six places:
+
+```json
+{"runtime": "onnx", "previous": {"runtime": "weights"}, "rollouts": 1}
+```
+
+What the ONNX loader adds is a check nothing else here can make. A graph
+carries its own input and output names, element types and shapes, so the
+package's declaration is **cross-checked** against what the artifact says about
+itself rather than trusted:
+
+```text
+the package declares the input features dimension 1 as 8 and the graph
+declares 16. These do not describe the same model
+```
+
+That is not pedantry about a typo. A package whose shape is wrong describes a
+*different model*, which means the version's held-out score, its dataset
+lineage and its label order belong to something else — and it is the only check
+in this chain where the model itself gets a vote. The same reasoning refuses a
+head that is not as wide as its declared vocabulary, a graph with two inputs or
+an image-shaped one (this request surface sends rows of numbers), a pinned
+batch axis, and an onnxruntime older than the one that wrote the graph.
+
+The demo defaults to `file://`. A deployment can add signed, byte-bounded
+`s3://` reads for one configured bucket with
+`AIWATCHER_MODEL_S3_ENDPOINT`, `AIWATCHER_MODEL_S3_BUCKET` and credentials from
+`AIWATCHER_MODEL_S3_*` or the standard AWS environment. Verified downloads are
+cached atomically by immutable version and digest with an LRU byte budget;
+`/v1/model` reports the non-secret reader and cache configuration. What remains
+is an approved-Hub reader plus TorchScript and isolated `python` loaders. See
+[plan.md](plan.md) and [ADR_0023](docs/ADR/ADR_0023_MODEL_PACKAGE.md).
+
+### Mirror a candidate without serving its answer
+
+After pointing a second registry label at a candidate, start the same process
+with `AIWATCHER_SERVE_SHADOW_LABEL=candidate`. Every validated primary request
+is eligible for a fire-and-forget call into that independently verified and
+warmed version; the result is discarded. A separate non-blocking semaphore
+(`AIWATCHER_SERVE_SHADOW_CONCURRENCY`, default 1) drops rather than queues
+excess mirror work.
+
+`/v1/model` reports the shadow's exact version and its per-version request,
+failure-rate, drop and mean-latency window. Its telemetry is marked
+`traffic=shadow` and carries no inputs or outputs. This is intentionally not a
+canary yet: runtime failures and latency can show that a model broke, but not
+that its predictions became worse.
 
 ## Starting the work, not only watching it
 

@@ -12,12 +12,14 @@ archive for conversation content, and a real registry-to-inference handoff.
 `aiwatcher-annotations::imports` and `aiwatcher-annotations::integrations::fetch`.
 `just seed-import` walks it.
 
-**Workstream 3 is delivered as far as a manifest and one hardened profile** —
+**Workstream 3 is delivered as far as a manifest and two runtime profiles** —
 see [ADR_0023](docs/ADR/ADR_0023_MODEL_PACKAGE.md),
-`aiwatcher-training::package` and `scripts/serve-mini-model.py`. What remains is
-loaders for frameworks this repository does not ship a model for, and the
-signed readers that would fetch their artifacts from somewhere other than a
-local file. Both are named below with what they need.
+`aiwatcher-training::package`, `aiwatcher_sdk.serving` and
+`scripts/serve-model.py`. The hardened half and the loader came apart when the
+second runtime arrived, which is what makes a third one cheap. What remains is
+a loader for a framework whose artifact is a *program* rather than a graph, the
+approved-Hub reader beside the delivered signed S3 reader and version cache,
+and canary routing. All three are named below with what they need.
 
 Each section is kept as the record of what was asked for, with what satisfies
 each item and which test asserts it.
@@ -36,7 +38,8 @@ each item and which test asserts it.
 | Fetch remote images | Allowlisted hosts, a public-address check on every resolved address, no redirects, a streamed byte ceiling, a header-only pixel ceiling, a verified content address | The window between the address check and the connection is closed by the allowlist rather than by a connection-time hook |
 | Label and export | Schema-driven canvas, review, family split, exclusions, COCO, immutable reference | No distributed labelling queue |
 | Train and register | Generic Python tracker plus executable mini trainer, immutable dataset gate, held-out promotion gate, and a model package naming every artifact by digest | The model-owning repository still supplies the trainer |
-| Serve | Resolves `production`, verifies the package's digests, warms, bounds, validates, watches the label, rolls forward in two phases and back in one, and reports every inference with no content | One runtime (`weights`) and `file://`; ONNX, TorchScript and signed readers are what a second profile adds |
+| Serve | Resolves `production`, reads `file://` or signed `s3://` through a verified version cache, verifies every package artifact, warms, bounds, validates, watches the label, rolls forward in two phases and back in one, optionally mirrors into an independently loaded shadow label, and reports every inference with no content | Two runtimes (`weights`, `onnx`); TorchScript, an isolated `python` subprocess, an approved-Hub reader and canary/rollback gates remain |
+| Cross-check a package | Where an artifact describes itself, the declaration is compared against it: an ONNX graph's input and output names, element types, shapes and head width against the package's, and a disagreement is a refusal naming both | A graph that carries no shapes — a TorchScript module traced without them — has nothing to compare against, and its declaration goes back to being trusted |
 
 ## Workstream 1: governed conversation training data — **delivered**
 
@@ -265,12 +268,14 @@ conversations it re-reads.
   consequence: a page slower than five minutes costs duplicated work, never
   corruption.
 
-## Workstream 3: general production model serving — **the manifest and one profile**
+## Workstream 3: general production model serving — **the manifest and two profiles**
 
 Landed as `aiwatcher-training::package` (ADR_0023), the `package` field on a
-model version and its registration, and `scripts/serve-mini-model.py` — one
-hardened runtime profile, end to end. `just e2e-train && just serve-mini-model`
-walks it.
+model version and its registration, and `aiwatcher_sdk.serving` behind
+`scripts/serve-model.py` — the hardened half, plus one loader per runtime.
+`just e2e-train && just serve-model` walks the first; `just onnx-version` moves
+the label to the second and the running server follows it across the runtime
+change.
 
 ### Goal
 
@@ -289,18 +294,40 @@ real checkpoint formats and storage backends.
    naming different weights are two versions
    (`two_versions_that_name_different_weights_are_two_versions`).
 2. **Signed readers for the configured object store and approved Hub
-   repositories.** ⛔ Not built. What *is* built is the half that would
-   otherwise be skipped: the digest is verified before the bytes are loaded,
-   and a mismatch is a refusal naming both hashes. The profile reads `file://`
-   only and says so. A reader for S3 or a Hub is credentials and a fetch, and
-   it plugs in where `read_artifact` is — see the note below on what it needs.
-3. **Isolated loaders for selected runtimes.** ⛔ One runtime is implemented —
-   `weights`, the JSON vector this repository's own trainer produces — and
-   every other is refused *by name* rather than attempted, which is the rule
-   rather than a stand-in. `Runtime::executes_packaged_code` is the question a
-   host answers before it opens anything, and `python` answers yes: such a
-   package is never to be loaded in the API process, which holds the object
-   store's credentials.
+   repositories.** ✅ for the configured S3 store, ⛔ for approved Hub
+   repositories. `S3Reader` signs a redirect-free, streamed, byte-bounded GET
+   with SigV4 and refuses a bucket other than the one the host approved.
+   `VersionCacheReader` admits only bytes matching the package's digest, stores
+   them atomically under `version/digest`, rechecks a hit and evicts LRU entries
+   to a configured byte budget. `read_verified` still hashes the result before
+   any loader opens it, and `load` now verifies *every* artifact, not only the
+   entry point. `FileReader` and `S3Reader` meet behind `SchemeReader`; the
+   endpoint, bucket, bounds and non-secret cache settings are reported on
+   `/v1/model`. `the_serving_reader_signature_is_accepted_by_a_real_object_store`
+   exercises the Python signature against RustFS in `just test-rustfs`.
+3. **Isolated loaders for selected runtimes.** ✅ for the two that are data
+   formats, ⛔ for the one that is a program. `weights` and `onnx` both load,
+   through one seam: `serving/server.py` is the hardened half and a runtime is
+   four members (`features`, `classes`, `predict`, `describe`) plus a loader,
+   so the rollout exists once rather than once per framework. Every other
+   runtime is refused *by name*, which is the rule rather than a stand-in, and
+   `Runtime::executes_packaged_code` is checked in the **selection** — a
+   `python` package is refused by a host that has not said it can isolate one,
+   before any loader sees it. What that host needs is a subprocess boundary,
+   not a loader.
+
+   The ONNX loader also produced the finding that most changes how a package is
+   read: **where an artifact describes itself, the declaration is cross-checked
+   rather than trusted.** A graph carries its own input and output names,
+   element types and shapes, and a disagreement with the package is a refusal
+   naming both sides — because a package whose shape is wrong describes a
+   *different model*, so the version's held-out score, its dataset lineage and
+   its label order belong to something else. It is the only check in this chain
+   where the model itself gets a vote. Same reasoning for `classes` against the
+   width of the head that produces them, and for what this request surface can
+   feed: two inputs, an image tensor, a string input, a pinned batch axis or an
+   onnxruntime older than the one that wrote the graph are all refused at load
+   rather than discovered at the first request.
 4. **Readiness, warmup, concurrency/batch limits, request validation,
    authentication and resource ceilings.** ✅ `/readyz` is 503 until a version
    is loaded *and* warmed; a semaphore bounds work in flight and returns a
@@ -316,14 +343,25 @@ real checkpoint formats and storage backends.
    left is pinned out so the next poll does not undo the rollback.
 6. **Inference events with the same content-redaction default as agent
    telemetry.** ✅ `run.started → llm.started → llm.completed` carrying model,
-   version, label, rows, latency and outcome. A served model is a model, so an
-   inference joins the same traces, the same model dimension and the same
+   version, label, traffic (`primary|shadow`), rows, latency and outcome. A
+   served model is a model, so an inference joins the same traces, the same
+   model dimension and the same
    "which version served this" question as everything else — and it carries no
    inputs and no outputs, which is ADR_0021's rule restated for serving.
-7. **Canary/shadow routing and automatic rollback gates.** ⛔ Not built, and it
-   is the deliverable that most wants a real second profile first: a rollback
-   gate needs a health signal that is more than "it loaded", and what that
-   signal *is* differs per runtime.
+7. **Canary/shadow routing and automatic rollback gates.** ✅ shadow, ⛔ canary
+   and automatic rollback. `--shadow-label` resolves an independent registry
+   label to its exact version, then reads, verifies, loads and warms it without
+   changing readiness. Validated primary rows are copied to a daemon worker;
+   its answer is discarded. A separate non-blocking semaphore bounds shadow
+   work, so saturation increments `dropped` rather than creating a queue.
+   `/v1/model.shadow` reports the loaded version, per-version requests,
+   failures, failure rate, dropped mirrors, mean latency and last error. A
+   broken shadow never changes the primary model or response
+   (`a_broken_shadow_never_changes_primary_readiness`,
+   `a_shadow_answer_is_discarded_and_its_work_never_queues`). What remains is
+   the policy that turns this runtime-only signal into a traffic percentage
+   and an automatic rollback; these signals can say "it broke", not "its
+   predictions got worse".
 
 ### Acceptance criteria
 
@@ -333,8 +371,13 @@ real checkpoint formats and storage backends.
   no package is loaded and reported `verified: false` rather than reported as
   verified.
 - **a broken new label never removes the ready old version** — ✅ the two-phase
-  rollout, verified by hand against a tampered checkpoint: the server kept
-  serving and put the reason on `/v1/model`.
+  rollout, in tests (`a_broken_new_label_does_not_remove_the_ready_old_version`,
+  `a_version_that_failed_to_become_ready_is_not_read_again`) and against a live
+  server with a tampered graph: it kept serving the weight vector and put the
+  two hashes on `/v1/model`. The runtime-change case is the one worth naming —
+  `the_label_moving_to_another_runtime_swaps_the_loader_with_it` — because a
+  swap that keeps the old *loader* would be a rollout that works only while
+  every version is the same framework.
 - **rollback does not require rebuilding an image** — ✅ the previous version is
   already loaded and warm, which is why it is kept.
 - **untrusted model artifacts cannot execute in the aiwatcher API process** —
@@ -347,21 +390,64 @@ real checkpoint formats and storage backends.
 
 ### What is still open here, and what each piece needs
 
-- **A signed reader.** Credentials, a bounded fetch and a cache keyed by the
-  immutable version. `aiwatcher-prompts`'s SigV4 signer is the S3 half already
-  written; what a serving process needs beyond it is a local cache directory
-  and an eviction policy, because re-downloading a checkpoint per pod restart
-  is the cost this hides.
-- **An ONNX or TorchScript loader.** A dependency and a subprocess boundary. The
-  manifest is what lets one be added without renegotiating anything, which was
-  the point of doing it first.
-- **Canary and shadow routing.** Wants a health signal per runtime and a
-  decision about where the split lives — in this process, or in the ingress in
-  front of it. Worth deciding after the second profile exists, because one
-  profile cannot tell you which of the two is general.
+- **An approved-Hub reader.** S3 is delivered: credentials never enter an
+  artifact URI, every GET is SigV4-signed and bounded, redirects are refused,
+  and a persistent version/digest cache has atomic writes, hit verification
+  and an LRU byte budget. A Hub reader still needs an explicit repository
+  allowlist, a pinned revision in the URI, token handling and the same streamed
+  ceiling behind `ArtifactReader`; the S3 cache can wrap it unchanged.
+- **A TorchScript loader, and a `python` one.** These are not the same kind of
+  work any more, which the second profile is what showed. TorchScript is a
+  dependency and a session; `python` is a *program*, so it is a subprocess with
+  its own credentials — the selection already refuses it, and what has to be
+  built is the host that can honestly answer `isolates_packaged_code`.
+  TorchScript also has the one property that would weaken the cross-check
+  above: a module traced without shapes has nothing to compare against.
+- **The ONNX gates are tested against a stub session.** They are pure functions
+  of what a session says about itself, and a hundred megabytes of runtime in
+  every CI run would test onnxruntime rather than this code. A real graph goes
+  through `just onnx-version`, which refuses unless the graph and the vector it
+  re-expresses agree row by row. What that leaves untested in CI is the wheel's
+  own API surface — the one thing a stub cannot check is that the stub is
+  shaped right.
+- **Canary routing and automatic rollback.** Shadowing is delivered in this
+  process: its label has an independently verified/warmed model, mirrored work
+  cannot queue, answers are discarded, telemetry names `traffic=shadow`, and
+  `/v1/model` exposes a per-version runtime-error/latency window. The remaining
+  gate must choose a minimum sample, error and latency thresholds, a traffic
+  percentage and a cooldown, and decide whether fleet-wide routing belongs in
+  the ingress. There is still no quality signal: runtime health can say "it
+  broke", never "its predictions got worse".
 - **The profile is single-process.** A semaphore bounds work in flight in *this*
   pod; nothing bounds a fleet. That is a scheduler's job, and the
   `ResourceRequest` on the package is what a scheduler would read.
+
+### What the second profile settled
+
+plan.md sequenced ONNX before the signed reader and before canary routing in
+order to find out three things, and it found them:
+
+**`entry_point` is actionable; `preprocessing` is not.** The difference is not
+how much text they hold — it is that one names something the package contains
+and the other names something the *caller* did. So `entry_point` resolves
+against the artifact list and a value matching nothing is a refusal, while
+`preprocessing` is reported on `/v1/model` and applied by nothing. Making it
+executable would be shipping code inside a package, which is the thing
+`executes_packaged_code` exists to keep visible.
+
+**A declaration whose artifact can be asked should be cross-checked.** This was
+not in the brief. Every other declaration in this system is the source because
+nothing else knows the answer; an ONNX graph is the exception, and comparing
+the two is the only check in the chain where the model itself gets a vote. A
+package whose declared shape is wrong is not a broken package — it is a package
+describing a different model, which makes the version's score, dataset and
+label order all belong to something else.
+
+**The rollout half of canary routing is general and the gate half is not.** The
+two loaders differ in every gate and share every phase, so a swap needs nothing
+per runtime. What neither has is a health signal beyond "it loaded", which is
+what a rollback gate would read — so shadowing (which needs no signal) comes
+before canary (which does).
 
 ### One thing Workstream 1 settled in advance
 
@@ -388,16 +474,31 @@ its own rules — is the convention ADR_0021 removed.
    go through.
 4. ~~Define the model package manifest before implementing loaders.~~
    **Delivered** — ADR_0023.
-5. **Ship the second runtime profile.** ONNX first: a fixed operator set, no
-   packaged code, and the loader that most deployments actually want. It needs
-   the signed reader (item 6) to be useful outside a single machine, and it is
-   what will show whether `entry_point` and `preprocessing` as free text are
-   enough to act on.
-6. **Then the signed reader and the version cache.** S3 with the SigV4 signer
-   that already exists, plus a local cache keyed by the immutable version and an
-   eviction policy — a checkpoint re-downloaded per pod restart is the cost this
-   hides.
-7. **Then canary and shadow routing**, once two profiles exist to tell you which
-   half of the rollout decision is general and which is per runtime.
+5. ~~Ship the second runtime profile. ONNX first: a fixed operator set, no
+   packaged code, and the loader that most deployments actually want.~~
+   **Delivered** — `aiwatcher_sdk.serving.runtimes.onnx`, and the split that
+   made it four members rather than a second server. It answered the question
+   it was sequenced to answer: `entry_point` is enough to act on *because* it
+   is read as a name in the package and a value naming nothing is a refusal;
+   `preprocessing` is not, and must not become so, because executable
+   preprocessing is a package that runs code in whatever opens it. It also
+   produced a rule nobody had asked for — where an artifact describes itself,
+   the declaration is cross-checked rather than trusted.
+6. ~~Then the signed reader and the version cache.~~ **Delivered for S3** —
+   `S3Reader` signs bounded, redirect-free reads for one configured bucket and
+   `VersionCacheReader` stores only digest-verified bytes atomically under the
+   immutable version, rechecks hits and evicts LRU to its byte budget. The real
+   wire gate is part of `just test-rustfs`, because a mock can see an
+   `Authorization` header and cannot say the signature is correct. An approved
+   Hugging Face reader remains a separate scheme implementation behind the
+   same port and cache.
+7. ~~Then shadow routing, and only then canary.~~ **Shadow delivered; canary is
+   next.** The shadow label is resolved exactly, loaded through the same gates,
+   mirrored asynchronously under its own no-queue concurrency bound and
+   observed as a per-version failure-rate/latency window. Its output never
+   reaches the caller. A canary gate can now be designed against a real signal
+   rather than an invented interface, but still needs explicit thresholds,
+   sample size, traffic percentage and cooldown before it may roll anything
+   back automatically.
 8. Add experiment comparison after `variant` is a query dimension and its
    traces, evaluation and model version can be joined without heuristics.

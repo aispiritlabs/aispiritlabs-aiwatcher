@@ -105,6 +105,79 @@ async fn a_signed_request_is_accepted_and_objects_round_trip() {
 
 #[tokio::test]
 #[ignore = "needs a RustFS; run `just test-rustfs`"]
+async fn the_serving_reader_signature_is_accepted_by_a_real_object_store() {
+    let bucket = "aiwatcher-test-serving-reader";
+    let store = store(bucket).await;
+    let body = b"[0.5,-0.25,1.0]";
+    let key = "models/a b/vector.json";
+    store.put(key, body.to_vec()).await.unwrap();
+
+    // The Python reader is a separate SigV4 implementation. A local HTTP
+    // stand-in can assert that an Authorization header exists; only an S3
+    // implementation can say that its canonical path and signature agree.
+    let script = r#"
+import hashlib
+import os
+from aiwatcher_sdk.serving import S3Credentials, S3Reader, read_verified
+
+body = os.environ["AIWATCHER_TEST_BODY"].encode()
+reader = S3Reader(
+    os.environ["AIWATCHER_TEST_ENDPOINT"],
+    os.environ["AIWATCHER_TEST_BUCKET"],
+    S3Credentials(
+        access_key_id=os.environ["AIWATCHER_TEST_ACCESS_KEY"],
+        secret_access_key=os.environ["AIWATCHER_TEST_SECRET_KEY"],
+        region="us-east-1",
+    ),
+)
+found = read_verified(
+    reader,
+    {
+        "name": "weights",
+        "uri": f"s3://{os.environ['AIWATCHER_TEST_BUCKET']}/models/a%20b/vector.json",
+        "digest": hashlib.sha256(body).hexdigest(),
+    },
+    version="ab" * 32,
+)
+print(found.decode())
+"#;
+    let sdk = format!("{}/../../sdk/python", env!("CARGO_MANIFEST_DIR"));
+    let output = std::process::Command::new("python3")
+        .arg("-c")
+        .arg(script)
+        .env("PYTHONPATH", sdk)
+        .env("AIWATCHER_TEST_ENDPOINT", endpoint())
+        .env("AIWATCHER_TEST_BUCKET", bucket)
+        .env(
+            "AIWATCHER_TEST_ACCESS_KEY",
+            std::env::var("AIWATCHER_PROMPT_S3_ACCESS_KEY")
+                .unwrap_or_else(|_| "rustfsadmin".to_owned()),
+        )
+        .env(
+            "AIWATCHER_TEST_SECRET_KEY",
+            std::env::var("AIWATCHER_PROMPT_S3_SECRET_KEY")
+                .unwrap_or_else(|_| "rustfsadmin".to_owned()),
+        )
+        .env(
+            "AIWATCHER_TEST_BODY",
+            String::from_utf8_lossy(body).as_ref(),
+        )
+        .output()
+        .expect("python3 runs the serving reader");
+
+    assert!(
+        output.status.success(),
+        "serving reader failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "[0.5,-0.25,1.0]"
+    );
+}
+
+#[tokio::test]
+#[ignore = "needs a RustFS; run `just test-rustfs`"]
 async fn a_listing_that_needs_several_pages_returns_every_key() {
     // 1000 is the page size the adapter asks for, so this is the boundary
     // where a missing continuation token silently truncates the version list.

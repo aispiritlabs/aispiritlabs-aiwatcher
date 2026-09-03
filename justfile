@@ -80,7 +80,8 @@ test-laser:
       cargo test -p aiwatcher-bus --features laser --test laser_integration \
       -- --ignored --test-threads=1
 
-# Five integration tests against a real object store. Run `just rustfs-up` first.
+# The registries and serving reader against a real object store. Run
+# `just rustfs-up` first; this is the wire test for both SigV4 implementations.
 test-rustfs:
     AIWATCHER_PROMPT_S3_ENDPOINT={{rustfs_endpoint}} \
       cargo test -p aiwatcher-prompts --test rustfs -- --ignored --test-threads=1
@@ -293,13 +294,23 @@ import-conversation conversation subject basis reference:
 e2e-train:
     ./scripts/e2e-mini-train.py
 
-# It watches the `production` label: moving it downloads, verifies and warms
-# the new version while the old one keeps serving, and only then swaps.
-# `POST /v1/rollback` puts the previous one back with nothing to rebuild.
+# It watches the `production` label: moving it reads, verifies and warms the
+# new version while the old one keeps serving, and only then swaps.
+# `POST /v1/rollback` puts the previous one back with nothing to rebuild. Two
+# runtimes: `weights` needs nothing, `onnx` needs `aiwatcher-sdk[onnx]`, and
+# anything else is refused by name rather than attempted.
 
-# Verify the promoted package's digest, load it, and serve it on :8091.
-serve-mini-model port="8091":
-    python3 ./scripts/serve-mini-model.py --port {{quote(port)}}
+# Verify the promoted package's digests, load it, and serve it on :8091.
+serve-model port="8091" *args:
+    python3 ./scripts/serve-model.py --port {{quote(port)}} {{args}}
+
+# It checks row by row that the graph computes the same function before
+# claiming the vector's held-out score, and a running `just serve-model` then
+# rolls forward across a runtime change.
+
+# Re-express the promoted weight vector as an ONNX graph and move the label.
+onnx-version *args:
+    python3 ./scripts/onnx-version.py {{args}}
 
 # ── Python SDK ───────────────────────────────────────────────────────────────
 

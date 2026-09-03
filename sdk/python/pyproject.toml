@@ -21,6 +21,13 @@ deepeval = ["deepeval>=4.1,<5"]
 # to decoding a PNG, so unlike the deepeval extra this one is real: the module
 # imports them lazily and says this line when they are missing.
 vision = ["numpy>=1.26", "pillow>=10.0"]
+# `serving.runtimes.onnx` is the second runtime profile. Like the vision extra
+# this one is real — a graph cannot be read without an interpreter — and unlike
+# it, the interpreter is a hundred-megabyte wheel, which is why it is an extra
+# rather than a dependency of a library that gets imported into agent
+# processes. A host that will never serve a graph registers no onnx loader and
+# never imports this.
+onnx = ["onnxruntime>=1.17", "numpy>=1.26"]
 
 [project.urls]
 Homepage = "https://github.com/ai-spirit/aiwatcher"
@@ -87,6 +94,16 @@ select = [
 python_version = "3.11"
 strict = true
 files = ["aiwatcher_sdk", "tests"]
+
+# onnxruntime is deliberately *not* a dev dependency. numpy and Pillow are,
+# because the rasteriser can be wrong without anything raising and so has to be
+# tested for real; the ONNX loader's gates are pure functions of what a session
+# says about itself and are tested against a stub one, which is what keeps a
+# hundred megabytes of runtime out of every CI run. The wheel ships no stubs
+# either way, so this line would be here regardless.
+[[tool.mypy.overrides]]
+module = ["onnxruntime"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
