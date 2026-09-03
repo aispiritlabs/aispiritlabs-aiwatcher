@@ -222,8 +222,16 @@ function Workspace({
       });
       return response.data;
     },
-    onSuccess: (saved) => {
+    onSuccess: (saved, accept) => {
       setProblems([]);
+      if (accept) {
+        // Acceptance completes the labelling gesture, not only the registry
+        // write. Return to navigation with no handles left active so the next
+        // click cannot accidentally start or edit another shape.
+        setTool('select');
+        setSelectedId(null);
+        setLinking(null);
+      }
       queryClient.setQueryData(['annotation-image', projectName, imageId], {
         ...detail.data,
         ...saved.head,
@@ -308,6 +316,16 @@ function Workspace({
         setTool('draw');
       } else if (event.key === 'v') {
         setTool('select');
+      } else if (
+        event.key.toLowerCase() === 'a' &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        imageId &&
+        !save.isPending
+      ) {
+        event.preventDefault();
+        save.mutate(true);
       } else if ((event.key === 'Delete' || event.key === 'x') && selectedId) {
         setDraft(annotations.filter((annotation) => annotation.id !== selectedId));
         setSelectedId(null);
@@ -318,7 +336,7 @@ function Workspace({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [annotations, classes, save, selectedId]);
+  }, [annotations, classes, imageId, save, selectedId]);
 
   const counts = React.useMemo(() => {
     const out: Record<string, number> = {};
@@ -483,6 +501,9 @@ function Workspace({
                 onClick={() => save.mutate(true)}
               >
                 <Check className="h-3.5 w-3.5" /> Save &amp; accept
+                <kbd className="rounded border border-current/30 px-1 font-mono text-[10px] opacity-70">
+                  a
+                </kbd>
               </Button>
             </div>
           </div>

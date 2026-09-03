@@ -125,6 +125,15 @@ export function AnnotationCanvas({
     setDraft([]);
   }, [src]);
 
+  // Leaving Draw means leaving the in-progress gesture as well. Keeping these
+  // points around makes Select (and an accepted image) still look and behave
+  // as though drawing were active: Enter can even create the abandoned shape.
+  React.useEffect(() => {
+    if (tool === 'draw') return;
+    setDraft([]);
+    setDrag(null);
+  }, [tool]);
+
   React.useEffect(() => {
     const element = container.current;
     if (!element) return;
