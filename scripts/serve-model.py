@@ -1,4 +1,11 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["aiwatcher-sdk[onnx]"]
+#
+# [tool.uv.sources]
+# aiwatcher-sdk = { path = "../sdk/python", editable = true }
+# ///
 """Serve the model version the `production` label names, and keep serving it.
 
 A command-line front for :mod:`aiwatcher_sdk.serving`, which is where the work

@@ -266,9 +266,9 @@ seed-evaluation:
 seed-workflow stamp="":
     ./scripts/seed-demo-workflow.sh {{stamp}}
 
-# Seed an annotation project: six plans, three families, an export, a training run.
-seed-annotations:
-    ./scripts/seed-demo-annotations.py
+# Seed an annotation project: 24 plans, 12 families, an export, a training run.
+seed-annotations *args:
+    ./scripts/seed-demo-annotations.py {{args}}
 
 # Stage a corpus in pages and import it with the queued job. Needs `just run`.
 seed-import:
@@ -280,11 +280,11 @@ seed-curation:
 
 # Record, review and export one conversation. Needs `just run-conversations`.
 seed-conversations:
-    python3 ./scripts/seed-demo-conversations.py
+    ./scripts/seed-demo-conversations.py
 
 # Move legacy data.input/data.output pairs off the log into the archive.
 import-conversation conversation subject basis reference:
-    python3 ./scripts/import-conversation-turns.py {{quote(conversation)}} \
+    ./scripts/import-conversation-turns.py {{quote(conversation)}} \
       --subject {{quote(subject)}} --basis {{quote(basis)}} --reference {{quote(reference)}}
 
 # The whole chain against a running server: annotate, export, fit a real
@@ -302,7 +302,7 @@ e2e-train:
 
 # Verify the promoted package's digests, load it, and serve it on :8091.
 serve-model port="8091" *args:
-    python3 ./scripts/serve-model.py --port {{quote(port)}} {{args}}
+    ./scripts/serve-model.py --port {{quote(port)}} {{args}}
 
 # It checks row by row that the graph computes the same function before
 # claiming the vector's held-out score, and a running `just serve-model` then
@@ -310,7 +310,7 @@ serve-model port="8091" *args:
 
 # Re-express the promoted weight vector as an ONNX graph and move the label.
 onnx-version *args:
-    python3 ./scripts/onnx-version.py {{args}}
+    ./scripts/onnx-version.py {{args}}
 
 # ── Python SDK ───────────────────────────────────────────────────────────────
 

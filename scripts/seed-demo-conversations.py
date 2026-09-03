@@ -1,4 +1,11 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["aiwatcher-sdk"]
+#
+# [tool.uv.sources]
+# aiwatcher-sdk = { path = "../sdk/python", editable = true }
+# ///
 """Seed the governed conversation archive: record, review, export, read back.
 
 The whole of ADR_0021 in one run, against a server started with

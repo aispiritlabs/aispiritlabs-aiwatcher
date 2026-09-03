@@ -13,6 +13,7 @@ are, which class won a contested one, and what the loss was told to skip.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import io
 import json
 import threading
@@ -401,7 +402,7 @@ def registry() -> Iterator[AnnotationRegistry]:
         server.server_close()
 
 
-def manifest() -> Export:
+def manifest(source: AnnotationRegistry | None = None) -> Export:
     return Export.from_json(
         {
             "project": PROJECT,
@@ -423,16 +424,17 @@ def manifest() -> Export:
             "excluded": [],
             "counts": {},
             "rights_policy": "commercial",
-        }
+        },
+        source=source,
     )
 
 
 def test_a_sample_comes_out_as_the_arrays_a_collate_can_stack(
     registry: AnnotationRegistry,
 ) -> None:
-    dataset = ExportDataset(registry, manifest(), split="train", image_size=64, classes=CLASSES)
+    dataset = manifest(registry).split("train").dataset(image_size=64, classes=CLASSES)
     assert len(dataset) == 1
-    assert dataset.families == {"komancza-dws"}
+    assert dataset.families() == {"komancza-dws"}
 
     item = dataset[0]
     assert item["image"].shape == (1, 64, 64)
@@ -443,13 +445,42 @@ def test_a_sample_comes_out_as_the_arrays_a_collate_can_stack(
     assert int((item["targets"][BASE] == OUTER).sum()) > 0
 
 
+def test_the_dataset_can_be_built_from_the_split_directly(
+    registry: AnnotationRegistry,
+) -> None:
+    # `SplitView.dataset` is the short way round; this is what it calls, and the
+    # two have to hold the same samples or the split rule has two homes.
+    split = manifest().split("train")
+    direct = ExportDataset(registry, split, image_size=64, classes=CLASSES)
+
+    assert direct.families() == split.families()
+    assert [sample.image_id for sample in direct.samples] == [IMAGE_ID]
+    assert direct.export is split.export
+    assert "train" in repr(direct)
+
+
+def test_the_loader_is_torch_s_own_step_and_says_so_when_torch_is_absent(
+    registry: AnnotationRegistry,
+) -> None:
+    """The last line of the PyTorch data tutorial, and the one place in this
+    SDK that imports torch — inside the method, so a process that only
+    rasterises never pays for it."""
+    dataset = manifest().split("train").dataset(registry, image_size=64, classes=CLASSES)
+    if importlib.util.find_spec("torch") is None:
+        with pytest.raises(ImportError, match="torch"):
+            dataset.loader(batch_size=1)
+        return
+    loader = dataset.loader(batch_size=1)
+    assert len(loader.dataset) == 1
+
+
 def test_the_dataset_reads_the_revision_the_export_pinned(
     registry: AnnotationRegistry,
 ) -> None:
     """Not the project's current head. An export is a claim about which
     drawings a run saw, and re-reading the head breaks it the first time
     somebody fixes a label while a run is training."""
-    ExportDataset(registry, manifest(), split="train", image_size=64, classes=CLASSES)[0]
+    manifest().split("train").dataset(registry, image_size=64, classes=CLASSES)[0]
     asked = [path for path in _Registry.seen if path.startswith("/api/v1/annotation-image?")]
     assert asked and f"revision={REVISION}" in asked[0]
 
@@ -457,13 +488,10 @@ def test_the_dataset_reads_the_revision_the_export_pinned(
 def test_a_cached_corpus_is_downloaded_once_rather_than_once_per_epoch(
     registry: AnnotationRegistry, tmp_path: Any
 ) -> None:
-    dataset = ExportDataset(
-        registry,
-        manifest(),
-        split="train",
-        image_size=64,
-        cache_dir=tmp_path,
-        classes=CLASSES,
+    dataset = (
+        manifest()
+        .split("train")
+        .dataset(registry, image_size=64, cache_dir=tmp_path, classes=CLASSES)
     )
     for _ in range(3):
         dataset[0]
@@ -586,4 +614,4 @@ def test_a_schema_that_moved_since_the_export_is_refused_rather_than_permuted(
     against a reordered vocabulary permutes every label, every metric stays
     finite, and nothing says so."""
     with pytest.raises(RegistryError, match="permutes every label"):
-        ExportDataset(registry, manifest(), split="train", image_size=64)
+        manifest().split("train").dataset(registry, image_size=64)

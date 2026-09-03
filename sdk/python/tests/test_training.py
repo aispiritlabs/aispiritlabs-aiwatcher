@@ -24,6 +24,10 @@ from aiwatcher_sdk.training import TrainingClient, TrainingError, curve, held_ou
 
 EXPORT = "floor-plans/dom-projekt@" + "9f" * 32
 
+#: What the client is given below, and what a failing flush therefore costs
+#: before it hands the batch back to the buffer.
+ATTEMPTS = 2
+
 
 class _Recorder(BaseHTTPRequestHandler):
     stubbed: ClassVar[dict[tuple[str, str], tuple[int, Any]]] = {}
@@ -70,7 +74,12 @@ def api() -> Iterator[tuple[TrainingClient, type[_Recorder]]]:
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        yield TrainingClient(f"http://127.0.0.1:{server.server_port}", timeout=3.0), _Recorder
+        yield (
+            TrainingClient(
+                f"http://127.0.0.1:{server.server_port}", timeout=3.0, attempts=ATTEMPTS
+            ),
+            _Recorder,
+        )
     finally:
         server.shutdown()
         server.server_close()
@@ -136,7 +145,10 @@ def test_a_server_that_goes_away_does_not_take_the_run_with_it(
     # not cause.
     client, recorder = api
     with client.run("run-4", model="unet", dataset=EXPORT) as run:
-        recorder.fail_until = 2
+        # Two flushes that fail *through* their retries. One 503 no longer
+        # loses a batch — the transport comes back on its own — so the buffer
+        # is what carries the ones that could not be delivered at all.
+        recorder.fail_until = 2 * ATTEMPTS
         with run.epoch(0) as epoch:
             epoch.step(loss=1.0)
         with run.epoch(1) as epoch:

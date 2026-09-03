@@ -1,4 +1,11 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["aiwatcher-sdk"]
+#
+# [tool.uv.sources]
+# aiwatcher-sdk = { path = "../sdk/python", editable = true }
+# ///
 """Seed an annotation project with plans, drawings, an export and a training run.
 
 Everything here is synthetic and drawn in pure Python — no Pillow, no numpy,
@@ -8,12 +15,13 @@ would invite somebody to judge the model that has not been trained yet.
 
 What it puts in front of you:
 
-* three buildings, each as a plain plan and its mirror — six images and three
-  families, which is what the split key exists for;
+* twelve buildings, each as a plain plan and its mirror — twenty-four images
+  and twelve families, which is what the split key exists for;
 * one CC BY-NC image, so a commercial export has something to exclude by name;
 * one image left as a draft, so the export has something to exclude for the
   other reason;
-* a regions/edges/markers drawing on each accepted image;
+* spaces, walls, stairs, columns and three kinds of opening on each accepted
+  image;
 * a built export, and a short training run recorded against its reference.
 
     just run                # in one terminal
@@ -22,7 +30,9 @@ What it puts in front of you:
 
 from __future__ import annotations
 
+import argparse
 import os
+import re
 import struct
 import sys
 import time
@@ -34,12 +44,44 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "sdk" / "python"))
 
-from aiwatcher_sdk.annotations import AnnotationRegistry, RegistryError  # noqa: E402
-from aiwatcher_sdk.training import TrainingClient  # noqa: E402
+from aiwatcher_sdk.annotations import AnnotationRegistry, RegistryError
+from aiwatcher_sdk.training import TrainingClient
 
 BASE = os.environ.get("AIWATCHER_URL", "http://127.0.0.1:8080")
 PROJECT = os.environ.get("AIWATCHER_ANNOTATION_PROJECT", "corpora/demo")
 WIDTH, HEIGHT = 640, 480
+
+LABEL_ROLES = (
+    "wall_exterior",
+    "wall_interior",
+    "space",
+    "stairs",
+    "column",
+    "door",
+    "window",
+    "passage",
+    "ignore",
+)
+DEFAULT_LABELS = {role: role for role in LABEL_ROLES}
+LABEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$")
+
+# Under the stable `demo` split salt these are 8 train, 2 validation and 2 test
+# families. Consecutive alphabetic names happen to produce no test family in
+# the first sixteen, so this explicit fixture keeps every demo split useful.
+FAMILIES = (
+    "subject-a",
+    "subject-b",
+    "subject-c",
+    "subject-d",
+    "subject-e",
+    "subject-f",
+    "subject-g",
+    "subject-h",
+    "subject-i",
+    "subject-j",
+    "subject-02",
+    "subject-05",
+)
 
 
 # ── A very small PNG writer ──────────────────────────────────────────────────
@@ -117,7 +159,11 @@ BLACK = (24, 24, 27)
 GREY = (150, 150, 155)
 
 
-def plan(seed: int, mirrored: bool) -> tuple[bytes, list[dict[str, Any]]]:
+def plan(
+    seed: int,
+    mirrored: bool,
+    labels: dict[str, str],
+) -> tuple[bytes, list[dict[str, Any]]]:
     """One synthetic plan and the shapes that describe it.
 
     The image and the annotation are generated together, so the demo's labels
@@ -137,48 +183,108 @@ def plan(seed: int, mirrored: bool) -> tuple[bytes, list[dict[str, Any]]]:
     canvas.line((flip(left), bottom + 30), (flip(right), bottom + 30), GREY, 1)
     # Furniture, so the ignore class has something to cover.
     canvas.rect((flip(left + 30), top + 40), (flip(left + 110), top + 100), GREY, 1)
+    # A stair flight and a structural column make the remaining base-layer
+    # labels visible in the source rather than merely present in the schema.
+    stair_left, stair_top = left + 130, top + 45
+    stair_right, stair_bottom = left + 185, top + 165
+    canvas.rect(
+        (flip(stair_left), stair_top),
+        (flip(stair_right), stair_bottom),
+        GREY,
+        1,
+    )
+    for tread_y in range(int(stair_top + 15), int(stair_bottom), 15):
+        canvas.line((flip(stair_left), tread_y), (flip(stair_right), tread_y), GREY, 1)
+    column_left, column_top = right - 80, top + 60
+    column_right, column_bottom = right - 58, top + 82
+    canvas.rect(
+        (flip(column_left), column_top),
+        (flip(column_right), column_bottom),
+        BLACK,
+        3,
+    )
 
-    def edge(identifier: str, points: list[list[float]], role: str) -> dict[str, Any]:
+    def edge(identifier: str, points: list[list[float]], label: str) -> dict[str, Any]:
         return {
             "id": identifier,
-            "class": "edge",
+            "class": label,
             "geometry": {"kind": "polyline", "points": [[flip(x), y] for x, y in points]},
-            "attributes": {"role": role, "thickness_px": 3.0},
+            "attributes": {"thickness_px": 3.0},
             "origin": "human",
         }
 
-    def region(identifier: str, x0: float, y0: float, x1: float, y1: float, label: str):
-        return [
-            {
-                "id": identifier,
-                "class": "region",
-                "geometry": {
-                    "kind": "polygon",
-                    "exterior": [
-                        [flip(x0), y0],
-                        [flip(x1), y0],
-                        [flip(x1), y1],
-                        [flip(x0), y1],
-                    ],
-                },
-                "attributes": {"label": label},
-                "origin": "human",
+    def polygon(
+        identifier: str,
+        label: str,
+        x0: float,
+        y0: float,
+        x1: float,
+        y1: float,
+        attributes: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        annotation = {
+            "id": identifier,
+            "class": label,
+            "geometry": {
+                "kind": "polygon",
+                "exterior": [
+                    [flip(x0), y0],
+                    [flip(x1), y0],
+                    [flip(x1), y1],
+                    [flip(x0), y1],
+                ],
             },
-        ]
+            "origin": "human",
+        }
+        if attributes:
+            annotation["attributes"] = attributes
+        return annotation
 
     annotations: list[dict[str, Any]] = [
-        edge("edge_north", [[left, top], [right, top]], "outer"),
-        edge("edge_east", [[right, top], [right, bottom]], "outer"),
-        edge("edge_south", [[right, bottom], [left, bottom]], "outer"),
-        edge("edge_west", [[left, bottom], [left, top]], "outer"),
-        edge("edge_divider", [[divider, top], [divider, bottom]], "inner"),
-        *region("region_1", left, top, divider, bottom, "left"),
-        *region("region_2", divider, top, right, bottom, "right"),
+        edge("edge_north", [[left, top], [right, top]], labels["wall_exterior"]),
+        edge("edge_east", [[right, top], [right, bottom]], labels["wall_exterior"]),
+        edge("edge_south", [[right, bottom], [left, bottom]], labels["wall_exterior"]),
+        edge("edge_west", [[left, bottom], [left, top]], labels["wall_exterior"]),
+        edge("edge_divider", [[divider, top], [divider, bottom]], labels["wall_interior"]),
+        polygon(
+            "region_1",
+            labels["space"],
+            left,
+            top,
+            divider,
+            bottom,
+            {"label": "left"},
+        ),
+        polygon(
+            "region_2",
+            labels["space"],
+            divider,
+            top,
+            right,
+            bottom,
+            {"label": "right"},
+        ),
+        polygon(
+            "stairs_1",
+            labels["stairs"],
+            stair_left,
+            stair_top,
+            stair_right,
+            stair_bottom,
+        ),
+        polygon(
+            "column_1",
+            labels["column"],
+            column_left,
+            column_top,
+            column_right,
+            column_bottom,
+        ),
         {
             # On layer 1, so it overlays `edge_divider` without erasing it —
             # the one thing layers exist for.
             "id": "marker_1",
-            "class": "marker",
+            "class": labels["door"],
             "geometry": {
                 "kind": "keypoints",
                 "points": [
@@ -186,12 +292,12 @@ def plan(seed: int, mirrored: bool) -> tuple[bytes, list[dict[str, Any]]]:
                     {"name": "end", "at": [flip(divider), 260.0], "visible": True},
                 ],
             },
-            "links": {"edge": ["edge_divider"]},
+            "links": {"wall": ["edge_divider"]},
             "origin": "human",
         },
         {
             "id": "marker_2",
-            "class": "marker",
+            "class": labels["window"],
             "geometry": {
                 "kind": "keypoints",
                 "points": [
@@ -199,12 +305,25 @@ def plan(seed: int, mirrored: bool) -> tuple[bytes, list[dict[str, Any]]]:
                     {"name": "end", "at": [flip(280.0), top], "visible": True},
                 ],
             },
-            "links": {"edge": ["edge_north"]},
+            "links": {"wall": ["edge_north"]},
+            "origin": "human",
+        },
+        {
+            "id": "marker_3",
+            "class": labels["passage"],
+            "geometry": {
+                "kind": "keypoints",
+                "points": [
+                    {"name": "start", "at": [flip(400.0), bottom], "visible": True},
+                    {"name": "end", "at": [flip(460.0), bottom], "visible": True},
+                ],
+            },
+            "links": {"wall": ["edge_south"]},
             "origin": "human",
         },
         {
             "id": "ignore_1",
-            "class": "ignore",
+            "class": labels["ignore"],
             "geometry": {
                 "kind": "polygon",
                 "exterior": [
@@ -225,7 +344,7 @@ OWNED = {"kind": "owned", "grant": "demo"}
 RESEARCH = {"kind": "research_only", "license": "CC BY-NC 4.0"}
 
 
-def demo_classes() -> list[dict[str, Any]]:
+def demo_classes(labels: dict[str, str]) -> list[dict[str, Any]]:
     """The vocabulary this demo draws with.
 
     aiwatcher ships none — a project brings its own — so the demo brings one,
@@ -236,39 +355,88 @@ def demo_classes() -> list[dict[str, Any]]:
     """
     return [
         {
-            "name": "region",
+            "name": labels["wall_exterior"],
+            "geometry": "polyline",
+            "color": "#1f2937",
+            "description": "An exterior wall, drawn as a centreline with a width.",
+            "attributes": [{"name": "thickness_px", "kind": "number", "required": True}],
+        },
+        {
+            "name": labels["wall_interior"],
+            "geometry": "polyline",
+            "color": "#475569",
+            "description": "An interior wall, drawn as a centreline with a width.",
+            "attributes": [{"name": "thickness_px", "kind": "number", "required": True}],
+        },
+        {
+            "name": labels["space"],
             "geometry": "polygon",
             "color": "#2563eb",
             "description": "An enclosed area.",
             "attributes": [{"name": "label", "kind": "text"}],
         },
         {
-            "name": "edge",
-            "geometry": "polyline",
-            "color": "#1f2937",
-            "description": "A boundary, drawn as a centreline with a width.",
-            "attributes": [
-                {
-                    "name": "role",
-                    "kind": "enum",
-                    "values": ["outer", "inner", "unknown"],
-                    "required": True,
-                    "default": "unknown",
-                },
-                {"name": "thickness_px", "kind": "number", "required": True},
-            ],
+            "name": labels["stairs"],
+            "geometry": "polygon",
+            "color": "#7c3aed",
+            "description": "A stair flight footprint.",
         },
         {
-            "name": "marker",
+            "name": labels["column"],
+            "geometry": "polygon",
+            "color": "#a16207",
+            "description": "A structural column footprint.",
+        },
+        {
+            "name": labels["door"],
             "geometry": "keypoints",
             "color": "#f97316",
-            "description": "Something sitting on an edge. Its own layer, so it does not erase one.",
+            "description": "A door opening sitting on a wall.",
             "keypoints": ["start", "end"],
-            "links": [{"name": "edge", "targets": ["edge"], "min": 0, "max": 1}],
+            "links": [
+                {
+                    "name": "wall",
+                    "targets": [labels["wall_exterior"], labels["wall_interior"]],
+                    "min": 0,
+                    "max": 1,
+                }
+            ],
             "layer": 1,
         },
         {
-            "name": "ignore",
+            "name": labels["window"],
+            "geometry": "keypoints",
+            "color": "#0ea5e9",
+            "description": "A window opening sitting on a wall.",
+            "keypoints": ["start", "end"],
+            "links": [
+                {
+                    "name": "wall",
+                    "targets": [labels["wall_exterior"], labels["wall_interior"]],
+                    "min": 0,
+                    "max": 1,
+                }
+            ],
+            "layer": 1,
+        },
+        {
+            "name": labels["passage"],
+            "geometry": "keypoints",
+            "color": "#16a34a",
+            "description": "An open passage sitting on a wall.",
+            "keypoints": ["start", "end"],
+            "links": [
+                {
+                    "name": "wall",
+                    "targets": [labels["wall_exterior"], labels["wall_interior"]],
+                    "min": 0,
+                    "max": 1,
+                }
+            ],
+            "layer": 1,
+        },
+        {
+            "name": labels["ignore"],
             "geometry": "polygon",
             "color": "#dc2626",
             "description": "Excluded from every target and from the loss.",
@@ -277,18 +445,68 @@ def demo_classes() -> list[dict[str, Any]]:
     ]
 
 
-def main() -> int:
+def parse_labels(overrides: list[str]) -> dict[str, str]:
+    labels = DEFAULT_LABELS.copy()
+    for override in overrides:
+        role, separator, name = override.partition("=")
+        if not separator or role not in DEFAULT_LABELS:
+            choices = ", ".join(LABEL_ROLES)
+            raise ValueError(f"label must be ROLE=NAME, where ROLE is one of: {choices}")
+        if not LABEL_NAME.fullmatch(name):
+            raise ValueError(
+                "label names must start with a letter or number, contain only letters, numbers, "
+                "'.', ':', '_' or '-', and be at most 160 characters"
+            )
+        labels[role] = name
+
+    duplicates = sorted(
+        name for name in set(labels.values()) if list(labels.values()).count(name) > 1
+    )
+    if duplicates:
+        repeated = ", ".join(duplicates)
+        raise ValueError(f"each role needs a distinct label name; repeated: {repeated}")
+    return labels
+
+
+def arguments(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--base-url", default=BASE, help=f"aiwatcher API URL (default: {BASE})")
+    parser.add_argument(
+        "--project",
+        default=PROJECT,
+        help=f"annotation project name (default: {PROJECT})",
+    )
+    parser.add_argument(
+        "--label",
+        action="append",
+        default=[],
+        metavar="ROLE=NAME",
+        help=("rename a generated annotation class; repeat for any of: " + ", ".join(LABEL_ROLES)),
+    )
+    args = parser.parse_args(argv)
     try:
-        urllib.request.urlopen(f"{BASE}/livez", timeout=2).read()  # noqa: S310
+        args.labels = parse_labels(args.label)
+    except ValueError as error:
+        parser.error(str(error))
+    return args
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = arguments(argv)
+    try:
+        urllib.request.urlopen(f"{args.base_url}/livez", timeout=2).read()  # noqa: S310
     except (urllib.error.URLError, OSError):
-        print(f"✗ nothing is listening on {BASE} — start it with `just run`", file=sys.stderr)
+        print(
+            f"✗ nothing is listening on {args.base_url} — start it with `just run`",
+            file=sys.stderr,
+        )
         return 1
 
-    registry = AnnotationRegistry(BASE)
+    registry = AnnotationRegistry(args.base_url)
     try:
-        classes = demo_classes()
+        classes = demo_classes(args.labels)
         registry.save_project(
-            PROJECT,
+            args.project,
             classes,
             description="Synthetic plans, for looking at the tool rather than the model",
             split_salt="demo",
@@ -302,15 +520,14 @@ def main() -> int:
             return 1
         raise
 
-    families = ["subject-a", "subject-b", "subject-c"]
     accepted = 0
-    for index, family in enumerate(families):
+    for index, family in enumerate(FAMILIES):
         for mirrored in (False, True):
-            png, annotations = plan(index, mirrored)
+            png, annotations = plan(index, mirrored, args.labels)
             stored = registry.upload(png, content_type="image/png")
             image_id = stored["image_id"]
             registry.register_image(
-                PROJECT,
+                args.project,
                 image_id=image_id,
                 uri=stored["uri"],
                 width=WIDTH,
@@ -324,18 +541,22 @@ def main() -> int:
             )
             # One image left as a draft, for the other exclusion reason.
             draft = family == "subject-b" and mirrored
-            registry.save_revision(PROJECT, image_id, annotations, accept=not draft)
+            registry.save_revision(args.project, image_id, annotations, accept=not draft)
             accepted += 0 if draft else 1
             print(f"  {'draft ' if draft else 'accept'} {family}{' (mirror)' if mirrored else ''}")
 
-    export = registry.build_export(PROJECT, note="seeded")
+    export = registry.build_export(args.project, note="seeded")
     print()
-    print(f"✓ {accepted} accepted drawings across {len(families)} families")
+    print(f"✓ {accepted} accepted drawings across {len(FAMILIES)} families")
     print(f"✓ export {export.reference}")
-    print(f"  {export.counts['images']} images, {export.counts['instances']} instances, "
-          f"{export.counts['excluded']} excluded")
+    print(
+        f"  {export.counts['images']} images, {export.counts['instances']} instances, "
+        f"{export.counts['excluded']} excluded"
+    )
     for exclusion in export.excluded:
-        print(f"  excluded {exclusion['group_id']}: {exclusion['reason']} — {exclusion['detail']}")
+        print(f"  excluded {exclusion}")
+    for name, side in export.splits().items():
+        print(f"  {name}: {side.counts()}")
 
     # And a training run against it, so the Training area has a curve to draw.
     # It goes to `/api/v1/training-runs`, not to the event log: a training run

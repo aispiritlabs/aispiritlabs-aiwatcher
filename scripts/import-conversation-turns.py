@@ -1,4 +1,11 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["aiwatcher-sdk"]
+#
+# [tool.uv.sources]
+# aiwatcher-sdk = { path = "../sdk/python", editable = true }
+# ///
 """Move training pairs off the event log and into the governed archive.
 
 The build before ADR_0021 kept conversation content by convention: a producer

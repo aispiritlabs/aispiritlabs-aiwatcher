@@ -2,10 +2,20 @@
 
 Publish agent-run telemetry to aiwatcher, and read its prompt registry.
 
-No dependencies. Everything here is `urllib`, `json` and `dataclasses`, because
-this gets imported into processes that already have opinions about `httpx` and
-`pydantic` versions, and a telemetry library that forces one of those is a
-library people vendor around.
+Two halves with opposite failure policies, and opposite dependencies.
+
+**Telemetry** — `aiwatcher_sdk` itself, which is what an instrumented agent
+imports — depends on nothing. It is `urllib`, `json` and `dataclasses`, because
+it gets imported into processes that already have opinions about `httpx` and
+`pydantic` versions, and because it must never take an agent down: the
+transport batches on a background thread and drops on a full queue, loudly.
+
+**The registries** — prompts, annotations, training, conversations — every
+method raises, because reading the prompt a service is about to run on, or the
+export a run is about to consume, *is* the work. They run in training jobs,
+deploy steps and CLIs rather than in somebody's request path, and they share
+one `httpx` client with a `tenacity` retry policy that knows the difference
+between a request nothing applied and one that may have been.
 
 ```bash
 uv add aiwatcher-sdk
@@ -144,12 +154,69 @@ version = registry.publish(
 )
 ```
 
+## The annotation registry
+
+Vector annotations for any vision domain — the project's label schema carries
+the domain, and this ships no vocabulary. An **export** is the frozen thing a
+training run records; a **split** of it is a sequence you can measure; and a
+dataset is built from that split, which is PyTorch's own two steps:
+
+```python
+from aiwatcher_sdk.annotations import AnnotationRegistry
+
+with AnnotationRegistry("http://aiwatcher:8080") as registry:
+    export = registry.build_export("corpora/plans")
+
+    test = export.split("test")
+    # images, and the subjects behind them
+    print(len(test), len(test.families()))
+
+    train = export.split("train").dataset(image_size=512)
+    loader = train.loader(batch_size=4, shuffle=True)
+```
+
+The export carries the registry it was read from, so nothing downstream asks
+for one again. A manifest reconstructed from a file with `Export.from_json` has
+no source and takes one: `split.dataset(registry, ...)`.
+
+`split()` returns a `SplitView`: a plain `Sequence[Sample]`, so `len`, indexing,
+slicing and iteration all work, plus the two questions worth asking before
+training on it.
+
+```python
+side = export.split("test")
+
+# the distinct subjects — what a score is really over
+side.families()
+# images, families, instances
+side.counts()
+# a slice is another view
+side[:8].families()
+```
+
+**The family, not the image, is the unit.** One building published as the plain
+plan, its mirror, a garage variant and a re-drawn revision is four images and
+one observation. `group_id` is what keeps them on one side, so a test score
+measures generalisation rather than memorisation — and `len(side.families())`
+is the number that bounds what that score can mean. `split_for` computes the
+same rule locally, byte for byte, so "is this house held out" needs no request.
+
+`.dataset(...)` needs `pip install 'aiwatcher-sdk[vision]'` — it rasterises the
+vector shapes into the grids a loss function reads, one per declared schema
+layer, on demand and never stored. `.loader(...)` is the only place in this SDK
+that imports torch, inside the method, so a process that only rasterises never
+pays for it.
+
+Exclusions are data: `export.excluded` is a list of `Exclusion` — `group_id`,
+`reason`, `detail` — because an export that quietly loses a third of a corpus
+reads exactly like one that did not.
+
 ## Prompt optimisation, with DeepEval
 
 `aiwatcher_sdk.integrations.deepeval` turns a DeepEval `OptimizationReport`
 into a stored candidate version plus a record of what it was measured against.
-It does **not** import deepeval — the report is read structurally, so this SDK
-stays dependency-free.
+It does **not** import deepeval — the report is read structurally, so a DeepEval
+release is not an SDK release.
 
 ```python
 from deepeval.optimizer import PromptOptimizer

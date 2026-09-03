@@ -30,15 +30,16 @@ Two things the registry does that are easy to get wrong by hand:
 from __future__ import annotations
 
 import hashlib
-import json
-import os
 import re
-import urllib.error
-import urllib.parse
-import urllib.request
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from types import TracebackType
+from typing import Any, Literal, Self
+from urllib.parse import quote
+
+import httpx
+
+from aiwatcher_sdk.api import ApiError, Transport
 
 __all__ = [
     "OptimizationRecord",
@@ -53,6 +54,8 @@ __all__ = [
 
 #: The label a deployment reads to answer "which version is live".
 PRODUCTION = "production"
+
+_DISABLED = "this aiwatcher instance was started without a prompt store; set AIWATCHER_PROMPT_STORE"
 
 # The lookbehind is load-bearing and matches the server's scanner: without it
 # `{{{ raw }}}` — a literal brace in a Jinja-style template — reads as a
@@ -82,33 +85,16 @@ def variables_of(text: str) -> list[str]:
     return sorted(set(_PLACEHOLDER.findall(text)))
 
 
-class RegistryError(RuntimeError):
+class RegistryError(ApiError):
     """The registry refused, or could not be reached.
 
     ``code`` is the machine-readable discriminator the API returns; switch on
     it rather than on the message. ``registry_disabled`` means the instance was
     started without a prompt store, which is a deployment problem rather than a
-    missing prompt.
+    missing prompt — and :attr:`~aiwatcher_sdk.api.ApiError.is_retryable` is
+    ``False`` for it, because retrying a deployment decision forever is what a
+    pipeline does instead of telling somebody to set a variable.
     """
-
-    def __init__(self, message: str, *, status: int | None = None, code: str | None = None) -> None:
-        super().__init__(message)
-        self.status = status
-        self.code = code
-
-    #: Statuses worth coming back from. Everything else is a decision the
-    #: server has already made and will make again.
-    _RETRYABLE = frozenset({429, 500, 502, 503, 504})
-
-    @property
-    def is_retryable(self) -> bool:
-        """Whether coming back later could plausibly work.
-
-        Not simply "5xx": a 501 means this instance was built without a prompt
-        store, and retrying it forever is what a deploy pipeline does instead
-        of telling somebody to set a variable.
-        """
-        return self.status is None or self.status in self._RETRYABLE
 
 
 @dataclass(frozen=True, slots=True)
@@ -292,15 +278,43 @@ class PromptRegistry:
     thread.
     """
 
-    def __init__(self, base_url: str, *, token: str | None = None, timeout: float = 10.0) -> None:
-        self._base = base_url.rstrip("/")
-        # Sent as ``Authorization: Bearer``, and needed only against an
-        # instance with single sign-on on. Unlike the telemetry client, every
-        # method here raises — reading the prompt a service is about to run on
-        # is the work — so a 401 arrives as a `RegistryError` saying the
-        # registry refused, which is the right shape for "set AIWATCHER_TOKEN".
-        self._token = token if token is not None else os.environ.get("AIWATCHER_TOKEN")
-        self._timeout = timeout
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        token: str | None = None,
+        timeout: float = 10.0,
+        attempts: int = 3,
+        client: httpx.Client | None = None,
+    ) -> None:
+        self._http = Transport(
+            base_url,
+            token=token,
+            timeout=timeout,
+            attempts=attempts,
+            error=RegistryError,
+            subject="the prompt registry",
+            hints={"registry_disabled": _DISABLED},
+            client=client,
+        )
+
+    @property
+    def base_url(self) -> str:
+        return self._http.base_url
+
+    def close(self) -> None:
+        self._http.close()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.close()
 
     # ── Reads ────────────────────────────────────────────────────────────
 
@@ -342,13 +356,9 @@ class PromptRegistry:
         tag: str | None = None,
         limit: int | None = None,
     ) -> dict[str, Any]:
-        query = {
-            key: value
-            for key, value in (("search", search), ("tag", tag), ("limit", limit))
-            if value is not None
-        }
-        suffix = f"?{urllib.parse.urlencode(query)}" if query else ""
-        return self._request("GET", f"/api/v1/prompts{suffix}")
+        return self._request(
+            "GET", "/api/v1/prompts", params={"search": search, "tag": tag, "limit": limit}
+        )
 
     def optimization(self, name: str, optimization_id: str) -> OptimizationRecord:
         return OptimizationRecord.from_json(
@@ -471,53 +481,18 @@ class PromptRegistry:
     # ── Transport ────────────────────────────────────────────────────────
 
     def _request(
-        self, method: str, path: str, body: Mapping[str, Any] | None = None
+        self,
+        method: str,
+        path: str,
+        body: Mapping[str, Any] | None = None,
+        *,
+        params: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        payload = None if body is None else json.dumps(body).encode()
-        headers = {"content-type": "application/json"}
-        if self._token:
-            headers["authorization"] = f"Bearer {self._token}"
-        request = urllib.request.Request(  # noqa: S310 - the base URL is the caller's own server
-            f"{self._base}{path}",
-            data=payload,
-            headers=headers,
-            method=method,
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=self._timeout) as response:  # noqa: S310
-                raw = response.read()
-        except urllib.error.HTTPError as error:
-            raise _from_http_error(error) from error
-        except (urllib.error.URLError, OSError) as error:
-            raise RegistryError(f"the registry at {self._base} is unreachable: {error}") from error
-        if not raw:
-            return {}
-        parsed: Any = json.loads(raw)
-        if not isinstance(parsed, dict):  # pragma: no cover - server contract
-            raise RegistryError(f"expected an object from {path}, got {type(parsed).__name__}")
-        return parsed
-
-
-def _from_http_error(error: urllib.error.HTTPError) -> RegistryError:
-    """Turn the API's error body into something a caller can branch on.
-
-    The body is the same shape everywhere — ``{"code", "message"}`` — which is
-    the whole reason the API has one error type.
-    """
-    code: str | None = None
-    message = error.reason or "the registry refused the request"
-    try:
-        body = json.loads(error.read())
-    except (ValueError, OSError):
-        body = None
-    if isinstance(body, dict):
-        code = body.get("code")
-        message = body.get("message", message)
-    if code == "registry_disabled":
-        message = (
-            "this aiwatcher instance was started without a prompt store; set AIWATCHER_PROMPT_STORE"
-        )
-    return RegistryError(message, status=error.code, code=code)
+        # Every write in this registry is idempotent by construction — a
+        # version id is `sha256(text)`, a label is set to a value, and an
+        # optimisation carries its own id — so a repeat after a lost answer
+        # lands on what is already stored rather than beside it.
+        return self._http.json(method, path, body, params=params, idempotent=True)
 
 
 def _segment(value: str) -> str:
@@ -526,5 +501,10 @@ def _segment(value: str) -> str:
     The server validates these too, and would refuse anything with a separator
     in it. Encoding here means a caller that passes a bad name gets a 400 that
     names the field rather than a 404 on a URL it did not intend to build.
+
+    ``httpx`` encodes a *query* — that is what ``params=`` is for — and leaves
+    a path alone, correctly, because a client is the only side that knows
+    whether a slash in a name is a separator or part of it. Here it is part of
+    it: ``planner.floor-plan`` and every namespaced name like it.
     """
-    return urllib.parse.quote(value, safe="")
+    return quote(value, safe="")

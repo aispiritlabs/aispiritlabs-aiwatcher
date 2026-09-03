@@ -1,4 +1,11 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["aiwatcher-sdk[onnx]", "onnx>=1.16"]
+#
+# [tool.uv.sources]
+# aiwatcher-sdk = { path = "../sdk/python", editable = true }
+# ///
 """Re-express the promoted model as an ONNX graph, prove it agrees, and label it.
 
 The second runtime profile needs a second runtime to serve, and inventing a

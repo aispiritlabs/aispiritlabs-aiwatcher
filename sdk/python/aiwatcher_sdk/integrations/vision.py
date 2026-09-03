@@ -12,19 +12,24 @@ mask beside the vector it came from is two sources of truth that will disagree,
 with nothing able to say which is right.
 
     from aiwatcher_sdk.annotations import AnnotationRegistry
-    from aiwatcher_sdk.integrations.vision import ExportDataset
 
     registry = AnnotationRegistry("http://aiwatcher:8080")
     export = registry.build_export("corpora/plans")
-    train = ExportDataset(registry, export, split="train", image_size=512)
-    loader = torch.utils.data.DataLoader(train, batch_size=4, shuffle=True)
+
+    train = export.split("train").dataset(image_size=512)
+    loader = train.loader(batch_size=4, shuffle=True)
+
+That is PyTorch's own two steps — a ``Dataset``, then a ``DataLoader`` over
+it — and the first of them is reached from the split rather than from here, so
+a caller never has to name this module to use it.
 
 ``ExportDataset`` is deliberately **not** a ``torch.utils.data.Dataset``
 subclass. A map-style dataset in PyTorch is a duck: ``__len__`` and
 ``__getitem__`` are the whole protocol, ``default_collate`` turns the numpy
 arrays it yields into tensors, and this file therefore stays importable in a
 process that has never heard of torch — the same rule
-:mod:`aiwatcher_sdk.integrations.torch` follows.
+:mod:`aiwatcher_sdk.integrations.torch` follows. :meth:`ExportDataset.loader`
+is the one method that imports it, and only when it is called.
 
 What it *does* need is numpy, and Pillow to decode a PNG. Both are imported
 lazily, inside the functions that need them, so importing this module costs
@@ -72,9 +77,9 @@ import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, TypedDict, cast
 
-from aiwatcher_sdk.annotations import AnnotationRegistry, Export, RegistryError, Sample
+from aiwatcher_sdk.annotations import AnnotationRegistry, Export, RegistryError, Sample, SplitView
 
 if TYPE_CHECKING:  # pragma: no cover - import-time only for the type checker
     import numpy as np
@@ -88,6 +93,7 @@ __all__ = [
     "STROKE_ATTRIBUTE",
     "BlobCache",
     "ExportDataset",
+    "Item",
     "LabelLayer",
     "Letterbox",
     "SegmentationScore",
@@ -635,40 +641,57 @@ def decode_image(body: bytes, letterbox: Letterbox, *, channels: int = 1) -> Arr
 # ── The dataset ──────────────────────────────────────────────────────────────
 
 
+class Item(TypedDict):
+    """One sample, as ``default_collate`` will stack it.
+
+    Written down rather than left as ``dict[str, Any]`` because this is the
+    contract between the rasteriser and somebody's loss function, and the two
+    keys that are *not* arrays are the ones worth being explicit about:
+    ``group_id`` is what makes a per-family metric possible, and a collate that
+    silently dropped it would leave a per-image mean that counts one subject
+    four times.
+    """
+
+    #: ``float32 (channels, size, size)`` in ``[0, 1]``.
+    image: Array
+    #: ``int64 (layers, size, size)`` — one grid per declared layer.
+    targets: Array
+    #: ``bool (size, size)`` — ``True`` is out of the loss.
+    ignore: Array
+    #: The content address of the pixels.
+    image_id: str
+    #: The family, not the drawing.
+    group_id: str
+
+
 class ExportDataset:
-    """One split of one export, as a map-style dataset.
+    """One :class:`~aiwatcher_sdk.annotations.SplitView`, as a map-style dataset.
 
-    Bound to an **export**, never to a project. A project is mutable: images
-    are added to it while a run trains, and a dataset reading one would have a
-    length that changed under a shuffled sampler. The export is the frozen
-    thing, and its reference is what the run records.
+    Built from a split rather than from a project, and the difference is the
+    point twice over. A project is mutable — images are added to it while a run
+    trains, and a dataset reading one would have a length that changed under a
+    shuffled sampler — while the export is frozen and its reference is what the
+    run records. And the split is where the family rule already lives, so there
+    is no second place that decides which subjects a model may see::
 
-    Each item is a dict of numpy arrays, which is exactly what
-    ``torch.utils.data.default_collate`` knows how to stack::
+        test = export.split("test")
+        data = test.dataset(registry, image_size=512)
+        assert data.families() == test.families()
 
-        image      float32  (channels, size, size)   in [0, 1]
-        targets    int64    (layers, size, size)     one grid per schema layer
-        ignore     bool     (size, size)             True = out of the loss
-        image_id   str      the content address
-        group_id   str      the family, not the drawing
+    Each item is an :class:`Item` of numpy arrays, which is exactly what
+    ``torch.utils.data.default_collate`` knows how to stack.
 
     :attr:`layers` says what the grids mean — layer order matches the first
     axis of ``targets``, and each layer's ``classes`` are its pixel values. A
     model reads one head per layer and gets its class counts from here rather
     than from a constant somebody has to keep in step.
-
-    ``group_id`` rides along because it is the only thing that makes a
-    per-family metric possible at evaluation time, and a per-image mean over a
-    corpus with four renderings of one subject is a mean that counts it four
-    times.
     """
 
     def __init__(
         self,
         registry: AnnotationRegistry,
-        export: Export,
+        split: SplitView,
         *,
-        split: Literal["train", "validation", "test"],
         image_size: int = 512,
         channels: int = 1,
         cache_dir: str | Path | None = None,
@@ -676,23 +699,23 @@ class ExportDataset:
         classes: Sequence[Mapping[str, Any]] | None = None,
     ) -> None:
         self.registry = registry
-        self.export = export
         self.split = split
+        self.export = split.export
         self.image_size = image_size
         self.channels = channels
         self.flip = flip
-        self.samples: list[Sample] = export.split(split)
+        self.samples: tuple[Sample, ...] = tuple(split)
         self.cache = BlobCache(cache_dir) if cache_dir is not None else None
         self._shapes: dict[str, list[dict[str, Any]]] = {}
         self.classes: list[dict[str, Any]] = (
             [dict(entry) for entry in classes]
             if classes is not None
-            else _schema_for(registry, export)
+            else _schema_for(registry, self.export)
         )
         self.layers: list[LabelLayer] = layers_for(self.classes)
         if not self.layers:
             raise RegistryError(
-                f"the schema behind {export.reference} declares no paintable class, so every "
+                f"the schema behind {self.export.reference} declares no paintable class, so every "
                 "target would be empty; a vocabulary of nothing but `ignore` classes is not a "
                 "training target"
             )
@@ -700,12 +723,50 @@ class ExportDataset:
     def __len__(self) -> int:
         return len(self.samples)
 
-    @property
-    def families(self) -> set[str]:
-        """The buildings on this side. The number a score is really over."""
-        return {sample.group_id for sample in self.samples}
+    def __repr__(self) -> str:
+        return (
+            f"ExportDataset({self.export.reference!r}, {self.split.name or 'all'}, "
+            f"{len(self.samples)} images, {len(self.layers)} layers)"
+        )
 
-    def __getitem__(self, index: int) -> dict[str, Any]:
+    def families(self) -> frozenset[str]:
+        """The subjects on this side. The number a score is really over.
+
+        The same answer as ``export.split("test").families()``, and the same
+        method name on both, because they are the same question asked of the
+        same side.
+        """
+        return self.split.families()
+
+    def loader(self, **options: Any) -> Any:
+        """A ``torch.utils.data.DataLoader`` over this dataset.
+
+        The last line of the PyTorch data tutorial, and the only place in this
+        SDK that imports torch. It is imported *here*, inside the one method
+        that cannot work without it, so a process that only rasterises never
+        pays for it and the rule the rest of this file follows — read the other
+        library structurally, never import it — is broken in exactly one
+        visible place rather than at the top of the module::
+
+            loader = export.split("train").dataset(registry).loader(
+                batch_size=4, shuffle=True, num_workers=4
+            )
+
+        Every keyword goes straight to ``DataLoader``. Nothing is defaulted
+        here: a batch size that fits one corpus does not fit the next, and a
+        default this layer picked would be a number nobody chose.
+        """
+        try:
+            from torch.utils.data import DataLoader
+        except ImportError as error:  # pragma: no cover - exercised by not having torch
+            raise ImportError(
+                "ExportDataset.loader needs torch; install it for your platform, or build the "
+                "loader yourself — this dataset is map-style, so any framework that reads "
+                "__len__ and __getitem__ takes it as it is"
+            ) from error
+        return DataLoader(self, **options)
+
+    def __getitem__(self, index: int) -> Item:
         numpy = _numpy()
         sample = self.samples[index]
         box = fit_letterbox(sample.width, sample.height, self.image_size)

@@ -7,15 +7,15 @@ after it has already seen the content.
 
 from __future__ import annotations
 
-import email.message
-import io
 import json
-import urllib.error
 from typing import Any
 
+import httpx
 import pytest
 
+from aiwatcher_sdk.api import Transport
 from aiwatcher_sdk.conversations import (
+    _DISABLED,
     ArchiveError,
     Consent,
     ConversationArchive,
@@ -24,7 +24,6 @@ from aiwatcher_sdk.conversations import (
     Retention,
     ToolResult,
     Turn,
-    _from_http_error,
 )
 
 
@@ -36,10 +35,19 @@ class RecordingArchive(ConversationArchive):
         self.sent: list[dict[str, Any]] = []
         self.paths: list[str] = []
         self.replies: list[dict[str, Any]] = []
+        self.queries: list[dict[str, Any]] = []
 
-    def _request(self, method: str, path: str, body: Any = None) -> dict[str, Any]:
+    def _request(
+        self,
+        method: str,
+        path: str,
+        body: Any = None,
+        *,
+        params: Any = None,
+    ) -> dict[str, Any]:
         self.paths.append(f"{method} {path}")
         self.sent.append(dict(body or {}))
+        self.queries.append(dict(params or {}))
         if self.replies:
             return self.replies.pop(0)
         return {"turns": [{"turn_id": "abc", "created": True}]}
@@ -50,15 +58,27 @@ class RecordingArchive(ConversationArchive):
         return first
 
 
-def _http_error(status: int, body: dict[str, Any]) -> urllib.error.HTTPError:
-    """A real ``HTTPError`` with a readable body, rather than a patched one."""
-    return urllib.error.HTTPError(
-        "http://aiwatcher.invalid/api/v1/conversation-turns",
-        status,
-        "refused",
-        email.message.Message(),
-        io.BytesIO(json.dumps(body).encode()),
+def refused(status: int, body: dict[str, Any]) -> ArchiveError:
+    """What this module's transport makes of the API's one error shape.
+
+    Driven through a real ``httpx`` transport rather than by calling the
+    mapper, because the mapping is only worth anything if a response that
+    arrives on the wire reaches it.
+    """
+    transport = Transport(
+        "http://aiwatcher.invalid",
+        error=ArchiveError,
+        subject="the conversation archive",
+        hints={"registry_disabled": _DISABLED},
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(status, json=body),
+            )
+        ),
     )
+    with pytest.raises(ArchiveError) as failure:
+        transport.json("POST", "/api/v1/conversation-turns", {})
+    return failure.value
 
 
 def archive(**kwargs: Any) -> RecordingArchive:
@@ -270,25 +290,23 @@ def test_iterating_a_corpus_follows_the_cursor() -> None:
 
 
 def test_a_disabled_archive_says_which_decision_is_missing() -> None:
-    translated = _from_http_error(_http_error(501, {"code": "registry_disabled", "message": "…"}))
+    translated = refused(501, {"code": "registry_disabled", "message": "…"})
     assert "AIWATCHER_CONVERSATION_ARCHIVE" in str(translated)
     # And not worth retrying: it is a decision somebody has to make.
     assert not translated.is_retryable
 
 
 def test_a_refusal_carries_every_reason_at_once() -> None:
-    translated = _from_http_error(
-        _http_error(
-            422,
-            {
-                "code": "turn_rejected",
-                "message": "the turn was refused",
-                "details": [
-                    "policy.consent.basis is required",
-                    "policy.redaction is required",
-                ],
-            },
-        )
+    translated = refused(
+        422,
+        {
+            "code": "turn_rejected",
+            "message": "the turn was refused",
+            "details": [
+                "policy.consent.basis is required",
+                "policy.redaction is required",
+            ],
+        },
     )
     assert len(translated.details) == 2
     assert translated.code == "turn_rejected"

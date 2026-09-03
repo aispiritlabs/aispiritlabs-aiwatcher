@@ -1,4 +1,11 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["aiwatcher-sdk"]
+#
+# [tool.uv.sources]
+# aiwatcher-sdk = { path = "../sdk/python", editable = true }
+# ///
 """End-to-end: annotate → export → train a real model → register → promote.
 
 The smallest thing that is not a mock. Twelve 64×48 plans are generated,
@@ -390,12 +397,9 @@ def main() -> int:  # noqa: PLR0911 - one early return per checked step, on purp
     print("2. export")
     export = annotations.build_export(PROJECT, note="e2e")
     print(f"   {export.reference}")
-    for split in ("train", "validation", "test"):
-        print(
-            f"   {split:<11} {len(export.split(split)):>2} images"
-            f"   {len(export.families(split))} families"
-        )
-    overlap = export.families("train") & export.families("test")
+    for name, side in export.splits().items():
+        print(f"   {name:<11} {side.counts()}")
+    overlap = export.split("train").families() & export.split("test").families()
     if overlap:
         print(f"✗ a building is in both train and test: {overlap}", file=sys.stderr)
         return 1

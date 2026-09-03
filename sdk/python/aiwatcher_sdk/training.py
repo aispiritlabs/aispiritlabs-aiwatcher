@@ -39,16 +39,17 @@ is worse than one that was never trained.
 from __future__ import annotations
 
 import contextlib
-import json
-import os
 import sys
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from types import TracebackType
+from typing import Any, Literal, Self
+from urllib.parse import quote
+
+import httpx
+
+from aiwatcher_sdk.api import ApiError, Transport
 
 __all__ = [
     "EpochContext",
@@ -68,19 +69,8 @@ Status = Literal["running", "succeeded", "failed", "cancelled"]
 DEFAULT_SAMPLE_INTERVAL = 10.0
 
 
-class TrainingError(RuntimeError):
+class TrainingError(ApiError):
     """The training registry refused, or could not be reached."""
-
-    def __init__(self, message: str, *, status: int | None = None, code: str | None = None) -> None:
-        super().__init__(message)
-        self.status = status
-        self.code = code
-
-    _RETRYABLE = frozenset({429, 500, 502, 503, 504})
-
-    @property
-    def is_retryable(self) -> bool:
-        return self.status is None or self.status in self._RETRYABLE
 
 
 @dataclass
@@ -253,7 +243,7 @@ class TrainingRun:
         try:
             self._client.request(
                 "POST",
-                f"/api/v1/training-runs/{urllib.parse.quote(self.run_id)}/progress",
+                f"/api/v1/training-runs/{quote(self.run_id)}/progress",
                 self._buffer.payload(),
             )
         except TrainingError as error:
@@ -279,7 +269,7 @@ class TrainingRun:
         try:
             self._client.request(
                 "POST",
-                f"/api/v1/training-runs/{urllib.parse.quote(self.run_id)}/finish",
+                f"/api/v1/training-runs/{quote(self.run_id)}/finish",
                 body,
             )
         except TrainingError as failure:
@@ -309,10 +299,42 @@ class TrainingRun:
 class TrainingClient:
     """A client for `/api/v1/training-runs` and `/api/v1/models`."""
 
-    def __init__(self, base_url: str, *, token: str | None = None, timeout: float = 15.0) -> None:
-        self._base = base_url.rstrip("/")
-        self._token = token if token is not None else os.environ.get("AIWATCHER_TOKEN")
-        self._timeout = timeout
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        token: str | None = None,
+        timeout: float = 15.0,
+        attempts: int = 3,
+        client: httpx.Client | None = None,
+    ) -> None:
+        self._http = Transport(
+            base_url,
+            token=token,
+            timeout=timeout,
+            attempts=attempts,
+            error=TrainingError,
+            subject="the training registry",
+            client=client,
+        )
+
+    @property
+    def base_url(self) -> str:
+        return self._http.base_url
+
+    def close(self) -> None:
+        self._http.close()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.close()
 
     @contextlib.contextmanager
     def run(
@@ -386,24 +408,25 @@ class TrainingClient:
         dataset: str | None = None,
         limit: int = 50,
     ) -> list[dict[str, Any]]:
-        query: dict[str, Any] = {"limit": limit}
-        for key, value in (("model", model), ("status", status), ("dataset", dataset)):
-            if value:
-                query[key] = value
-        page = self.request("GET", f"/api/v1/training-runs?{urllib.parse.urlencode(query)}")
+        query: dict[str, Any] = {
+            "limit": limit,
+            "model": model,
+            "status": status,
+            "dataset": dataset,
+        }
+        page = self.request("GET", "/api/v1/training-runs", params=query)
         return list(page.get("runs", []))
 
     def get_run(self, run_id: str) -> dict[str, Any]:
         """One run, with its whole curve."""
-        return self.request("GET", f"/api/v1/training-runs/{urllib.parse.quote(run_id)}")
+        return self.request("GET", f"/api/v1/training-runs/{quote(run_id)}")
 
     def models(self) -> list[dict[str, Any]]:
         return list(self.request("GET", "/api/v1/models").get("models", []))
 
     def get_model(self, name: str, *, version: str | None = None) -> dict[str, Any]:
         """One model. With no version this resolves `production`, then newest."""
-        suffix = f"?{urllib.parse.urlencode({'version': version})}" if version else ""
-        return self.request("GET", f"/api/v1/models/{urllib.parse.quote(name)}{suffix}")
+        return self.request("GET", f"/api/v1/models/{quote(name)}", params={"version": version})
 
     # ── Writes ───────────────────────────────────────────────────────────
 
@@ -455,49 +478,29 @@ class TrainingClient:
         """Point a label at a version. Needs `admin`, and can be refused."""
         return self.request(
             "POST",
-            f"/api/v1/models/{urllib.parse.quote(name)}/labels",
+            f"/api/v1/models/{quote(name)}/labels",
             {"label": label, "version": version},
         )
 
     # ── Transport ────────────────────────────────────────────────────────
 
     def request(
-        self, method: str, path: str, body: Mapping[str, Any] | None = None
+        self,
+        method: str,
+        path: str,
+        body: Mapping[str, Any] | None = None,
+        *,
+        params: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        payload = None if body is None else json.dumps(body).encode()
-        headers = {"content-type": "application/json"}
-        if self._token:
-            headers["authorization"] = f"Bearer {self._token}"
-        request = urllib.request.Request(  # noqa: S310 - the base URL is the caller's own server
-            f"{self._base}{path}",
-            data=payload,
-            headers=headers,
-            method=method,
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=self._timeout) as response:  # noqa: S310
-                received = response.read()
-        except urllib.error.HTTPError as error:
-            raise _from_http_error(error) from error
-        except (urllib.error.URLError, OSError) as error:
-            raise TrainingError(
-                f"the training registry at {self._base} is unreachable: {error}"
-            ) from error
-        if not received:
-            return {}
-        parsed: Any = json.loads(received)
-        if not isinstance(parsed, dict):  # pragma: no cover - server contract
-            raise TrainingError(f"expected an object from {path}, got {type(parsed).__name__}")
-        return parsed
+        """One request. Public, because `TrainingRun` posts through it.
 
-
-def _from_http_error(error: urllib.error.HTTPError) -> TrainingError:
-    try:
-        body = json.loads(error.read() or b"{}")
-    except (ValueError, OSError):  # pragma: no cover - a proxy in the way
-        body = {}
-    message = body.get("message") or error.reason or "the training registry refused"
-    return TrainingError(str(message), status=error.code, code=body.get("code"))
+        Every write here is safe to repeat: opening a run that is already open
+        returns it, `progress` **replaces** the epoch index it carries rather
+        than appending one, and finishing a finished run is the same finish. A
+        retried epoch that appended would draw a curve with two points at one
+        x, which reads as training that went backwards.
+        """
+        return self._http.json(method, path, body, params=params, idempotent=True)
 
 
 def curve(run: Mapping[str, Any], metric: str) -> list[tuple[int, float]]:

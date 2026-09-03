@@ -430,10 +430,15 @@ that appears in one, run `just openapi` and commit both the contract and
 
 ### Python SDK
 
-`sdk/python` is a `uv` project with its own `pyproject.toml`, and it has **no
-runtime dependencies** — it is imported into agent processes that already have
-opinions about `httpx` and `pydantic` versions. `uv.lock` is committed because
-it pins only the dev toolchain. `just sdk-check` runs `ruff format --check`,
+`sdk/python` is a `uv` project with its own `pyproject.toml`, and its
+dependencies are **split by half**. The telemetry client — `aiwatcher_sdk`
+itself, which is what an instrumented agent imports — depends on nothing and
+stays on `urllib`: it is imported into processes that already pinned `httpx`
+and `pydantic`, and it must never take an agent down. The four **registry**
+clients depend on `httpx` and `tenacity`, because they run in training jobs and
+deploy steps rather than in a request path, every method raises, and the retry
+policy is the thing most worth writing once — `aiwatcher_sdk/api.py` is that
+one place. `uv.lock` is committed. `just sdk-check` runs `ruff format --check`,
 `ruff check`, `mypy --strict` and `pytest`; CI runs the same on Python 3.11,
 which is the floor `requires-python` claims. The lint set is the one `planner`
 selects, deliberately: the two repositories are worked on together, and a lint
@@ -444,8 +449,20 @@ policies, and that is the design: telemetry must never take an agent down, so
 `HttpTransport` swallows and counts; reading the prompt a service is about to
 run on is the work, so every `PromptRegistry` method raises.
 `aiwatcher_sdk/integrations/deepeval.py` never imports deepeval — it reads the
-report structurally, so the SDK stays dependency-free and a DeepEval release is
-not an SDK release.
+report structurally, so a DeepEval release is not an SDK release. The same rule
+holds for torch, with one deliberate exception: `ExportDataset.loader` imports
+it *inside the method*, because handing back a `DataLoader` is the one thing
+that cannot be done structurally.
+
+An annotation export is read the shape PyTorch reads a dataset:
+`export.split("test")` is a `SplitView` — a `Sequence[Sample]` that also answers
+`families()` and `counts()` — and `.dataset(...)` turns it into the map-style
+dataset a `DataLoader` takes, through the registry the export remembers being
+read from rather than one the caller repeats. Everything on that path pickles,
+because a `DataLoader` with workers puts it across a process boundary under
+`spawn`. The split is where the family rule
+already lives, so nothing downstream gets a second chance to decide which
+subjects a model may see.
 
 `aiwatcher_sdk/serving` is the one thing here that reads a decision back out and
 acts on it rather than recording one: it resolves the `production` label and

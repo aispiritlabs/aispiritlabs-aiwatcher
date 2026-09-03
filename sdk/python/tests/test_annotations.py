@@ -14,11 +14,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import pickle
 import threading
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, ClassVar
 
+import httpx
 import pytest
 
 from aiwatcher_sdk.annotations import (
@@ -184,9 +186,140 @@ def test_an_export_reports_its_families_because_that_is_what_bounds_a_score(
     recorder.stubbed[("GET", "/api/v1/annotation-export")] = (200, manifest_body())
     export = registry.export(f"{PROJECT}@{EXPORT_ID}")
 
-    assert len(export.split("train")) == 2
-    assert export.families("train") == {"komancza-dws"}
-    assert export.families("test") == set()
+    train = export.split("train")
+    assert len(train) == 2
+    assert train.families() == {"komancza-dws"}
+    assert export.split("test").families() == frozenset()
+    # The question is asked of the side, not of the export with the side as an
+    # argument — the same call the dataset answers, so the two cannot drift.
+    assert export.families() == train.families()
+
+
+def test_a_split_is_a_sequence_of_samples_and_still_says_what_it_is(
+    api: tuple[AnnotationRegistry, type[_Recorder]],
+) -> None:
+    # Everything a list did, plus the two questions worth asking before
+    # training on it.
+    registry, recorder = api
+    recorder.stubbed[("GET", "/api/v1/annotation-export")] = (200, manifest_body())
+    train = registry.export(f"{PROJECT}@{EXPORT_ID}").split("train")
+
+    assert [sample.image_id for sample in train] == [IMAGE_ID, "11" * 32]
+    assert train[0].image_id == IMAGE_ID
+    assert train[0] in train
+    assert train.counts().images == 2
+    assert train.counts().families == 1
+    assert train.counts().instances == 49
+
+    # A slice is another view, so narrowing keeps every answer available.
+    first = train[:1]
+    assert len(first) == 1
+    assert first.families() == {"komancza-dws"}
+    assert first.export is train.export
+
+
+def test_every_split_is_reachable_in_one_pass(
+    api: tuple[AnnotationRegistry, type[_Recorder]],
+) -> None:
+    registry, recorder = api
+    recorder.stubbed[("GET", "/api/v1/annotation-export")] = (200, manifest_body())
+    sides = registry.export(f"{PROJECT}@{EXPORT_ID}").splits()
+
+    assert list(sides) == ["train", "validation", "test"]
+    assert [len(side) for side in sides.values()] == [2, 0, 0]
+    with pytest.raises(RegistryError, match="not a split"):
+        registry.export(f"{PROJECT}@{EXPORT_ID}").split("holdout")  # type: ignore[arg-type]
+
+
+def test_a_sample_on_an_unknown_side_is_refused_rather_than_dropped() -> None:
+    # A `split ==` that matches nothing is how a third of a corpus goes missing
+    # from every side at once, with a manifest that still says it is there.
+    body = manifest_body()
+    body["samples"][0]["split"] = "holdout"
+    with pytest.raises(RegistryError, match="holdout"):
+        Export.from_json(body)
+
+
+def test_an_export_carries_the_registry_it_was_read_from(
+    api: tuple[AnnotationRegistry, type[_Recorder]],
+) -> None:
+    # An export that came from a registry knows which one, so reading it and
+    # then reading its images is one object rather than two.
+    registry, recorder = api
+    recorder.stubbed[("GET", "/api/v1/annotation-export")] = (200, manifest_body())
+    export = registry.export(f"{PROJECT}@{EXPORT_ID}")
+
+    assert export.source is registry
+    assert export.split("train").registry() is registry
+    # An override still wins, for a manifest whose images live elsewhere.
+    other = AnnotationRegistry("http://elsewhere.invalid")
+    assert export.split("train").registry(other) is other
+
+
+def test_a_manifest_off_a_file_refuses_to_guess_where_its_images_are() -> None:
+    # A default base URL invented here would go looking for a training set on
+    # somebody's laptop.
+    offline = Export.from_json(manifest_body())
+    assert offline.source is None
+    with pytest.raises(RegistryError, match="not read from a registry"):
+        offline.split("train").registry()
+
+
+def test_provenance_is_not_content_so_two_readers_agree(
+    api: tuple[AnnotationRegistry, type[_Recorder]],
+) -> None:
+    # Two manifests with the same reference are the same export, whichever
+    # client read them — so `source` is out of `==` and out of `repr`.
+    registry, recorder = api
+    recorder.stubbed[("GET", "/api/v1/annotation-export")] = (200, manifest_body())
+    assert registry.export(f"{PROJECT}@{EXPORT_ID}") == Export.from_json(manifest_body())
+
+
+def test_a_registry_survives_the_process_boundary_a_dataloader_puts_it_across(
+    api: tuple[AnnotationRegistry, type[_Recorder]],
+) -> None:
+    """A `DataLoader` with `num_workers > 0` pickles its dataset under `spawn`,
+    the default on macOS and Windows, and that dataset holds a registry. A
+    connection pool does not survive that and must not have to."""
+    registry, recorder = api
+    recorder.stubbed[("GET", "/api/v1/annotation-export")] = (200, manifest_body())
+    recorder.stubbed[("GET", f"/api/v1/annotation-blobs/{IMAGE_ID}")] = (200, b"a plan")
+    export = registry.export(f"{PROJECT}@{EXPORT_ID}")
+
+    revived: Export = pickle.loads(pickle.dumps(export))  # noqa: S301 - our own bytes
+    assert revived.reference == export.reference
+    assert revived.source is not None
+    # And the rebuilt pool works, which is the half a `__getstate__` that only
+    # dropped the client would not have.
+    assert revived.source.fetch_image(revived.samples[0]) == b"a plan"
+
+
+def test_a_borrowed_client_says_why_it_cannot_go_to_a_worker() -> None:
+    # Dropping a caller's proxy or client certificate silently and rebuilding a
+    # default in the worker is the failure this refuses to be.
+    borrowed = AnnotationRegistry(
+        "http://aiwatcher.invalid",
+        client=httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200))),
+    )
+    with pytest.raises(TypeError, match="cross a process boundary"):
+        pickle.dumps(borrowed)
+
+
+def test_printing_an_export_says_what_it_is_rather_than_everything_it_holds(
+    api: tuple[AnnotationRegistry, type[_Recorder]],
+) -> None:
+    # The generated repr printed `raw` — the whole server response, tens of
+    # kilobytes. `repr` is what somebody types to find out what they are
+    # holding, and an answer that scrolls the terminal is not one.
+    registry, recorder = api
+    recorder.stubbed[("GET", "/api/v1/annotation-export")] = (200, manifest_body())
+    export = registry.export(f"{PROJECT}@{EXPORT_ID}")
+
+    printed = repr(export)
+    assert printed == (f"Export('{PROJECT}@{EXPORT_ID}', 2 images, 1 families, 1 excluded)")
+    assert "revision" not in printed
+    # Still reachable, just not shouted.
+    assert export.raw["created_at"] == "2026-09-01T10:00:00Z"
 
 
 def test_an_exclusion_is_data_rather_than_a_silent_drop(
@@ -197,8 +330,19 @@ def test_an_exclusion_is_data_rather_than_a_silent_drop(
     export = registry.export(f"{PROJECT}@{EXPORT_ID}")
 
     assert export.counts["excluded"] == 1
-    assert export.excluded[0]["reason"] == "rights"
-    assert "CC BY-NC" in export.excluded[0]["detail"]
+    left_out = export.excluded[0]
+    assert left_out.reason == "rights"
+    assert left_out.group_id == "cubicasa-00042"
+    assert "CC BY-NC" in left_out.detail
+    # Reads as a sentence, because this is the half somebody stares at when a
+    # corpus came out smaller than they expected.
+    assert str(left_out).startswith("cubicasa-00042: rights — ")
+    # A reason this release has never heard of prints rather than raises: it is
+    # a label for a human, not a key that decides anything.
+    future = Export.from_json(
+        {**manifest_body(), "excluded": [{"group_id": "g", "reason": "quarantined"}]}
+    )
+    assert str(future.excluded[0]) == "g: quarantined"
 
 
 def test_building_an_export_asks_for_a_commercial_one_by_default(
@@ -278,6 +422,32 @@ def test_fetching_a_blob_verifies_the_digest_it_was_asked_for(
     recorder.stubbed[("GET", f"/api/v1/annotation-blobs/{IMAGE_ID}")] = (200, b"a different plan")
     with pytest.raises(RegistryError, match="do not hash to it"):
         registry.fetch_image(sample)
+
+
+def test_an_image_by_reference_is_hashed_too_and_its_host_gets_no_token(
+    api: tuple[AnnotationRegistry, type[_Recorder]],
+) -> None:
+    # An id is a SHA-256 whatever the image is, and the check matters most here:
+    # those bytes live on a host this deployment does not run, and
+    # `plans/latest.png` is different pixels tomorrow.
+    registry, recorder = api
+    recorder.stubbed[("GET", "/api/v1/annotation-export")] = (200, manifest_body())
+    external = registry.export(f"{PROJECT}@{EXPORT_ID}").samples[1]
+
+    seen: list[str | None] = []
+
+    def elsewhere(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers.get("authorization"))
+        return httpx.Response(200, content=b"someone else's plan")
+
+    scoped = AnnotationRegistry(
+        registry.base_url,
+        token="secret",
+        client=httpx.Client(transport=httpx.MockTransport(elsewhere)),
+    )
+    with pytest.raises(RegistryError, match="do not hash to it"):
+        scoped.fetch_image(external)
+    assert seen == [None]
 
 
 def test_an_external_image_url_is_left_alone(

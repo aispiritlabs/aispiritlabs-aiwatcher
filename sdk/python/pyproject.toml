@@ -5,11 +5,20 @@ description = "Publish agent-run telemetry to aiwatcher, and read its prompt reg
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
-# Deliberately empty, and worth keeping that way. This is imported into agent
-# processes that already have opinions about httpx, pydantic and their
-# versions; a telemetry library that forces one of those is a library people
-# vendor around. Everything here is `urllib`, `json` and `dataclasses`.
-dependencies = []
+# Two, and the split is the design. The **telemetry** half — `aiwatcher_sdk`
+# itself, which is what an instrumented agent imports — reaches for neither:
+# it is `urllib`, `json` and `dataclasses`, because a telemetry library that
+# forces an httpx version on a process that already pinned one is a library
+# people vendor around, and because it must never take an agent down.
+#
+# The **registry** clients are the opposite case and always were. They run in
+# training jobs, deploy steps and CLIs rather than inside somebody's request
+# path; every method raises, because reading the export a run is about to
+# consume *is* the work; and hand-rolling connection reuse, a retry policy and
+# `Retry-After` on top of `urllib` is how a client ends up with four copies of
+# a bug. Importing them costs the dependency; importing `aiwatcher_sdk` does
+# not.
+dependencies = ["httpx>=0.28,<0.29", "tenacity>=9.1,<10"]
 
 [project.optional-dependencies]
 # The DeepEval bridge does not import deepeval — it reads the report
@@ -101,8 +110,13 @@ files = ["aiwatcher_sdk", "tests"]
 # says about itself and are tested against a stub one, which is what keeps a
 # hundred megabytes of runtime out of every CI run. The wheel ships no stubs
 # either way, so this line would be here regardless.
+# torch is not a dependency either, and for a larger version of the same
+# reason: `ExportDataset.loader` imports it inside the one method that cannot
+# work without it, and every other line of the rasteriser is numpy. A CI run
+# that installed torch to check one `DataLoader(...)` call would be installing
+# two gigabytes to type-check a constructor.
 [[tool.mypy.overrides]]
-module = ["onnxruntime"]
+module = ["onnxruntime", "torch.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

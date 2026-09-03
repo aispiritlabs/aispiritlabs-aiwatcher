@@ -483,7 +483,7 @@ just test          # cargo test --workspace --all-targets
 just test-one PAT  # one test by name, e.g. `just test-one two_parallel`
 just openapi       # regenerate contracts/openapi.json and the panel's client
 just seed-curation # 80 runs, saved Flow recipes and two immutable datasets
-just seed-annotations  # six synthetic plans, three families, an export, a training run
+just seed-annotations  # 24 synthetic plans, 12 families, an export, a training run
 just seed-import   # stage a corpus in pages and import it with the queued job
 just run-conversations # the server with the encrypted conversation archive on
 just seed-conversations  # record, review and export one conversation end to end
@@ -495,6 +495,15 @@ just stack-up      # docker compose: VictoriaTraces, VictoriaMetrics, Collector,
 just tilt-up       # the same stack on a local Kubernetes, rebuilt on save
 just flow-check    # the PHP query service's own gate — `just check` excludes it
 just authentik-up  # a local identity provider, for `just run-sso`
+```
+
+The annotation seed uses the floor-plan labels `wall_exterior`,
+`wall_interior`, `space`, `stairs`, `column`, `door`, `window` and `passage` by
+default. Point it at another project or rename any generated class without
+editing the script:
+
+```bash
+just seed-annotations --project floor-plans/kickoff --label space=room
 ```
 
 `contracts/openapi.json` is generated from the axum routes and the panel's

@@ -36,14 +36,15 @@ all — which is what a protected deployment does.
 
 from __future__ import annotations
 
-import json
-import os
-import urllib.error
-import urllib.parse
-import urllib.request
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol, runtime_checkable
+from types import TracebackType
+from typing import Any, Literal, Protocol, Self, runtime_checkable
+from urllib.parse import quote
+
+import httpx
+
+from aiwatcher_sdk.api import ApiError, Transport
 
 __all__ = [
     "ArchiveError",
@@ -67,7 +68,13 @@ Scope = Literal["train", "evaluate", "share"]
 REDACTOR_VERSION = "1"
 
 
-class ArchiveError(RuntimeError):
+_DISABLED = (
+    "this aiwatcher instance keeps no conversation archive; "
+    "set AIWATCHER_CONVERSATION_ARCHIVE=on and AIWATCHER_CONVERSATION_KEYS"
+)
+
+
+class ArchiveError(ApiError):
     """The archive refused, or could not be reached.
 
     ``code`` is the machine-readable discriminator the API returns; switch on
@@ -81,32 +88,11 @@ class ArchiveError(RuntimeError):
     ``erased``
         The turn was here and its content is gone. An answer rather than a
         404, and the distinction an auditor asked for.
+
+    :attr:`~aiwatcher_sdk.api.ApiError.is_retryable` is not simply "5xx"
+    either: a 501 means this instance keeps no archive, and retrying that
+    forever is what a job does instead of telling somebody to make a decision.
     """
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        status: int | None = None,
-        code: str | None = None,
-        details: Sequence[str] = (),
-    ) -> None:
-        super().__init__(message)
-        self.status = status
-        self.code = code
-        self.details = list(details)
-
-    _RETRYABLE = frozenset({429, 500, 502, 503, 504})
-
-    @property
-    def is_retryable(self) -> bool:
-        """Whether coming back later could plausibly work.
-
-        Not simply "5xx": a 501 means this instance keeps no archive, and
-        retrying that forever is what a job does instead of telling somebody to
-        make a decision.
-        """
-        return self.status is None or self.status in self._RETRYABLE
 
 
 # ── Producer-side redaction ──────────────────────────────────────────────────
@@ -450,13 +436,40 @@ class ConversationArchive:
         retention: Retention | None = None,
         token: str | None = None,
         timeout: float = 10.0,
+        attempts: int = 3,
+        client: httpx.Client | None = None,
     ) -> None:
-        self._base = base_url.rstrip("/")
         self._redactor = redactor
         self._consent = consent or Consent()
         self._retention = retention or Retention()
-        self._token = token or os.environ.get("AIWATCHER_TOKEN")
-        self._timeout = timeout
+        self._http = Transport(
+            base_url,
+            token=token,
+            timeout=timeout,
+            attempts=attempts,
+            error=ArchiveError,
+            subject="the conversation archive",
+            hints={"registry_disabled": _DISABLED},
+            client=client,
+        )
+
+    @property
+    def base_url(self) -> str:
+        return self._http.base_url
+
+    def close(self) -> None:
+        self._http.close()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.close()
 
     # ── Writes ───────────────────────────────────────────────────────────
 
@@ -636,10 +649,11 @@ class ConversationArchive:
         Reading these needs the ``admin`` role: they are conversation content,
         and the gate is the same one that guards a single turn.
         """
-        query = urllib.parse.urlencode(
-            {"name": name, "version": version, "offset": offset, "limit": limit}
+        return self._request(
+            "GET",
+            "/api/v1/conversation-dataset-rows",
+            params={"name": name, "version": version, "offset": offset, "limit": limit},
         )
-        return self._request("GET", f"/api/v1/conversation-dataset-rows?{query}")
 
     def iter_rows(self, name: str, version: str, *, page: int = 100) -> Iterator[dict[str, Any]]:
         """Every row of a corpus, a page at a time.
@@ -668,52 +682,20 @@ class ConversationArchive:
     # ── Transport ────────────────────────────────────────────────────────
 
     def _request(
-        self, method: str, path: str, body: Mapping[str, Any] | None = None
+        self,
+        method: str,
+        path: str,
+        body: Mapping[str, Any] | None = None,
+        *,
+        params: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        payload = None if body is None else json.dumps(body).encode()
-        headers = {"content-type": "application/json"}
-        if self._token:
-            headers["authorization"] = f"Bearer {self._token}"
-        request = urllib.request.Request(  # noqa: S310 - the base URL is the caller's own server
-            f"{self._base}{path}",
-            data=payload,
-            headers=headers,
-            method=method,
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=self._timeout) as response:  # noqa: S310
-                raw = response.read()
-        except urllib.error.HTTPError as error:
-            raise _from_http_error(error) from error
-        except (urllib.error.URLError, OSError) as error:
-            raise ArchiveError(f"the archive at {self._base} is unreachable: {error}") from error
-        if not raw:
-            return {}
-        parsed: Any = json.loads(raw)
-        if not isinstance(parsed, dict):  # pragma: no cover - server contract
-            raise ArchiveError(f"expected an object from {path}, got {type(parsed).__name__}")
-        return parsed
-
-
-def _from_http_error(error: urllib.error.HTTPError) -> ArchiveError:
-    code: str | None = None
-    details: list[str] = []
-    message = error.reason or "the archive refused the request"
-    try:
-        body = json.loads(error.read())
-    except (ValueError, OSError):
-        body = None
-    if isinstance(body, dict):
-        code = body.get("code")
-        message = body.get("message", message)
-        details = list(body.get("details", []))
-    if code == "registry_disabled":
-        message = (
-            "this aiwatcher instance keeps no conversation archive; "
-            "set AIWATCHER_CONVERSATION_ARCHIVE=on and AIWATCHER_CONVERSATION_KEYS"
-        )
-    return ArchiveError(message, status=error.code, code=code, details=details)
+        # Idempotent by construction: a turn is keyed by `message_id`, a review
+        # is a state set to a value, and an export job's id is derived from the
+        # request and the selection it resolved to — so a retried call joins
+        # the job it already started rather than queueing a second one.
+        return self._http.json(method, path, body, params=params, idempotent=True)
 
 
 def _segment(value: str) -> str:
-    return urllib.parse.quote(value, safe="")
+    """A path segment, encoded. httpx encodes a query; a path is the caller's."""
+    return quote(value, safe="")
