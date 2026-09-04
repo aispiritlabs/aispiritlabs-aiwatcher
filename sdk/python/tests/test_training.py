@@ -29,7 +29,7 @@ EXPORT = "floor-plans/dom-projekt@" + "9f" * 32
 ATTEMPTS = 2
 
 
-class _Recorder(BaseHTTPRequestHandler):
+class Recorder(BaseHTTPRequestHandler):
     stubbed: ClassVar[dict[tuple[str, str], tuple[int, Any]]] = {}
     seen: ClassVar[list[dict[str, Any]]] = []
     fail_until: ClassVar[int] = 0
@@ -66,11 +66,11 @@ class _Recorder(BaseHTTPRequestHandler):
 
 
 @pytest.fixture
-def api() -> Iterator[tuple[TrainingClient, type[_Recorder]]]:
-    _Recorder.stubbed = {}
-    _Recorder.seen = []
-    _Recorder.fail_until = 0
-    server = HTTPServer(("127.0.0.1", 0), _Recorder)
+def api() -> Iterator[tuple[TrainingClient, type[Recorder]]]:
+    Recorder.stubbed = {}
+    Recorder.seen = []
+    Recorder.fail_until = 0
+    server = HTTPServer(("127.0.0.1", 0), Recorder)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -78,14 +78,14 @@ def api() -> Iterator[tuple[TrainingClient, type[_Recorder]]]:
             TrainingClient(
                 f"http://127.0.0.1:{server.server_port}", timeout=3.0, attempts=ATTEMPTS
             ),
-            _Recorder,
+            Recorder,
         )
     finally:
         server.shutdown()
         server.server_close()
 
 
-def posts(recorder: type[_Recorder], suffix: str) -> list[dict[str, Any]]:
+def posts(recorder: type[Recorder], suffix: str) -> list[dict[str, Any]]:
     return [
         entry["body"]
         for entry in recorder.seen
@@ -94,7 +94,7 @@ def posts(recorder: type[_Recorder], suffix: str) -> list[dict[str, Any]]:
 
 
 def test_a_step_never_becomes_a_request(
-    api: tuple[TrainingClient, type[_Recorder]],
+    api: tuple[TrainingClient, type[Recorder]],
 ) -> None:
     # Ten thousand steps here is a small run; the same loop on a real corpus is
     # millions. A rule that only holds at the small size is not a rule.
@@ -112,7 +112,7 @@ def test_a_step_never_becomes_a_request(
 
 
 def test_a_validation_number_overrides_the_averaged_one_of_the_same_name(
-    api: tuple[TrainingClient, type[_Recorder]],
+    api: tuple[TrainingClient, type[Recorder]],
 ) -> None:
     client, recorder = api
     with client.run("run-2", model="unet", dataset=EXPORT) as run, run.epoch(0) as epoch:
@@ -124,7 +124,7 @@ def test_a_validation_number_overrides_the_averaged_one_of_the_same_name(
 
 
 def test_a_sampled_series_is_rate_limited_at_the_source(
-    api: tuple[TrainingClient, type[_Recorder]],
+    api: tuple[TrainingClient, type[Recorder]],
 ) -> None:
     client, recorder = api
     with client.run("run-3", model="unet", dataset=EXPORT) as run:
@@ -137,7 +137,7 @@ def test_a_sampled_series_is_rate_limited_at_the_source(
 
 
 def test_a_server_that_goes_away_does_not_take_the_run_with_it(
-    api: tuple[TrainingClient, type[_Recorder]],
+    api: tuple[TrainingClient, type[Recorder]],
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     # The whole reason progress never raises. Killing a six-hour training run
@@ -164,7 +164,7 @@ def test_a_server_that_goes_away_does_not_take_the_run_with_it(
 
 
 def test_opening_a_run_raises_because_six_gpu_hours_later_is_the_wrong_moment(
-    api: tuple[TrainingClient, type[_Recorder]],
+    api: tuple[TrainingClient, type[Recorder]],
 ) -> None:
     client, recorder = api
     recorder.stubbed[("POST", "/api/v1/training-runs")] = (
@@ -180,7 +180,7 @@ def test_opening_a_run_raises_because_six_gpu_hours_later_is_the_wrong_moment(
 
 
 def test_a_crash_closes_the_run_as_failed_and_keeps_the_epochs_it_reached(
-    api: tuple[TrainingClient, type[_Recorder]],
+    api: tuple[TrainingClient, type[Recorder]],
 ) -> None:
     client, recorder = api
     with pytest.raises(RuntimeError, match="CUDA out of memory"):  # noqa: SIM117
@@ -198,7 +198,7 @@ def test_a_crash_closes_the_run_as_failed_and_keeps_the_epochs_it_reached(
 
 
 def test_an_interrupt_closes_the_run_as_cancelled_rather_than_failed(
-    api: tuple[TrainingClient, type[_Recorder]],
+    api: tuple[TrainingClient, type[Recorder]],
 ) -> None:
     # Ctrl-C on a training run is a decision, not a crash, and a runs list that
     # showed them the same way would make every real failure harder to find.
@@ -211,7 +211,7 @@ def test_an_interrupt_closes_the_run_as_cancelled_rather_than_failed(
 
 
 def test_a_best_checkpoint_becomes_the_number_the_run_closes_with(
-    api: tuple[TrainingClient, type[_Recorder]],
+    api: tuple[TrainingClient, type[Recorder]],
 ) -> None:
     client, recorder = api
     with client.run("run-8", model="unet", dataset=EXPORT) as run:
@@ -230,7 +230,7 @@ def test_a_best_checkpoint_becomes_the_number_the_run_closes_with(
 
 
 def test_training_on_a_mutable_dataset_name_warns_and_still_runs(
-    api: tuple[TrainingClient, type[_Recorder]],
+    api: tuple[TrainingClient, type[Recorder]],
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     # A smoke test on an unversioned dataset is legitimate. Taking the process
@@ -240,12 +240,12 @@ def test_training_on_a_mutable_dataset_name_warns_and_still_runs(
     with client.run("run-9", model="unet", dataset="floor-plans/dom-projekt"):
         pass
 
-    assert "not an immutable export reference" in capsys.readouterr().err
+    assert "not an immutable export source" in capsys.readouterr().err
     assert posts(recorder, "/training-runs")[0]["dataset"] == "floor-plans/dom-projekt"
 
 
 def test_a_mirror_receives_the_same_points_and_cannot_fail_the_run(
-    api: tuple[TrainingClient, type[_Recorder]],
+    api: tuple[TrainingClient, type[Recorder]],
 ) -> None:
     class AngryWandb:
         def __init__(self) -> None:
@@ -268,7 +268,7 @@ def test_a_mirror_receives_the_same_points_and_cannot_fail_the_run(
 
 
 def test_registering_a_model_separates_what_selection_watched_from_what_it_did_not(
-    api: tuple[TrainingClient, type[_Recorder]],
+    api: tuple[TrainingClient, type[Recorder]],
 ) -> None:
     client, recorder = api
     recorder.stubbed[("POST", "/api/v1/models")] = (
@@ -289,7 +289,7 @@ def test_registering_a_model_separates_what_selection_watched_from_what_it_did_n
 
 
 def test_a_refused_promotion_arrives_as_the_reason_rather_than_a_boolean(
-    api: tuple[TrainingClient, type[_Recorder]],
+    api: tuple[TrainingClient, type[Recorder]],
 ) -> None:
     client, recorder = api
     recorder.stubbed[("POST", "/api/v1/models/floor-plan.segmenter/labels")] = (
@@ -327,7 +327,7 @@ def test_the_held_out_gap_is_none_when_the_two_splits_measured_different_things(
 
 
 def test_the_lightning_callback_drives_a_run_without_importing_lightning(
-    api: tuple[TrainingClient, type[_Recorder]],
+    api: tuple[TrainingClient, type[Recorder]],
 ) -> None:
     from aiwatcher_sdk.integrations.torch import TrainingCallback
 

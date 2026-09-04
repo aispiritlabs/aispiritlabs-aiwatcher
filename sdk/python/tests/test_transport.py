@@ -6,7 +6,7 @@ from typing import Any
 from aiwatcher_sdk import AiwatcherClient, HttpTransport
 
 
-class _FlushableTransport:
+class FlushableTransport:
     def __init__(self) -> None:
         self.events: list[dict[str, Any]] = []
         self.flushes = 0
@@ -43,7 +43,7 @@ class HttpTransportTests(unittest.TestCase):
 
 class AiwatcherClientTests(unittest.TestCase):
     def test_flush_delegates_to_flushable_transport(self) -> None:
-        transport = _FlushableTransport()
+        transport = FlushableTransport()
         client = AiwatcherClient(service="test", transport=transport)
 
         client.flush()

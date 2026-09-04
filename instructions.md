@@ -355,8 +355,9 @@ Accept the images that may enter training, then open **Annotations → Exports**
 2. build the export;
 3. inspect split counts and every exclusion reason;
 4. copy the immutable `project@export-sha256` reference;
-5. fetch COCO per split or use `aiwatcher_sdk.integrations.vision.ExportDataset`
-   to derive tensors and masks from the vector annotations.
+5. fetch COCO per split or call `build_dataloader` from the Python SDK and
+   `get_split(...).as_dataset(...)` to derive tensors and masks from the vector
+   annotations.
 
 The export is content-addressed and idempotent. A changed label, review state,
 schema or rights decision produces a different reference.
@@ -382,14 +383,16 @@ For a real vision model, use the export adapter and the same tracker:
 
 ```python
 from aiwatcher_sdk.annotations import AnnotationRegistry
-from aiwatcher_sdk.integrations.vision import ExportDataset
 from aiwatcher_sdk.training import TrainingClient
 
-registry = AnnotationRegistry("http://127.0.0.1:8080")
-export = registry.build_export("your/project")
-train = ExportDataset(registry, export, split="train", image_size=512)
+with AnnotationRegistry("http://127.0.0.1:8080") as data_registry:
+    dataloader = data_registry.build_dataloader("your/project", rights_policy="commercial")
+    train = dataloader.get_split("train").as_dataset(image_size=512)
 tracking = TrainingClient("http://127.0.0.1:8080")
 ```
+
+`dataloader.source` is the `project@export-sha256` the run records, and
+`dataloader.excluded_samples` says what the export left out and why.
 
 The complete PyTorch/Lightning loop follows the same `training.run`,
 `run.epoch`, `run.checkpoint`, `register_model`, and `promote` calls shown in

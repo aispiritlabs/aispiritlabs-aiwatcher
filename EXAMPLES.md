@@ -406,13 +406,13 @@ its own store and its own three write routes
 from aiwatcher_sdk.annotations import AnnotationRegistry
 from aiwatcher_sdk.training import TrainingClient
 
-export = AnnotationRegistry(URL).build_export("corpora/plans")
+dataloader = AnnotationRegistry(URL).build_dataloader("corpora/plans")
 training = TrainingClient(URL)
 
 with training.run(
     "segmenter-2026-09-01",
     model="efficientnetv2-s",
-    dataset=export.reference,          # project@sha256, never a bare name
+    dataset=dataloader.source,         # project@sha256, never a bare name
     params={"batch_size": 4, "lr": 3e-4},
 ) as run:
     for index in range(epochs):
@@ -452,12 +452,14 @@ raster is derived; `integrations.vision` is that derivation, done per batch and
 thrown away. Nothing here writes a mask back, and nothing here reads one.
 
 ```python
-from aiwatcher_sdk.integrations.vision import ExportDataset
-
-train = ExportDataset(registry, export, split="train",
-                      image_size=512, cache_dir=".cache/images")
-loader = torch.utils.data.DataLoader(train, batch_size=4, shuffle=True)
+train = dataloader.get_split("train").as_dataset(image_size=512, cache_dir=".cache/images")
+loader = train.as_torch_dataloader(batch_size=4, shuffle=True)
 ```
+
+`as_dataset` builds an `ExportDataset` over one split, through the registry the
+loader remembers being read from; `as_torch_dataloader` is
+`torch.utils.data.DataLoader(train, **options)` and the only line in the SDK
+that imports torch.
 
 It is deliberately **not** a `torch.utils.data.Dataset` subclass. A map-style
 dataset in PyTorch is `__len__` and `__getitem__`, `default_collate` stacks the
@@ -528,7 +530,7 @@ from aiwatcher_sdk.integrations.torch import TrainingCallback
 
 trainer = Trainer(callbacks=[TrainingCallback(
     TrainingClient(URL), run_id="…", model="efficientnetv2-s",
-    dataset=export.reference,
+    dataset=dataloader.source,
 )])
 ```
 

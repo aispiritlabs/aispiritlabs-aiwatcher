@@ -29,7 +29,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from collections.abc import Iterator
+from collections.abc import Generator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
@@ -90,11 +90,11 @@ class NullTransport:
 
 
 @dataclass
-class _FlushRequest:
+class FlushRequest:
     done: threading.Event
 
 
-class _Tick:
+class Tick:
     """The timer fired with nothing queued.
 
     A type of its own rather than `...`: the queue holds four different things,
@@ -103,7 +103,7 @@ class _Tick:
     """
 
 
-_TICK = _Tick()
+_TICK = Tick()
 
 
 class HttpTransport:
@@ -140,7 +140,7 @@ class HttpTransport:
         # 50k is roughly 40 MB of held events and covers a burst no real agent
         # produces — a synthetic firehose of 126k events in 1.5s still overflows
         # it, which is the point at which raising it is a deliberate choice.
-        self._queue: queue.Queue[dict[str, Any] | _FlushRequest | None] = queue.Queue(
+        self._queue: queue.Queue[dict[str, Any] | FlushRequest | None] = queue.Queue(
             maxsize=queue_size
         )
         self._dropped = 0
@@ -190,7 +190,7 @@ class HttpTransport:
         Failures still follow the transport policy: they are counted and
         reported, never raised into the agent or evaluation gate.
         """
-        request = _FlushRequest(threading.Event())
+        request = FlushRequest(threading.Event())
         try:
             self._queue.put(request, timeout=self._timeout)
         except queue.Full:
@@ -209,7 +209,7 @@ class HttpTransport:
         deadline = time.monotonic() + self._flush_interval
         while True:
             timeout = max(deadline - time.monotonic(), 0.0)
-            item: dict[str, Any] | _FlushRequest | _Tick | None
+            item: dict[str, Any] | FlushRequest | Tick | None
             try:
                 item = self._queue.get(timeout=timeout)
             except queue.Empty:
@@ -217,13 +217,13 @@ class HttpTransport:
             if item is None:
                 self._post(pending)
                 return
-            if isinstance(item, _FlushRequest):
+            if isinstance(item, FlushRequest):
                 self._post(pending)
                 pending = []
                 deadline = time.monotonic() + self._flush_interval
                 item.done.set()
                 continue
-            if not isinstance(item, _Tick):
+            if not isinstance(item, Tick):
                 pending.append(item)
             if len(pending) >= self._batch_size or time.monotonic() >= deadline:
                 self._post(pending)
@@ -263,7 +263,7 @@ class HttpTransport:
 
 
 @dataclass
-class _Context:
+class Correlation:
     """The four ids, plus what identifies the run."""
 
     run_id: str
@@ -317,7 +317,7 @@ class AiwatcherClient:
     def emit(
         self,
         event_type: str,
-        context: _Context,
+        context: Correlation,
         data: dict[str, Any] | None = None,
         *,
         span_id: str | None = None,
@@ -373,14 +373,14 @@ class AiwatcherClient:
         workflow_id: str | None = None,
         workflow_run_id: str | None = None,
         correlation_id: str | None = None,
-    ) -> Iterator[RunContext]:
+    ) -> Generator[RunContext, None, None]:
         """One execution of an agent. Becomes one trace.
 
         `conversation_id` groups runs by who is talking; `workflow_id` groups
         them by what is being executed, so the same orchestration is comparable
         across sessions.
         """
-        context = _Context(
+        context = Correlation(
             run_id=run_id,
             conversation_id=conversation_id,
             workflow_id=workflow_id,
@@ -414,7 +414,7 @@ class AiwatcherClient:
         dataset: str | None = None,
         variant: str | None = None,
         params: dict[str, Any] | None = None,
-    ) -> Iterator[EvaluationContext]:
+    ) -> Generator[EvaluationContext, None, None]:
         """One execution of an evaluation suite. Becomes a report, not a trace.
 
         `eval.*` events ride the same log as everything else and are folded
@@ -432,7 +432,7 @@ class AiwatcherClient:
         ...     run.metrics(mean_score=0.91)
         ...     run.report({"failures": [...]})
         """
-        context = _Context(run_id=evaluation_id or _new_id())
+        context = Correlation(run_id=evaluation_id or _new_id())
         base: dict[str, Any] = {"suite": suite}
         if dataset:
             base["dataset"] = dataset
@@ -482,7 +482,7 @@ class AiwatcherClient:
         instantaneous, which is honest — nothing told us when it began — and
         useless for anything that looks at how long a suite takes.
         """
-        context = _Context(run_id=evaluation_id or _new_id())
+        context = Correlation(run_id=evaluation_id or _new_id())
         base: dict[str, Any] = {"suite": suite}
         if dataset:
             base["dataset"] = dataset
@@ -523,7 +523,7 @@ class AiwatcherClient:
         execution_id: str | None = None,
         run_id: str | None = None,
         conversation_id: str | None = None,
-    ) -> Iterator[WorkflowContext]:
+    ) -> Generator[WorkflowContext, None, None]:
         """One execution of an orchestration, and the shape it is executing.
 
         Declaring the shape is the point. Without it the graph can only ever
@@ -550,7 +550,7 @@ class AiwatcherClient:
         """
         resolved_nodes = _normalize_nodes(nodes)
         resolved_edges = _normalize_edges(edges)
-        context = _Context(
+        context = Correlation(
             run_id=run_id or _new_id(),
             conversation_id=conversation_id,
             workflow_id=workflow_id,
@@ -619,7 +619,7 @@ class EvaluationContext:
     def __init__(
         self,
         client: AiwatcherClient,
-        context: _Context,
+        context: Correlation,
         base: dict[str, Any],
     ) -> None:
         self._client = client
@@ -732,7 +732,7 @@ def _topology_version(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) 
 
 def _emit_artifact(
     client: AiwatcherClient,
-    context: _Context,
+    context: Correlation,
     *,
     name: str,
     uri: str,
@@ -763,18 +763,18 @@ def _stringify(params: dict[str, Any]) -> dict[str, str]:
     return {key: str(value)[:500] for key, value in params.items()}
 
 
-class _Scope:
+class Scope:
     """Shared start/end bookkeeping for agent, LLM and tool scopes."""
 
-    def __init__(self, client: AiwatcherClient, context: _Context) -> None:
+    def __init__(self, client: AiwatcherClient, context: Correlation) -> None:
         self._client = client
         self._context = context
 
 
-class RunContext(_Scope):
+class RunContext(Scope):
     @contextlib.contextmanager
-    def agent(self, agent_id: str) -> Iterator[AgentContext]:
-        context = _Context(
+    def agent(self, agent_id: str) -> Generator[AgentContext, None, None]:
+        context = Correlation(
             run_id=self._context.run_id,
             conversation_id=self._context.conversation_id,
             workflow_id=self._context.workflow_id,
@@ -794,7 +794,7 @@ class RunContext(_Scope):
             self._client.emit("agent.completed", context)
 
 
-class WorkflowContext(_Scope):
+class WorkflowContext(Scope):
     """One traversal of a declared graph."""
 
     @contextlib.contextmanager
@@ -806,7 +806,7 @@ class WorkflowContext(_Scope):
         kind: str = "chain",
         attempt: str | None = None,
         **payload: Any,
-    ) -> Iterator[NodeContext]:
+    ) -> Generator[NodeContext, None, None]:
         """One stage. Becomes a span, and a node's status on the graph.
 
         `step.*` rather than an event type of its own, because a stage really
@@ -818,7 +818,7 @@ class WorkflowContext(_Scope):
         by span key, which is derived from this. Generated when omitted, which
         is right for a stage that runs once.
         """
-        context = _Context(
+        context = Correlation(
             run_id=self._context.run_id,
             conversation_id=self._context.conversation_id,
             workflow_id=self._context.workflow_id,
@@ -853,7 +853,7 @@ class WorkflowContext(_Scope):
             )
 
     @contextlib.contextmanager
-    def agent(self, agent_id: str) -> Iterator[AgentContext]:
+    def agent(self, agent_id: str) -> Generator[AgentContext, None, None]:
         """An agent inside this traversal, outside any one stage.
 
         For an agent that coordinates rather than executes — the one that hands
@@ -891,15 +891,15 @@ class WorkflowContext(_Scope):
         )
 
 
-class NodeContext(_Scope):
+class NodeContext(Scope):
     """One stage of a traversal, while it runs."""
 
-    def __init__(self, client: AiwatcherClient, context: _Context, node_id: str) -> None:
+    def __init__(self, client: AiwatcherClient, context: Correlation, node_id: str) -> None:
         super().__init__(client, context)
         self._node_id = node_id
 
     @contextlib.contextmanager
-    def agent(self, agent_id: str) -> Iterator[AgentContext]:
+    def agent(self, agent_id: str) -> Generator[AgentContext, None, None]:
         """An agent doing this stage's work. Nests under the stage's span."""
         with RunContext(self._client, self._context).agent(agent_id) as agent:
             yield agent
@@ -926,7 +926,7 @@ class NodeContext(_Scope):
         )
 
 
-class AgentContext(_Scope):
+class AgentContext(Scope):
     def message(
         self,
         to: str,
@@ -960,7 +960,7 @@ class AgentContext(_Scope):
         provider: str | None = None,
         call_id: str | None = None,
         **request: Any,
-    ) -> Iterator[LlmCall]:
+    ) -> Generator[LlmCall, None, None]:
         # `call_id` is what separates two concurrent calls. Generated when
         # omitted, but pass your provider's request id where you have one — it
         # makes the span joinable with the provider's own logs.
@@ -989,7 +989,9 @@ class AgentContext(_Scope):
             )
 
     @contextlib.contextmanager
-    def tool(self, name: str, *, call_id: str | None = None, **arguments: Any) -> Iterator[None]:
+    def tool(
+        self, name: str, *, call_id: str | None = None, **arguments: Any
+    ) -> Generator[None, None, None]:
         base = {"call_id": call_id or _new_id(), "tool_name": name, **arguments}
         started = time.monotonic()
         self._client.emit("tool.started", self._context, base)
@@ -1010,11 +1012,11 @@ class AgentContext(_Scope):
             )
 
 
-class LlmCall(_Scope):
+class LlmCall(Scope):
     def __init__(
         self,
         client: AiwatcherClient,
-        context: _Context,
+        context: Correlation,
         base: dict[str, Any],
         started: float,
     ) -> None:

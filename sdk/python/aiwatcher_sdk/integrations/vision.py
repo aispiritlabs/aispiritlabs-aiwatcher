@@ -13,23 +13,30 @@ with nothing able to say which is right.
 
     from aiwatcher_sdk.annotations import AnnotationRegistry
 
-    registry = AnnotationRegistry("http://aiwatcher:8080")
-    export = registry.build_export("corpora/plans")
+    data_registry = AnnotationRegistry("http://aiwatcher:8080")
+    dataloader = data_registry.build_dataloader("corpora/plans")
 
-    train = export.split("train").dataset(image_size=512)
-    loader = train.loader(batch_size=4, shuffle=True)
+    train = dataloader.get_split("train").as_dataset(image_size=512)
+    loader = train.as_torch_dataloader(batch_size=4, shuffle=True)
 
 That is PyTorch's own two steps — a ``Dataset``, then a ``DataLoader`` over
 it — and the first of them is reached from the split rather than from here, so
 a caller never has to name this module to use it.
+
+What it asks for is not the client but
+:class:`~aiwatcher_sdk.annotations.image_source.ImageSource` — a project's
+schema, one revision's shapes, and an image's bytes. Three methods, so a cache,
+a reader over a corpus somebody rsynced onto a GPU box, or a test double
+substitutes for the registry without subclassing anything.
 
 ``ExportDataset`` is deliberately **not** a ``torch.utils.data.Dataset``
 subclass. A map-style dataset in PyTorch is a duck: ``__len__`` and
 ``__getitem__`` are the whole protocol, ``default_collate`` turns the numpy
 arrays it yields into tensors, and this file therefore stays importable in a
 process that has never heard of torch — the same rule
-:mod:`aiwatcher_sdk.integrations.torch` follows. :meth:`ExportDataset.loader`
-is the one method that imports it, and only when it is called.
+:mod:`aiwatcher_sdk.integrations.torch` follows.
+:meth:`ExportDataset.as_torch_dataloader` is the one method that imports it,
+and only when it is called.
 
 What it *does* need is numpy, and Pillow to decode a PNG. Both are imported
 lazily, inside the functions that need them, so importing this module costs
@@ -79,7 +86,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict, cast
 
-from aiwatcher_sdk.annotations import AnnotationRegistry, Export, RegistryError, Sample, SplitView
+from aiwatcher_sdk.annotations import Export, ImageSource, RegistryError, Sample, SplitView
 
 if TYPE_CHECKING:  # pragma: no cover - import-time only for the type checker
     import numpy as np
@@ -670,13 +677,13 @@ class ExportDataset:
     Built from a split rather than from a project, and the difference is the
     point twice over. A project is mutable — images are added to it while a run
     trains, and a dataset reading one would have a length that changed under a
-    shuffled sampler — while the export is frozen and its reference is what the
-    run records. And the split is where the family rule already lives, so there
+    shuffled sampler — while the export is frozen and its source is what the
+    run records. And the split is where the group rule already lives, so there
     is no second place that decides which subjects a model may see::
 
-        test = export.split("test")
-        data = test.dataset(registry, image_size=512)
-        assert data.families() == test.families()
+        test = dataloader.get_split("test")
+        data = test.as_dataset(registry, image_size=512)
+        assert data.get_groups() == test.get_groups()
 
     Each item is an :class:`Item` of numpy arrays, which is exactly what
     ``torch.utils.data.default_collate`` knows how to stack.
@@ -689,7 +696,7 @@ class ExportDataset:
 
     def __init__(
         self,
-        registry: AnnotationRegistry,
+        registry: ImageSource,
         split: SplitView,
         *,
         image_size: int = 512,
@@ -715,7 +722,7 @@ class ExportDataset:
         self.layers: list[LabelLayer] = layers_for(self.classes)
         if not self.layers:
             raise RegistryError(
-                f"the schema behind {self.export.reference} declares no paintable class, so every "
+                f"the schema behind {self.export.source} declares no paintable class, so every "
                 "target would be empty; a vocabulary of nothing but `ignore` classes is not a "
                 "training target"
             )
@@ -725,21 +732,25 @@ class ExportDataset:
 
     def __repr__(self) -> str:
         return (
-            f"ExportDataset({self.export.reference!r}, {self.split.name or 'all'}, "
+            f"ExportDataset({self.export.source!r}, {self.split.name or 'all'}, "
             f"{len(self.samples)} images, {len(self.layers)} layers)"
         )
 
-    def families(self) -> frozenset[str]:
+    def get_groups(self) -> frozenset[str]:
         """The subjects on this side. The number a score is really over.
 
-        The same answer as ``export.split("test").families()``, and the same
-        method name on both, because they are the same question asked of the
-        same side.
+        The same answer as ``dataloader.get_split("test").get_groups()``, and
+        the same method name on both, because they are the same question asked
+        of the same side.
         """
-        return self.split.families()
+        return self.split.get_groups()
 
-    def loader(self, **options: Any) -> Any:
+    def as_torch_dataloader(self, **options: Any) -> Any:
         """A ``torch.utils.data.DataLoader`` over this dataset.
+
+        Named for the framework because the word is taken: the *loader* a
+        training script holds is the export with its registry, and this is the
+        batching iterator torch builds over one split of it.
 
         The last line of the PyTorch data tutorial, and the only place in this
         SDK that imports torch. It is imported *here*, inside the one method
@@ -748,7 +759,7 @@ class ExportDataset:
         library structurally, never import it — is broken in exactly one
         visible place rather than at the top of the module::
 
-            loader = export.split("train").dataset(registry).loader(
+            loader = dataloader.get_split("train").as_dataset().as_torch_dataloader(
                 batch_size=4, shuffle=True, num_workers=4
             )
 
@@ -760,7 +771,8 @@ class ExportDataset:
             from torch.utils.data import DataLoader
         except ImportError as error:  # pragma: no cover - exercised by not having torch
             raise ImportError(
-                "ExportDataset.loader needs torch; install it for your platform, or build the "
+                "ExportDataset.as_torch_dataloader needs torch; install it for your platform, "
+                "or build the "
                 "loader yourself — this dataset is map-style, so any framework that reads "
                 "__len__ and __getitem__ takes it as it is"
             ) from error
@@ -799,7 +811,7 @@ class ExportDataset:
             "group_id": sample.group_id,
         }
 
-    def letterbox_for(self, sample: Sample) -> Letterbox:
+    def get_letterbox(self, sample: Sample) -> Letterbox:
         """The transform this dataset would apply to one sample.
 
         Needed at inference: a prediction is in model-input pixels and the
@@ -817,7 +829,7 @@ class ExportDataset:
         """
         cached = self._shapes.get(sample.image_id)
         if cached is None:
-            cached = self.registry.revision_annotations(
+            cached = self.registry.get_revision_annotations(
                 self.export.project, sample.image_id, revision=sample.revision
             )
             self._shapes[sample.image_id] = cached
@@ -870,7 +882,7 @@ class SegmentationScore:
         flat = numpy.bincount(actual[valid] * count + predicted[valid], minlength=count * count)
         self.matrix += flat.reshape(count, count)
 
-    def iou(self) -> dict[str, float]:
+    def get_iou(self) -> dict[str, float]:
         """Per class. ``nan`` for a class with no ground truth and no
         prediction — which is a class this split cannot score, and saying so is
         better than reporting the zero that would drag a mean down."""
@@ -881,13 +893,13 @@ class SegmentationScore:
             values = numpy.where(union > 0, intersection / union, numpy.nan)
         return dict(zip(self.classes, (float(value) for value in values), strict=True))
 
-    def mean_iou(self) -> float:
+    def get_mean_iou(self) -> float:
         """Over the classes that appeared. Never over the absent ones."""
         numpy = _numpy()
-        values = [value for value in self.iou().values() if not math.isnan(value)]
+        values = [value for value in self.get_iou().values() if not math.isnan(value)]
         return float(numpy.mean(values)) if values else 0.0
 
-    def pixel_accuracy(self) -> float:
+    def get_pixel_accuracy(self) -> float:
         numpy = _numpy()
         total = float(self.matrix.sum())
         return float(numpy.diag(self.matrix).sum()) / total if total else 0.0
@@ -901,16 +913,16 @@ class SegmentationScore:
         fell has got better at rooms and worse at the building outline.
         """
         metrics = {
-            f"{prefix}_miou": self.mean_iou(),
-            f"{prefix}_accuracy": self.pixel_accuracy(),
+            f"{prefix}_miou": self.get_mean_iou(),
+            f"{prefix}_accuracy": self.get_pixel_accuracy(),
         }
-        for name, value in self.iou().items():
+        for name, value in self.get_iou().items():
             if not math.isnan(value):
                 metrics[f"{prefix}_iou_{name}"] = value
         return metrics
 
 
-def _schema_for(registry: AnnotationRegistry, export: Export) -> list[dict[str, Any]]:
+def _schema_for(registry: ImageSource, export: Export) -> list[dict[str, Any]]:
     """The label schema the export was built against.
 
     Read from the project and then *checked* against the export's pinned
@@ -921,13 +933,13 @@ def _schema_for(registry: AnnotationRegistry, export: Export) -> list[dict[str, 
 
     A caller who genuinely has the right classes can pass them instead.
     """
-    project = registry.project(export.project)
+    project = registry.get_project(export.project)
     schema = project.get("schema") or {}
     version = str(schema.get("version") or "")
     if version != export.schema_version:
         raise RegistryError(
             f"{export.project} is now on schema {version[:12]} and "
-            f"{export.reference} was built against {export.schema_version[:12]}; "
+            f"{export.source} was built against {export.schema_version[:12]}; "
             "rasterising against the wrong vocabulary permutes every label without failing. "
             "Rebuild the export, or pass `classes=` explicitly."
         )

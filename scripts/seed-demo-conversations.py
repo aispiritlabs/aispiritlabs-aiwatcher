@@ -105,7 +105,7 @@ def main() -> int:
     )
 
     try:
-        policy = archive.policy()
+        policy = archive.get_policy()
     except ArchiveError as error:
         print(f"error: {error}", file=sys.stderr)
         if error.code == "registry_disabled":
@@ -189,7 +189,7 @@ def main() -> int:
 
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
-        job = archive.job(job["job_id"])
+        job = archive.get_job(job["job_id"])
         if job["state"] in {"completed", "failed", "cancelled"}:
             break
         time.sleep(0.5)
@@ -211,7 +211,7 @@ def main() -> int:
 
     # 5. Read one row back, so the audit trail is visible rather than claimed.
     try:
-        page = archive.rows(arguments.corpus, job["version"], limit=1)
+        page = archive.get_rows(arguments.corpus, job["version"], limit=1)
     except ArchiveError as error:
         if error.code == "forbidden":
             print("(reading rows needs the admin role on an authenticated instance)")

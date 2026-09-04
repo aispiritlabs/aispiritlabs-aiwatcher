@@ -395,25 +395,26 @@ def main() -> int:  # noqa: PLR0911 - one early return per checked step, on purp
     print(f"   {len(families) * 2} images, {len(families)} families, all accepted")
 
     print("2. export")
-    export = annotations.build_export(PROJECT, note="e2e")
-    print(f"   {export.reference}")
-    for name, side in export.splits().items():
-        print(f"   {name:<11} {side.counts()}")
-    overlap = export.split("train").families() & export.split("test").families()
+    dataloader = annotations.build_dataloader(PROJECT, note="e2e")
+    print(f"   {dataloader.source}")
+    for name, side in dataloader.get_splits().items():
+        print(f"   {name:<11} {side.get_counts()}")
+    train_groups = dataloader.get_split("train").get_groups()
+    overlap = train_groups & dataloader.get_split("test").get_groups()
     if overlap:
         print(f"✗ a building is in both train and test: {overlap}", file=sys.stderr)
         return 1
     # Both renderings of a pinned building went the same way, which is the
     # property the whole family-keyed split exists for.
     for family, side in overrides.items():
-        placed = {sample.split for sample in export.samples if sample.group_id == family}
+        placed = {row.split for row in dataloader.samples if row.group_id == family}
         if placed != {side}:
             print(f"✗ {family} landed in {placed or 'nothing'}, not {side}", file=sys.stderr)
             return 1
     print("   every rendering of a pinned building stayed on one side")
 
     print("3. rasterise")
-    coco = annotations.coco(export)
+    coco = annotations.get_coco(dataloader)
     image_ids = {image["id"]: image["aiwatcher"]["image_id"] for image in coco["images"]}
     edges: dict[str, list[list[list[float]]]] = {}
     for record in coco["annotations"]:
@@ -423,7 +424,7 @@ def main() -> int:  # noqa: PLR0911 - one early return per checked step, on purp
         edges.setdefault(image_ids[record["image_id"]], []).append(extra["geometry"]["points"])
 
     splits: dict[str, list[tuple[list[float], int]]] = {"train": [], "validation": [], "test": []}
-    for sample in export.samples:
+    for sample in dataloader.samples:
         pixels = decode_png(annotations.fetch_image(sample))
         rows = features(pixels)
         labels = target_grid(edges.get(sample.image_id, []))
@@ -443,7 +444,7 @@ def main() -> int:  # noqa: PLR0911 - one early return per checked step, on purp
     with training.run(
         run_id,
         model=MODEL,
-        dataset=export.reference,
+        dataset=dataloader.source,
         framework="pure-python",
         device="cpu",
         code="scripts/e2e-mini-train.py",
@@ -581,7 +582,7 @@ def main() -> int:  # noqa: PLR0911 - one early return per checked step, on purp
             print(f"✗ {failure}", file=sys.stderr)
         return 1
 
-    print(f"✓ end to end: {len(export.samples)} images → a model that learned something")
+    print(f"✓ end to end: {len(dataloader.samples)} images → a model that learned something")
     print(
         "  the IoU is high because the task is separable by construction — this "
         "measures the plumbing, not a model"

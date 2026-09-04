@@ -545,18 +545,18 @@ def main(argv: list[str] | None = None) -> int:
             accepted += 0 if draft else 1
             print(f"  {'draft ' if draft else 'accept'} {family}{' (mirror)' if mirrored else ''}")
 
-    export = registry.build_export(args.project, note="seeded")
+    dataloader = registry.build_dataloader(args.project, note="seeded")
     print()
-    print(f"✓ {accepted} accepted drawings across {len(FAMILIES)} families")
-    print(f"✓ export {export.reference}")
+    print(f"✓ {accepted} accepted drawings across {len(FAMILIES)} groups")
+    print(f"✓ export {dataloader.source}")
     print(
-        f"  {export.counts['images']} images, {export.counts['instances']} instances, "
-        f"{export.counts['excluded']} excluded"
+        f"  {dataloader.counts['images']} images, {dataloader.counts['instances']} instances, "
+        f"{dataloader.counts['excluded']} excluded"
     )
-    for exclusion in export.excluded:
-        print(f"  excluded {exclusion}")
-    for name, side in export.splits().items():
-        print(f"  {name}: {side.counts()}")
+    for excluded in dataloader.excluded_samples:
+        print(f"  excluded {excluded}")
+    for name, side in dataloader.get_splits().items():
+        print(f"  {name}: {side.get_counts()}")
 
     # And a training run against it, so the Training area has a curve to draw.
     # It goes to `/api/v1/training-runs`, not to the event log: a training run
@@ -567,7 +567,7 @@ def main(argv: list[str] | None = None) -> int:
     with training.run(
         run_id,
         model="unet-s",
-        dataset=export.reference,
+        dataset=dataloader.source,
         framework="pytorch",
         device="cuda:0",
         code="git:demo",

@@ -28,7 +28,7 @@ from aiwatcher_sdk.prompts import (
 BASELINE = "Describe the floor plan on {{ page }} in {{ language }}."
 
 
-class _Recorder(BaseHTTPRequestHandler):
+class Recorder(BaseHTTPRequestHandler):
     """Answers whatever the test put in `responses`, and records the requests."""
 
     # Class-level because `http.server` constructs a handler per request, so
@@ -72,14 +72,14 @@ class _Recorder(BaseHTTPRequestHandler):
 
 
 @pytest.fixture
-def api() -> Iterator[tuple[PromptRegistry, type[_Recorder]]]:
-    _Recorder.stubbed = {}
-    _Recorder.seen = []
-    server = HTTPServer(("127.0.0.1", 0), _Recorder)
+def api() -> Iterator[tuple[PromptRegistry, type[Recorder]]]:
+    Recorder.stubbed = {}
+    Recorder.seen = []
+    server = HTTPServer(("127.0.0.1", 0), Recorder)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        yield PromptRegistry(f"http://127.0.0.1:{server.server_port}"), _Recorder
+        yield PromptRegistry(f"http://127.0.0.1:{server.server_port}"), Recorder
     finally:
         server.shutdown()
         server.server_close()
@@ -124,7 +124,7 @@ def test_rendering_refuses_a_partial_substitution() -> None:
 
 
 def test_publishing_sends_only_the_fields_that_were_given(
-    api: tuple[PromptRegistry, type[_Recorder]],
+    api: tuple[PromptRegistry, type[Recorder]],
 ) -> None:
     registry, recorder = api
     recorder.stubbed[("POST", "/api/v1/prompts")] = (
@@ -146,7 +146,7 @@ def test_publishing_sends_only_the_fields_that_were_given(
 
 
 def test_resolve_reads_the_current_version_in_one_request(
-    api: tuple[PromptRegistry, type[_Recorder]],
+    api: tuple[PromptRegistry, type[Recorder]],
 ) -> None:
     registry, recorder = api
     recorder.stubbed[("GET", "/api/v1/prompts/planner.floor-plan")] = (
@@ -161,7 +161,7 @@ def test_resolve_reads_the_current_version_in_one_request(
 
 
 def test_resolving_a_label_nobody_moved_is_an_error_not_a_silent_fallback(
-    api: tuple[PromptRegistry, type[_Recorder]],
+    api: tuple[PromptRegistry, type[Recorder]],
 ) -> None:
     # Falling back to the newest version here would deploy an unreviewed prompt
     # to a service that explicitly asked for `staging`.
@@ -177,7 +177,7 @@ def test_resolving_a_label_nobody_moved_is_an_error_not_a_silent_fallback(
 
 
 def test_recording_an_optimisation_sends_both_splits(
-    api: tuple[PromptRegistry, type[_Recorder]],
+    api: tuple[PromptRegistry, type[Recorder]],
 ) -> None:
     registry, recorder = api
     candidate = "Read {{ page }} closely; describe every room in {{ language }}."
@@ -219,7 +219,7 @@ def test_recording_an_optimisation_sends_both_splits(
 
 
 def test_a_rejection_carries_the_reason_rather_than_raising(
-    api: tuple[PromptRegistry, type[_Recorder]],
+    api: tuple[PromptRegistry, type[Recorder]],
 ) -> None:
     # A refused promotion is a result, not an error: the caller decides whether
     # to fail the build over it, and either way the experiment is recorded.
@@ -253,7 +253,7 @@ def test_a_rejection_carries_the_reason_rather_than_raising(
 
 
 def test_an_instance_without_a_registry_says_which_variable_is_unset(
-    api: tuple[PromptRegistry, type[_Recorder]],
+    api: tuple[PromptRegistry, type[Recorder]],
 ) -> None:
     registry, recorder = api
     recorder.stubbed[("GET", "/api/v1/prompts/planner.floor-plan")] = (
@@ -262,7 +262,7 @@ def test_an_instance_without_a_registry_says_which_variable_is_unset(
     )
 
     with pytest.raises(RegistryError) as raised:
-        registry.get("planner.floor-plan")
+        registry.get_prompt("planner.floor-plan")
 
     assert raised.value.code == "registry_disabled"
     assert "AIWATCHER_PROMPT_STORE" in str(raised.value)
@@ -273,7 +273,7 @@ def test_an_unreachable_registry_raises_rather_than_returning_nothing() -> None:
     # The whole difference from the telemetry transport, which swallows this.
     registry = PromptRegistry("http://127.0.0.1:1", timeout=0.5)
     with pytest.raises(RegistryError) as raised:
-        registry.get("planner.floor-plan")
+        registry.get_prompt("planner.floor-plan")
     assert raised.value.is_retryable
 
 

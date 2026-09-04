@@ -639,11 +639,13 @@ class ConversationArchive:
             body["selection"] = {"conversations": list(conversations)}
         return self._request("POST", "/api/v1/conversation-exports", body)
 
-    def job(self, job_id: str) -> dict[str, Any]:
+    def get_job(self, job_id: str) -> dict[str, Any]:
         """One export job: where it is, and every row it left out, by reason."""
         return self._request("GET", f"/api/v1/conversation-exports/{_segment(job_id)}")
 
-    def rows(self, name: str, version: str, *, offset: int = 0, limit: int = 100) -> dict[str, Any]:
+    def get_rows(
+        self, name: str, version: str, *, offset: int = 0, limit: int = 100
+    ) -> dict[str, Any]:
         """One page of an immutable corpus.
 
         Reading these needs the ``admin`` role: they are conversation content,
@@ -664,14 +666,14 @@ class ConversationArchive:
         """
         offset = 0
         while True:
-            body = self.rows(name, version, offset=offset, limit=page)
+            body = self.get_rows(name, version, offset=offset, limit=page)
             yield from body.get("rows", [])
             following = body.get("next_offset")
             if following is None:
                 return
             offset = int(following)
 
-    def policy(self) -> dict[str, Any]:
+    def get_policy(self) -> dict[str, Any]:
         """What this deployment demands, and which keys it can open with.
 
         Worth calling once at start-up: a producer that discovers the consent

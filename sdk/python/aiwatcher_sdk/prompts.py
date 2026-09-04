@@ -325,7 +325,7 @@ class PromptRegistry:
         the newest version when nothing has been promoted — so a registry is
         readable from the first publish rather than after a ceremony.
         """
-        detail = self.get(name)
+        detail = self.get_prompt(name)
         if label is None:
             current = detail.get("current")
             if not current:
@@ -336,31 +336,34 @@ class PromptRegistry:
             raise RegistryError(
                 f"prompt {name} has no {label!r} label", status=404, code="not_found"
             )
-        return self.version(name, version_id)
+        return self.get_version(name, version_id)
 
-    def get(self, name: str) -> dict[str, Any]:
+    def get_prompt(self, name: str) -> dict[str, Any]:
         """One prompt's head, its version index and its recent optimisations."""
         return self._request("GET", f"/api/v1/prompts/{_segment(name)}")
 
-    def version(self, name: str, version_id: str) -> PromptVersion:
+    def get_version(self, name: str, version_id: str) -> PromptVersion:
+        """One version by its content address, with its text."""
         return PromptVersion.from_json(
             self._request(
                 "GET", f"/api/v1/prompts/{_segment(name)}/versions/{_segment(version_id)}"
             )
         )
 
-    def list(
+    def get_prompts(
         self,
         *,
         search: str | None = None,
         tag: str | None = None,
         limit: int | None = None,
     ) -> dict[str, Any]:
+        """The prompt index, filtered. A page of heads, not their text."""
         return self._request(
             "GET", "/api/v1/prompts", params={"search": search, "tag": tag, "limit": limit}
         )
 
-    def optimization(self, name: str, optimization_id: str) -> OptimizationRecord:
+    def get_optimization(self, name: str, optimization_id: str) -> OptimizationRecord:
+        """One optimisation record, with the verdict the server reached."""
         return OptimizationRecord.from_json(
             self._request(
                 "GET",

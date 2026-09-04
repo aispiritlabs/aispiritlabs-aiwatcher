@@ -25,7 +25,13 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from aiwatcher_sdk.annotations import AnnotationRegistry, Export, RegistryError
+from aiwatcher_sdk.annotations import (
+    AnnotationRegistry,
+    Export,
+    ImageSource,
+    RegistryError,
+    Sample,
+)
 from aiwatcher_sdk.integrations.vision import (
     BlobCache,
     ExportDataset,
@@ -324,9 +330,9 @@ def test_iou_is_computed_over_the_split_not_averaged_over_batches() -> None:
     target = np.array([[0, 1], [1, 1]])
     score.update(prediction, target)
     # `a`: one hit, one false positive, no misses.  `b`: two hits, one miss.
-    assert score.iou()["a"] == pytest.approx(1 / 2)
-    assert score.iou()["b"] == pytest.approx(2 / 3)
-    assert score.pixel_accuracy() == pytest.approx(3 / 4)
+    assert score.get_iou()["a"] == pytest.approx(1 / 2)
+    assert score.get_iou()["b"] == pytest.approx(2 / 3)
+    assert score.get_pixel_accuracy() == pytest.approx(3 / 4)
 
 
 def test_ignored_pixels_are_left_out_of_the_score_as_well_as_the_loss() -> None:
@@ -336,16 +342,16 @@ def test_ignored_pixels_are_left_out_of_the_score_as_well_as_the_loss() -> None:
         np.array([[0, 1]]),
         ignore=np.array([[False, True]]),
     )
-    assert score.iou()["a"] == pytest.approx(1.0)
-    assert np.isnan(score.iou()["b"])
+    assert score.get_iou()["a"] == pytest.approx(1.0)
+    assert np.isnan(score.get_iou()["b"])
 
 
 def test_a_class_this_split_cannot_score_reads_as_absent_rather_than_zero() -> None:
     score = SegmentationScore(["a", "b"])
     score.update(np.array([[0]]), np.array([[0]]))
-    assert np.isnan(score.iou()["b"])
+    assert np.isnan(score.get_iou()["b"])
     # And it is left out of the mean rather than dragging it to a half.
-    assert score.mean_iou() == pytest.approx(1.0)
+    assert score.get_mean_iou() == pytest.approx(1.0)
     assert "val_iou_b" not in score.as_metrics("val")
 
 
@@ -357,7 +363,7 @@ PROJECT = "floor-plans/dom-projekt"
 REVISION = "ab" * 32
 
 
-class _Registry(BaseHTTPRequestHandler):
+class Registry(BaseHTTPRequestHandler):
     seen: ClassVar[list[str]] = []
 
     def log_message(self, *args: Any) -> None:
@@ -391,8 +397,8 @@ class _Registry(BaseHTTPRequestHandler):
 
 @pytest.fixture
 def registry() -> Iterator[AnnotationRegistry]:
-    _Registry.seen = []
-    server = HTTPServer(("127.0.0.1", 0), _Registry)
+    Registry.seen = []
+    server = HTTPServer(("127.0.0.1", 0), Registry)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -402,7 +408,7 @@ def registry() -> Iterator[AnnotationRegistry]:
         server.server_close()
 
 
-def manifest(source: AnnotationRegistry | None = None) -> Export:
+def manifest(registry: AnnotationRegistry | None = None) -> Export:
     return Export.from_json(
         {
             "project": PROJECT,
@@ -425,16 +431,16 @@ def manifest(source: AnnotationRegistry | None = None) -> Export:
             "counts": {},
             "rights_policy": "commercial",
         },
-        source=source,
+        registry=registry,
     )
 
 
 def test_a_sample_comes_out_as_the_arrays_a_collate_can_stack(
     registry: AnnotationRegistry,
 ) -> None:
-    dataset = manifest(registry).split("train").dataset(image_size=64, classes=CLASSES)
+    dataset = manifest(registry).get_split("train").as_dataset(image_size=64, classes=CLASSES)
     assert len(dataset) == 1
-    assert dataset.families() == {"komancza-dws"}
+    assert dataset.get_groups() == {"komancza-dws"}
 
     item = dataset[0]
     assert item["image"].shape == (1, 64, 64)
@@ -448,12 +454,12 @@ def test_a_sample_comes_out_as_the_arrays_a_collate_can_stack(
 def test_the_dataset_can_be_built_from_the_split_directly(
     registry: AnnotationRegistry,
 ) -> None:
-    # `SplitView.dataset` is the short way round; this is what it calls, and the
+    # `SplitView.as_dataset` is the short way round; this is what it calls, and the
     # two have to hold the same samples or the split rule has two homes.
-    split = manifest().split("train")
+    split = manifest().get_split("train")
     direct = ExportDataset(registry, split, image_size=64, classes=CLASSES)
 
-    assert direct.families() == split.families()
+    assert direct.get_groups() == split.get_groups()
     assert [sample.image_id for sample in direct.samples] == [IMAGE_ID]
     assert direct.export is split.export
     assert "train" in repr(direct)
@@ -465,12 +471,12 @@ def test_the_loader_is_torch_s_own_step_and_says_so_when_torch_is_absent(
     """The last line of the PyTorch data tutorial, and the one place in this
     SDK that imports torch — inside the method, so a process that only
     rasterises never pays for it."""
-    dataset = manifest().split("train").dataset(registry, image_size=64, classes=CLASSES)
+    dataset = manifest().get_split("train").as_dataset(registry, image_size=64, classes=CLASSES)
     if importlib.util.find_spec("torch") is None:
         with pytest.raises(ImportError, match="torch"):
-            dataset.loader(batch_size=1)
+            dataset.as_torch_dataloader(batch_size=1)
         return
-    loader = dataset.loader(batch_size=1)
+    loader = dataset.as_torch_dataloader(batch_size=1)
     assert len(loader.dataset) == 1
 
 
@@ -480,8 +486,8 @@ def test_the_dataset_reads_the_revision_the_export_pinned(
     """Not the project's current head. An export is a claim about which
     drawings a run saw, and re-reading the head breaks it the first time
     somebody fixes a label while a run is training."""
-    manifest().split("train").dataset(registry, image_size=64, classes=CLASSES)[0]
-    asked = [path for path in _Registry.seen if path.startswith("/api/v1/annotation-image?")]
+    manifest().get_split("train").as_dataset(registry, image_size=64, classes=CLASSES)[0]
+    asked = [path for path in Registry.seen if path.startswith("/api/v1/annotation-image?")]
     assert asked and f"revision={REVISION}" in asked[0]
 
 
@@ -490,17 +496,17 @@ def test_a_cached_corpus_is_downloaded_once_rather_than_once_per_epoch(
 ) -> None:
     dataset = (
         manifest()
-        .split("train")
-        .dataset(registry, image_size=64, cache_dir=tmp_path, classes=CLASSES)
+        .get_split("train")
+        .as_dataset(registry, image_size=64, cache_dir=tmp_path, classes=CLASSES)
     )
     for _ in range(3):
         dataset[0]
-    blobs = [path for path in _Registry.seen if "annotation-blobs" in path]
+    blobs = [path for path in Registry.seen if "annotation-blobs" in path]
     assert len(blobs) == 1
 
 
 def test_a_revision_the_server_could_not_resolve_raises_instead_of_training_on_nothing() -> None:
-    class _NoRevision(_Registry):
+    class NoRevision(Registry):
         def do_GET(self) -> None:
             body = json.dumps({"image_id": IMAGE_ID}).encode()
             self.send_response(200)
@@ -509,13 +515,13 @@ def test_a_revision_the_server_could_not_resolve_raises_instead_of_training_on_n
             self.end_headers()
             self.wfile.write(body)
 
-    server = HTTPServer(("127.0.0.1", 0), _NoRevision)
+    server = HTTPServer(("127.0.0.1", 0), NoRevision)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
         client = AnnotationRegistry(f"http://127.0.0.1:{server.server_port}")
         with pytest.raises(RegistryError, match="empty target"):
-            client.revision_annotations(PROJECT, IMAGE_ID, revision=REVISION)
+            client.get_revision_annotations(PROJECT, IMAGE_ID, revision=REVISION)
     finally:
         server.shutdown()
         server.server_close()
@@ -614,4 +620,43 @@ def test_a_schema_that_moved_since_the_export_is_refused_rather_than_permuted(
     against a reordered vocabulary permutes every label, every metric stays
     finite, and nothing says so."""
     with pytest.raises(RegistryError, match="permutes every label"):
-        manifest().split("train").dataset(registry, image_size=64)
+        manifest().get_split("train").as_dataset(registry, image_size=64)
+
+
+class OfflineImages:
+    """Three methods and no network, which is the whole point of the port.
+
+    Not a subclass of anything and it names `ImageSource` nowhere — a corpus
+    already on a GPU box, or a cache in front of a slow link, is this shape.
+    """
+
+    def __init__(self) -> None:
+        self.asked: list[str | None] = []
+
+    def get_project(self, name: str) -> dict[str, Any]:
+        return {"schema": {"version": "cc" * 32, "classes": CLASSES}}
+
+    def get_revision_annotations(
+        self, project: str, image_id: str, *, revision: str | None = None
+    ) -> list[dict[str, Any]]:
+        self.asked.append(revision)
+        return [line("w", [[5, 5], [58, 5]], thickness=4.0)]
+
+    def fetch_image(self, sample: Sample | str) -> bytes:
+        return IMAGE
+
+
+def test_a_dataset_reads_through_the_port_rather_than_through_the_client() -> None:
+    """`ExportDataset` needs three answers and nothing else about an HTTP
+    client, so anything that gives those three drives it — no server, no
+    connection pool, and no subclassing."""
+    offline = OfflineImages()
+    source: ImageSource = offline
+
+    dataset = manifest().get_split("train").as_dataset(source, image_size=64)
+    item = dataset[0]
+
+    assert item["image"].shape == (1, 64, 64)
+    assert int((item["targets"][BASE] == OUTER).sum()) > 0
+    # And it asked for the revision the export pinned, not the project's head.
+    assert offline.asked == [REVISION]

@@ -112,7 +112,7 @@ class S3Credentials:
     session_token: str | None = field(default=None, repr=False)
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
+class NoRedirect(urllib.request.HTTPRedirectHandler):
     """Turn every 3xx into an answer the caller can refuse."""
 
     def redirect_request(
@@ -167,7 +167,7 @@ class S3Reader:
         self._credentials = credentials
         self._timeout = timeout_seconds
         self._max_bytes = max_bytes
-        self._opener = urllib.request.build_opener(_NoRedirect())
+        self._opener = urllib.request.build_opener(NoRedirect())
 
     @property
     def schemes(self) -> tuple[str, ...]:

@@ -11,11 +11,11 @@ API and its own store. See ADR_0018.
     from aiwatcher_sdk.annotations import AnnotationRegistry
     from aiwatcher_sdk.training import TrainingClient
 
-    export = AnnotationRegistry(URL).build_export("floor-plans/dom-projekt")
+    dataloader = AnnotationRegistry(URL).build_dataloader("floor-plans/dom-projekt")
     training = TrainingClient(URL)
 
     with training.run("effnetv2s-2026-09-01", model="effnetv2-s",
-                      dataset=export.reference) as run:
+                      dataset=dataloader.source) as run:
         for index in range(epochs):
             with run.epoch(index) as epoch:
                 for batch in loader:
@@ -41,7 +41,7 @@ from __future__ import annotations
 import contextlib
 import sys
 import time
-from collections.abc import Iterator, Mapping
+from collections.abc import Generator, Mapping
 from dataclasses import dataclass, field
 from types import TracebackType
 from typing import Any, Literal, Self
@@ -74,7 +74,7 @@ class TrainingError(ApiError):
 
 
 @dataclass
-class _Buffer:
+class Buffer:
     """What has been measured and not yet sent."""
 
     epochs: list[dict[str, Any]] = field(default_factory=list)
@@ -127,7 +127,8 @@ class EpochContext:
         """
         self._final.update({key: float(value) for key, value in metrics.items()})
 
-    def summary(self) -> dict[str, float]:
+    def get_summary(self) -> dict[str, float]:
+        """What this epoch will publish: the step averages, then the measured numbers."""
         averaged = (
             {key: value / self.steps for key, value in self._sums.items()} if self.steps else {}
         )
@@ -149,21 +150,21 @@ class TrainingRun:
         self._client = client
         self._mirror = mirror
         self._sample_interval = sample_interval
-        self._buffer = _Buffer()
+        self._buffer = Buffer()
         self._last_sample_at = 0.0
         self._epochs = 0
         self._best: dict[str, Any] | None = None
         self._warned = False
 
     @contextlib.contextmanager
-    def epoch(self, index: int) -> Iterator[EpochContext]:
+    def epoch(self, index: int) -> Generator[EpochContext, None, None]:
         """One epoch. Times itself and flushes one batch when it ends."""
         epoch = EpochContext(index)
         started = time.monotonic()
         try:
             yield epoch
         finally:
-            metrics = epoch.summary()
+            metrics = epoch.get_summary()
             self._buffer.epochs.append(
                 {
                     "epoch": index,
@@ -351,11 +352,11 @@ class TrainingClient:
         workflow_run_id: str | None = None,
         mirror: Any | None = None,
         sample_interval: float = DEFAULT_SAMPLE_INTERVAL,
-    ) -> Iterator[TrainingRun]:
+    ) -> Generator[TrainingRun, None, None]:
         """Open a run, and close it however the block ends.
 
-        `dataset` should be `project@export-sha256` from the annotation
-        registry. A bare project name is accepted, recorded, and marks the run
+        `dataset` should be `project@export-sha256` — `dataloader.source` from
+        the annotation registry. A bare project name is accepted, recorded, and marks the run
         irreproducible — refusing it would only teach people to lie about it —
         but it is said once on stderr, because that is the field that decides
         whether anybody can repeat this later.
@@ -363,7 +364,8 @@ class TrainingClient:
         if dataset and "@" not in dataset:
             print(
                 f"aiwatcher: training on {dataset!r}, which is not an immutable export "
-                "reference (project@sha256); this run will not be reproducible and its "
+                "source (project@sha256, `dataloader.source`); this run will not be "
+                "reproducible and its "
                 "model version will not be promotable",
                 file=sys.stderr,
             )
@@ -400,7 +402,7 @@ class TrainingClient:
 
     # ── Reads ────────────────────────────────────────────────────────────
 
-    def runs(
+    def get_runs(
         self,
         *,
         model: str | None = None,
@@ -421,7 +423,7 @@ class TrainingClient:
         """One run, with its whole curve."""
         return self.request("GET", f"/api/v1/training-runs/{quote(run_id)}")
 
-    def models(self) -> list[dict[str, Any]]:
+    def get_models(self) -> list[dict[str, Any]]:
         return list(self.request("GET", "/api/v1/models").get("models", []))
 
     def get_model(self, name: str, *, version: str | None = None) -> dict[str, Any]:

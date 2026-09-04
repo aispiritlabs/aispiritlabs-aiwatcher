@@ -20,7 +20,7 @@ aiwatcher with no change to the training loop::
         TrainingClient("http://aiwatcher:8080"),
         run_id="floorplan-effnetv2s-2026-09-01",
         model="efficientnetv2-s",
-        dataset=export.reference,
+        dataset=dataloader.source,
     )])
 
 :func:`profile_summary` turns a finished ``torch.profiler.profile`` into the
@@ -33,7 +33,7 @@ better than a waterfall ever will.
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Iterator, Mapping
+from collections.abc import Generator, Mapping
 from typing import Any
 
 from aiwatcher_sdk.training import EpochContext, TrainingClient, TrainingRun
@@ -254,7 +254,7 @@ class TrainingCallback:
         return self._run
 
     @contextlib.contextmanager
-    def epoch(self, index: int) -> Iterator[EpochContext]:
+    def epoch(self, index: int) -> Generator[EpochContext, None, None]:
         """For a plain PyTorch loop with no Trainer to call the hooks."""
         if self._run is None:
             self.on_train_start()

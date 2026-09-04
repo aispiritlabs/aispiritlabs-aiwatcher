@@ -157,59 +157,136 @@ version = registry.publish(
 ## The annotation registry
 
 Vector annotations for any vision domain — the project's label schema carries
-the domain, and this ships no vocabulary. An **export** is the frozen thing a
-training run records; a **split** of it is a sequence you can measure; and a
-dataset is built from that split, which is PyTorch's own two steps:
+the domain, and this ships no vocabulary. A **data loader** is the frozen
+export a training run records, together with the registry it reads through; a
+**split** of it is a sequence you can measure; and a dataset is built from that
+split, which is PyTorch's own two steps:
 
 ```python
 from aiwatcher_sdk.annotations import AnnotationRegistry
 
-with AnnotationRegistry("http://aiwatcher:8080") as registry:
-    export = registry.build_export("corpora/plans")
+with AnnotationRegistry("http://aiwatcher:8080") as data_registry:
+    dataloader = data_registry.build_dataloader("corpora/plans", rights_policy="commercial")
+    print(dataloader.source)  # corpora/plans@9f3c… — what a training run records
 
-    test = export.split("test")
+    test = dataloader.get_split("test")
     # images, and the subjects behind them
-    print(len(test), len(test.families()))
+    print(len(test), len(test.get_groups()))
 
-    train = export.split("train").dataset(image_size=512)
-    loader = train.loader(batch_size=4, shuffle=True)
+    train = dataloader.get_split("train").as_dataset(image_size=512)
+    loader = train.as_torch_dataloader(batch_size=4, shuffle=True)
 ```
 
-The export carries the registry it was read from, so nothing downstream asks
-for one again. A manifest reconstructed from a file with `Export.from_json` has
-no source and takes one: `split.dataset(registry, ...)`.
+`build_dataloader` freezes the project on the server as an **export** — a
+content-addressed manifest — and hands it back with this registry attached, so
+nothing downstream asks for one again. `get_dataloader(source)` reads one that
+already exists. A manifest reconstructed from a file with `Export.from_json`
+has no registry and takes one: `split.as_dataset(registry, ...)`.
 
-`split()` returns a `SplitView`: a plain `Sequence[Sample]`, so `len`, indexing,
-slicing and iteration all work, plus the two questions worth asking before
-training on it.
+`get_split()` returns a `SplitView`: a plain `Sequence[Sample]`, so `len`,
+indexing, slicing and iteration all work, plus the two questions worth asking
+before training on it.
 
 ```python
-side = export.split("test")
+side = dataloader.get_split("test")
 
 # the distinct subjects — what a score is really over
-side.families()
-# images, families, instances
-side.counts()
+side.get_groups()
+# images, groups, instances
+side.get_counts()
 # a slice is another view
-side[:8].families()
+side[:8].get_groups()
 ```
 
-**The family, not the image, is the unit.** One building published as the plain
+**The group, not the image, is the unit.** One building published as the plain
 plan, its mirror, a garage variant and a re-drawn revision is four images and
 one observation. `group_id` is what keeps them on one side, so a test score
-measures generalisation rather than memorisation — and `len(side.families())`
+measures generalisation rather than memorisation — and `len(side.get_groups())`
 is the number that bounds what that score can mean. `split_for` computes the
 same rule locally, byte for byte, so "is this house held out" needs no request.
 
-`.dataset(...)` needs `pip install 'aiwatcher-sdk[vision]'` — it rasterises the
-vector shapes into the grids a loss function reads, one per declared schema
-layer, on demand and never stored. `.loader(...)` is the only place in this SDK
-that imports torch, inside the method, so a process that only rasterises never
-pays for it.
+`.as_dataset(...)` needs `pip install 'aiwatcher-sdk[vision]'` — it rasterises
+the vector shapes into the grids a loss function reads, one per declared schema
+layer, on demand and never stored. `.as_torch_dataloader(...)` is the only
+place in this SDK that imports torch, inside the method, so a process that only
+rasterises never pays for it.
 
-Exclusions are data: `export.excluded` is a list of `Exclusion` — `group_id`,
-`reason`, `detail` — because an export that quietly loses a third of a corpus
-reads exactly like one that did not.
+Exclusions are data: `dataloader.excluded_samples` is a list of
+`ExcludedSample` — `group_id`, `reason`, `detail` — because an export that
+quietly loses a third of a corpus reads exactly like one that did not.
+
+```python
+for excluded in dataloader.excluded_samples:
+    print(excluded.group_id, excluded.reason, excluded.detail)
+```
+
+### What is where
+
+`aiwatcher_sdk/annotations/` is a package: one file per noun, ordered so every
+import points up this list and none points back down.
+
+| file | holds |
+|---|---|
+| `errors.py` | `RegistryError`, and the sentence a disabled instance should produce |
+| `split.py` | the *rule* — the three sides, and `split_for` |
+| `sample.py` | `Sample` and `ExcludedSample`, the two halves of a manifest |
+| `image_source.py` | `ImageSource`, the three reads a dataset needs |
+| `view.py` | `SplitView`, one side as a `Sequence[Sample]` |
+| `export.py` | `Export`, the frozen manifest and the string a run records |
+| `registry.py` | `AnnotationRegistry`, the only file that knows a network exists |
+
+`__init__.py` is the door and re-exports all of it, so
+`from aiwatcher_sdk.annotations import AnnotationRegistry` is what it always
+was.
+
+### Substituting the registry
+
+A dataset does not need a client. It needs three answers — a project's schema,
+one revision's shapes, and an image's bytes — and that is `ImageSource`:
+
+```python
+class OfflineImages:  # names ImageSource nowhere, inherits nothing
+    def get_project(self, name): ...
+    def get_revision_annotations(self, project, image_id, *, revision=None): ...
+    def fetch_image(self, sample): ...
+
+
+train = dataloader.get_split("train").as_dataset(OfflineImages(), image_size=512)
+```
+
+A cache in front of a slow link, a reader over a corpus already on the GPU box,
+or a test double is then a small class rather than a subclass of something with
+a connection pool inside it.
+
+It also settles the direction. A manifest carries the source it was read from
+and the registry hands back manifests; pointed at the concrete client that is a
+circular import, and pointed at the protocol it is the straight line the file
+table above describes.
+
+### How things are named
+
+One rule, across every registry client here. A **method is a verb phrase**: a
+read is `get_<noun>` — `iter_<noun>` when it pages, as `iter_images` and
+`iter_rows` do — a conversion is `as_<noun>`, and `build_<noun>` asks the server
+to make something. A **field or property is a noun**: `source`, `samples`,
+`counts`. A **collection is named for what it holds**, so the rows an export
+kept are `samples` and the rows it left out are `excluded_samples`. Writes
+keep the verb that says what they do — `publish`, `save_revision`,
+`register_model`, `promote`, `record_turns`. A method that is a bare noun reads
+like a field, and has to be looked up to find out that it is a request.
+
+A **class name never starts with an underscore.** A class that is internal is
+simply left out of `__all__`; a leading underscore says the same thing a second
+time, more weakly, and then leaks into every annotation that mentions it —
+`list[_Context]` in a neighbouring module is a private name crossing a module
+boundary in public. `Correlation`, `Buffer`, `Scope`, `Tick` and `FlushRequest`
+were `_Context`, `_Buffer`, `_Scope`, `_Tick` and `_FlushRequest`.
+
+A **`@contextmanager` is annotated `Generator`**, never `Iterator`. The
+decorated function really is a generator — `contextlib` throws exceptions back
+into it at the `yield`, which is the half `Iterator` cannot express — and
+`Generator[Foo, None, None]` is written out in full because the one-argument
+spelling needs PEP 696 defaults and `requires-python` here is 3.11.
 
 ## Prompt optimisation, with DeepEval
 

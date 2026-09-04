@@ -450,19 +450,59 @@ policies, and that is the design: telemetry must never take an agent down, so
 run on is the work, so every `PromptRegistry` method raises.
 `aiwatcher_sdk/integrations/deepeval.py` never imports deepeval — it reads the
 report structurally, so a DeepEval release is not an SDK release. The same rule
-holds for torch, with one deliberate exception: `ExportDataset.loader` imports
-it *inside the method*, because handing back a `DataLoader` is the one thing
-that cannot be done structurally.
+holds for torch, with one deliberate exception:
+`ExportDataset.as_torch_dataloader` imports it *inside the method*, because
+handing back a `DataLoader` is the one thing that cannot be done structurally.
 
-An annotation export is read the shape PyTorch reads a dataset:
-`export.split("test")` is a `SplitView` — a `Sequence[Sample]` that also answers
-`families()` and `counts()` — and `.dataset(...)` turns it into the map-style
-dataset a `DataLoader` takes, through the registry the export remembers being
-read from rather than one the caller repeats. Everything on that path pickles,
-because a `DataLoader` with workers puts it across a process boundary under
-`spawn`. The split is where the family rule
-already lives, so nothing downstream gets a second chance to decide which
-subjects a model may see.
+An annotation export is read the shape PyTorch reads a dataset.
+`data_registry.build_dataloader(project)` freezes the project and hands back
+the loader — the `Export` with the registry attached, whose `source` is the
+`project@sha256` a run records and whose `excluded_samples` say what was left
+out and why. `dataloader.get_split("test")` is a `SplitView` — a
+`Sequence[Sample]` that also answers `get_groups()` and `get_counts()` — and
+`.as_dataset(...)` turns it into the map-style dataset a `DataLoader` takes,
+through the registry the loader remembers being read from rather than one the
+caller repeats. Everything on that path pickles, because a `DataLoader` with
+workers puts it across a process boundary under `spawn`. The split is where the
+group rule already lives, so nothing downstream gets a second chance to decide
+which subjects a model may see.
+
+**Registry clients are named by one rule, and a new method follows it.** A
+method is a verb phrase: a read is `get_<noun>`, `iter_<noun>` when it pages, a
+conversion is `as_<noun>`, and `build_<noun>` asks the server to make
+something; a field or a property is a noun; a collection is named for what it
+holds (`samples`, `excluded_samples`). Writes keep the verb that says what
+they do. A bare-noun method — `split()`, `families()`, `counts()`, `job()`,
+`policy()` — reads like a field and has to be looked up to find out that it is
+a request, which is why none is left. The telemetry client's scopes
+(`client.run`, `run.agent`, `agent.llm`) are a different idiom, a `with` block
+that names what it opens, and are deliberately not covered.
+
+Two more rules hold everywhere in `sdk/python`. **A class name never starts
+with an underscore** — internal means absent from `__all__`, and a leading
+underscore is the same statement made more weakly, which then leaks into every
+annotation that mentions it (`list[_Context]` in a neighbouring module is a
+private name crossing a module boundary in public). And **a `@contextmanager`
+is annotated `Generator[T, None, None]`, never `Iterator[T]`**: the decorated
+function is a generator, `contextlib` throws exceptions back into it at the
+`yield`, and the three-argument spelling is written out because `Generator[T]`
+needs PEP 696 defaults while `requires-python` is 3.11.
+
+`aiwatcher_sdk/annotations` is a **package sliced by noun**, and the slicing
+rule is the Rust one above: a change to what one thing *is* touches one file.
+`errors` → `split` (the rule that deals a group a side) → `sample` (`Sample`
+and `ExcludedSample`, the two halves of a manifest) → `image_source` → `view`
+(`SplitView`) → `export` (`Export`) → `registry` (`AnnotationRegistry`, the
+only file that knows a network exists), with `__init__` as the door that
+re-exports all of it. Every import points up that list. The one thing holding
+it straight is `image_source::ImageSource` — the three reads a dataset needs, a
+project's schema, one revision's shapes and an image's bytes. A manifest
+carries the source it was read from and the registry hands back manifests, so
+written against the concrete client those two would import each other; written
+against the protocol they meet at the abstraction. It is also what makes a
+cache, an offline corpus or a test double substitutable for the client without
+inheriting from it, which `test_a_dataset_reads_through_the_port_rather_than_through_the_client`
+is there to keep true.
 
 `aiwatcher_sdk/serving` is the one thing here that reads a decision back out and
 acts on it rather than recording one: it resolves the `production` label and

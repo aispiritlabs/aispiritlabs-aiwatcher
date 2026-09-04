@@ -73,10 +73,10 @@ import os
 import sys
 import time
 import uuid
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Generator, Mapping
 from typing import Any
 
-from aiwatcher_sdk import AiwatcherClient, NullTransport, Transport, _Context
+from aiwatcher_sdk import AiwatcherClient, Correlation, NullTransport, Transport
 
 __all__ = ["AiwatcherTracer", "TeeTracer", "aiwatcher_tracer", "tee"]
 
@@ -84,7 +84,7 @@ __all__ = ["AiwatcherTracer", "TeeTracer", "aiwatcher_tracer", "tee"]
 _TOOL_SPAN_TYPE = "TOOL"
 
 
-class _NoopSpan:
+class NoopSpan:
     """What every context manager here yields.
 
     The interface lets a caller annotate a span after the fact. aiwatcher builds
@@ -122,8 +122,8 @@ class AiwatcherTracer:
         )
         # A stack, not a single value: agents nest, and a tool call belongs to
         # the innermost one.
-        self._runs: list[_Context] = []
-        self._agents: list[_Context] = []
+        self._runs: list[Correlation] = []
+        self._agents: list[Correlation] = []
         # Open span ids, innermost last. The top is the parent of whatever
         # opens next; a leaf pushes and pops around its own body so that a
         # nested call sees it.
@@ -132,10 +132,10 @@ class AiwatcherTracer:
     # -- context -----------------------------------------------------------
 
     @property
-    def _run(self) -> _Context | None:
+    def _run(self) -> Correlation | None:
         return self._runs[-1] if self._runs else None
 
-    def _scope(self, agent_id: str | None = None) -> _Context | None:
+    def _scope(self, agent_id: str | None = None) -> Correlation | None:
         """The context an event should be attributed to.
 
         Innermost agent if one is open, else the run. Returns `None` when
@@ -147,7 +147,7 @@ class AiwatcherTracer:
             return None
         if agent_id is None or agent_id == base.agent_id:
             return base
-        return _Context(
+        return Correlation(
             run_id=base.run_id,
             conversation_id=base.conversation_id,
             workflow_id=base.workflow_id,
@@ -164,7 +164,7 @@ class AiwatcherTracer:
     def _emit(
         self,
         event_type: str,
-        context: _Context | None,
+        context: Correlation | None,
         data: dict[str, Any],
         *,
         span_id: str | None = None,
@@ -184,7 +184,7 @@ class AiwatcherTracer:
             print(f"[aiwatcher] dropped {event_type}: {error}", file=sys.stderr)
 
     @contextlib.contextmanager
-    def _scoped_span(self) -> Iterator[tuple[str, str | None]]:
+    def _scoped_span(self) -> Generator[tuple[str, str | None], None, None]:
         """Mint a span id, make it the current parent, and pop it after.
 
         Popping in a `finally` matters: a scope that raises must not leave its
@@ -213,12 +213,12 @@ class AiwatcherTracer:
         tags: Mapping[str, str] | None = None,
         input: Any | None = None,
         tracing_context: Any | None = None,
-    ) -> Iterator[_NoopSpan]:
+    ) -> Generator[NoopSpan, None, None]:
         del input, tracing_context
         # A fresh run per workflow, grouped by session. One chat session runs
         # the agent many times; a trace covering the whole session would never
         # close and would be unreadable in every trace UI.
-        context = _Context(
+        context = Correlation(
             run_id=f"{session_id or 'session'}-{uuid.uuid4().hex[:8]}",
             conversation_id=session_id or None,
             workflow_id=name or None,
@@ -238,7 +238,7 @@ class AiwatcherTracer:
         with self._scoped_span() as (span_id, parent_span):
             self._emit("run.started", context, payload, span_id=span_id, parent_span_id=parent_span)
             try:
-                yield _NoopSpan()
+                yield NoopSpan()
             except BaseException as error:
                 # BaseException, not Exception: a cancelled run that reports
                 # nothing is indistinguishable from a hung one.
@@ -268,16 +268,16 @@ class AiwatcherTracer:
         agent_id: str = "",
         input: Any | None = None,
         attributes: Mapping[str, Any] | None = None,
-    ) -> Iterator[_NoopSpan]:
+    ) -> Generator[NoopSpan, None, None]:
         del input
         parent = self._scope()
         if parent is None:
             # No workflow open. Emitting an orphan agent span would produce a
             # trace with no root, so this one is simply not recorded.
-            yield _NoopSpan()
+            yield NoopSpan()
             return
 
-        context = _Context(
+        context = Correlation(
             run_id=parent.run_id,
             conversation_id=parent.conversation_id,
             workflow_id=parent.workflow_id,
@@ -295,7 +295,7 @@ class AiwatcherTracer:
                 "agent.started", context, payload, span_id=span_id, parent_span_id=parent_span
             )
             try:
-                yield _NoopSpan()
+                yield NoopSpan()
             except BaseException as error:
                 self._emit(
                     "agent.failed",
@@ -318,7 +318,7 @@ class AiwatcherTracer:
         input: Any | None = None,
         attributes: Mapping[str, Any] | None = None,
         span_type: str = "CHAIN",
-    ) -> Iterator[_NoopSpan]:
+    ) -> Generator[NoopSpan, None, None]:
         del input
         attributes = attributes or {}
         kind = span_type.upper()
@@ -358,7 +358,7 @@ class AiwatcherTracer:
                 parent_span_id=parent_span,
             )
             try:
-                yield _NoopSpan()
+                yield NoopSpan()
             except BaseException as error:
                 self._emit(
                     f"{event_prefix}.failed",
@@ -486,22 +486,22 @@ class TeeTracer:
         self._tracers = [tracer for tracer in tracers if tracer is not None]
 
     @contextlib.contextmanager
-    def workflow(self, **kwargs: Any) -> Iterator[Any]:
+    def workflow(self, **kwargs: Any) -> Generator[Any, None, None]:
         with contextlib.ExitStack() as stack:
             handles = [stack.enter_context(t.workflow(**kwargs)) for t in self._tracers]
-            yield handles[0] if handles else _NoopSpan()
+            yield handles[0] if handles else NoopSpan()
 
     @contextlib.contextmanager
-    def agent(self, **kwargs: Any) -> Iterator[Any]:
+    def agent(self, **kwargs: Any) -> Generator[Any, None, None]:
         with contextlib.ExitStack() as stack:
             handles = [stack.enter_context(t.agent(**kwargs)) for t in self._tracers]
-            yield handles[0] if handles else _NoopSpan()
+            yield handles[0] if handles else NoopSpan()
 
     @contextlib.contextmanager
-    def step(self, **kwargs: Any) -> Iterator[Any]:
+    def step(self, **kwargs: Any) -> Generator[Any, None, None]:
         with contextlib.ExitStack() as stack:
             handles = [stack.enter_context(t.step(**kwargs)) for t in self._tracers]
-            yield handles[0] if handles else _NoopSpan()
+            yield handles[0] if handles else NoopSpan()
 
     def llm(self, *, invoke: Callable[..., Any], **kwargs: Any) -> Any:
         def nest(index: int) -> Callable[..., Any]:

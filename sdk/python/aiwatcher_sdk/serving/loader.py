@@ -195,7 +195,7 @@ def pick_artifact(
     )
 
 
-class _OnceReader:
+class OnceReader:
     """A reader that fetches each URI once per load.
 
     Two callers want the same bytes while one candidate is being built — the
@@ -243,7 +243,7 @@ def load(
     if not version:
         raise LoadError("the registry returned a version with no id")
 
-    once = _OnceReader(reader)
+    once = OnceReader(reader)
     package = current.get("package")
     if not package:
         return _unpackaged(current, name, loaders, once)
@@ -280,7 +280,7 @@ def load(
     # A package is every file it declares, not merely its entry point. A label
     # file or tokenizer with the wrong digest is the same provenance break as
     # a graph with the wrong digest, even when this runtime does not open it.
-    # Do this before the loader opens anything; _OnceReader then makes the
+    # Do this before the loader opens anything; OnceReader then makes the
     # loader's own read-and-check of the entry point a memory read.
     for artifact in artifacts:
         read_verified(once, artifact, version=version)
