@@ -264,23 +264,71 @@ export type Artifact = {
 };
 
 /**
- * One file a package is made of.
+ * What sort of thing an artifact holds.
+ *
+ * An enum rather than free text — unlike `data.step_type`, which is free text
+ * so a producer can introduce `rerank` without a backend release. The
+ * difference is who chooses: a step type is chosen by whoever instruments an
+ * agent, and this is chosen by the code in this workspace that writes the
+ * bytes. It decides a key prefix and a filter, and nothing that executes.
+ */
+export const ArtifactKind = {
+    ROWS: 'rows',
+    CODE: 'code',
+    PREVIEW: 'preview',
+    LOG: 'log',
+    MODEL: 'model',
+    REPORT: 'report',
+    BLOB: 'blob'
+} as const;
+
+/**
+ * What sort of thing an artifact holds.
+ *
+ * An enum rather than free text — unlike `data.step_type`, which is free text
+ * so a producer can introduce `rerank` without a backend release. The
+ * difference is who chooses: a step type is chosen by whoever instruments an
+ * agent, and this is chosen by the code in this workspace that writes the
+ * bytes. It decides a key prefix and a filter, and nothing that executes.
+ */
+export type ArtifactKind = typeof ArtifactKind[keyof typeof ArtifactKind];
+
+/**
+ * One file, addressed by what is in it.
  */
 export type ArtifactRef = {
     content_type?: string;
     /**
-     * `sha256` of the bytes, lowercase hex. Required, and the reason this
-     * type exists: an address is not an identity.
+     * `sha256` of the bytes, lowercase hex.
+     *
+     * The reason this type exists rather than a `(name, uri)` pair. Whether it
+     * may be empty is the caller's rule, not this type's.
      */
     digest: string;
     /**
-     * What the runtime calls it: `weights`, `tokenizer`, `config`.
+     * Added when this moved out of `aiwatcher-training`. Defaulted and skipped
+     * when unset, so every package already written reads and re-writes
+     * unchanged.
+     */
+    kind?: ArtifactKind;
+    /**
+     * What the reader calls it: `weights`, `tokenizer`, `rows`.
      */
     name: string;
+    /**
+     * The schema the bytes claim to be in — a dataset version, a `sha256` of a
+     * column list. Read by whoever consumes them; interpreted by nothing here.
+     */
+    schema_ref?: string | null;
     size_bytes?: number | null;
     /**
      * Where the bytes are. A pointer, like every other artifact in this
-     * workspace — the registry stores no weights.
+     * workspace — nothing here stores a copy.
+     *
+     * A `file://` on a shared volume is accepted and is never the only
+     * reference to something that matters: nothing outside that node can
+     * verify it, so a step handing on a path also reports the object store
+     * copy's digest, or reports no artifact at all.
      */
     uri: string;
 };
@@ -344,6 +392,52 @@ export type BestMetric = {
     epoch?: number | null;
     metric: string;
     value: number;
+};
+
+/**
+ * Where a block sits on the canvas. Presentation, and nothing reads it but the
+ * canvas — the chain is the edges.
+ */
+export type BlockPosition = {
+    x?: number;
+    y?: number;
+};
+
+/**
+ * What one block is, and everything that block kind needs.
+ *
+ * Internally tagged rather than flattened: `spec.kind` is one word a reader
+ * and a `switch` both understand, and the generated TypeScript is a
+ * discriminated union rather than an intersection of optional fields.
+ */
+export type BlockSpec = {
+    /**
+     * `read()` arguments, by name. Values are sent as written — the Flow
+     * service refuses one the dataset never declared, which is where that
+     * check belongs.
+     */
+    arguments?: {
+        [key: string]: string;
+    };
+    dataset: string;
+    kind: 'source';
+} | {
+    kind: 'transform';
+    steps?: string;
+} | {
+    kind: 'notebook';
+    notebook: string;
+    /**
+     * What the notebook's `mo.ui` elements start at: the block's settings,
+     * which a headless run has instead of somebody moving a slider.
+     */
+    params?: {
+        [key: string]: unknown;
+    };
+    revision?: string | null;
+} | {
+    dataset?: string | null;
+    kind: 'view';
 };
 
 /**
@@ -716,6 +810,18 @@ export const Credential = {
  */
 export type Credential = typeof Credential[keyof typeof Credential];
 
+export type CurationPipeline = {
+    blocks: Array<PipelineBlock>;
+    description?: string;
+    edges: Array<PipelineEdge>;
+    name: string;
+    /**
+     * SHA-256 of the authored fields. The stable identity of this revision.
+     */
+    revision: string;
+    saved_at: string;
+};
+
 /**
  * A saved Flow PHP transformation.
  */
@@ -841,6 +947,7 @@ export type DatasetVersion = DatasetVersionSummary & {
 export type DatasetVersionSummary = {
     columns: Array<string>;
     created_at: string;
+    produced_by?: string | null;
     recipe?: string | null;
     row_count: number;
     version: string;
@@ -1437,7 +1544,7 @@ export type EventPage = {
  * must not have its events rejected. They are stored and streamed
  * live, they simply take part in no span.
  */
-export type EventType = 'RunStarted' | 'RunCompleted' | 'RunFailed' | 'AgentStarted' | 'AgentCompleted' | 'AgentFailed' | 'AgentMessage' | 'LlmStarted' | 'LlmFirstToken' | 'LlmChunk' | 'LlmCompleted' | 'LlmFailed' | 'ToolStarted' | 'ToolCompleted' | 'ToolFailed' | 'StepStarted' | 'StepCompleted' | 'StepFailed' | 'EvalStarted' | 'EvalCase' | 'EvalCompleted' | 'EvalFailed' | 'WorkflowDeclared' | 'ArtifactProduced' | {
+export type EventType = 'RunStarted' | 'RunCompleted' | 'RunFailed' | 'AgentStarted' | 'AgentCompleted' | 'AgentFailed' | 'AgentMessage' | 'LlmStarted' | 'LlmFirstToken' | 'LlmChunk' | 'LlmCompleted' | 'LlmFailed' | 'ToolStarted' | 'ToolCompleted' | 'ToolFailed' | 'StepStarted' | 'StepCompleted' | 'StepFailed' | 'EvalStarted' | 'EvalCase' | 'EvalCompleted' | 'EvalFailed' | 'WorkflowDeclared' | 'ArtifactProduced' | 'ExecutionRequested' | 'ExecutionStarted' | 'ExecutionPaused' | 'ExecutionAwaitingInput' | 'ExecutionResumed' | 'ExecutionCompleted' | 'ExecutionFailed' | 'ExecutionCancelled' | {
     Unknown: string;
 };
 
@@ -3078,6 +3185,17 @@ export type NodeState = {
     name: string;
     node_id: string;
     /**
+     * Who published this node's executions, from `data.published_by`.
+     *
+     * Normally one entry, or none for a producer that does not say. **Two is
+     * a finding**: exactly one party publishes a given attempt (ADR_0026), so
+     * a node with both `engine` and a producer's own events is a managed step
+     * whose producer code opened its own `node()` scope, and its attempt count
+     * and duration are describing two things at once. The flag exists to make
+     * that visible, not to resolve it — the resolution is in the producer.
+     */
+    publishers?: Array<string>;
+    /**
      * The run the node executed in. A stage-per-pod orchestrator gives every
      * node a different one; this is what links a node back to its trace.
      */
@@ -3344,6 +3462,25 @@ export type Percentiles = {
     p50: number;
     p95: number;
     p99: number;
+};
+
+export type PipelineBlock = {
+    /**
+     * Stable within one pipeline. What the edges name.
+     */
+    id: string;
+    position?: BlockPosition;
+    spec: BlockSpec;
+    title?: string;
+};
+
+export type PipelineEdge = {
+    from: string;
+    to: string;
+};
+
+export type PipelinePage = {
+    pipelines: Array<CurationPipeline>;
 };
 
 /**
@@ -3672,6 +3809,22 @@ export type PublishDatasetRequest = {
      * The exact script that produced `items`, even when it was not saved first.
      */
     pipeline: string;
+    /**
+     * The block chain that produced these rows, as `name@revision`.
+     *
+     * Present when the execution came from the pipeline canvas rather than
+     * from one script, and provenance rather than identity — like the recipe
+     * name and the description, and for the same reason: a block dragged
+     * across the canvas is a new pipeline revision and the same rows, and a
+     * dataset version per canvas tidy-up would be a version history about
+     * layout.
+     *
+     * It matters because the Flow script alone does not describe this
+     * execution: a notebook block ran between that script and these rows, and
+     * the only place its settings and its pinned source are written down is
+     * the pipeline revision this names.
+     */
+    produced_by?: string | null;
     /**
      * Saved recipe name, when the run came from one.
      */
@@ -4391,6 +4544,13 @@ export type SampleRecord = {
     step?: number | null;
 };
 
+export type SavePipelineRequest = {
+    blocks: Array<PipelineBlock>;
+    description?: string;
+    edges?: Array<PipelineEdge>;
+    name: string;
+};
+
 /**
  * What a caller sends to create or re-describe a project.
  */
@@ -4424,6 +4584,14 @@ export type SaveRevisionRequest = {
     image_id: string;
     notes?: string;
     project: string;
+};
+
+export type SavedPipeline = {
+    /**
+     * False when this exact immutable revision was already present.
+     */
+    created: boolean;
+    pipeline: CurationPipeline;
 };
 
 export type SavedRecipe = {
@@ -6313,6 +6481,57 @@ export type ListConversationsResponses = {
 };
 
 export type ListConversationsResponse = ListConversationsResponses[keyof ListConversationsResponses];
+
+export type ListPipelinesData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/curation-pipelines';
+};
+
+export type ListPipelinesErrors = {
+    501: ErrorBody;
+};
+
+export type ListPipelinesError = ListPipelinesErrors[keyof ListPipelinesErrors];
+
+export type ListPipelinesResponses = {
+    200: PipelinePage;
+};
+
+export type ListPipelinesResponse = ListPipelinesResponses[keyof ListPipelinesResponses];
+
+export type SavePipelineData = {
+    body: SavePipelineRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/curation-pipelines';
+};
+
+export type SavePipelineErrors = {
+    400: ErrorBody;
+    413: ErrorBody;
+    /**
+     * The blocks do not form a runnable chain
+     */
+    422: ErrorBody;
+    501: ErrorBody;
+};
+
+export type SavePipelineError = SavePipelineErrors[keyof SavePipelineErrors];
+
+export type SavePipelineResponses = {
+    /**
+     * This exact revision already existed
+     */
+    200: SavedPipeline;
+    /**
+     * A new revision was stored
+     */
+    201: SavedPipeline;
+};
+
+export type SavePipelineResponse = SavePipelineResponses[keyof SavePipelineResponses];
 
 export type ListRecipesData = {
     body?: never;

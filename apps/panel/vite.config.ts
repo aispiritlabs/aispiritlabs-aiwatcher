@@ -31,6 +31,15 @@ export default defineConfig({
         target: process.env.AIWATCHER_FLOW_URL ?? 'http://127.0.0.1:8081',
         changeOrigin: true,
       },
+      // The `ml_pipeline` notebook runtime, optional in exactly the same way.
+      // `ws` is not optional though: a marimo app talks to its kernel over a
+      // WebSocket, so without it the block's editor loads, renders nothing and
+      // never says why.
+      '/ml-pipeline': {
+        target: process.env.AIWATCHER_ML_PIPELINE_URL ?? 'http://127.0.0.1:8082',
+        changeOrigin: true,
+        ws: true,
+      },
     },
   },
 });

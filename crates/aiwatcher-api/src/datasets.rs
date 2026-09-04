@@ -11,8 +11,8 @@ use axum::routing::get;
 use axum::{Json, Router};
 
 use aiwatcher_datasets::{
-    DatasetPage, DatasetRowsPage, PublishDatasetRequest, PublishedDataset, RecipePage, Registry,
-    SaveRecipeRequest, SavedRecipe,
+    DatasetPage, DatasetRowsPage, PipelinePage, PublishDatasetRequest, PublishedDataset,
+    RecipePage, Registry, SavePipelineRequest, SaveRecipeRequest, SavedPipeline, SavedRecipe,
 };
 use serde::Deserialize;
 
@@ -33,6 +33,8 @@ use utoipa::OpenApi;
     publish_dataset,
     list_recipes,
     save_recipe,
+    list_pipelines,
+    save_pipeline,
 ))]
 struct Api;
 
@@ -47,6 +49,10 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/datasets", get(list_datasets).post(publish_dataset))
         .route("/api/v1/dataset-rows", get(get_dataset_rows))
         .route("/api/v1/curations", get(list_recipes).post(save_recipe))
+        .route(
+            "/api/v1/curation-pipelines",
+            get(list_pipelines).post(save_pipeline),
+        )
 }
 
 #[derive(Debug, Deserialize, utoipa::IntoParams)]
@@ -178,6 +184,55 @@ async fn save_recipe(
 ) -> ApiResult<(StatusCode, Json<SavedRecipe>)> {
     may_author(&caller)?;
     let saved = registry(&state)?.save_recipe(request).await?;
+    let status = if saved.created {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    Ok((status, Json(saved)))
+}
+
+/// Every saved curation pipeline, newest save first.
+#[utoipa::path(
+    get,
+    path = "/api/v1/curation-pipelines",
+    responses(
+        (status = 200, body = PipelinePage),
+        (status = 501, body = crate::error::ErrorBody),
+    ),
+    tag = "data-curation",
+)]
+async fn list_pipelines(State(state): State<AppState>) -> ApiResult<Json<PipelinePage>> {
+    Ok(Json(registry(&state)?.pipelines().await?))
+}
+
+/// Save a content-addressed revision of a block pipeline.
+///
+/// The blocks are checked as a chain here and nowhere else — the canvas draws
+/// what it is told and implements no rules of its own, exactly as the
+/// annotation canvas does not re-implement the shape validator. A refusal is a
+/// 422 whose `details` carry every problem at once.
+#[utoipa::path(
+    post,
+    path = "/api/v1/curation-pipelines",
+    request_body = SavePipelineRequest,
+    responses(
+        (status = 201, body = SavedPipeline, description = "A new revision was stored"),
+        (status = 200, body = SavedPipeline, description = "This exact revision already existed"),
+        (status = 400, body = crate::error::ErrorBody),
+        (status = 413, body = crate::error::ErrorBody),
+        (status = 422, body = crate::error::ErrorBody, description = "The blocks do not form a runnable chain"),
+        (status = 501, body = crate::error::ErrorBody),
+    ),
+    tag = "data-curation",
+)]
+async fn save_pipeline(
+    State(state): State<AppState>,
+    caller: Caller,
+    Json(request): Json<SavePipelineRequest>,
+) -> ApiResult<(StatusCode, Json<SavedPipeline>)> {
+    may_author(&caller)?;
+    let saved = registry(&state)?.save_pipeline(request).await?;
     let status = if saved.created {
         StatusCode::CREATED
     } else {

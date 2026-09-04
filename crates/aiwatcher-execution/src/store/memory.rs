@@ -1,0 +1,258 @@
+//! Everything in one lock. What the tests and `just check` run against.
+//!
+//! The transaction is the mutex: `append` takes it, checks the version and the
+//! inbox, and either writes all six pieces or none. That is the same guarantee
+//! PostgreSQL gives with a transaction, reached the only way a process can
+//! reach it — which is why the same contract suite runs against both.
+//!
+//! It is multi-process only in the sense that it is not: one process holds the
+//! whole thing, and it claims [`StoreCapabilities::multi_process`] anyway,
+//! because a test that spawns two logical workers inside one process is
+//! exercising exactly the race the flag is about. `file` is the adapter that
+//! says no, because there the second process is real.
+
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use time::OffsetDateTime;
+use tokio::sync::Mutex;
+
+use aiwatcher_core::{Checkpoint, MessageId};
+
+use crate::claim::{AttemptKey, AttemptRow, ClaimFilter};
+use crate::error::{Result, StoreError};
+use crate::message::{Direction, OutboxMessage, RecordedMessage, RunProjection};
+use crate::state::ExecutionId;
+
+use super::{
+    AppendOutcome, AppendRequest, ExpectedVersion, StoreCapabilities, StreamSlice, WorkflowStore,
+};
+
+#[derive(Debug, Default)]
+struct Inner {
+    streams: HashMap<String, Vec<RecordedMessage>>,
+    /// `execution -> message_id -> the version that message landed at`. The
+    /// durable inbox: permanent, unlike a processor's own dedup window, because
+    /// re-deciding one input years later would still be wrong.
+    seen: HashMap<String, HashMap<String, u64>>,
+    projections: HashMap<String, RunProjection>,
+    outbox: Vec<OutboxMessage>,
+    checkpoints: HashMap<String, Checkpoint>,
+    /// Ordered so `claim_attempt` takes the oldest, which is what stops a
+    /// backlog from being served newest-first while its head starves.
+    attempts: BTreeMap<AttemptKey, AttemptRow>,
+}
+
+/// An in-memory workflow store.
+#[derive(Clone, Debug, Default)]
+pub struct MemoryWorkflowStore {
+    inner: Arc<Mutex<Inner>>,
+}
+
+impl MemoryWorkflowStore {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Every outbox row, published or not. For a test that wants to prove the
+    /// ordering rather than the publishing.
+    pub async fn outbox(&self) -> Vec<OutboxMessage> {
+        self.inner.lock().await.outbox.clone()
+    }
+}
+
+#[async_trait]
+impl WorkflowStore for MemoryWorkflowStore {
+    fn capabilities(&self) -> StoreCapabilities {
+        StoreCapabilities {
+            multi_process: true,
+            claimable: true,
+        }
+    }
+
+    async fn load(&self, execution: &ExecutionId) -> Result<StreamSlice> {
+        let inner = self.inner.lock().await;
+        let messages = inner
+            .streams
+            .get(execution.as_str())
+            .cloned()
+            .unwrap_or_default();
+        Ok(StreamSlice {
+            version: messages.len() as u64,
+            messages,
+        })
+    }
+
+    async fn append(
+        &self,
+        execution: &ExecutionId,
+        request: AppendRequest,
+    ) -> Result<AppendOutcome> {
+        request.check_payloads()?;
+        let mut inner = self.inner.lock().await;
+        let key = execution.as_str().to_owned();
+        let stream = inner.streams.entry(key.clone()).or_default();
+        let version = stream.len() as u64;
+
+        // The inbox first: a redelivery is not a conflict, and answering it
+        // with one would make every at-least-once retry look like a race.
+        if let Some(seen) = inner
+            .seen
+            .get(&key)
+            .and_then(|seen| seen.get(request.input.metadata.message_id.as_str()))
+        {
+            return Ok(AppendOutcome::Duplicate { version: *seen });
+        }
+
+        match request.expected_version {
+            ExpectedVersion::Any => {}
+            ExpectedVersion::NoStream if version != 0 => {
+                return Err(StoreError::VersionConflict {
+                    expected: 0,
+                    actual: version,
+                });
+            }
+            ExpectedVersion::NoStream => {}
+            ExpectedVersion::Exact(expected) if expected != version => {
+                return Err(StoreError::VersionConflict {
+                    expected,
+                    actual: version,
+                });
+            }
+            ExpectedVersion::Exact(_) => {}
+        }
+
+        let now = OffsetDateTime::now_utc();
+        let stream = inner.streams.entry(key.clone()).or_default();
+        // The input's own version is what the inbox remembers: it is where the
+        // previous result can be looked up, and it stays true as the stream
+        // grows past it.
+        let input_version = version + 1;
+        let mut next = version;
+        for message in std::iter::once(request.input.clone()).chain(request.outputs.clone()) {
+            next += 1;
+            stream.push(RecordedMessage {
+                stream_version: next,
+                direction: message.direction,
+                message: message.message,
+                metadata: message.metadata,
+                recorded_at: now,
+            });
+        }
+
+        inner
+            .seen
+            .entry(key.clone())
+            .or_default()
+            .insert(request.input.metadata.message_id.to_string(), input_version);
+        inner.projections.insert(key, request.projection);
+        for row in request.attempts {
+            inner.attempts.insert(row.key.clone(), row);
+        }
+        inner.outbox.extend(request.outbox);
+        if let Some((processor, checkpoint)) = request.checkpoint {
+            inner.checkpoints.insert(processor, checkpoint);
+        }
+        Ok(AppendOutcome::Appended { version: next })
+    }
+
+    async fn projection(&self, execution: &ExecutionId) -> Result<Option<RunProjection>> {
+        Ok(self
+            .inner
+            .lock()
+            .await
+            .projections
+            .get(execution.as_str())
+            .cloned())
+    }
+
+    async fn pending_outbox(&self, limit: usize) -> Result<Vec<OutboxMessage>> {
+        Ok(self
+            .inner
+            .lock()
+            .await
+            .outbox
+            .iter()
+            .filter(|row| row.published_at.is_none())
+            .take(limit)
+            .cloned()
+            .collect())
+    }
+
+    async fn mark_published(&self, ids: &[MessageId], at: OffsetDateTime) -> Result<()> {
+        let mut inner = self.inner.lock().await;
+        for row in &mut inner.outbox {
+            if ids.contains(&row.message_id) {
+                row.published_at = Some(at);
+            }
+        }
+        Ok(())
+    }
+
+    async fn checkpoint(&self, processor: &str) -> Result<Option<Checkpoint>> {
+        Ok(self.inner.lock().await.checkpoints.get(processor).cloned())
+    }
+
+    async fn claim_attempt(
+        &self,
+        filter: &ClaimFilter,
+        owner: &str,
+        now: OffsetDateTime,
+    ) -> Result<Option<AttemptRow>> {
+        let mut inner = self.inner.lock().await;
+        // The lock is the `SELECT … FOR UPDATE SKIP LOCKED`: whoever holds it
+        // sees the row unclaimed and leaves it claimed, so two claimants
+        // racing produce one claim and one `None`.
+        let Some(key) = inner
+            .attempts
+            .values()
+            .find(|row| row.is_claimable(now) && filter.matches(row))
+            .map(|row| row.key.clone())
+        else {
+            return Ok(None);
+        };
+        let row = inner.attempts.get_mut(&key).map(|row| {
+            row.claim(owner, now);
+            row.clone()
+        });
+        Ok(row)
+    }
+
+    async fn heartbeat(&self, key: &AttemptKey, owner: &str, now: OffsetDateTime) -> Result<bool> {
+        let mut inner = self.inner.lock().await;
+        let Some(row) = inner.attempts.get_mut(key) else {
+            return Ok(false);
+        };
+        if !row.is_held_by(owner, now) {
+            return Ok(false);
+        }
+        row.claimed_at = Some(now);
+        Ok(true)
+    }
+
+    async fn attempt(&self, key: &AttemptKey) -> Result<Option<AttemptRow>> {
+        Ok(self.inner.lock().await.attempts.get(key).cloned())
+    }
+
+    async fn advance_checkpoint(&self, processor: &str, checkpoint: Checkpoint) -> Result<()> {
+        self.inner
+            .lock()
+            .await
+            .checkpoints
+            .insert(processor.to_owned(), checkpoint);
+        Ok(())
+    }
+}
+
+/// The messages one decision produced, from a loaded slice — used by the
+/// contract suite to prove that input and outputs land together.
+#[must_use]
+pub fn outputs_at(slice: &StreamSlice, after: u64) -> Vec<&RecordedMessage> {
+    slice
+        .messages
+        .iter()
+        .filter(|message| message.stream_version > after && message.direction == Direction::Output)
+        .collect()
+}

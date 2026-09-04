@@ -487,9 +487,12 @@ fn span_kind(event: &RecordedEvent) -> SpanKind {
             .step_type(&event.data)
             .filter(|kind| catalog::step_type::is_remote(kind))
             .map_or(SpanKind::Internal, |_| SpanKind::Client),
-        Subject::Run | Subject::Agent | Subject::Eval | Subject::Workflow | Subject::Unknown => {
-            SpanKind::Internal
-        }
+        Subject::Run
+        | Subject::Agent
+        | Subject::Eval
+        | Subject::Workflow
+        | Subject::Execution
+        | Subject::Unknown => SpanKind::Internal,
     }
 }
 
@@ -507,7 +510,11 @@ fn span_target(event: &RecordedEvent) -> Option<&str> {
         Subject::Step => event
             .data_str("name")
             .or_else(|| event.event_type.step_type(&event.data)),
-        Subject::Run | Subject::Eval | Subject::Workflow | Subject::Unknown => None,
+        Subject::Run
+        | Subject::Eval
+        | Subject::Workflow
+        | Subject::Execution
+        | Subject::Unknown => None,
     }
 }
 
@@ -544,7 +551,11 @@ fn base_attributes(event: &RecordedEvent) -> Vec<Attr> {
         Subject::Tool => out.push(attr(genai::OPERATION_NAME, genai::operation::EXECUTE_TOOL)),
         Subject::Agent => out.push(attr(genai::OPERATION_NAME, genai::operation::INVOKE_AGENT)),
         Subject::Step => out.push(attr(genai::OPERATION_NAME, "step")),
-        Subject::Run | Subject::Eval | Subject::Workflow | Subject::Unknown => {}
+        Subject::Run
+        | Subject::Eval
+        | Subject::Workflow
+        | Subject::Execution
+        | Subject::Unknown => {}
     }
     out
 }
@@ -623,7 +634,7 @@ fn payload_attributes(event: &RecordedEvent) -> Vec<Attr> {
                 out.push(attr(own::step::SCORE, score));
             }
         }
-        Subject::Eval | Subject::Workflow | Subject::Unknown => {}
+        Subject::Eval | Subject::Workflow | Subject::Execution | Subject::Unknown => {}
     }
     out
 }
@@ -704,6 +715,10 @@ fn operation_for(subject: Subject) -> &'static str {
         Subject::Tool => genai::operation::EXECUTE_TOOL,
         Subject::Agent => genai::operation::INVOKE_AGENT,
         Subject::Step => "step",
-        Subject::Run | Subject::Eval | Subject::Workflow | Subject::Unknown => "run",
+        Subject::Run
+        | Subject::Eval
+        | Subject::Workflow
+        | Subject::Execution
+        | Subject::Unknown => "run",
     }
 }

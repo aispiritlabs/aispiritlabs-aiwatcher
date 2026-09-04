@@ -2809,6 +2809,117 @@
         }
       }
     },
+    "/api/v1/curation-pipelines": {
+      "get": {
+        "tags": [
+          "data-curation"
+        ],
+        "summary": "Every saved curation pipeline, newest save first.",
+        "operationId": "list_pipelines",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelinePage"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "data-curation"
+        ],
+        "summary": "Save a content-addressed revision of a block pipeline.",
+        "description": "The blocks are checked as a chain here and nowhere else — the canvas draws\nwhat it is told and implements no rules of its own, exactly as the\nannotation canvas does not re-implement the shape validator. A refusal is a\n422 whose `details` carry every problem at once.",
+        "operationId": "save_pipeline",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SavePipelineRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "This exact revision already existed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedPipeline"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "A new revision was stored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedPipeline"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The blocks do not form a runnable chain",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/curations": {
       "get": {
         "tags": [
@@ -6915,9 +7026,22 @@
           }
         }
       },
+      "ArtifactKind": {
+        "type": "string",
+        "description": "What sort of thing an artifact holds.\n\nAn enum rather than free text — unlike `data.step_type`, which is free text\nso a producer can introduce `rerank` without a backend release. The\ndifference is who chooses: a step type is chosen by whoever instruments an\nagent, and this is chosen by the code in this workspace that writes the\nbytes. It decides a key prefix and a filter, and nothing that executes.",
+        "enum": [
+          "rows",
+          "code",
+          "preview",
+          "log",
+          "model",
+          "report",
+          "blob"
+        ]
+      },
       "ArtifactRef": {
         "type": "object",
-        "description": "One file a package is made of.",
+        "description": "One file, addressed by what is in it.",
         "required": [
           "name",
           "uri",
@@ -6929,11 +7053,22 @@
           },
           "digest": {
             "type": "string",
-            "description": "`sha256` of the bytes, lowercase hex. Required, and the reason this\ntype exists: an address is not an identity."
+            "description": "`sha256` of the bytes, lowercase hex.\n\nThe reason this type exists rather than a `(name, uri)` pair. Whether it\nmay be empty is the caller's rule, not this type's."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ArtifactKind",
+            "description": "Added when this moved out of `aiwatcher-training`. Defaulted and skipped\nwhen unset, so every package already written reads and re-writes\nunchanged."
           },
           "name": {
             "type": "string",
-            "description": "What the runtime calls it: `weights`, `tokenizer`, `config`."
+            "description": "What the reader calls it: `weights`, `tokenizer`, `rows`."
+          },
+          "schema_ref": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The schema the bytes claim to be in — a dataset version, a `sha256` of a\ncolumn list. Read by whoever consumes them; interpreted by nothing here."
           },
           "size_bytes": {
             "type": [
@@ -6945,7 +7080,7 @@
           },
           "uri": {
             "type": "string",
-            "description": "Where the bytes are. A pointer, like every other artifact in this\nworkspace — the registry stores no weights."
+            "description": "Where the bytes are. A pointer, like every other artifact in this\nworkspace — nothing here stores a copy.\n\nA `file://` on a shared volume is accepted and is never the only\nreference to something that matters: nothing outside that node can\nverify it, so a step handing on a path also reports the object store\ncopy's digest, or reports no artifact at all."
           }
         },
         "additionalProperties": false
@@ -7038,6 +7173,122 @@
             "format": "double"
           }
         }
+      },
+      "BlockPosition": {
+        "type": "object",
+        "description": "Where a block sits on the canvas. Presentation, and nothing reads it but the\ncanvas — the chain is the edges.",
+        "properties": {
+          "x": {
+            "type": "number",
+            "format": "double"
+          },
+          "y": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "BlockSpec": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Where the rows come from: one dataset in the Flow service's catalog,\nwith the arguments that catalog declares for it. `hub_rows` is a\nHugging Face corpus; `runs` and `spans` are this installation's own log.",
+            "required": [
+              "dataset",
+              "kind"
+            ],
+            "properties": {
+              "arguments": {
+                "type": "object",
+                "description": "`read()` arguments, by name. Values are sent as written — the Flow\nservice refuses one the dataset never declared, which is where that\ncheck belongs.",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "dataset": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "source"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Flow PHP steps, appended to the source's `read()`. The tail of a\npipeline, without `data_frame()`, without the `read()` and without the\n`write()`: those three are what the chain contributes.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "transform"
+                ]
+              },
+              "steps": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A marimo notebook, run over the rows by the marimo service.\n\n`revision` is the digest of the notebook source as it was when this\npipeline was saved. The source itself lives in the notebook directory,\nbecause that is the file marimo serves, a run executes and a test\nimports — so this is a pin rather than a copy, and the panel says so\nwhen the two disagree.",
+            "required": [
+              "notebook",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "notebook"
+                ]
+              },
+              "notebook": {
+                "type": "string"
+              },
+              "params": {
+                "type": "object",
+                "description": "What the notebook's `mo.ui` elements start at: the block's settings,\nwhich a headless run has instead of somebody moving a slider."
+              },
+              "revision": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The end of the chain: the rows, and the dataset a version of them is\npublished to.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "dataset": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "view"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "What one block is, and everything that block kind needs.\n\nInternally tagged rather than flattened: `spec.kind` is one word a reader\nand a `switch` both understand, and the generated TypeScript is a\ndiscriminated union rather than an intersection of optional fields."
       },
       "Bucket": {
         "type": "object",
@@ -7838,6 +8089,44 @@
           "anonymous"
         ]
       },
+      "CurationPipeline": {
+        "type": "object",
+        "required": [
+          "name",
+          "blocks",
+          "edges",
+          "revision",
+          "saved_at"
+        ],
+        "properties": {
+          "blocks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PipelineBlock"
+            }
+          },
+          "description": {
+            "type": "string"
+          },
+          "edges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PipelineEdge"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string",
+            "description": "SHA-256 of the authored fields. The stable identity of this revision."
+          },
+          "saved_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
       "CurationRecipe": {
         "type": "object",
         "description": "A saved Flow PHP transformation.",
@@ -8156,6 +8445,12 @@
           "created_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "produced_by": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "recipe": {
             "type": [
@@ -9321,6 +9616,54 @@
             "type": "string",
             "enum": [
               "ArtifactProduced"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "ExecutionRequested"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "ExecutionStarted"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "ExecutionPaused"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "ExecutionAwaitingInput"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "ExecutionResumed"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "ExecutionCompleted"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "ExecutionFailed"
+            ]
+          },
+          {
+            "type": "string",
+            "enum": [
+              "ExecutionCancelled"
             ]
           },
           {
@@ -12439,6 +12782,13 @@
           "node_id": {
             "type": "string"
           },
+          "publishers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Who published this node's executions, from `data.published_by`.\n\nNormally one entry, or none for a producer that does not say. **Two is\na finding**: exactly one party publishes a given attempt (ADR_0026), so\na node with both `engine` and a producer's own events is a managed step\nwhose producer code opened its own `node()` scope, and its attempt count\nand duration are describing two things at once. The flag exists to make\nthat visible, not to resolve it — the resolution is in the producer."
+          },
           "run_id": {
             "type": [
               "string",
@@ -12867,6 +13217,57 @@
           "p99": {
             "type": "number",
             "format": "double"
+          }
+        }
+      },
+      "PipelineBlock": {
+        "type": "object",
+        "required": [
+          "id",
+          "spec"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Stable within one pipeline. What the edges name."
+          },
+          "position": {
+            "$ref": "#/components/schemas/BlockPosition"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/BlockSpec"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
+      "PipelineEdge": {
+        "type": "object",
+        "required": [
+          "from",
+          "to"
+        ],
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          }
+        }
+      },
+      "PipelinePage": {
+        "type": "object",
+        "required": [
+          "pipelines"
+        ],
+        "properties": {
+          "pipelines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CurationPipeline"
+            }
           }
         }
       },
@@ -13475,6 +13876,13 @@
           "pipeline": {
             "type": "string",
             "description": "The exact script that produced `items`, even when it was not saved first."
+          },
+          "produced_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The block chain that produced these rows, as `name@revision`.\n\nPresent when the execution came from the pipeline canvas rather than\nfrom one script, and provenance rather than identity — like the recipe\nname and the description, and for the same reason: a block dragged\nacross the canvas is a new pipeline revision and the same rows, and a\ndataset version per canvas tidy-up would be a version history about\nlayout.\n\nIt matters because the Flow script alone does not describe this\nexecution: a notebook block ran between that script and these rows, and\nthe only place its settings and its pinned source are written down is\nthe pipeline revision this names."
           },
           "recipe": {
             "type": [
@@ -14707,6 +15115,33 @@
           }
         }
       },
+      "SavePipelineRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "blocks"
+        ],
+        "properties": {
+          "blocks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PipelineBlock"
+            }
+          },
+          "description": {
+            "type": "string"
+          },
+          "edges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PipelineEdge"
+            }
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "SaveProjectRequest": {
         "type": "object",
         "description": "What a caller sends to create or re-describe a project.",
@@ -14793,6 +15228,22 @@
           }
         },
         "additionalProperties": false
+      },
+      "SavedPipeline": {
+        "type": "object",
+        "required": [
+          "pipeline",
+          "created"
+        ],
+        "properties": {
+          "created": {
+            "type": "boolean",
+            "description": "False when this exact immutable revision was already present."
+          },
+          "pipeline": {
+            "$ref": "#/components/schemas/CurationPipeline"
+          }
+        }
       },
       "SavedRecipe": {
         "type": "object",

@@ -63,9 +63,22 @@ real bucket work by changing one environment variable.
 <td valign="middle">
 <a href="https://github.com/flow-php/flow"><b>Flow PHP</b></a> — the strongly
 typed data processing framework behind <code>services/flow</code>, the optional
-service serving the panel's Query tab. A query is lexed, whitelisted and turned
-into Flow objects through an explicit <code>match</code> — parsed, never
-executed.
+service serving the panel's Query tab and a curation pipeline's transforms. A
+query is lexed, whitelisted and turned into Flow objects through an explicit
+<code>match</code> — parsed, never executed.
+</td>
+</tr>
+<tr>
+<td width="90" align="center" valign="middle">
+<a href="https://github.com/marimo-team/marimo"><img src="https://avatars.githubusercontent.com/marimo-team" height="44" alt="marimo"></a>
+</td>
+<td valign="middle">
+<a href="https://github.com/marimo-team/marimo"><b>marimo</b></a> — the reactive
+Python notebook behind a curation pipeline's notebook blocks
+(<code>services/ml_pipeline</code>). A notebook is a plain Python file, so the
+same one is run as a step through <code>App.run(defs=…)</code> and served as a
+live app inside the block's editor — no harness, and the widgets move against
+the rows the block will actually run on.
 </td>
 </tr>
 </table>
@@ -236,13 +249,16 @@ started:
   what it left out, by reason; what comes out is one immutable
   `name@sha256` a training run can record. An erasure request removes the words
   from the archive *and* from every corpus that already had them.
-- **Data Curation** — two ways to produce a dataset, on one page. Either write
-  the transformation in Flow PHP with four explicit stages — test without
-  reading, simulate 25 rows, execute the full bounded result, save that exact
-  output as a version — or pick a curation workflow the orchestrator already
-  holds and set only what, where, which rows and over what period. The second
-  is a form rendered from the launch plan's own declared inputs, with the
-  page's time window and dataset name already filled in.
+- **Data Curation** — two views, for two sizes of the same job. **Pipeline** is
+  a canvas: `Hugging Face → Flow PHP → marimo → View`, wired as blocks. Click a
+  block and its settings open, or its code — and a notebook block opens as a
+  *live* marimo app running against the rows the chain last produced, so a
+  detector is built against the data it will run on. Preview 25 rows through
+  every block, run it, and save the exact output as a version that records the
+  chain that made it. **Recipe** is the single-script editor for when the whole
+  curation is one Flow PHP query, with the same four stages — test without
+  reading, simulate 25 rows, execute, save — and the orchestrator's own curation
+  workflows beside it, as a form rendered from their declared inputs.
 - **Annotations** — the labelling tool, and the two things around it. **Label**
   is a canvas over a plan: polygons for rooms, polylines with a thickness for
   wall centrelines, named keypoints for a door's opening, hinge and leaf, typed
@@ -335,9 +351,10 @@ In dependency order. A crate may only depend on ones above it.
 | `aiwatcher-server` | Config, wiring, graceful shutdown. The only crate that knows every implementation exists. |
 
 Around them: `apps/panel` (React), `sdk/python`, `sdk/typescript`, `contracts/`,
-`deploy/`, `docs/ADR/`, and `services/flow` — an optional PHP service serving
-the panel's Query tab, outside the Cargo workspace and unknown to the Rust
-binary.
+`deploy/`, `docs/ADR/`, and two optional services outside the Cargo workspace
+and unknown to the Rust binary — `services/flow`, the PHP query surface behind
+the Query tab and a pipeline's transforms, and `services/ml_pipeline`, the
+Python notebook runtime behind its marimo blocks.
 
 ## The decisions that explain most of the code
 

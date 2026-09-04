@@ -24,6 +24,11 @@ tracing.workspace = true
 utoipa.workspace = true
 
 [dev-dependencies]
+# The end-to-end proof of ADR_0026: the facts a managed execution publishes are
+# folded by the graph this crate already serves, with no second read path.
+aiwatcher-execution.workspace = true
+serde_json.workspace = true
+time.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 
 [lints]

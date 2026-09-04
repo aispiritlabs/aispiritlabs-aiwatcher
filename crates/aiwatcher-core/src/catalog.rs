@@ -48,6 +48,14 @@ pub enum Subject {
     /// something that happened to a request. The *execution* of a node is a
     /// [`Self::Step`], which does form a span.
     Workflow,
+    /// One aiwatcher-owned execution of a compiled plan: requested, started,
+    /// waiting for somebody, finished.
+    ///
+    /// Forms no span, for the same reason as the two above it: an execution is
+    /// a record with a lifecycle rather than something that happened to a
+    /// request. The executions of its *nodes* are [`Self::Step`], and those do
+    /// form spans. See ADR_0026.
+    Execution,
     Unknown,
 }
 
@@ -62,6 +70,7 @@ impl Subject {
             Self::Step => "step",
             Self::Eval => "eval",
             Self::Workflow => "workflow",
+            Self::Execution => "execution",
             Self::Unknown => "unknown",
         }
     }
@@ -182,6 +191,22 @@ event_catalog! {
     // node's execution is drawn against, and an artifact is what one produced.
     WorkflowDeclared => "workflow.declared", Subject::Workflow, Phase::Point;
     ArtifactProduced => "artifact.produced", Subject::Workflow, Phase::Point;
+
+    // What aiwatcher's own execution engine publishes about a run it owns
+    // (ADR_0025, ADR_0026). Phases, because an execution has a start and an
+    // end that the execution projection reads; no spans, because it is a
+    // record rather than something that happened to a request.
+    //
+    // The three in the middle are why this is not `eval.*` with different
+    // words: nothing else in the catalog can be waiting for a person.
+    ExecutionRequested     => "execution.requested",      Subject::Execution, Phase::Start;
+    ExecutionStarted       => "execution.started",        Subject::Execution, Phase::Point;
+    ExecutionPaused        => "execution.paused",         Subject::Execution, Phase::Point;
+    ExecutionAwaitingInput => "execution.awaiting_input", Subject::Execution, Phase::Point;
+    ExecutionResumed       => "execution.resumed",        Subject::Execution, Phase::Point;
+    ExecutionCompleted     => "execution.completed",      Subject::Execution, Phase::End { ok: true };
+    ExecutionFailed        => "execution.failed",         Subject::Execution, Phase::End { ok: false };
+    ExecutionCancelled     => "execution.cancelled",      Subject::Execution, Phase::End { ok: false };
 }
 
 /// The step kinds this build knows how to name and classify.
@@ -252,11 +277,19 @@ impl EventType {
     /// the moment a producer got round to describing itself. The executions
     /// drawn against that shape are `step.*`, and those do form spans.
     ///
+    /// An execution's own lifecycle is the third, and it is the one that spans
+    /// hours rather than milliseconds: a run can sit in `awaiting_input` until
+    /// somebody answers it, and a waterfall bar the width of a lunch break is
+    /// noise in every trace it lands in. Its *attempts* are `step.*`.
+    ///
     /// Distinct from [`Self::is_high_cardinality`], which suppresses a *record*
     /// for an event that still belongs to a span.
     #[must_use]
     pub fn forms_span(&self) -> bool {
-        !matches!(self.subject(), Subject::Eval | Subject::Workflow)
+        !matches!(
+            self.subject(),
+            Subject::Eval | Subject::Workflow | Subject::Execution
+        )
     }
 
     /// The stable key a span id derives from when the producer sent none.
@@ -289,6 +322,10 @@ impl EventType {
             // across the two types would be a lie waiting for the day one of
             // them starts forming a span.
             Subject::Workflow => format!("workflow:{}", self.as_str()),
+            // One key per execution: a redelivered `execution.completed` has
+            // to land where its first delivery did, exactly as an evaluation's
+            // does. Never used for a span — see `forms_span`.
+            Subject::Execution => "execution".to_owned(),
             Subject::Unknown => format!("event:{}", self.as_str()),
         }
     }
@@ -312,7 +349,9 @@ impl EventType {
             // reads the same way `chat gpt-5` does.
             (Subject::Step, Some(target)) => target.to_owned(),
             (Subject::Step, None) => "step".to_owned(),
-            (Subject::Eval | Subject::Workflow | Subject::Unknown, _) => self.as_str().to_owned(),
+            (Subject::Eval | Subject::Workflow | Subject::Execution | Subject::Unknown, _) => {
+                self.as_str().to_owned()
+            }
         }
     }
 }
@@ -416,7 +455,10 @@ mod tests {
         for event_type in EventType::KNOWN {
             assert_eq!(
                 event_type.forms_span(),
-                !matches!(event_type.subject(), Subject::Eval | Subject::Workflow),
+                !matches!(
+                    event_type.subject(),
+                    Subject::Eval | Subject::Workflow | Subject::Execution
+                ),
                 "{event_type} disagrees with its subject about being traced"
             );
         }
@@ -433,6 +475,49 @@ mod tests {
             assert_eq!(event_type.phase(), Some(Phase::Point));
             assert!(!event_type.forms_span(), "{event_type} must not be traced");
         }
+    }
+
+    #[test]
+    fn an_execution_has_phases_and_a_wait_state_and_forms_no_span() {
+        // The phases are what the execution projection folds on. The wait is
+        // why this subject exists at all: nothing else in the catalog can be
+        // stopped until a person answers, and a waterfall bar the width of a
+        // lunch break is noise in every trace it lands in. See ADR_0026.
+        assert_eq!(
+            EventType::ExecutionRequested.phase(),
+            Some(Phase::Start),
+            "an execution starts when it is requested, not when a step runs"
+        );
+        assert_eq!(
+            EventType::ExecutionAwaitingInput.phase(),
+            Some(Phase::Point)
+        );
+        assert_eq!(
+            EventType::ExecutionCancelled.phase(),
+            Some(Phase::End { ok: false })
+        );
+
+        for event_type in EventType::KNOWN {
+            if event_type.subject() != Subject::Execution {
+                continue;
+            }
+            assert!(
+                event_type.as_str().starts_with("execution."),
+                "{event_type} is an execution fact under another prefix"
+            );
+            assert!(!event_type.forms_span(), "{event_type} must not be traced");
+        }
+    }
+
+    #[test]
+    fn every_delivery_of_one_executions_lifecycle_shares_a_key() {
+        // Same rule as an evaluation's: one key per execution, so a
+        // redelivered `execution.completed` lands where its first delivery
+        // did rather than beside it.
+        assert_eq!(
+            EventType::ExecutionRequested.span_key(None, None),
+            EventType::ExecutionCompleted.span_key(Some("attempt-2"), Some("agent")),
+        );
     }
 
     #[test]

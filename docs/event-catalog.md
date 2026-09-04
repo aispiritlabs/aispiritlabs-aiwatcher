@@ -37,6 +37,14 @@ than the backend keeps working.
 | `eval.failed` | end (error) | closes it, status `failed` |
 | `workflow.declared` | point | the shape of an orchestration — **no span** |
 | `artifact.produced` | point | a pointer to what a node produced — **no span** |
+| `execution.requested` | start | opens an aiwatcher-owned execution — **no span** |
+| `execution.started` | point | its first step was scheduled |
+| `execution.paused` | point | somebody paused it |
+| `execution.awaiting_input` | point | a step is waiting for a person |
+| `execution.resumed` | point | it is running again |
+| `execution.completed` | end (ok) | closes it |
+| `execution.failed` | end (error) | closes it |
+| `execution.cancelled` | end (error) | closes it, on request |
 
 ## Matching a start to its end
 
@@ -167,6 +175,27 @@ Anything else in `data` is stored and displayed but not interpreted.
 The retrieval fields have no settled OpenTelemetry convention yet, so they sit
 in the aiwatcher namespace rather than squatting on a `gen_ai.*` name that may
 come to mean something else.
+
+### `execution.*`
+
+What aiwatcher's own execution engine publishes about a run it owns
+(ADR_0025, ADR_0026). **A producer does not send these** — they arrive through
+the engine's outbox, after the decision that caused them is committed, which is
+what stops the log claiming a step finished that the store does not consider
+finished.
+
+None of them forms a span. An execution is a record with a lifecycle, and it can
+sit in `execution.awaiting_input` until somebody answers; a waterfall bar the
+width of a lunch break is noise in every trace it lands in. Its *attempts* are
+`step.*` with `data.node` and `data.call_id`, and those do form spans.
+
+| Field | Meaning |
+|-------|---------|
+| `workflow_id` | the definition this execution is of |
+| `workflow_run_id` | the execution id — the same one `step.*` carries |
+| `plan_id` | the compiled plan, which is what `workflow.declared` carries as `version` |
+| `owner` | `local`, `engine:<name>` or `worker` — who decides for this run |
+| `published_by` | on `step.*`, which party ran the attempt: `engine` or `worker` |
 
 ### `workflow.declared`, `artifact.produced`, `agent.message`
 

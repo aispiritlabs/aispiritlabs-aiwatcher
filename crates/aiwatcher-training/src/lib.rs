@@ -35,7 +35,11 @@ pub use model::{
     ModelDetail, ModelHead, ModelLabelRequest, ModelMetrics, ModelPage, ModelVersion,
     ModelVersionSummary, PRODUCTION, RegisterModelRequest, RegisteredModel,
 };
-pub use package::{ArtifactRef, MAX_ARTIFACTS, ModelPackage, ResourceRequest, Runtime, TensorSpec};
+// `ArtifactRef` is `aiwatcher_core`'s — an execution step hands its rows on
+// with the same record (ADR_0025). Re-exported here because this is where
+// ADR_0023's rule about it lives, and where every caller already looks.
+pub use aiwatcher_core::{ArtifactKind, ArtifactRef};
+pub use package::{MAX_ARTIFACTS, ModelPackage, ResourceRequest, Runtime, TensorSpec};
 pub use registry::Registry;
 pub use run::{
     BestMetric, CheckpointInput, CheckpointRecord, EpochInput, EpochRecord, FinishRunRequest,

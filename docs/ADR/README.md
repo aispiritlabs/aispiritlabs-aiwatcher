@@ -29,5 +29,8 @@ decision is made rather than reconstructed afterwards. The value is in the
 | [0021](ADR_0021_CONVERSATION_ARCHIVE.md) | Conversation content is an encrypted archive with its own retention, not events on the log |
 | [0022](ADR_0022_STAGED_IMPORT_JOBS.md) | A long job over an object store is one primitive, and a corpus is staged before it is imported |
 | [0023](ADR_0023_MODEL_PACKAGE.md) | A serving runtime is handed a declared package, and a checkpoint URI is not one |
+| [0024](ADR_0024_CURATION_BLOCKS.md) | A curation is a chain of blocks, each belonging to the engine that can run it |
+| [0025](ADR_0025_MANAGED_EXECUTION.md) | A managed execution is owned by the server, and the browser only asks for one |
+| [0026](ADR_0026_ENGINE_AS_PRODUCER.md) | The execution engine is a producer on its own log |
 
 Use [template.md](template.md) for a new one.

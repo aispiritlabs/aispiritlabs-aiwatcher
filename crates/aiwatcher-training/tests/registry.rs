@@ -496,7 +496,7 @@ async fn a_checkpoint_marked_best_becomes_the_run_s_headline_number() {
 
 #[tokio::test]
 async fn a_version_may_declare_what_a_runtime_needs_and_a_half_declaration_is_refused() {
-    use aiwatcher_training::{ArtifactRef, ModelPackage, ResourceRequest, Runtime};
+    use aiwatcher_training::{ArtifactKind, ArtifactRef, ModelPackage, ResourceRequest, Runtime};
 
     let registry = registry();
     finished(&registry, "run-packaged", EXPORT).await;
@@ -515,6 +515,8 @@ async fn a_version_may_declare_what_a_runtime_needs_and_a_half_declaration_is_re
             digest: digest.to_owned(),
             size_bytes: Some(4096),
             content_type: String::new(),
+            kind: ArtifactKind::Model,
+            schema_ref: None,
         }],
         resources: ResourceRequest::default(),
     };
@@ -570,7 +572,7 @@ async fn a_version_may_declare_what_a_runtime_needs_and_a_half_declaration_is_re
 
 #[tokio::test]
 async fn two_versions_that_name_different_weights_are_two_versions() {
-    use aiwatcher_training::{ArtifactRef, ModelPackage, ResourceRequest, Runtime};
+    use aiwatcher_training::{ArtifactKind, ArtifactRef, ModelPackage, ResourceRequest, Runtime};
 
     let registry = registry();
     finished(&registry, "run-weights-swap", EXPORT).await;
@@ -588,6 +590,8 @@ async fn two_versions_that_name_different_weights_are_two_versions() {
             digest: digest.to_owned(),
             size_bytes: None,
             content_type: String::new(),
+            kind: ArtifactKind::Model,
+            schema_ref: None,
         }],
         resources: ResourceRequest::default(),
     };

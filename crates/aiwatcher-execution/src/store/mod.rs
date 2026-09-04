@@ -1,0 +1,306 @@
+//! The one transactional operation, and the port behind it.
+//!
+//! Handling one workflow input is six writes that have to happen together:
+//!
+//! ```text
+//! BEGIN
+//!   load the stream at the expected version
+//!   if this message_id is already recorded: return what it produced
+//!   fold the events, run decide()
+//!   append the input, then every output
+//!   update the run and step projection
+//!   insert the outbox rows
+//!   advance the processor checkpoint, when the input came from the log
+//! COMMIT
+//! ```
+//!
+//! Splitting them is the dual-write gap: an outbox row with no decision behind
+//! it publishes a `step.completed` for an attempt the store does not consider
+//! complete, and a decision with no outbox row is a run the panel never sees
+//! finish. That requirement is what settles the backend — the event log offers
+//! ordered offsets and at-least-once delivery and no transaction spanning
+//! itself and this state (ADR_0025).
+//!
+//! ## Three adapters, one contract
+//!
+//! `memory` for tests, `file` for `just dev`, and `postgres` for a deployment —
+//! the pattern `memory | wal | laser` and `none | memory | file | s3` already
+//! set. The suite in `tests/store_contract.rs` runs against every one of them,
+//! because an adapter that passes a *different* suite is an adapter that is
+//! correct about something else.
+//!
+//! The `file` adapter holds **one process**, and says so by name
+//! ([`StoreError::SingleProcessOnly`]) rather than by corrupting quietly. A run
+//! that needs a worker, a container job or a second API replica is refused on
+//! it, so that a development store never becomes a production one by omission.
+
+pub mod file;
+pub mod memory;
+#[cfg(feature = "postgres")]
+pub mod postgres;
+
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
+
+use aiwatcher_core::{Checkpoint, MessageId};
+
+use crate::claim::{AttemptKey, AttemptRow, ClaimFilter};
+use crate::error::{Result, StoreError};
+use crate::message::{
+    Direction, MAX_PAYLOAD_BYTES, OutboxMessage, PendingMessage, RecordedMessage, RunProjection,
+};
+use crate::state::ExecutionId;
+
+/// What the caller believed the stream was at.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ExpectedVersion {
+    /// Append whatever the stream is at. For an input whose decision does not
+    /// depend on the state — there are none yet, and the variant exists so a
+    /// caller has to *choose* rather than pass a number it guessed.
+    Any,
+    /// The stream must be empty. What `StartExecution` uses, so two callers
+    /// racing to start one execution produce one execution and one conflict.
+    #[default]
+    NoStream,
+    Exact(u64),
+}
+
+/// Everything one decision writes, in one call.
+#[derive(Clone, Debug)]
+pub struct AppendRequest {
+    pub expected_version: ExpectedVersion,
+    /// The message that caused this decision. Its `message_id` is the durable
+    /// inbox key: re-delivering it returns the first outcome rather than
+    /// deciding again.
+    pub input: PendingMessage,
+    pub outputs: Vec<PendingMessage>,
+    /// The inline projection after this decision. Written in the same
+    /// transaction, so a caller that reads it never sees a state the stream
+    /// does not justify.
+    pub projection: RunProjection,
+    /// What the outbox publishes to the event log, after commit. Never before
+    /// (ADR_0026).
+    pub outbox: Vec<OutboxMessage>,
+    /// `(processor_id, checkpoint)` when this input came from the log.
+    pub checkpoint: Option<(String, Checkpoint)>,
+    /// The attempt rows this decision dispatched or settled.
+    ///
+    /// Written in the same transaction as the decision that authorised them, so
+    /// a claimable row always has a `StepScheduled` behind it and a settled one
+    /// always has its completion. A row inserted separately would be work
+    /// nobody decided on.
+    pub attempts: Vec<AttemptRow>,
+}
+
+impl AppendRequest {
+    /// The bounds every message has to be inside.
+    ///
+    /// Checked here rather than trusted, because the payload that breaks the
+    /// limit is somebody inlining a result on the day the corpus grew.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::PayloadTooLarge`] naming the size and the limit.
+    pub fn check_payloads(&self) -> Result<()> {
+        for message in std::iter::once(&self.input).chain(&self.outputs) {
+            let size = message.payload_size();
+            if size > MAX_PAYLOAD_BYTES {
+                return Err(StoreError::PayloadTooLarge {
+                    size,
+                    limit: MAX_PAYLOAD_BYTES,
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+/// What an append did.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AppendOutcome {
+    Appended {
+        version: u64,
+    },
+    /// This input was already recorded. The version is where the *input
+    /// message* landed the first time — where the previous result is looked up,
+    /// and a number that stays true as the stream grows past it. The outputs it
+    /// produced are already in the stream, and the outbox already holds their
+    /// rows.
+    Duplicate {
+        version: u64,
+    },
+}
+
+impl AppendOutcome {
+    #[must_use]
+    pub const fn version(&self) -> u64 {
+        match self {
+            Self::Appended { version } | Self::Duplicate { version } => *version,
+        }
+    }
+
+    #[must_use]
+    pub const fn is_duplicate(&self) -> bool {
+        matches!(self, Self::Duplicate { .. })
+    }
+}
+
+/// One execution's stream, as loaded.
+#[derive(Clone, Debug, Default)]
+pub struct StreamSlice {
+    pub version: u64,
+    pub messages: Vec<RecordedMessage>,
+}
+
+impl StreamSlice {
+    /// The facts, in order. What [`crate::decide::replay`] folds.
+    pub fn events(&self) -> impl Iterator<Item = &crate::message::WorkflowEvent> {
+        self.messages
+            .iter()
+            .filter(|recorded| recorded.direction == Direction::Output)
+            .filter_map(|recorded| recorded.message.event())
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.messages.is_empty()
+    }
+}
+
+/// What an adapter can do, so a caller can refuse rather than discover.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StoreCapabilities {
+    /// Whether more than one process may hold this store at once. `false` for
+    /// `file`, and the reason a managed run needing a worker is refused on it.
+    pub multi_process: bool,
+    /// Whether an attempt can be claimed by pulling. `false` until a store can
+    /// hand one row to exactly one claimant.
+    pub claimable: bool,
+}
+
+/// The transactional store an execution's history lives in.
+#[async_trait]
+pub trait WorkflowStore: Send + Sync + std::fmt::Debug {
+    /// What this adapter can do. Read before a plan is accepted, never after.
+    fn capabilities(&self) -> StoreCapabilities;
+
+    /// The whole stream for one execution.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the backend could not do.
+    async fn load(&self, execution: &ExecutionId) -> Result<StreamSlice>;
+
+    /// The one atomic operation. Everything in `request` lands, or none of it.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::VersionConflict`] when somebody appended in between — the
+    /// caller re-reads and decides again, which is a bounded retry around a
+    /// pure function rather than an error a caller surfaces.
+    async fn append(
+        &self,
+        execution: &ExecutionId,
+        request: AppendRequest,
+    ) -> Result<AppendOutcome>;
+
+    /// The inline projection, for accepting the next command and for the run's
+    /// own page. Never for a list the event log's folds already serve.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the backend could not do.
+    async fn projection(&self, execution: &ExecutionId) -> Result<Option<RunProjection>>;
+
+    /// Rows the publisher has not yet put on the log, oldest first.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the backend could not do.
+    async fn pending_outbox(&self, limit: usize) -> Result<Vec<OutboxMessage>>;
+
+    /// Mark rows published. Safe to repeat: a row published twice is a
+    /// redelivery, which the projector already deduplicates by message id.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the backend could not do.
+    async fn mark_published(&self, ids: &[MessageId], at: OffsetDateTime) -> Result<()>;
+
+    /// Take the oldest claimable attempt this claimant would run, if there is
+    /// one, and hold it for [`aiwatcher_jobs::LEASE_SECONDS`].
+    ///
+    /// Exactly one claimant gets a given row. Everything about *which* row is
+    /// [`ClaimFilter`]'s: a reactor claims by runtime and a worker by queue,
+    /// and neither takes the other's work.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the backend could not do.
+    async fn claim_attempt(
+        &self,
+        filter: &ClaimFilter,
+        owner: &str,
+        now: OffsetDateTime,
+    ) -> Result<Option<AttemptRow>>;
+
+    /// Renew a lease. `false` when the caller no longer holds it, which is the
+    /// signal to stop rather than to try harder.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the backend could not do.
+    async fn heartbeat(&self, key: &AttemptKey, owner: &str, now: OffsetDateTime) -> Result<bool>;
+
+    /// One attempt row, for a caller re-checking a lease at a boundary.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the backend could not do.
+    async fn attempt(&self, key: &AttemptKey) -> Result<Option<AttemptRow>>;
+
+    /// Where a processor got to.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the backend could not do.
+    async fn checkpoint(&self, processor: &str) -> Result<Option<Checkpoint>>;
+
+    /// Move a processor's cursor on its own, outside any decision.
+    ///
+    /// For the one case a decision cannot cover: an input from the log that the
+    /// inbox says was already handled. The decision committed long ago, so
+    /// there is nothing to be atomic with — and advancing afterwards is the
+    /// right way round by [`aiwatcher_jobs::ORDERING`]. A crash in between
+    /// re-reads a message the inbox already knows, which is the failure this
+    /// system is built to absorb.
+    ///
+    /// Everything else passes its checkpoint in [`AppendRequest`], where it
+    /// moves with the decision or not at all.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the backend could not do.
+    async fn advance_checkpoint(&self, processor: &str, checkpoint: Checkpoint) -> Result<()>;
+}
+
+/// A row on its way to the log, with the ordering rule already applied.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct OutboxBatch {
+    pub messages: Vec<OutboxMessage>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_caller_has_to_choose_an_expectation_rather_than_guess_a_number() {
+        // `NoStream` is the default because starting an execution is the one
+        // append whose expectation is not a number somebody read: two callers
+        // racing to start one execution must produce one execution and one
+        // conflict.
+        assert_eq!(ExpectedVersion::default(), ExpectedVersion::NoStream);
+    }
+}

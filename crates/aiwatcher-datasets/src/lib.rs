@@ -15,6 +15,14 @@ use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 use utoipa::ToSchema;
 
+/// A curation assembled out of blocks rather than written as one script.
+mod pipeline;
+
+pub use pipeline::{
+    BlockPosition, BlockSpec, CurationPipeline, PipelineBlock, PipelineEdge, PipelinePage,
+    SavePipelineRequest, SavedPipeline, order_of,
+};
+
 const MAX_NAME_BYTES: usize = 160;
 const MAX_DESCRIPTION_BYTES: usize = 8 * 1024;
 const MAX_PIPELINE_BYTES: usize = 128 * 1024;
@@ -28,6 +36,13 @@ const MAX_SEARCH_BYTES: usize = 256;
 pub enum RegistryError {
     #[error("{0}")]
     Invalid(String),
+    /// A request that failed in several ways at once, listed together.
+    ///
+    /// A pipeline is the case that needs it: somebody wiring a canvas fixes
+    /// what they can see, and a validator that reports one problem per round
+    /// trip teaches people to press the button again instead of reading it.
+    #[error("the pipeline was refused: {}", .0.join("; "))]
+    Rejected(Vec<String>),
     #[error("{0} not found")]
     NotFound(String),
     #[error("{what} is {size} bytes; the limit is {limit}")]
@@ -94,6 +109,21 @@ pub struct PublishDatasetRequest {
     pub source: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window_seconds: Option<u64>,
+    /// The block chain that produced these rows, as `name@revision`.
+    ///
+    /// Present when the execution came from the pipeline canvas rather than
+    /// from one script, and provenance rather than identity — like the recipe
+    /// name and the description, and for the same reason: a block dragged
+    /// across the canvas is a new pipeline revision and the same rows, and a
+    /// dataset version per canvas tidy-up would be a version history about
+    /// layout.
+    ///
+    /// It matters because the Flow script alone does not describe this
+    /// execution: a notebook block ran between that script and these rows, and
+    /// the only place its settings and its pinned source are written down is
+    /// the pipeline revision this names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub produced_by: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
@@ -105,6 +135,8 @@ pub struct DatasetVersionSummary {
     pub columns: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recipe: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub produced_by: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
@@ -252,6 +284,16 @@ impl Registry {
             });
         }
 
+        if let Some(produced_by) = &request.produced_by
+            && produced_by.len() > MAX_PROVENANCE_BYTES
+        {
+            return Err(RegistryError::TooLarge {
+                what: "the provenance reference",
+                size: produced_by.len(),
+                limit: MAX_PROVENANCE_BYTES,
+            });
+        }
+
         let requested_description = request.description.clone();
         let identity = dataset_identity(&request)?;
         if identity.len() > MAX_ARTIFACT_BYTES {
@@ -274,6 +316,7 @@ impl Registry {
                     row_count: request.items.len(),
                     columns: request.columns.clone(),
                     recipe: request.recipe.clone(),
+                    produced_by: request.produced_by.clone(),
                 };
                 DatasetVersion {
                     name: request.name.clone(),
@@ -487,6 +530,8 @@ fn validate_name(name: &str, what: &str) -> Result<()> {
     Ok(())
 }
 
+const MAX_PROVENANCE_BYTES: usize = 240;
+
 fn validate_authored(description: &str, pipeline: &str) -> Result<()> {
     if pipeline.trim().is_empty() {
         return Err(RegistryError::Invalid(
@@ -585,6 +630,7 @@ mod tests {
             )])],
             source: "http://api.test".to_owned(),
             window_seconds: Some(900),
+            produced_by: None,
         }
     }
 
@@ -645,6 +691,29 @@ mod tests {
         assert_eq!(changed.dataset.versions.len(), 2);
         assert_ne!(first.dataset.latest.version, changed.dataset.latest.version);
         assert_eq!(registry.datasets().await.unwrap().datasets.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn where_a_version_came_from_is_provenance_rather_than_identity() {
+        // A block dragged across the canvas is a new pipeline revision and the
+        // same rows. A dataset version per canvas tidy-up would be a version
+        // history about layout.
+        let registry = registry();
+        let mut first = dataset("data_frame()->read(default)");
+        first.produced_by = Some("curation/pii-detection@aaaa".to_owned());
+        let mut moved = dataset("data_frame()->read(default)");
+        moved.produced_by = Some("curation/pii-detection@bbbb".to_owned());
+
+        let first = registry.publish(first).await.unwrap();
+        let moved = registry.publish(moved).await.unwrap();
+
+        assert!(first.created);
+        assert!(!moved.created);
+        assert_eq!(
+            first.dataset.latest.produced_by.as_deref(),
+            Some("curation/pii-detection@aaaa"),
+            "the version keeps the chain it was first published from"
+        );
     }
 
     #[tokio::test]

@@ -53,6 +53,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use aiwatcher_core::ArtifactRef;
+
 use crate::{Error, Result, validate_slug};
 
 /// Artifacts one package may name. A model is weights, a config and a
@@ -160,50 +162,39 @@ pub struct TensorSpec {
     pub classes: Vec<String>,
 }
 
-/// One file a package is made of.
-#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ArtifactRef {
-    /// What the runtime calls it: `weights`, `tokenizer`, `config`.
-    pub name: String,
-    /// Where the bytes are. A pointer, like every other artifact in this
-    /// workspace — the registry stores no weights.
-    pub uri: String,
-    /// `sha256` of the bytes, lowercase hex. Required, and the reason this
-    /// type exists: an address is not an identity.
-    pub digest: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub size_bytes: Option<u64>,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub content_type: String,
-}
-
-impl ArtifactRef {
-    fn validate(&self) -> Result<()> {
-        validate_slug(&self.name, "an artifact name")?;
-        if self.uri.trim().is_empty() {
-            return Err(Error::Invalid(format!(
-                "the artifact {} has no uri",
-                self.name
-            )));
-        }
-        if self.digest.len() != 64 || !self.digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return Err(Error::Invalid(format!(
-                "the artifact {} has no sha256 digest. An address is not an identity: \
-                 's3://models/latest.pt' is different bytes tomorrow, and a version whose weights \
-                 cannot be checked is a provenance chain with a hole in it",
-                self.name
-            )));
-        }
-        if self.digest.bytes().any(|byte| byte.is_ascii_uppercase()) {
-            return Err(Error::Invalid(format!(
-                "the artifact {}'s digest must be lowercase hex; uppercase would address the same \
-                 bytes twice",
-                self.name
-            )));
-        }
-        Ok(())
+/// What a package is refused for, per artifact.
+///
+/// The type itself is [`aiwatcher_core::ArtifactRef`]: an execution step hands
+/// its rows on with the same record, and a second definition of it here would
+/// be the drift ADR_0022 refuses in the other direction. What stayed is the
+/// *rule*, because it is this ADR's rather than the type's — the workflow fold
+/// reads a digest when it is there and requires none, and a model package
+/// refuses an artifact without one.
+fn validate_artifact(artifact: &ArtifactRef) -> Result<()> {
+    validate_slug(&artifact.name, "an artifact name")?;
+    if artifact.uri.trim().is_empty() {
+        return Err(Error::Invalid(format!(
+            "the artifact {} has no uri",
+            artifact.name
+        )));
     }
+    if artifact.digest.len() != 64 || !artifact.digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(Error::Invalid(format!(
+            "the artifact {} has no sha256 digest. An address is not an identity: \
+             's3://models/latest.pt' is different bytes tomorrow, and a version whose weights \
+             cannot be checked is a provenance chain with a hole in it",
+            artifact.name
+        )));
+    }
+    if !artifact.has_digest() {
+        return Err(Error::Invalid(format!(
+            "the artifact {}'s digest must be lowercase hex; uppercase would address the same \
+             bytes twice",
+            artifact.name
+        )));
+    }
+    Ok(())
 }
 
 /// What a package needs in order to run at all.
@@ -292,7 +283,7 @@ impl ModelPackage {
         }
         let mut seen = std::collections::BTreeSet::new();
         for artifact in &self.artifacts {
-            artifact.validate()?;
+            validate_artifact(artifact)?;
             if !seen.insert(artifact.name.as_str()) {
                 return Err(Error::Invalid(format!(
                     "two artifacts are both called {}; a loader resolves them by name",
@@ -339,6 +330,8 @@ impl ModelPackage {
 
 #[cfg(test)]
 mod tests {
+    use aiwatcher_core::ArtifactKind;
+
     use super::*;
 
     fn artifact(name: &str) -> ArtifactRef {
@@ -348,6 +341,8 @@ mod tests {
             digest: "ab".repeat(32),
             size_bytes: Some(1024),
             content_type: String::new(),
+            kind: ArtifactKind::Model,
+            schema_ref: None,
         }
     }
 

@@ -11,6 +11,7 @@
 #   aiwatcher-annotations vector image annotations + immutable training exports
 #   aiwatcher-training   training runs and the model versions they produce
 #   aiwatcher-conversations  the encrypted conversation archive and its exports
+#   aiwatcher-execution  the plan, the pure decider, and the workflow store
 #   aiwatcher-runner     the workflow rerun dispatcher, over HTTP
 #   aiwatcher-pipeline   pipeline engines: the launchable catalog, and starting one
 #   aiwatcher-auth       OIDC relying party: discovery, JWKS, sessions, roles
@@ -41,6 +42,7 @@ aiwatcher-datasets = { path = "crates/aiwatcher-datasets", version = "0.1.0" }
 aiwatcher-annotations = { path = "crates/aiwatcher-annotations", version = "0.1.0" }
 aiwatcher-training = { path = "crates/aiwatcher-training", version = "0.1.0" }
 aiwatcher-conversations = { path = "crates/aiwatcher-conversations", version = "0.1.0" }
+aiwatcher-execution = { path = "crates/aiwatcher-execution", version = "0.1.0" }
 aiwatcher-runner = { path = "crates/aiwatcher-runner", version = "0.1.0" }
 aiwatcher-pipeline = { path = "crates/aiwatcher-pipeline", version = "0.1.0" }
 aiwatcher-auth = { path = "crates/aiwatcher-auth", version = "0.1.0" }
@@ -79,6 +81,19 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "htt
 ring = "0.17.14"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+# The PostgreSQL workflow store, optional and off by default — the `postgres`
+# feature of `aiwatcher-execution`, in the shape `laser` already has in
+# `aiwatcher-bus`. Default features off on purpose: sqlx's defaults pull
+# `sqlx-mysql`, which depends on `rsa`, and `rsa` carries RUSTSEC-2023-0071 with
+# no fixed release — the same reason `jsonwebtoken` is pinned to 9.
+sqlx = { version = "0.8", default-features = false, features = [
+  "postgres",
+  "runtime-tokio",
+  "tls-rustls-ring",
+  "json",
+  "time",
+  "uuid",
+] }
 # SHA-256 for content-addressed prompt versions and for SigV4. Both have to
 # agree byte for byte with `hashlib.sha256` on the producer side, which is not
 # something to hand-roll — unlike the FNV derivation in `core::ids`, where the

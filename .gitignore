@@ -81,3 +81,8 @@ detected-*.yaml
 .idea/
 .vscode/
 !.vscode/extensions.json
+
+# The ml_pipeline notebook runtime: its virtualenv and the rows it stages between a
+# block and the notebook that reads them. Both are scratch.
+services/ml_pipeline/.venv/
+services/ml_pipeline/.data/

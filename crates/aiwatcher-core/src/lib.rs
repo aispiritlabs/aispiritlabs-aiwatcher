@@ -10,6 +10,7 @@
 //! `checkpoint` / `correlationId` / `causationId` / `traceId` / `spanId`) and
 //! from its scope resolution rule, see [`context`].
 
+pub mod artifact;
 pub mod attrs;
 pub mod catalog;
 pub mod checkpoint;
@@ -22,6 +23,7 @@ pub mod ports;
 pub mod prompts;
 pub mod stream;
 
+pub use artifact::{ArtifactKind, ArtifactRef};
 pub use catalog::{EventType, Phase, Subject};
 pub use checkpoint::Checkpoint;
 pub use context::{ContextGenerator, ObservabilityContext, SeedContext, SystemContextGenerator};

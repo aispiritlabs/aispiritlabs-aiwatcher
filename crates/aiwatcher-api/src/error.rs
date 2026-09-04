@@ -348,6 +348,10 @@ fn dataset_registry_parts(error: &aiwatcher_datasets::RegistryError) -> (StatusC
     match error {
         RegistryError::NotFound(_) => (StatusCode::NOT_FOUND, "not_found"),
         RegistryError::Invalid(_) => (StatusCode::BAD_REQUEST, "bad_request"),
+        // The same 422 the annotation registry uses, and for the same reason:
+        // the request was well formed and the thing it describes cannot be
+        // run. Every problem with it rides in `details`.
+        RegistryError::Rejected(_) => (StatusCode::UNPROCESSABLE_ENTITY, "pipeline_rejected"),
         RegistryError::TooLarge { .. } => (StatusCode::PAYLOAD_TOO_LARGE, "too_large"),
         RegistryError::Store(store) if store.is_retryable() => {
             (StatusCode::SERVICE_UNAVAILABLE, "registry_unavailable")
@@ -372,6 +376,11 @@ impl IntoResponse for ApiError {
             // Same reason: a producer fixing one policy problem per round trip
             // learns to send a basis it does not mean.
             Self::ConversationArchive(aiwatcher_conversations::Error::Rejected(problems)) => {
+                problems.clone()
+            }
+            // And the same again for a curation canvas: somebody wiring blocks
+            // fixes what they can see, all at once.
+            Self::DatasetRegistry(aiwatcher_datasets::RegistryError::Rejected(problems)) => {
                 problems.clone()
             }
             _ => Vec::new(),

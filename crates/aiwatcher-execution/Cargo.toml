@@ -1,0 +1,53 @@
+[package]
+name = "aiwatcher-execution"
+description = "Owned execution: the plan, the pure decider, and the transactional workflow store"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# The storage contract suite, so a second crate's adapter proves the same
+# properties this one's do. Off by default: none of it reaches a production
+# build, and the crate dev-depends on itself to run it.
+testing = []
+# Wires the PostgreSQL workflow store. Off by default so `cargo test` needs no
+# database and the dependency tree stays small; `just test-postgres` turns it
+# on. The same shape `aiwatcher-bus` uses for `laser` — a module beside the
+# others, not a crate of its own.
+#
+# `default-features = false` and `postgres` only: sqlx's defaults pull
+# `sqlx-mysql`, which depends on `rsa` — the crate this workspace already
+# refused for `jsonwebtoken`, because RUSTSEC-2023-0071 has no fixed release
+# and `just audit` would go red for a driver nothing here uses.
+#
+# No `macros` and no `migrate` either: both live in `sqlx-macros`, which wants
+# a live database at *compile* time.
+postgres = ["dep:sqlx"]
+
+[dependencies]
+aiwatcher-bus.workspace = true
+aiwatcher-core.workspace = true
+aiwatcher-datasets.workspace = true
+aiwatcher-jobs.workspace = true
+async-trait.workspace = true
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sqlx = { workspace = true, optional = true }
+thiserror.workspace = true
+time.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util", "sync"] }
+utoipa.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+aiwatcher-core.workspace = true
+aiwatcher-execution = { workspace = true, features = ["testing"] }
+aiwatcher-jobs.workspace = true
+tokio = { workspace = true, features = ["full"] }
+
+[lints]
+workspace = true

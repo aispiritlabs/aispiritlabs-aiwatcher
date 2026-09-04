@@ -1,7 +1,13 @@
 # ADR_0014: Flow executes curation; the Rust registry versions its scripts and outputs
 
-- **Status**: accepted
+- **Status**: accepted; browser-mediated persistence superseded by ADR_0025 for
+  managed runs
 - **Date**: 2026-08-31
+
+The recipe, the versioned script and the content-addressed dataset version
+stand, and the browser still runs an ad-hoc query and saves what it liked. What
+ADR_0025 takes over is the *managed* path: a run the server sequences publishes
+its own version, and the tab is not what carries the rows there.
 
 ## Context
 

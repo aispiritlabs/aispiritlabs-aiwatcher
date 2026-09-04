@@ -205,6 +205,24 @@ pub struct NodeState {
     pub span_id: Option<SpanId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Who published this node's executions, from `data.published_by`.
+    ///
+    /// Normally one entry, or none for a producer that does not say. **Two is
+    /// a finding**: exactly one party publishes a given attempt (ADR_0026), so
+    /// a node with both `engine` and a producer's own events is a managed step
+    /// whose producer code opened its own `node()` scope, and its attempt count
+    /// and duration are describing two things at once. The flag exists to make
+    /// that visible, not to resolve it — the resolution is in the producer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub publishers: Vec<String>,
+}
+
+impl NodeState {
+    /// Whether more than one party published this node's executions.
+    #[must_use]
+    pub fn has_two_publishers(&self) -> bool {
+        self.publishers.len() > 1
+    }
 }
 
 impl NodeState {
@@ -224,6 +242,7 @@ impl NodeState {
             run_id: None,
             span_id: None,
             error: None,
+            publishers: Vec::new(),
         }
     }
 
@@ -243,6 +262,7 @@ impl NodeState {
             run_id: None,
             span_id: None,
             error: None,
+            publishers: Vec::new(),
         }
     }
 }
@@ -1086,6 +1106,9 @@ fn apply_step(held: &mut Held, event: &RecordedEvent, config: &WorkflowConfig) {
         .data_str("error")
         .or_else(|| event.data_str("message"))
         .map(ToOwned::to_owned);
+    // ADR_0026: exactly one party publishes a given attempt. Recorded rather
+    // than reconciled — see `NodeState::publishers`.
+    let publisher = event.data_str("published_by").map(ToOwned::to_owned);
 
     let counted = {
         let seen = held.attempts.entry(node_id.clone()).or_default();
@@ -1108,6 +1131,11 @@ fn apply_step(held: &mut Held, event: &RecordedEvent, config: &WorkflowConfig) {
         && !node.agents.iter().any(|known| known == &agent)
     {
         node.agents.push(agent);
+    }
+    if let Some(publisher) = publisher
+        && !node.publishers.iter().any(|known| known == &publisher)
+    {
+        node.publishers.push(publisher);
     }
 
     match phase {

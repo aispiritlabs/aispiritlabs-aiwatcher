@@ -27,6 +27,10 @@ Python / TypeScript agents
    training runs   ──► RustFS (S3)   a curve and a model registry; off the log
    pipeline engine ──► Flyte 2       what could be started; read, and asked
    dataset hubs    ──► Kaggle, HF    what exists; never what is permitted
+   curation blocks ──► Flow PHP      one query, up to the first notebook
+                   └─► ml_pipeline   a marimo notebook: run as a step, served live
+   managed runs    ──► PostgreSQL    the plan, the decisions, the outbox — and
+                                     back onto the log as facts about work
 ```
 
 ## Commands
@@ -40,6 +44,7 @@ just openapi       # regenerate contracts/openapi.json AND the panel's client
 just run           # server on :8080, write-ahead log in ./.data
 just run-hubs      # the same, with Kaggle/Hugging Face dataset search on
 just dev           # server (in-memory bus) + panel dev server on :5173
+just pii-demo      # the whole curation chain: API + Flow PHP + notebooks + panel
 just seed          # publish a demo run into a running server
 just seed-evaluation  # publish two comparable evaluation reports
 just seed-prompts  # publish a prompt plus three optimisations, one admitted
@@ -51,6 +56,8 @@ just seed-conversations # one reviewed exchange, an export job, an immutable cor
 just e2e-train        # the whole chain: annotate → export → fit a real tiny model → promote
 just serve-model      # verify the promoted package's digests, load it, serve it, watch the label
 just onnx-version     # re-express that model as an ONNX graph, check it agrees, move the label
+just ml-pipeline-serve # the marimo notebook runtime on :8082, for notebook blocks
+just ml-pipeline-check # ruff, mypy --strict and pytest for that service
 just stack-up      # docker compose: VictoriaTraces, VictoriaMetrics, Collector, Grafana
 just tilt-up       # the same stack on a local Kubernetes, rebuilt on save
 ```
@@ -65,6 +72,15 @@ just images            # build aiwatcher and aiwatcher-panel
 ```
 
 With a broker, for the Laser backend:
+
+With a database, for the workflow store:
+
+```bash
+just postgres-up   # PostgreSQL on :5433 — not 5432, so a suite never lands in
+                   # a project database somebody already has there
+just test-postgres # the storage contract, the same fifteen properties the
+                   # memory and file adapters prove, against a real database
+```
 
 ```bash
 just iggy-up       # Apache Iggy in Docker, with the three flags it needs
@@ -119,6 +135,8 @@ Crates, in dependency order. A crate may only depend on ones above it.
 | `aiwatcher-annotations` | Vector image annotations for **any** vision domain — it ships no vocabulary, and the project's label schema carries the domain (ADR_0020). Sliced by noun: `images/` (one picture — head, revisions, review, bytes, bulk import), `imports/` (the staged batch and the queued job that reads it, ADR_0022), `project`, `export`, `license` (what may be done with the data), `schema`, `shapes`, `sources` (a catalogue an instance loads), `integrations/` — `hubs` (Kaggle and Hugging Face) and `fetch`, the bounded downloader every outbound byte goes through. `registry` is the facade and the only public door; `store` is the private key layout every slice reads through. |
 | `aiwatcher-conversations` | Governed conversation training data: the `turn` contract, consent and retention, the **encrypted** archive, the human review gate, and the resumable export job that freezes a corpus. The one authored store that is off by default, whose content is sealed, and whose deletions delete. Sliced by noun: `turn`, `policy`, `redaction`, `review`, `archive/` (the store and its retention clock, `crypt` beneath it), `export/` (the job, `format` beneath it). `registry` is the facade and the only public door; `store` is the private key layout. |
 | `aiwatcher-training` | Training runs and the model versions they produce. The one registry here whose contents never came from the event log: a run is a record that grows in place, and a promotion is refused without a held-out score. `package` is what a serving runtime is handed — the runtime, the entry point, the shapes, and every artifact with its digest (ADR_0023). |
+| `aiwatcher-datasets` | Curation recipes, the dataset versions they produce, and the **block pipelines** of ADR_0024 — a chain of source, transform, notebook and view, refused as a whole with every problem at once. Nothing here executes anything; the panel drives the chain because the engines are three different systems. |
+| `aiwatcher-execution` | Owned execution (ADR_0025, ADR_0026): the compiled `ExecutionPlan` and its `plan_id`, the states, the attempts, the pure `decide`/`evolve`, the cache key, the compiler from ADR_0024's blocks, the atomic command handler, the claim table, the fact encoder and the outbox publisher. Three ports: `WorkflowStore` (`memory | file | postgres`, the last behind a feature so `sqlx` is out of every build that does not ask for it — the shape `laser` has in `aiwatcher-bus`), `ActivityExecutor` (what a reactor does with a claimed attempt) and `ArtifactCatalog` (metadata, lineage, the cache index). Executes nothing itself, and holds no second copy of `aiwatcher-jobs`' rules — it calls them. |
 | `aiwatcher-runner` | The workflow rerun dispatcher: one HTTP POST to one configured endpoint, behind `core::ports::WorkflowRunner`. |
 | `aiwatcher-pipeline` | Pipeline engines behind `core::engine::WorkflowEngine`: the orchestrator's launchable catalog, the inputs each entry declares, and starting one. Flyte 2 over its `/api/v1/` gateway, plus the literal encoder that binds a form's JSON to Flyte's declared types. With the runner, the second and last thing here that asks another system to do work. |
 | `aiwatcher-auth` | Single sign-on: OIDC discovery, a JWKS cache, the authorization-code flow with PKCE, HMAC-signed session cookies, authentik's forward-auth headers, and the group-to-role mapping. Knows nothing about axum. |
@@ -130,9 +148,35 @@ Everything else: `apps/panel` (React), `sdk/python`, `sdk/typescript`,
 `contracts/` (the OpenAPI document and the envelope JSON Schema), `deploy/`
 (the Dockerfiles, the docker compose stack, the kustomize test stack, and
 `helm/aiwatcher` + `helmfile.yaml.gotmpl` + `scripts/` — the install path),
-`docs/ADR/`, and `services/flow` — an **optional** PHP service serving the
-panel's Query tab. It is outside the Cargo workspace and the Rust binary does
-not know it exists; `just check` does not cover it (`just flow-test` does).
+`docs/ADR/`, and two **optional** services outside the Cargo workspace that the
+Rust binary does not know exist. `services/flow` is the PHP query surface behind
+the panel's Query tab and its curation transforms (`just flow-check`).
+`services/ml_pipeline` is the Python 3.14 notebook runtime behind a pipeline's
+marimo blocks: it runs one as a step through marimo's own `App.run(defs=…)` and
+serves the same file as a live app for the block's editor (`just
+ml-pipeline-check`). `just check` covers neither.
+
+### The words, since "workflow" meant four things
+
+| Term | Meaning |
+|------|---------|
+| `CurationPipelineDefinition` | ADR_0024's authored source/transform/notebook/view blocks |
+| `WorkflowDefinition` | An authored or registered agent, search or ML workflow |
+| `DefinitionRevision` | The immutable content-addressed version of either — the whole authored request, canvas positions included |
+| `ExecutionPlan` | The compiled, runtime-neutral graph, addressed by `plan_id` over the executable fields only |
+| `ExecutionRun` | One attempt to execute one pinned plan |
+| `StepRun` | The logical state of one plan step, across every attempt |
+| `StepAttempt` | One physical attempt. Immutable once terminal; a retry increments, never rewrites |
+| `WorkflowStream` | One execution's ordered inputs and outputs, in the `WorkflowStore` |
+| `ArtifactRef` | `aiwatcher-core`'s pointer to bytes stored outside the message |
+| `RuntimeBinding` | Where a step runs and what that runtime needs — never a host |
+| `ExecutionOwner` | Who decides: `local`, `engine:<name>`, or `worker` |
+| `ExecutionMode` | `compiled` — the Rust decider schedules a static plan; `hosted` — a worker decides and this keeps the history |
+| `ObservedWorkflow` | A graph folded from telemetry (ADR_0012). Not necessarily launchable, and not an `ExecutionPlan` |
+
+A curation pipeline, a planner workflow and an agent graph may all compile to an
+`ExecutionPlan` and remain distinct authoring experiences — and an agent graph
+compiles only to its *shape*, because its decisions stay in the worker.
 
 ## The decisions that explain most of the code
 
@@ -356,6 +400,47 @@ area.
    own no-queue concurrency bound, its answers are discarded, and its health
    window resets per candidate version.
 
+20. **A curation may be a chain of blocks, and each block belongs to the engine
+   that can run it** ([ADR_0024](docs/ADR/ADR_0024_CURATION_BLOCKS.md)).
+   ADR_0014's answer is right while the whole curation is one query. Detecting
+   personal data in a hub corpus is not: something has to read the text, and
+   Flow's whitelist exists precisely so that it cannot. So a pipeline is
+   `source → transform → notebook → view`, saved as a content-addressed revision
+   beside the recipes, and **the panel drives it** — every source and transform
+   compiles to one Flow query, its rows go to a marimo notebook the
+   `ml_pipeline` service runs, and the view publishes a dataset version carrying
+   `produced_by`. The chain's rules live in `aiwatcher-datasets` and a refusal
+   carries every problem at once. A notebook is *one file doing two jobs*:
+   `App.run(defs={"rows": …, "params": …})` injects the rows for a step, and the
+   same file served as a live app reads what the last run staged, so the widgets
+   move against the rows the block will actually run on.
+
+21. **A managed execution is owned by the server, and the browser only asks for
+   one** ([ADR_0025](docs/ADR/ADR_0025_MANAGED_EXECUTION.md)). ADR_0024's own
+   Consequences named what would make it wrong — a chain that has to run
+   unattended, on a schedule, or over a corpus too large for one browser
+   session — and all three arrived at once, from planner's four-stage import,
+   `ai_spirit_agent`'s graphs and the personal-data corpus. So a definition
+   compiles to an immutable `ExecutionPlan` addressed by `plan_id` over the
+   *executable* fields only, a run pins one plan, `decide` is pure, and one
+   workflow input is six writes in one transaction behind a `WorkflowStore`
+   port — `memory | file | postgres`, the pattern already set twice. The
+   `file` adapter holds one process and says so by name, so a development
+   store never becomes a production one by omission. ADR_0024's blocks, chain
+   validation and content-addressed revisions all stand; what is withdrawn is
+   "the chain is driven from the browser", for managed runs only.
+
+22. **The execution engine is a producer on its own log**
+   ([ADR_0026](docs/ADR/ADR_0026_ENGINE_AS_PRODUCER.md)). The question ADR_0016
+   deferred, decided in favour. `execution.*` and `Subject::Execution` join the
+   catalog with `forms_span = false`; a started plan publishes
+   `workflow.declared`, an attempt publishes `step.*` with `data.published_by`,
+   a result publishes `artifact.produced` with a digest. The workflow fold, the
+   waterfall, `Pending`, the live SSE and VictoriaTraces then draw a managed run
+   with no second read path — and the PostgreSQL projection is for accepting the
+   next command, never for a list the fold already serves. Facts, never
+   decisions: the *why* stays in the store.
+
 ## Conventions
 
 ### Rust
@@ -562,6 +647,13 @@ what runs a real graph.
   behind them are the whole story. It draws a progress bar and Training does
   not, for the same reason Conversations does: the pages were counted when the
   batch was sealed, so the denominator is a fact.
+- `data-curation` is the one area that orchestrates. Its **Pipeline** view runs
+  a chain across three systems from the browser — Flow PHP, the notebook
+  runtime, the Rust registry — and reports each block as it goes, including the
+  three that light up together because Flow executes them as one query. Both
+  engines are optional and their absence is a badge, not a failure. Its
+  **Recipe** view is ADR_0014's single-script editor, still the right tool when
+  the whole curation is one query.
 - `annotations` is the one area that draws. Its canvas puts an `<img>` and an
   `<svg>` in one transformed container, both sized to the image's *natural*
   pixels, so SVG user units are image coordinates and no shape ever carries a
@@ -592,6 +684,97 @@ what runs a real graph.
 
 ## Guardrails
 
+- **Never make a managed execution depend on an open browser tab.** ADR_0025.
+  The panel authors, commands, links and renders; it does not compile, sequence,
+  retry, resume or publish. `lib/pipeline.ts`'s `orderOf` stays a *traversal*
+  for drawing and never an explanation of a refusal, and a managed run's Flow
+  script is compiled in Rust — the browser may show the same text, and what runs
+  is what the server produced.
+- **Never let `decide` read a clock, open a socket or generate a random
+  value.** Time arrives in `Now`, ids are derived from what they name. That is
+  what makes a replay reach the same schedule and the same command id, so a
+  redelivered dispatch lands on the attempt it already created instead of
+  beside it — `TraceId::derive`'s rule, one layer up. A jittered retry delay is
+  the dispatcher's, applied when it schedules.
+- **Never split the six writes of one workflow decision.** Deduplicate the
+  input, check the expected version, append the outputs, update the projection,
+  write the outbox, advance the checkpoint — one transaction, or the dual-write
+  gap. An outbox row with no decision behind it publishes a `step.completed`
+  for an attempt the store does not consider complete; a decision with no
+  outbox row is a run the panel never sees finish.
+- **Never publish an execution fact before the decision that caused it
+  commits.** ADR_0026, and `aiwatcher_jobs::ORDERING` in the fourth place it
+  applies. The outbox publishes after commit, never from the handler.
+- **Never publish a decision to the log.** Facts about work go on it —
+  `workflow.declared`, `step.*`, `artifact.produced`, `execution.*` — and
+  commands, retries scheduled, leases and heartbeats stay in the store. An
+  engine that published per decision would flood the log it observes.
+- **Never let two parties publish one attempt's `step.*`.** A `local`
+  execution's reactor publishes for what it ran, a worker for what it ran, an
+  `engine:` execution's pods for theirs and the engine for none.
+  `data.published_by` makes a second publisher visible; the resolution is that
+  a managed step's producer code does not open its own `node()` scope.
+- **Never run a managed execution that needs two processes on the `file`
+  store.** `StoreCapabilities::multi_process` is `false` there and the refusal
+  names `AIWATCHER_WORKFLOW_STORE`. A file offers no compare-and-append across
+  processes, and a workflow stream has a decider, a reactor and a worker racing
+  to append — so a second process is refused at `open` rather than allowed to
+  interleave writes that each look fine alone.
+- **Never let a plan name its own executor's address.** `AIWATCHER_FLOW_URL`,
+  `AIWATCHER_ML_PIPELINE_URL`, `AIWATCHER_FLYTE_ENDPOINT`, the pod's service
+  account. A `PlanStep` names a binding and its parameters, never a host —
+  ADR_0012's and ADR_0016's reasoning, unchanged, and for the same reason the
+  rerun target is configuration.
+- **Never retry the same work in two places.** The owner of an execution owns
+  its retries: Rust for a `local` run's steps, the engine for what it was handed
+  whole, the store for a hosted decider's *attempt* and never the worker's own
+  loop as well. A `ContainerJob` sets `backoffLimit: 0` for the same reason.
+- **Never make `plan_id` depend on where a block sits.** The authored revision
+  digests the whole request, positions included, because that is what somebody
+  saved and what `produced_by` names; `plan_id` digests the executable fields
+  only. A canvas tidy-up must invalidate no cache and start no different run.
+- **Never cache a step whose inputs are not all addressed.** A moving window, an
+  unpinned notebook, a `file://` with no digest — `cache_key` returns `None`
+  rather than a key that means "probably the same". Caching is opt-in for the
+  same reason: claiming a step is a pure function of digest-addressed things is
+  wrong often enough to be worth saying out loud.
+- **Never put rows, notebook source, a prompt, a completion or an agent's
+  inter-node text in a workflow message.** A step hands data on as an
+  `ArtifactRef` and its answer as a bounded inline value. The last of those is
+  conversation content and belongs in the archive with a retention clock —
+  ADR_0021's rule, in a second store.
+- **Never let a Flow PHP block follow a notebook block.** A Flow step reads its
+  rows by naming a dataset in the query service's catalog; there is no way to
+  hand it what a notebook produced. A chain that tried would silently run the
+  transform against the *source* again and produce something else. The registry
+  refuses it by name — the message says why rather than "invalid".
+- **Never re-implement a pipeline's rules in the panel.** `aiwatcher-datasets`
+  decides whether blocks form a runnable chain and returns every problem as
+  `details` on a 422; the canvas renders those lines. `lib/pipeline.ts`'s
+  `orderOf` is a *traversal* — it answers "in what order" and `null` when there
+  is no one order — and it never explains a refusal. Same split as the
+  annotation canvas and the shape validator, for the same reason.
+- **Never hold a notebook's source in the block.** That file is what marimo
+  serves, what `ml_pipeline.step` imports and what a test reads. The block names
+  it and pins the `sha256` it was saved against; the panel says when the two have
+  drifted. A copy in the registry would be a second source of truth for a file
+  that has to stay runnable on its own.
+- **Never let a notebook's injected cell define anything else.** `App.run(defs=)`
+  replaces a whole cell, not one name, so the cell binding `rows` and `params`
+  binds nothing downstream needs — imports go in a cell of their own, and what
+  only that cell uses is underscored. `ml_pipeline.step` catches marimo's own
+  message for this and answers it, because that message names the missing
+  definitions without saying what to do about them.
+- **Never expose the notebook runtime.** It runs notebook code with no sandbox,
+  in its own process for a live app and in a child process for a step, and it
+  has no authentication. It binds to `127.0.0.1` and is a development surface —
+  the same posture as the Flow service, and a sharper reason.
+- **Never make `produced_by` part of a dataset version's identity.** A block
+  dragged across the canvas is a new pipeline revision and the same rows, and a
+  dataset version per canvas tidy-up would be a version history about layout. It
+  is provenance, like the recipe name and the description — and it matters
+  because the Flow script alone does not describe an execution a notebook ran
+  after.
 - **Never let a route decide for itself whether it needs a caller.** The
   authentication layer is applied once, in front of the whole router in
   `routes::router`, with an exception list in `auth::is_public` — the health

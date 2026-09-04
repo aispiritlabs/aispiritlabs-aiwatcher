@@ -30,6 +30,12 @@ rustfs_endpoint := env_var_or_default("AIWATCHER_PROMPT_S3_ENDPOINT", "http://12
 authentik_issuer := env_var_or_default("AIWATCHER_AUTH_ISSUER", "http://localhost:9000/application/o/aiwatcher/")
 laser_connection := env_var_or_default("AIWATCHER_LASER_CONNECTION_STRING", "iggy:iggy@127.0.0.1:8090")
 
+# The workflow store `just test-postgres` runs against. Port 5433, not 5432: a
+# developer machine usually already has something on the default one, and a
+# suite that silently connected to it would create tables in somebody's
+# project database.
+workflow_postgres_url := env_var_or_default("AIWATCHER_WORKFLOW_POSTGRES_URL", "postgres://aiwatcher:aiwatcher@127.0.0.1:5433/aiwatcher")
+
 # The control plane `just run-flyte` browses. `flytectl demo start` serves one
 # on :30080; a cluster's is the flyteadmin Service. There is no `flyte-up` here
 # on purpose — the demo cluster is a k3s in Docker that this repo does not
@@ -85,6 +91,14 @@ test-laser:
 test-rustfs:
     AIWATCHER_PROMPT_S3_ENDPOINT={{rustfs_endpoint}} \
       cargo test -p aiwatcher-prompts --test rustfs -- --ignored --test-threads=1
+
+# `just postgres-up` first. This is what makes the third `WorkflowStore`
+# adapter prove the same properties as the two that need no service — the suite
+# is `aiwatcher_execution::testing`, called by all three.
+test-postgres:
+    AIWATCHER_WORKFLOW_POSTGRES_URL={{workflow_postgres_url}} \
+      cargo test -p aiwatcher-execution --features postgres,testing --test postgres \
+      -- --ignored --test-threads=1
 
 audit:
     cargo deny check
@@ -384,6 +398,68 @@ flow-query pipeline:
       | curl -sS -X POST http://127.0.0.1:8081/flow/query -H 'content-type: application/json' -d @- \
       | python3 -m json.tool
 
+# ── ML pipeline notebook runtime (Python) ────────────────────────────────────
+#
+# Optional, exactly like the Flow service above. It serves the marimo notebooks
+# a curation pipeline's notebook blocks run, and hosts each one as a live app
+# for the block's editor. Without it, a pipeline of a source and a transform
+# still runs and the panel says which service is missing. See ADR_0024.
+
+ml_pipeline := "services/ml_pipeline"
+
+# Install the dependencies, and the interpreter: uv fetches Python 3.14 itself.
+ml-pipeline-install:
+    cd {{ml_pipeline}} && uv sync --all-groups
+
+# The notebook runtime on :8082. Binds to localhost: it runs notebook code.
+ml-pipeline-serve port="8082":
+    cd {{ml_pipeline}} && AIWATCHER_ML_PIPELINE_PORT={{port}} uv run python -m ml_pipeline
+
+# The panel edits the same file, so stop this before saving from there.
+
+# marimo's own editor for one notebook, for a change bigger than the panel's box.
+ml-pipeline-edit notebook:
+    cd {{ml_pipeline}} && uv run marimo edit "notebooks/{{notebook}}.py"
+
+# Run one notebook over rows from a JSON file, without the panel or the chain.
+ml-pipeline-run notebook rows:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    python3 -c 'import json,sys;print(json.dumps({"notebook":sys.argv[1],"rows":json.load(open(sys.argv[2]))}))' \
+      {{quote(notebook)}} {{quote(rows)}} \
+      | curl -sS -X POST http://127.0.0.1:8082/ml-pipeline/run -H 'content-type: application/json' -d @- \
+      | python3 -m json.tool
+
+# Not part of `just check`, which is Rust and the panel: this service is
+# optional, like the PHP one.
+
+# Everything the notebook runtime has to pass.
+ml-pipeline-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd {{ml_pipeline}}
+    uv run ruff format --check .
+    uv run ruff check .
+    uv run mypy
+    uv run pytest -q
+
+# Open http://localhost:5173/data-curation/pipeline and press "Load the PII
+# example".
+
+# The whole curation example: the API with hub search on, both engines, the panel.
+pii-demo:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Killed together, whichever one exits first: three of these are servers
+    # that would otherwise be left holding ports somebody has to go and find.
+    trap 'kill 0' EXIT INT TERM
+    AIWATCHER_BUS=wal AIWATCHER_INGEST_ENABLED=true AIWATCHER_HUGGINGFACE_ENABLED=true \
+      cargo run --bin aiwatcher &
+    (cd {{flow}} && AIWATCHER_URL=http://127.0.0.1:8080 PHP_CLI_SERVER_WORKERS=4 \
+      php -S 127.0.0.1:8081 -t public) &
+    (cd {{ml_pipeline}} && uv run python -m ml_pipeline) &
+    (cd {{panel}} && npm run dev)
+
 # ── Iggy (for the Laser backend) ─────────────────────────────────────────────
 
 # A local broker for `just run-laser` and `just test-laser`.
@@ -491,6 +567,34 @@ rustfs-up:
 
 rustfs-down:
     -docker rm -f aiwatcher-rustfs
+
+# A local PostgreSQL for `just test-postgres` and for the workflow store.
+postgres-up:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    docker rm -f aiwatcher-postgres >/dev/null 2>&1 || true
+    docker run -d --name aiwatcher-postgres \
+      -e POSTGRES_USER=aiwatcher \
+      -e POSTGRES_PASSWORD=aiwatcher \
+      -e POSTGRES_DB=aiwatcher \
+      -p 5433:5432 postgres:17-alpine
+    echo "waiting for the workflow store …"
+    for _ in $(seq 1 30); do
+      if docker exec aiwatcher-postgres pg_isready -U aiwatcher -q 2>/dev/null; then
+        echo "✓ postgres on :5433"
+        exit 0
+      fi
+      sleep 1
+    done
+    echo "✗ postgres did not come up:" >&2
+    docker logs aiwatcher-postgres 2>&1 | tail -20 >&2
+    exit 1
+
+postgres-down:
+    -docker rm -f aiwatcher-postgres
+
+# Wipe it. The schema is applied on connect, so this is how a run starts clean.
+postgres-reset: postgres-down postgres-up
 
 rustfs-logs:
     docker logs -f --tail=100 aiwatcher-rustfs
