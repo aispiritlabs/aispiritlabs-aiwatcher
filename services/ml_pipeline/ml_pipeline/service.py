@@ -124,6 +124,7 @@ def create_app(config: Config | None = None) -> Starlette:
             _params(body),
             staging,
             settings,
+            _context(body),
         )
         return JSONResponse(
             {
@@ -135,6 +136,11 @@ def create_app(config: Config | None = None) -> Starlette:
                 "truncated": result.truncated,
                 "stdout": result.stdout,
                 "took_ms": result.took_ms,
+                # Whether a managed chain may remember this. Declared by the
+                # notebook, because nothing outside it can tell a pure
+                # transform from one that read the clock — the same reason the
+                # query service reports it rather than the caller assuming it.
+                "deterministic": result.deterministic,
                 "app_url": app_url(notebook.name),
             }
         )
@@ -212,6 +218,21 @@ def _rows(body: dict[str, Any], limit: int) -> list[Row]:
     if len(kept) > limit:
         raise ValueError(f"{len(kept)} rows were sent; this service accepts {limit}")
     return kept
+
+
+def _context(body: dict[str, Any]) -> str | None:
+    """Which run's rows these are, when the caller is a run.
+
+    A managed step sends `<execution>/<step>/<attempt>`; the panel sends
+    nothing and shares the ad-hoc directory. Bounded because it becomes a hash
+    and a hash of an unbounded string is an unbounded read.
+    """
+    context = body.get("context")
+    if context is None or context == "":
+        return None
+    if not isinstance(context, str) or len(context) > 512:
+        raise ValueError('"context" is a string of at most 512 characters')
+    return context
 
 
 def _params(body: dict[str, Any]) -> dict[str, Any]:

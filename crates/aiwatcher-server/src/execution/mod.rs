@@ -35,6 +35,7 @@
 
 pub mod artifacts;
 pub mod flow;
+pub mod marimo;
 pub mod publish;
 
 use std::sync::Arc;
@@ -43,8 +44,8 @@ use std::time::Duration;
 use aiwatcher_api::state::AppState;
 use aiwatcher_bus::MessageSink;
 use aiwatcher_execution::{
-    ArtifactCatalog, ExecutionHandler, ObjectArtifactCatalog, Performed, Reactor, WorkflowStore,
-    publish_pending,
+    ArtifactCatalog, ExecutionHandler, ObjectArtifactCatalog, Performed, Pruned, Reactor,
+    WorkflowStore, publish_pending,
 };
 use time::OffsetDateTime;
 use tokio::task::JoinHandle;
@@ -66,6 +67,7 @@ const BACKOFF: Duration = Duration::from_secs(30);
 #[derive(Debug, Default)]
 pub struct Tasks {
     pub outbox: Option<JoinHandle<()>>,
+    pub retention: Option<JoinHandle<()>>,
     pub reactors: Vec<(&'static str, JoinHandle<()>)>,
 }
 
@@ -82,6 +84,15 @@ impl Tasks {
                 // the failure ADR_0026 is about, and this ordering is what
                 // makes the first outcome the one that happens.
                 Err(_) => tracing::warn!("the execution outbox did not stop within the grace"),
+            }
+        }
+        if let Some(task) = self.retention {
+            match tokio::time::timeout(grace, task).await {
+                Ok(Ok(())) => tracing::info!("the retention sweep stopped"),
+                Ok(Err(error)) => tracing::error!(%error, "the retention sweep panicked"),
+                // Nothing is half-deleted: each pass is one transaction, and a
+                // pass that never ran is a pass the next one does.
+                Err(_) => tracing::warn!("the retention sweep did not stop within the grace"),
             }
         }
         for (role, task) in self.reactors {
@@ -153,6 +164,14 @@ pub fn spawn(
     }
 
     if config.role.works() {
+        // In the work role because the rule it has to keep is the outbox's: an
+        // execution whose facts have not reached the log is not forgotten. The
+        // loop that publishes them and the loop that forgets are then one
+        // process's problem rather than two processes' agreement.
+        tasks.retention = config
+            .workflow_retention
+            .map(|window| spawn_retention(Arc::clone(store), window, shutdown.clone()));
+
         tasks.outbox = Some(spawn_outbox(
             Arc::clone(store),
             Arc::clone(sink),
@@ -161,11 +180,15 @@ pub fn spawn(
             shutdown.clone(),
         ));
 
-        let executors = flow::executors(config, artifacts);
+        // One registry per address, merged: each executor's "no address is a
+        // working state" stays local to it, and a deployment may run managed
+        // Flow steps and no notebooks or the other way round.
+        let executors =
+            flow::executors(config, artifacts).merge(marimo::executors(config, artifacts));
         if executors.is_empty() {
             tracing::info!(
                 "the work role holds no runtime executor; nothing is claimed \
-                 (AIWATCHER_FLOW_URL)"
+                 (AIWATCHER_FLOW_URL, AIWATCHER_ML_PIPELINE_URL)"
             );
         } else {
             tasks.reactors.push((
@@ -269,6 +292,80 @@ fn spawn_outbox(
     })
 }
 
+/// How often a sweep looks, and how much it takes at once.
+///
+/// A retention window is days, so an hour is often enough that a store never
+/// carries more than an hour of history past its window, and rare enough that a
+/// deployment inside its window logs nothing. The batch bounds one transaction:
+/// turning retention on against a store with a year in it is many short
+/// deletes, not one that holds a table for a minute.
+const SWEEP_EVERY: Duration = Duration::from_secs(3_600);
+const SWEEP_BATCH: usize = 500;
+
+/// Forget finished executions past the retention window.
+///
+/// Section 43.25. The window is the deployment's; the three rules it keeps are
+/// [`WorkflowStore::prune`]'s, and none of them is age alone.
+fn spawn_retention(
+    store: Arc<dyn WorkflowStore>,
+    window: Duration,
+    shutdown: CancellationToken,
+) -> JoinHandle<()> {
+    tracing::info!(
+        days = window.as_secs() / 86_400,
+        "finished executions are forgotten after this long"
+    );
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                () = shutdown.cancelled() => {
+                    tracing::info!("the retention sweep is stopping");
+                    return;
+                }
+                // Before the first sweep as well as between them. Nothing is
+                // urgent here, and a process that restarts every few minutes
+                // must not sweep on every start.
+                () = tokio::time::sleep(SWEEP_EVERY) => {}
+            }
+            if let Err(error) = sweep(store.as_ref(), window, SWEEP_BATCH).await {
+                // The rows stay. A store that is down is a store that keeps
+                // its history, which is the failure worth having.
+                tracing::warn!(%error, "the retention sweep could not run");
+            }
+        }
+    })
+}
+
+/// Take batches until a pass comes back short of one.
+///
+/// Short means the store ran out of candidates rather than out of budget, which
+/// is the only signal here that does not need the store to count what it left —
+/// and it cannot spin, because a pass that deletes nothing is short by
+/// definition.
+async fn sweep(
+    store: &dyn WorkflowStore,
+    window: Duration,
+    batch: usize,
+) -> aiwatcher_execution::Result<()> {
+    let before = OffsetDateTime::now_utc() - window;
+    let mut total = Pruned::default();
+    loop {
+        let pass = store.prune(before, batch).await?;
+        total.executions += pass.executions;
+        total.attempts += pass.attempts;
+        if pass.executions < batch {
+            if !total.is_empty() {
+                tracing::info!(
+                    executions = total.executions,
+                    attempts = total.attempts,
+                    "forgot executions past the retention window"
+                );
+            }
+            return Ok(());
+        }
+    }
+}
+
 /// Send every pending row, in batches, until there are none.
 ///
 /// A loop rather than one batch: a backlog after a broker outage is worked
@@ -354,4 +451,116 @@ fn spawn_reactor<S: WorkflowStore + 'static>(
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use aiwatcher_core::{CausationId, CorrelationId, MessageId};
+    use aiwatcher_execution::store::memory::MemoryWorkflowStore;
+    use aiwatcher_execution::{
+        AppendRequest, ExecutionId, ExecutionMode, ExecutionOwner, ExpectedVersion,
+        MessageMetadata, PendingMessage, RunProjection, RunState, StateType, WorkflowCommand,
+        WorkflowMessage,
+    };
+
+    /// One finished execution, written straight into the store.
+    ///
+    /// A start decided through `decide` would do, and would put a plan, an
+    /// outbox row and three events in a test about a loop. What the loop reads
+    /// is the projection.
+    fn finished(execution: &ExecutionId) -> AppendRequest {
+        AppendRequest {
+            expected_version: ExpectedVersion::NoStream,
+            input: PendingMessage::input(
+                WorkflowMessage::Command(WorkflowCommand::PauseExecution),
+                MessageMetadata {
+                    schema_version: aiwatcher_execution::message::SCHEMA_VERSION,
+                    message_id: MessageId::new(format!("{execution}/only")),
+                    occurred_at: OffsetDateTime::UNIX_EPOCH,
+                    correlation_id: CorrelationId::new(execution.as_str()),
+                    causation_id: CausationId::new("test"),
+                    trace_id: None,
+                    span_id: None,
+                    step_id: None,
+                    attempt: None,
+                },
+            ),
+            outputs: Vec::new(),
+            projection: RunProjection {
+                execution_id: execution.clone(),
+                plan_id: String::new(),
+                definition_name: "swept".to_owned(),
+                owner: ExecutionOwner::Local,
+                mode: ExecutionMode::Compiled,
+                state: RunState::of(StateType::Completed),
+                requested_by: "a test".to_owned(),
+                steps: Vec::new(),
+                last_message_version: 1,
+                created_at: OffsetDateTime::UNIX_EPOCH,
+                started_at: None,
+                ended_at: None,
+            },
+            outbox: Vec::new(),
+            checkpoint: None,
+            attempts: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_sweep_takes_batches_until_one_comes_back_short() {
+        // The signal the loop stops on, and the only one available without the
+        // store counting what it left behind: a pass that filled its budget may
+        // have more waiting, and a pass that did not cannot.
+        let store = MemoryWorkflowStore::new();
+        for index in 0..5 {
+            let execution = ExecutionId::new(format!("sweep-{index}"));
+            store
+                .append(&execution, finished(&execution))
+                .await
+                .expect("a finished execution");
+        }
+
+        // A window of zero makes every write older than the cutoff, which is
+        // what lets this run in milliseconds rather than in a retention period.
+        sweep(&store, Duration::ZERO, 2)
+            .await
+            .expect("a sweep over five executions in batches of two");
+
+        for index in 0..5 {
+            let execution = ExecutionId::new(format!("sweep-{index}"));
+            assert!(
+                store
+                    .projection(&execution)
+                    .await
+                    .expect("reading it back")
+                    .is_none(),
+                "sweep-{index} survived a sweep that had budget left"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_sweep_over_a_store_inside_its_window_stops_at_once() {
+        let store = MemoryWorkflowStore::new();
+        let execution = ExecutionId::new("sweep-recent");
+        store
+            .append(&execution, finished(&execution))
+            .await
+            .expect("a finished execution");
+
+        sweep(&store, Duration::from_secs(86_400), 2)
+            .await
+            .expect("a sweep");
+
+        assert!(
+            store
+                .projection(&execution)
+                .await
+                .expect("reading it back")
+                .is_some(),
+            "forgot an execution that finished inside the window"
+        );
+    }
 }

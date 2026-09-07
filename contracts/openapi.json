@@ -2920,6 +2920,87 @@
         }
       }
     },
+    "/api/v1/curation-pipelines/{name}/revisions/{revision}/blocks/{block_id}/context": {
+      "get": {
+        "tags": [
+          "data-curation"
+        ],
+        "summary": "One authored block of one revision, as it would run.",
+        "description": "The revision is pinned in the path and never defaulted to the head: opening\na block of a saved pipeline means the pipeline as it was saved, and reading\nthe head instead would be the same answer for every revision.",
+        "operationId": "block_context",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The saved pipeline",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "revision",
+            "in": "path",
+            "description": "The immutable revision to read",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "block_id",
+            "in": "path",
+            "description": "A block on that revision's canvas",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContextSnapshot"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The revision does not compile; every reason is in `details`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/curations": {
       "get": {
         "tags": [
@@ -4428,6 +4509,478 @@
             }
           },
           "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/executions/{execution_id}/commands/cancel": {
+      "post": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "Stop a run, and everything it has not already dispatched.",
+        "operationId": "cancel_execution",
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "description": "The id a start returned",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunProjection"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The run is in no state to accept this",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/executions/{execution_id}/commands/pause": {
+      "post": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "Schedule nothing further until this run is resumed.",
+        "description": "What is already dispatched keeps running: an attempt is somebody else's\nprocess, and a pause that could reach into it would be a cancel wearing the\nwrong name.",
+        "operationId": "pause_execution",
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "description": "The id a start returned",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunProjection"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The run is in no state to accept this",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/executions/{execution_id}/commands/resume": {
+      "post": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "Let a paused run schedule again.",
+        "operationId": "resume_execution",
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "description": "The id a start returned",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunProjection"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The run is in no state to accept this",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/executions/{execution_id}/steps/{step_id}/commands/retry": {
+      "post": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "Take one step again, from the inputs and the code its plan pinned.",
+        "description": "A new attempt rather than a rewrite: the failed one stays in the stream with\nits error, which is what a waterfall draws and what a person reads to find\nout why this needed a second go.",
+        "operationId": "retry_step",
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "description": "The id a start returned",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "step_id",
+            "in": "path",
+            "description": "A step of that run's pinned plan",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunProjection"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The step is in no state to be retried",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/executions/{execution_id}/steps/{step_id}/context": {
+      "get": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "One step of one run, exactly as it was.",
+        "description": "Read from the stream rather than from the definition: the run pinned a plan,\nand the definition may have moved on several revisions since. That is the\ndifference between reopening a block and reopening *this* block.",
+        "operationId": "step_context",
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "description": "The id a start returned",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "step_id",
+            "in": "path",
+            "description": "A step of that run's pinned plan",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContextSnapshot"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/executions/{execution_id}/steps/{step_id}/input": {
+      "post": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "Answer the question a `HumanInput` step is waiting on.",
+        "operationId": "provide_input",
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "description": "The id a start returned",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "step_id",
+            "in": "path",
+            "description": "The step that asked",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProvideInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunProjection"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "That step is not waiting for this answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
             "description": "",
             "content": {
               "application/json": {
@@ -7599,6 +8152,25 @@
           }
         }
       },
+      "CachePolicy": {
+        "type": "string",
+        "description": "Whether a step may be answered from an earlier identical one.",
+        "enum": [
+          "never",
+          "by_content"
+        ]
+      },
+      "CancelBody": {
+        "type": "object",
+        "description": "A reason, for the one command that carries one.",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "description": "Recorded on the decision and read by whoever finds the run stopped.\nEmpty is allowed; a wrong reason would be worse than none."
+          }
+        },
+        "additionalProperties": false
+      },
       "CaseDelta": {
         "type": "object",
         "required": [
@@ -7898,6 +8470,86 @@
           },
           "retention": {
             "$ref": "#/components/schemas/RetentionPolicy"
+          }
+        }
+      },
+      "ContextAction": {
+        "type": "string",
+        "description": "Something a caller may do with a block, given what it is and where it got to.\n\nDeliberately **no hrefs**, which is where this departs from section 19's\nsketch. An action's address is either this API's own — which the generated\nclient already has — or an optional service's, and a service's address in a\nresponse body is the one thing every route here refuses to carry. What only\nthe server knows is *which* actions apply, and that is what this is.",
+        "enum": [
+          "validate",
+          "test",
+          "open_editor",
+          "retry",
+          "answer"
+        ]
+      },
+      "ContextSnapshot": {
+        "type": "object",
+        "description": "Everything needed to reopen one block as it was.",
+        "required": [
+          "context_id",
+          "definition_kind",
+          "definition_name",
+          "definition_revision",
+          "plan_id",
+          "step_id",
+          "runtime",
+          "allowed"
+        ],
+        "properties": {
+          "allowed": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContextAction"
+            }
+          },
+          "context_id": {
+            "type": "string",
+            "description": "Where this step's staged input, parameters and output live.\n\n`<execution>/<step>/<attempt>` for a run (16.2), and\n`<definition>@<revision>/<block>` for a revision. Keyed by context and\nnever by the notebook's name, so two pipelines editing one notebook do\nnot overwrite each other's rows."
+          },
+          "definition_kind": {
+            "$ref": "#/components/schemas/DefinitionKind"
+          },
+          "definition_name": {
+            "type": "string"
+          },
+          "definition_revision": {
+            "$ref": "#/components/schemas/DefinitionRevision",
+            "description": "The authored revision this was compiled from — what somebody saved."
+          },
+          "input_artifacts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ArtifactRef"
+            },
+            "description": "What this step read, resolved to the artifacts its parents produced.\nEmpty for a revision, because nothing has run."
+          },
+          "parameters": {
+            "type": "object",
+            "description": "Values bound when the execution was requested. Empty for a revision."
+          },
+          "plan_id": {
+            "$ref": "#/components/schemas/PlanId",
+            "description": "The compiled plan. For a revision context this is what the definition\ncompiles to *now*, which is not the `plan_id` of a run that pinned a\nwindow: a plan digests its resolved bounds, and a revision has none."
+          },
+          "runtime": {
+            "$ref": "#/components/schemas/RuntimeBinding",
+            "description": "The step exactly as the plan pinned it: the script beside its structured\nsource, or the notebook beside the digest it was saved against."
+          },
+          "state": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StepState",
+                "description": "Where the step got to, across every attempt. `None` for a revision."
+              }
+            ]
+          },
+          "step_id": {
+            "type": "string"
           }
         }
       },
@@ -8714,6 +9366,18 @@
             "type": "string"
           }
         }
+      },
+      "DefinitionKind": {
+        "type": "string",
+        "description": "What kind of definition a plan was compiled from.\n\nPart of a plan's identity, so a curation pipeline and an agent graph that\nhappened to compile to identical steps stay two plans. They have different\neditors, different permissions and different provenance.",
+        "enum": [
+          "curation_pipeline",
+          "workflow"
+        ]
+      },
+      "DefinitionRevision": {
+        "type": "string",
+        "description": "The immutable, content-addressed version of an authored definition.\n\nA newtype over the digest so that a function taking both a revision and a\n`plan_id` cannot be called with them the wrong way round — they are both\n64 hex characters and they mean different things."
       },
       "DimensionKind": {
         "type": "string",
@@ -10069,6 +10733,43 @@
           }
         }
       },
+      "ExecutionPlan": {
+        "type": "object",
+        "description": "The runtime-neutral graph an execution runs.\n\nImmutable. A run pins exactly one of these, so editing the definition while\na run is active creates a new revision and a new plan and changes nothing\nabout what is already running.",
+        "required": [
+          "plan_id",
+          "definition_kind",
+          "definition_name",
+          "revision",
+          "steps"
+        ],
+        "properties": {
+          "definition_kind": {
+            "$ref": "#/components/schemas/DefinitionKind"
+          },
+          "definition_name": {
+            "type": "string"
+          },
+          "edges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanEdge"
+            }
+          },
+          "plan_id": {
+            "$ref": "#/components/schemas/PlanId"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/DefinitionRevision"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanStep"
+            }
+          }
+        }
+      },
       "ExecutionStatus": {
         "type": "string",
         "description": "Where a whole traversal got to.",
@@ -10862,6 +11563,32 @@
           }
         }
       },
+      "ExternalWorkflowSpec": {
+        "type": "object",
+        "required": [
+          "engine",
+          "entity"
+        ],
+        "properties": {
+          "engine": {
+            "type": "string",
+            "description": "The engine this is delegated to, as configuration names it."
+          },
+          "entity": {
+            "type": "string",
+            "description": "Always version-pinned. An execution recorded against \"whatever was\ncurrent\" is not something anybody can repeat."
+          },
+          "inputs": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "FailureClass": {
         "type": "string",
         "description": "Why an attempt did not succeed, and therefore whether to try again.\n\nThe classification is the caller's claim about the error, exactly as\n`aiwatcher_jobs::after_failure` takes `retryable` rather than deciding it:\nan unreachable notebook runtime is worth coming back for and a Flow parse\nerror will not parse on the third attempt either.",
@@ -10958,6 +11685,74 @@
           }
         },
         "additionalProperties": false
+      },
+      "FlowSourceRef": {
+        "type": "object",
+        "description": "Where the rows come from, kept structured beside the generated script.\n\nA historical editor regenerates the query from *this*, never from the\npipeline's current head — which is the whole point: opening a step of a run\nfrom last week has to show what that run read.",
+        "required": [
+          "dataset"
+        ],
+        "properties": {
+          "arguments": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dataset": {
+            "type": "string"
+          },
+          "resolved_revision": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The dataset version this read resolved to, when it resolved to one."
+          },
+          "window": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResolvedWindow",
+                "description": "A moving window is not cacheable; a resolved one is. This is where the\ndifference is recorded."
+              }
+            ]
+          }
+        }
+      },
+      "FlowStepSpec": {
+        "type": "object",
+        "required": [
+          "script",
+          "source"
+        ],
+        "properties": {
+          "blocks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The authored block ids this one step covers, in order. The panel lights\nthem together from one `step.started`."
+          },
+          "script": {
+            "type": "string",
+            "description": "The complete query, compiled here rather than in the browser."
+          },
+          "source": {
+            "$ref": "#/components/schemas/FlowSourceRef"
+          }
+        }
       },
       "Geometry": {
         "oneOf": [
@@ -11415,6 +12210,29 @@
           }
         },
         "additionalProperties": false
+      },
+      "HumanInputSpec": {
+        "type": "object",
+        "required": [
+          "prompt",
+          "role"
+        ],
+        "properties": {
+          "choices": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "prompt": {
+            "type": "string",
+            "description": "What is being asked, in the words the person reads."
+          },
+          "role": {
+            "type": "string",
+            "description": "The role that may answer. Checked when the answer arrives, never here."
+          }
+        }
       },
       "Identity": {
         "type": "object",
@@ -12200,6 +13018,53 @@
           }
         }
       },
+      "InputBinding": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "An output of an earlier step, by name.",
+            "required": [
+              "step",
+              "output",
+              "from"
+            ],
+            "properties": {
+              "from": {
+                "type": "string",
+                "enum": [
+                  "step"
+                ]
+              },
+              "output": {
+                "type": "string"
+              },
+              "step": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A value bound when the execution was requested.",
+            "required": [
+              "name",
+              "from"
+            ],
+            "properties": {
+              "from": {
+                "type": "string",
+                "enum": [
+                  "parameter"
+                ]
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "Where one of a step's inputs comes from."
+      },
       "InputRequest": {
         "type": "object",
         "description": "What a step is waiting for somebody to answer.",
@@ -12622,6 +13487,32 @@
               "null"
             ],
             "description": "Where to send the browser to end the session at the provider too.\n`None` when the provider declares no `end_session_endpoint`, in which\ncase clearing the cookie is all a sign-out can do."
+          }
+        }
+      },
+      "MarimoStepSpec": {
+        "type": "object",
+        "required": [
+          "notebook",
+          "code_revision"
+        ],
+        "properties": {
+          "block": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The authored block this step came from, for the editor link."
+          },
+          "code_revision": {
+            "type": "string",
+            "description": "`sha256` of the notebook source this plan pins. A managed run pins code\nfirst; an editor test may use unsaved code and is marked ad hoc."
+          },
+          "notebook": {
+            "type": "string"
+          },
+          "params": {
+            "type": "object"
           }
         }
       },
@@ -13534,6 +14425,27 @@
           "ocr"
         ]
       },
+      "OutputDeclaration": {
+        "type": "object",
+        "required": [
+          "name",
+          "kind"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/ArtifactKind"
+          },
+          "name": {
+            "type": "string"
+          },
+          "schema_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "ParameterKind": {
         "type": "string",
         "description": "How a form should render one input.",
@@ -13656,6 +14568,65 @@
           "evaluation",
           "inference"
         ]
+      },
+      "PlanEdge": {
+        "type": "object",
+        "required": [
+          "from",
+          "to"
+        ],
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          }
+        }
+      },
+      "PlanId": {
+        "type": "string",
+        "description": "`sha256` of the canonical compiled plan."
+      },
+      "PlanStep": {
+        "type": "object",
+        "required": [
+          "id",
+          "runtime",
+          "timeout_seconds"
+        ],
+        "properties": {
+          "cache": {
+            "$ref": "#/components/schemas/CachePolicy"
+          },
+          "id": {
+            "type": "string"
+          },
+          "inputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InputBinding"
+            }
+          },
+          "outputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OutputDeclaration"
+            }
+          },
+          "retry": {
+            "$ref": "#/components/schemas/RetryPolicy"
+          },
+          "runtime": {
+            "$ref": "#/components/schemas/RuntimeBinding"
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Seconds. Per-runtime and explicit — never a global default, because the\nnumber that is generous for a Flow query is a hang for a notebook.",
+            "minimum": 0
+          }
+        }
       },
       "PolicyMode": {
         "type": "string",
@@ -14175,6 +15146,26 @@
           }
         }
       },
+      "ProvideInputBody": {
+        "type": "object",
+        "description": "The answer a `HumanInput` step asked for.",
+        "required": [
+          "attempt",
+          "response"
+        ],
+        "properties": {
+          "attempt": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Which attempt asked. Named by the caller rather than read from the\nstep's latest: an answer typed against a question that has since been\nretried is an answer to a question nobody is asking any more, and\nsilently applying it to the new attempt would record a human decision\nthat no human made.",
+            "minimum": 0
+          },
+          "response": {
+            "type": "object"
+          }
+        },
+        "additionalProperties": false
+      },
       "PublicAuthConfig": {
         "type": "object",
         "description": "What the panel is told before anybody has signed in.\n\nPublic on purpose, and it is the only route reachable unauthenticated\nbesides the health probes: a panel that cannot ask \"is there a login here,\nand what is it called\" has to guess, and guessing wrong means either a\nsign-in screen on an instance with no provider or an endless 401 loop on\none that has.",
@@ -14284,6 +15275,28 @@
             ],
             "format": "int64",
             "minimum": 0
+          }
+        }
+      },
+      "PublishDatasetSpec": {
+        "type": "object",
+        "required": [
+          "dataset",
+          "produced_by"
+        ],
+        "properties": {
+          "block": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dataset": {
+            "type": "string"
+          },
+          "produced_by": {
+            "type": "string",
+            "description": "`<pipeline name>@<revision>`, the authored revision — provenance, and\nnever part of a dataset version's identity."
           }
         }
       },
@@ -14400,6 +15413,26 @@
           },
           "dataset": {
             "$ref": "#/components/schemas/DatasetSummary"
+          }
+        }
+      },
+      "PythonTaskSpec": {
+        "type": "object",
+        "required": [
+          "task_ref",
+          "queue"
+        ],
+        "properties": {
+          "params": {
+            "type": "object"
+          },
+          "queue": {
+            "type": "string",
+            "description": "Which worker queue this is claimable on."
+          },
+          "task_ref": {
+            "type": "string",
+            "description": "`name@version`: the registered name and the pinned code version a worker\nmust match before it may claim an attempt."
           }
         }
       },
@@ -14996,6 +16029,24 @@
           }
         }
       },
+      "ResolvedWindow": {
+        "type": "object",
+        "description": "Exact bounds, in seconds since the epoch. A relative window resolved once,\nat compile time, so that a retry three hours later reads the same rows.",
+        "required": [
+          "from",
+          "to"
+        ],
+        "properties": {
+          "from": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "to": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "ResourceRequest": {
         "type": "object",
         "description": "What a package needs in order to run at all.\n\nDeclared so a scheduler can refuse rather than thrash. A model that needs\n24 GB of accelerator memory placed on a node with 16 does not fail at load\n— it fails at the first request under load, at which point the previous\nversion is already gone.",
@@ -15050,6 +16101,46 @@
           "ttl_days": {
             "type": "integer",
             "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "RetryPolicy": {
+        "type": "object",
+        "description": "How many times, and how far apart.\n\nThe defaults are section 26's: three attempts, 1 s / 5 s / 30 s. The delays\nare a list rather than a base and a multiplier so that a policy can be read\noff the plan without arithmetic, and so that a runtime whose useful backoff\nis not exponential can say so.\n\n# Two budgets, because there are two kinds of failure\n\n`max_attempts` counts attempts that **produced an answer**: the code ran and\nwas wrong, the query would not parse, the graph does not bind. Three is\nright for those, because the fourth will be just as wrong.\n\n`max_unavailable_attempts` counts attempts where nobody answered — the\nservice was down, the connection reset, the caller stopped waiting. Those\nsay nothing about the work, and spending the work's budget on them means a\nforty-second outage kills a run that would have succeeded a minute later.\nMeasured, not supposed: restarting the process with the query service down\nburned all three attempts and failed a chain whose Flow step was fine.\n\nThe two are counted separately off the attempt records the state already\nkeeps, so a run alternating between the two kinds is bounded by both.",
+        "required": [
+          "max_attempts",
+          "delays_seconds"
+        ],
+        "properties": {
+          "delays_seconds": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "description": "Seconds before attempt 2, 3, … . The last entry repeats."
+          },
+          "delays_seconds_unavailable": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            },
+            "description": "The same, for an attempt nobody answered. Longer, because what it is\nwaiting for is a service coming back rather than a flake passing."
+          },
+          "max_attempts": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Attempts that got an answer and the answer was wrong.",
+            "minimum": 0
+          },
+          "max_unavailable_attempts": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Attempts where the runtime never answered. Its own budget — see above.",
             "minimum": 0
           }
         }
@@ -15522,6 +16613,149 @@
           "python",
           "unspecified"
         ]
+      },
+      "RuntimeBinding": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FlowStepSpec",
+                "description": "One Flow PHP query. Its `blocks` is what makes three boxes on the canvas\nlight up together: Flow executes one pipeline, so a source and its\ntransforms compile to one step."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "runtime"
+                ],
+                "properties": {
+                  "runtime": {
+                    "type": "string",
+                    "enum": [
+                      "flow_php"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "One Flow PHP query. Its `blocks` is what makes three boxes on the canvas\nlight up together: Flow executes one pipeline, so a source and its\ntransforms compile to one step."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MarimoStepSpec",
+                "description": "One marimo notebook over the rows the step before it produced."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "runtime"
+                ],
+                "properties": {
+                  "runtime": {
+                    "type": "string",
+                    "enum": [
+                      "marimo"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "One marimo notebook over the rows the step before it produced."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PublishDatasetSpec",
+                "description": "A dataset version, written by the serve role. The one binding that runs\nin that process, and it executes nothing: it writes a\ncontent-addressed version."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "runtime"
+                ],
+                "properties": {
+                  "runtime": {
+                    "type": "string",
+                    "enum": [
+                      "publish_dataset"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "A dataset version, written by the serve role. The one binding that runs\nin that process, and it executes nothing: it writes a\ncontent-addressed version."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PythonTaskSpec",
+                "description": "A registered function a worker pulls and runs."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "runtime"
+                ],
+                "properties": {
+                  "runtime": {
+                    "type": "string",
+                    "enum": [
+                      "python_task"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "A registered function a worker pulls and runs."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HumanInputSpec",
+                "description": "Nobody runs it. It waits for somebody to answer."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "runtime"
+                ],
+                "properties": {
+                  "runtime": {
+                    "type": "string",
+                    "enum": [
+                      "human_input"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Nobody runs it. It waits for somebody to answer."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ExternalWorkflowSpec",
+                "description": "Handed whole to an external engine through `core::engine::WorkflowEngine`.\nThat engine owns its internal retries; this one records the reference."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "runtime"
+                ],
+                "properties": {
+                  "runtime": {
+                    "type": "string",
+                    "enum": [
+                      "external_workflow"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Handed whole to an external engine through `core::engine::WorkflowEngine`.\nThat engine owns its internal retries; this one records the reference."
+          }
+        ],
+        "description": "Where a step runs, and everything that runtime needs.\n\nSection 35 of `docs/PIPELINE_ARCHITECTURE.md` is the table this enum is the\ncode for: where each executes, who owns its retries, and what it may carry.\nEvery variant names a *binding* and its parameters and never a host — an\nexecutor's address is configuration, for ADR_0012's and ADR_0016's reason,\nunchanged. A plan naming its own endpoint would be a request-forgery\nprimitive posted by anything that can reach the API."
       },
       "RuntimeKind": {
         "type": "string",

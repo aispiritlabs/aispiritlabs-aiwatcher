@@ -13,7 +13,7 @@ use aiwatcher_execution::plan::{
 };
 use aiwatcher_execution::store::memory::MemoryWorkflowStore;
 use aiwatcher_execution::store::{
-    AppendOutcome, AppendRequest, StoreCapabilities, StreamSlice, WorkflowStore,
+    AppendOutcome, AppendRequest, Pruned, StoreCapabilities, StreamSlice, WorkflowStore,
 };
 use aiwatcher_execution::{
     AttemptKey, AttemptRow, ClaimFilter, ExecutionHandler, ExecutionId, ExecutionMode,
@@ -237,6 +237,14 @@ impl WorkflowStore for OneProcess {
     ) -> aiwatcher_execution::Result<()> {
         self.0.advance_checkpoint(processor, checkpoint).await
     }
+
+    async fn prune(
+        &self,
+        before: OffsetDateTime,
+        limit: usize,
+    ) -> aiwatcher_execution::Result<Pruned> {
+        self.0.prune(before, limit).await
+    }
 }
 
 #[tokio::test]
@@ -362,6 +370,14 @@ impl WorkflowStore for Contends {
         checkpoint: Checkpoint,
     ) -> aiwatcher_execution::Result<()> {
         self.inner.advance_checkpoint(processor, checkpoint).await
+    }
+
+    async fn prune(
+        &self,
+        before: OffsetDateTime,
+        limit: usize,
+    ) -> aiwatcher_execution::Result<Pruned> {
+        self.inner.prune(before, limit).await
     }
 }
 

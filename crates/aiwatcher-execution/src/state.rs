@@ -94,6 +94,35 @@ impl StateType {
             Self::Completed | Self::Failed | Self::Crashed | Self::Cancelled
         )
     }
+
+    /// Every state [`Self::is_terminal`] answers true for, as a list.
+    ///
+    /// So a store can ask a database the question the fold asks in memory
+    /// without writing a second list in SQL. The schema already spells one out
+    /// for `step_attempts`, and that one is about a *step*; this is about a
+    /// run, and a copy of it in a query is a copy that drifts the day a state
+    /// is added. `terminal_states_are_the_ones_is_terminal_answers_for` is what
+    /// keeps the two halves the same.
+    pub const TERMINAL: [Self; 4] = [
+        Self::Completed,
+        Self::Failed,
+        Self::Crashed,
+        Self::Cancelled,
+    ];
+
+    /// Every variant, for the tests that have to be exhaustive about them.
+    #[cfg(test)]
+    const EVERY: [Self; 9] = [
+        Self::Scheduled,
+        Self::Pending,
+        Self::Running,
+        Self::AwaitingInput,
+        Self::Completed,
+        Self::Failed,
+        Self::Crashed,
+        Self::Cancelled,
+        Self::Paused,
+    ];
 }
 
 /// A stable type, and the word a person reads.
@@ -491,6 +520,22 @@ impl Execution {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminal_states_are_the_ones_is_terminal_answers_for() {
+        // The retention sweep asks a database `state_type = any(TERMINAL)` and
+        // every other reader asks `is_terminal`. A state added to one and not
+        // the other is a run that is finished everywhere except where it is
+        // forgotten, which nothing would report.
+        for state in StateType::EVERY {
+            assert_eq!(
+                state.is_terminal(),
+                StateType::TERMINAL.contains(&state),
+                "{}",
+                state.as_str()
+            );
+        }
+    }
 
     #[test]
     fn an_owner_round_trips_through_the_string_a_row_holds() {

@@ -11,7 +11,7 @@
 //! exercising exactly the race the flag is about. `file` is the adapter that
 //! says no, because there the second process is real.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -26,7 +26,8 @@ use crate::message::{Direction, OutboxMessage, RecordedMessage, RunProjection};
 use crate::state::ExecutionId;
 
 use super::{
-    AppendOutcome, AppendRequest, ExpectedVersion, StoreCapabilities, StreamSlice, WorkflowStore,
+    AppendOutcome, AppendRequest, ExpectedVersion, Pruned, StoreCapabilities, StreamSlice,
+    WorkflowStore, prunable,
 };
 
 #[derive(Debug, Default)]
@@ -245,6 +246,57 @@ impl WorkflowStore for MemoryWorkflowStore {
             .insert(processor.to_owned(), checkpoint);
         Ok(())
     }
+
+    async fn prune(&self, before: OffsetDateTime, limit: usize) -> Result<Pruned> {
+        let mut inner = self.inner.lock().await;
+
+        // Which executions the outbox still speaks for. Collected before
+        // anything is chosen, because the answer has to be the same for every
+        // candidate in one pass.
+        let unpublished: HashSet<String> = inner
+            .outbox
+            .iter()
+            .filter(|row| row.published_at.is_none())
+            .map(|row| row.partition_key.clone())
+            .collect();
+
+        let doomed: Vec<String> = inner
+            .projections
+            .iter()
+            .filter(|(execution, run)| {
+                prunable(run, last_activity(inner.streams.get(*execution)), before)
+            })
+            .filter(|(execution, _)| !unpublished.contains(&format!("workflow:{execution}")))
+            .map(|(execution, _)| execution.clone())
+            .take(limit)
+            .collect();
+
+        let mut pruned = Pruned::default();
+        for execution in &doomed {
+            inner.streams.remove(execution);
+            inner.seen.remove(execution);
+            inner.projections.remove(execution);
+            pruned.executions += 1;
+        }
+        let doomed: HashSet<&String> = doomed.iter().collect();
+        let before_count = inner.attempts.len();
+        inner
+            .attempts
+            .retain(|key, _| !doomed.contains(&key.execution_id.to_string()));
+        pruned.attempts = before_count - inner.attempts.len();
+        Ok(pruned)
+    }
+}
+
+/// When this store last wrote anything about an execution.
+///
+/// The epoch for a stream that is not there, which is prunable by every window
+/// — a projection with no stream behind it is the half-state a crash between
+/// the two writes leaves, and keeping it forever is how it becomes permanent.
+fn last_activity(stream: Option<&Vec<RecordedMessage>>) -> OffsetDateTime {
+    stream
+        .and_then(|messages| messages.last())
+        .map_or(OffsetDateTime::UNIX_EPOCH, |message| message.recorded_at)
 }
 
 /// The messages one decision produced, from a loaded slice — used by the

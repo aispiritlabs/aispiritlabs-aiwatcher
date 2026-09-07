@@ -74,6 +74,27 @@ spec:
             matchLabels:
               {{- include "aiwatcher.selectorLabels" . | nindent 14 }}
               app.kubernetes.io/component: panel
+        {{- if ne .Values.execution.store "none" }}
+        # The other client, and the one that is easy to forget: a managed
+        # `flow_php` step is aiwatcher reaching this service directly, not the
+        # panel proxying a person's query. Without this the reactor's every
+        # attempt is a refused connection, which the retry budget reads as a
+        # transient outage and spends ten attempts on.
+        #
+        # Which pod that is depends on the role split, so both are listed: the
+        # combined process reaches Flow from `server`, and a split one reaches
+        # it only from `worker` — the whole point of splitting.
+        - podSelector:
+            matchLabels:
+              {{- include "aiwatcher.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: server
+        {{- if .Values.execution.splitRoles }}
+        - podSelector:
+            matchLabels:
+              {{- include "aiwatcher.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: worker
+        {{- end }}
+        {{- end }}
       ports:
         - { protocol: TCP, port: 8081 }
 {{- end }}
@@ -100,8 +121,46 @@ spec:
             matchLabels:
               {{- include "aiwatcher.selectorLabels" . | nindent 14 }}
               app.kubernetes.io/component: server
+        {{- if .Values.execution.splitRoles }}
+        - podSelector:
+            matchLabels:
+              {{- include "aiwatcher.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: worker
+        {{- end }}
       ports:
         - { protocol: TCP, port: 9000 }
+{{- end }}
+{{- if eq .Values.postgresql.mode "install" }}
+---
+# Narrow, for the object store's reason and one more: this database holds the
+# *explanation* of every managed run, which is the one thing here that no fold
+# over the event log can reconstruct. Its only client is the server.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-postgres-ingress
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "aiwatcher.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: postgres
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "aiwatcher.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: server
+        {{- if .Values.execution.splitRoles }}
+        - podSelector:
+            matchLabels:
+              {{- include "aiwatcher.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: worker
+        {{- end }}
+      ports:
+        - { protocol: TCP, port: 5432 }
 {{- end }}
 {{- end }}
 
@@ -130,6 +189,7 @@ lowercase — and `promptStore` is not.
   (dict "key" "victoriametrics" "name" "victoriametrics" "port" 8428 "client" "collector" "flag" $.Values.networkPolicy.allowEgressToExternalVictoriaMetrics "cfg" $.Values.victoriametrics)
   (dict "key" "victoriatraces"  "name" "victoriatraces"  "port" 10428 "client" "collector" "flag" $.Values.networkPolicy.allowEgressToExternalVictoriaTraces "cfg" $.Values.victoriatraces)
   (dict "key" "promptStore"     "name" "prompt-store"    "port" 9000  "client" "server"    "flag" $.Values.networkPolicy.allowEgressToExternalPromptStore "cfg" $.Values.promptStore)
+  (dict "key" "postgresql"      "name" "workflow-store"  "port" (default 5432 $.Values.postgresql.external.port) "client" "server"    "flag" $.Values.networkPolicy.allowEgressToExternalWorkflowStore "cfg" $.Values.postgresql)
 }}
 {{- range $a := $attachments }}
 {{- if and $a.flag (eq $a.cfg.mode "external") }}
@@ -161,6 +221,13 @@ spec:
             matchLabels:
               {{- include "aiwatcher.selectorLabels" $ | nindent 14 }}
               app.kubernetes.io/component: {{ $a.client }}
+        {{- if and $.Values.execution.splitRoles (eq $a.client "server") }}
+        # A split release reaches an external store from the worker as well.
+        - podSelector:
+            matchLabels:
+              {{- include "aiwatcher.selectorLabels" $ | nindent 14 }}
+              app.kubernetes.io/component: worker
+        {{- end }}
       ports:
         - { protocol: TCP, port: {{ $a.port }} }
 {{- end }}

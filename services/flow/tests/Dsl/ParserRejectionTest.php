@@ -50,6 +50,24 @@ final class ParserRejectionTest extends TestCase
             "data_frame()->read(default)->withEntry('x', shell_exec('id'))",
         ];
         yield 'a method that is not a pipeline step' => ['data_frame()->getIterator()'];
+        // Flow's own two callable-taking functions. What a query may name is
+        // derived from signatures rather than listed, so these prove the
+        // derivation is what refuses them — not an oversight somebody could
+        // fix by adding a name.
+        // Written without a second argument on purpose: `call('system', [])`
+        // is refused by the lexer for the `[`, which would make this case pass
+        // whatever the admission rules said.
+        yield "Flow's call(), which takes a callable" => [
+            "data_frame()->read(default)->withEntry('x', call('system'))",
+        ];
+        yield "Flow's to_callable()" => ["data_frame()->read(default)->withEntry('x', to_callable('system'))"];
+        // A query composes values. The catalog decides what may be read and
+        // write() decides where rows go, so Flow's own I/O constructors are
+        // outside the admitted categories however harmless their names look.
+        yield 'a sink that would write a file' => ["data_frame()->read(default)->write(to_csv('/tmp/x.csv'))"];
+        yield 'an extractor that would read a file' => [
+            "data_frame()->read(default)->withEntry('x', from_parquet('/etc/passwd'))",
+        ];
         yield 'phpinfo' => ['data_frame()->read(default)->withEntry(\'x\', phpinfo())'];
     }
 

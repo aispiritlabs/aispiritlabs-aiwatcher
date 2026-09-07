@@ -36,7 +36,7 @@ use aiwatcher_core::prompts::ObjectStore;
 use aiwatcher_core::{ArtifactKind, ArtifactRef};
 use aiwatcher_execution::{ActivityError, FailureClass};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 /// The key prefix every step result lives under, beside the five registries.
 pub const PREFIX: &str = "artifacts";
@@ -250,8 +250,79 @@ fn store_error(error: aiwatcher_core::ports::PortError) -> ActivityError {
     }
 }
 
+/// How much of a result stays inline on the completion event.
+///
+/// Far below `MAX_INLINE_RESULT_BYTES`, and deliberately: what rides the
+/// workflow stream is a *control value* somebody reads on a canvas, and the
+/// rows are one `object://` away. A preview sized at the message limit would
+/// be a stream that grows with the corpus.
+pub const PREVIEW_ROWS: usize = 5;
+pub const PREVIEW_BYTES: usize = 8 * 1024;
+
+/// The bounded control value that rides the completion event.
+pub fn preview(columns: &[String], rows: &Rows, took_ms: Option<u64>) -> Value {
+    let mut sample = Vec::new();
+    let mut budget = PREVIEW_BYTES;
+    for row in rows.iter().take(PREVIEW_ROWS) {
+        let encoded = serde_json::to_value(row).unwrap_or(Value::Null);
+        let size = encoded.to_string().len();
+        if size > budget {
+            break;
+        }
+        budget -= size;
+        sample.push(encoded);
+    }
+    json!({
+        "columns": columns,
+        "rows": rows.len(),
+        "preview": sample,
+        "took_ms": took_ms,
+    })
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_preview_is_a_control_value_and_never_the_rows() {
+        // What rides the workflow stream is what somebody reads on a canvas.
+        // The rows are one `object://` away, and a preview sized at the
+        // message limit would be a stream that grows with the corpus.
+        let rows: Rows = (0..500)
+            .map(|n| {
+                std::collections::BTreeMap::from([(
+                    "text".to_owned(),
+                    Value::String("x".repeat(200) + &n.to_string()),
+                )])
+            })
+            .collect();
+        let preview = preview(&["text".to_owned()], &rows, Some(12));
+
+        assert_eq!(preview["rows"], 500, "the count is the whole table's");
+        assert_eq!(
+            preview["preview"].as_array().expect("an array").len(),
+            PREVIEW_ROWS,
+            "and the sample is not"
+        );
+        assert!(preview.to_string().len() < PREVIEW_BYTES * 2);
+    }
+
+    #[test]
+    fn a_preview_stops_at_its_byte_budget_before_its_row_budget() {
+        let rows: Rows = (0..PREVIEW_ROWS)
+            .map(|_| {
+                std::collections::BTreeMap::from([(
+                    "text".to_owned(),
+                    Value::String("x".repeat(PREVIEW_BYTES)),
+                )])
+            })
+            .collect();
+        let preview = preview(&["text".to_owned()], &rows, None);
+        assert!(
+            preview["preview"].as_array().expect("an array").len() < PREVIEW_ROWS,
+            "one row over the budget is one row too many"
+        );
+    }
+
     use aiwatcher_prompts::adapters::memory::MemoryObjectStore;
 
     use super::*;

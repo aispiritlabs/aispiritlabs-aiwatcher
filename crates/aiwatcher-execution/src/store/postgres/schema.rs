@@ -28,7 +28,10 @@ use crate::Result;
 const ADVISORY_LOCK: i64 = 0x00A1_0025;
 
 /// Every schema file, in order, with the version it records.
-const MIGRATIONS: &[(i64, &str)] = &[(1, include_str!("../../../migrations/0001_execution.sql"))];
+const MIGRATIONS: &[(i64, &str)] = &[
+    (1, include_str!("../../../migrations/0001_execution.sql")),
+    (2, include_str!("../../../migrations/0002_retention.sql")),
+];
 
 /// Bring the database up to the schema this build expects.
 ///

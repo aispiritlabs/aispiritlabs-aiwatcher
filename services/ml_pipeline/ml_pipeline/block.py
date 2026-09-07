@@ -46,6 +46,22 @@ DATA_VARIABLE = "AIWATCHER_ML_PIPELINE_DATA"
 #: notebook with configuration attached to it.
 OUTPUT = "output"
 
+#: How a notebook says it does not answer the same thing twice.
+#:
+#: A managed chain caches a notebook step by the rows it read, the parameters
+#: it was given and the revision it pinned — which is right for a transform and
+#: wrong for a notebook that reads the clock, draws a random sample or asks a
+#: model. Nothing can detect the difference from outside: this is arbitrary
+#: Python, and the only party that knows is the notebook.
+#:
+#: So it declares it, the same way it declares its output::
+#:
+#:     deterministic = False
+#:
+#: Absent means `True`, because a curation block normally is one and a default
+#: that turned caching off would make every chain pay for the exceptions.
+DETERMINISTIC = "deterministic"
+
 
 @dataclass(frozen=True)
 class Block:

@@ -148,7 +148,7 @@ Crates, in dependency order. A crate may only depend on ones above it.
 | `aiwatcher-conversations` | Governed conversation training data: the `turn` contract, consent and retention, the **encrypted** archive, the human review gate, and the resumable export job that freezes a corpus. The one authored store that is off by default, whose content is sealed, and whose deletions delete. Sliced by noun: `turn`, `policy`, `redaction`, `review`, `archive/` (the store and its retention clock, `crypt` beneath it), `export/` (the job, `format` beneath it). `registry` is the facade and the only public door; `store` is the private key layout. |
 | `aiwatcher-training` | Training runs and the model versions they produce. The one registry here whose contents never came from the event log: a run is a record that grows in place, and a promotion is refused without a held-out score. `package` is what a serving runtime is handed — the runtime, the entry point, the shapes, and every artifact with its digest (ADR_0023). |
 | `aiwatcher-datasets` | Curation recipes, the dataset versions they produce, and the **block pipelines** of ADR_0024 — a chain of source, transform, notebook and view, refused as a whole with every problem at once. Nothing here executes anything; the panel drives the chain because the engines are three different systems. |
-| `aiwatcher-execution` | Owned execution (ADR_0025, ADR_0026): the compiled `ExecutionPlan` and its `plan_id`, the states, the attempts, the pure `decide`/`evolve`, the cache key, the compiler from ADR_0024's blocks, the atomic command handler, the claim table, the fact encoder and the outbox publisher. Three ports: `WorkflowStore` (`memory | file | postgres`, the last behind a feature so `sqlx` is out of every build that does not ask for it — the shape `laser` has in `aiwatcher-bus`), `ActivityExecutor` (what a reactor does with a claimed attempt) and `ArtifactCatalog` (metadata, lineage, the cache index). Executes nothing itself, and holds no second copy of `aiwatcher-jobs`' rules — it calls them. |
+| `aiwatcher-execution` | Owned execution (ADR_0025, ADR_0026): the compiled `ExecutionPlan` and its `plan_id`, the states, the attempts, the pure `decide`/`evolve`, the cache key, the compiler from ADR_0024's blocks, the atomic command handler, the claim table, the `ContextSnapshot` that reopens a block, the fact encoder and the outbox publisher. Three ports: `WorkflowStore` (`memory | file | postgres`, the last behind a feature so `sqlx` is out of every build that does not ask for it — the shape `laser` has in `aiwatcher-bus`), `ActivityExecutor` (what a reactor does with a claimed attempt) and `ArtifactCatalog` (metadata, lineage, the cache index). Executes nothing itself, and holds no second copy of `aiwatcher-jobs`' rules — it calls them. |
 | `aiwatcher-runner` | The workflow rerun dispatcher: one HTTP POST to one configured endpoint, behind `core::ports::WorkflowRunner`. |
 | `aiwatcher-pipeline` | Pipeline engines behind `core::engine::WorkflowEngine`: the orchestrator's launchable catalog, the inputs each entry declares, and starting one. Flyte 2 over its `/api/v1/` gateway, plus the literal encoder that binds a form's JSON to Flyte's declared types. With the runner, the second and last thing here that asks another system to do work. |
 | `aiwatcher-auth` | Single sign-on: OIDC discovery, a JWKS cache, the authorization-code flow with PKCE, HMAC-signed session cookies, authentik's forward-auth headers, and the group-to-role mapping. Knows nothing about axum. |
@@ -667,10 +667,16 @@ what runs a real graph.
   **Recipe** view is ADR_0014's single-script editor, still the right tool when
   the whole curation is one query.
 - `data-curation` is also the one area with a *managed* path beside its ad-hoc
-  one, and only the server has it: `POST /api/v1/executions` compiles a saved
-  pipeline and runs it, and the browser may close (ADR_0025). No panel code
-  calls it yet — Phase 7 — so the Pipeline view still drives a chain itself, and
-  that path stays either way for validation and an explicit editor test.
+  one: **Run on the server** saves the revision, calls `POST /api/v1/executions`
+  and the browser may close (ADR_0025). It follows that run with the stream that
+  already exists — `openWorkflowStream`, because a managed run's facts carry the
+  execution as their `workflow_run_id` — and the stream is only the *signal*:
+  every frame re-reads `GET /executions/{id}`, whose projection was written in
+  the same transaction as the decision. Nothing here parses a frame's payload,
+  and the waterfall is a link to the Workflows view rather than a second
+  drawing of one run. The ad-hoc path stays, because a preview and a block at a
+  time are what an editor needs; the two empty states say which of the two ran,
+  since "nothing run yet" under a card reading `completed` is a contradiction.
 - `annotations` is the one area that draws. Its canvas puts an `<img>` and an
   `<svg>` in one transformed container, both sized to the image's *natural*
   pixels, so SVG user units are image coordinates and no shape ever carries a
@@ -714,6 +720,26 @@ what runs a real graph.
   hears about it, and the step sits `pending` behind a lease nothing releases.
   It names the execution, the step, the attempt and which of the two facts it
   is. Section 43.10.
+- **Never derive a command's message id without the run's version.** The same
+  rule, arriving from the other side. `execution + command name` makes a
+  double-click idempotent and makes a Pause *after* a Resume a redelivery of
+  the first Pause — accepted, deduplicated, and the run keeps going with a
+  success on the wire. `RunProjection::last_message_version` is the
+  discriminator. Section 43.20.
+- **Never list an action whose command would be refused.**
+  `ContextSnapshot::allowed` carries `Retry` only from `Failed` or `Crashed`
+  and not while the run is cancelling, and `Answer` only while a step actually
+  holds a question — each mirroring `decide`'s own precondition. An action
+  offered where the command 409s is a button that does not work, which is worse
+  than an absent one. Cancel, pause and resume are not there at all: they are
+  done to a run, and that is a block's context.
+- **Never build a second live view of one run.** ADR_0026 puts a managed run's
+  facts on the log carrying the execution as `workflow_run_id`, and
+  `/api/v1/workflow-executions/{id}/stream` scopes by that field — so a managed
+  execution has been streamable since the first one ran. Section 20's
+  `/executions/{id}/stream` is struck rather than built, and
+  `every_fact_a_managed_run_publishes_is_reachable_by_the_execution_id` is what
+  keeps the reason true. Section 43.21.
 - **Never split the binary in two without sharing all three backends.** The
   workflow store (`postgres`), the log the outbox publishes to and the projector
   folds (`laser`), and the object store one role writes a step's result into for
@@ -776,6 +802,25 @@ what runs a real graph.
   processes, and a workflow stream has a decider, a reactor and a worker racing
   to append — so a second process is refused at `open` rather than allowed to
   interleave writes that each look fine alone.
+- **Never run a notebook a plan did not pin.** The revision is checked against
+  the runtime *before* anything executes and against what actually ran
+  *after* — the first so drift costs nothing, the second so a notebook saved
+  between those two moments cannot be recorded as the pinned one. `UserCode`,
+  so it is not retried, and the message carries both revisions. A cache *hit*
+  re-checks nothing, and that is correct: the key holds the pinned revision, so
+  the stored rows came from it whatever the file says now. Section 43.24.
+- **Never let a staged file be keyed by the notebook alone.** Two pipelines
+  using one notebook then overwrite each other's rows, and a block that passed
+  its preview reads somebody else's table on the next one. A run stages under
+  its context and *then* points `latest` at it — that order, because the live
+  app knows only a notebook's name and follows the pointer. The context is
+  hashed into a directory name rather than sanitised: it holds separators.
+- **Never let a runtime's own knowledge be assumed by the caller.** Whether a
+  Flow query named `now()`, whether a notebook samples or asks a model — only
+  the thing that ran it knows, and both report it on the answer for
+  `ActivityResult::cacheable` to read. A notebook says `deterministic = False`
+  beside its `output`; absent means true, because a curation block normally is
+  one and the other default would make every chain pay for the exceptions.
 - **Never let a plan name its own executor's address.** `AIWATCHER_FLOW_URL`,
   `AIWATCHER_ML_PIPELINE_URL`, `AIWATCHER_FLYTE_ENDPOINT`, the pod's service
   account. A `PlanStep` names a binding and its parameters, never a host —
@@ -811,6 +856,30 @@ what runs a real graph.
   every compiled Flow step for a phase while `cache_key` was called only by its
   own tests — a claim the code did not keep, and a latent unsoundness no test
   could catch because no caller existed. Wiring it is what found the bug.
+- **Never forget a run the outbox is still speaking for.** A pending row is a
+  fact that has not reached the log; deleting the decision behind it leaves the
+  publisher a message with no explanation and the log a gap nothing records.
+  `aiwatcher_jobs::ORDERING` in a sixth place, and the second half of
+  `store::prunable`'s candidate test. Section 43.25.
+- **Never let retention decide a run has died.** `prune` takes terminal
+  executions only. A run with no end is `Running` and age tells an OOM kill from
+  a twenty-minute think in neither direction — the projector's rule for agent
+  runs, in a second store. And it deletes the whole execution together: a kept
+  projection whose stream is gone is a run the panel lists and cannot open.
+- **Never delete an execution's history by default.**
+  `AIWATCHER_WORKFLOW_RETENTION_DAYS` is unset unless a deployment says
+  otherwise, and `0` means keep rather than delete. The stream is the
+  *explanation* of a run and the one thing the event log does not carry, so this
+  is the only copy — the conversation archive's default, for the same reason and
+  in a different store. The window also has a floor nothing in the crate can
+  check: the inbox goes with the stream, so it must outlast the log's own
+  retention or a redelivery is decided again instead of recognised.
+- **Never let one adapter decide what "finished long enough ago" means.**
+  `store::prunable` is the rule; `last_activity` is the only thing an adapter
+  supplies, from whatever it already holds — the last recorded message, a file's
+  modification time, an indexed column. A property proving a running execution
+  survives would otherwise prove it about one adapter. The same reason
+  `StateType::TERMINAL` exists rather than a list of states written out in SQL.
 - **Never keep an outbox row the log has accepted.** `mark_published` deletes.
   The fact is on the event log, which is the durable copy and the one every fold
   reads; a second copy answers no question and grows with every step of every
@@ -832,6 +901,17 @@ what runs a real graph.
   hand it what a notebook produced. A chain that tried would silently run the
   transform against the *source* again and produce something else. The registry
   refuses it by name — the message says why rather than "invalid".
+- **Never let the panel reconstruct a block's context.** Every part of the
+  answer is somewhere the browser is not — the pinned plan, the artifacts a
+  parent produced, the attempt a staging key is named after — so a canvas that
+  guessed would guess from the draft on screen, which is certainly not what an
+  old run read. `ContextSnapshot` is the answer, and it carries the plan's own
+  `RuntimeBinding` rather than a second description of it. Section 19, 43.19.
+- **Never put a service's address in a context's actions.** `allowed` says
+  *which* actions apply, because only the server knows the state; where they
+  live is the panel's own routing or the generated client's. And an action whose
+  route does not exist is not listed — a retry nobody can perform reads as a
+  feature.
 - **Never re-implement a pipeline's rules in the panel.** `aiwatcher-datasets`
   decides whether blocks form a runnable chain and returns every problem as
   `details` on a 422; the canvas renders those lines. `lib/pipeline.ts`'s
@@ -1317,6 +1397,27 @@ what runs a real graph.
   a `match` branch, is never called by string, and there is no `eval` anywhere in
   the service. `tests/Dsl/ParserRejectionTest.php` is the list of things that
   must keep failing; adding to it is cheap and is the point.
+- **Never enumerate what a signature can decide.** ADR_0008's rule is about
+  *dispatch*: a name from a query may select a key, never become a callable. A
+  hand-written list of 37 names was an enumeration on top of that rule, and an
+  enumeration is a queue — Flow ships 239. `Dsl\Registry` derives the
+  vocabulary by return-type namespace, refuses any function with a
+  `callable`/`Closure` parameter, and keeps `DECLINED`. Adding a name by hand
+  now means the rule did not cover it, which is a reason to look at the rule.
+- **Never let a query name something that opens a source or writes a sink.**
+  The catalog decides what may be read and `write()` decides where rows go, so
+  `Flow\ETL\Loader`, `Extractor` and `Filesystem` are outside the admitted
+  return types. `to_csv('/etc/...')` in a service with no authentication is a
+  file write, and its name looks as harmless as any other.
+- **Never decide admission by loading a class.** `class_exists()` autoloads,
+  and `Flow\ETL\Function\Uuid` throws at load without `ramsey/uuid`. The
+  return type is matched as a **string**, or the service fails to start over an
+  optional dependency of a function nobody called.
+- **Never remember a result the query service says is not deterministic.**
+  `now()`, `uuid_v4()` and `random_string()` are honest work in the Query tab
+  and a wrong cache entry in a managed step. The answer carries `deterministic`
+  beside `window_applied`, for the same reason: only the service knows what its
+  query resolved to. Section 43.22.
 - **Never offer Flow's loose comparisons in the whitelist.** In Flow 0.43
   `equals` matches null against anything and `notEquals` drops nulls. Every
   column in every dataset is nullable, so both silently return the wrong rows.
@@ -1381,6 +1482,19 @@ what runs a real graph.
   are the exception and are not one: `PromptVersionId::of` has to agree byte for
   byte with `hashlib.sha256` on the producer side, unlike `ids::derive`, whose
   only requirement is that every aiwatcher agrees with every other one.
+- **Never add a runtime a managed step reaches without opening the path to it.**
+  The Flow service's policy admitted the panel and nothing else, which was right
+  while the only client proxied a person's query — a managed `flow_php` step is
+  aiwatcher reaching that service directly, and the refusal arrives as a refused
+  connection the retry budget reads as a transient outage and spends ten
+  attempts on. Whichever pod holds the reactor is the one to admit: `server`
+  combined, `worker` split. Section 43.25.
+- **Never reuse a database the cluster happens to be running.**
+  `detect-stack.py` reports PostgreSQL and derives nothing, which is the object
+  store's rule with a sharper reason: what this release would do with a database
+  it found is *create tables in it*, and which database, whose credentials and
+  whether that role may create a schema are none of them discoverable from a
+  matching image.
 - **Never attach a NetworkPolicy ingress rule to an object store nothing else
   fences.** The general rule below applies with a sharper edge here: planner's
   RustFS serves `planner-web`, `planner-import-api` and `planner-mlflow`, and a

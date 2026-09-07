@@ -180,3 +180,35 @@ def test_a_notebook_that_raises_comes_back_as_its_traceback(scratch: Config) -> 
 
     assert "exited with status" in str(failure.value)
     assert "RuntimeError" in failure.value.stderr
+
+
+def test_a_notebook_that_answers_the_same_thing_twice_says_nothing_and_is_believed(
+    scratch: Config,
+) -> None:
+    """The default, and it is the common case: a curation block is a transform."""
+    NotebookDirectory(root=scratch.notebooks).save_notebook("plain", PASSTHROUGH)
+
+    assert run(scratch, "plain", [{"text": "a"}], {}).deterministic
+
+
+def test_a_notebook_that_reads_the_clock_says_so_and_is_not_cached(scratch: Config) -> None:
+    """The escape hatch. A managed chain caches this step by the rows it read,
+    the parameters it was given and the revision it pinned — which is right for
+    a transform and wrong for a notebook that samples, asks a model or reads
+    the time. Nothing outside the notebook can tell those apart, so it says."""
+    sampling = PASSTHROUGH.replace(
+        """@app.cell
+def _(rows):
+    output = [{**row, "seen": True} for row in rows]
+    return (output,)""",
+        """@app.cell
+def _(rows):
+    import random
+
+    output = [{**row, "sample": random.random()} for row in rows]
+    deterministic = False
+    return deterministic, output""",
+    )
+    NotebookDirectory(root=scratch.notebooks).save_notebook("sampling", sampling)
+
+    assert run(scratch, "sampling", [{"text": "a"}], {}).deterministic is False

@@ -15,7 +15,7 @@ is left for you.
 
 ## What gets installed, and what does not
 
-The chart can install seven things. Four of them are things a cluster may
+The chart can install eight things. Five of them are things a cluster may
 already run:
 
 | Component | Default | Detected? |
@@ -27,6 +27,7 @@ already run:
 | VictoriaTraces | installed | yes → `mode: external` |
 | VictoriaMetrics | installed | yes → `mode: external` |
 | RustFS (the prompt registry's store) | installed | detected, but **never** reused automatically |
+| PostgreSQL (the workflow store) | **off** | detected, but **never** reused automatically |
 | Grafana | never installed | yes → the datasource ConfigMap is emitted |
 
 Detection is `deploy/scripts/detect-stack.py`. Run it on its own to see what a
@@ -43,6 +44,7 @@ cluster: vps
   victoriatraces   absent    no pod runs a matching image
   collector        absent    no pod runs a matching image
   grafana          present   http://planner-grafana.planner.svc.cluster.local:3000
+  postgres         present   http://planner-postgres.planner.svc.cluster.local:5432
   objectstore      present   http://planner-rustfs-svc.planner.svc.cluster.local:9000
 ```
 
@@ -140,6 +142,106 @@ aiwatcher only" — which would cut off whoever else was writing to that bucket.
 `detect-stack.py` reports whether the store is fenced; only then does
 `networkPolicy.allowEgressToExternalPromptStore: true` grant a path rather than
 take three away.
+
+---
+
+## Managed execution
+
+Off by default. With `execution.store: none` the `/api/v1/executions` routes
+answer 501 naming the variable, and the panel's Pipeline view still drives a
+curation chain from the browser — which is what it did before managed runs
+existed and what an editor wants anyway (ADR_0025). Turning it on gives you a
+chain that runs on the server: the browser asks for a run and may then close.
+
+```yaml
+execution:
+  store: postgres
+  retentionDays: 90
+  flowUrl: ""                # derived from flow.enabled
+  mlPipelineUrl: ""          # no default; see below
+
+postgresql:
+  mode: install
+```
+
+**Which store.** `file` is one directory of append-only files and holds *one
+process* — it takes a lock at start-up and refuses a second by name, so it is
+correct for a single replica and can never become a production store by
+omission. The chart refuses it on an `emptyDir`, because there every managed run
+is forgotten on a restart, including one that was still going. `postgres` is
+what a deployment uses.
+
+**Retention.** `retentionDays: 0` — the default — keeps everything. The stream
+is the *explanation* of a run, and it is the one thing the event log does not
+carry, so this is the only copy of it; a release that started deleting it on an
+upgrade would be deleting something nothing else holds. When you do set it, set
+it **longer than the event log's own retention**: the log is what redelivers a
+message, and the inbox that recognises a redelivery is deleted with the stream.
+The sweep runs in the work role, takes terminal executions only, and never takes
+one whose facts the outbox has not yet published.
+
+**The database is never reused automatically.** The object store's reason with a
+sharper edge: what this release would do with a database it found is *create
+tables in it*. Which database, under whose credentials, and whether that role
+may create a schema are none of them discoverable from a matching image.
+Detection reports one and prints the block you would need:
+
+```yaml
+execution:
+  store: postgres
+postgresql:
+  mode: external
+  database: aiwatcher
+  username: aiwatcher          # a role that may create tables
+  external:
+    host: postgres.data.svc.cluster.local
+    port: 5432
+  credentialsSecret:
+    name: aiwatcher-db
+    passwordKey: password
+```
+
+The same NetworkPolicy warning applies, and harder: a database is the backend
+most likely to already have other clients, so
+`networkPolicy.allowEgressToExternalWorkflowStore` is worth turning on only when
+`detect-stack.py` says something already fences it.
+
+**Where the steps run.** A managed `flow_php` step is the *server* reaching the
+Flow service directly, not the panel proxying a person's query — so
+`flow.enabled: true` is enough and the chart opens that path in the policy for
+you. A `marimo` notebook step has no default and no template: that service runs
+notebook code with no sandbox and no authentication, so it is a development
+surface bound to localhost, and a cluster that wants notebook blocks has to name
+one deliberately in `execution.mlPipelineUrl`. A process with no address for a
+runtime registers no executor for it and therefore claims none of its work —
+absence is a working state, not a failure.
+
+### Splitting the API from the worker
+
+`execution.splitRoles: true` renders a second Deployment. `serve` holds the API,
+the read model and the object store; `work` holds the outbox and the reactors
+and is the only role that opens a socket to Flow, a notebook runtime or an
+orchestrator — so the pod behind the ingress stops holding those addresses and
+those credentials. It has no Service, no ingress path and no probes, because it
+opens no listener at all.
+
+Off is not a lesser configuration: one process holding both halves is the
+default and is what every development install is. The split costs three shared
+backends, which is exactly what stops being per-process when the binary becomes
+two processes — the workflow store (`execution.store: postgres`), the log
+(`server.bus: laser`) and the object store (`promptStore.mode` other than
+`none`). The chart refuses each by name at render time, which is the same
+refusal `Config::validate` makes at start-up, arriving before the rollout
+instead of during it.
+
+```yaml
+execution:
+  splitRoles: true
+  workers: 3
+```
+
+More than one worker is the point: an attempt is claimed by exactly one of them
+under a lease, and one that dies has its lease expire and its work taken over.
 
 ---
 

@@ -164,9 +164,13 @@ fn apply(execution: &mut Execution, event: &WorkflowEvent) {
                     record.state = RunState::of(StateType::Running);
                 }
             }
-            if execution.started_at.is_none() {
-                execution.state = RunState::of(StateType::Running);
-            }
+            // The run's own state is not touched here. `ExecutionStarted` is
+            // emitted unconditionally by the start and already set it, so the
+            // only states this could reach are the ones it has moved to
+            // *since* — `Cancelling` and `Paused` — and a step reporting
+            // itself started is not news that either has stopped. It is news
+            // that a reactor claimed something that was dispatched before the
+            // cancel or the pause landed, which is ordinary.
         }
         WorkflowEvent::StepCompleted {
             step_id,

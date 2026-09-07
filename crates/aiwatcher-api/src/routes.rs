@@ -58,6 +58,10 @@ pub fn router(state: AppState) -> Router {
         // or an object store, and the one whose whole promise is that closing
         // the browser changes nothing. See ADR_0025.
         .merge(crate::executions::router())
+        // What a block was, so the canvas does not guess it from the draft on
+        // screen — which is the one thing that is certainly not what an old run
+        // read. Section 19.
+        .merge(crate::context::router())
         // ── Reaching a service aiwatcher does not run ────────────────────────
         .merge(crate::integrations::hubs::router())
         // ── The caller, rather than the data ─────────────────────────────────

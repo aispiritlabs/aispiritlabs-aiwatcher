@@ -1,0 +1,144 @@
+{{- if eq .Values.postgresql.mode "install" }}
+{{- $fullname := include "aiwatcher.fullname" . -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-postgres
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+spec:
+  selector:
+    {{- include "aiwatcher.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+  ports:
+    - { name: postgres, port: 5432, targetPort: postgres, protocol: TCP }
+---
+{{- if not .Values.postgresql.credentialsSecret.name }}
+# The password this release generates for itself.
+#
+# `lookup` first, then generate — the same shape as the object store's
+# credentials and for the same reason: a new password on every `helm upgrade`
+# is a database that will not open the volume it wrote. A rendered-only run
+# (`helm template`, `--dry-run`) has no cluster to look in and falls back to a
+# fixed placeholder, so a diff shows configuration changes rather than a fresh
+# random string every time.
+#
+# Alphanumeric on purpose: it goes into a connection URL, and a generated
+# password holding `@` or `/` would be a DSN that parses to somewhere else.
+{{- $existing := lookup "v1" "Secret" .Release.Namespace (printf "%s-postgres" $fullname) }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $fullname }}-postgres
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+type: Opaque
+data:
+  {{- if $existing }}
+  password: {{ index $existing.data "password" }}
+  {{- else if .Release.IsInstall }}
+  password: {{ randAlphaNum 40 | b64enc | quote }}
+  {{- else }}
+  password: {{ "rendered-without-a-cluster" | b64enc | quote }}
+  {{- end }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $fullname }}-postgres
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+  annotations:
+    # Why this is a StatefulSet where the object store is a Deployment: the
+    # volume claim template is what keeps one pod's data with that pod across a
+    # rescheduling, and a database is the one thing here that must never be
+    # opened by two writers.
+    aiwatcher.dev/retention: "an execution stream is the only record of why a run did what it did"
+spec:
+  serviceName: {{ $fullname }}-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "aiwatcher.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: postgres
+  template:
+    metadata:
+      labels:
+        {{- include "aiwatcher.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/part-of: aiwatcher
+        app.kubernetes.io/component: postgres
+    spec:
+      automountServiceAccountToken: false
+      {{- include "aiwatcher.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: postgres
+          image: "{{ .Values.postgresql.image.repository }}:{{ .Values.postgresql.image.tag }}"
+          imagePullPolicy: {{ .Values.postgresql.image.pullPolicy }}
+          env:
+            - { name: POSTGRES_DB, value: {{ .Values.postgresql.database | quote }} }
+            - { name: POSTGRES_USER, value: {{ .Values.postgresql.username | quote }} }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  {{- include "aiwatcher.workflowPostgresSecretRef" . | nindent 18 }}
+                  key: {{ .Values.postgresql.credentialsSecret.passwordKey }}
+            # A subdirectory rather than the mount point: the image refuses to
+            # initialise into a volume that already holds `lost+found`.
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          ports:
+            - { name: postgres, containerPort: 5432, protocol: TCP }
+          readinessProbe:
+            # `pg_isready` against the socket, not a TCP probe: the port is open
+            # while the server is still recovering, and a pod that is ready then
+            # is a pod the server connects to and is refused by.
+            exec:
+              command: ["pg_isready", "-U", {{ .Values.postgresql.username | quote }}, "-d", {{ .Values.postgresql.database | quote }}]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", {{ .Values.postgresql.username | quote }}, "-d", {{ .Values.postgresql.database | quote }}]
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.postgresql.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            # Not read-only: PostgreSQL writes its socket and lock files under
+            # /var/run/postgresql, and the alternative is a third emptyDir to
+            # make one file writable.
+            readOnlyRootFilesystem: false
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        {{- if not .Values.postgresql.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
+  {{- if .Values.postgresql.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.postgresql.persistence.size }}
+        {{- include "aiwatcher.storageClass" .Values.postgresql.persistence | nindent 8 }}
+  {{- end }}
+{{- end }}

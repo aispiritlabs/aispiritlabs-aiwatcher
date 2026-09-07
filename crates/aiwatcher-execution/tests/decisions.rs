@@ -891,3 +891,105 @@ fn replaying_a_stream_reaches_the_state_the_decisions_left_behind() {
         StateType::Completed
     );
 }
+
+#[test]
+fn a_step_starting_after_a_cancel_does_not_take_the_cancelling_label_off_the_run() {
+    // The reachable order: somebody cancels while a step is dispatched and not
+    // yet claimed, and the reactor's `step_started` arrives afterwards. The run
+    // is still stopping — `cancelling` is what decides that — and the word the
+    // panel shows has to keep saying so.
+    // Two steps with no edge between them, so both are dispatched at once and
+    // both can be claimed before either reports.
+    let both = plan(vec![task("left"), task("right")], Vec::new());
+    let mut state = aiwatcher_execution::initial_state();
+    let outputs = decide(&state, &start(both), &cause("start"), now()).expect("start");
+    state = apply(state, &outputs);
+    let outputs = decide(
+        &state,
+        &WorkflowMessage::Event(WorkflowEvent::StepStarted {
+            step_id: "left".to_owned(),
+            attempt: 1,
+        }),
+        &cause("left"),
+        now(),
+    )
+    .expect("a start report");
+    state = apply(state, &outputs);
+
+    let outputs = decide(
+        &state,
+        &WorkflowMessage::Command(WorkflowCommand::CancelExecution {
+            reason: "somebody asked".to_owned(),
+        }),
+        &cause("cancel"),
+        now(),
+    )
+    .expect("a cancel");
+    state = apply(state, &outputs);
+    assert_eq!(
+        state.active().expect("a run").state.label(),
+        "Cancelling",
+        "the cancel itself"
+    );
+
+    // `right` was dispatched before the cancel and claimed by a reactor that
+    // had not reported yet. Its report arrives now, honestly: that attempt did
+    // start. The run is still stopping.
+    let outputs = decide(
+        &state,
+        &WorkflowMessage::Event(WorkflowEvent::StepStarted {
+            step_id: "right".to_owned(),
+            attempt: 1,
+        }),
+        &cause("late-start"),
+        now(),
+    )
+    .expect("a start report");
+    state = apply(state, &outputs);
+
+    let run = state.active().expect("a run");
+    assert!(run.cancelling, "the run is still stopping");
+    assert_eq!(
+        run.state.label(),
+        "Cancelling",
+        "a step reporting itself started put the run back to plain Running"
+    );
+}
+
+#[test]
+fn a_step_starting_after_a_pause_does_not_take_the_run_off_pause() {
+    // The same defect as the cancel one, reached the other way and worse: a
+    // pause is a thing somebody does and then watches for, and a run that
+    // reads `running` a second later reads as a pause that did not take.
+    let both = plan(vec![task("left"), task("right")], Vec::new());
+    let mut state = aiwatcher_execution::initial_state();
+    let outputs = decide(&state, &start(both), &cause("start"), now()).expect("start");
+    state = apply(state, &outputs);
+
+    let outputs = decide(
+        &state,
+        &WorkflowMessage::Command(WorkflowCommand::PauseExecution),
+        &cause("pause"),
+        now(),
+    )
+    .expect("a pause");
+    state = apply(state, &outputs);
+
+    let outputs = decide(
+        &state,
+        &WorkflowMessage::Event(WorkflowEvent::StepStarted {
+            step_id: "right".to_owned(),
+            attempt: 1,
+        }),
+        &cause("late-start"),
+        now(),
+    )
+    .expect("a start report");
+    state = apply(state, &outputs);
+
+    assert_eq!(
+        state.active().expect("a run").state.state_type,
+        StateType::Paused,
+        "a step reporting itself started took the run off pause"
+    );
+}

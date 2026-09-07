@@ -45,6 +45,7 @@ pub mod artifact;
 pub mod cache;
 pub mod claim;
 pub mod compile;
+pub mod context;
 pub mod decide;
 pub mod error;
 pub mod facts;
@@ -69,6 +70,7 @@ pub use artifact::{
 pub use cache::cache_key;
 pub use claim::{AttemptKey, AttemptRow, ClaimFilter};
 pub use compile::{CompileOptions, compile_curation};
+pub use context::{ContextAction, ContextSnapshot};
 pub use decide::{Decision, Now, decide, evolve, idempotency_key, initial_state, replay};
 pub use error::{CompileError, DecisionError, Result, StoreError};
 pub use facts::{FactContext, PublishedBy, envelopes_for};
@@ -88,7 +90,8 @@ pub use state::{
     StateType, StepError, StepState,
 };
 pub use store::{
-    AppendOutcome, AppendRequest, ExpectedVersion, StoreCapabilities, StreamSlice, WorkflowStore,
+    AppendOutcome, AppendRequest, ExpectedVersion, Pruned, StoreCapabilities, StreamSlice,
+    WorkflowStore,
 };
 
 use sha2::{Digest, Sha256};

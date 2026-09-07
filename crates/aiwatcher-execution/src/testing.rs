@@ -192,6 +192,32 @@ fn dispatch(execution: &ExecutionId, message_id: &str, rows: Vec<AttemptRow>) ->
     }
 }
 
+/// An append that puts one execution into a terminal state.
+///
+/// The projection is what a sweep reads, so this is the smallest thing that
+/// makes a run finished from the store's point of view — the stream behind it
+/// is the same start, and no property here is about how it got there.
+fn finish(execution: &ExecutionId, message_id: &str) -> AppendRequest {
+    AppendRequest {
+        expected_version: ExpectedVersion::Any,
+        input: PendingMessage::input(
+            WorkflowMessage::Command(WorkflowCommand::PauseExecution),
+            metadata(execution, message_id),
+        ),
+        outputs: Vec::new(),
+        projection: projection(execution, 1, StateType::Completed),
+        outbox: Vec::new(),
+        checkpoint: None,
+        attempts: Vec::new(),
+    }
+}
+
+/// A cutoff every write so far is before. The sweep's own clock, moved rather
+/// than the store's — nothing here may sleep for a retention window.
+fn well_after_everything() -> OffsetDateTime {
+    OffsetDateTime::now_utc() + time::Duration::hours(1)
+}
+
 /// Run every property against one store.
 ///
 /// # Panics
@@ -214,6 +240,8 @@ pub async fn assert_contract(name: &str, store: &dyn WorkflowStore) {
     a_settled_attempt_is_out_of_every_claimants_view(name, store).await;
     a_retry_is_not_claimable_before_its_delay(name, store).await;
     a_cursor_advances_on_its_own_for_a_message_the_inbox_knew(name, store).await;
+    a_finished_execution_is_forgotten_and_a_running_one_is_not(name, store).await;
+    an_execution_the_outbox_still_speaks_for_is_kept(name, store).await;
 }
 
 macro_rules! ok {
@@ -808,6 +836,150 @@ pub async fn a_cursor_advances_on_its_own_for_a_message_the_inbox_knew(
 
 /// Rewriting the same result must produce the same rows.
 ///
+/// Retention forgets a run that finished and keeps one that has not.
+///
+/// The second half is the point. A sweep that deleted by age alone would delete
+/// the run somebody is watching, and nothing in this system decides a run has
+/// died — a producer may have been killed or may be thinking for twenty
+/// minutes, and age tells the two apart in neither direction.
+///
+/// The attempt rows go with it, which is the cost that was actually growing:
+/// the claim table is what every claimant scans.
+pub async fn a_finished_execution_is_forgotten_and_a_running_one_is_not(
+    name: &str,
+    store: &dyn WorkflowStore,
+) {
+    let finished = fresh("pruned");
+    let running = fresh("kept");
+    for execution in [&finished, &running] {
+        ok!(
+            name,
+            store.append(
+                execution,
+                start_request(execution, ExpectedVersion::NoStream, "m-1")
+            ),
+            "a start"
+        );
+        // A start leaves an outbox row, and an unpublished row keeps its
+        // execution out of every sweep. That is the *next* property; this one
+        // is about the state, so the row is drained first.
+        ok!(
+            name,
+            store.mark_published(
+                &[MessageId::new(format!("{execution}/outbox-1"))],
+                OffsetDateTime::now_utc()
+            ),
+            "publishing the start's fact"
+        );
+    }
+    ok!(
+        name,
+        store.append(
+            &finished,
+            dispatch(&finished, "m-2", vec![claimable(&finished)])
+        ),
+        "a dispatch"
+    );
+    ok!(
+        name,
+        store.append(&finished, finish(&finished, "m-3")),
+        "an end"
+    );
+
+    let pruned = ok!(
+        name,
+        store.prune(well_after_everything(), 100),
+        "a retention sweep"
+    );
+    assert!(pruned.executions >= 1, "{name}: swept nothing");
+    assert!(pruned.attempts >= 1, "{name}: kept the claim rows");
+
+    assert!(
+        ok!(
+            name,
+            store.projection(&finished),
+            "reading the finished run"
+        )
+        .is_none(),
+        "{name}: a finished execution survived its retention window"
+    );
+    assert!(
+        ok!(name, store.load(&finished), "loading the finished run")
+            .events()
+            .next()
+            .is_none(),
+        "{name}: the stream outlived the projection that indexed it"
+    );
+    assert!(
+        ok!(
+            name,
+            store.attempt(&AttemptKey::new(finished.clone(), "extract", 1)),
+            "reading the attempt row"
+        )
+        .is_none(),
+        "{name}: an attempt row outlived the execution that authorised it"
+    );
+    assert!(
+        ok!(name, store.projection(&running), "reading the running run").is_some(),
+        "{name}: a running execution was deleted for being old"
+    );
+}
+
+/// A fact that has not reached the log keeps its explanation alive.
+///
+/// [`aiwatcher_jobs::ORDERING`] in a sixth place: the durable copy first, and
+/// only then the thing it was derived from. Deleting the other way round leaves
+/// the publisher a message with no decision behind it and the log a gap nothing
+/// records.
+pub async fn an_execution_the_outbox_still_speaks_for_is_kept(
+    name: &str,
+    store: &dyn WorkflowStore,
+) {
+    let execution = fresh("outbox-retention");
+    ok!(
+        name,
+        store.append(
+            &execution,
+            start_request(&execution, ExpectedVersion::NoStream, "m-1")
+        ),
+        "a start"
+    );
+    ok!(
+        name,
+        store.append(&execution, finish(&execution, "m-2")),
+        "an end"
+    );
+
+    let kept = ok!(
+        name,
+        store.prune(well_after_everything(), 100),
+        "a sweep with the fact still pending"
+    );
+    let _ = kept;
+    assert!(
+        ok!(name, store.projection(&execution), "reading it back").is_some(),
+        "{name}: forgot an execution whose fact had not reached the log"
+    );
+
+    ok!(
+        name,
+        store.mark_published(
+            &[MessageId::new(format!("{execution}/outbox-1"))],
+            OffsetDateTime::now_utc()
+        ),
+        "publishing"
+    );
+    ok!(
+        name,
+        store.prune(well_after_everything(), 100),
+        "a sweep afterwards"
+    );
+    assert!(
+        ok!(name, store.projection(&execution), "reading it back").is_none(),
+        "{name}: kept an execution whose fact is on the log"
+    );
+}
+
 /// Not part of [`assert_contract`] because it needs a store nobody else is
 /// using; the PostgreSQL adapter's own test calls it.
 pub async fn appending_the_same_decision_twice_is_idempotent(

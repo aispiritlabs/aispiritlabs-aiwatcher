@@ -179,6 +179,56 @@ pub struct StoreCapabilities {
     pub claimable: bool,
 }
 
+/// What one pass of a retention sweep removed.
+///
+/// Counted rather than named: a sweep that ran for an hour would otherwise
+/// return a list nobody reads, and what an operator wants from the log line is
+/// whether the store is shrinking.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Pruned {
+    pub executions: usize,
+    pub attempts: usize,
+}
+
+impl Pruned {
+    /// Whether anything went. What a sweeper logs on, so a store that is
+    /// already inside its window is silent rather than hourly.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.executions == 0 && self.attempts == 0
+    }
+}
+
+/// Whether one execution may be forgotten, given a cutoff.
+///
+/// The rule the three adapters share, written once. An adapter that decided
+/// this for itself would keep a *different* retention policy, and the property
+/// saying a running execution survives would only prove it about whichever one
+/// it was written against.
+///
+/// `last_activity` is when the store last wrote anything about this execution,
+/// and each adapter reads it from what it already has — the last recorded
+/// message for `memory`, the stream file's own modification time for `file`,
+/// an indexed column for `postgres`. Its meaning is the same in all three,
+/// which is what the contract suite checks; its source is not, which is what
+/// stops one adapter paying for another's shape.
+///
+/// It is deliberately *not* [`RunProjection::ended_at`], and the first reason
+/// is that nothing writes that field: `evolve` reads no clock and the terminal
+/// events carry no timestamp, so it has been `None` since it was added. The
+/// second reason is that it would be the wrong clock anyway — a crashed run may
+/// never get a terminal event, and a retried one has to start the window again.
+/// "Nothing has been written here for N days" answers both on its own, and is
+/// what a retention window means when somebody says it out loud.
+#[must_use]
+pub fn prunable(
+    run: &RunProjection,
+    last_activity: OffsetDateTime,
+    before: OffsetDateTime,
+) -> bool {
+    run.state.state_type.is_terminal() && last_activity < before
+}
+
 /// The transactional store an execution's history lives in.
 #[async_trait]
 pub trait WorkflowStore: Send + Sync + std::fmt::Debug {
@@ -296,6 +346,51 @@ pub trait WorkflowStore: Send + Sync + std::fmt::Debug {
     ///
     /// Whatever the backend could not do.
     async fn advance_checkpoint(&self, processor: &str, checkpoint: Checkpoint) -> Result<()>;
+
+    /// Forget finished executions that ended before `before`.
+    ///
+    /// Section 43.25. The stream is the *explanation* of a run — the commands,
+    /// the decisions, the attempt that failed and the one that did not — and it
+    /// is the one thing the event log does not carry, so this is a deletion of
+    /// something no other store holds. That is why the window is configuration
+    /// and why its default keeps everything.
+    ///
+    /// Three rules, and each is a way of not leaving a half-run behind:
+    ///
+    /// * **Terminal only**, by [`StateType::is_terminal`](crate::StateType::is_terminal). A run with no end is
+    ///   `Running` and this system never decides one has died — the same rule
+    ///   the projector keeps for agent runs. Age is not evidence.
+    /// * **Nothing the outbox still holds.** A pending row is a fact that has
+    ///   not reached the log; deleting the decision behind it would leave the
+    ///   publisher a message with no explanation and the log a gap with no
+    ///   record of one. [`aiwatcher_jobs::ORDERING`] in a sixth place — the
+    ///   durable copy first, and only then the thing it was derived from.
+    /// * **All of one execution together**: stream, inbox, projection, attempt
+    ///   rows. A kept projection whose stream is gone is a run the panel lists
+    ///   and cannot open, which is the guardrail about actions that would be
+    ///   refused, arriving as a link instead of a button.
+    ///
+    /// Plans and checkpoints are untouched. A plan is content-addressed and
+    /// shared by every run of one revision; a checkpoint belongs to a processor
+    /// rather than to an execution, and forgetting one would re-read the log.
+    ///
+    /// `limit` bounds one pass, so turning retention on against a store with a
+    /// year of history is many short transactions rather than one that holds a
+    /// table lock for a minute. A caller that wants to catch up sweeps again
+    /// while the count comes back at the limit.
+    ///
+    /// ## The window has a floor nothing here can check
+    ///
+    /// The inbox goes with the stream, so a message redelivered after its
+    /// execution was pruned is decided again rather than recognised. Delivery
+    /// is at-least-once and the log is what redelivers, so the window has to be
+    /// longer than the log's own retention. That is a deployment fact this
+    /// crate cannot read, which is why it is written here rather than asserted.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the backend could not do.
+    async fn prune(&self, before: OffsetDateTime, limit: usize) -> Result<Pruned>;
 }
 
 /// Sharing one store between the parts of a process that hold it.
@@ -359,6 +454,10 @@ impl<T: WorkflowStore + ?Sized> WorkflowStore for std::sync::Arc<T> {
 
     async fn advance_checkpoint(&self, processor: &str, checkpoint: Checkpoint) -> Result<()> {
         (**self).advance_checkpoint(processor, checkpoint).await
+    }
+
+    async fn prune(&self, before: OffsetDateTime, limit: usize) -> Result<Pruned> {
+        (**self).prune(before, limit).await
     }
 }
 

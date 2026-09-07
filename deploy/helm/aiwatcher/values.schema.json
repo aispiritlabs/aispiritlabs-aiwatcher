@@ -180,6 +180,38 @@
         }
       }
     },
+    "postgresql": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "enum": [
+            "install",
+            "external",
+            "none"
+          ]
+        },
+        "maxConnections": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "execution": {
+      "type": "object",
+      "properties": {
+        "store": {
+          "enum": [
+            "none",
+            "file",
+            "postgres"
+          ]
+        },
+        "retentionDays": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
     "engine": {
       "type": "object",
       "properties": {

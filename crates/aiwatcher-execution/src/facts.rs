@@ -478,6 +478,34 @@ mod tests {
     }
 
     #[test]
+    fn every_fact_a_managed_run_publishes_is_reachable_by_the_execution_id() {
+        // This is what makes a second live route unnecessary. ADR_0026 puts a
+        // managed run's facts on the log, and every one of them carries the
+        // execution as its `workflow_run_id` — so
+        // `/api/v1/workflow-executions/{id}/stream`, which scopes by exactly
+        // that field, already follows a managed execution. An
+        // `/executions/{id}/stream` beside it would be a second image of one
+        // run, which is the thing ADR_0026 refuses.
+        for event in [
+            WorkflowEvent::ExecutionStarted,
+            WorkflowEvent::StepStarted {
+                step_id: "acquire".to_owned(),
+                attempt: 1,
+            },
+            WorkflowEvent::ExecutionCancelled,
+        ] {
+            let name = event.name();
+            for envelope in publish(&event) {
+                assert_eq!(
+                    envelope.workflow_run_id.as_deref(),
+                    Some("exec-1"),
+                    "{name} is not reachable through the execution it belongs to"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn an_attempt_says_which_node_which_try_and_who_ran_it() {
         let envelopes = publish(&WorkflowEvent::StepStarted {
             step_id: "acquire".to_owned(),

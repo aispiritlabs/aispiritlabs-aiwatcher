@@ -477,6 +477,27 @@ export type BuiltExport = {
     manifest: ExportManifest;
 };
 
+/**
+ * Whether a step may be answered from an earlier identical one.
+ */
+export const CachePolicy = { NEVER: 'never', BY_CONTENT: 'by_content' } as const;
+
+/**
+ * Whether a step may be answered from an earlier identical one.
+ */
+export type CachePolicy = typeof CachePolicy[keyof typeof CachePolicy];
+
+/**
+ * A reason, for the one command that carries one.
+ */
+export type CancelBody = {
+    /**
+     * Recorded on the decision and read by whoever finds the run stopped.
+     * Empty is allowed; a wrong reason would be worse than none.
+     */
+    reason?: string;
+};
+
 export type CaseDelta = {
     baseline_score?: number | null;
     case_id: string;
@@ -588,6 +609,80 @@ export type ContentPolicy = {
     consent?: ConsentRecord;
     redaction?: null | RedactionRecord;
     retention?: RetentionPolicy;
+};
+
+/**
+ * Something a caller may do with a block, given what it is and where it got to.
+ *
+ * Deliberately **no hrefs**, which is where this departs from section 19's
+ * sketch. An action's address is either this API's own — which the generated
+ * client already has — or an optional service's, and a service's address in a
+ * response body is the one thing every route here refuses to carry. What only
+ * the server knows is *which* actions apply, and that is what this is.
+ */
+export const ContextAction = {
+    VALIDATE: 'validate',
+    TEST: 'test',
+    OPEN_EDITOR: 'open_editor',
+    RETRY: 'retry',
+    ANSWER: 'answer'
+} as const;
+
+/**
+ * Something a caller may do with a block, given what it is and where it got to.
+ *
+ * Deliberately **no hrefs**, which is where this departs from section 19's
+ * sketch. An action's address is either this API's own — which the generated
+ * client already has — or an optional service's, and a service's address in a
+ * response body is the one thing every route here refuses to carry. What only
+ * the server knows is *which* actions apply, and that is what this is.
+ */
+export type ContextAction = typeof ContextAction[keyof typeof ContextAction];
+
+/**
+ * Everything needed to reopen one block as it was.
+ */
+export type ContextSnapshot = {
+    allowed: Array<ContextAction>;
+    /**
+     * Where this step's staged input, parameters and output live.
+     *
+     * `<execution>/<step>/<attempt>` for a run (16.2), and
+     * `<definition>@<revision>/<block>` for a revision. Keyed by context and
+     * never by the notebook's name, so two pipelines editing one notebook do
+     * not overwrite each other's rows.
+     */
+    context_id: string;
+    definition_kind: DefinitionKind;
+    definition_name: string;
+    /**
+     * The authored revision this was compiled from — what somebody saved.
+     */
+    definition_revision: DefinitionRevision;
+    /**
+     * What this step read, resolved to the artifacts its parents produced.
+     * Empty for a revision, because nothing has run.
+     */
+    input_artifacts?: Array<ArtifactRef>;
+    /**
+     * Values bound when the execution was requested. Empty for a revision.
+     */
+    parameters?: {
+        [key: string]: unknown;
+    };
+    /**
+     * The compiled plan. For a revision context this is what the definition
+     * compiles to *now*, which is not the `plan_id` of a run that pinned a
+     * window: a plan digests its resolved bounds, and a revision has none.
+     */
+    plan_id: PlanId;
+    /**
+     * The step exactly as the plan pinned it: the script beside its structured
+     * source, or the notebook beside the digest it was saved against.
+     */
+    runtime: RuntimeBinding;
+    state?: null | StepState;
+    step_id: string;
 };
 
 export type ConversationArchivePage = {
@@ -973,6 +1068,33 @@ export type DatasetVersionSummary = {
     row_count: number;
     version: string;
 };
+
+/**
+ * What kind of definition a plan was compiled from.
+ *
+ * Part of a plan's identity, so a curation pipeline and an agent graph that
+ * happened to compile to identical steps stay two plans. They have different
+ * editors, different permissions and different provenance.
+ */
+export const DefinitionKind = { CURATION_PIPELINE: 'curation_pipeline', WORKFLOW: 'workflow' } as const;
+
+/**
+ * What kind of definition a plan was compiled from.
+ *
+ * Part of a plan's identity, so a curation pipeline and an agent graph that
+ * happened to compile to identical steps stay two plans. They have different
+ * editors, different permissions and different provenance.
+ */
+export type DefinitionKind = typeof DefinitionKind[keyof typeof DefinitionKind];
+
+/**
+ * The immutable, content-addressed version of an authored definition.
+ *
+ * A newtype over the digest so that a function taking both a revision and a
+ * `plan_id` cannot be called with them the wrong way round — they are both
+ * 64 hex characters and they mean different things.
+ */
+export type DefinitionRevision = string;
 
 /**
  * What the tree is rooted on.
@@ -1676,6 +1798,22 @@ export type ExecutionPage = {
 };
 
 /**
+ * The runtime-neutral graph an execution runs.
+ *
+ * Immutable. A run pins exactly one of these, so editing the definition while
+ * a run is active creates a new revision and a new plan and changes nothing
+ * about what is already running.
+ */
+export type ExecutionPlan = {
+    definition_kind: DefinitionKind;
+    definition_name: string;
+    edges?: Array<PlanEdge>;
+    plan_id: PlanId;
+    revision: DefinitionRevision;
+    steps: Array<PlanStep>;
+};
+
+/**
  * Where a whole traversal got to.
  */
 export const ExecutionStatus = {
@@ -2015,6 +2153,21 @@ export type ExportVersionSummary = {
     withdrawn?: boolean;
 };
 
+export type ExternalWorkflowSpec = {
+    /**
+     * The engine this is delegated to, as configuration names it.
+     */
+    engine: string;
+    /**
+     * Always version-pinned. An execution recorded against "whatever was
+     * current" is not something anybody can repeat.
+     */
+    entity: string;
+    inputs?: {
+        [key: string]: string;
+    };
+};
+
 /**
  * Why an attempt did not succeed, and therefore whether to try again.
  *
@@ -2093,6 +2246,39 @@ export type FinishRunRequest = {
     best?: null | BestMetric;
     error?: string | null;
     status: TrainingStatus;
+};
+
+/**
+ * Where the rows come from, kept structured beside the generated script.
+ *
+ * A historical editor regenerates the query from *this*, never from the
+ * pipeline's current head — which is the whole point: opening a step of a run
+ * from last week has to show what that run read.
+ */
+export type FlowSourceRef = {
+    arguments?: {
+        [key: string]: string;
+    };
+    cursor?: string | null;
+    dataset: string;
+    /**
+     * The dataset version this read resolved to, when it resolved to one.
+     */
+    resolved_revision?: string | null;
+    window?: null | ResolvedWindow;
+};
+
+export type FlowStepSpec = {
+    /**
+     * The authored block ids this one step covers, in order. The panel lights
+     * them together from one `step.started`.
+     */
+    blocks?: Array<string>;
+    /**
+     * The complete query, compiled here rather than in the browser.
+     */
+    script: string;
+    source: FlowSourceRef;
 };
 
 /**
@@ -2340,6 +2526,18 @@ export type HubsPage = {
 export type HumanFinding = {
     kind: FindingKind;
     rule: string;
+};
+
+export type HumanInputSpec = {
+    choices?: Array<string>;
+    /**
+     * What is being asked, in the words the person reads.
+     */
+    prompt: string;
+    /**
+     * The role that may answer. Checked when the answer arrives, never here.
+     */
+    role: string;
 };
 
 /**
@@ -2776,6 +2974,18 @@ export type IngestResponse = {
 };
 
 /**
+ * Where one of a step's inputs comes from.
+ */
+export type InputBinding = {
+    from: 'step';
+    output: string;
+    step: string;
+} | {
+    from: 'parameter';
+    name: string;
+};
+
+/**
  * What a step is waiting for somebody to answer.
  */
 export type InputRequest = {
@@ -3058,6 +3268,22 @@ export type LoggedOut = {
      * case clearing the cookie is all a sign-out can do.
      */
     redirect_url?: string | null;
+};
+
+export type MarimoStepSpec = {
+    /**
+     * The authored block this step came from, for the editor link.
+     */
+    block?: string | null;
+    /**
+     * `sha256` of the notebook source this plan pins. A managed run pins code
+     * first; an editor test may use unsaved code and is marked ad hoc.
+     */
+    code_revision: string;
+    notebook: string;
+    params?: {
+        [key: string]: unknown;
+    };
 };
 
 /**
@@ -3544,6 +3770,12 @@ export const Origin = {
  */
 export type Origin = typeof Origin[keyof typeof Origin];
 
+export type OutputDeclaration = {
+    kind: ArtifactKind;
+    name: string;
+    schema_ref?: string | null;
+};
+
 /**
  * How a form should render one input.
  */
@@ -3636,6 +3868,30 @@ export const PipelineStage = {
  * depend on it.
  */
 export type PipelineStage = typeof PipelineStage[keyof typeof PipelineStage];
+
+export type PlanEdge = {
+    from: string;
+    to: string;
+};
+
+/**
+ * `sha256` of the canonical compiled plan.
+ */
+export type PlanId = string;
+
+export type PlanStep = {
+    cache?: CachePolicy;
+    id: string;
+    inputs?: Array<InputBinding>;
+    outputs?: Array<OutputDeclaration>;
+    retry?: RetryPolicy;
+    runtime: RuntimeBinding;
+    /**
+     * Seconds. Per-runtime and explicit — never a global default, because the
+     * number that is generous for a Flow query is a hang for a notebook.
+     */
+    timeout_seconds: number;
+};
 
 /**
  * How strict this deployment is.
@@ -3885,6 +4141,23 @@ export type Provenance = {
 };
 
 /**
+ * The answer a `HumanInput` step asked for.
+ */
+export type ProvideInputBody = {
+    /**
+     * Which attempt asked. Named by the caller rather than read from the
+     * step's latest: an answer typed against a question that has since been
+     * retried is an answer to a question nobody is asking any more, and
+     * silently applying it to the new attempt would record a human decision
+     * that no human made.
+     */
+    attempt: number;
+    response: {
+        [key: string]: unknown;
+    };
+};
+
+/**
  * What the panel is told before anybody has signed in.
  *
  * Public on purpose, and it is the only route reachable unauthenticated
@@ -3968,6 +4241,16 @@ export type PublishDatasetRequest = {
     window_seconds?: number | null;
 };
 
+export type PublishDatasetSpec = {
+    block?: string | null;
+    dataset: string;
+    /**
+     * `<pipeline name>@<revision>`, the authored revision — provenance, and
+     * never part of a dataset version's identity.
+     */
+    produced_by: string;
+};
+
 /**
  * Publish a version, and optionally update the prompt around it.
  */
@@ -4022,6 +4305,21 @@ export type PublishedDataset = {
      */
     created: boolean;
     dataset: DatasetSummary;
+};
+
+export type PythonTaskSpec = {
+    params?: {
+        [key: string]: unknown;
+    };
+    /**
+     * Which worker queue this is claimable on.
+     */
+    queue: string;
+    /**
+     * `name@version`: the registered name and the pinned code version a worker
+     * must match before it may claim an attempt.
+     */
+    task_ref: string;
 };
 
 export type RecipePage = {
@@ -4366,6 +4664,15 @@ export type RerunRequest = {
 };
 
 /**
+ * Exact bounds, in seconds since the epoch. A relative window resolved once,
+ * at compile time, so that a retry three hours later reads the same rows.
+ */
+export type ResolvedWindow = {
+    from: number;
+    to: number;
+};
+
+/**
  * What a package needs in order to run at all.
  *
  * Declared so a scheduler can refuse rather than thrash. A model that needs
@@ -4399,6 +4706,50 @@ export type RetentionPolicy = {
      */
     policy_id?: string;
     ttl_days: number;
+};
+
+/**
+ * How many times, and how far apart.
+ *
+ * The defaults are section 26's: three attempts, 1 s / 5 s / 30 s. The delays
+ * are a list rather than a base and a multiplier so that a policy can be read
+ * off the plan without arithmetic, and so that a runtime whose useful backoff
+ * is not exponential can say so.
+ *
+ * # Two budgets, because there are two kinds of failure
+ *
+ * `max_attempts` counts attempts that **produced an answer**: the code ran and
+ * was wrong, the query would not parse, the graph does not bind. Three is
+ * right for those, because the fourth will be just as wrong.
+ *
+ * `max_unavailable_attempts` counts attempts where nobody answered — the
+ * service was down, the connection reset, the caller stopped waiting. Those
+ * say nothing about the work, and spending the work's budget on them means a
+ * forty-second outage kills a run that would have succeeded a minute later.
+ * Measured, not supposed: restarting the process with the query service down
+ * burned all three attempts and failed a chain whose Flow step was fine.
+ *
+ * The two are counted separately off the attempt records the state already
+ * keeps, so a run alternating between the two kinds is bounded by both.
+ */
+export type RetryPolicy = {
+    /**
+     * Seconds before attempt 2, 3, … . The last entry repeats.
+     */
+    delays_seconds: Array<number>;
+    /**
+     * The same, for an attempt nobody answered. Longer, because what it is
+     * waiting for is a service coming back rather than a flake passing.
+     */
+    delays_seconds_unavailable?: Array<number>;
+    /**
+     * Attempts that got an answer and the answer was wrong.
+     */
+    max_attempts: number;
+    /**
+     * Attempts where the runtime never answered. Its own budget — see above.
+     */
+    max_unavailable_attempts?: number;
 };
 
 /**
@@ -4694,6 +5045,30 @@ export const Runtime = {
  * a fixed interpreter; the third is a program.
  */
 export type Runtime = typeof Runtime[keyof typeof Runtime];
+
+/**
+ * Where a step runs, and everything that runtime needs.
+ *
+ * Section 35 of `docs/PIPELINE_ARCHITECTURE.md` is the table this enum is the
+ * code for: where each executes, who owns its retries, and what it may carry.
+ * Every variant names a *binding* and its parameters and never a host — an
+ * executor's address is configuration, for ADR_0012's and ADR_0016's reason,
+ * unchanged. A plan naming its own endpoint would be a request-forgery
+ * primitive posted by anything that can reach the API.
+ */
+export type RuntimeBinding = (FlowStepSpec & {
+    runtime: 'flow_php';
+}) | (MarimoStepSpec & {
+    runtime: 'marimo';
+}) | (PublishDatasetSpec & {
+    runtime: 'publish_dataset';
+}) | (PythonTaskSpec & {
+    runtime: 'python_task';
+}) | (HumanInputSpec & {
+    runtime: 'human_input';
+}) | (ExternalWorkflowSpec & {
+    runtime: 'external_workflow';
+});
 
 /**
  * The word a reactor routes on, without loading the plan.
@@ -6821,6 +7196,43 @@ export type SavePipelineResponses = {
 
 export type SavePipelineResponse = SavePipelineResponses[keyof SavePipelineResponses];
 
+export type BlockContextData = {
+    body?: never;
+    path: {
+        /**
+         * The saved pipeline
+         */
+        name: string;
+        /**
+         * The immutable revision to read
+         */
+        revision: string;
+        /**
+         * A block on that revision's canvas
+         */
+        block_id: string;
+    };
+    query?: never;
+    url: '/api/v1/curation-pipelines/{name}/revisions/{revision}/blocks/{block_id}/context';
+};
+
+export type BlockContextErrors = {
+    404: ErrorBody;
+    /**
+     * The revision does not compile; every reason is in `details`
+     */
+    422: ErrorBody;
+    501: ErrorBody;
+};
+
+export type BlockContextError = BlockContextErrors[keyof BlockContextErrors];
+
+export type BlockContextResponses = {
+    200: ContextSnapshot;
+};
+
+export type BlockContextResponse = BlockContextResponses[keyof BlockContextResponses];
+
 export type ListRecipesData = {
     body?: never;
     path?: never;
@@ -7438,6 +7850,194 @@ export type GetExecutionResponses = {
 };
 
 export type GetExecutionResponse = GetExecutionResponses[keyof GetExecutionResponses];
+
+export type CancelExecutionData = {
+    body: CancelBody;
+    path: {
+        /**
+         * The id a start returned
+         */
+        execution_id: string;
+    };
+    query?: never;
+    url: '/api/v1/executions/{execution_id}/commands/cancel';
+};
+
+export type CancelExecutionErrors = {
+    403: ErrorBody;
+    404: ErrorBody;
+    /**
+     * The run is in no state to accept this
+     */
+    409: ErrorBody;
+    501: ErrorBody;
+};
+
+export type CancelExecutionError = CancelExecutionErrors[keyof CancelExecutionErrors];
+
+export type CancelExecutionResponses = {
+    200: RunProjection;
+};
+
+export type CancelExecutionResponse = CancelExecutionResponses[keyof CancelExecutionResponses];
+
+export type PauseExecutionData = {
+    body?: never;
+    path: {
+        /**
+         * The id a start returned
+         */
+        execution_id: string;
+    };
+    query?: never;
+    url: '/api/v1/executions/{execution_id}/commands/pause';
+};
+
+export type PauseExecutionErrors = {
+    403: ErrorBody;
+    404: ErrorBody;
+    /**
+     * The run is in no state to accept this
+     */
+    409: ErrorBody;
+    501: ErrorBody;
+};
+
+export type PauseExecutionError = PauseExecutionErrors[keyof PauseExecutionErrors];
+
+export type PauseExecutionResponses = {
+    200: RunProjection;
+};
+
+export type PauseExecutionResponse = PauseExecutionResponses[keyof PauseExecutionResponses];
+
+export type ResumeExecutionData = {
+    body?: never;
+    path: {
+        /**
+         * The id a start returned
+         */
+        execution_id: string;
+    };
+    query?: never;
+    url: '/api/v1/executions/{execution_id}/commands/resume';
+};
+
+export type ResumeExecutionErrors = {
+    403: ErrorBody;
+    404: ErrorBody;
+    /**
+     * The run is in no state to accept this
+     */
+    409: ErrorBody;
+    501: ErrorBody;
+};
+
+export type ResumeExecutionError = ResumeExecutionErrors[keyof ResumeExecutionErrors];
+
+export type ResumeExecutionResponses = {
+    200: RunProjection;
+};
+
+export type ResumeExecutionResponse = ResumeExecutionResponses[keyof ResumeExecutionResponses];
+
+export type RetryStepData = {
+    body?: never;
+    path: {
+        /**
+         * The id a start returned
+         */
+        execution_id: string;
+        /**
+         * A step of that run's pinned plan
+         */
+        step_id: string;
+    };
+    query?: never;
+    url: '/api/v1/executions/{execution_id}/steps/{step_id}/commands/retry';
+};
+
+export type RetryStepErrors = {
+    403: ErrorBody;
+    404: ErrorBody;
+    /**
+     * The step is in no state to be retried
+     */
+    409: ErrorBody;
+    501: ErrorBody;
+};
+
+export type RetryStepError = RetryStepErrors[keyof RetryStepErrors];
+
+export type RetryStepResponses = {
+    200: RunProjection;
+};
+
+export type RetryStepResponse = RetryStepResponses[keyof RetryStepResponses];
+
+export type StepContextData = {
+    body?: never;
+    path: {
+        /**
+         * The id a start returned
+         */
+        execution_id: string;
+        /**
+         * A step of that run's pinned plan
+         */
+        step_id: string;
+    };
+    query?: never;
+    url: '/api/v1/executions/{execution_id}/steps/{step_id}/context';
+};
+
+export type StepContextErrors = {
+    404: ErrorBody;
+    501: ErrorBody;
+    503: ErrorBody;
+};
+
+export type StepContextError = StepContextErrors[keyof StepContextErrors];
+
+export type StepContextResponses = {
+    200: ContextSnapshot;
+};
+
+export type StepContextResponse = StepContextResponses[keyof StepContextResponses];
+
+export type ProvideInputData = {
+    body: ProvideInputBody;
+    path: {
+        /**
+         * The id a start returned
+         */
+        execution_id: string;
+        /**
+         * The step that asked
+         */
+        step_id: string;
+    };
+    query?: never;
+    url: '/api/v1/executions/{execution_id}/steps/{step_id}/input';
+};
+
+export type ProvideInputErrors = {
+    403: ErrorBody;
+    404: ErrorBody;
+    /**
+     * That step is not waiting for this answer
+     */
+    409: ErrorBody;
+    501: ErrorBody;
+};
+
+export type ProvideInputError = ProvideInputErrors[keyof ProvideInputErrors];
+
+export type ProvideInputResponses = {
+    200: RunProjection;
+};
+
+export type ProvideInputResponse = ProvideInputResponses[keyof ProvideInputResponses];
 
 export type LiveWebsocketData = {
     body?: never;

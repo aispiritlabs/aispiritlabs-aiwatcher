@@ -437,6 +437,14 @@ pub struct Config {
     /// the only address a Flow step ever runs against: a plan names a binding
     /// and its parameters, never a host.
     pub flow_url: Option<String>,
+    /// The notebook runtime, for a managed `marimo` step.
+    ///
+    /// The same shape and the same reasoning as `flow_url`: absent, this
+    /// process registers no notebook executor and therefore claims no `marimo`
+    /// attempt. The two are independent — a deployment may run managed Flow
+    /// steps and no notebooks — which is why they are two variables rather
+    /// than one "curation services" switch.
+    pub ml_pipeline_url: Option<String>,
     /// The name this process holds its leases under.
     ///
     /// Unique per process, or two reactors each believe they hold the other's
@@ -451,6 +459,22 @@ pub struct Config {
     /// both wake the loops directly. This is what catches a row another replica
     /// wrote, and an attempt left running by a process that died.
     pub execution_poll: Duration,
+
+    /// How long a finished execution's history is kept, or `None` to keep it.
+    ///
+    /// **`None` is the default, and that is the decision.** The stream is the
+    /// *explanation* of a run — the commands, the decisions, the attempt that
+    /// failed and the one that did not — and it is the one thing the event log
+    /// does not carry. A release that started deleting it on an upgrade would
+    /// be the failure the conversation archive's default is about, arriving in
+    /// a second store.
+    ///
+    /// Set it, and the work role sweeps: terminal executions only, and never
+    /// one whose facts the outbox is still holding. The window has a floor
+    /// nothing here can check — it must be longer than the event log's own
+    /// retention, because the log is what redelivers and the durable inbox goes
+    /// with the stream. See [`aiwatcher_execution::store::prunable`].
+    pub workflow_retention: Option<Duration>,
     /// Whether this instance can list and start an orchestrator's work.
     pub engine: EngineKind,
     /// The control plane's base URL. Required when `engine = Flyte`, and the
@@ -557,11 +581,14 @@ impl Default for Config {
             // which is a lot of idle connections per pod.
             workflow_postgres_max_connections: 5,
             flow_url: None,
+            ml_pipeline_url: None,
             reactor_owner: None,
             // A second. Shorter than the conversation and import queues'
             // fifteen because a step's latency is a person watching a canvas,
             // and both loops are woken directly anyway.
             execution_poll: Duration::from_secs(1),
+            // Nothing is forgotten unless a deployment says so.
+            workflow_retention: None,
             engine: EngineKind::default(),
             flyte_endpoint: None,
             // Flyte's own defaults, so a sandbox needs one variable set.
@@ -776,6 +803,9 @@ impl Config {
         if let Some(raw) = var("AIWATCHER_FLOW_URL") {
             config.flow_url = Some(raw.trim_end_matches('/').to_owned());
         }
+        if let Some(raw) = var("AIWATCHER_ML_PIPELINE_URL") {
+            config.ml_pipeline_url = Some(raw.trim_end_matches('/').to_owned());
+        }
         config.reactor_owner = var("AIWATCHER_REACTOR_OWNER");
         if let Some(raw) = var("AIWATCHER_EXECUTION_POLL_SECONDS") {
             config.execution_poll =
@@ -784,6 +814,18 @@ impl Config {
                     value: raw,
                     expected: "whole number of seconds",
                 })?);
+        }
+        if let Some(raw) = var("AIWATCHER_WORKFLOW_RETENTION_DAYS") {
+            let days: u64 = raw.parse().map_err(|_| ConfigError::Invalid {
+                name: "AIWATCHER_WORKFLOW_RETENTION_DAYS",
+                value: raw.clone(),
+                expected: "whole number of days, or 0 to keep everything",
+            })?;
+            // Zero is "keep everything" rather than "delete everything", which
+            // is the reading somebody typing it in a hurry would want to be
+            // wrong about. Deleting on the next sweep is not a thing one
+            // character should ask for.
+            config.workflow_retention = (days > 0).then(|| Duration::from_secs(days * 86_400));
         }
         if let Some(raw) = var("AIWATCHER_ENGINE") {
             config.engine = raw.parse()?;

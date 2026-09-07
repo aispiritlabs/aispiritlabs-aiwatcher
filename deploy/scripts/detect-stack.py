@@ -34,6 +34,7 @@ Overrides, because detection is a convenience and never the last word:
     AIWATCHER_VICTORIATRACES_URL=http://…
     AIWATCHER_COLLECTOR_URL=http://…
     AIWATCHER_GRAFANA_URL=http://…
+    AIWATCHER_POSTGRES_URL=http://…
     AIWATCHER_<NAME>_URL=none                force "not present" for one target
     AIWATCHER_DOMAIN=aiwatcher.example.com   publish on this host, do not derive one
     AIWATCHER_DOMAIN=none                    derive nothing
@@ -92,6 +93,29 @@ TARGETS: tuple[Target, ...] = (
     # by its image; the credentials that would make it usable are not
     # discoverable from here, and neither is whether aiwatcher may create a
     # bucket in it.
+    # Reported, never derived, and the reason is sharper than the object store's.
+    # A database found here is almost certainly some other application's, and
+    # what aiwatcher would do with it is create tables — which is not a thing to
+    # decide from a matching image. Nothing in the cluster says which database
+    # this release may write, under which credentials, or whether the role it
+    # would use may create a schema.
+    Target(
+        key="postgres",
+        images=("postgres", "postgresql", "pgvector", "timescaledb"),
+        port=5432,
+        # Exporters, poolers and operators all carry the name and are none of
+        # them a database this could open a connection to.
+        not_images=(
+            "postgres-exporter",
+            "postgres_exporter",
+            "postgres-operator",
+            "postgresql-operator",
+            "pgbouncer",
+            "pgpool",
+            "cloudnative-pg",
+        ),
+        note="a database is reported, never reused: which database, whose credentials and whether it may create tables are not discoverable",
+    ),
     Target(
         key="objectstore",
         images=("minio/minio", "rustfs/rustfs", "chrislusf/seaweedfs", "quay.io/minio/minio"),
@@ -546,6 +570,43 @@ def as_helm_values(findings: dict[str, Finding], domain: Domain, reachable: bool
         else:
             lines.append("# Nothing fences it, so leave networkPolicy.allowEgressToExternalPromptStore")
             lines.append("# off: a rule attached to unfenced pods would cut off its existing clients.")
+
+    # Reported for the object store's reason, refused for a stronger one: what
+    # this release would do with a database it found is create tables in it.
+    database = findings["postgres"]
+    if database.found:
+        lines.append(f"# PostgreSQL is running at {database.url}, and this release installs")
+        lines.append("# nothing for it — postgresql.mode stays at its chart default. Managed")
+        lines.append("# execution (ADR_0025) is the only thing here that would use one, and it is")
+        lines.append("# off unless execution.store says otherwise.")
+        lines.append("#")
+        lines.append("# To point it at that database instead of installing one:")
+        lines.append("#")
+        lines.append("#   execution: { store: postgres }")
+        lines.append("#   postgresql:")
+        lines.append("#     mode: external")
+        lines.append("#     external:")
+        # `host:port`, from the URL the finding already carries — the scheme is
+        # this script's own convention for every target and means nothing for a
+        # database. An override supplies the URL and no Service, which is the
+        # case a name built from `service.namespace` would render as dots.
+        lines.append(f"#       host: {database.url.split('//', 1)[-1].rsplit(':', 1)[0]}")
+        lines.append(f"#       port: {database.url.rsplit(':', 1)[-1]}")
+        if database.pod_selector:
+            lines.append(f"#       namespace: {json.dumps(database.namespace)}")
+            lines.append("#       podSelector:")
+            for label, value in sorted(database.pod_selector.items()):
+                lines.append(f"#         {json.dumps(label)}: {json.dumps(value)}")
+        lines.append("#     database: <database>")
+        lines.append("#     username: <role that may create tables>")
+        lines.append("#     credentialsSecret: { name: <secret>, passwordKey: password }")
+        if database.fenced:
+            lines.append(f"# It is fenced by NetworkPolicy {database.fenced_by}, so that also needs")
+            lines.append("# networkPolicy.allowEgressToExternalWorkflowStore=true.")
+        else:
+            lines.append("# Nothing fences it, so leave networkPolicy.allowEgressToExternalWorkflowStore")
+            lines.append("# off: a rule attached to unfenced pods would cut off its existing clients —")
+            lines.append("# and a database is the backend most likely to have some.")
 
     return "\n".join(lines) + "\n"
 

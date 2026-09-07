@@ -1,12 +1,18 @@
 import * as React from 'react';
 import { createFileRoute } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Play, Plus, Save, Sparkles, Upload } from 'lucide-react';
+import { Play, Plus, Save, ServerCog, Sparkles, Upload } from 'lucide-react';
 import { z } from 'zod';
 
-import { listPipelines, publishDataset, savePipeline } from '@/api/generated/sdk.gen';
+import {
+  listPipelines,
+  publishDataset,
+  savePipeline,
+  startExecution,
+} from '@/api/generated/sdk.gen';
 import type { BlockSpec, CurationPipeline, PipelineBlock } from '@/api/generated/types.gen';
 import { BlockInspector } from '@/components/block-inspector';
+import { ManagedRunCard, useManagedRun } from '@/components/managed-run';
 import { FlowResultView } from '@/components/flow-preview';
 import { PipelineCanvas, blockLabel } from '@/components/pipeline-canvas';
 import { DEFAULT_WINDOW_SECONDS, TimeRange, windowParam } from '@/components/time-range';
@@ -37,6 +43,13 @@ import {
  * Both notebook-running services are optional and the page says which one is
  * missing rather than failing: a chain of a source and a transform is a
  * perfectly good curation, and it runs with the notebook runtime switched off.
+ *
+ * There is a second way to run one, and it is the opposite arrangement: **Run
+ * on the server** hands the saved revision to `POST /api/v1/executions` and
+ * the browser stops being part of it (ADR_0025). The ad-hoc path above stays,
+ * because it is what an editor needs — a preview, a block at a time, an answer
+ * in the tab you are already looking at. What it is not is a thing to leave
+ * running.
  */
 
 const searchSchema = z.object({
@@ -181,7 +194,33 @@ function PipelinePage() {
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['datasets'] }),
   });
 
-  const busy = execute.isPending || save.isPending || publish.isPending;
+  // The run the server owns, if this page started one. Held by id rather than
+  // by object: the projection is re-read from the store on every frame, and a
+  // copy here would be the stale one.
+  const [executionId, setExecutionId] = React.useState<string>();
+  const managed = useManagedRun(executionId);
+
+  const startOnServer = useMutation({
+    mutationFn: async () => {
+      // Saved first, always. A managed run pins a revision, and a chain that
+      // was never saved is a reference to nothing — the same reason Publish
+      // saves before it writes a version.
+      const stored = await save.mutateAsync();
+      const response = await startExecution({
+        body: {
+          target: { kind: 'curation_pipeline', name: stored.pipeline.name },
+          window_seconds: windowParam(windowSeconds) ?? undefined,
+        },
+      });
+      if (!response.data) throw response.error ?? new Error('The run could not be started.');
+      return response.data;
+    },
+    onSuccess: (accepted) => setExecutionId(accepted.execution.execution_id),
+    onError: (error) => setProblems(rejectionDetails(error)),
+  });
+
+  const busy =
+    execute.isPending || save.isPending || publish.isPending || startOnServer.isPending;
 
   const addBlock = (kind: BlockSpec['kind']) => {
     const id = nextId(kind, draft.blocks);
@@ -347,6 +386,15 @@ function PipelinePage() {
             Run
           </Button>
           <Button
+            variant="outline"
+            onClick={() => startOnServer.mutate()}
+            disabled={busy || !chain}
+            title="Compile this pipeline on the server and run it there. The browser may close."
+          >
+            {startOnServer.isPending ? <Spinner /> : <ServerCog className="h-3.5 w-3.5" />} Run on
+            the server
+          </Button>
+          <Button
             variant="ghost"
             onClick={() => publish.mutate()}
             disabled={busy || !result || !publishTo}
@@ -370,6 +418,10 @@ function PipelinePage() {
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_26rem]">
         <div className="flex min-w-0 flex-col gap-4">
+          {executionId || startOnServer.isPending ? (
+            <ManagedRunCard run={managed.data} pending={startOnServer.isPending} />
+          ) : null}
+
           {publish.data ? (
             <Card className="border-success/40 p-3 text-sm">
               Dataset <strong>{publish.data.dataset.name}</strong> saved as version{' '}
@@ -394,7 +446,7 @@ function PipelinePage() {
             </Card>
           ) : null}
 
-          <ResultTable result={result} />
+          <ResultTable result={result} managed={Boolean(executionId)} />
 
           {chain ? (
             <Card className="overflow-hidden">
@@ -458,9 +510,18 @@ function PipelinePage() {
   );
 }
 
-function ResultTable({ result }: { result: PipelineResult | null }) {
+function ResultTable({ result, managed }: { result: PipelineResult | null; managed: boolean }) {
   if (!result) {
-    return (
+    // Two different nothings. With a server run on the page, "nothing run yet"
+    // sits directly under a card saying `completed` and reads as a
+    // contradiction — so it says which of the two ran, because the rows a
+    // managed run produced are in its dataset version and never in this tab.
+    return managed ? (
+      <EmptyState
+        title="Nothing run in this tab"
+        hint="The server run above produced its rows into the dataset it publishes. Preview and Run read them here instead, and write nothing."
+      />
+    ) : (
       <EmptyState
         title="Nothing run yet"
         hint="Preview reads 25 rows through every block and writes nothing."

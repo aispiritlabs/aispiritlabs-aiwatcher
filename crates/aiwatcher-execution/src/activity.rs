@@ -278,6 +278,17 @@ impl ExecutorRegistry {
         self
     }
 
+    /// Everything two registries hold, with the second winning a runtime they
+    /// both name.
+    ///
+    /// A process registers its executors one address at a time — a Flow client
+    /// from one variable, a notebook client from another — and a registry per
+    /// address keeps each one's "absent is a working state" local to it.
+    #[must_use]
+    pub fn merge(self, other: Self) -> Self {
+        other.executors.into_iter().fold(self, Self::with)
+    }
+
     #[must_use]
     pub fn get(&self, runtime: RuntimeKind) -> Option<&std::sync::Arc<dyn ActivityExecutor>> {
         self.executors

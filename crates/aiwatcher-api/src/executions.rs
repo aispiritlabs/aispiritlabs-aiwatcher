@@ -68,7 +68,15 @@ const IDEMPOTENCY_KEY: &str = "idempotency-key";
 
 /// This module's operations, as the contract they satisfy.
 #[derive(OpenApi)]
-#[openapi(paths(start_execution, get_execution))]
+#[openapi(paths(
+    start_execution,
+    get_execution,
+    cancel_execution,
+    pause_execution,
+    resume_execution,
+    retry_step,
+    provide_input
+))]
 struct Api;
 
 /// The operations this module serves. Composed by [`crate::openapi`].
@@ -81,6 +89,30 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/executions", post(start_execution))
         .route("/api/v1/executions/{execution_id}", get(get_execution))
+        // Section 20's command routes. Grouped under `commands/` for the run
+        // and under the step for the two that name one, which is the shape the
+        // plan asked for and reads correctly: pausing is done to a run, and
+        // retrying is done to a step of one.
+        .route(
+            "/api/v1/executions/{execution_id}/commands/cancel",
+            post(cancel_execution),
+        )
+        .route(
+            "/api/v1/executions/{execution_id}/commands/pause",
+            post(pause_execution),
+        )
+        .route(
+            "/api/v1/executions/{execution_id}/commands/resume",
+            post(resume_execution),
+        )
+        .route(
+            "/api/v1/executions/{execution_id}/steps/{step_id}/commands/retry",
+            post(retry_step),
+        )
+        .route(
+            "/api/v1/executions/{execution_id}/steps/{step_id}/input",
+            post(provide_input),
+        )
 }
 
 /// What kind of definition is being run.
@@ -456,4 +488,273 @@ mod tests {
         assert_eq!(nightly.from, 1_700_000_000);
         assert_eq!(nightly.to, 1_700_003_600);
     }
+}
+
+/// A reason, for the one command that carries one.
+#[derive(Debug, Default, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CancelBody {
+    /// Recorded on the decision and read by whoever finds the run stopped.
+    /// Empty is allowed; a wrong reason would be worse than none.
+    #[serde(default)]
+    pub reason: String,
+}
+
+/// The answer a `HumanInput` step asked for.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProvideInputBody {
+    /// Which attempt asked. Named by the caller rather than read from the
+    /// step's latest: an answer typed against a question that has since been
+    /// retried is an answer to a question nobody is asking any more, and
+    /// silently applying it to the new attempt would record a human decision
+    /// that no human made.
+    pub attempt: u32,
+    #[schema(value_type = Object)]
+    pub response: Value,
+}
+
+/// What a command's message id names, beyond the execution and its version.
+///
+/// Section 43.10 one layer up: a message id derived from less than what it
+/// identifies collides with a different intention, and the second is swallowed
+/// as a redelivery of the first. A retry of `read` and a retry of `publish` are
+/// two commands.
+fn intent(command: &WorkflowCommand) -> String {
+    match command {
+        WorkflowCommand::RetryStep { step_id } => format!("retry_step/{step_id}"),
+        WorkflowCommand::ProvideInput {
+            step_id, attempt, ..
+        } => format!("provide_input/{step_id}/{attempt}"),
+        other => other.name().to_owned(),
+    }
+}
+
+/// One intention, applied to a run that already exists.
+///
+/// Every command route below is this function with a different
+/// [`WorkflowCommand`]. What they share is what is worth writing once: the
+/// role, the difference between "no such run" and "that run will not accept
+/// this", the message id, and the nudge to the loops that would otherwise wait
+/// out a poll interval.
+///
+/// The command is built from the caller's identity rather than passed in, so a
+/// route that records *who* answered cannot forget to ask.
+async fn apply<F>(
+    state: &AppState,
+    execution_id: &str,
+    caller: &Caller,
+    build: F,
+) -> ApiResult<Json<RunProjection>>
+where
+    F: FnOnce(&str) -> WorkflowCommand,
+{
+    let who = caller
+        .require(aiwatcher_auth::Role::Editor)?
+        .log_subject()
+        .to_owned();
+    let handler = handler(state)?;
+    let execution = ExecutionId::new(execution_id.to_owned());
+
+    // Read before deciding, for two reasons that both matter. A run this
+    // instance has never heard of is a 404 rather than a 409, because the fix
+    // is a different id and not a different moment. And the version is the
+    // message id's discriminator — see below.
+    let current = handler
+        .store()
+        .projection(&execution)
+        .await
+        .map_err(aiwatcher_execution::HandleError::Store)?
+        .ok_or_else(|| ApiError::NotFound(format!("execution {execution_id}")))?;
+
+    let command = build(&who);
+    debug_assert!(
+        !command.is_effect(),
+        "a caller may only send an intention; ExecuteStep and RequestInput are the decider's"
+    );
+
+    // The run's own version is what tells a double-click from a second
+    // intention. Two clicks on Pause read the same version, derive one id and
+    // meet the inbox; a Pause after a Resume reads a version the Resume moved,
+    // and is a command rather than a redelivery of the first Pause.
+    let message_id = aiwatcher_core::MessageId::new(derive_uuid(&format!(
+        "aiwatcher/execution/command/{execution}/{}/{}",
+        intent(&command),
+        current.last_message_version,
+    )));
+
+    let now = time::OffsetDateTime::now_utc();
+    let handled = handler
+        .handle(
+            &execution,
+            WorkflowMessage::Command(command),
+            MessageMetadata::caused_by(&execution, &message_id, message_id.clone(), now),
+            Now::at(now),
+        )
+        .await?;
+
+    state.notify_execution_worker();
+
+    tracing::info!(
+        execution_id = %execution,
+        state = ?handled.projection.state,
+        requested_by = %who,
+        duplicate = handled.duplicate,
+        "applied a command to a managed execution"
+    );
+
+    Ok(Json(handled.projection))
+}
+
+/// Stop a run, and everything it has not already dispatched.
+#[utoipa::path(
+    post,
+    path = "/api/v1/executions/{execution_id}/commands/cancel",
+    params(("execution_id" = String, Path, description = "The id a start returned")),
+    request_body = CancelBody,
+    responses(
+        (status = 200, body = RunProjection),
+        (status = 403, body = crate::error::ErrorBody),
+        (status = 404, body = crate::error::ErrorBody),
+        (status = 409, body = crate::error::ErrorBody, description = "The run is in no state to accept this"),
+        (status = 501, body = crate::error::ErrorBody),
+    ),
+    tag = "execution",
+)]
+async fn cancel_execution(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(execution_id): Path<String>,
+    body: Option<Json<CancelBody>>,
+) -> ApiResult<Json<RunProjection>> {
+    let reason = body.map(|Json(body)| body.reason).unwrap_or_default();
+
+    apply(&state, &execution_id, &caller, |_| {
+        WorkflowCommand::CancelExecution { reason }
+    })
+    .await
+}
+
+/// Schedule nothing further until this run is resumed.
+///
+/// What is already dispatched keeps running: an attempt is somebody else's
+/// process, and a pause that could reach into it would be a cancel wearing the
+/// wrong name.
+#[utoipa::path(
+    post,
+    path = "/api/v1/executions/{execution_id}/commands/pause",
+    params(("execution_id" = String, Path, description = "The id a start returned")),
+    responses(
+        (status = 200, body = RunProjection),
+        (status = 403, body = crate::error::ErrorBody),
+        (status = 404, body = crate::error::ErrorBody),
+        (status = 409, body = crate::error::ErrorBody, description = "The run is in no state to accept this"),
+        (status = 501, body = crate::error::ErrorBody),
+    ),
+    tag = "execution",
+)]
+async fn pause_execution(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(execution_id): Path<String>,
+) -> ApiResult<Json<RunProjection>> {
+    apply(&state, &execution_id, &caller, |_| {
+        WorkflowCommand::PauseExecution
+    })
+    .await
+}
+
+/// Let a paused run schedule again.
+#[utoipa::path(
+    post,
+    path = "/api/v1/executions/{execution_id}/commands/resume",
+    params(("execution_id" = String, Path, description = "The id a start returned")),
+    responses(
+        (status = 200, body = RunProjection),
+        (status = 403, body = crate::error::ErrorBody),
+        (status = 404, body = crate::error::ErrorBody),
+        (status = 409, body = crate::error::ErrorBody, description = "The run is in no state to accept this"),
+        (status = 501, body = crate::error::ErrorBody),
+    ),
+    tag = "execution",
+)]
+async fn resume_execution(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(execution_id): Path<String>,
+) -> ApiResult<Json<RunProjection>> {
+    apply(&state, &execution_id, &caller, |_| {
+        WorkflowCommand::ResumeExecution
+    })
+    .await
+}
+
+/// Take one step again, from the inputs and the code its plan pinned.
+///
+/// A new attempt rather than a rewrite: the failed one stays in the stream with
+/// its error, which is what a waterfall draws and what a person reads to find
+/// out why this needed a second go.
+#[utoipa::path(
+    post,
+    path = "/api/v1/executions/{execution_id}/steps/{step_id}/commands/retry",
+    params(
+        ("execution_id" = String, Path, description = "The id a start returned"),
+        ("step_id" = String, Path, description = "A step of that run's pinned plan"),
+    ),
+    responses(
+        (status = 200, body = RunProjection),
+        (status = 403, body = crate::error::ErrorBody),
+        (status = 404, body = crate::error::ErrorBody),
+        (status = 409, body = crate::error::ErrorBody, description = "The step is in no state to be retried"),
+        (status = 501, body = crate::error::ErrorBody),
+    ),
+    tag = "execution",
+)]
+async fn retry_step(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path((execution_id, step_id)): Path<(String, String)>,
+) -> ApiResult<Json<RunProjection>> {
+    apply(&state, &execution_id, &caller, |_| {
+        WorkflowCommand::RetryStep { step_id }
+    })
+    .await
+}
+
+/// Answer the question a `HumanInput` step is waiting on.
+#[utoipa::path(
+    post,
+    path = "/api/v1/executions/{execution_id}/steps/{step_id}/input",
+    params(
+        ("execution_id" = String, Path, description = "The id a start returned"),
+        ("step_id" = String, Path, description = "The step that asked"),
+    ),
+    request_body = ProvideInputBody,
+    responses(
+        (status = 200, body = RunProjection),
+        (status = 403, body = crate::error::ErrorBody),
+        (status = 404, body = crate::error::ErrorBody),
+        (status = 409, body = crate::error::ErrorBody, description = "That step is not waiting for this answer"),
+        (status = 501, body = crate::error::ErrorBody),
+    ),
+    tag = "execution",
+)]
+async fn provide_input(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path((execution_id, step_id)): Path<(String, String)>,
+    Json(body): Json<ProvideInputBody>,
+) -> ApiResult<Json<RunProjection>> {
+    apply(&state, &execution_id, &caller, |who| {
+        // Who answered comes from the session, never from the body. A field a
+        // caller could set would make the one record of a human decision say
+        // whatever the caller preferred it to say.
+        WorkflowCommand::ProvideInput {
+            step_id,
+            attempt: body.attempt,
+            answered_by: who.to_owned(),
+            response: body.response,
+        }
+    })
+    .await
 }

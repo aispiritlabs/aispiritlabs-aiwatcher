@@ -44,9 +44,10 @@ use crate::claim::{AttemptKey, AttemptRow, ClaimFilter};
 use crate::message::{
     Direction, MessageMetadata, OutboxMessage, RecordedMessage, RunProjection, WorkflowMessage,
 };
-use crate::state::ExecutionId;
+use crate::state::{ExecutionId, StateType};
 use crate::store::{
-    AppendOutcome, AppendRequest, ExpectedVersion, StoreCapabilities, StreamSlice, WorkflowStore,
+    AppendOutcome, AppendRequest, ExpectedVersion, Pruned, StoreCapabilities, StreamSlice,
+    WorkflowStore,
 };
 use crate::{Result, StoreError};
 use aiwatcher_core::{Checkpoint, MessageId};
@@ -423,6 +424,91 @@ impl WorkflowStore for PostgresWorkflowStore {
             .map_err(|error| StoreError::Backend(error.to_string()))?;
         Ok(())
     }
+
+    /// One bounded transaction: choose, then delete all four tables together.
+    ///
+    /// `for update skip locked` is what makes two work replicas sweeping at
+    /// once take disjoint sets rather than the same one twice — the same reason
+    /// [`Self::claim_attempt`] uses it, and here it keeps the counts honest as
+    /// well as the work halved.
+    async fn prune(&self, before: OffsetDateTime, limit: usize) -> Result<Pruned> {
+        let terminal: Vec<&str> = StateType::TERMINAL.iter().map(|s| s.as_str()).collect();
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|error| StoreError::Backend(error.to_string()))?;
+
+        // The candidate test, in one place: terminal, quiet for long enough,
+        // and not still spoken for by the outbox. The last clause is
+        // `aiwatcher_jobs::ORDERING` — the durable copy reaches the log before
+        // the explanation behind it is forgotten.
+        let doomed: Vec<String> = sqlx::query_scalar(
+            "select execution_id from execution_runs
+              where state_type = any($1)
+                and updated_at < $2
+                and not exists (
+                      select 1 from outbox_messages o
+                       where o.execution_id = execution_runs.execution_id
+                         and o.published_at is null)
+              -- No `order by`. Oldest-first reads well and is what the index
+              -- would have to be sorted into: `state_type = any(...)` over a
+              -- composite index returns each state's rows in its own order, so
+              -- a global ordering is a sort of every prunable row in the table
+              -- to take five hundred of them. The sweep loops until it drains,
+              -- so which five hundred is a question with no consequence — and
+              -- neither of the other two adapters orders either. Measured on
+              -- 50 000 rows: without it the plan is an index scan whose
+              -- condition covers both columns and touches only the hundred
+              -- prunable rows; with it, a Sort above that scan.
+              limit $3
+              for update skip locked",
+        )
+        .bind(&terminal)
+        .bind(before)
+        .bind(limit as i64)
+        .fetch_all(&mut *transaction)
+        .await
+        .map_err(|error| StoreError::Backend(error.to_string()))?;
+
+        if doomed.is_empty() {
+            transaction
+                .rollback()
+                .await
+                .map_err(|error| StoreError::Backend(error.to_string()))?;
+            return Ok(Pruned::default());
+        }
+
+        let attempts: i64 =
+            sqlx::query_scalar("with gone as (delete from step_attempts where execution_id = any($1) returning 1) select count(*) from gone")
+                .bind(&doomed)
+                .fetch_one(&mut *transaction)
+                .await
+                .map_err(|error| StoreError::Backend(error.to_string()))?;
+
+        for statement in [
+            "delete from workflow_messages where execution_id = any($1)",
+            // Published rows only: an unpublished one would have kept its
+            // execution out of `doomed` in the first place.
+            "delete from outbox_messages where execution_id = any($1)",
+            "delete from execution_runs where execution_id = any($1)",
+        ] {
+            sqlx::query(statement)
+                .bind(&doomed)
+                .execute(&mut *transaction)
+                .await
+                .map_err(|error| StoreError::Backend(error.to_string()))?;
+        }
+
+        transaction
+            .commit()
+            .await
+            .map_err(|error| StoreError::Backend(error.to_string()))?;
+        Ok(Pruned {
+            executions: doomed.len(),
+            attempts: usize::try_from(attempts).unwrap_or(0),
+        })
+    }
 }
 
 type Transaction<'a> = sqlx::Transaction<'a, sqlx::Postgres>;
@@ -435,8 +521,8 @@ async fn upsert_projection(
         "insert into execution_runs
            (execution_id, plan_id, definition_name, owner, mode, state_type,
             state_name, requested_by, steps, last_message_version,
-            created_at, started_at, ended_at)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            created_at, started_at, ended_at, updated_at)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now())
          on conflict (execution_id) do update set
            plan_id = excluded.plan_id,
            definition_name = excluded.definition_name,
@@ -448,7 +534,11 @@ async fn upsert_projection(
            steps = excluded.steps,
            last_message_version = excluded.last_message_version,
            started_at = excluded.started_at,
-           ended_at = excluded.ended_at",
+           ended_at = excluded.ended_at,
+           -- The retention clock. A clock read in the store rather than in
+           -- `decide`, which is the one place that may not have one: this is
+           -- when the row was written, not a fact the fold produced.
+           updated_at = now()",
     )
     .bind(projection.execution_id.as_str())
     .bind(&projection.plan_id)

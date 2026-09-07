@@ -27,7 +27,7 @@
 //! [`aiwatcher_jobs::ORDERING`], where a crash re-does work rather than losing
 //! it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -45,7 +45,8 @@ use crate::message::{OutboxMessage, RecordedMessage, RunProjection};
 use crate::state::ExecutionId;
 
 use super::{
-    AppendOutcome, AppendRequest, ExpectedVersion, StoreCapabilities, StreamSlice, WorkflowStore,
+    AppendOutcome, AppendRequest, ExpectedVersion, Pruned, StoreCapabilities, StreamSlice,
+    WorkflowStore, prunable,
 };
 
 const LOCK_FILE: &str = "workflow.lock";
@@ -170,6 +171,20 @@ impl FileWorkflowStore {
     async fn write_attempts(&self, rows: &BTreeMap<AttemptKey, AttemptRow>) -> Result<()> {
         let rows: Vec<&AttemptRow> = rows.values().collect();
         write_atomically(&self.root.join(ATTEMPTS_FILE), &serde_json::to_vec(&rows)?).await
+    }
+
+    /// When this store last wrote anything about an execution.
+    ///
+    /// The stream file's own modification time, because this adapter holds one
+    /// process and appends to that file in place — so the filesystem's answer
+    /// *is* the last append, without reading a line of it. The epoch when the
+    /// file is not there, which is what finishes a prune that was interrupted
+    /// between removing the stream and removing the projection.
+    async fn last_activity(&self, execution: &ExecutionId) -> OffsetDateTime {
+        fs::metadata(self.stream_path(execution))
+            .await
+            .and_then(|meta| meta.modified())
+            .map_or(OffsetDateTime::UNIX_EPOCH, OffsetDateTime::from)
     }
 
     async fn read_outbox(&self) -> Result<Vec<OutboxMessage>> {
@@ -400,6 +415,68 @@ impl WorkflowStore for FileWorkflowStore {
             &serde_json::to_vec(&checkpoint)?,
         )
         .await
+    }
+
+    /// A sweep reads every projection, which is the cost this adapter accepts.
+    ///
+    /// There is no index here to ask instead, and building one would be a
+    /// second file to keep in sync with the directory that is already the
+    /// truth. A store this holds is a development store — one process,
+    /// `just dev` — and the pass it pays for is what keeps the *claim* table
+    /// small, which is the cost that was actually growing.
+    async fn prune(&self, before: OffsetDateTime, limit: usize) -> Result<Pruned> {
+        let _guard = self.gate.lock().await;
+
+        let unpublished: HashSet<String> = self
+            .read_outbox()
+            .await?
+            .into_iter()
+            .filter(|row| row.published_at.is_none())
+            .map(|row| row.partition_key)
+            .collect();
+
+        let mut doomed: Vec<RunProjection> = Vec::new();
+        let mut entries = fs::read_dir(self.root.join(PROJECTIONS_DIR)).await?;
+        while let Some(entry) = entries.next_entry().await? {
+            if doomed.len() == limit {
+                break;
+            }
+            let Ok(body) = fs::read(entry.path()).await else {
+                continue;
+            };
+            let Ok(run) = serde_json::from_slice::<RunProjection>(&body) else {
+                continue;
+            };
+            if unpublished.contains(&format!("workflow:{}", run.execution_id)) {
+                continue;
+            }
+            if prunable(&run, self.last_activity(&run.execution_id).await, before) {
+                doomed.push(run);
+            }
+        }
+
+        let mut pruned = Pruned::default();
+        for run in &doomed {
+            // The stream before the projection: a crash between them leaves a
+            // projection with no stream, which the next pass reads as activity
+            // at the epoch and finishes. The other order leaves a stream
+            // nothing points at and nothing ever looks for.
+            let _ = fs::remove_file(self.stream_path(&run.execution_id)).await;
+            let _ = fs::remove_file(self.projection_path(&run.execution_id)).await;
+            pruned.executions += 1;
+        }
+
+        if !doomed.is_empty() {
+            let gone: HashSet<&ExecutionId> = doomed.iter().map(|run| &run.execution_id).collect();
+            let mut attempts = self.read_attempts().await?;
+            let before_count = attempts.len();
+            attempts.retain(|key, _| !gone.contains(&key.execution_id));
+            pruned.attempts = before_count - attempts.len();
+            if pruned.attempts > 0 {
+                self.write_attempts(&attempts).await?;
+            }
+        }
+        Ok(pruned)
     }
 }
 

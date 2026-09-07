@@ -25,7 +25,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from ml_pipeline.block import OUTPUT
+from ml_pipeline.block import DETERMINISTIC, OUTPUT
 from ml_pipeline.staging import Row, read_input, write_json
 
 
@@ -75,6 +75,17 @@ def inject(app: Any, rows: list[Row], params: dict[str, Any], notebook: str) -> 
     return dict(definitions)
 
 
+def deterministic_of(definitions: dict[str, Any]) -> bool:
+    """Whether this notebook says running it again would answer the same thing.
+
+    Absent means yes. A value that is not a bool is also yes rather than an
+    error: a notebook binding this name to something else has not said "no",
+    and refusing the whole run over it would fail a chain for a spelling.
+    """
+    declared = definitions.get(DETERMINISTIC, True)
+    return declared if isinstance(declared, bool) else True
+
+
 def rows_of(definitions: dict[str, Any], notebook: str) -> list[Row]:
     """The `output` definition, checked for being a list of rows."""
     if OUTPUT not in definitions:
@@ -105,7 +116,14 @@ def main(argv: list[str]) -> int:
         print(error, file=sys.stderr)
         return 1
 
-    write_json(output_path, {"notebook": notebook_path.stem, "rows": rows})
+    write_json(
+        output_path,
+        {
+            "notebook": notebook_path.stem,
+            "rows": rows,
+            "deterministic": deterministic_of(definitions),
+        },
+    )
     return 0
 
 

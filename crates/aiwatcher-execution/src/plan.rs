@@ -503,6 +503,28 @@ impl ExecutionPlan {
             .collect()
     }
 
+    /// The step an authored block compiled into.
+    ///
+    /// Not one-to-one, which is the whole reason this is a search rather than a
+    /// lookup: Flow executes one pipeline, so a source and every transform
+    /// after it fold into a single step whose `blocks` lists all of them. Three
+    /// boxes on a canvas point at one step, and opening any of them has to
+    /// reach it.
+    #[must_use]
+    pub fn step_for_block(&self, block_id: &str) -> Option<&PlanStep> {
+        self.steps.iter().find(|step| match &step.runtime {
+            RuntimeBinding::FlowPhp(spec) => spec.blocks.iter().any(|id| id == block_id),
+            RuntimeBinding::Marimo(spec) => spec.block.as_deref() == Some(block_id),
+            RuntimeBinding::PublishDataset(spec) => spec.block.as_deref() == Some(block_id),
+            // The three that no canvas block compiles to. A plan carrying one
+            // came from a `WorkflowDefinition`, whose editor addresses steps by
+            // their own id rather than by a block.
+            RuntimeBinding::PythonTask(_)
+            | RuntimeBinding::HumanInput(_)
+            | RuntimeBinding::ExternalWorkflow(_) => step.id == block_id,
+        })
+    }
+
     /// The steps that cannot be performed by this process alone.
     ///
     /// Read against [`StoreCapabilities::multi_process`] *before* a run is

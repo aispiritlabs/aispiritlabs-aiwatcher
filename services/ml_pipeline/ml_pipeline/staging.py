@@ -6,13 +6,27 @@ rows or the second is useless — developing a detector against rows that are no
 the rows it will run on is how a block passes every preview and fails on the
 first real batch.
 
-So there is one file per notebook and both sides use it. A run stages the rows
-it was given before it runs them; the live app reads the same file. Open a
-block's editor after a preview and the notebook is showing the rows the chain
-actually produced. Nothing here is durable and nothing here is a dataset: a staged file
-is scratch, it is overwritten by the next stage, and the only artifact that
-outlives a session is the dataset version the View block publishes through the
-Rust registry.
+So a run stages the rows it was given before it runs them, and the live app
+reads what was staged. Open a block's editor after a preview and the notebook is
+showing the rows the chain actually produced. Nothing here is durable and
+nothing here is a dataset: a staged file is scratch, it is overwritten by the
+next stage, and the only artifact that outlives a session is the dataset version
+the View block publishes through the Rust registry.
+
+## Why a context, and why there is still a `latest`
+
+One file per *notebook* was the first shape, and it is wrong as soon as two
+pipelines use one notebook: each run overwrites the other's rows, and a block
+that passed its preview reads somebody else's table on the next one. So a run
+stages under its **context** — `<execution>/<step>/<attempt>` for a managed run,
+which is what `ActivityContext::context_id` carries.
+
+That alone would break the thing this module exists for, because the live app
+knows a notebook's name and nothing else. `latest` is the join: a stage writes
+its own context and then points `latest` at it, and the editor follows the
+pointer. Written in that order, always — a `latest` naming a context that was
+never written is a broken editor, while an unreferenced staged file is a few
+kilobytes nobody reads.
 """
 
 from __future__ import annotations
@@ -20,6 +34,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +47,17 @@ Row = dict[str, Any]
 # staging root.
 NAME = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
+#: What a context directory may be called: the hash, or the reserved word.
+SLUG = re.compile(r"^([0-9a-f]{32}|adhoc)$")
+
 MAX_STAGED_BYTES = 64 * 1024 * 1024
+
+#: What a stage with no context of its own is filed under.
+#:
+#: Every query the panel sends. Named rather than blank so the directory says
+#: what it holds, and reserved so a real context id can never land on it — a
+#: context is hashed, and a hash is never this word.
+ADHOC = "adhoc"
 
 
 class StagingError(ValueError):
@@ -48,6 +73,8 @@ class StagedInput:
     columns: list[str] = field(default_factory=list)
     params: dict[str, Any] = field(default_factory=dict)
     staged_at: str | None = None
+    #: Which run's rows these are. `ADHOC` for anything the panel staged.
+    context: str = ""
 
     @property
     def is_staged(self) -> bool:
@@ -61,11 +88,11 @@ class Staging:
 
     root: Path
 
-    def input_path(self, notebook: str) -> Path:
-        return self._directory(notebook) / "input.json"
+    def input_path(self, notebook: str, context: str | None = None) -> Path:
+        return self._directory(notebook, context) / "input.json"
 
-    def output_path(self, notebook: str) -> Path:
-        return self._directory(notebook) / "output.json"
+    def output_path(self, notebook: str, context: str | None = None) -> Path:
+        return self._directory(notebook, context) / "output.json"
 
     def stage(
         self,
@@ -73,35 +100,70 @@ class Staging:
         rows: list[Row],
         columns: list[str] | None = None,
         params: dict[str, Any] | None = None,
+        context: str | None = None,
     ) -> StagedInput:
-        """Write the rows this notebook is to read, replacing whatever was there."""
+        """Write the rows this notebook is to read for this context.
+
+        Replaces whatever that context held, and leaves every other context
+        alone — which is the difference between two pipelines sharing a
+        notebook and two pipelines fighting over one.
+        """
         staged = StagedInput(
             notebook=_checked(notebook),
             rows=rows,
             columns=columns if columns is not None else columns_of(rows),
             params=params or {},
             staged_at=datetime.now(UTC).isoformat(),
+            context=context or ADHOC,
         )
-        path = self.input_path(staged.notebook)
-        path.parent.mkdir(parents=True, exist_ok=True)
         write_json(
-            path,
+            self.input_path(staged.notebook, context),
             {
                 "notebook": staged.notebook,
                 "staged_at": staged.staged_at,
+                "context": staged.context,
                 "params": staged.params,
                 "columns": staged.columns,
                 "rows": staged.rows,
             },
         )
+        # And only then the pointer the editor follows. The other order leaves
+        # `latest` naming rows that were never written.
+        write_json(
+            self._latest_path(staged.notebook),
+            {"slug": _slug(context), "context": staged.context, "at": staged.staged_at},
+        )
         return staged
 
-    def get_input(self, notebook: str) -> StagedInput:
-        """The staged rows, or an empty one when nothing has been staged yet."""
-        return read_input(self.input_path(_checked(notebook)), notebook)
+    def get_input(self, notebook: str, context: str | None = None) -> StagedInput:
+        """The staged rows, or an empty one when nothing has been staged yet.
 
-    def _directory(self, notebook: str) -> Path:
-        return self.root / "blocks" / _checked(notebook)
+        With no context — which is how the live app asks, because a notebook
+        file knows its own name and nothing else — this follows `latest`.
+        """
+        notebook = _checked(notebook)
+        slug = _slug(context) if context is not None else self._latest_slug(notebook)
+        return read_input(self._at(notebook, slug) / "input.json", notebook)
+
+    def _latest_path(self, notebook: str) -> Path:
+        return self.root / "blocks" / _checked(notebook) / "latest.json"
+
+    def _latest_slug(self, notebook: str) -> str:
+        """Which context the editor should open on."""
+        path = self._latest_path(notebook)
+        if not path.is_file():
+            return _slug(None)
+        body = read_json(path)
+        slug = body.get("slug") if isinstance(body, dict) else None
+        # A pointer that is not a slug is a pointer nobody wrote: fall back to
+        # the ad-hoc directory rather than refusing to open an editor.
+        return slug if isinstance(slug, str) and SLUG.match(slug) else _slug(None)
+
+    def _directory(self, notebook: str, context: str | None = None) -> Path:
+        return self._at(_checked(notebook), _slug(context))
+
+    def _at(self, notebook: str, slug: str) -> Path:
+        return self.root / "blocks" / notebook / slug
 
 
 def read_input(path: Path, notebook: str) -> StagedInput:
@@ -120,6 +182,7 @@ def read_input(path: Path, notebook: str) -> StagedInput:
         columns=[str(name) for name in columns] if isinstance(columns, list) else [],
         params=params if isinstance(params, dict) else {},
         staged_at=str(body["staged_at"]) if body.get("staged_at") else None,
+        context=str(body.get("context") or ADHOC),
     )
 
 
@@ -160,6 +223,19 @@ def read_json(path: Path) -> Any:
         return orjson.loads(path.read_bytes())
     except orjson.JSONDecodeError as error:
         raise StagingError(f"{path} is not JSON: {error}") from error
+
+
+def _slug(context: str | None) -> str:
+    """A directory name for a context id.
+
+    Hashed rather than sanitised: a context is `<execution>/<step>/<attempt>`,
+    so it holds separators, and a path built by replacing them would be one
+    somebody could aim outside the staging root. A hash cannot be, and it
+    cannot collide with [`ADHOC`] either.
+    """
+    if context is None or not context:
+        return ADHOC
+    return sha256(context.encode()).hexdigest()[:32]
 
 
 def _checked(notebook: str) -> str:

@@ -70,6 +70,15 @@ final class PipelineBuilder
 
     private bool $truncate = true;
 
+    /**
+     * Whether every function this query named answers the same thing twice.
+     *
+     * Reported rather than refused: `now()` and `uuid_v4()` are legitimate in
+     * an ad-hoc query, which is never cached anyway. What they may not do is
+     * let a managed step be remembered as a pure function of its inputs.
+     */
+    private bool $deterministic = true;
+
     private ?Dataset $dataset = null;
 
     /** The request window, overridden by read(..., period:) when the script pins one. */
@@ -119,7 +128,7 @@ final class PipelineBuilder
             );
         }
 
-        return new Plan($frame, $this->dataset, $this->truncate, $this->effectiveWindowSeconds);
+        return new Plan($frame, $this->dataset, $this->truncate, $this->effectiveWindowSeconds, $this->deterministic);
     }
 
     private function read(Step $step): DataFrame
@@ -637,10 +646,7 @@ final class PipelineBuilder
                 \sprintf('%s() belongs inside write().', $node->name),
                 $node->column(),
             ),
-            default => throw new ParseError(
-                \sprintf('"%s" is not part of the query language.', $node->name),
-                $node->column(),
-            ),
+            default => $this->viaRegistry($node, $args),
         };
 
         // `ref`/`col` already applied their own chain above; applying it twice
@@ -793,5 +799,58 @@ final class PipelineBuilder
         $reference = $this->reference($node);
 
         return $node->chain === [] ? $reference : $this->compare($reference, $node);
+    }
+
+    /**
+     * A function Flow offers that this file has no bespoke arm for.
+     *
+     * The name is a **key** into [`Registry::functions()`] and never becomes a
+     * callable, which is ADR 0008's rule stated where it actually bites: it is
+     * about dispatch, not about enumeration. The arms above stay because they
+     * marshal arguments in ways a signature does not describe — an aggregation
+     * carries an alias from `->as()`, and `all()` takes scalar functions rather
+     * than values.
+     */
+    private function viaRegistry(Call $node, array $args): mixed
+    {
+        $function = Registry::function($node->name);
+
+        if ($function === null) {
+            throw new ParseError(\sprintf('"%s" is not part of the query language.', $node->name), $node->column());
+        }
+
+        if (\in_array($node->name, Registry::NONDETERMINISTIC, true)) {
+            $this->deterministic = false;
+        }
+
+        // Named arguments keep their names as string keys, which is what the
+        // spread turns back into named arguments.
+        $call = [];
+
+        foreach ($node->args as $index => $argument) {
+            if ($argument->name === null) {
+                $call[] = $args[$index];
+
+                continue;
+            }
+
+            $call[$argument->name] = $args[$index];
+        }
+
+        try {
+            return $function->invoke(...$call);
+        } catch (\TypeError|\ArgumentCountError) {
+            // Flow's own message names a parameter position in a file nobody
+            // reading a query has open. The signature is what the call was
+            // checked against, so the signature is what the message says.
+            throw new ParseError(
+                \sprintf(
+                    '%s() does not take those arguments. It is %s.',
+                    $node->name,
+                    Registry::signature($node->name),
+                ),
+                $node->column(),
+            );
+        }
     }
 }

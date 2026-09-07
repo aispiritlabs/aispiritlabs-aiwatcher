@@ -51,17 +51,8 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::artifacts::{Artifacts, Receipt, Rows};
+use super::artifacts::{Artifacts, Receipt, Rows, preview};
 use crate::config::Config;
-
-/// How much of a result stays inline on the completion event.
-///
-/// Far below `MAX_INLINE_RESULT_BYTES`, and deliberately: what rides the
-/// workflow stream is a *control value* somebody reads on a canvas, and the
-/// rows are one `object://` away. A preview sized at the message limit would
-/// be a stream that grows with the corpus.
-const PREVIEW_ROWS: usize = 5;
-const PREVIEW_BYTES: usize = 8 * 1024;
 
 /// The Flow executor, if this process has an address for one.
 ///
@@ -187,8 +178,18 @@ impl ActivityExecutor for FlowExecutor {
         // span. Believed from the answer rather than assumed from the request,
         // because only the service knows what its sources accept — an older
         // build that never learnt `as_of` says so by omission.
-        let honoured =
-            spec.source.window.is_none() || answer.window_applied.as_deref() == Some("span");
+        let honoured = worth_remembering(
+            spec.source.window.is_some(),
+            answer.window_applied.as_deref(),
+            answer.deterministic,
+        );
+        if !answer.deterministic {
+            tracing::debug!(
+                key,
+                "the query named a function whose value is the moment it ran; \
+                 this result will not be cached"
+            );
+        }
         if !honoured {
             tracing::debug!(
                 key,
@@ -384,27 +385,6 @@ fn refusal(status: reqwest::StatusCode, body: &str) -> String {
     }
 }
 
-/// The bounded control value that rides the completion event.
-fn preview(columns: &[String], rows: &Rows, took_ms: Option<u64>) -> Value {
-    let mut sample = Vec::new();
-    let mut budget = PREVIEW_BYTES;
-    for row in rows.iter().take(PREVIEW_ROWS) {
-        let encoded = serde_json::to_value(row).unwrap_or(Value::Null);
-        let size = encoded.to_string().len();
-        if size > budget {
-            break;
-        }
-        budget -= size;
-        sample.push(encoded);
-    }
-    json!({
-        "columns": columns,
-        "rows": rows.len(),
-        "preview": sample,
-        "took_ms": took_ms,
-    })
-}
-
 /// `POST /flow/query`, as much of it as a managed step reads.
 ///
 /// Deliberately not the panel's whole schema: the fields a *table on a screen*
@@ -434,6 +414,31 @@ struct QueryAnswer {
     /// `duration` — the behaviour that build has.
     #[serde(default)]
     window_applied: Option<String>,
+    /// Whether running the query again would answer the same thing.
+    ///
+    /// False once it named `now()`, `uuid_v4()` or another function whose value
+    /// is the moment it ran. Only the query service can know this — the script
+    /// is text until it resolves it — which is the same reason
+    /// `window_applied` is declared there rather than inferred here. Defaults
+    /// to true so an older build, which never reported it, keeps the behaviour
+    /// it had: those builds have no function that could make it false.
+    #[serde(default = "yes")]
+    deterministic: bool,
+}
+
+/// Serde's default for a field an older query service does not send.
+fn yes() -> bool {
+    true
+}
+
+/// Whether this result may be remembered under the step's cache key.
+///
+/// Both halves are the *service's* answer rather than the request's, for the
+/// reason section 43.18 states: whether a key is well defined is `cache_key`'s
+/// question, and whether the run that produced these rows happened under those
+/// conditions is only knowable where the query resolved.
+fn worth_remembering(pinned_a_span: bool, applied: Option<&str>, deterministic: bool) -> bool {
+    deterministic && (!pinned_a_span || applied == Some("span"))
 }
 
 /// `GET /flow/executions/{execution_id}`.
@@ -447,47 +452,6 @@ struct PriorAnswer {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_preview_is_a_control_value_and_never_the_rows() {
-        // What rides the workflow stream is what somebody reads on a canvas.
-        // The rows are one `object://` away, and a preview sized at the
-        // message limit would be a stream that grows with the corpus.
-        let rows: Rows = (0..500)
-            .map(|n| {
-                std::collections::BTreeMap::from([(
-                    "text".to_owned(),
-                    Value::String("x".repeat(200) + &n.to_string()),
-                )])
-            })
-            .collect();
-        let preview = preview(&["text".to_owned()], &rows, Some(12));
-
-        assert_eq!(preview["rows"], 500, "the count is the whole table's");
-        assert_eq!(
-            preview["preview"].as_array().expect("an array").len(),
-            PREVIEW_ROWS,
-            "and the sample is not"
-        );
-        assert!(preview.to_string().len() < PREVIEW_BYTES * 2);
-    }
-
-    #[test]
-    fn a_preview_stops_at_its_byte_budget_before_its_row_budget() {
-        let rows: Rows = (0..PREVIEW_ROWS)
-            .map(|_| {
-                std::collections::BTreeMap::from([(
-                    "text".to_owned(),
-                    Value::String("x".repeat(PREVIEW_BYTES)),
-                )])
-            })
-            .collect();
-        let preview = preview(&["text".to_owned()], &rows, None);
-        assert!(
-            preview["preview"].as_array().expect("an array").len() < PREVIEW_ROWS,
-            "one row over the budget is one row too many"
-        );
-    }
 
     #[test]
     fn a_pinned_span_is_sent_as_bounds_and_as_the_width_it_is_worth() {
@@ -523,6 +487,32 @@ mod tests {
         let body = request_of(&unwindowed, "exec-1/read/1");
         assert!(body.get("window_seconds").is_none());
         assert!(body.get("window_from").is_none());
+    }
+
+    #[test]
+    fn a_result_is_remembered_only_when_the_service_says_both_halves_held() {
+        // A pinned span the service honoured, over functions that answer the
+        // same thing twice. Anything less is produced, reported and forgotten.
+        assert!(worth_remembering(true, Some("span"), true));
+        assert!(worth_remembering(false, None, true));
+
+        // The service narrowed the span to a width applied from its own clock,
+        // so a retry five minutes later reads different rows under one key.
+        assert!(!worth_remembering(true, Some("duration"), true));
+
+        // And the half the query language decides: `now()` is honest work and
+        // a cache entry that would be wrong the second time it is read.
+        assert!(!worth_remembering(true, Some("span"), false));
+        assert!(!worth_remembering(false, None, false));
+    }
+
+    #[test]
+    fn a_query_service_that_never_learnt_to_report_determinism_is_believed() {
+        // Those builds have no function that could make it false, so the
+        // absent field means "yes" rather than "unknown" — the same reasoning
+        // that lets an older service omit `window_applied`.
+        let answer: QueryAnswer = serde_json::from_str(r#"{"rows":[]}"#).expect("an empty answer");
+        assert!(answer.deterministic);
     }
 
     #[test]

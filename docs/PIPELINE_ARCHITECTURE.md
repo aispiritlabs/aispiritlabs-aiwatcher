@@ -1219,16 +1219,21 @@ POST /api/v1/executions
 GET  /api/v1/executions
 GET  /api/v1/executions/{execution_id}
 GET  /api/v1/executions/{execution_id}/events
-GET  /api/v1/executions/{execution_id}/stream
 
 POST /api/v1/executions/{execution_id}/commands/cancel
 POST /api/v1/executions/{execution_id}/commands/pause
 POST /api/v1/executions/{execution_id}/commands/resume
 POST /api/v1/executions/{execution_id}/steps/{step_id}/commands/retry
+POST /api/v1/executions/{execution_id}/steps/{step_id}/input
 
 GET  /api/v1/executions/{execution_id}/steps/{step_id}/context
 POST /api/v1/editor-sessions
 ```
+
+A live stream of one execution is **not** in that list, and 43.21 says why: it
+was written before ADR_0026, which put a managed run's facts on the log under
+the execution's own id. `/api/v1/workflow-executions/{id}/stream` already
+follows one.
 
 Revision 2 adds the routes the worker, the hosted decider and the human step
 need:
@@ -1551,12 +1556,11 @@ Phases 1, 3 and 9 build, moves Phase 8 behind its own gate, and adds Phases
 10–15 for the worker, planner, the hosted decider and the human step. Each
 phase names its exit; a phase without a green exit does not start the next.
 
-> **Implementation status, 2026-09-05.** Phases 0, 1, 2, 3 and 5 are done.
-> Phase 4 is **not**, and Phase 5 was built without it: what it needed of
-> artifacts is a content-addressed put, a verified read and a receipt, which is
-> `aiwatcher-server`'s `execution::artifacts` rather than the catalog tables and
-> editor sessions Phase 4 describes. Section 45 records what building it
-> changed in this document.
+> **Implementation status, 2026-09-05.** Phases 0, 1, 2, 3, 5 and the
+> context half of 4 are done. What is left of Phase 4 is a code snapshot and a
+> staging key, and both wait on Phase 6 rather than on anybody's time — section
+> 43.19 says why. Section 45 records what building it changed in this
+> document.
 >
 > **Recorded.** ADR_0025 (the server owns managed execution) and ADR_0026 (the
 > engine is a producer on its own log). ADR_0014 and ADR_0024 marked partially
@@ -1598,7 +1602,11 @@ phase names its exit; a phase without a green exit does not start the next.
 > `running | done {digest, rows} | absent`. The service remembers that it ran
 > and what the result hashed to, never the rows.
 >
-> **Proven.** The Phase 5 exit, by hand and end to end: a saved pipeline
+> **Proven.** The Phase 4 exit, by hand: a pipeline saved, edited and saved
+> again, and the *old* revision's block still opening with the script it was
+> saved with — plus a finished run's publish step reporting the exact artifact
+> digest it read, resolved from the stream rather than guessed. The Phase 5
+> exit, by hand and end to end: a saved pipeline
 > submitted over HTTP, the client gone, the process killed mid-run, and one
 > published dataset version carrying `produced_by` and `execution_id` after the
 > restart. The Phase 3 exit, in
@@ -1607,27 +1615,39 @@ phase names its exit; a phase without a green exit does not start the next.
 > nodes, from `workflow.declared` and `step.*` alone, with no second read path
 > and no panel work. The Phase 1 exit, three times over: the contract suite is
 > `aiwatcher_execution::testing` behind a `testing` feature, and all three
-> adapters assert the same sixteen properties rather than three similar sets.
+> adapters assert the same eighteen properties rather than three similar sets.
 > `just postgres-up && just test-postgres` runs it against a real database.
+>
+> Phases 6 and 7 followed (43.24, 43.23): the marimo executor, the panel's
+> "Run on the server", and with them Phase 4's staging by context id. Retention
+> and the chart came after (43.25).
 >
 > **Not built, and each blocks something named:**
 >
-> * Phase 4's artifact metadata, lineage and cache **tables**, and its editor
->   sessions and `ContextSnapshot`. `ArtifactCatalog` has a memory adapter and
->   no durable one, and nothing wires it: a cache hit is therefore impossible
->   today, and an old block cannot be opened with its historical context.
+> * Phase 4's editor sessions and its content-addressed notebook source
+>   snapshot. The block pins a `sha256` and the runtime checks it twice, which
+>   is what the snapshot was for; a session that survives a reload is not
+>   built (43.19).
 > * Section 20's `mode: "preview"`. A managed step already reports a bounded
 >   inline preview *beside* its artifact, which is what a canvas renders; what
 >   does not exist is a whole execution that runs at simulation size and
 >   publishes nothing. `POST /executions` refuses the field by name rather than
 >   ignoring it.
-> * The marimo activity executor, which is Phase 6.
-> * Any panel change. `POST /executions` has no caller in the browser, so the
->   Pipeline view still drives a chain itself — Phase 7, and ADR_0025 is
->   explicit that the ad-hoc path stays either way.
-> * Anything in `deploy/`: no PostgreSQL installed or reported through
->   `detect-stack.py` as ADR_0009 requires, and no NetworkPolicy for the two
->   roles.
+> * **A caller for the five command routes.** Cancel, pause, resume, retry and
+>   provide-input are served, tested and reachable by `curl`; nothing in the
+>   panel sends one, and `ContextSnapshot::allowed` lists `Retry` and `Answer`
+>   for a canvas that renders neither — as do both context routes, which have
+>   no caller at all. Section 43.27.
+> * **A managed run that outlives the tab that started it.** The execution id
+>   is `React.useState` in the Pipeline view, against this repository's own
+>   rule that a view's state lives in the URL — so a reload loses the run
+>   ADR_0025 exists to let you walk away from. It is not lost from the system:
+>   the Workflows view draws it from the log, by the same id. There is also no
+>   `GET /api/v1/executions` to find one with. Section 43.27.
+> * **A trigger that is not a person.** ADR_0025 named "unattended, on a
+>   schedule" as a motivation and `POST /executions` is still the only way in.
+>   Nothing forecloses a scheduler — it would post the same body — and nothing
+>   provides one.
 > * Everything from Phase 8 on.
 
 ### Phase 0 — record the decisions
@@ -1688,14 +1708,22 @@ nodes — before any panel work.
 
 ### Phase 4 — artifacts and context
 
-- Promote `aiwatcher_training::package::ArtifactRef` to core.
-- Add artifact metadata, lineage, and cache tables.
-- Store results and code snapshots through `ObjectStore`.
-- Implement `ContextSnapshot` and editor-session APIs.
-- Change marimo staging keys from notebook name to context id (16.4).
+- ~~Promote `aiwatcher_training::package::ArtifactRef` to core.~~ Done.
+- ~~Add artifact metadata, lineage, and cache tables.~~ Done, as
+  `artifact::object` over the same `ObjectStore` — the manifest beside the
+  bytes, the cache index beside both, and a lineage prefix because an object
+  store lists by prefix and nothing else.
+- Store results *(done)* and code snapshots *(not — see 43.19)* through
+  `ObjectStore`.
+- ~~Implement `ContextSnapshot`~~ done, with two routes; **editor-session APIs
+  deferred to Phase 6**, which is when a session has something to open.
+- Change marimo staging keys from notebook name to context id (16.4) — **not**,
+  and 43.19 says what it waits for.
 
 **Exit:** an old Flow or marimo block opens with its exact historical data and
-code revision.
+code revision. **Met**, with one honest limit: the code revision is the digest
+the pipeline *pinned*, and whether the notebook file still hashes to it is the
+notebook runtime's answer rather than this one's.
 
 ### Phase 5 — Flow-only managed execution
 
@@ -3145,6 +3173,425 @@ And `ActivityResult` lost its derived `Default`. `cacheable` defaults to `true`,
 which a derive would have made `false` — silently turning the cache off for
 every executor that built a result the short way. A boolean whose safe value is
 not `Default::default()` is a boolean that needs an impl.
+
+### 43.19 Phase 4 was three bullets and two of them had no reader
+
+The phase reads as one unit — "artifacts and context" — and building it split
+cleanly into what somebody can use today and what would be a writer nobody
+reads. The split is worth recording because it is the same judgement 43.15 was
+about, made *before* the code rather than after.
+
+**Built: `ContextSnapshot` and its two routes.** This is the exit, and it has
+readers: a person reopening an old block, and the panel that must not
+reconstruct one. `of_step` is exact because a run pins an immutable plan;
+`of_block` reports what a saved revision would run and says "nothing has
+happened" with empty fields rather than borrowing the newest run's rows.
+
+The type carries the plan's own `RuntimeBinding` rather than re-describing it.
+A binding already *is* the resolved context — the compiled script beside its
+structured source, the notebook beside the digest the revision pinned — and a
+second description of it would be a second place to change when a runtime gains
+a field.
+
+**Not built: a content-addressed source snapshot (16.1, step 2).** It is a
+writer with no reader until Phase 6's marimo executor exists, and it argues with
+a guardrail ADR_0024 states plainly: a copy of a notebook's source in a registry
+is a second source of truth for a file that has to stay runnable on its own. The
+two are reconcilable — an archive that is only ever read is not a second source
+of truth — but reconciling them costs a decision, and the decision buys nothing
+until something loads a pinned revision. So the context reports what was
+**pinned**, and whether the file still hashes to it stays the notebook runtime's
+answer: the one part of a context the process holding the plan cannot know.
+
+**Not built: staging by context id (16.4).** Same reason and a sharper one. The
+staging module's own docstring argues *for* one file per notebook — "open a
+block's editor after a preview and the notebook is showing the rows the chain
+actually produced" — and 16.4 wants a key per context so two pipelines stop
+overwriting each other. Both are right, and reconciling them means a context
+directory plus a per-notebook pointer to the latest. Nothing passes a context id
+until the panel does, which is Phase 7.
+
+**One departure from section 19.** Its sketch gives each action an `href`. This
+returns action *names* and no addresses: an action's address is either this
+API's own, which the generated client already has, or an optional service's —
+and a service's address in a response body is what every other route here
+refuses to carry. What only the server knows is which actions apply, and that is
+what `allowed` is.
+
+That last part was true for one phase and is not any more. With the command
+routes built (43.20), `allowed` gained `Retry` and `Answer`, each listed
+exactly where `decide` would accept it — `Failed` or `Crashed` and not
+cancelling for the first, a step actually holding a question for the second.
+Cancel, pause and resume stayed out on a different ground than "no route":
+they are done to a **run**, and this is a block's context.
+
+### 43.20 Five commands the state machine had and nobody could send
+
+`decide` implemented `CancelExecution`, `PauseExecution`, `ResumeExecution`,
+`RetryStep` and `ProvideInput` from the phase that introduced it, with the
+scenario tests to match. The API exposed none of them, so a managed run that
+went wrong could only be waited out. This is the cheapest kind of gap to miss:
+both halves are correct, the tests are green, and the capability is real and
+unreachable.
+
+Building the routes cost almost nothing and settled three things worth
+recording.
+
+**A command's message id names the run's version.** The inbox deduplicates by
+message id, so a derivation of "execution plus command name" makes a
+double-click idempotent — and makes a Pause after a Resume a *redelivery of the
+first Pause*, silently leaving the run going. `RunProjection::last_message_version`
+is the discriminator: two clicks read one version and meet the inbox, while a
+second intention reads a version the first moved. This is 43.10's rule reaching
+a second place, and `a_pause_after_a_resume_is_a_command_and_not_a_redelivery_of_the_first_pause`
+fails without it.
+
+**"No such run" and "that run will not accept this" are different answers.**
+The route reads the projection first and 404s, because a 409 invites somebody
+to try again later and there is no later for an id that does not exist.
+Everything else is `decide`'s, arriving as `HandleError::Decision` → 409 with
+the state named. The API restates none of those rules — the same split as the
+annotation canvas and the shape validator.
+
+**`answered_by` is the session, never a field.** `ProvideInputBody` is
+`deny_unknown_fields`, so a body trying to set it is a 422 rather than the one
+record of a human decision saying whatever the caller preferred.
+
+And the consequence for section 19: `ContextSnapshot::allowed` stopped being
+almost a function of the runtime. It now carries `Retry` and `Answer` exactly
+where `decide` would accept them, because an action offered where the command
+would be refused is a button that returns a 409.
+
+### 43.21 The execution stream was already there
+
+Section 20 lists `GET /api/v1/executions/{execution_id}/stream`. It was written
+before ADR_0026, and ADR_0026 is what makes it unnecessary: a managed run's
+facts go on the event log, every one of them carrying the execution as its
+`workflow_run_id`, and `/api/v1/workflow-executions/{workflow_run_id}/stream`
+scopes by exactly that field. A managed execution has been streamable since the
+first one ran.
+
+Building the second route would have been a second image of one run, which is
+the thing ADR_0026 refuses in the same sentence it refuses a second read path
+for the list. It is struck from section 20 rather than implemented, and
+`every_fact_a_managed_run_publishes_is_reachable_by_the_execution_id` is the
+test that keeps the reason true — if a fact ever ships without that field, the
+argument for having no second route stops holding, and that test is where it
+says so.
+
+`GET /api/v1/executions/{execution_id}/events` stays: paging a stored stream
+and following a live one are different questions.
+
+### 43.22 The query vocabulary was a queue, not a boundary
+
+ADR_0008's rule is that a name from a query never becomes a callable. What grew
+around that rule was a hand-written whitelist of 37 names and, in
+`PipelineBuilder`, a `match` arm per name with its own argument marshalling.
+Those are two different things, and only the first is the boundary: the second
+is an enumeration, and an enumeration is a queue. Flow ships 239 functions.
+
+The rule is about **dispatch**. A string that selects a key in a map built from
+reflection is exactly as safe as one that selects a `match` arm, so
+`Dsl\Registry` builds that map and admission is decided by three things, none
+of which is a name:
+
+- **the return type's namespace.** A query composes values; the catalog decides
+  what may be read and `write()` decides where rows go. `Flow\ETL\Loader`,
+  `Extractor` and `Filesystem` are absent, which is what keeps `to_csv()` and
+  `from_parquet()` out — 32 functions that would otherwise have been a file
+  write in a service with no authentication.
+- **any parameter that accepts a callable.** Flow has two, `call()` and
+  `to_callable()`, and `call(ScalarFunction|callable $callable, …)` is
+  precisely the remote code execution this service exists to refuse. Refused by
+  *signature*, so a function Flow adds later is refused before anybody here has
+  heard of it.
+- **`Whitelist::DECLINED`**, which is about correctness rather than safety and
+  keeps its reasons: `equals` still matches null against anything.
+
+108 names, from 37, including window functions and the whole `regex_*`,
+`array_*` and date family. The existing `match` arms were left exactly as they
+were and the registry is the `default` branch, so nothing that worked before
+takes a new path.
+
+Two findings came out of running it rather than reading it.
+
+**Categorisation reads the return type as a string and never loads the class.**
+`class_exists()` autoloads, and `Flow\ETL\Function\Uuid` throws at load when
+neither `ramsey/uuid` nor `symfony/uid` is installed. Deciding admission by
+loading would take the service down at start-up over an optional dependency of
+a function nobody called.
+
+**A refusal test passed for the wrong reason.** `call('system', [])` is refused
+by the lexer, for the `[`. With the signature rule disabled, `call('system')`
+parsed. The case is now written without the array, and it fails when the rule
+is removed — which is the only version of that test worth having.
+
+The one thing admission could not decide is **determinism**. `now()`,
+`uuid_v4()` and `random_string()` are honest work in the Query tab and a wrong
+cache entry in a managed step, so the answer carries `deterministic` beside
+`window_applied` and for the same reason as 43.18: only the service knows what
+its query resolved to. The reactor reads it as `ActivityResult::cacheable`, and
+an older service that never learnt the field is believed, because those builds
+have no function that could make it false.
+
+`join` did not come free. It takes a second `DataFrame`, which needs a
+sub-pipeline in the parser rather than a dispatch change, so it stays ahead
+rather than arriving with this.
+
+### 43.23 Phase 7, at the size that was actually missing
+
+The plan's Phase 7 is "thin the panel": remove `orderOf`, `compileFlow` and
+`runPipeline` from the managed path. What was actually missing was smaller and
+came first — **nothing in the panel called `POST /api/v1/executions` at all**,
+so every managed run so far had been started with curl.
+
+Three decisions, and the first is the one worth keeping.
+
+**The stream is the signal; the projection is the truth.** A frame says
+something happened and `GET /executions/{id}` says what the state now is,
+because that projection was written in the same transaction as the decision
+(ADR_0026). So `useManagedRun` subscribes to `openWorkflowStream` and does
+nothing with the frame but invalidate a query. No frame parsing, no polling
+interval, and the per-step state a canvas would need is the store's rather than
+a fold's.
+
+**The waterfall is a link, not a second drawing.** The Workflows view is fed by
+the same events and already renders a managed run (43.21). Drawing one here too
+would be two pictures of one run that disagree whenever one is a frame behind.
+
+**The ad-hoc path stays, and the two empty states now say which nothing they
+mean.** With a server run on the page, "Nothing run yet" sits directly under a
+card reading `completed`; it says "nothing run in this tab" instead, and where
+the rows went. ADR_0025 keeps the browser-driven chain deliberately — a
+preview, a block at a time, an answer in the tab you are looking at — so the
+two will coexist and the wording is the whole cost of that.
+
+Proven by running it: the button saved, started, and the card reached
+`completed` with both steps, live. Two things came out of the same session that
+no test states. A managed run whose Flow service could not reach the API failed
+three times as `Transient`, kept its wider budget and **recovered on its own**
+at attempt four once the dependency came back — 43.17 doing exactly its job,
+51 s of wall clock and no human. And the second run of the same pinned span
+finished in 1.03 s having sent the query service **no query at all**: the
+cache, in the panel-driven path.
+
+What is still Phase 7 and deliberately not done: the canvas does not light its
+blocks from a managed run's step states, and `compileFlow` still exists on the
+ad-hoc path. Both are real work and neither is what made the feature
+unreachable.
+
+### 43.24 Phase 6, and the two Phase 4 items it was holding
+
+The notebook executor is the fourth `ActivityExecutor` and the last runtime a
+curation chain needs, so ADR_0024's `source → transform → notebook → view` now
+runs whole under the server. It also unblocked the two things 43.19 recorded as
+"writers with no reader", and both turned out to be more than plumbing.
+
+**The pinned revision is checked twice, and both are the same rule.** The
+compiler already refuses a notebook block with no revision, so a plan always
+pins one. The executor asks the runtime what source it holds *before* anything
+executes, and compares what actually ran *after*. The first makes drift a
+refusal that cost nothing; the second makes it impossible for a notebook saved
+between those two moments to be recorded as the pinned one. `UserCode`, so it
+is not retried, and the message carries both revisions and the fix — proven by
+running it: a notebook edited after its pipeline was saved refused before the
+subprocess started.
+
+**Staging by context needed a `latest` to stay useful.** 16.4 reads as "key the
+staged rows by context id instead of by notebook name", and doing only that
+breaks the thing staging exists for: the live app knows a notebook's name and
+nothing else, so it would stop finding the rows. So a run stages under its
+context *and then* points `latest` at it, in that order — a `latest` naming
+rows that were never written is a broken editor, while an unreferenced staged
+file is a few kilobytes nobody reads. The editor follows the pointer. Two
+pipelines sharing one notebook no longer overwrite each other, and opening
+either still shows the rows its last run produced.
+
+The context is **hashed** into a directory name rather than sanitised, because
+`<execution>/<step>/<attempt>` holds separators and a path built by replacing
+them is one somebody could aim outside the staging root.
+
+**And a hole that only appeared once something ran.** The compiler marks a
+notebook step `CachePolicy::ByContent`, which had no consequence while no
+notebook step ever executed. With an executor it does: a chain caches the step
+by the rows it read, the parameters it was given and the revision it pinned —
+right for a transform, wrong for a notebook that samples, reads the clock or
+asks a model. Nothing outside the notebook can tell those apart.
+
+So a notebook declares it, beside its `output`:
+
+```python
+deterministic = False
+```
+
+Absent means true, because a curation block normally is one and a default that
+turned caching off would make every chain pay for the exceptions. This is
+exactly the seam 43.22 built for the query service, arriving at the same answer
+from the other side: the runtime reports what it knows, and
+`ActivityResult::cacheable` is where both land.
+
+A cache hit, incidentally, does **not** re-check the pin, and that is correct
+rather than a gap: the key contains the pinned revision, and the cached rows
+were produced by a run that verified it. The file on disk having changed since
+says nothing about bytes that were produced by the revision the plan names.
+
+**What `lookup` cannot do here.** The query service remembers that it ran a key
+(15.4); the notebook runtime remembers nothing — a run is a subprocess it holds
+open and there is no route to ask. So `lookup` asks the object store's receipt
+and nothing else, which answers honestly whether a *previous attempt got all
+the way through*. It does not cover a notebook still running in a process this
+one cannot see, and such a step may run twice. Recorded rather than hidden:
+giving the notebook runtime the query service's execution memory is the fix,
+and it is a change to that service.
+
+### 43.25 The store grew and the chart could not hold it
+
+Two halves of one gap, and both are about the first real deployment rather than
+about a design that was wrong.
+
+**Nothing forgot anything.** 43.16 deleted published outbox rows and said what
+it did not fix: streams, attempt rows and the projection are never pruned, and
+the `file` adapter rewrites its whole attempt table on every claim. So
+`WorkflowStore` gained `prune(before, limit)`, every adapter implements it, and
+the contract suite has a seventeenth and eighteenth property. The rules are
+`store::prunable` and the outbox check, in one place because an adapter that
+decided them itself would keep a *different* retention policy:
+
+* **Terminal only.** A run with no end is `Running`, and nothing in this system
+  decides one has died — the projector's rule for agent runs, arriving in a
+  second store. A sweep that deleted by age alone would delete the run somebody
+  is watching.
+* **Nothing the outbox still holds.** A pending row is a fact that has not
+  reached the log. Deleting the decision behind it leaves the publisher a
+  message with no explanation and the log a gap nothing records —
+  `aiwatcher_jobs::ORDERING` in a sixth place.
+* **All of one execution together**: stream, inbox, projection, attempts. A
+  kept projection whose stream is gone is a run the panel lists and cannot
+  open.
+
+**The clock is not `ended_at`.** Following the sweep through found that field to
+be the mirror image of 43.15's `CachePolicy::ByContent`: `RunProjection::ended_at`
+and `started_at` have **no writer**. `evolve` reads no clock and the terminal
+events carry no timestamp, so nothing ever sets them, and nothing reads them
+either. Rather than widen `replay` across twenty call sites for a field that is
+not the right clock anyway, retention uses *when the store last wrote anything
+about this execution* — which cannot be absent, which resets on a retry, and
+which is what a person means by a retention window. Each adapter reads it from
+what it already holds: the last recorded message (`memory`), the stream file's
+own modification time (`file`), a column written by the projection upsert
+(`postgres`, migration 0002 — the first use of the second-migration machinery
+`schema.rs` was built for, verified by rolling a database back to version 1 and
+applying it again). `ended_at` having no writer stands, unfixed and now written
+down.
+
+The PostgreSQL sweep is one transaction with `for update skip locked`, so two
+work replicas take disjoint sets. Its candidate query carries **no** `order by`:
+oldest-first reads well, and over a composite index led by `state_type` it is a
+sort of every prunable row in the table to take five hundred of them. Measured
+on 50 000 rows — without it the plan is an index scan whose condition covers
+both columns and touches exactly the hundred rows past the cutoff; with it, a
+Sort sits above that scan. The sweep loops until it drains, so *which* five
+hundred has no consequence, and neither of the other two adapters orders either.
+
+The window has a floor nothing in the crate can check: the inbox goes with the
+stream, so a message redelivered after its execution was pruned is decided again
+rather than recognised. Delivery is at-least-once and the log is what
+redelivers, so the window must be longer than the log's retention.
+`AIWATCHER_WORKFLOW_RETENTION_DAYS` is unset by default and `0` means keep, not
+delete: the stream is the *explanation* of a run and the one thing the event log
+does not carry, so a release that started deleting it on an upgrade would be
+deleting the only copy.
+
+**And `deploy/` knew nothing about any of it.** The chart had no database, no
+detection for one, no workflow-store variables, no address for the runtimes a
+step needs, and no policy for either. It has all of them now: `execution`
+(`store`, `retentionDays`, `flowUrl`, `mlPipelineUrl`, `splitRoles`, `workers`)
+and `postgresql` as the fifth `install | external | none` backend, with
+`detect-stack.py` reporting a database it finds and **never** deriving one —
+the object store's rule with a sharper reason, because what this release would
+do with a database it found is create tables in it.
+
+Four refusals at render time rather than at rollout, each naming what
+`Config::validate` would refuse later: `store: postgres` with no database,
+`store: file` on an emptyDir, and the three shared backends the role split
+needs. And one bug that a policy would have surfaced only as a timeout: the Flow
+service's NetworkPolicy admitted the **panel** and nothing else, which was right
+while the only client proxied a person's query — a managed `flow_php` step is
+aiwatcher reaching that service directly, and every attempt would have been a
+refused connection the retry budget read as a transient outage and spent ten
+attempts on. It admits the panel, the server and, when the roles are split, the
+worker.
+
+Section 27's split is a `splitRoles` flag over one shared environment: the two
+Deployments are the same binary reading the same configuration, so the
+environment is a template rendered twice and the two things that differ —
+`AIWATCHER_ROLE`, and the listen address a role with no socket has no use for —
+are written beside each call. Two copies of that list would be one release where
+a variable reached the API and not the worker, whose every symptom appears three
+attempts later as "holds no object". The extraction was verified by diffing the
+rendered chart before and after: identical but for the generated secrets, which
+are random per render by design.
+
+### 43.26 A dead guard that was not inert
+
+`evolve`'s `StepStarted` arm carried
+
+```rust
+if execution.started_at.is_none() {
+    execution.state = RunState::of(StateType::Running);
+}
+```
+
+meaning "the first step to start moves the run from scheduled to running". Two
+things are wrong with it and they compound. `RunProjection::started_at` and
+`ended_at` have **no writer** — `evolve` reads no clock and the terminal events
+carry no timestamp — so the condition is always true; and the transition it
+guards is already made unconditionally by `ExecutionStarted`, which the start
+emits before any step can report. So the branch could only ever overwrite a
+state the run had moved to *since*: `Cancelling` or `Paused`.
+
+Both are reachable and neither is exotic. Two steps with no edge are dispatched
+together; one reports started, somebody cancels, and the reactor that had
+already claimed the other reports honestly a moment later — the run reads
+`running` again. The pause case is worse, because a pause is a thing somebody
+does and then watches for, and a run that reads `running` a second later reads
+as a pause that did not take. Nothing *behaved* wrongly: `cancelling` is a
+separate flag and it is what `decide` and `ContextSnapshot::allowed` read. Only
+the word a person sees was wrong, which is the whole job of that field.
+
+The assignment is deleted rather than repaired, because the transition has an
+owner. `started_at` and `ended_at` having no writer stands — fixing them needs
+a timestamp in the fold, which is a change to `replay` and its twenty call
+sites, and neither field has a reader either.
+
+### 43.27 What is served and what is reachable are two lists
+
+Written down because the gap between them is invisible from either side.
+
+**Five commands with no caller.** 43.20 added cancel, pause, resume, retry and
+provide-input, and 43.19's `ContextSnapshot::allowed` says which of them apply
+to a block, precisely so a panel never offers one that would 409. Nothing in
+the panel sends any of them, and the canvas renders neither `Retry` nor
+`Answer`. The routes are right and the guardrail about not listing an action
+whose command would be refused is kept — by rendering no actions at all, which
+is the trivial way to keep it.
+
+**A managed run that does not outlive its tab.** The Pipeline view holds the
+execution id in `React.useState`. This repository's own rule is that a view's
+state lives in the URL so a link lands the reader on the same view, and here it
+is load-bearing rather than a convenience: ADR_0025's whole claim is that the
+browser may close. It may — the run finishes, publishes its dataset version and
+draws itself in the Workflows view from the log — but the Pipeline view cannot
+be pointed back at it, and there is no `GET /api/v1/executions` to find it with
+either. The fix is small and is two things, not one: the id in the search
+params, and a list route.
+
+**No trigger that is not a person.** ADR_0025 named three things that would
+make ADR_0024's browser-driven chain wrong, and one of them was "has to run
+unattended, on a schedule". The other two arrived and are handled; this one is
+not built. Nothing forecloses it — a scheduler posts the same body to the same
+route — and nothing provides it, so a nightly curation is a cron job somebody
+writes outside this system.
 
 ### 43.9 What did not need changing
 

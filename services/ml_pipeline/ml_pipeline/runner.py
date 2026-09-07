@@ -59,6 +59,10 @@ class RunResult:
     truncated: bool = False
     stdout: str = ""
     took_ms: int = 0
+    #: What the notebook said about itself. See `block.DETERMINISTIC`: a
+    #: managed chain caches this step, and only the notebook knows whether it
+    #: may be.
+    deterministic: bool = True
 
     @property
     def row_count(self) -> int:
@@ -71,10 +75,16 @@ def run_notebook(
     params: dict[str, Any],
     staging: Staging,
     config: Config,
+    context: str | None = None,
 ) -> RunResult:
-    """Stage the rows, run the notebook over them, and read what it handed on."""
-    staging.stage(notebook.name, rows, params=params)
-    output_path = staging.output_path(notebook.name)
+    """Stage the rows, run the notebook over them, and read what it handed on.
+
+    `context` is the managed run's `<execution>/<step>/<attempt>`; the panel's
+    own runs have none and share the ad-hoc directory, which is the same thing
+    they shared before contexts existed.
+    """
+    staging.stage(notebook.name, rows, params=params, context=context)
+    output_path = staging.output_path(notebook.name, context)
     output_path.unlink(missing_ok=True)
 
     environment = dict(os.environ)
@@ -100,7 +110,7 @@ def run_notebook(
                 "-m",
                 "ml_pipeline.step",
                 str(notebook.path),
-                str(staging.input_path(notebook.name)),
+                str(staging.input_path(notebook.name, context)),
                 str(output_path),
             ],
             cwd=str(SERVICE_ROOT),
@@ -161,6 +171,7 @@ def run_notebook(
         truncated=len(produced) > len(kept),
         took_ms=took_ms,
     )
+    declared = body.get("deterministic") if isinstance(body, dict) else True
     return RunResult(
         notebook=notebook.name,
         revision=notebook.revision,
@@ -169,6 +180,7 @@ def run_notebook(
         truncated=len(produced) > len(kept),
         stdout=_tail(completed.stdout),
         took_ms=took_ms,
+        deterministic=declared if isinstance(declared, bool) else True,
     )
 
 

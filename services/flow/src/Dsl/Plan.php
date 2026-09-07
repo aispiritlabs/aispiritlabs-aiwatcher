@@ -22,5 +22,14 @@ final readonly class Plan
         public bool $truncate,
         /** The effective relative period after the script overrides the panel, if it does. */
         public ?int $windowSeconds,
+        /**
+         * Whether running this query again would answer the same thing.
+         *
+         * False once a query names `now()`, `uuid_v4()` or another function
+         * whose value is the moment it ran. Carried out to the caller rather
+         * than acted on here: only a managed step cares, and it cares by
+         * declining to remember the result.
+         */
+        public bool $deterministic = true,
     ) {}
 }

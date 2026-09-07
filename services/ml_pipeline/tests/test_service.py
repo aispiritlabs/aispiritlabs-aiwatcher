@@ -5,6 +5,7 @@ from starlette.testclient import TestClient
 
 from ml_pipeline.config import Config
 from ml_pipeline.service import create_app
+from ml_pipeline.staging import SLUG, Staging
 
 NOTEBOOK = """
 import marimo
@@ -88,7 +89,45 @@ def test_running_a_block_hands_the_next_one_its_rows_and_leaves_them_staged(
         assert result["rows"] == [{"text": "a", "seen": True}]
         assert result["columns"] == ["text", "seen"]
         assert result["truncated"] is False
-        assert (scratch.data / "blocks" / "demo" / "input.json").is_file()
+        # Asserted through the reader rather than through a path: what matters
+        # is that the live app, which knows only the notebook's name, opens on
+        # the rows this run staged.
+        assert Staging(scratch.data).get_input("demo").rows == [{"text": "a"}]
+
+
+def test_two_runs_of_one_notebook_do_not_overwrite_each_others_rows(
+    scratch: Config,
+) -> None:
+    """The reason a context exists. Two pipelines sharing one notebook used to
+    share one staged file, so each preview read the other's table."""
+    with TestClient(create_app(scratch)) as client:
+        client.put("/ml-pipeline/notebooks/demo", json={"source": NOTEBOOK})
+        for context, text in [("exec-1/clean/1", "first"), ("exec-2/clean/1", "second")]:
+            client.post(
+                "/ml-pipeline/run",
+                json={"notebook": "demo", "rows": [{"text": text}], "context": context},
+            )
+
+        staging = Staging(scratch.data)
+        assert staging.get_input("demo", "exec-1/clean/1").rows == [{"text": "first"}]
+        assert staging.get_input("demo", "exec-2/clean/1").rows == [{"text": "second"}]
+        # And the editor opens on the one that ran last, which is the whole
+        # reason `latest` is written at all.
+        assert staging.get_input("demo").rows == [{"text": "second"}]
+
+
+def test_a_context_may_not_be_a_path(scratch: Config) -> None:
+    """A context id holds separators, so it is hashed rather than sanitised —
+    and the directory it names is inside the staging root by construction."""
+    with TestClient(create_app(scratch)) as client:
+        client.put("/ml-pipeline/notebooks/demo", json={"source": NOTEBOOK})
+        client.post(
+            "/ml-pipeline/run",
+            json={"notebook": "demo", "rows": [{"text": "a"}], "context": "../../etc/passwd"},
+        )
+
+        written = sorted(path.name for path in (scratch.data / "blocks" / "demo").iterdir())
+        assert all(SLUG.match(name) for name in written if name != "latest.json"), written
 
 
 def test_more_rows_than_this_service_accepts_is_a_refusal_not_a_silent_slice(

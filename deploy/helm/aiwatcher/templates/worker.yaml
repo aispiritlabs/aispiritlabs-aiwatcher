@@ -1,0 +1,103 @@
+{{- if .Values.execution.splitRoles }}
+{{- $fullname := include "aiwatcher.fullname" . -}}
+{{- /*
+Section 27's other half.
+
+`serve` holds the API, the read model and the object store; `work` holds the
+outbox and the reactors, and is the only role that opens a socket to Flow, a
+notebook runtime or an orchestrator. That is the whole purchase: the pod behind
+the ingress stops holding those addresses and those credentials.
+
+The three refusals below are the ones `Config::validate` makes at start-up,
+made here instead so they cost a render rather than a rollout. Each names what
+stops being per-process when the binary becomes two processes.
+*/ -}}
+{{- if ne .Values.execution.store "postgres" -}}
+{{- fail "execution.splitRoles is true but execution.store is not \"postgres\". Two processes need a store that offers compare-and-append across them: `file` takes a lock and refuses the second by name, and `memory` is not shared at all. The API pod and the worker would each believe they held the whole history." -}}
+{{- end -}}
+{{- if ne .Values.server.bus "laser" -}}
+{{- fail "execution.splitRoles is true but server.bus is not \"laser\". The outbox publishes to the log in the worker and the projector folds it in the API pod, so the log has to be a broker both can reach. The write-ahead log is one directory on one volume, and an in-memory bus is one process — with either, the worker publishes facts the read model never sees." -}}
+{{- end -}}
+{{- if eq .Values.promptStore.mode "none" -}}
+{{- fail "execution.splitRoles is true but promptStore.mode is \"none\". A step's result is bytes in the object store and a reference in the message, so the role that runs a step writes what the role serving the panel reads. With no object store they share nothing, and the failure arrives three attempts later as \"holds no object\"." -}}
+{{- end -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-worker
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+    app.kubernetes.io/component: worker
+spec:
+  # More than one is the point, and it is safe for the reason the API's is not:
+  # a worker holds no read model and no live hub. An attempt is claimed by
+  # exactly one of them under a lease, and one that dies has its lease expire
+  # and its work taken over.
+  replicas: {{ .Values.execution.workers }}
+  strategy:
+    # RollingUpdate, unlike the API's Recreate: there is no consumer group to
+    # split and no projection to hand over. A worker being torn down loses its
+    # in-flight attempt to a lease expiry, which is the case the takeover path
+    # exists for.
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      {{- include "aiwatcher.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      labels:
+        {{- include "aiwatcher.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/part-of: aiwatcher
+        app.kubernetes.io/component: worker
+    spec:
+      automountServiceAccountToken: false
+      {{- include "aiwatcher.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: aiwatcher
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            # No AIWATCHER_LISTEN: this role opens no HTTP listener, which is
+            # also why there is no Service, no ingress path and no probe below.
+            # A liveness probe would need a port to knock on, and inventing one
+            # would mean serving something in the pod whose whole purpose is to
+            # serve nothing.
+            - { name: AIWATCHER_ROLE, value: "work" }
+            {{- include "aiwatcher.serverEnv" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.server.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            # An emptyDir, not the API's volume. With `laser` the durable log is
+            # the broker's, so nothing here outlives the pod — and a second
+            # claim on a ReadWriteOnce volume is a pod that never schedules.
+            - { name: data, mountPath: /var/lib/aiwatcher }
+            - { name: tmp, mountPath: /tmp }
+      {{- with .Values.server.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.server.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.server.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+{{- end }}

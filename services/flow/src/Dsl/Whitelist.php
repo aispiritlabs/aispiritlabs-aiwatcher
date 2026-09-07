@@ -49,6 +49,7 @@ final class Whitelist
         'last',
         'collect',
         'collect_unique',
+        'string_agg',
     ];
 
     /** Row-level functions, valid wherever a value is. */
@@ -183,6 +184,10 @@ final class Whitelist
             || \in_array($name, self::SCALARS, true)
             || \in_array($name, self::AGGREGATIONS, true)
             || \in_array($name, self::SINKS, true)
+            // Everything Flow itself offers in an admitted category. The four lists
+            // above stay because `aggregate()`, `write()` and the bespoke arms in
+            // `PipelineBuilder` ask narrower questions than "may a query name it".
+            || Registry::has($name)
         );
     }
 
@@ -210,6 +215,7 @@ final class Whitelist
             self::SCALARS,
             self::SINKS,
             self::REFERENCE_METHODS,
+            Registry::names(),
         );
     }
 

@@ -30,6 +30,10 @@
 //! * **The engine** (`/api/v1/engine`) is the only group here that reads
 //!   neither the log nor an authored store: it asks the orchestrator what it
 //!   could start, and starts one. See [`engine`].
+//! * **Context** (`.../context`) is the group that exists so the panel does
+//!   not have to reconstruct one. Every part of the answer is somewhere the
+//!   browser is not — the pinned plan, the artifacts a parent produced, the
+//!   attempt a staging key is named after. See [`context`] and section 19.
 //! * **Managed execution** (`/api/v1/executions`) is the group where this
 //!   system does the work rather than asking somebody else to: a definition is
 //!   compiled, one transaction is written, and the browser may close. It is
@@ -50,6 +54,7 @@
 
 pub mod annotations;
 pub mod auth;
+pub mod context;
 pub mod conversations;
 pub mod datasets;
 pub mod engine;

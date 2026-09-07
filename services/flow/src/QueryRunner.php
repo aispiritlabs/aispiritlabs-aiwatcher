@@ -119,6 +119,12 @@ final readonly class QueryRunner
             // 09:00–10:00 needs to know whether it got that or a width applied
             // from now. See `windowApplied`.
             'window_applied' => self::windowApplied($windowSpan, $plan->dataset),
+            // Whether running this again would answer the same thing. A query
+            // that named `now()` is honest work and a bad cache entry, and only
+            // this service knows which functions it resolved — the same reason
+            // `window_applied` is declared here rather than inferred by the
+            // caller. The reactor reads it as `ActivityResult::cacheable`.
+            'deterministic' => $plan->deterministic,
             'took_ms' => (int) \round((\microtime(true) - $started) * 1000),
             // What this result hashed to, in *this* service's encoding. A fingerprint for
             // comparing two runs of one query, never a key into anybody's store — see

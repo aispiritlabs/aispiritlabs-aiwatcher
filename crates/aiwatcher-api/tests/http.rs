@@ -3700,3 +3700,339 @@ async fn an_instance_with_no_workflow_store_answers_501_rather_than_404() {
         "{body}"
     );
 }
+
+// ── Context ──────────────────────────────────────────────────────────────────
+//
+// Phase 4's exit: an old block opens with its exact historical data and code
+// revision. The two routes answer different questions and the difference is the
+// point — one is what a run *did* read, the other what a revision *would*.
+
+#[tokio::test]
+async fn an_old_revisions_block_opens_with_the_code_that_revision_pinned() {
+    // The whole reason the revision is in the path rather than defaulted to the
+    // head: editing the pipeline afterwards must not change what opening the
+    // saved one shows.
+    let fixture = Fixture::new(false);
+    let mut first = flow_only_pipeline("aged");
+    first["blocks"][2] = json!({
+        "id": "detect",
+        "position": { "x": 400.0, "y": 0.0 },
+        "spec": {
+            "kind": "notebook",
+            "notebook": "pii_scan",
+            "revision": "cd".repeat(32),
+            "params": { "threshold": 0.8 }
+        }
+    });
+    first["edges"] = json!([
+        { "from": "read", "to": "clean" },
+        { "from": "clean", "to": "detect" }
+    ]);
+    let (status, saved) = fixture
+        .post("/api/v1/curation-pipelines", first.clone())
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{saved}");
+    let old = saved["pipeline"]["revision"]
+        .as_str()
+        .expect("a revision")
+        .to_owned();
+
+    // Now somebody edits the notebook's pin and saves again.
+    let mut second = first;
+    second["blocks"][2]["spec"]["revision"] = json!("ef".repeat(32));
+    fixture.post("/api/v1/curation-pipelines", second).await;
+
+    let (status, context) = fixture
+        .get(&format!(
+            "/api/v1/curation-pipelines/aged/revisions/{old}/blocks/detect/context"
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{context}");
+    assert_eq!(
+        context["runtime"]["code_revision"],
+        "cd".repeat(32),
+        "the old revision still opens with the code it pinned"
+    );
+    assert_eq!(context["runtime"]["runtime"], "marimo");
+    assert_eq!(context["runtime"]["params"]["threshold"], 0.8);
+    // Nothing ran, and empty fields say so rather than borrowing a run's.
+    assert!(
+        context["input_artifacts"]
+            .as_array()
+            .expect("an array")
+            .is_empty()
+    );
+    assert!(context.get("state").is_none() || context["state"].is_null());
+    assert_eq!(context["definition_revision"], old);
+}
+
+#[tokio::test]
+async fn any_box_of_the_three_one_flow_step_covers_opens_that_step() {
+    // Flow executes one pipeline, so a source and its transforms are one step.
+    // Opening either box has to reach it; a lookup by block id would find only
+    // the source.
+    let fixture = Fixture::new(false);
+    let (_, saved) = fixture
+        .post("/api/v1/curation-pipelines", flow_only_pipeline("folded"))
+        .await;
+    let revision = saved["pipeline"]["revision"].as_str().expect("a revision");
+
+    for block in ["read", "clean"] {
+        let (status, context) = fixture
+            .get(&format!(
+                "/api/v1/curation-pipelines/folded/revisions/{revision}/blocks/{block}/context"
+            ))
+            .await;
+        assert_eq!(status, StatusCode::OK, "opening {block}: {context}");
+        assert_eq!(context["step_id"], "read");
+        // And the script is the compiled one, not something the canvas would
+        // have to assemble from the blocks it can see.
+        assert!(
+            context["runtime"]["script"]
+                .as_str()
+                .expect("a script")
+                .contains("->limit(100)"),
+            "{context}"
+        );
+        assert_eq!(context["allowed"], json!(["validate", "test"]));
+    }
+
+    let (status, _) = fixture
+        .get(&format!(
+            "/api/v1/curation-pipelines/folded/revisions/{revision}/blocks/nothing/context"
+        ))
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_running_steps_context_is_the_plan_that_run_pinned() {
+    // Read from the stream rather than from the definition, which is what makes
+    // it exact: the definition may have moved on several revisions since.
+    let fixture = Fixture::new(false);
+    fixture
+        .post("/api/v1/curation-pipelines", flow_only_pipeline("live"))
+        .await;
+    let (_, accepted) = fixture
+        .post(
+            "/api/v1/executions",
+            json!({ "target": { "kind": "curation_pipeline", "name": "live" } }),
+        )
+        .await;
+    let execution = accepted["execution"]["execution_id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+
+    let (status, context) = fixture
+        .get(&format!(
+            "/api/v1/executions/{execution}/steps/read/context"
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{context}");
+    assert_eq!(context["plan_id"], accepted["execution"]["plan_id"]);
+    // Keyed by the attempt its staging is named after, never by a notebook's
+    // name (section 16.2).
+    assert_eq!(context["context_id"], format!("{execution}/read/1"));
+    assert_eq!(context["state"]["state"]["state_type"], "pending");
+
+    // A step the run's plan does not have is a name that never ran here.
+    let (status, _) = fixture
+        .get(&format!(
+            "/api/v1/executions/{execution}/steps/absent/context"
+        ))
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = fixture
+        .get("/api/v1/executions/never/steps/read/context")
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_pause_after_a_resume_is_a_command_and_not_a_redelivery_of_the_first_pause() {
+    // The message id names the run's *version*, which is what tells a
+    // double-click from a second intention. Derived from the execution and the
+    // command name alone, this third request would land on the inbox as a
+    // repeat of the first and the run would silently stay running — section
+    // 43.10's failure, one layer up.
+    let fixture = Fixture::new(false);
+    fixture
+        .post("/api/v1/curation-pipelines", flow_only_pipeline("nightly"))
+        .await;
+    let (_, accepted) = fixture
+        .post(
+            "/api/v1/executions",
+            json!({ "target": { "kind": "curation_pipeline", "name": "nightly" } }),
+        )
+        .await;
+    let id = accepted["execution"]["execution_id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+
+    let (status, paused) = fixture
+        .post(
+            &format!("/api/v1/executions/{id}/commands/pause"),
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{paused}");
+    assert_eq!(paused["state"]["state_type"], "paused");
+
+    let (status, resumed) = fixture
+        .post(
+            &format!("/api/v1/executions/{id}/commands/resume"),
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{resumed}");
+    assert_ne!(
+        resumed["state"]["state_type"], "paused",
+        "a resume un-pauses"
+    );
+
+    let (status, again) = fixture
+        .post(
+            &format!("/api/v1/executions/{id}/commands/pause"),
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(
+        again["state"]["state_type"], "paused",
+        "the second pause is its own command"
+    );
+}
+
+#[tokio::test]
+async fn a_cancelled_run_reports_the_state_rather_than_only_accepting_the_command() {
+    // The answer is the projection the decision wrote, so a caller learns what
+    // its command did without a second read — and the two cannot disagree,
+    // because they are one transaction.
+    let fixture = Fixture::new(false);
+    fixture
+        .post("/api/v1/curation-pipelines", flow_only_pipeline("corpus"))
+        .await;
+    let (_, accepted) = fixture
+        .post(
+            "/api/v1/executions",
+            json!({ "target": { "kind": "curation_pipeline", "name": "corpus" } }),
+        )
+        .await;
+    let id = accepted["execution"]["execution_id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+
+    let (status, cancelled) = fixture
+        .post(
+            &format!("/api/v1/executions/{id}/commands/cancel"),
+            json!({ "reason": "the corpus was withdrawn" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{cancelled}");
+    // Nothing had been dispatched, so the run is stopped outright rather than
+    // waiting for an attempt somebody else's process is still holding.
+    assert_eq!(cancelled["state"]["state_type"], "cancelled", "{cancelled}");
+}
+
+#[tokio::test]
+async fn a_command_for_a_run_this_instance_never_heard_of_is_a_404_and_not_a_409() {
+    // Two different answers with two different fixes: a 409 invites somebody
+    // to try again later, and there is no later for an id that does not exist.
+    let fixture = Fixture::new(false);
+    let (status, _) = fixture
+        .post("/api/v1/executions/never-started/commands/pause", json!({}))
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn retrying_a_step_that_has_not_failed_is_refused_and_says_what_state_it_is_in() {
+    // `decide` owns this rule and the route does not restate it: a second copy
+    // in the API would be a second answer to "may this be retried", and the
+    // day they disagree somebody trusts the wrong one.
+    let fixture = Fixture::new(false);
+    fixture
+        .post("/api/v1/curation-pipelines", flow_only_pipeline("pii"))
+        .await;
+    let (_, accepted) = fixture
+        .post(
+            "/api/v1/executions",
+            json!({ "target": { "kind": "curation_pipeline", "name": "pii" } }),
+        )
+        .await;
+    let id = accepted["execution"]["execution_id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+
+    let (status, refused) = fixture
+        .post(
+            &format!("/api/v1/executions/{id}/steps/read/commands/retry"),
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    let message = refused["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("pending"),
+        "the refusal names the state the step is actually in: {message}"
+    );
+}
+
+#[tokio::test]
+async fn a_step_nobody_is_asking_a_question_of_refuses_an_answer() {
+    let fixture = Fixture::new(false);
+    fixture
+        .post("/api/v1/curation-pipelines", flow_only_pipeline("pii"))
+        .await;
+    let (_, accepted) = fixture
+        .post(
+            "/api/v1/executions",
+            json!({ "target": { "kind": "curation_pipeline", "name": "pii" } }),
+        )
+        .await;
+    let id = accepted["execution"]["execution_id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+
+    let (status, refused) = fixture
+        .post(
+            &format!("/api/v1/executions/{id}/steps/read/input"),
+            json!({ "attempt": 1, "response": { "approved": true } }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+}
+
+#[tokio::test]
+async fn an_answer_may_not_say_who_gave_it() {
+    // `answered_by` comes from the session and is not a field. A body that
+    // tries to set it is a 422 naming it, rather than a record of a human
+    // decision saying whatever the caller preferred.
+    let fixture = Fixture::new(false);
+    fixture
+        .post("/api/v1/curation-pipelines", flow_only_pipeline("pii"))
+        .await;
+    let (_, accepted) = fixture
+        .post(
+            "/api/v1/executions",
+            json!({ "target": { "kind": "curation_pipeline", "name": "pii" } }),
+        )
+        .await;
+    let id = accepted["execution"]["execution_id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+
+    let (status, _) = fixture
+        .post(
+            &format!("/api/v1/executions/{id}/steps/read/input"),
+            json!({ "attempt": 1, "response": {}, "answered_by": "somebody-else" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}

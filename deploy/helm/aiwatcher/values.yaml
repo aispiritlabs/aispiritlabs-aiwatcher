@@ -275,6 +275,130 @@ flow:
   tolerations: []
   affinity: {}
 
+# ── Managed execution ────────────────────────────────────────────────────────
+#
+# ADR_0025 and ADR_0026. A curation pipeline or a workflow started here is owned
+# by the server: it compiles to an immutable plan, the decider schedules it, a
+# reactor runs each step, and the facts go onto the event log like any other
+# producer's. The browser asks for a run and may then close.
+#
+# Off by default, and that is the same decision as everywhere else in this
+# chart: with `store: none` the `/api/v1/executions` routes answer 501 naming
+# the variable, and the panel's Pipeline view still runs a chain from the
+# browser, which is what it did before this existed and what an editor wants
+# anyway.
+execution:
+  # none | file | postgres
+  #
+  # `file` holds ONE PROCESS — it takes a lock at start-up and refuses a second
+  # by name. That is fine for a single replica and it is not a production
+  # store: nothing about it is safe once this release runs the API and the
+  # worker as two pods, which is why it refuses rather than interleaves.
+  # `postgres` is what a deployment uses.
+  store: none
+
+  # How long a finished execution's history is kept. 0 keeps it forever, which
+  # is the default.
+  #
+  # This is the *explanation* of a run — the commands, the decisions, the
+  # attempt that failed and the one that did not — and it is the one thing the
+  # event log does not carry, so a release that started deleting it on an
+  # upgrade would be deleting the only copy. Set it deliberately, and set it
+  # longer than the event log's retention: the log is what redelivers a message,
+  # and the inbox that recognises a redelivery goes with the stream.
+  retentionDays: 0
+
+  # Where a `flow_php` step runs. Empty derives it from `flow.enabled`, the same
+  # way the panel's upstream is derived; set it when the service runs somewhere
+  # this chart does not manage.
+  #
+  # A process with no address here registers no Flow executor and therefore
+  # claims no `flow_php` attempt — absence is a working state, not a failure.
+  flowUrl: ""
+
+  # Whether to run the API and the worker as two Deployments (section 27).
+  #
+  # Off is not a lesser configuration — `both` is one process holding both
+  # halves, and it is what `just run` and every development install are. The
+  # split buys one thing: only the worker opens a socket to Flow, a notebook
+  # runtime or an orchestrator, so the pod holding the ingress holds none of
+  # those credentials.
+  #
+  # It costs three shared backends, because that is exactly what stops being
+  # per-process when the binary is two processes: the workflow store, the log
+  # the outbox publishes to and the projector folds, and the object store one
+  # role writes a step's result into for the other to read. The chart refuses
+  # each by name, as the server does — two of the three fail silently and the
+  # third fails three attempts later with "holds no object".
+  splitRoles: false
+
+  # How many workers. More than one is fine and is the reason the split exists:
+  # an attempt is claimed by exactly one of them, under a lease.
+  workers: 1
+
+  # Where a `marimo` notebook step runs (services/ml_pipeline). No default and
+  # no template: that service runs notebook code with no sandbox and no
+  # authentication, so it is a development surface bound to localhost. A cluster
+  # that wants notebook blocks has to say where one is, deliberately.
+  mlPipelineUrl: ""
+
+# ── PostgreSQL ───────────────────────────────────────────────────────────────
+#
+# The workflow store, and nothing else in this chart uses it. Read only when
+# `execution.store` is "postgres".
+#
+# `install | external | none`, like every other backend here (ADR_0009): a
+# second database beside an existing one is not a harmless duplicate, and the
+# helmfile's detection reports one it finds rather than assuming.
+postgresql:
+  # install | external | none
+  mode: none
+
+  database: aiwatcher
+  username: aiwatcher
+
+  # Where the password comes from. With `mode: install` and no name, the chart
+  # generates one on first install and reuses it on every upgrade — the same
+  # `lookup` the object store's credentials use, and for the same reason: a new
+  # password on every upgrade is a pod that cannot open the volume it wrote.
+  # With `mode: external` this is required.
+  credentialsSecret:
+    name: ""
+    passwordKey: password
+
+  external:
+    host: ""
+    port: 5432
+    # Filled in by the detection script. Used only by the NetworkPolicy below,
+    # to add an ingress rule to pods this chart does not own — the same
+    # mechanism the Collector uses to reach a fenced VictoriaMetrics.
+    podSelector: {}
+    namespace: ""
+
+  image:
+    repository: postgres
+    tag: "17.6-alpine"
+    pullPolicy: IfNotPresent
+
+  # How many connections the server opens. Each replica holds this many idle,
+  # and PostgreSQL's own default ceiling is 100.
+  maxConnections: 5
+
+  persistence:
+    # On by default, like the object store's and unlike the trace store's. A
+    # lost span is in VictoriaTraces; a lost execution stream is the only record
+    # of why a run did what it did.
+    enabled: true
+    size: 5Gi
+    storageClassName: ""
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+
 # ── Collector ────────────────────────────────────────────────────────────────
 #
 # In the path even though the server can post OTLP straight at a store: it is
@@ -619,3 +743,8 @@ networkPolicy:
   # policy selects narrows them from "accepts everything" to "accepts aiwatcher
   # only", which would cut off whoever else was using the bucket.
   allowEgressToExternalPromptStore: false
+  # The same thing for an external PostgreSQL, with the same warning and one
+  # more: a database is the backend most likely to be shared with something
+  # else in the cluster, so attaching a rule to pods nothing else fences would
+  # cut off every other application using it.
+  allowEgressToExternalWorkflowStore: false

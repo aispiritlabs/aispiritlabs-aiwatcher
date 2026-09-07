@@ -10,6 +10,12 @@
 {{- if and .Values.conversationArchive.enabled (not $promptStore) -}}
 {{- fail "conversationArchive.enabled is true but promptStore.mode is \"none\". The archive writes to the same object store as the other authored registries; with none configured, every /api/v1/conversation-* route would answer 501 while the deployment believed capture was on." -}}
 {{- end -}}
+{{- if and (eq .Values.execution.store "postgres") (eq .Values.postgresql.mode "none") -}}
+{{- fail "execution.store is \"postgres\" but postgresql.mode is \"none\". The workflow store is where a managed run's plan, decisions and outbox live in one transaction; with no database the server refuses to start rather than running managed executions on something weaker. Set postgresql.mode to \"install\" or \"external\", or set execution.store to \"file\" (one process only) or \"none\"." -}}
+{{- end -}}
+{{- if and (eq .Values.execution.store "file") (not .Values.server.persistence.enabled) -}}
+{{- fail "execution.store is \"file\" but server.persistence.enabled is false. That store is one directory of append-only files, so on an emptyDir every managed run is forgotten when the pod restarts — including one that was still running. Turn persistence on, or use \"postgres\"." -}}
+{{- end -}}
 {{- if and (eq .Values.server.bus "laser") (not .Values.server.laser.connectionStringSecret.name) -}}
 {{- fail "server.bus is \"laser\" but server.laser.connectionStringSecret.name is empty. The connection string carries a password, so it comes from a Secret." -}}
 {{- end -}}
@@ -87,149 +93,8 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
             - { name: AIWATCHER_LISTEN, value: "0.0.0.0:8080" }
-            - { name: AIWATCHER_BUS, value: {{ .Values.server.bus | quote }} }
-            - { name: AIWATCHER_DATA_DIR, value: /var/lib/aiwatcher }
-            - { name: AIWATCHER_SERVICE_NAME, value: {{ .Values.server.serviceName | quote }} }
-            - { name: AIWATCHER_PROCESSOR_ID, value: {{ .Values.server.processorId | quote }} }
-            - { name: AIWATCHER_INGEST_ENABLED, value: {{ .Values.server.ingestEnabled | quote }} }
-            - { name: AIWATCHER_LOG, value: {{ .Values.server.logLevel | quote }} }
-            - { name: AIWATCHER_LOG_FORMAT, value: {{ .Values.server.logFormat | quote }} }
-            - { name: AIWATCHER_MAX_RUNS, value: {{ .Values.server.maxRuns | quote }} }
-            - { name: AIWATCHER_MAX_SPANS_TOTAL, value: {{ .Values.server.maxSpansTotal | quote }} }
-            - { name: AIWATCHER_ORPHAN_TIMEOUT_SECONDS, value: {{ .Values.server.orphanTimeoutSeconds | quote }} }
-            {{- with .Values.server.corsOrigins }}
-            - { name: AIWATCHER_CORS_ORIGINS, value: {{ join "," . | quote }} }
-            {{- end }}
-            {{- if $otlp }}
-            - { name: AIWATCHER_OTLP_ENDPOINT, value: {{ $otlp | quote }} }
-            {{- end }}
-            {{- if $promptStore }}
-            - { name: AIWATCHER_PROMPT_STORE, value: "s3" }
-            - { name: AIWATCHER_PROMPT_S3_ENDPOINT, value: {{ $promptStore | quote }} }
-            - { name: AIWATCHER_PROMPT_S3_BUCKET, value: {{ .Values.promptStore.bucket | quote }} }
-            - { name: AIWATCHER_PROMPT_PREFIX, value: {{ .Values.promptStore.prefix | quote }} }
-            - { name: AIWATCHER_PROMPT_S3_REGION, value: {{ .Values.promptStore.external.region | quote }} }
-            - name: AIWATCHER_PROMPT_S3_CREATE_BUCKET
-              value: {{ eq .Values.promptStore.mode "install" | ternary "true" (.Values.promptStore.external.createBucket | toString) | quote }}
-            - name: AIWATCHER_PROMPT_S3_ACCESS_KEY
-              valueFrom:
-                secretKeyRef:
-                  {{- include "aiwatcher.promptStoreSecretRef" . | nindent 18 }}
-                  key: {{ .Values.promptStore.credentialsSecret.accessKeyKey }}
-            - name: AIWATCHER_PROMPT_S3_SECRET_KEY
-              valueFrom:
-                secretKeyRef:
-                  {{- include "aiwatcher.promptStoreSecretRef" . | nindent 18 }}
-                  key: {{ .Values.promptStore.credentialsSecret.secretKeyKey }}
-            {{- else }}
-            # No store: every /api/v1/prompts route answers 501, and the panel
-            # says which variable is unset rather than showing an empty list.
-            - { name: AIWATCHER_PROMPT_STORE, value: "none" }
-            {{- end }}
-            {{- if .Values.conversationArchive.enabled }}
-            - { name: AIWATCHER_CONVERSATION_ARCHIVE, value: "on" }
-            - { name: AIWATCHER_CONVERSATION_PREFIX, value: {{ .Values.conversationArchive.prefix | quote }} }
-            - { name: AIWATCHER_CONVERSATION_POLICY, value: {{ .Values.conversationArchive.policy | quote }} }
-            - { name: AIWATCHER_CONVERSATION_MAX_TTL_DAYS, value: {{ .Values.conversationArchive.maxTtlDays | quote }} }
-            - { name: AIWATCHER_CONVERSATION_REJECT_ON_FINDING, value: {{ .Values.conversationArchive.rejectOnFinding | quote }} }
-            - { name: AIWATCHER_CONVERSATION_SWEEP_SECONDS, value: {{ .Values.conversationArchive.sweepSeconds | quote }} }
-            - name: AIWATCHER_CONVERSATION_KEYS
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.conversationArchive.keysSecret.name | quote }}
-                  key: {{ .Values.conversationArchive.keysSecret.key | quote }}
-            {{- end }}
-            {{- if eq .Values.engine.mode "flyte" }}
-            - { name: AIWATCHER_ENGINE, value: "flyte" }
-            - name: AIWATCHER_FLYTE_ENDPOINT
-              value: {{ required "engine.mode is \"flyte\" but engine.flyte.endpoint is empty. In-cluster this is the flyteadmin Service — the console host is engine.flyte.consoleUrl and is usually a different address." .Values.engine.flyte.endpoint | quote }}
-            - { name: AIWATCHER_FLYTE_PROJECT, value: {{ .Values.engine.flyte.project | quote }} }
-            - { name: AIWATCHER_FLYTE_DOMAIN, value: {{ .Values.engine.flyte.domain | quote }} }
-            {{- with .Values.engine.flyte.consoleUrl }}
-            - { name: AIWATCHER_FLYTE_CONSOLE_URL, value: {{ . | quote }} }
-            {{- end }}
-            {{- with .Values.engine.flyte.clientId }}
-            - { name: AIWATCHER_FLYTE_CLIENT_ID, value: {{ . | quote }} }
-            - name: AIWATCHER_FLYTE_TOKEN_URL
-              value: {{ required "engine.flyte.clientId is set but engine.flyte.tokenUrl is empty. It is explicit rather than discovered: taking the token endpoint from a document the control plane serves would hand the choice of who mints aiwatcher's credentials to whoever answered the request." $.Values.engine.flyte.tokenUrl | quote }}
-            - { name: AIWATCHER_FLYTE_SCOPES, value: {{ $.Values.engine.flyte.scopes | quote }} }
-            - name: AIWATCHER_FLYTE_CLIENT_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: {{ required "engine.flyte.clientId is set but engine.flyte.credentialsSecret.name is empty — the secret is where the client secret comes from." $.Values.engine.flyte.credentialsSecret.name }}
-                  key: {{ $.Values.engine.flyte.credentialsSecret.clientSecretKey }}
-            {{- else }}
-            {{- with .Values.engine.flyte.credentialsSecret.name }}
-            # No service account: a pre-issued bearer, when the cluster hands
-            # one out. Optional so the sandbox — which authenticates nothing —
-            # needs neither.
-            - name: AIWATCHER_FLYTE_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ . }}
-                  key: {{ $.Values.engine.flyte.credentialsSecret.tokenKey }}
-                  optional: true
-            {{- end }}
-            {{- end }}
-            {{- if eq .Values.engine.rerun "engine" }}
-            # One adapter, both ports: the Workflows tab's rerun becomes a
-            # launch of the launch plan with that workflow's name.
-            - { name: AIWATCHER_WORKFLOW_RUNNER, value: "engine" }
-            {{- end }}
-            {{- end }}
-            - { name: AIWATCHER_AUTH_MODE, value: {{ .Values.auth.mode | quote }} }
-            {{- if ne .Values.auth.mode "none" }}
-            - { name: AIWATCHER_AUTH_PROVIDER_NAME, value: {{ .Values.auth.providerName | quote }} }
-            - { name: AIWATCHER_AUTH_ADMIN_GROUPS, value: {{ join "," .Values.auth.roles.adminGroups | quote }} }
-            - { name: AIWATCHER_AUTH_EDITOR_GROUPS, value: {{ join "," .Values.auth.roles.editorGroups | quote }} }
-            - { name: AIWATCHER_AUTH_VIEWER_GROUPS, value: {{ join "," .Values.auth.roles.viewerGroups | quote }} }
-            - { name: AIWATCHER_AUTH_DEFAULT_ROLE, value: {{ .Values.auth.roles.defaultRole | quote }} }
-            {{- with .Values.auth.roles.requiredGroups }}
-            - { name: AIWATCHER_AUTH_REQUIRED_GROUPS, value: {{ join "," . | quote }} }
-            {{- end }}
-            {{- with .Values.auth.ingestTokenSecret.name }}
-            - name: AIWATCHER_AUTH_INGEST_TOKENS
-              valueFrom:
-                secretKeyRef:
-                  name: {{ . }}
-                  key: {{ $.Values.auth.ingestTokenSecret.key }}
-            {{- end }}
-            {{- end }}
-            {{- if eq .Values.auth.mode "oidc" }}
-            - name: AIWATCHER_AUTH_ISSUER
-              value: {{ required "auth.mode is \"oidc\" but auth.oidc.issuer is empty. For authentik it is https://<host>/application/o/<application-slug>/ — the application slug, not the provider name." .Values.auth.oidc.issuer | quote }}
-            - { name: AIWATCHER_AUTH_CLIENT_ID, value: {{ .Values.auth.oidc.clientId | quote }} }
-            - { name: AIWATCHER_AUTH_REDIRECT_URL, value: {{ include "aiwatcher.authRedirectUrl" . | quote }} }
-            - { name: AIWATCHER_AUTH_SCOPES, value: {{ join " " .Values.auth.oidc.scopes | quote }} }
-            - { name: AIWATCHER_AUTH_GROUPS_CLAIM, value: {{ .Values.auth.oidc.groupsClaim | quote }} }
-            - { name: AIWATCHER_AUTH_SESSION_TTL_SECONDS, value: {{ .Values.auth.oidc.sessionTtlSeconds | quote }} }
-            {{- with .Values.auth.oidc.postLogoutUrl }}
-            - { name: AIWATCHER_AUTH_POST_LOGOUT_URL, value: {{ . | quote }} }
-            {{- end }}
-            - name: AIWATCHER_AUTH_CLIENT_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "aiwatcher.authSecretName" . }}
-                  key: {{ .Values.auth.oidc.secret.clientSecretKey }}
-            - name: AIWATCHER_AUTH_SESSION_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "aiwatcher.authSecretName" . }}
-                  key: {{ .Values.auth.oidc.secret.sessionSecretKey }}
-                  # Optional so an installation can start without one and be
-                  # given one later; the cost until then is that a restart
-                  # signs everybody out.
-                  optional: true
-            {{- end }}
-            {{- if eq .Values.server.bus "laser" }}
-            - name: AIWATCHER_LASER_CONNECTION_STRING
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.server.laser.connectionStringSecret.name }}
-                  key: {{ .Values.server.laser.connectionStringSecret.key }}
-            - { name: AIWATCHER_LASER_STREAM, value: {{ .Values.server.laser.stream | quote }} }
-            - { name: AIWATCHER_LASER_TOPIC, value: {{ .Values.server.laser.topic | quote }} }
-            {{- end }}
+            - { name: AIWATCHER_ROLE, value: {{ ternary "serve" "both" .Values.execution.splitRoles | quote }} }
+            {{- include "aiwatcher.serverEnv" . | nindent 12 }}
           ports:
             - { name: http, containerPort: 8080, protocol: TCP }
           livenessProbe:
