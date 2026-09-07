@@ -31,6 +31,8 @@ Python / TypeScript agents
                    └─► ml_pipeline   a marimo notebook: run as a step, served live
    managed runs    ──► PostgreSQL    the plan, the decisions, the outbox — and
                                      back onto the log as facts about work
+                   └─► serve | work  two roles, one binary; `work` is the only
+                                     one that opens a socket to Flow
 ```
 
 ## Commands
@@ -42,6 +44,8 @@ just test          # cargo test --workspace --all-targets
 just lint          # cargo clippy -Dwarnings
 just openapi       # regenerate contracts/openapi.json AND the panel's client
 just run           # server on :8080, write-ahead log in ./.data
+just run-execution # the same, with managed Flow execution wired to :8081
+just run-postgres  # the same, with the workflow store on PostgreSQL
 just run-hubs      # the same, with Kaggle/Hugging Face dataset search on
 just dev           # server (in-memory bus) + panel dev server on :5173
 just pii-demo      # the whole curation chain: API + Flow PHP + notebooks + panel
@@ -78,9 +82,17 @@ With a database, for the workflow store:
 ```bash
 just postgres-up   # PostgreSQL on :5433 — not 5432, so a suite never lands in
                    # a project database somebody already has there
-just test-postgres # the storage contract, the same fifteen properties the
+just test-postgres # the storage contract, the same sixteen properties the
                    # memory and file adapters prove, against a real database
+just run-serve     # the API, the read model and the object store, no ingress out
+just run-work      # the outbox and the reactors, no ingress in
 ```
+
+The last two are the split of section 27, and they need three shared backends —
+`postgres`, `laser` and `s3` — because that is what stops being per-process when
+the binary is two processes. The start-up refuses each by name. One process
+holding both roles is the default and needs none of them, which is what `just
+run` and `just dev` are.
 
 ```bash
 just iggy-up       # Apache Iggy in Docker, with the three flags it needs
@@ -142,7 +154,7 @@ Crates, in dependency order. A crate may only depend on ones above it.
 | `aiwatcher-auth` | Single sign-on: OIDC discovery, a JWKS cache, the authorization-code flow with PKCE, HMAC-signed session cookies, authentik's forward-auth headers, and the group-to-role mapping. Knows nothing about axum. |
 | `aiwatcher-projector` | The pipeline, live hub, read model, dimension, span, evaluation and workflow-graph folds, dedup, retry, dead letters |
 | `aiwatcher-api` | axum router: REST, SSE, WebSocket, OpenAPI |
-| `aiwatcher-server` | Config, wiring, graceful shutdown. The only crate that knows every implementation exists. |
+| `aiwatcher-server` | Config, wiring, graceful shutdown, and the **reactors** — the one place an executor's client lives, because an executor holds a socket and a credential. `execution/` is the work role: `artifacts` (the object store's sixth prefix, and the receipt a lookup reads), `flow` (the Flow activity executor) and `publish` (the dataset version, which runs in `serve` because it executes nothing). The only crate that knows every implementation exists. |
 
 Everything else: `apps/panel` (React), `sdk/python`, `sdk/typescript`,
 `contracts/` (the OpenAPI document and the envelope JSON Schema), `deploy/`
@@ -654,6 +666,11 @@ what runs a real graph.
   engines are optional and their absence is a badge, not a failure. Its
   **Recipe** view is ADR_0014's single-script editor, still the right tool when
   the whole curation is one query.
+- `data-curation` is also the one area with a *managed* path beside its ad-hoc
+  one, and only the server has it: `POST /api/v1/executions` compiles a saved
+  pipeline and runs it, and the browser may close (ADR_0025). No panel code
+  calls it yet — Phase 7 — so the Pipeline view still drives a chain itself, and
+  that path stays either way for validation and an explicit editor test.
 - `annotations` is the one area that draws. Its canvas puts an `<img>` and an
   `<svg>` in one transformed container, both sized to the image's *natural*
   pixels, so SVG user units are image coordinates and no shape ever carries a
@@ -684,6 +701,45 @@ what runs a real graph.
 
 ## Guardrails
 
+- **Never let a process claim work it cannot perform.** The claim filter is
+  built from the `ExecutorRegistry`, so a process with no `AIWATCHER_FLOW_URL`
+  registers no Flow executor and never takes a `flow_php` attempt. The
+  reactor's "no executor for this runtime" branch is defensive rather than
+  reachable, and a runtime whose client would not build is one this process
+  claims nothing for rather than one it fails every attempt of.
+- **Never derive a message id from less than what it identifies.** A reactor's
+  report id *is* the inbox key. Derived from the execution and the event name
+  it is unique for a one-step plan and collides for a two-step one — the second
+  step's `step_started` reads as a redelivery of the first's, the decider never
+  hears about it, and the step sits `pending` behind a lease nothing releases.
+  It names the execution, the step, the attempt and which of the two facts it
+  is. Section 43.10.
+- **Never split the binary in two without sharing all three backends.** The
+  workflow store (`postgres`), the log the outbox publishes to and the projector
+  folds (`laser`), and the object store one role writes a step's result into for
+  the other to read (`s3`). `Config::validate` refuses each by name, because two
+  of the three fail silently and the third fails three attempts later with
+  "holds no object". Section 43.11.
+- **Never put the projector in the `work` role.** It *is* the read model the API
+  answers from, in process, under `AIWATCHER_MAX_SPANS_TOTAL`'s memory contract.
+  A `serve` role without it answers every read from an empty fold. Moving the
+  folds out of process is Phase 8, behind its own gate.
+- **Never let a lookup's two answers become one question.** A runtime says
+  whether it is *still executing* a key — nothing else can know that. The object
+  store's receipt says what the finished attempt *produced* — the query service
+  keeps no rows, and ADR_0014's refusal of an S3 client for it stands. `done`
+  with no receipt means the query finished and its rows never landed, and the
+  only way to get them is to run it again.
+- **Never write a step's receipt before its data.** `aiwatcher_jobs::ORDERING`,
+  in the fifth place it applies. A crash the right way round leaves bytes
+  nothing points at, which the next attempt overwrites identically; a crash the
+  wrong way round leaves a completed step whose artifact 404s.
+- **Never compare a runtime's digest with an artifact's.** They are digests of
+  two different encodings by two different languages, and making them agree byte
+  for byte is a cross-language contract over row data that nobody could keep.
+  The comparison that means something is the runtime's answer against the digest
+  *recorded in the receipt*: it says whether the stored bytes are this run of
+  this key.
 - **Never make a managed execution depend on an open browser tab.** ADR_0025.
   The panel authors, commands, links and renders; it does not compile, sequence,
   retry, resume or publish. `lib/pipeline.ts`'s `orderOf` stays a *traversal*
@@ -737,7 +793,35 @@ what runs a real graph.
   unpinned notebook, a `file://` with no digest — `cache_key` returns `None`
   rather than a key that means "probably the same". Caching is opt-in for the
   same reason: claiming a step is a pure function of digest-addressed things is
-  wrong often enough to be worth saying out loud.
+  wrong often enough to be worth saying out loud. A pinned window counts because
+  the query service reads one: `POST /flow/query` takes `window_from`/`window_to`
+  and the API's windowed routes take `as_of`, so a plan that pinned 09:00–10:00
+  and a retry five minutes later read the same rows. Sections 43.15 and 43.18.
+- **Never decide from the request what only the runtime can answer.** Whether a
+  cache key is *well defined* is `cache_key`'s question; whether the run that
+  produced a result happened under those conditions is the executor's, on
+  `ActivityResult::cacheable`. An older query service that never learnt `as_of`
+  reads a drifting window and says so by omission — its rows are produced,
+  reported and not remembered. Section 43.18.
+- **Never let a window mean "the last hour" to one reader and a span to
+  another.** `as_of` is absent for every panel query, which is what keeps a
+  shared link meaning the hour it is opened in; a managed step pins it, and only
+  then is the window a closed span two reads agree on.
+- **Never let a policy field have no reader.** `CachePolicy::ByContent` sat on
+  every compiled Flow step for a phase while `cache_key` was called only by its
+  own tests — a claim the code did not keep, and a latent unsoundness no test
+  could catch because no caller existed. Wiring it is what found the bug.
+- **Never keep an outbox row the log has accepted.** `mark_published` deletes.
+  The fact is on the event log, which is the durable copy and the one every fold
+  reads; a second copy answers no question and grows with every step of every
+  run. The `file` adapter rewrites the whole outbox on each publish, so
+  remembering was quadratic. Section 43.16.
+- **Never spend the budget for attempts at the work on a runtime that declined
+  it.** `Transient` is a refused connection or a 503 — nothing ran, so running
+  it again costs one call and gets ten attempts over ten minutes. `Timeout` and
+  `Infrastructure` may have done the work, so they keep three. Counted by kind,
+  because one budget of three sized for a job shard killed a run over a
+  forty-second outage. Section 43.17.
 - **Never put rows, notebook source, a prompt, a completion or an agent's
   inter-node text in a workflow message.** A step hands data on as an
   `ArtifactRef` and its answer as a bounded inline value. The last of those is

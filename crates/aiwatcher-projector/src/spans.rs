@@ -100,6 +100,9 @@ pub struct SpanFilter {
     /// Only spans that ended in the last this-many seconds. See
     /// [`crate::window`].
     pub window_seconds: Option<i64>,
+    /// The instant the window ends at, in seconds since the epoch. `None` is
+    /// now — see [`crate::window::bounds`].
+    pub as_of: Option<i64>,
     pub run_id: Option<String>,
     pub trace_id: Option<String>,
     pub agent_id: Option<String>,
@@ -216,7 +219,7 @@ pub fn compute(
     filter: &SpanFilter,
     now: OffsetDateTime,
 ) -> SpanPage {
-    let since = crate::window::cutoff(filter.window_seconds, now);
+    let window = crate::window::bounds(filter.window_seconds, crate::window::at(filter.as_of), now);
     let mut rows: Vec<SpanRow> = spans
         .iter()
         // `run_id` is the map key, so narrowing by it skips whole runs before
@@ -231,7 +234,7 @@ pub fn compute(
         // On the end, not the start: a span is only ever written when it
         // finishes, so "in the last fifteen minutes" is a question about when
         // it landed.
-        .filter(|row| since.is_none_or(|start| row.end >= start))
+        .filter(|row| window.holds(row.end))
         .filter(|row| matches(row, filter))
         .collect();
 

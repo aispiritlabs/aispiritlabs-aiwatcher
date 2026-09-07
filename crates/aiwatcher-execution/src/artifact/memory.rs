@@ -1,150 +1,12 @@
-//! Where a step's output goes, and what it was made from.
-//!
-//! Sections 9.5, 17 and 18. Three questions with one owner, because they are
-//! the same fact read three ways: *what is this artifact*, *what produced it*,
-//! and *has this exact work already been done*.
-//!
-//! ## The catalog stores no bytes
-//!
-//! An [`ArtifactRef`] is a pointer with a digest. The bytes are the object
-//! store's — `aiwatcher-core`'s `ObjectStore` port, the same one the prompt
-//! registry, the annotations and the conversation archive already write
-//! through. A catalog that also held content would be a second copy of
-//! something addressed by its content, which is the one duplication that cannot
-//! be detected afterwards.
-//!
-//! ## Deleting the index loses nothing authoritative
-//!
-//! The cache is an *index*, and section 18 is explicit that dropping it must
-//! cost a rerun and never a result. So a hit is recorded in the workflow
-//! history as [`WorkflowEvent::StepCacheHit`](crate::WorkflowEvent), with the
-//! key and the artifact ids in it — the run stays explainable after the index
-//! is gone. And invalidation *marks* an entry rather than deleting the
-//! artifacts it names: an old execution that used them is a record of what
-//! happened, and rewriting it would be a different kind of lie.
+//! The catalog in process. For tests, and for a run that keeps no lineage.
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
-use utoipa::ToSchema;
 
-use aiwatcher_core::{ArtifactKind, ArtifactRef};
+use aiwatcher_core::ArtifactKind;
 
+use super::{ArtifactCatalog, CacheEntry, CatalogedArtifact};
 use crate::state::ExecutionId;
-
-/// Who made this, so a reader can get from a byte range back to a decision.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
-pub struct Provenance {
-    pub execution_id: ExecutionId,
-    pub step_id: String,
-    pub attempt: u32,
-}
-
-/// One artifact as the catalog holds it: the pointer, who made it, and what it
-/// was made from.
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, ToSchema)]
-pub struct CatalogedArtifact {
-    pub artifact: ArtifactRef,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub produced_by: Option<Provenance>,
-    /// The digests this was made from, in the order the step read them.
-    ///
-    /// Digests rather than ids: lineage has to survive a catalog that was
-    /// rebuilt, and a digest is the same fact in every copy of it.
-    #[serde(default)]
-    pub inputs: Vec<String>,
-    #[serde(with = "time::serde::rfc3339")]
-    pub created_at: OffsetDateTime,
-}
-
-/// A cache entry: a key, what it resolved to, and whether it still counts.
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, ToSchema)]
-pub struct CacheEntry {
-    pub cache_key: String,
-    pub artifacts: Vec<ArtifactRef>,
-    #[serde(with = "time::serde::rfc3339")]
-    pub created_at: OffsetDateTime,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[serde(with = "time::serde::rfc3339::option")]
-    pub expires_at: Option<OffsetDateTime>,
-    /// Set rather than deleted. An old execution that used this entry is a
-    /// record of what happened; removing the row would not change that and
-    /// removing the artifacts would break it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[serde(with = "time::serde::rfc3339::option")]
-    pub invalidated_at: Option<OffsetDateTime>,
-}
-
-impl CacheEntry {
-    /// Whether this entry may still answer for a step.
-    #[must_use]
-    pub fn is_usable(&self, now: OffsetDateTime) -> bool {
-        self.invalidated_at.is_none() && self.expires_at.is_none_or(|at| now < at)
-    }
-}
-
-/// Artifact metadata, lineage and the cache index.
-#[async_trait]
-pub trait ArtifactCatalog: Send + Sync + std::fmt::Debug {
-    /// Record an artifact and what it was made from.
-    ///
-    /// Idempotent by digest: writing the same bytes twice is one row, because
-    /// two deterministic attempts over the same inputs produce byte-identical
-    /// output and a catalog that counted them twice would report a rerun as a
-    /// second artifact.
-    ///
-    /// # Errors
-    ///
-    /// Whatever the backend could not do.
-    async fn record(&self, artifact: CatalogedArtifact) -> crate::Result<CatalogedArtifact>;
-
-    /// One artifact by its content address.
-    ///
-    /// # Errors
-    ///
-    /// Whatever the backend could not do.
-    async fn by_digest(
-        &self,
-        digest: &str,
-        kind: ArtifactKind,
-    ) -> crate::Result<Option<CatalogedArtifact>>;
-
-    /// Everything one execution produced, in the order it was recorded.
-    ///
-    /// # Errors
-    ///
-    /// Whatever the backend could not do.
-    async fn produced_by(&self, execution: &ExecutionId) -> crate::Result<Vec<CatalogedArtifact>>;
-
-    /// A usable cache entry, or `None`.
-    ///
-    /// `None` for an entry that is expired or invalidated as well as for one
-    /// that was never written — the caller reruns either way, and separating
-    /// them would put the policy in every caller.
-    ///
-    /// # Errors
-    ///
-    /// Whatever the backend could not do.
-    async fn cached(
-        &self,
-        cache_key: &str,
-        now: OffsetDateTime,
-    ) -> crate::Result<Option<CacheEntry>>;
-
-    /// Remember what this key resolved to.
-    ///
-    /// # Errors
-    ///
-    /// Whatever the backend could not do.
-    async fn remember(&self, entry: CacheEntry) -> crate::Result<()>;
-
-    /// Mark an entry unusable without touching what it names.
-    ///
-    /// # Errors
-    ///
-    /// Whatever the backend could not do.
-    async fn invalidate(&self, cache_key: &str, at: OffsetDateTime) -> crate::Result<()>;
-}
 
 /// An in-memory catalog. For tests, and for a development run that keeps no
 /// lineage across a restart.
@@ -245,6 +107,9 @@ impl ArtifactCatalog for MemoryArtifactCatalog {
 
 #[cfg(test)]
 mod tests {
+    use aiwatcher_core::ArtifactRef;
+
+    use super::super::Provenance;
     use super::*;
 
     fn rows(digest: &str) -> ArtifactRef {

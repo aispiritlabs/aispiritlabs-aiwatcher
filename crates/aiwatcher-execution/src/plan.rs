@@ -139,6 +139,17 @@ impl RuntimeKind {
         matches!(self, Self::PythonTask)
     }
 
+    /// Whether performing this needs a process the server does not run.
+    ///
+    /// A pulled attempt is claimed by a worker — a process somebody else
+    /// operates, against the same store. Everything else here is a reactor in
+    /// one of this binary's two roles, or a wait, or a delegation to a system
+    /// that never touches the store at all.
+    #[must_use]
+    pub const fn needs_another_process(self) -> bool {
+        self.is_pulled()
+    }
+
     /// Whether a step of this kind may be answered from a cache.
     ///
     /// Never for a wait or a delegation: a `HumanInput` cache hit would be a
@@ -285,18 +296,59 @@ pub struct OutputDeclaration {
 /// are a list rather than a base and a multiplier so that a policy can be read
 /// off the plan without arithmetic, and so that a runtime whose useful backoff
 /// is not exponential can say so.
+///
+/// # Two budgets, because there are two kinds of failure
+///
+/// `max_attempts` counts attempts that **produced an answer**: the code ran and
+/// was wrong, the query would not parse, the graph does not bind. Three is
+/// right for those, because the fourth will be just as wrong.
+///
+/// `max_unavailable_attempts` counts attempts where nobody answered — the
+/// service was down, the connection reset, the caller stopped waiting. Those
+/// say nothing about the work, and spending the work's budget on them means a
+/// forty-second outage kills a run that would have succeeded a minute later.
+/// Measured, not supposed: restarting the process with the query service down
+/// burned all three attempts and failed a chain whose Flow step was fine.
+///
+/// The two are counted separately off the attempt records the state already
+/// keeps, so a run alternating between the two kinds is bounded by both.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
 pub struct RetryPolicy {
+    /// Attempts that got an answer and the answer was wrong.
     pub max_attempts: u32,
+    /// Attempts where the runtime never answered. Its own budget — see above.
+    #[serde(default = "default_unavailable_attempts")]
+    pub max_unavailable_attempts: u32,
     /// Seconds before attempt 2, 3, … . The last entry repeats.
     pub delays_seconds: Vec<u64>,
+    /// The same, for an attempt nobody answered. Longer, because what it is
+    /// waiting for is a service coming back rather than a flake passing.
+    #[serde(default = "default_unavailable_delays")]
+    pub delays_seconds_unavailable: Vec<u64>,
+}
+
+/// Ten, which with the delays below tolerates roughly ten minutes of a runtime
+/// being down — long enough to cover a rolling restart of the service a step
+/// talks to, and short enough that a run does not sit `pending` for an hour
+/// against something nobody is going to bring back.
+fn default_unavailable_attempts() -> u32 {
+    10
+}
+
+/// 5 s / 15 s / 30 s / 60 s, the last repeating. A service that is down comes
+/// back on its own schedule, and asking it four times a second while it does
+/// is a way to make its recovery slower.
+fn default_unavailable_delays() -> Vec<u64> {
+    vec![5, 15, 30, 60]
 }
 
 impl Default for RetryPolicy {
     fn default() -> Self {
         Self {
             max_attempts: aiwatcher_jobs::MAX_ATTEMPTS,
+            max_unavailable_attempts: default_unavailable_attempts(),
             delays_seconds: vec![1, 5, 30],
+            delays_seconds_unavailable: default_unavailable_delays(),
         }
     }
 }
@@ -308,7 +360,9 @@ impl RetryPolicy {
     pub fn once() -> Self {
         Self {
             max_attempts: 1,
+            max_unavailable_attempts: 1,
             delays_seconds: Vec::new(),
+            delays_seconds_unavailable: Vec::new(),
         }
     }
 
@@ -317,17 +371,25 @@ impl RetryPolicy {
     /// Deterministic: jitter is the dispatcher's, applied when it schedules,
     /// because a decider that reached for a random number would stop being
     /// replayable.
+    ///
+    /// `unavailable` picks the second list. Which failure a delay follows is
+    /// what decides how long it should be: a flake passes in a second, and a
+    /// service that is down comes back on its own schedule.
     #[must_use]
-    pub fn delay_before(&self, attempt: u32) -> Duration {
+    pub fn delay_before(&self, attempt: u32, unavailable: bool) -> Duration {
+        let delays = if unavailable {
+            &self.delays_seconds_unavailable
+        } else {
+            &self.delays_seconds
+        };
         // Attempt 1 is not a retry, so it waits for nothing. Saturating
         // subtraction alone would give it the first delay.
         let Some(index) = attempt.checked_sub(2).map(|index| index as usize) else {
             return Duration::ZERO;
         };
-        let seconds = self
-            .delays_seconds
+        let seconds = delays
             .get(index)
-            .or_else(|| self.delays_seconds.last())
+            .or_else(|| delays.last())
             .copied()
             .unwrap_or(0);
         Duration::from_secs(seconds)
@@ -438,6 +500,24 @@ impl ExecutionPlan {
             .iter()
             .filter(|edge| edge.from == id)
             .map(|edge| edge.to.as_str())
+            .collect()
+    }
+
+    /// The steps that cannot be performed by this process alone.
+    ///
+    /// Read against [`StoreCapabilities::multi_process`] *before* a run is
+    /// accepted (ADR_0025). Discovering it later is worse than it sounds: the
+    /// run starts, the decider dispatches the step, and nothing claims it —
+    /// which looks exactly like a worker that is busy, forever, with nothing
+    /// in any log saying that no worker can ever exist here.
+    ///
+    /// [`StoreCapabilities::multi_process`]: crate::store::StoreCapabilities::multi_process
+    #[must_use]
+    pub fn steps_needing_another_process(&self) -> Vec<&str> {
+        self.steps
+            .iter()
+            .filter(|step| step.runtime.kind().needs_another_process())
+            .map(|step| step.id.as_str())
             .collect()
     }
 
@@ -564,13 +644,62 @@ mod tests {
     #[test]
     fn the_retry_delays_are_one_five_and_thirty_and_the_last_one_repeats() {
         let policy = RetryPolicy::default();
-        assert_eq!(policy.delay_before(2), Duration::from_secs(1));
-        assert_eq!(policy.delay_before(3), Duration::from_secs(5));
-        assert_eq!(policy.delay_before(4), Duration::from_secs(30));
-        assert_eq!(policy.delay_before(9), Duration::from_secs(30));
+        assert_eq!(policy.delay_before(2, false), Duration::from_secs(1));
+        assert_eq!(policy.delay_before(3, false), Duration::from_secs(5));
+        assert_eq!(policy.delay_before(4, false), Duration::from_secs(30));
+        assert_eq!(policy.delay_before(9, false), Duration::from_secs(30));
         // Attempt 1 is not a retry, so it waits for nothing.
-        assert_eq!(policy.delay_before(1), Duration::ZERO);
-        assert_eq!(RetryPolicy::once().delay_before(2), Duration::ZERO);
+        assert_eq!(policy.delay_before(1, false), Duration::ZERO);
+        assert_eq!(RetryPolicy::once().delay_before(2, false), Duration::ZERO);
+    }
+
+    #[test]
+    fn waiting_for_a_runtime_to_come_back_waits_longer_than_waiting_out_a_flake() {
+        // A flake passes in a second; a service that is down comes back on its
+        // own schedule, and asking it four times a second while it does is a
+        // way to make its recovery slower.
+        let policy = RetryPolicy::default();
+        assert_eq!(policy.delay_before(2, true), Duration::from_secs(5));
+        assert_eq!(policy.delay_before(5, true), Duration::from_secs(60));
+        assert_eq!(policy.delay_before(20, true), Duration::from_secs(60));
+
+        // And it is the budget that makes an outage survivable: ten attempts
+        // over those delays is about ten minutes, against the thirty-six
+        // seconds one budget of three used to allow.
+        let tolerated: u64 = (2..=policy.max_unavailable_attempts)
+            .map(|attempt| policy.delay_before(attempt, true).as_secs())
+            .sum();
+        assert!(tolerated >= 300, "an outage of {tolerated}s is survivable");
+    }
+
+    #[test]
+    fn a_plan_says_which_of_its_steps_this_process_cannot_perform_alone() {
+        // Read before the run is accepted. A `PythonTask` on a store that
+        // holds one process is a step that is dispatched and then claimed by
+        // nobody, which looks exactly like a busy worker — forever.
+        let pulled = ExecutionPlan::seal(
+            DefinitionKind::Workflow,
+            "import".to_owned(),
+            DefinitionRevision("ab".repeat(32)),
+            vec![step("stage")],
+            Vec::new(),
+        );
+        assert_eq!(pulled.steps_needing_another_process(), vec!["stage"]);
+
+        let mut local = step("publish");
+        local.runtime = RuntimeBinding::PublishDataset(PublishDatasetSpec {
+            dataset: "clean".to_owned(),
+            produced_by: "pii@ab".to_owned(),
+            block: None,
+        });
+        let here = ExecutionPlan::seal(
+            DefinitionKind::CurationPipeline,
+            "pii".to_owned(),
+            DefinitionRevision("ab".repeat(32)),
+            vec![local],
+            Vec::new(),
+        );
+        assert!(here.steps_needing_another_process().is_empty());
     }
 
     #[test]

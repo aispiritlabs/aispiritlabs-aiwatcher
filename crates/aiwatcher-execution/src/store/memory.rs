@@ -181,13 +181,14 @@ impl WorkflowStore for MemoryWorkflowStore {
             .collect())
     }
 
-    async fn mark_published(&self, ids: &[MessageId], at: OffsetDateTime) -> Result<()> {
-        let mut inner = self.inner.lock().await;
-        for row in &mut inner.outbox {
-            if ids.contains(&row.message_id) {
-                row.published_at = Some(at);
-            }
-        }
+    async fn mark_published(&self, ids: &[MessageId], _at: OffsetDateTime) -> Result<()> {
+        // Dropped rather than flagged: the fact is on the log, and a second
+        // copy here would grow with every step of every run.
+        self.inner
+            .lock()
+            .await
+            .outbox
+            .retain(|row| !ids.contains(&row.message_id));
         Ok(())
     }
 

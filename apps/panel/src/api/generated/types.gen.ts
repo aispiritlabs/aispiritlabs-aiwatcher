@@ -334,6 +334,21 @@ export type ArtifactRef = {
 };
 
 /**
+ * One physical attempt to perform a step. Immutable once terminal.
+ */
+export type AttemptRecord = {
+    attempt: number;
+    ended_at?: string | null;
+    error?: null | StepError;
+    /**
+     * When a retry may be dispatched. `None` means "now".
+     */
+    not_before?: string | null;
+    started_at?: string | null;
+    state: RunState;
+};
+
+/**
  * One typed field on a class.
  */
 export type AttributeDef = {
@@ -947,6 +962,12 @@ export type DatasetVersion = DatasetVersionSummary & {
 export type DatasetVersionSummary = {
     columns: Array<string>;
     created_at: string;
+    /**
+     * The managed execution that produced this version, when one did. Kept in
+     * the summary as well as the request so a dataset list can link to a run
+     * without reading every version artifact.
+     */
+    execution_id?: string | null;
     produced_by?: string | null;
     recipe?: string | null;
     row_count: number;
@@ -1575,6 +1596,22 @@ export const ExclusionReason = {
 export type ExclusionReason = typeof ExclusionReason[keyof typeof ExclusionReason];
 
 /**
+ * An accepted command, and the run it started.
+ */
+export type ExecutionAccepted = {
+    /**
+     * True when this request started the run, false when an
+     * `Idempotency-Key` landed on one that was already going. Both are 202:
+     * the caller asked for a run with that key and there is one.
+     */
+    created: boolean;
+    /**
+     * The store's inline projection after the decision that accepted this.
+     */
+    execution: RunProjection;
+};
+
+/**
  * One execution, with everything needed to draw it.
  */
 export type ExecutionDetail = {
@@ -1599,6 +1636,38 @@ export type ExecutionDetail = {
     nodes: Array<NodeState>;
     summary: ExecutionSummary;
 };
+
+/**
+ * The execution's own identity. `workflow_run_id` on every event it publishes.
+ */
+export type ExecutionId = string;
+
+/**
+ * Whether the plan is the program, or only its shape.
+ */
+export const ExecutionMode = { COMPILED: 'compiled', HOSTED: 'hosted' } as const;
+
+/**
+ * Whether the plan is the program, or only its shape.
+ */
+export type ExecutionMode = typeof ExecutionMode[keyof typeof ExecutionMode];
+
+/**
+ * Who decides for this execution, and therefore who owns its retries.
+ *
+ * The `ExecutionBackend` trait of the plan's first revision collapsed into
+ * this field. A trait would have said the three are interchangeable
+ * implementations of one thing; they are not — they differ in *who thinks*,
+ * which is a property of the run rather than a strategy the run holds.
+ */
+export type ExecutionOwner = 'Local' | {
+    /**
+     * Handed whole to an external engine, which owns its own internal
+     * scheduling. Its phase is shown *beside* the status folded from the log
+     * and never merged into it.
+     */
+    Engine: string;
+} | 'Worker';
 
 export type ExecutionPage = {
     executions: Array<ExecutionSummary>;
@@ -1662,6 +1731,20 @@ export type ExecutionSummary = {
     version?: string | null;
     workflow_id: string;
     workflow_run_id: string;
+};
+
+/**
+ * Which definition, at which revision.
+ */
+export type ExecutionTarget = {
+    kind: TargetKind;
+    name: string;
+    /**
+     * The immutable revision to compile. Left out, the definition's head is
+     * read and *pinned* — a run always names one revision, so editing the
+     * definition while it goes changes nothing about what is running.
+     */
+    revision?: string | null;
 };
 
 export type ExportCounts = {
@@ -1931,6 +2014,33 @@ export type ExportVersionSummary = {
      */
     withdrawn?: boolean;
 };
+
+/**
+ * Why an attempt did not succeed, and therefore whether to try again.
+ *
+ * The classification is the caller's claim about the error, exactly as
+ * `aiwatcher_jobs::after_failure` takes `retryable` rather than deciding it:
+ * an unreachable notebook runtime is worth coming back for and a Flow parse
+ * error will not parse on the third attempt either.
+ */
+export const FailureClass = {
+    VALIDATION: 'validation',
+    USER_CODE: 'user_code',
+    TRANSIENT: 'transient',
+    TIMEOUT: 'timeout',
+    INFRASTRUCTURE: 'infrastructure',
+    POLICY: 'policy'
+} as const;
+
+/**
+ * Why an attempt did not succeed, and therefore whether to try again.
+ *
+ * The classification is the caller's claim about the error, exactly as
+ * `aiwatcher_jobs::after_failure` takes `retryable` rather than deciding it:
+ * an unreachable notebook runtime is worth coming back for and a Flow parse
+ * error will not parse on the third attempt either.
+ */
+export type FailureClass = typeof FailureClass[keyof typeof FailureClass];
 
 /**
  * One problem, located but not quoted.
@@ -2663,6 +2773,19 @@ export type IngestResponse = {
      * live stream to pick up exactly where its own write landed.
      */
     last_checkpoint: Checkpoint;
+};
+
+/**
+ * What a step is waiting for somebody to answer.
+ */
+export type InputRequest = {
+    choices?: Array<string>;
+    deadline?: string | null;
+    prompt: string;
+    /**
+     * The role that may answer. Checked when the answer arrives.
+     */
+    role: string;
 };
 
 /**
@@ -3801,6 +3924,18 @@ export type PublicAuthConfig = {
 export type PublishDatasetRequest = {
     columns?: Array<string>;
     description?: string;
+    /**
+     * The managed execution that produced these rows, when one did.
+     *
+     * Provenance and not identity, for `produced_by`'s reason and with a
+     * second one of its own: the same rows published by a rerun are the same
+     * version, and a version per run would be a version history about *when*.
+     * What it buys is the join the other way — from a published dataset back
+     * to the run, its waterfall, and its `step.*` on the event log. Absent for
+     * a version the panel published from an ad-hoc query (ADR_0025 withdrew
+     * that path for managed runs only).
+     */
+    execution_id?: string | null;
     items: Array<{
         [key: string]: unknown;
     }>;
@@ -4446,6 +4581,40 @@ export type RunPage = {
     total_known: number;
 };
 
+/**
+ * The run projection a store keeps beside the stream.
+ *
+ * Rebuildable from the stream, and updated in the same transaction that
+ * appends to it. It exists to *accept the next command* without folding a
+ * whole history, and for the run's own page — never as the source of a list the
+ * event log's own folds already serve (ADR_0026).
+ */
+export type RunProjection = {
+    created_at: string;
+    definition_name: string;
+    ended_at?: string | null;
+    execution_id: ExecutionId;
+    last_message_version: number;
+    mode: ExecutionMode;
+    owner: ExecutionOwner;
+    plan_id: string;
+    requested_by: string;
+    started_at?: string | null;
+    state: RunState;
+    steps: Array<StepState>;
+};
+
+/**
+ * A stable type, and the word a person reads.
+ */
+export type RunState = {
+    /**
+     * Empty means "call it by its type".
+     */
+    name?: string;
+    state_type: StateType;
+};
+
 export const RunStatus = {
     RUNNING: 'running',
     SUCCEEDED: 'succeeded',
@@ -4525,6 +4694,23 @@ export const Runtime = {
  * a fixed interpreter; the third is a program.
  */
 export type Runtime = typeof Runtime[keyof typeof Runtime];
+
+/**
+ * The word a reactor routes on, without loading the plan.
+ */
+export const RuntimeKind = {
+    FLOW_PHP: 'flow_php',
+    MARIMO: 'marimo',
+    PUBLISH_DATASET: 'publish_dataset',
+    PYTHON_TASK: 'python_task',
+    HUMAN_INPUT: 'human_input',
+    EXTERNAL_WORKFLOW: 'external_workflow'
+} as const;
+
+/**
+ * The word a reactor routes on, without loading the plan.
+ */
+export type RuntimeKind = typeof RuntimeKind[keyof typeof RuntimeKind];
 
 export type SampleInput = {
     metrics: {
@@ -4893,6 +5079,44 @@ export type StagedBatch = {
 };
 
 /**
+ * What a caller may ask this system to run.
+ *
+ * Note what is not here, which is the same absence as `LaunchBody`'s and
+ * `RerunBody`'s: no endpoint, no script, no host. A plan names a binding and
+ * its parameters, and every executor's address is configuration.
+ * `deny_unknown_fields` so an attempt to supply one — or a `backend`, a `mode`
+ * or a `publish` flag from section 20 that this phase does not implement — is
+ * a 400 naming it rather than a field silently ignored that reads as accepted.
+ */
+export type StartExecutionBody = {
+    /**
+     * Where that window ends, in seconds since the epoch. `None` is now.
+     *
+     * Two runs that pin the same span compile to one `plan_id` and one cache
+     * key, which is what makes a scheduled build of a fixed period cheap the
+     * second time. Left out, every run pins a fresh span — which is right for
+     * "curate the last hour" and is why a hit is something a caller asks for
+     * rather than something they get by accident.
+     */
+    as_of?: number | null;
+    /**
+     * Values bound when the execution was requested, available to every step.
+     */
+    parameters?: {
+        [key: string]: unknown;
+    };
+    target: ExecutionTarget;
+    /**
+     * How wide the source's time window is, in seconds.
+     *
+     * Resolved to exact bounds **here**, once, rather than at dispatch: the
+     * plan then records what it was asked for, a retry reads the same rows,
+     * and a cache key can exist at all.
+     */
+    window_seconds?: number | null;
+};
+
+/**
  * What opens a run.
  */
 export type StartRunRequest = {
@@ -4913,6 +5137,26 @@ export type StartRunRequest = {
 };
 
 /**
+ * What drives orchestration. Nine, and no more without a reason written down.
+ */
+export const StateType = {
+    SCHEDULED: 'scheduled',
+    PENDING: 'pending',
+    RUNNING: 'running',
+    AWAITING_INPUT: 'awaiting_input',
+    COMPLETED: 'completed',
+    FAILED: 'failed',
+    CRASHED: 'crashed',
+    CANCELLED: 'cancelled',
+    PAUSED: 'paused'
+} as const;
+
+/**
+ * What drives orchestration. Nine, and no more without a reason written down.
+ */
+export type StateType = typeof StateType[keyof typeof StateType];
+
+/**
  * Retrieval, embedding, rerank, guardrail — grouped by kind, then by name.
  *
  * Retrieval latency is the number a slow RAG turn gets debugged against, and
@@ -4924,6 +5168,28 @@ export type StepBreakdown = {
     latency: Percentiles;
     name: string;
     step_type: string;
+};
+
+export type StepError = {
+    class: FailureClass;
+    message: string;
+};
+
+/**
+ * The logical state of one plan step, across every attempt it took.
+ */
+export type StepState = {
+    attempts?: Array<AttemptRecord>;
+    awaiting?: null | InputRequest;
+    cache_key?: string | null;
+    /**
+     * The attempt number in flight, or the last one taken. `0` before any.
+     */
+    current_attempt: number;
+    outputs?: Array<ArtifactRef>;
+    runtime: RuntimeKind;
+    state: RunState;
+    step_id: string;
 };
 
 /**
@@ -4991,6 +5257,28 @@ export type SuiteSummary = {
     succeeded: number;
     suite: string;
 };
+
+/**
+ * What kind of definition is being run.
+ *
+ * One arm today, and an enum rather than a bare name because the second is
+ * already named: a `WorkflowDefinition` compiles to the same `ExecutionPlan`
+ * from a different editor, with different permissions and different
+ * provenance (section 4). A `kind` nobody had to send would have to be guessed
+ * from the name the day the second arrives.
+ */
+export const TargetKind = { CURATION_PIPELINE: 'curation_pipeline' } as const;
+
+/**
+ * What kind of definition is being run.
+ *
+ * One arm today, and an enum rather than a bare name because the second is
+ * already named: a `WorkflowDefinition` compiles to the same `ExecutionPlan`
+ * from a different editor, with different permissions and different
+ * provenance (section 4). A `kind` nobody had to send would have to be guessed
+ * from the name the day the second arrives.
+ */
+export type TargetKind = typeof TargetKind[keyof typeof TargetKind];
 
 /**
  * A number a request has to look like.
@@ -7094,6 +7382,63 @@ export type StreamEventsResponses = {
     200: unknown;
 };
 
+export type StartExecutionData = {
+    body: StartExecutionBody;
+    path?: never;
+    query?: never;
+    url: '/api/v1/executions';
+};
+
+export type StartExecutionErrors = {
+    400: ErrorBody;
+    403: ErrorBody;
+    /**
+     * No definition by that name, or no such revision
+     */
+    404: ErrorBody;
+    409: ErrorBody;
+    /**
+     * Every reason the definition does not run here, in `details`
+     */
+    422: ErrorBody;
+    501: ErrorBody;
+    503: ErrorBody;
+};
+
+export type StartExecutionError = StartExecutionErrors[keyof StartExecutionErrors];
+
+export type StartExecutionResponses = {
+    202: ExecutionAccepted;
+};
+
+export type StartExecutionResponse = StartExecutionResponses[keyof StartExecutionResponses];
+
+export type GetExecutionData = {
+    body?: never;
+    path: {
+        /**
+         * The id a start returned
+         */
+        execution_id: string;
+    };
+    query?: never;
+    url: '/api/v1/executions/{execution_id}';
+};
+
+export type GetExecutionErrors = {
+    404: ErrorBody;
+    501: ErrorBody;
+    503: ErrorBody;
+};
+
+export type GetExecutionError = GetExecutionErrors[keyof GetExecutionErrors];
+
+export type GetExecutionResponses = {
+    200: RunProjection;
+};
+
+export type GetExecutionResponse = GetExecutionResponses[keyof GetExecutionResponses];
+
 export type LiveWebsocketData = {
     body?: never;
     path?: never;
@@ -7479,6 +7824,14 @@ export type ListRunsData = {
          * [`crate::window`] — zero and absent both mean everything.
          */
         window_seconds?: number | null;
+        /**
+         * The instant the window ends at, in seconds since the epoch.
+         *
+         * `None` is now, which is every ordinary read and every link somebody
+         * pastes. A managed step pins one so that a retry reads the same rows —
+         * see [`crate::window::bounds`].
+         */
+        as_of?: number | null;
         conversation_id?: string | null;
         agent_id?: string | null;
         /**
@@ -7625,6 +7978,11 @@ export type ListSpansData = {
          * [`crate::window`].
          */
         window_seconds?: number | null;
+        /**
+         * The instant the window ends at, in seconds since the epoch. `None` is
+         * now — see [`crate::window::bounds`].
+         */
+        as_of?: number | null;
         run_id?: string | null;
         trace_id?: string | null;
         agent_id?: string | null;

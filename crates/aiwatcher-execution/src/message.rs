@@ -235,8 +235,13 @@ pub enum WorkflowEvent {
     },
     /// The step was answered from an earlier identical one, and this records
     /// which artifacts were reused. A hit is an execution state, not a silence.
+    ///
+    /// It names the **attempt** it answered, because that attempt was claimed
+    /// and dispatched like any other: something has to settle its row, or it
+    /// stays claimable behind a lease nobody releases.
     StepCacheHit {
         step_id: String,
+        attempt: u32,
         cache_key: String,
         #[serde(default)]
         outputs: Vec<ArtifactRef>,

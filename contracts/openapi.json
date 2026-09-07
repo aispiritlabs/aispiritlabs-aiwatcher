@@ -4275,6 +4275,171 @@
         }
       }
     },
+    "/api/v1/executions": {
+      "post": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "Compile a definition and start running it.",
+        "description": "`202`, not `200`: what is durable when this answers is the command and the\nfirst decision, and nothing has executed. The browser may close immediately\nafterwards — that is the whole point of the route, and of ADR_0025.",
+        "operationId": "start_execution",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartExecutionBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionAccepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No definition by that name, or no such revision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Every reason the definition does not run here, in `details`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/executions/{execution_id}": {
+      "get": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "One run's own page: where it is, and where each of its steps is.",
+        "description": "The store's inline projection rather than a fold of the log, and the two are\nnot interchangeable. This one is transactional with the decision that\nproduced it, which is what makes it safe to accept the next command from;\nthe fold is what draws the run beside every other execution, with `Pending`\nnodes and a live stream, and it is the one a list comes from.",
+        "operationId": "get_execution",
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "description": "The id a start returned",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunProjection"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/live": {
       "get": {
         "tags": [
@@ -5230,6 +5395,19 @@
             }
           },
           {
+            "name": "as_of",
+            "in": "query",
+            "description": "The instant the window ends at, in seconds since the epoch.\n\n`None` is now, which is every ordinary read and every link somebody\npastes. A managed step pins one so that a retry reads the same rows —\nsee [`crate::window::bounds`].",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
             "name": "conversation_id",
             "in": "query",
             "required": false,
@@ -5560,6 +5738,19 @@
             "name": "window_seconds",
             "in": "query",
             "description": "Only spans that ended in the last this-many seconds. See\n[`crate::window`].",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "as_of",
+            "in": "query",
+            "description": "The instant the window ends at, in seconds since the epoch. `None` is\nnow — see [`crate::window::bounds`].",
             "required": false,
             "schema": {
               "type": [
@@ -7085,6 +7276,56 @@
         },
         "additionalProperties": false
       },
+      "AttemptRecord": {
+        "type": "object",
+        "description": "One physical attempt to perform a step. Immutable once terminal.",
+        "required": [
+          "attempt",
+          "state"
+        ],
+        "properties": {
+          "attempt": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "ended_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StepError"
+              }
+            ]
+          },
+          "not_before": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When a retry may be dispatched. `None` means \"now\"."
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "state": {
+            "$ref": "#/components/schemas/RunState"
+          }
+        }
+      },
       "AttributeDef": {
         "type": "object",
         "description": "One typed field on a class.",
@@ -8446,6 +8687,13 @@
             "type": "string",
             "format": "date-time"
           },
+          "execution_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The managed execution that produced this version, when one did. Kept in\nthe summary as well as the request so a dataset list can link to a run\nwithout reading every version artifact."
+          },
           "produced_by": {
             "type": [
               "string",
@@ -9693,6 +9941,24 @@
           "no_requested_class"
         ]
       },
+      "ExecutionAccepted": {
+        "type": "object",
+        "description": "An accepted command, and the run it started.",
+        "required": [
+          "execution",
+          "created"
+        ],
+        "properties": {
+          "created": {
+            "type": "boolean",
+            "description": "True when this request started the run, false when an\n`Idempotency-Key` landed on one that was already going. Both are 202:\nthe caller asked for a run with that key and there is one."
+          },
+          "execution": {
+            "$ref": "#/components/schemas/RunProjection",
+            "description": "The store's inline projection after the decision that accepted this."
+          }
+        }
+      },
       "ExecutionDetail": {
         "type": "object",
         "description": "One execution, with everything needed to draw it.",
@@ -9733,6 +9999,50 @@
             "$ref": "#/components/schemas/ExecutionSummary"
           }
         }
+      },
+      "ExecutionId": {
+        "type": "string",
+        "description": "The execution's own identity. `workflow_run_id` on every event it publishes."
+      },
+      "ExecutionMode": {
+        "type": "string",
+        "description": "Whether the plan is the program, or only its shape.",
+        "enum": [
+          "compiled",
+          "hosted"
+        ]
+      },
+      "ExecutionOwner": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "The Rust decider schedules the steps and owns their retries.",
+            "enum": [
+              "Local"
+            ]
+          },
+          {
+            "type": "object",
+            "description": "Handed whole to an external engine, which owns its own internal\nscheduling. Its phase is shown *beside* the status folded from the log\nand never merged into it.",
+            "required": [
+              "Engine"
+            ],
+            "properties": {
+              "Engine": {
+                "type": "string",
+                "description": "Handed whole to an external engine, which owns its own internal\nscheduling. Its phase is shown *beside* the status folded from the log\nand never merged into it."
+              }
+            }
+          },
+          {
+            "type": "string",
+            "description": "A worker runs `decide` and this system keeps the history and the lease.",
+            "enum": [
+              "Worker"
+            ]
+          }
+        ],
+        "description": "Who decides for this execution, and therefore who owns its retries.\n\nThe `ExecutionBackend` trait of the plan's first revision collapsed into\nthis field. A trait would have said the three are interchangeable\nimplementations of one thing; they are not — they differ in *who thinks*,\nwhich is a property of the run rather than a strategy the run holds."
       },
       "ExecutionPage": {
         "type": "object",
@@ -9887,6 +10197,30 @@
             "type": "string"
           }
         }
+      },
+      "ExecutionTarget": {
+        "type": "object",
+        "description": "Which definition, at which revision.",
+        "required": [
+          "kind",
+          "name"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/TargetKind"
+          },
+          "name": {
+            "type": "string"
+          },
+          "revision": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The immutable revision to compile. Left out, the definition's head is\nread and *pinned* — a run always names one revision, so editing the\ndefinition while it goes changes nothing about what is running."
+          }
+        },
+        "additionalProperties": false
       },
       "ExportCounts": {
         "type": "object",
@@ -10527,6 +10861,18 @@
             "description": "True once an erasure has taken this corpus' rows away."
           }
         }
+      },
+      "FailureClass": {
+        "type": "string",
+        "description": "Why an attempt did not succeed, and therefore whether to try again.\n\nThe classification is the caller's claim about the error, exactly as\n`aiwatcher_jobs::after_failure` takes `retryable` rather than deciding it:\nan unreachable notebook runtime is worth coming back for and a Flow parse\nerror will not parse on the third attempt either.",
+        "enum": [
+          "validation",
+          "user_code",
+          "transient",
+          "timeout",
+          "infrastructure",
+          "policy"
+        ]
       },
       "Finding": {
         "type": "object",
@@ -11851,6 +12197,36 @@
           "last_checkpoint": {
             "$ref": "#/components/schemas/Checkpoint",
             "description": "The checkpoint of the last event written. A client can hand this to the\nlive stream to pick up exactly where its own write landed."
+          }
+        }
+      },
+      "InputRequest": {
+        "type": "object",
+        "description": "What a step is waiting for somebody to answer.",
+        "required": [
+          "prompt",
+          "role"
+        ],
+        "properties": {
+          "choices": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "deadline": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "description": "The role that may answer. Checked when the answer arrives."
           }
         }
       },
@@ -13860,6 +14236,13 @@
           "description": {
             "type": "string"
           },
+          "execution_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The managed execution that produced these rows, when one did.\n\nProvenance and not identity, for `produced_by`'s reason and with a\nsecond one of its own: the same rows published by a rerun are the same\nversion, and a version per run would be a version history about *when*.\nWhat it buys is the join the other way — from a published dataset back\nto the run, its waterfall, and its `step.*` on the event log. Absent for\na version the panel published from an ad-hoc query (ADR_0025 withdrew\nthat path for managed runs only)."
+          },
           "items": {
             "type": "array",
             "items": {
@@ -14921,6 +15304,90 @@
           }
         }
       },
+      "RunProjection": {
+        "type": "object",
+        "description": "The run projection a store keeps beside the stream.\n\nRebuildable from the stream, and updated in the same transaction that\nappends to it. It exists to *accept the next command* without folding a\nwhole history, and for the run's own page — never as the source of a list the\nevent log's own folds already serve (ADR_0026).",
+        "required": [
+          "execution_id",
+          "plan_id",
+          "definition_name",
+          "owner",
+          "mode",
+          "state",
+          "requested_by",
+          "steps",
+          "last_message_version",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "definition_name": {
+            "type": "string"
+          },
+          "ended_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "execution_id": {
+            "$ref": "#/components/schemas/ExecutionId"
+          },
+          "last_message_version": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "mode": {
+            "$ref": "#/components/schemas/ExecutionMode"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/ExecutionOwner"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "requested_by": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "state": {
+            "$ref": "#/components/schemas/RunState"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StepState"
+            }
+          }
+        }
+      },
+      "RunState": {
+        "type": "object",
+        "description": "A stable type, and the word a person reads.",
+        "required": [
+          "state_type"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Empty means \"call it by its type\"."
+          },
+          "state_type": {
+            "$ref": "#/components/schemas/StateType"
+          }
+        }
+      },
       "RunStatus": {
         "type": "string",
         "enum": [
@@ -15054,6 +15521,18 @@
           "torch_script",
           "python",
           "unspecified"
+        ]
+      },
+      "RuntimeKind": {
+        "type": "string",
+        "description": "The word a reactor routes on, without loading the plan.",
+        "enum": [
+          "flow_php",
+          "marimo",
+          "publish_dataset",
+          "python_task",
+          "human_input",
+          "external_workflow"
         ]
       },
       "SampleInput": {
@@ -15821,6 +16300,40 @@
           }
         }
       },
+      "StartExecutionBody": {
+        "type": "object",
+        "description": "What a caller may ask this system to run.\n\nNote what is not here, which is the same absence as `LaunchBody`'s and\n`RerunBody`'s: no endpoint, no script, no host. A plan names a binding and\nits parameters, and every executor's address is configuration.\n`deny_unknown_fields` so an attempt to supply one — or a `backend`, a `mode`\nor a `publish` flag from section 20 that this phase does not implement — is\na 400 naming it rather than a field silently ignored that reads as accepted.",
+        "required": [
+          "target"
+        ],
+        "properties": {
+          "as_of": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Where that window ends, in seconds since the epoch. `None` is now.\n\nTwo runs that pin the same span compile to one `plan_id` and one cache\nkey, which is what makes a scheduled build of a fixed period cheap the\nsecond time. Left out, every run pins a fresh span — which is right for\n\"curate the last hour\" and is why a hit is something a caller asks for\nrather than something they get by accident."
+          },
+          "parameters": {
+            "type": "object",
+            "description": "Values bound when the execution was requested, available to every step."
+          },
+          "target": {
+            "$ref": "#/components/schemas/ExecutionTarget"
+          },
+          "window_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "How wide the source's time window is, in seconds.\n\nResolved to exact bounds **here**, once, rather than at dispatch: the\nplan then records what it was asked for, a retry reads the same rows,\nand a cache key can exist at all.",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
       "StartRunRequest": {
         "type": "object",
         "description": "What opens a run.",
@@ -15871,6 +16384,21 @@
         },
         "additionalProperties": false
       },
+      "StateType": {
+        "type": "string",
+        "description": "What drives orchestration. Nine, and no more without a reason written down.",
+        "enum": [
+          "scheduled",
+          "pending",
+          "running",
+          "awaiting_input",
+          "completed",
+          "failed",
+          "crashed",
+          "cancelled",
+          "paused"
+        ]
+      },
       "StepBreakdown": {
         "type": "object",
         "description": "Retrieval, embedding, rerank, guardrail — grouped by kind, then by name.\n\nRetrieval latency is the number a slow RAG turn gets debugged against, and\nit is invisible in the LLM and tool breakdowns.",
@@ -15899,6 +16427,76 @@
             "type": "string"
           },
           "step_type": {
+            "type": "string"
+          }
+        }
+      },
+      "StepError": {
+        "type": "object",
+        "required": [
+          "class",
+          "message"
+        ],
+        "properties": {
+          "class": {
+            "$ref": "#/components/schemas/FailureClass"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "StepState": {
+        "type": "object",
+        "description": "The logical state of one plan step, across every attempt it took.",
+        "required": [
+          "step_id",
+          "runtime",
+          "state",
+          "current_attempt"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AttemptRecord"
+            }
+          },
+          "awaiting": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/InputRequest"
+              }
+            ]
+          },
+          "cache_key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "current_attempt": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The attempt number in flight, or the last one taken. `0` before any.",
+            "minimum": 0
+          },
+          "outputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ArtifactRef"
+            }
+          },
+          "runtime": {
+            "$ref": "#/components/schemas/RuntimeKind"
+          },
+          "state": {
+            "$ref": "#/components/schemas/RunState"
+          },
+          "step_id": {
             "type": "string"
           }
         }
@@ -16054,6 +16652,13 @@
             "type": "string"
           }
         }
+      },
+      "TargetKind": {
+        "type": "string",
+        "description": "What kind of definition is being run.\n\nOne arm today, and an enum rather than a bare name because the second is\nalready named: a `WorkflowDefinition` compiles to the same `ExecutionPlan`\nfrom a different editor, with different permissions and different\nprovenance (section 4). A `kind` nobody had to send would have to be guessed\nfrom the name the day the second arrives.",
+        "enum": [
+          "curation_pipeline"
+        ]
       },
       "TensorSpec": {
         "type": "object",
@@ -16947,6 +17552,10 @@
     {
       "name": "engine",
       "description": "The orchestrator's launchable inventory, and starting one"
+    },
+    {
+      "name": "execution",
+      "description": "Managed execution: compiling a definition, running it here, and reading one run"
     },
     {
       "name": "live",

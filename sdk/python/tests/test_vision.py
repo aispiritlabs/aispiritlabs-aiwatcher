@@ -451,6 +451,59 @@ def test_a_sample_comes_out_as_the_arrays_a_collate_can_stack(
     assert int((item["targets"][BASE] == OUTER).sum()) > 0
 
 
+def test_the_census_is_reachable_from_the_dataset_and_not_from_a_batch(
+    registry: AnnotationRegistry,
+) -> None:
+    """Where a training script actually asks whether its drawing survived.
+
+    `Item` cannot carry the census — per-class dictionaries whose keys vary by
+    sample are not something a collate stacks — so a script that only ever sees
+    batches has no way to notice a class that was drawn and painted over. This
+    is the way to ask, and it has to answer the same thing twice running even
+    when the dataset is flipping.
+    """
+    dataset = manifest(registry).get_split("train").as_dataset(image_size=64, classes=CLASSES)
+
+    targets = dataset.get_targets(0)
+    assert targets.counts["line_outer"] == 1
+    assert targets.pixels["line_outer"] > 0
+    assert targets.pixels["line_inner"] == 0
+    assert "line_inner" not in targets.counts
+
+    # It agrees with the grid the loss is handed, and it does not flip.
+    item = dataset[0]
+    assert targets.pixels["line_outer"] == int((item["targets"][BASE] == OUTER).sum())
+    assert dataset.get_targets(0).pixels == targets.pixels
+
+    assert "counts" not in item
+    assert "pixels" not in item
+
+
+def test_an_ignore_class_is_absent_from_the_census_rather_than_zero_in_it() -> None:
+    """It paints into the ignore mask, so it has no pixels in a grid to lose.
+
+    Zero would read as "drawn and wholly covered", which is the one thing the
+    census exists to report — every ignore region on every plan would answer
+    it, and an audit that fires on all of them is one nobody keeps.
+    """
+    shapes = [
+        line("w", [[10, 30], [50, 30]], thickness=4.0),
+        polygon("f", "ignore", [[12, 12], [24, 12], [24, 24], [12, 24]]),
+    ]
+    targets = rasterize(shapes, CLASSES, 64, 64, size=64)
+
+    assert targets.counts["ignore"] == 1
+    assert "ignore" not in targets.pixels
+    assert bool(targets.ignore[18, 18])
+
+    covered = [
+        name
+        for name, drawn in targets.counts.items()
+        if drawn and name in targets.pixels and targets.pixels[name] == 0
+    ]
+    assert covered == []
+
+
 def test_the_dataset_can_be_built_from_the_split_directly(
     registry: AnnotationRegistry,
 ) -> None:
@@ -569,6 +622,98 @@ def test_declaration_order_decides_which_class_wins_a_contested_pixel() -> None:
     covered = rasterize(shapes, reversed_schema, 64, 64, size=64)
     covered_region = layers_for(reversed_schema)[BASE].classes.index("region")
     assert covered.layers[BASE][30, 30] == covered_region
+
+
+# The geometry that produced this pair of tests: two regions drawn flush
+# against both sides of the boundary that divides them, which is what a floor
+# plan, a parcel map and a wafer die grid all are. One region leaves the far
+# half of the boundary showing; two leave only the ends, and the ends are
+# exactly where a smoke test that asks "are there any pixels of this class"
+# finds some and reports success.
+def divided_plan() -> list[dict[str, Any]]:
+    return [
+        polygon("left", "region", [[10, 10], [32, 10], [32, 50], [10, 50]]),
+        polygon("right", "region", [[32, 10], [54, 10], [54, 50], [32, 50]]),
+        line("divider", [[32, 10], [32, 50]], role="inner", thickness=4.0),
+        mark("opening", "mark_a", [32, 26], [32, 34], line_id="divider"),
+    ]
+
+
+#: The same vocabulary with the region declared last, which is the mistake.
+COVERED_CLASSES: list[dict[str, Any]] = [
+    entry for entry in CLASSES if entry["name"] != "region"
+] + [{"name": "region", "geometry": "polygon", "layer": 0}]
+
+
+def test_a_boundary_between_two_regions_survives_along_its_whole_length() -> None:
+    """Not "some pixels of the class exist" — *which* class holds the middle.
+
+    A boundary covered by the regions it divides keeps the pixels at its two
+    ends, where neither region quite reaches. Counting pixels finds those and
+    reads as a pass, so what is asserted here is the class at points along the
+    span, including the centre, plus a survivor count too large to be ends.
+    """
+    targets = rasterize(divided_plan(), CLASSES, 64, 64, size=64)
+    base = targets.layers[BASE]
+
+    for y in (12, 20, 30, 40, 48):
+        assert base[y, 32] == INNER, f"the divider was overwritten at y={y}"
+
+    # The ends alone are an order of magnitude smaller than this.
+    assert int((base == INNER).sum()) > 100
+    # And the regions are still regions either side of it.
+    assert base[30, 20] == REGION
+    assert base[30, 44] == REGION
+
+
+def test_a_covered_boundary_is_a_census_entry_rather_than_a_silent_target() -> None:
+    """The failure mode the census exists for.
+
+    Declared after the regions, the divider is drawn, is counted, and is gone:
+    a target that teaches "there is no boundary here" from a drawing that says
+    there is. Every shape is present, the grid is the declared dtype and every
+    index is in range, so `counts` alone cannot tell this from a plan that
+    genuinely has no divider — only `counts` against `pixels` can.
+    """
+    covered = rasterize(divided_plan(), COVERED_CLASSES, 64, 64, size=64)
+    inner = layers_for(COVERED_CLASSES)[BASE].classes.index("line_inner")
+    region = layers_for(COVERED_CLASSES)[BASE].classes.index("region")
+
+    assert covered.layers[BASE][30, 32] == region, "this test no longer covers the wall"
+    assert covered.counts["line_inner"] == 1
+    assert covered.pixels["line_inner"] < 20
+
+    intact = rasterize(divided_plan(), CLASSES, 64, 64, size=64)
+    assert intact.counts["line_inner"] == covered.counts["line_inner"]
+    assert intact.pixels["line_inner"] > 10 * covered.pixels["line_inner"]
+    assert int((covered.layers[BASE] == inner).sum()) == covered.pixels["line_inner"]
+
+    # A class nobody drew and a class drawn and then covered are both absent
+    # from the grid; only the pair of numbers separates them.
+    assert "line_outer" not in intact.counts
+    assert intact.pixels["line_outer"] == 0
+
+
+def test_an_overlay_layer_is_unaffected_by_what_wins_on_the_layer_below() -> None:
+    """The two questions are independent and have to stay that way.
+
+    Reordering the base vocabulary to fix which class holds a contested pixel
+    must not move an opening, because openings contend with nothing down there
+    — they are on their own grid and their own head. A fix that quietly
+    repainted the overlay would trade one wrong target for another.
+    """
+    intact = rasterize(divided_plan(), CLASSES, 64, 64, size=64)
+    covered = rasterize(divided_plan(), COVERED_CLASSES, 64, 64, size=64)
+
+    assert layers_for(CLASSES)[OVERLAY].classes == layers_for(COVERED_CLASSES)[OVERLAY].classes
+    assert np.array_equal(intact.layers[OVERLAY], covered.layers[OVERLAY])
+    assert intact.pixels["mark_a"] == covered.pixels["mark_a"] > 0
+    assert np.array_equal(intact.ignore, covered.ignore)
+
+    # And the opening is still on top of the boundary it links to, which is
+    # the thing layers exist for.
+    assert intact.layers[OVERLAY][30, 32] == MARK_A
+    assert intact.layers[BASE][30, 32] == INNER
 
 
 def test_drawing_order_never_changes_the_grids() -> None:

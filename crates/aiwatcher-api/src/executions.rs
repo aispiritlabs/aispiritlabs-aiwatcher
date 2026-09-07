@@ -1,0 +1,459 @@
+//! Managed execution: asking this system to run something, and reading how far
+//! it got.
+//!
+//! Two routes, and the asymmetry between them is the design. `POST` accepts a
+//! **command** — it compiles a definition, writes one transaction and answers
+//! 202; nothing has run. `GET` reads the store's inline projection for one run:
+//! its own page, and the state the next command is accepted against.
+//!
+//! ## Why there is no list here
+//!
+//! ADR_0026. The store's projection exists to accept the next command and to
+//! draw one run; a list of executions is what `/api/v1/workflow-executions`
+//! already serves, folded from `workflow.declared` and `step.*` on the event
+//! log. Two lists would be two pictures of one run, and the first time a
+//! producer and the engine described the same node they would disagree — with
+//! nothing able to say which was right.
+//!
+//! ## Why this is not `/api/v1/engine/launches`
+//!
+//! That route asks somebody else's orchestrator to start something it already
+//! holds (ADR_0016). This one runs a plan **here**, compiled from a definition
+//! this system stores, against reactors this deployment configured. They differ
+//! in who owns the retries, which is the whole of ADR_0025 — and a picker that
+//! merged them could not say which of the two a row was.
+//!
+//! ## Why an editor, and not an admin
+//!
+//! A launch and a rerun need `admin` because they are aiwatcher asking *another
+//! system* to do work inside the cluster on the caller's behalf. This is
+//! aiwatcher doing its own work, against services this deployment named, and it
+//! produces the same artifact as `POST /api/v1/datasets` — which is an editor's
+//! to publish. Capping the ingest token at editor still holds: a leaked agent
+//! environment can build a dataset it could already have published, and cannot
+//! start anything in anybody's cluster.
+
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+use axum::extract::{Path, State};
+use axum::http::{HeaderMap, StatusCode};
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use utoipa::OpenApi;
+
+use aiwatcher_datasets::Registry as DatasetRegistry;
+use aiwatcher_execution::compile::CompileOptions;
+use aiwatcher_execution::message::RunProjection;
+use aiwatcher_execution::plan::ResolvedWindow;
+use aiwatcher_execution::{
+    ExecutionHandler, ExecutionId, ExecutionMode, ExecutionOwner, ExecutionPlan, MessageMetadata,
+    Now, WorkflowCommand, WorkflowMessage, WorkflowStore, compile_curation, derive_uuid,
+};
+
+use crate::auth::Caller;
+use crate::error::{ApiError, ApiResult};
+use crate::state::AppState;
+
+/// The header a caller repeats to reach the same execution twice.
+///
+/// Section 20 asks every mutating command endpoint for one. Here it does its
+/// work by *deriving the execution id* rather than by a table of keys: the same
+/// key produces the same id, the same id produces the same stream, and the
+/// store's own inbox answers the second request with what the first decided.
+/// A table would be a fourth place a decision is recorded.
+const IDEMPOTENCY_KEY: &str = "idempotency-key";
+
+/// This module's operations, as the contract they satisfy.
+#[derive(OpenApi)]
+#[openapi(paths(start_execution, get_execution))]
+struct Api;
+
+/// The operations this module serves. Composed by [`crate::openapi`].
+#[must_use]
+pub fn openapi() -> utoipa::openapi::OpenApi {
+    Api::openapi()
+}
+
+pub fn router() -> Router<AppState> {
+    Router::new()
+        .route("/api/v1/executions", post(start_execution))
+        .route("/api/v1/executions/{execution_id}", get(get_execution))
+}
+
+/// What kind of definition is being run.
+///
+/// One arm today, and an enum rather than a bare name because the second is
+/// already named: a `WorkflowDefinition` compiles to the same `ExecutionPlan`
+/// from a different editor, with different permissions and different
+/// provenance (section 4). A `kind` nobody had to send would have to be guessed
+/// from the name the day the second arrives.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TargetKind {
+    /// ADR_0024's source/transform/notebook/view chain.
+    CurationPipeline,
+}
+
+/// Which definition, at which revision.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionTarget {
+    pub kind: TargetKind,
+    pub name: String,
+    /// The immutable revision to compile. Left out, the definition's head is
+    /// read and *pinned* — a run always names one revision, so editing the
+    /// definition while it goes changes nothing about what is running.
+    #[serde(default)]
+    pub revision: Option<String>,
+}
+
+/// What a caller may ask this system to run.
+///
+/// Note what is not here, which is the same absence as `LaunchBody`'s and
+/// `RerunBody`'s: no endpoint, no script, no host. A plan names a binding and
+/// its parameters, and every executor's address is configuration.
+/// `deny_unknown_fields` so an attempt to supply one — or a `backend`, a `mode`
+/// or a `publish` flag from section 20 that this phase does not implement — is
+/// a 400 naming it rather than a field silently ignored that reads as accepted.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct StartExecutionBody {
+    pub target: ExecutionTarget,
+    /// Values bound when the execution was requested, available to every step.
+    #[serde(default)]
+    #[schema(value_type = Object)]
+    pub parameters: BTreeMap<String, Value>,
+    /// How wide the source's time window is, in seconds.
+    ///
+    /// Resolved to exact bounds **here**, once, rather than at dispatch: the
+    /// plan then records what it was asked for, a retry reads the same rows,
+    /// and a cache key can exist at all.
+    #[serde(default)]
+    pub window_seconds: Option<u64>,
+    /// Where that window ends, in seconds since the epoch. `None` is now.
+    ///
+    /// Two runs that pin the same span compile to one `plan_id` and one cache
+    /// key, which is what makes a scheduled build of a fixed period cheap the
+    /// second time. Left out, every run pins a fresh span — which is right for
+    /// "curate the last hour" and is why a hit is something a caller asks for
+    /// rather than something they get by accident.
+    #[serde(default)]
+    pub as_of: Option<i64>,
+}
+
+/// An accepted command, and the run it started.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct ExecutionAccepted {
+    /// The store's inline projection after the decision that accepted this.
+    pub execution: RunProjection,
+    /// True when this request started the run, false when an
+    /// `Idempotency-Key` landed on one that was already going. Both are 202:
+    /// the caller asked for a run with that key and there is one.
+    pub created: bool,
+}
+
+fn handler(state: &AppState) -> ApiResult<&Arc<ExecutionHandler<Arc<dyn WorkflowStore>>>> {
+    state
+        .executions
+        .as_ref()
+        .ok_or(ApiError::ExecutionsDisabled)
+}
+
+fn definitions(state: &AppState) -> ApiResult<&Arc<DatasetRegistry>> {
+    state
+        .datasets
+        .as_ref()
+        .ok_or(ApiError::DatasetRegistryDisabled)
+}
+
+/// Compile a definition and start running it.
+///
+/// `202`, not `200`: what is durable when this answers is the command and the
+/// first decision, and nothing has executed. The browser may close immediately
+/// afterwards — that is the whole point of the route, and of ADR_0025.
+#[utoipa::path(
+    post,
+    path = "/api/v1/executions",
+    request_body = StartExecutionBody,
+    responses(
+        (status = 202, body = ExecutionAccepted),
+        (status = 400, body = crate::error::ErrorBody),
+        (status = 403, body = crate::error::ErrorBody),
+        (status = 404, body = crate::error::ErrorBody, description = "No definition by that name, or no such revision"),
+        (status = 409, body = crate::error::ErrorBody),
+        (status = 422, body = crate::error::ErrorBody, description = "Every reason the definition does not run here, in `details`"),
+        (status = 501, body = crate::error::ErrorBody),
+        (status = 503, body = crate::error::ErrorBody),
+    ),
+    tag = "execution",
+)]
+async fn start_execution(
+    State(state): State<AppState>,
+    caller: Caller,
+    headers: HeaderMap,
+    Json(body): Json<StartExecutionBody>,
+) -> ApiResult<(StatusCode, Json<ExecutionAccepted>)> {
+    let requester = caller
+        .require(aiwatcher_auth::Role::Editor)?
+        .log_subject()
+        .to_owned();
+    let handler = handler(&state)?;
+
+    let plan = compile(&state, &body).await?;
+    let execution_id = ExecutionId::new(execution_id_for(&headers, &plan));
+    // Derived from the execution, so a redelivered request — a retried POST, a
+    // proxy that repeated it — lands on the inbox rather than beside it.
+    let message_id = aiwatcher_core::MessageId::new(derive_uuid(&format!(
+        "aiwatcher/execution/start/{execution_id}"
+    )));
+
+    let now = time::OffsetDateTime::now_utc();
+    let handled = handler
+        .handle(
+            &execution_id,
+            WorkflowMessage::Command(WorkflowCommand::StartExecution {
+                execution_id: execution_id.clone(),
+                plan: Box::new(plan),
+                // Local: the Rust decider schedules the steps and owns their
+                // retries. `engine:` and `worker` are Phases 9 and 10, and the
+                // field is here rather than derived so that a run always
+                // records who was responsible for it.
+                owner: ExecutionOwner::Local,
+                mode: ExecutionMode::Compiled,
+                requested_by: requester.clone(),
+                input: body.parameters,
+            }),
+            MessageMetadata::caused_by(&execution_id, &message_id, message_id.clone(), now),
+            Now::at(now),
+        )
+        .await?;
+
+    // The outbox has rows and the claim table has a dispatched attempt; both
+    // are drained by loops that would otherwise wait a poll interval. Nothing
+    // is lost if this process runs neither — the store is durable and whichever
+    // one does run them picks the work up.
+    state.notify_execution_worker();
+
+    tracing::info!(
+        execution_id = %execution_id,
+        plan_id = %handled.projection.plan_id,
+        definition = %handled.projection.definition_name,
+        steps = handled.projection.steps.len(),
+        // Who asked. A managed execution is this system doing work on
+        // somebody's behalf, and before SSO this line could only have said
+        // "somebody".
+        requested_by = %requester,
+        duplicate = handled.duplicate,
+        "accepted a managed execution"
+    );
+
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(ExecutionAccepted {
+            execution: handled.projection,
+            created: !handled.duplicate,
+        }),
+    ))
+}
+
+/// One run's own page: where it is, and where each of its steps is.
+///
+/// The store's inline projection rather than a fold of the log, and the two are
+/// not interchangeable. This one is transactional with the decision that
+/// produced it, which is what makes it safe to accept the next command from;
+/// the fold is what draws the run beside every other execution, with `Pending`
+/// nodes and a live stream, and it is the one a list comes from.
+#[utoipa::path(
+    get,
+    path = "/api/v1/executions/{execution_id}",
+    params(("execution_id" = String, Path, description = "The id a start returned")),
+    responses(
+        (status = 200, body = RunProjection),
+        (status = 404, body = crate::error::ErrorBody),
+        (status = 501, body = crate::error::ErrorBody),
+        (status = 503, body = crate::error::ErrorBody),
+    ),
+    tag = "execution",
+)]
+async fn get_execution(
+    State(state): State<AppState>,
+    Path(execution_id): Path<String>,
+) -> ApiResult<Json<RunProjection>> {
+    handler(&state)?
+        .store()
+        .projection(&ExecutionId::new(execution_id.clone()))
+        .await
+        .map_err(aiwatcher_execution::HandleError::Store)?
+        .map(Json)
+        .ok_or_else(|| ApiError::NotFound(format!("execution {execution_id}")))
+}
+
+/// Read the definition at the revision it names, and compile it.
+///
+/// The compiler is `aiwatcher-execution`'s and the shape rules are
+/// `aiwatcher-datasets`'; this function only decides *which* definition. A
+/// refusal carries every problem at once, which is what the canvas renders.
+async fn compile(state: &AppState, body: &StartExecutionBody) -> ApiResult<ExecutionPlan> {
+    let TargetKind::CurationPipeline = body.target.kind;
+    let pipeline = definitions(state)?
+        .pipeline(&body.target.name, body.target.revision.as_deref())
+        .await?
+        .ok_or_else(|| match &body.target.revision {
+            Some(revision) => {
+                ApiError::NotFound(format!("pipeline {} at {revision}", body.target.name))
+            }
+            None => ApiError::NotFound(format!("pipeline {}", body.target.name)),
+        })?;
+
+    compile_curation(
+        &pipeline,
+        CompileOptions {
+            window: body
+                .window_seconds
+                .map(|seconds| resolve_window(seconds, body.as_of)),
+        },
+    )
+    .map_err(|error| ApiError::PlanRefused {
+        summary: format!(
+            "{} does not compile to something that can be run",
+            body.target.name
+        ),
+        problems: error.problems().to_vec(),
+    })
+}
+
+/// A relative window, pinned to the bounds it meant when it was asked for.
+///
+/// The clock is read here and nowhere below: `decide` may not read one, and a
+/// window resolved at dispatch would move under a retry.
+fn resolve_window(seconds: u64, as_of: Option<i64>) -> ResolvedWindow {
+    let to = as_of.unwrap_or_else(|| time::OffsetDateTime::now_utc().unix_timestamp());
+    ResolvedWindow {
+        from: to.saturating_sub(i64::try_from(seconds).unwrap_or(i64::MAX)),
+        to,
+    }
+}
+
+/// The id this run will have.
+///
+/// With an `Idempotency-Key`, derived from the key *and the plan*: repeating
+/// the request reaches the same stream, whose inbox answers with what the first
+/// one decided. Without one, a fresh v7 — two clicks are two runs, which is
+/// what somebody clicking twice on purpose means.
+///
+/// The plan is in the derivation so that one key cannot address two different
+/// plans: a caller who edited the pipeline and repeated their key would
+/// otherwise get the *old* run back and a 202 saying so.
+fn execution_id_for(headers: &HeaderMap, plan: &ExecutionPlan) -> String {
+    match headers
+        .get(IDEMPOTENCY_KEY)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+    {
+        Some(key) => derive_uuid(&format!(
+            "aiwatcher/execution/request/{}/{key}",
+            plan.plan_id
+        )),
+        // Hyphen-free, like a launch's `workflow_run_id`: this id becomes a
+        // correlation id, a partition key and a file name.
+        None => uuid::Uuid::now_v7().simple().to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use aiwatcher_execution::plan::{DefinitionKind, DefinitionRevision};
+
+    use super::*;
+
+    fn plan(revision: &str) -> ExecutionPlan {
+        ExecutionPlan::seal(
+            DefinitionKind::CurationPipeline,
+            "pii".to_owned(),
+            DefinitionRevision(revision.to_owned()),
+            vec![aiwatcher_execution::plan::PlanStep {
+                id: "read".to_owned(),
+                runtime: aiwatcher_execution::plan::RuntimeBinding::FlowPhp(
+                    aiwatcher_execution::plan::FlowStepSpec {
+                        script: "data_frame()->read(default)".to_owned(),
+                        source: aiwatcher_execution::plan::FlowSourceRef::default(),
+                        blocks: Vec::new(),
+                    },
+                ),
+                inputs: Vec::new(),
+                outputs: Vec::new(),
+                retry: aiwatcher_execution::plan::RetryPolicy::default(),
+                timeout_seconds: 300,
+                cache: aiwatcher_execution::plan::CachePolicy::Never,
+            }],
+            Vec::new(),
+        )
+    }
+
+    fn with_key(key: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(IDEMPOTENCY_KEY, key.parse().expect("a header value"));
+        headers
+    }
+
+    #[test]
+    fn one_key_repeated_reaches_one_execution() {
+        // Which is the whole mechanism: the same id is the same stream, and
+        // the store's own inbox answers the second request with what the first
+        // decided. A table of keys would be a fourth place a decision lives.
+        let plan = plan("ab");
+        assert_eq!(
+            execution_id_for(&with_key("nightly-2026-09-05"), &plan),
+            execution_id_for(&with_key("nightly-2026-09-05"), &plan)
+        );
+    }
+
+    #[test]
+    fn one_key_against_an_edited_pipeline_is_a_different_execution() {
+        // Otherwise somebody who fixed their pipeline and repeated their key
+        // would get the *old* run back, with a 202 saying it was theirs.
+        assert_ne!(
+            execution_id_for(&with_key("nightly"), &plan("ab")),
+            execution_id_for(&with_key("nightly"), &plan("cd"))
+        );
+    }
+
+    #[test]
+    fn two_clicks_with_no_key_are_two_runs() {
+        let plan = plan("ab");
+        assert_ne!(
+            execution_id_for(&HeaderMap::new(), &plan),
+            execution_id_for(&HeaderMap::new(), &plan)
+        );
+        // And an id that becomes a correlation id, a partition key and a file
+        // name carries none of the characters any of those three dislike.
+        let id = execution_id_for(&HeaderMap::new(), &plan);
+        assert!(
+            id.chars().all(|c| c.is_ascii_alphanumeric()),
+            "{id} has to survive being a file name"
+        );
+    }
+
+    #[test]
+    fn a_window_is_pinned_to_the_bounds_it_meant_when_it_was_asked_for() {
+        let window = resolve_window(900, None);
+        assert_eq!(window.to - window.from, 900);
+    }
+
+    #[test]
+    fn two_requests_pinning_one_span_ask_the_same_question() {
+        // Which is what makes a scheduled build of a fixed period cheap the
+        // second time: the same span compiles to one `plan_id` and one cache
+        // key. Without `as_of` every run pins a fresh span, which is right for
+        // "curate the last hour" and is why a hit is asked for rather than had
+        // by accident.
+        let nightly = resolve_window(3600, Some(1_700_003_600));
+        assert_eq!(nightly, resolve_window(3600, Some(1_700_003_600)));
+        assert_eq!(nightly.from, 1_700_000_000);
+        assert_eq!(nightly.to, 1_700_003_600);
+    }
+}

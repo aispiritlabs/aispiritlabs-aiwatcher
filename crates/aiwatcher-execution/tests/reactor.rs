@@ -18,9 +18,9 @@ use aiwatcher_execution::plan::{
 };
 use aiwatcher_execution::store::memory::MemoryWorkflowStore;
 use aiwatcher_execution::{
-    ExecutionHandler, ExecutionId, ExecutionMode, ExecutionOwner, ExecutionPlan, FailureClass, Now,
-    Performed, Reactor, RuntimeKind, StateType, WorkflowCommand, WorkflowMessage, WorkflowStore,
-    replay,
+    ArtifactCatalog, ExecutionHandler, ExecutionId, ExecutionMode, ExecutionOwner, ExecutionPlan,
+    FailureClass, MemoryArtifactCatalog, Now, Performed, Reactor, RuntimeKind, StateType,
+    WorkflowCommand, WorkflowMessage, WorkflowStore, replay,
 };
 use async_trait::async_trait;
 use time::OffsetDateTime;
@@ -108,6 +108,9 @@ struct Fake {
     ran: AtomicUsize,
     looked_up: AtomicUsize,
     prior: Option<Answer>,
+    /// What this runtime says about whether its answer may be cached. `false`
+    /// stands in for a Flow service that narrowed a pinned span.
+    cacheable: bool,
     seen_key: std::sync::Mutex<Option<String>>,
     seen_inputs: std::sync::Mutex<Vec<ArtifactRef>>,
 }
@@ -126,6 +129,20 @@ impl Fake {
             ran: AtomicUsize::new(0),
             looked_up: AtomicUsize::new(0),
             prior: None,
+            cacheable: true,
+            seen_key: std::sync::Mutex::new(None),
+            seen_inputs: std::sync::Mutex::new(Vec::new()),
+        })
+    }
+
+    /// A runtime that could not honour something the key assumes.
+    fn not_cacheable(self: Arc<Self>) -> Arc<Self> {
+        Arc::new(Self {
+            answer: self.answer.clone(),
+            ran: AtomicUsize::new(0),
+            looked_up: AtomicUsize::new(0),
+            prior: self.prior.clone(),
+            cacheable: false,
             seen_key: std::sync::Mutex::new(None),
             seen_inputs: std::sync::Mutex::new(Vec::new()),
         })
@@ -137,18 +154,20 @@ impl Fake {
             ran: AtomicUsize::new(0),
             looked_up: AtomicUsize::new(0),
             prior: Some(prior),
+            cacheable: true,
             seen_key: std::sync::Mutex::new(None),
             seen_inputs: std::sync::Mutex::new(Vec::new()),
         })
     }
 
-    fn result(answer: &Answer) -> Result<ActivityResult, ActivityError> {
+    fn result(answer: &Answer, cacheable: bool) -> Result<ActivityResult, ActivityError> {
         match answer {
             Answer::Rows(digest) => Ok(ActivityResult {
                 outputs: vec![
                     ArtifactRef::new("rows", format!("s3://bucket/{digest}"), digest.clone())
                         .of_kind(ArtifactKind::Rows),
                 ],
+                cacheable,
                 ..ActivityResult::default()
             }),
             Answer::Fails(class) => Err(ActivityError::new(*class, "the fake said no")),
@@ -182,14 +201,14 @@ impl ActivityExecutor for Fake {
             .lock()
             .expect("the inputs")
             .clone_from(&command.inputs);
-        Self::result(&self.answer)
+        Self::result(&self.answer, self.cacheable)
     }
 
     async fn lookup(&self, _command: &ActivityCommand) -> Result<PriorAttempt, ActivityError> {
         self.looked_up.fetch_add(1, Ordering::SeqCst);
         match &self.prior {
             Some(answer) => Ok(PriorAttempt::Done(Box::new(
-                Self::result(answer).unwrap_or_default(),
+                Self::result(answer, true).unwrap_or_default(),
             ))),
             None => Ok(PriorAttempt::Absent),
         }
@@ -262,6 +281,301 @@ async fn the_next_step_is_handed_what_the_one_before_it_produced() {
     assert_eq!(inputs.len(), 1, "the second step read one artifact");
     assert_eq!(inputs[0].digest, "ab".repeat(32));
     assert_eq!(inputs[0].kind, ArtifactKind::Rows);
+}
+
+#[tokio::test]
+async fn every_step_of_one_run_reaches_the_decider_and_the_run_finishes() {
+    // The regression this exists for: a report's message id is the *inbox*
+    // key, and one derived from the execution and the event name alone makes
+    // the second step's `step_started` a redelivery of the first's. The
+    // decider then never hears about it — the step stays `pending` behind a
+    // lease nothing releases, which reads exactly like a runtime that is busy,
+    // and the run never ends.
+    //
+    // The old two-step test asserted what the second step was *handed*, which
+    // it is either way. What tells the two apart is where the run got to.
+    let store = MemoryWorkflowStore::new();
+    started(&store).await;
+    let fake = Fake::new(Answer::Rows("ab".repeat(32)));
+    let reactor = reactor(store.clone(), Arc::clone(&fake));
+
+    reactor.poll_once(at(10)).await.expect("the first step");
+    reactor.poll_once(at(20)).await.expect("the second step");
+
+    let state = replay(store.load(&execution()).await.expect("a load").events());
+    let run = state.active().expect("an execution");
+    for step_id in ["extract", "load"] {
+        assert_eq!(
+            run.step(step_id).expect("the step").state.state_type,
+            StateType::Completed,
+            "{step_id} reported its outcome and the decider accepted it"
+        );
+    }
+    assert_eq!(run.state.state_type, StateType::Completed);
+
+    // And nothing is left claimable: both rows are settled, so a third poll
+    // has nothing to take rather than the second step's lease to wait out.
+    assert_eq!(
+        reactor.poll_once(at(30)).await.expect("a third poll"),
+        Performed::Idle
+    );
+}
+
+/// The Phase 5 plan's step is `CachePolicy::Never`; this is the same step
+/// opted in **and** with its window pinned, which are the two conditions a key
+/// needs. Opting in alone is not enough: a moving window shares a script and
+/// not a question.
+fn cacheable_plan() -> ExecutionPlan {
+    let mut steps = vec![step("extract", Vec::new())];
+    steps[0].cache = CachePolicy::ByContent;
+    if let RuntimeBinding::FlowPhp(spec) = &mut steps[0].runtime {
+        spec.source.window = Some(aiwatcher_execution::plan::ResolvedWindow {
+            from: 1_700_000_000,
+            to: 1_700_003_600,
+        });
+    }
+    steps[0].outputs = vec![aiwatcher_execution::plan::OutputDeclaration {
+        name: "rows".to_owned(),
+        kind: ArtifactKind::Rows,
+        schema_ref: None,
+    }];
+    ExecutionPlan::seal(
+        DefinitionKind::Workflow,
+        "import".to_owned(),
+        DefinitionRevision("ab".repeat(32)),
+        steps,
+        Vec::new(),
+    )
+}
+
+async fn started_with(store: &MemoryWorkflowStore, plan: ExecutionPlan) {
+    ExecutionHandler::new(store.clone())
+        .handle(
+            &execution(),
+            WorkflowMessage::Command(WorkflowCommand::StartExecution {
+                execution_id: execution(),
+                plan: Box::new(plan),
+                owner: ExecutionOwner::Local,
+                mode: ExecutionMode::Compiled,
+                requested_by: "mk".to_owned(),
+                input: BTreeMap::new(),
+            }),
+            metadata("m-1"),
+            Now::at(at(0)),
+        )
+        .await
+        .expect("a start");
+}
+
+#[tokio::test]
+async fn a_step_nobody_opted_in_gets_no_key_and_is_therefore_never_a_hit() {
+    // Caching is opt-in, and the default is `Never` everywhere. A key computed
+    // for a step that did not ask for one would put the decision in the index
+    // instead of in the plan.
+    let store = MemoryWorkflowStore::new();
+    started(&store).await;
+
+    let state = replay(store.load(&execution()).await.expect("a load").events());
+    let run = state.active().expect("an execution");
+    assert!(run.step("extract").expect("the step").cache_key.is_none());
+}
+
+#[tokio::test]
+async fn an_opted_in_step_over_a_moving_window_still_gets_no_key() {
+    // The second condition, and the one that is easy to miss: a chain compiled
+    // without a resolved window is opted in and uncacheable, because two runs
+    // an hour apart would share a key and not a question.
+    let mut steps = vec![step("extract", Vec::new())];
+    steps[0].cache = CachePolicy::ByContent;
+    let moving = ExecutionPlan::seal(
+        DefinitionKind::Workflow,
+        "import".to_owned(),
+        DefinitionRevision("ab".repeat(32)),
+        steps,
+        Vec::new(),
+    );
+    let store = MemoryWorkflowStore::new();
+    started_with(&store, moving).await;
+
+    let state = replay(store.load(&execution()).await.expect("a load").events());
+    assert!(
+        state
+            .active()
+            .expect("an execution")
+            .step("extract")
+            .expect("the step")
+            .cache_key
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn an_opted_in_step_is_answered_from_the_catalog_without_running() {
+    // The whole point: the decider computes the key (purely, from the plan and
+    // the artifacts its parents produced) and the reactor reads the index.
+    let store = MemoryWorkflowStore::new();
+    started_with(&store, cacheable_plan()).await;
+
+    let state = replay(store.load(&execution()).await.expect("a load").events());
+    let key = state
+        .active()
+        .expect("an execution")
+        .step("extract")
+        .expect("the step")
+        .cache_key
+        .clone()
+        .expect("an opted-in step has a key");
+
+    let reused = ArtifactRef::new("rows", "object://artifacts/rows/cd", "cd".repeat(32))
+        .of_kind(ArtifactKind::Rows);
+    let catalog = Arc::new(MemoryArtifactCatalog::new());
+    catalog
+        .remember(aiwatcher_execution::CacheEntry {
+            cache_key: key.clone(),
+            artifacts: vec![reused.clone()],
+            created_at: at(0),
+            expires_at: None,
+            invalidated_at: None,
+        })
+        .await
+        .expect("a cache write");
+
+    let fake = Fake::new(Answer::Rows("ab".repeat(32)));
+    let reactor = reactor(store.clone(), Arc::clone(&fake)).with_catalog(catalog);
+
+    assert_eq!(
+        reactor.poll_once(at(10)).await.expect("a poll"),
+        Performed::Reported {
+            step_id: "extract".to_owned(),
+            attempt: 1,
+            succeeded: true,
+        }
+    );
+    assert_eq!(
+        fake.ran.load(Ordering::SeqCst),
+        0,
+        "the runtime was never called"
+    );
+
+    let state = replay(store.load(&execution()).await.expect("a load").events());
+    let run = state.active().expect("an execution");
+    let step = run.step("extract").expect("the step");
+    assert_eq!(
+        step.state.label(),
+        "Cached",
+        "a hit is a state, not a silence"
+    );
+    assert_eq!(step.outputs, vec![reused]);
+    assert_eq!(run.state.state_type, StateType::Completed);
+
+    // And the attempt it answered is settled, so nothing claims it again.
+    assert_eq!(
+        reactor.poll_once(at(20)).await.expect("a second poll"),
+        Performed::Idle
+    );
+}
+
+#[tokio::test]
+async fn a_miss_runs_the_work_and_records_what_it_produced() {
+    // The other half: without an entry the step runs, and what it produced is
+    // in the catalog with its lineage — so the *next* identical run hits.
+    let store = MemoryWorkflowStore::new();
+    started_with(&store, cacheable_plan()).await;
+    let catalog = Arc::new(MemoryArtifactCatalog::new());
+    let fake = Fake::new(Answer::Rows("ab".repeat(32)));
+    let reactor = reactor(store.clone(), Arc::clone(&fake))
+        .with_catalog(Arc::clone(&catalog) as Arc<dyn ArtifactCatalog>);
+
+    reactor.poll_once(at(10)).await.expect("a poll");
+    assert_eq!(fake.ran.load(Ordering::SeqCst), 1);
+
+    let state = replay(store.load(&execution()).await.expect("a load").events());
+    let key = state
+        .active()
+        .expect("an execution")
+        .step("extract")
+        .expect("the step")
+        .cache_key
+        .clone()
+        .expect("a key");
+    let entry = catalog
+        .cached(&key, at(10))
+        .await
+        .expect("a read")
+        .expect("the run remembered what it produced");
+    assert_eq!(entry.artifacts.len(), 1);
+    assert_eq!(entry.artifacts[0].digest, "ab".repeat(32));
+
+    // And the artifact is described, so a reader can get from the bytes back
+    // to the attempt that made them.
+    let described = catalog
+        .by_digest(&"ab".repeat(32), ArtifactKind::Rows)
+        .await
+        .expect("a read")
+        .expect("a manifest");
+    let made = described.produced_by.expect("provenance");
+    assert_eq!(made.step_id, "extract");
+    assert_eq!(made.attempt, 1);
+}
+
+#[tokio::test]
+async fn a_result_the_runtime_could_not_pin_is_produced_and_not_remembered() {
+    // The rows are the step's answer and the step succeeds. What they may not
+    // become is the answer to the *key*, which claims a span the runtime read
+    // as a width from its own now — correct rows for a different question.
+    let store = MemoryWorkflowStore::new();
+    started_with(&store, cacheable_plan()).await;
+    let catalog = Arc::new(MemoryArtifactCatalog::new());
+    let fake = Fake::new(Answer::Rows("ab".repeat(32))).not_cacheable();
+    let reactor = reactor(store.clone(), Arc::clone(&fake))
+        .with_catalog(Arc::clone(&catalog) as Arc<dyn ArtifactCatalog>);
+
+    reactor.poll_once(at(10)).await.expect("a poll");
+
+    let state = replay(store.load(&execution()).await.expect("a load").events());
+    let run = state.active().expect("an execution");
+    assert_eq!(
+        run.step("extract").expect("the step").state.state_type,
+        StateType::Completed,
+        "the step succeeded"
+    );
+    let key = run
+        .step("extract")
+        .expect("the step")
+        .cache_key
+        .clone()
+        .expect("a key");
+    assert!(
+        catalog
+            .cached(&key, at(10))
+            .await
+            .expect("a read")
+            .is_none(),
+        "and nothing was stored under a key its rows do not answer"
+    );
+    // The artifact is still described, because the lineage is about what
+    // happened and not about what may be reused.
+    assert!(
+        catalog
+            .by_digest(&"ab".repeat(32), ArtifactKind::Rows)
+            .await
+            .expect("a read")
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn a_reactor_with_no_catalog_runs_everything_and_remembers_nothing() {
+    // A working state, not a degraded one: a deployment with no object store
+    // has no index, and section 18 is explicit that dropping the index costs a
+    // rerun and never a result.
+    let store = MemoryWorkflowStore::new();
+    started_with(&store, cacheable_plan()).await;
+    let fake = Fake::new(Answer::Rows("ab".repeat(32)));
+    let reactor = reactor(store.clone(), Arc::clone(&fake));
+
+    reactor.poll_once(at(10)).await.expect("a poll");
+    assert_eq!(fake.ran.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]

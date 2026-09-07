@@ -63,6 +63,32 @@ pub enum ApiError {
     #[error("this instance has no pipeline engine configured (AIWATCHER_ENGINE)")]
     EngineDisabled,
 
+    /// The one `Option` in [`AppState`](crate::state::AppState) that is never
+    /// `None` in the server binary: an execution store needs no more
+    /// configuration than a directory. What answers this is a router built
+    /// without one — a test, and any embedder that wires the reads and not the
+    /// writes.
+    #[error("this instance has no workflow store configured (AIWATCHER_WORKFLOW_STORE)")]
+    ExecutionsDisabled,
+
+    /// A definition that does not compile to something this deployment can
+    /// run: a chain that is not a chain, a notebook nobody pinned, or a step
+    /// that needs a process the configured store cannot give it.
+    ///
+    /// Every reason at once, in `details`, for
+    /// [`order_of`](aiwatcher_datasets::order_of)'s reason: somebody wiring a
+    /// canvas fixes what they can see, and one problem per round trip teaches
+    /// them to press the button again instead of reading it.
+    #[error("{summary}")]
+    PlanRefused {
+        summary: String,
+        problems: Vec<String>,
+    },
+
+    /// A command the execution's own state would not accept.
+    #[error(transparent)]
+    Execution(#[from] aiwatcher_execution::HandleError),
+
     #[error("this instance has no identity provider configured (AIWATCHER_AUTH_MODE)")]
     AuthDisabled,
 
@@ -183,6 +209,12 @@ impl ApiError {
             // this deployment wired no orchestrator behind them. The message
             // names the variable to set.
             Self::EngineDisabled => (StatusCode::NOT_IMPLEMENTED, "engine_disabled"),
+            Self::ExecutionsDisabled => (StatusCode::NOT_IMPLEMENTED, "executions_disabled"),
+            // The same 422 a refused pipeline gets, for the same reason: the
+            // request was well formed and the thing it describes cannot be
+            // run. Every problem with it rides in `details`.
+            Self::PlanRefused { .. } => (StatusCode::UNPROCESSABLE_ENTITY, "plan_refused"),
+            Self::Execution(error) => execution_parts(error),
             // Same shape again, and the same reason: the sign-in routes exist
             // in the contract and this deployment configured no provider.
             Self::AuthDisabled => (StatusCode::NOT_IMPLEMENTED, "auth_disabled"),
@@ -361,6 +393,31 @@ fn dataset_registry_parts(error: &aiwatcher_datasets::RegistryError) -> (StatusC
     }
 }
 
+/// A workflow failure, as a status the caller can act on.
+///
+/// Three outcomes, and which one it is decides what the panel does. A command
+/// the state would not accept is a 409 — the request is well formed and what it
+/// assumed is no longer true. Contention is a 503 the client should simply
+/// repeat: somebody else appended while this decision was being made, which is
+/// the store working rather than failing. And a plan the store has nowhere to
+/// run is a 422 naming the variable, because it is a fact about this
+/// deployment that the message has to carry back to whoever pressed the button.
+fn execution_parts(error: &aiwatcher_execution::HandleError) -> (StatusCode, &'static str) {
+    use aiwatcher_execution::HandleError;
+    match error {
+        HandleError::Decision(_) => (StatusCode::CONFLICT, "command_refused"),
+        HandleError::Contended { .. } => (StatusCode::SERVICE_UNAVAILABLE, "execution_contended"),
+        HandleError::NeedsMultiProcess { .. } => (StatusCode::UNPROCESSABLE_ENTITY, "plan_refused"),
+        HandleError::Store(aiwatcher_execution::StoreError::PayloadTooLarge { .. }) => {
+            (StatusCode::PAYLOAD_TOO_LARGE, "too_large")
+        }
+        HandleError::Store(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "workflow_store_unavailable",
+        ),
+    }
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, code) = self.parts();
@@ -383,6 +440,9 @@ impl IntoResponse for ApiError {
             Self::DatasetRegistry(aiwatcher_datasets::RegistryError::Rejected(problems)) => {
                 problems.clone()
             }
+            // And once more for a plan: the compiler reports everything wrong
+            // with a definition in one pass, so the canvas can draw all of it.
+            Self::PlanRefused { problems, .. } => problems.clone(),
             _ => Vec::new(),
         };
         let mut response = (

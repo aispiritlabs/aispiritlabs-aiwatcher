@@ -79,6 +79,19 @@ final class PipelineBuilder
         private readonly Catalog $catalog,
         /** The panel's fallback time window, in seconds, or null for everything. */
         ?int $windowSeconds = null,
+        /**
+         * The instant a managed plan pinned its window to end at.
+         *
+         * Absent for every panel query, which is what keeps a shared link
+         * meaning "the last hour" when it is opened. Present, the window is a
+         * closed span and a retry reads the same rows — which is what lets a
+         * managed step be cached at all.
+         *
+         * Not overridden by `period:` the way the width is: a script that pins
+         * its own period is saying how *wide*, and the plan is saying how far
+         * *back from where*. The two compose.
+         */
+        private readonly ?int $asOf = null,
     ) {
         $this->effectiveWindowSeconds = $windowSeconds;
     }
@@ -203,6 +216,7 @@ final class PipelineBuilder
             \is_string($run) ? $run : null,
             $this->effectiveWindowSeconds,
             $arguments,
+            $this->asOf,
         );
     }
 

@@ -11,6 +11,7 @@ use aiwatcher_conversations::Registry as ConversationArchive;
 use aiwatcher_core::engine::WorkflowEngine;
 use aiwatcher_core::ports::WorkflowRunner;
 use aiwatcher_datasets::Registry as DatasetRegistry;
+use aiwatcher_execution::{ExecutionHandler, WorkflowStore};
 use aiwatcher_projector::{LiveHub, ReadModel};
 use aiwatcher_prompts::Registry;
 use aiwatcher_training::Registry as TrainingRegistry;
@@ -56,6 +57,27 @@ pub struct AppState {
     /// worker, and a notify nobody waits on would be a silent no-op rather
     /// than an obvious one.
     pub export_worker: Option<Arc<tokio::sync::Notify>>,
+    /// Managed execution: the transactional store, behind the handler that is
+    /// the only way to write to it.
+    ///
+    /// Never `None` in the server binary — an execution store needs no more
+    /// configuration than a directory, so there is no "this deployment has
+    /// none" to report. It is an `Option` for the routers a test builds, which
+    /// have no store and should answer 501 rather than hold one.
+    ///
+    /// What the API does with it is deliberately narrow: accept a command, and
+    /// read one run's own page. Never a *list* — the workflow fold already
+    /// serves that from the log, and a second list would be the second picture
+    /// of one run that ADR_0026 refuses.
+    pub executions: Option<Arc<ExecutionHandler<Arc<dyn WorkflowStore>>>>,
+    /// How a handler tells this process's work role that there is something to
+    /// do.
+    ///
+    /// Two loops wait on it — the outbox publisher and a reactor — so this one
+    /// wakes *every* waiter rather than one of them, unlike the two queues
+    /// above. A loop that was not yet waiting misses the nudge and picks the
+    /// work up on its next poll, which is why the poll still exists.
+    pub execution_worker: Option<Arc<tokio::sync::Notify>>,
     /// The same, for the annotation import queue.
     ///
     /// A second notify rather than a shared one: the two queues live in
@@ -124,6 +146,17 @@ impl AppState {
             worker.notify_one();
         }
     }
+
+    /// Wake this process's work role, if it runs one.
+    ///
+    /// `notify_waiters` rather than `notify_one`: a decision produces both an
+    /// outbox row and, usually, a claimable attempt, and the two are drained by
+    /// different loops. Waking one of them would leave the other on its poll.
+    pub fn notify_execution_worker(&self) {
+        if let Some(worker) = &self.execution_worker {
+            worker.notify_waiters();
+        }
+    }
 }
 
 impl std::fmt::Debug for AppState {
@@ -135,6 +168,7 @@ impl std::fmt::Debug for AppState {
             .field("dataset_registry", &self.datasets.is_some())
             .field("annotation_registry", &self.annotations.is_some())
             .field("conversation_archive", &self.conversations.is_some())
+            .field("execution_store", &self.executions.is_some())
             .field("training_registry", &self.training.is_some())
             .field("dataset_hubs", &self.hubs.is_some())
             .field("dataset_sources", &self.sources.sources.len())

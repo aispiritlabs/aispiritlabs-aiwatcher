@@ -217,6 +217,25 @@ impl Registry {
         Ok(SavedPipeline { pipeline, created })
     }
 
+    /// One saved pipeline: a pinned revision, or the head when none is named.
+    ///
+    /// The pinned read is what makes a managed execution repeatable — a run
+    /// compiles the revision it was asked for, and editing the definition
+    /// while it is going creates a new revision and changes nothing about what
+    /// is already running (ADR_0025, section 5.3).
+    pub async fn pipeline(
+        &self,
+        name: &str,
+        revision: Option<&str>,
+    ) -> Result<Option<CurationPipeline>> {
+        validate_name(name, "pipeline")?;
+        let key = match revision.filter(|revision| !revision.is_empty()) {
+            Some(revision) => self.pipeline_version_key(name, revision),
+            None => self.pipeline_head_key(name),
+        };
+        self.read_json(&key).await
+    }
+
     /// Every saved pipeline, newest save first.
     pub async fn pipelines(&self) -> Result<PipelinePage> {
         let marker = "/head.json";

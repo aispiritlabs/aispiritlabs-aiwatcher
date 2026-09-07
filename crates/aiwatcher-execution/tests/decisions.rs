@@ -247,9 +247,64 @@ fn a_transient_failure_is_retried_with_the_delay_the_policy_names() {
         .expect("a retry with a time on it");
     // Resolved to an instant here rather than left as a duration, so replay
     // reaches the same schedule instead of one relative to when it replayed.
+    // Five seconds, not one: a transient failure is the runtime declining, and
+    // what it is waiting for is a service coming back rather than a flake
+    // passing.
     assert_eq!(
         scheduled,
-        OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(1)
+        OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(5)
+    );
+}
+
+#[test]
+fn an_outage_does_not_spend_the_budget_for_attempts_at_the_work() {
+    // Measured, not supposed: with one budget of three, a forty-second outage
+    // of the query service killed a run whose step was fine. A `Transient`
+    // failure is the runtime *declining* — nothing ran, nothing has a side
+    // effect — so it is counted against its own, larger budget.
+    let mut state = aiwatcher_execution::initial_state();
+    let outputs = decide(&state, &start(chain_of_two()), &cause("start"), now()).expect("start");
+    state = apply(state, &outputs);
+
+    let policy = RetryPolicy::default();
+    for attempt in 1..policy.max_unavailable_attempts {
+        let outputs = decide(
+            &state,
+            &WorkflowMessage::Event(WorkflowEvent::StepFailed {
+                step_id: "extract".to_owned(),
+                attempt,
+                error: StepError::new(FailureClass::Transient, "connection refused"),
+            }),
+            &cause(&format!("down-{attempt}")),
+            now(),
+        )
+        .expect("the service is down");
+        assert_eq!(
+            names(&outputs),
+            vec!["step_failed", "step_retry_scheduled", "execute_step"],
+            "attempt {attempt} of {} still waits for the service",
+            policy.max_unavailable_attempts
+        );
+        state = apply(state, &outputs);
+    }
+
+    // And when it comes back and the *work* is wrong, that is a separate
+    // budget which nine outages did not touch.
+    let outputs = decide(
+        &state,
+        &WorkflowMessage::Event(WorkflowEvent::StepFailed {
+            step_id: "extract".to_owned(),
+            attempt: policy.max_unavailable_attempts,
+            error: StepError::new(FailureClass::Timeout, "stopped waiting"),
+        }),
+        &cause("slow"),
+        now(),
+    )
+    .expect("a timeout after the outage");
+    assert_eq!(
+        names(&outputs),
+        vec!["step_failed", "step_retry_scheduled", "execute_step"],
+        "the first attempt that may have run the work has its own three"
     );
 }
 
@@ -293,6 +348,8 @@ fn the_retry_budget_runs_out_rather_than_looping() {
     let outputs = decide(&state, &start(chain_of_two()), &cause("start"), now()).expect("start");
     state = apply(state, &outputs);
 
+    // A timeout, because that is the class that spends the *work* budget: the
+    // runtime may have done something, so repeating it is not free.
     let mut last = Vec::new();
     for attempt in 1..=RetryPolicy::default().max_attempts {
         let outputs = decide(
@@ -300,12 +357,12 @@ fn the_retry_budget_runs_out_rather_than_looping() {
             &WorkflowMessage::Event(WorkflowEvent::StepFailed {
                 step_id: "extract".to_owned(),
                 attempt,
-                error: StepError::new(FailureClass::Transient, "reset"),
+                error: StepError::new(FailureClass::Timeout, "stopped waiting"),
             }),
             &cause(&format!("fail-{attempt}")),
             now(),
         )
-        .expect("a transient failure");
+        .expect("a timeout");
         state = apply(state, &outputs);
         last = names(&outputs);
     }

@@ -1011,6 +1011,18 @@ load balancer answers `absent` for the other replica's execution, which the
 reactor treats as "retry", and a retry of a deterministic query over the same
 window writes the same digest.
 
+**As built.** "In memory" is a note in the system temp directory, because a PHP
+process has no memory between requests and `php -S` and PHP-FPM both fork: a
+static array would answer `absent` to whichever worker took the lookup, which
+is the bug this route removes arriving from another direction. The note is
+scoped to one host and expires with the lookup window, which is the property
+the paragraph above asks for. `POST /flow/query` also gained `digest` on its
+answer — the service's own fingerprint of its own encoding, never compared
+against the reactor's digest of the bytes it stored (section 43.14). And the
+reactor's `done` answer is two reads rather than one: this route says whether
+the query is still executing, and the object store's receipt says what the
+finished attempt produced.
+
 ## 16. marimo
 
 The notebook service remains outside the Rust process because it executes
@@ -1515,13 +1527,22 @@ Runtime-specific compilation should not leak into the panel:
 - Flyte remains a `WorkflowEngine` adapter.
 
 **Process roles.** One binary, two roles: `aiwatcher serve` holds the API, the
-store and the object store; `aiwatcher work` holds the consumers, the workflow
-processor and the reactors, and is the only role that opens a socket to Flow,
-marimo, an engine or the cluster. `just dev` runs both in one process tree
-with the `file` store; a deployment runs them as two Deployments with
-different network policies, and the one that holds cluster credentials is the
-one that holds no ingress. This is how ADR 0008's "the binary does not know
-the optional services exist" survives as a statement about the *API*.
+read model, the store and the object store; `aiwatcher work` holds the outbox
+publisher and the reactors, and is the only role that opens a socket to Flow,
+marimo, an engine or the cluster. `just dev` runs both **in one process** with
+the `file` store; a deployment runs them as two Deployments with different
+network policies, and the one that holds cluster credentials is the one that
+holds no ingress. This is how ADR 0008's "the binary does not know the optional
+services exist" survives as a statement about the *API*.
+
+**Corrected while building it, twice.** Revision 2 put "the consumers" in
+`work`. The projector *is* the read model the API answers from, in process,
+under a memory contract — so it runs in `serve`, and what runs in `work` is the
+outbox (section 43.12). And the split needs three shared backends rather than
+one: the store, the log the outbox publishes to, and the object store one role
+writes a step's result into for the other to read. All three are refused at
+start-up by name (section 43.11), and a single-node install needs none of them
+because both roles are one process.
 
 ## 28. Migration plan
 
@@ -1530,11 +1551,12 @@ Phases 1, 3 and 9 build, moves Phase 8 behind its own gate, and adds Phases
 10–15 for the worker, planner, the hosted decider and the human step. Each
 phase names its exit; a phase without a green exit does not start the next.
 
-> **Implementation status, 2026-09-05.** Phases 0, 1, 2 and 3 are done, and
-> the three ports of section 27 exist. `aiwatcher-execution` still has no
-> caller: it is a library with its own tests, and nothing in `aiwatcher-server`
-> or `aiwatcher-api` constructs it. Section 45 records what building it changed
-> in this document.
+> **Implementation status, 2026-09-05.** Phases 0, 1, 2, 3 and 5 are done.
+> Phase 4 is **not**, and Phase 5 was built without it: what it needed of
+> artifacts is a content-addressed put, a verified read and a receipt, which is
+> `aiwatcher-server`'s `execution::artifacts` rather than the catalog tables and
+> editor sessions Phase 4 describes. Section 45 records what building it
+> changed in this document.
 >
 > **Recorded.** ADR_0025 (the server owns managed execution) and ADR_0026 (the
 > engine is a producer on its own log). ADR_0014 and ADR_0024 marked partially
@@ -1558,23 +1580,55 @@ phase names its exit; a phase without a green exit does not start the next.
 > **In `aiwatcher-projector`.** The workflow fold records `data.published_by`
 > and `NodeState::has_two_publishers` flags a node with two.
 >
-> **Proven.** The Phase 3 exit, in `aiwatcher-projector/tests/managed_execution.rs`:
-> a managed execution draws itself in the existing workflow tab with `Pending`
+> **Wired, in `aiwatcher-server`.** `AIWATCHER_WORKFLOW_STORE`
+> (`memory | file | postgres`, `file` by default under `AIWATCHER_DATA_DIR`,
+> `postgres` behind a cargo feature); `AIWATCHER_ROLE` and the `serve` / `work`
+> arguments; the outbox publisher and the reactor loops as background tasks;
+> `execution::artifacts` — the object store's sixth prefix, with the receipt of
+> section 43.14; `execution::flow` — the Flow activity executor, addressed by
+> `AIWATCHER_FLOW_URL`; and `execution::publish` — the `PublishDataset`
+> executor, which runs in `serve` because it executes nothing.
+>
+> **In `aiwatcher-api`.** `POST /api/v1/executions` and
+> `GET /api/v1/executions/{id}`, as a module facade. No list: the workflow fold
+> already serves one, and a second would be ADR_0026's two pictures of one run.
+>
+> **In `services/flow`.** Section 15.4 as written: `execution_id` on
+> `POST /flow/query`, and `GET /flow/executions/{id}` answering
+> `running | done {digest, rows} | absent`. The service remembers that it ran
+> and what the result hashed to, never the rows.
+>
+> **Proven.** The Phase 5 exit, by hand and end to end: a saved pipeline
+> submitted over HTTP, the client gone, the process killed mid-run, and one
+> published dataset version carrying `produced_by` and `execution_id` after the
+> restart. The Phase 3 exit, in
+> `aiwatcher-projector/tests/managed_execution.rs`, and again in that run — the
+> managed execution draws itself in the existing workflow tab with `Pending`
 > nodes, from `workflow.declared` and `step.*` alone, with no second read path
 > and no panel work. The Phase 1 exit, three times over: the contract suite is
 > `aiwatcher_execution::testing` behind a `testing` feature, and all three
-> adapters assert the same fifteen properties rather than three similar sets.
+> adapters assert the same sixteen properties rather than three similar sets.
 > `just postgres-up && just test-postgres` runs it against a real database.
 >
 > **Not built, and each blocks something named:**
 >
-> * Any wiring at all — no `AIWATCHER_WORKFLOW_STORE`, no process roles, no
->   `POST /executions`, no outbox publisher task, no reactor loop running
->   anywhere, and nothing in `deploy/` that installs a PostgreSQL or reports one
->   through `detect-stack.py` as ADR_0009 requires.
-> * Any `ActivityExecutor` implementation. The port and the loop exist; no Flow,
->   marimo or publish executor does, which is Phase 5 and 6.
-> * Everything from Phase 4 on.
+> * Phase 4's artifact metadata, lineage and cache **tables**, and its editor
+>   sessions and `ContextSnapshot`. `ArtifactCatalog` has a memory adapter and
+>   no durable one, and nothing wires it: a cache hit is therefore impossible
+>   today, and an old block cannot be opened with its historical context.
+> * Section 20's `mode: "preview"`. A managed step already reports a bounded
+>   inline preview *beside* its artifact, which is what a canvas renders; what
+>   does not exist is a whole execution that runs at simulation size and
+>   publishes nothing. `POST /executions` refuses the field by name rather than
+>   ignoring it.
+> * The marimo activity executor, which is Phase 6.
+> * Any panel change. `POST /executions` has no caller in the browser, so the
+>   Pipeline view still drives a chain itself — Phase 7, and ADR_0025 is
+>   explicit that the ad-hoc path stays either way.
+> * Anything in `deploy/`: no PostgreSQL installed or reported through
+>   `detect-stack.py` as ADR_0009 requires, and no NetworkPolicy for the two
+>   roles.
+> * Everything from Phase 8 on.
 
 ### Phase 0 — record the decisions
 
@@ -2743,6 +2797,25 @@ Each with the recommendation and what would settle it.
 13. **Who owns the pod templates.** The aiwatcher chart, as values, because
     the work role reads them; planner's chart supplies its own under a
     documented key. Settled by whoever writes the second template.
+14. **Absolute bounds on the windowed list routes.** *Settled by building it,
+    smaller than it was drafted* (43.18). Not `from`/`to` replacing the
+    relative window, which `window::cutoff` argues against and which would
+    have touched every windowed route — one optional `as_of`, on the two
+    routes Flow reads with a window. Absent it is now and every link means
+    what it meant; present the window is a closed span, and a windowed Flow
+    step is cacheable.
+15. **A second query engine, run locally.** Open, and worth keeping possible
+    rather than building: DuckDB from a console over the same authored
+    source, for the case where the corpus is on the machine somebody is
+    sitting at. Nothing forecloses it — `RuntimeBinding` is an enum of
+    bindings and never a host, `ActivityExecutor` assumes no transport, and
+    `FlowSourceRef` keeps the source **structured** beside the generated
+    script (15.3), which is what a second compiler would read. What *would*
+    foreclose it is a transform block whose only representation is Flow DSL
+    text, which is what `BlockSpec::Transform` is today: a SQL compiler could
+    not read it, so a DuckDB engine would take the source and not the
+    transforms. Settled by whoever wants the second engine, and cheapest to
+    fix before there are many saved transforms.
 
 ## 43. What building it changed
 
@@ -2866,6 +2939,212 @@ schedules one, so the report was silently refused and the step stayed `Running`.
 Added, with the honest limit written down: the answer today **completes** the
 step, which is right for a `HumanInput` and is the half of section 41 that is
 missing for a turn that wants to *continue* after the answer.
+
+### 43.10 A report's message id has to name the attempt, not the event
+
+The reactor derived a report's `message_id` — which *is* the inbox key — from
+the execution and the event's name: `report/{execution}/step_started/started`.
+For a one-step plan that is unique. For a two-step one it is not: the second
+step's `step_started` is byte-identical to the first's, the inbox answers
+`Duplicate`, and the decider never hears about it. The step then sits `pending`
+behind a lease nothing releases, which reads exactly like a runtime that is
+busy — for five minutes, and then again.
+
+Found by running the Phase 5 chain, not by a test. The two-step reactor test
+that existed asserted what the second step was *handed*, which is right either
+way; what tells the two apart is where the run got to.
+`every_step_of_one_run_reaches_the_decider_and_the_run_finishes` asserts that,
+and fails without the fix. The id is now
+`report/{execution}/{step}/{attempt}/{what}`, and the metadata carries
+`step_id` and `attempt` as well.
+
+**The lesson is about derived ids generally.** Deriving rather than generating
+is right (43.9 records that it held); what this cost is the half of the rule
+nobody stated — a derived id must name everything that distinguishes the thing
+it identifies, and "everything" is easy to under-count when the first plan you
+run has one step.
+
+### 43.11 Splitting the binary in two makes three backends stop being per-process
+
+Section 27 says `serve` and `work` are two Deployments and names one
+consequence: the store has to be one more than one process can hold. Running it
+found two more, and the third the expensive way.
+
+* **The workflow store.** As stated. `file` takes an exclusive lock and fails
+  on whichever process starts second.
+* **The log.** The work role's outbox publishes execution facts and the serve
+  role's projector folds them. `memory` is one process's channel and `wal` is
+  one process's directory, so a split on either leaves the facts in a log
+  nobody reads: a run that completed, and a workflow tab that never heard.
+* **The object store.** The one that fails loudly and *late*. The work role
+  wrote a step's rows into its own `./.data/prompts` and the serve role's
+  publish executor read a digest that was not there — `Infrastructure`, three
+  attempts, then `crashed`. Correct behaviour, and an hour of diagnosis for a
+  configuration that could have been refused at start-up.
+
+All three are now refused in `Config::validate`, each naming its variable and
+what made it required. The failure direction is the safe one: a single-node
+install needs none of them, because both roles are one process.
+
+### 43.12 The projector belongs to `serve`, not to `work`
+
+Section 27 gives `work` "the consumers". In this codebase the projector *is*
+the read model the API answers from — in process, under
+`AIWATCHER_MAX_SPANS_TOTAL`'s memory contract — so a `serve` role without it
+would answer every read from an empty fold, and a `work` role with it would
+hold a second copy nobody queries. What runs in `work` is the outbox and the
+reactors.
+
+This is not a disagreement with the plan so much as an ordering: moving the
+folds out of process is Phase 8, deferred behind its own gate, and until it
+happens "the consumers" cannot mean the projector. Section 27 is corrected.
+
+### 43.13 `ResolvedWindow` was a pin the query service could not honour
+
+`FlowSourceRef::window` is resolved at compile time so a retry reads the same
+rows and a cache key can exist. `POST /flow/query` took `window_seconds` — a
+*duration*, applied relative to the service's own now — so what survived a retry
+was the width of the window and not its bounds.
+
+Section 15.4 was implemented as written, one field and one route, and the gap
+was recorded rather than papered over. It stopped being tolerable the moment the
+cache was wired: a key that claims a span, over rows read through a drifting
+width, is a hit that answers the wrong question. Closed in 43.18.
+
+### 43.14 "It ran" and "here is what it produced" are two questions
+
+Section 15.4 says the query service remembers that it ran and what the result
+hashed to, "never the rows". Following that through, a `done` answer is not
+enough on its own: the reactor needs the rows to produce an artifact, and the
+service is the one party that does not have them.
+
+So the lookup is two reads against two systems, and each answers what only it
+can. The **service** answers whether the query is still executing — nothing
+else knows that, and it is the whole reason the route exists. The **object
+store** answers what the finished attempt produced, through a receipt the
+reactor writes after the data (`aiwatcher_jobs::ORDERING`, in the fifth place
+it applies). `done` with no receipt is the honest gap between them: the query
+finished and its rows never reached the store, so running it again is the only
+way to get them.
+
+The receipt also settles a question that looked like a cross-language contract
+and is not one. The two digests — PHP's of its own JSON, Rust's of the bytes it
+stored — are of different encodings and are never compared to each other. What
+is compared is the service's digest against the one *recorded in the receipt*,
+which answers the only question that matters: whether the note beside the
+stored bytes describes this run of this key.
+
+### 43.15 Wiring the cache made a latent unsoundness reachable
+
+The compiler set `CachePolicy::ByContent` on every Flow and notebook step from
+the day it was written, and nothing ever computed a key: `cache_key` was called
+only by its own tests, `StepScheduled.cache_key` was always `None`, and
+`ArtifactCatalog` had one adapter that nobody constructed. The plan *declared* a
+cache the system did not have, which is worse than not having one — somebody
+reads `ByContent` and believes the second identical run is free.
+
+Wiring it turned a dormant bug into a reachable one. `code_digest` gated a Flow
+key on `window.is_some() || resolved_revision.is_some()`, and the window itself
+was **not in the material** — so one script over two different pinned spans
+produced one key. A pipeline run at 10:00 over the last hour and the same
+pipeline run at 14:00 over the last hour would have shared a key, and the second
+would have been answered with the first's rows.
+
+Two changes, and the second is the one worth remembering:
+
+* The resolved window is in the key material now. One script over two spans is
+  two questions.
+* A Flow step needs a **pinned source**, not merely a pinned window. `POST
+  /flow/query` takes a duration and applies it from its own now, so a plan that
+  pinned 09:00–10:00 and a retry five minutes later read different rows — and
+  the retry would store them under the original key. That is exactly the
+  "probably the same" that `cache_key` exists to refuse, so it refuses it.
+
+**The lesson is about declaring a capability before wiring it.** The gate that
+was wrong had been wrong for as long as it had existed, and no test caught it
+because no caller existed. A policy field with no reader is not half a feature;
+it is a claim the code does not keep.
+
+### 43.16 The outbox was a queue that never forgot
+
+`mark_published` set `published_at` and `pending_outbox` filtered on it, so
+every fact this engine ever published stayed in the store forever. Nothing read
+those rows: once the sink has taken a message it is on the event log, which is
+the durable copy and the one every fold reads.
+
+They are deleted now, in all three adapters, and the contract suite has a
+sixteenth property that says so. The sharpest case is the `file` adapter, which
+rewrites the whole outbox on every publish — a kept row is paid for on every
+pass afterwards, so the cost of remembering was quadratic in the number of facts
+a deployment had ever produced.
+
+**What this does not fix** is the rest of the store. Streams, attempt rows and
+the projection are still never pruned, and the `file` adapter rewrites its whole
+attempt table on every claim. A retention policy for finished executions is its
+own decision — the stream is the *explanation* of a run, which is the one thing
+the log does not carry.
+
+### 43.17 One retry budget was sized for a job shard
+
+`RetryPolicy::max_attempts` defaulted to `aiwatcher_jobs::MAX_ATTEMPTS` — three,
+sized in that crate for "a failure worth retrying is transient by definition".
+Applied to a step that depends on an external service, three attempts over
+1 s/5 s/30 s tolerates thirty-six seconds of outage. Restarting the process with
+the query service down burned all three and failed a chain whose Flow step was
+fine.
+
+Every class `is_retryable` answers true for means *nobody answered*, so the one
+budget only ever bounded that case. It is two budgets now, split by whether the
+runtime may have done the work:
+
+* `Transient` is the runtime **declining** — a refused connection, a 503, no
+  worker. Nothing ran and nothing has a side effect, so running it again costs
+  one call: ten attempts over 5/15/30/60 s, about ten minutes of outage.
+* `Timeout` and `Infrastructure` may have run something — the caller stopped
+  waiting, a pod died holding work. Repeating those is not free, so they keep
+  the three.
+
+They are counted by kind off the attempt records the state already holds, so a
+step that waited out a restart and then timed out has spent one of its three,
+not seven.
+
+**The lesson generalises past retries.** `aiwatcher-jobs` is called rather than
+copied, which is right — and a *constant* is not a rule. `MAX_ATTEMPTS` is a
+number chosen for one shape of work, and importing it into another shape was a
+decision that looked like reuse.
+
+### 43.18 A window keeps its shape and gains an end
+
+Making `ResolvedWindow` mean something took one optional parameter, not the
+absolute-bounds rewrite open decision 14 was drafted for. `window::cutoff`'s own
+docstring argued against *replacing* the relative window — "a link someone
+pastes into a chat should mean the last hour when it is opened" — and that
+argument is untouched by letting a caller say where the window *ends*.
+
+So `as_of` is the whole change: absent, it is now and every link means what it
+meant; present, the window is a closed span and two reads of it agree. It
+reaches four places and stops:
+
+* `window::bounds` returns both ends, and `cutoff` is the one-ended call
+  everything else still makes.
+* `RunFilter` and `SpanFilter` carry it — the two datasets Flow declares as
+  windowed, and the only two routes that needed it.
+* `POST /flow/query` takes `window_from`/`window_to`; the catalog forwards
+  `as_of` to the routes that accept one.
+* `cache::code_digest` opens back up for a pinned window.
+
+**Two things this changed about how the cache is trusted.** The key being *well
+defined* is `cache_key`'s question, and whether the run that produced a result
+actually happened under those conditions is the executor's — because only the
+runtime knows what it managed to do. `ActivityResult::cacheable` is that answer,
+and the query service's `window_applied` is what the Flow executor reads to give
+it. An older service that never learnt `as_of` says so by omission and its
+results are produced, reported and not remembered.
+
+And `ActivityResult` lost its derived `Default`. `cacheable` defaults to `true`,
+which a derive would have made `false` — silently turning the cache off for
+every executor that built a result the short way. A boolean whose safe value is
+not `Default::default()` is a boolean that needs an impl.
 
 ### 43.9 What did not need changing
 

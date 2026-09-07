@@ -185,6 +185,7 @@ fn apply(execution: &mut Execution, event: &WorkflowEvent) {
         }
         WorkflowEvent::StepCacheHit {
             step_id,
+            attempt,
             cache_key,
             outputs,
         } => {
@@ -192,6 +193,9 @@ fn apply(execution: &mut Execution, event: &WorkflowEvent) {
                 step.state = RunState::named(StateType::Completed, "Cached");
                 step.cache_key = Some(cache_key.clone());
                 step.outputs.clone_from(outputs);
+                if let Some(record) = step.attempts.iter_mut().find(|r| r.attempt == *attempt) {
+                    record.state = RunState::named(StateType::Completed, "Cached");
+                }
             }
         }
         WorkflowEvent::StepFailed {
@@ -536,6 +540,39 @@ fn decide_active(
             Ok(emit.into_messages())
         }
 
+        // A reactor answered the attempt out of the artifact catalog instead
+        // of running it. Handled beside the completion rather than folded into
+        // it, because the two are different facts: a hit says the work was not
+        // done, and a run that reports one has to stay explainable after the
+        // index is dropped (section 18).
+        WorkflowMessage::Event(WorkflowEvent::StepCacheHit {
+            step_id,
+            attempt,
+            cache_key,
+            outputs,
+        }) => {
+            let step = step_of(execution, step_id)?;
+            if step.state.state_type == StateType::Completed {
+                return Ok(Vec::new());
+            }
+            if step.current_attempt != *attempt {
+                return Err(DecisionError::StaleAttempt {
+                    step: step_id.clone(),
+                    attempt: *attempt,
+                    current: step.current_attempt,
+                });
+            }
+            emit.about_step(step_id, *attempt);
+            emit.event(WorkflowEvent::StepCacheHit {
+                step_id: step_id.clone(),
+                attempt: *attempt,
+                cache_key: cache_key.clone(),
+                outputs: outputs.clone(),
+            });
+            continue_after(execution, step_id, &mut emit, now);
+            Ok(emit.into_messages())
+        }
+
         WorkflowMessage::Event(WorkflowEvent::StepCompleted {
             step_id,
             attempt,
@@ -596,11 +633,26 @@ fn decide_active(
             });
 
             let next = attempt + 1;
-            let may_retry = error.class.is_retryable()
-                && next <= plan_step.retry.max_attempts
-                && !execution.cancelling;
+            // Two budgets, counted by kind rather than by attempt number. A
+            // step that waited out a restarting service and then failed on its
+            // own terms has spent one of the three attempts at the *work*, not
+            // six — and a run that only ever failed to reach its runtime is
+            // bounded by the other number rather than by this one.
+            let may_have_run = error.class.may_have_run();
+            let spent = 1 + step
+                .attempts
+                .iter()
+                .filter_map(|record| record.error.as_ref())
+                .filter(|failed| failed.class.may_have_run() == may_have_run)
+                .count() as u32;
+            let budget = if may_have_run {
+                plan_step.retry.max_attempts
+            } else {
+                plan_step.retry.max_unavailable_attempts
+            };
+            let may_retry = error.class.is_retryable() && spent < budget && !execution.cancelling;
             if may_retry {
-                let delay = plan_step.retry.delay_before(next);
+                let delay = plan_step.retry.delay_before(next, !may_have_run);
                 let not_before =
                     now.at + time::Duration::try_from(delay).unwrap_or(time::Duration::ZERO);
                 emit.event(WorkflowEvent::StepRetryScheduled {
@@ -696,7 +748,13 @@ fn schedule_attempt(
         step_id: step_id.to_owned(),
         attempt,
         runtime: plan_step.runtime.kind(),
-        cache_key: None,
+        // Computed here, where it can be: the key is a pure function of the
+        // step and the artifacts its parents produced, and both are in the
+        // state. `None` is the ordinary answer — caching is opt-in, and
+        // `cache_key` refuses a key for anything whose inputs are not all
+        // digest-addressed. What consults the index is the reactor, because
+        // that is a read and `decide` performs none.
+        cache_key: crate::cache_key(plan_step, &execution.resolved_inputs(step_id)),
     });
 
     // A wait is not dispatched anywhere: the question goes in front of

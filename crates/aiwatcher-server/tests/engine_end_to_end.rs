@@ -265,7 +265,7 @@ impl Instance {
         let runtime = aiwatcher_server::build(config)
             .await
             .expect("the instance builds");
-        let (state, _config, projector) = runtime.split();
+        let (state, projector) = (runtime.state, runtime.projector);
 
         let shutdown = CancellationToken::new();
         let projector_shutdown = shutdown.clone();

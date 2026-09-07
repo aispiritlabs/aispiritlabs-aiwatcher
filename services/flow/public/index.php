@@ -5,7 +5,7 @@ declare(strict_types=1);
 /**
  * The Flow query service.
  *
- * Five routes and no framework, because the surface is still deliberately small. The panel
+ * Six routes and no framework, because the surface is still deliberately small. The panel
  * talks to this directly rather than through the Rust API: aiwatcher's binary
  * has no idea this exists, which is what lets the service be absent without the
  * rest of the panel noticing (see ADR_0008).
@@ -14,11 +14,20 @@ declare(strict_types=1);
  *   GET  /flow/datasets  what a query may read, and the columns of each
  *   POST /flow/check     {"pipeline": …} -> what is wrong with it, without running it
  *   POST /flow/simulate  {"pipeline": …} -> a 25-row, side-effect-free preview
- *   POST /flow/query     {"pipeline": …, "window_seconds": …} -> a table
+ *   POST /flow/query     {"pipeline": …, "window_seconds": …, "window_from"/"window_to": …,
+ *                         "execution_id": …} -> a table, saying which window it used
+ *   GET  /flow/executions/{id}  did this service already run that key
+ *
+ * The last two are what managed execution needs and all it needs: one field and one route
+ * (section 15.4 of `docs/PIPELINE_ARCHITECTURE.md`). `execution_id` is
+ * `<execution>/<step>/<attempt>`, and what the service remembers about it is that it ran
+ * and what the result hashed to — never the rows. ADR 0014 refused this service an S3
+ * client and that refusal stands: the rows go to the artifact the *reactor* uploads.
  */
 
 use Aiwatcher\Flow\Dataset\Catalog;
 use Aiwatcher\Flow\Dsl\ParseError;
+use Aiwatcher\Flow\ExecutionMemory;
 use Aiwatcher\Flow\Lint\MagoLinter;
 use Aiwatcher\Flow\QueryChecker;
 use Aiwatcher\Flow\QueryRunner;
@@ -32,7 +41,7 @@ $aiwatcher = \rtrim((string) (\getenv('AIWATCHER_URL') ?: '') ?: 'http://127.0.0
 $client = new Psr18Client();
 $catalog = new Catalog($client, $aiwatcher);
 $linter = MagoLinter::fromVendor($catalog, \dirname(__DIR__));
-$runner = new QueryRunner($catalog, $aiwatcher);
+$runner = new QueryRunner($catalog, $aiwatcher, ExecutionMemory::default());
 $checker = new QueryChecker($catalog, $linter);
 
 /** The request body, decoded once — `php://input` is read, not re-read. */
@@ -45,6 +54,34 @@ $request = (static function (): array {
 
 /** Read a `{"pipeline": "…"}` body, or null when it is not one. */
 $pipeline = static fn(): ?string => \is_string($request['pipeline'] ?? null) ? $request['pipeline'] : null;
+
+/**
+ * The idempotency key of a managed step, from the same body.
+ *
+ * Absent for every ad-hoc query, which is every query the panel sends: those are not
+ * keyed, not resumed and not deduplicated, and nothing about them is remembered.
+ */
+$executionId = static fn(): ?string => \is_string($request['execution_id'] ?? null)
+    && $request['execution_id'] !== ''
+        ? $request['execution_id']
+        : null;
+
+/**
+ * The exact bounds a managed plan pinned, when it pinned any.
+ *
+ * Sent beside `window_seconds` rather than instead of it: this service narrows a
+ * span to the width it is worth, because the aiwatcher API's windowed routes take
+ * a duration. What it does *not* do is pretend otherwise — the answer says which
+ * of the two the rows were read through. See `QueryRunner::windowApplied`.
+ *
+ * @return ?array{int, int}
+ */
+$windowSpan = static function () use ($request): ?array {
+    $from = $request['window_from'] ?? null;
+    $to = $request['window_to'] ?? null;
+
+    return \is_int($from) && \is_int($to) && $to > $from ? [$from, $to] : null;
+};
 
 /**
  * The panel's time window, in seconds, from the same body.
@@ -107,7 +144,14 @@ try {
             $send(200, $checker->check($query));
         })(),
 
-        $path === '/flow/query' && $method === 'POST' => (static function () use ($send, $runner, $pipeline, $window): void {
+        $path === '/flow/query' && $method === 'POST' => (static function () use (
+            $send,
+            $runner,
+            $pipeline,
+            $window,
+            $executionId,
+            $windowSpan,
+        ): void {
             $query = $pipeline();
 
             if ($query === null) {
@@ -116,8 +160,22 @@ try {
                 return;
             }
 
-            $send(200, $runner->run($query, $window()));
+            $send(200, $runner->run(
+                $query,
+                $window(),
+                QueryRunner::MAX_ROWS,
+                $executionId(),
+                $windowSpan(),
+            ));
         })(),
+
+        // The lookup half. A reactor asks this after a timeout, before it runs the same
+        // key again — a timeout says the caller stopped waiting and nothing about whether
+        // this service stopped working. `absent` is the ordinary answer and the safe one.
+        \str_starts_with($path, '/flow/executions/') && $method === 'GET' => $send(
+            200,
+            $runner->seen(\rawurldecode(\substr($path, \strlen('/flow/executions/')))),
+        ),
 
         $path === '/flow/simulate' && $method === 'POST' => (static function () use ($send, $runner, $pipeline, $window): void {
             $query = $pipeline();

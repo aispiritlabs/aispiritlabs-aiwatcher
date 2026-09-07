@@ -36,6 +36,10 @@ laser_connection := env_var_or_default("AIWATCHER_LASER_CONNECTION_STRING", "igg
 # project database.
 workflow_postgres_url := env_var_or_default("AIWATCHER_WORKFLOW_POSTGRES_URL", "postgres://aiwatcher:aiwatcher@127.0.0.1:5433/aiwatcher")
 
+# Where a managed Flow step is sent. The only address a `flow_php` step ever
+# runs against: a plan names a binding and its parameters, never a host.
+flow_url := env_var_or_default("AIWATCHER_FLOW_URL", "http://127.0.0.1:8081")
+
 # The control plane `just run-flyte` browses. `flytectl demo start` serves one
 # on :30080; a cluster's is the flyteadmin Service. There is no `flyte-up` here
 # on purpose — the demo cluster is a k3s in Docker that this repo does not
@@ -214,6 +218,65 @@ run-flyte:
 test-pipeline:
     cargo test -p aiwatcher-pipeline
     cargo test -p aiwatcher-server --test engine_end_to_end
+
+# The workflow store defaults to ./.data/workflow and holds one process, so the
+# two roles below are one process tree unless a database is behind them. That is
+# what `just dev` and `just run` run, and it is the refusal in `Config::validate`
+# rather than a lock file somebody has to interpret.
+
+# Server on :8080 with managed Flow execution wired. Run `just flow-serve` beside it.
+run-execution:
+    AIWATCHER_BUS=wal \
+    AIWATCHER_INGEST_ENABLED=true \
+    AIWATCHER_FLOW_URL={{flow_url}} \
+    AIWATCHER_LOG=info,aiwatcher=debug \
+    cargo run --bin aiwatcher
+
+# The same, on PostgreSQL. Run `just postgres-up` first; needs the feature built in.
+run-postgres:
+    AIWATCHER_BUS=wal \
+    AIWATCHER_INGEST_ENABLED=true \
+    AIWATCHER_WORKFLOW_STORE=postgres \
+    AIWATCHER_WORKFLOW_POSTGRES_URL={{workflow_postgres_url}} \
+    AIWATCHER_FLOW_URL={{flow_url}} \
+    AIWATCHER_LOG=info,aiwatcher=debug \
+    cargo run --bin aiwatcher --features postgres
+
+# The two roles as two processes. Three things stop being per-process when the
+# binary is split, and the start-up refuses each by name: the workflow store
+# (`postgres`), the log the outbox publishes to and the projector folds
+# (`laser`), and the object store one role writes a step's result into for the
+# other to read (`s3`). So this needs `just postgres-up`, `just iggy-up` and
+# `just rustfs-up` — which is the honest shape of a split deployment, and why
+# one process holding both roles is the default.
+
+# `aiwatcher work` alone: the outbox and the reactors, and no ingress.
+run-work:
+    AIWATCHER_BUS=laser \
+    AIWATCHER_LASER_CONNECTION_STRING={{laser_connection}} \
+    AIWATCHER_WORKFLOW_STORE=postgres \
+    AIWATCHER_WORKFLOW_POSTGRES_URL={{workflow_postgres_url}} \
+    AIWATCHER_PROMPT_STORE=s3 \
+    AIWATCHER_PROMPT_S3_ENDPOINT={{rustfs_endpoint}} \
+    AIWATCHER_PROMPT_S3_ACCESS_KEY=rustfsadmin \
+    AIWATCHER_PROMPT_S3_SECRET_KEY=rustfsadmin \
+    AIWATCHER_FLOW_URL={{flow_url}} \
+    AIWATCHER_LOG=info,aiwatcher=debug \
+    cargo run --bin aiwatcher --features postgres,laser -- work
+
+# `aiwatcher serve` alone: the API, the read model and the object store.
+run-serve:
+    AIWATCHER_BUS=laser \
+    AIWATCHER_LASER_CONNECTION_STRING={{laser_connection}} \
+    AIWATCHER_INGEST_ENABLED=true \
+    AIWATCHER_WORKFLOW_STORE=postgres \
+    AIWATCHER_WORKFLOW_POSTGRES_URL={{workflow_postgres_url}} \
+    AIWATCHER_PROMPT_STORE=s3 \
+    AIWATCHER_PROMPT_S3_ENDPOINT={{rustfs_endpoint}} \
+    AIWATCHER_PROMPT_S3_ACCESS_KEY=rustfsadmin \
+    AIWATCHER_PROMPT_S3_SECRET_KEY=rustfsadmin \
+    AIWATCHER_LOG=info,aiwatcher=debug \
+    cargo run --bin aiwatcher --features postgres,laser -- serve
 
 # Server on :8080 with the prompt registry in RustFS. Run `just rustfs-up` first.
 run-rustfs:

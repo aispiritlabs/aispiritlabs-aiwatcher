@@ -153,6 +153,124 @@ async fn a_command_that_does_not_apply_is_refused_rather_than_retried() {
     );
 }
 
+/// A store that is the memory one in every way but its capabilities.
+///
+/// A `file` store would do, and would put a directory and a lock file in a test
+/// about a decision. What is under test is the *rule*, and the rule reads one
+/// boolean.
+#[derive(Debug)]
+struct OneProcess(MemoryWorkflowStore);
+
+#[async_trait::async_trait]
+impl WorkflowStore for OneProcess {
+    fn capabilities(&self) -> StoreCapabilities {
+        StoreCapabilities {
+            multi_process: false,
+            claimable: false,
+        }
+    }
+
+    async fn load(&self, execution: &ExecutionId) -> aiwatcher_execution::Result<StreamSlice> {
+        self.0.load(execution).await
+    }
+
+    async fn append(
+        &self,
+        execution: &ExecutionId,
+        request: AppendRequest,
+    ) -> aiwatcher_execution::Result<AppendOutcome> {
+        self.0.append(execution, request).await
+    }
+
+    async fn projection(
+        &self,
+        execution: &ExecutionId,
+    ) -> aiwatcher_execution::Result<Option<RunProjection>> {
+        self.0.projection(execution).await
+    }
+
+    async fn pending_outbox(
+        &self,
+        limit: usize,
+    ) -> aiwatcher_execution::Result<Vec<OutboxMessage>> {
+        self.0.pending_outbox(limit).await
+    }
+
+    async fn mark_published(
+        &self,
+        ids: &[MessageId],
+        at: OffsetDateTime,
+    ) -> aiwatcher_execution::Result<()> {
+        self.0.mark_published(ids, at).await
+    }
+
+    async fn claim_attempt(
+        &self,
+        filter: &ClaimFilter,
+        owner: &str,
+        now: OffsetDateTime,
+    ) -> aiwatcher_execution::Result<Option<AttemptRow>> {
+        self.0.claim_attempt(filter, owner, now).await
+    }
+
+    async fn heartbeat(
+        &self,
+        key: &AttemptKey,
+        owner: &str,
+        now: OffsetDateTime,
+    ) -> aiwatcher_execution::Result<bool> {
+        self.0.heartbeat(key, owner, now).await
+    }
+
+    async fn attempt(&self, key: &AttemptKey) -> aiwatcher_execution::Result<Option<AttemptRow>> {
+        self.0.attempt(key).await
+    }
+
+    async fn checkpoint(&self, processor: &str) -> aiwatcher_execution::Result<Option<Checkpoint>> {
+        self.0.checkpoint(processor).await
+    }
+
+    async fn advance_checkpoint(
+        &self,
+        processor: &str,
+        checkpoint: Checkpoint,
+    ) -> aiwatcher_execution::Result<()> {
+        self.0.advance_checkpoint(processor, checkpoint).await
+    }
+}
+
+#[tokio::test]
+async fn a_plan_that_needs_a_worker_is_refused_by_a_store_that_holds_one_process() {
+    // Before the run rather than when nothing claims the step. The second
+    // failure is the invisible one: an attempt no worker can ever take looks
+    // exactly like a worker that is busy, and no log anywhere says otherwise.
+    let handler = ExecutionHandler::new(OneProcess(MemoryWorkflowStore::new()));
+    let error = handler
+        .handle(&execution(), start(), metadata("m-1"), Now::at(at(0)))
+        .await
+        .expect_err("a python task on a single-process store");
+
+    assert!(
+        matches!(error, HandleError::NeedsMultiProcess { .. }),
+        "{error}"
+    );
+    assert!(error.to_string().contains("'extract'"), "{error}");
+    assert!(
+        error.to_string().contains("AIWATCHER_WORKFLOW_STORE"),
+        "the refusal names the variable that fixes it: {error}"
+    );
+
+    // And nothing was written: a refused start is not half an execution.
+    assert!(
+        handler
+            .store()
+            .load(&execution())
+            .await
+            .expect("a load")
+            .is_empty()
+    );
+}
+
 /// A store that refuses the first `n` appends with a version conflict.
 #[derive(Debug)]
 struct Contends {
@@ -478,18 +596,20 @@ async fn a_scheduled_retry_is_not_claimable_until_its_delay_has_passed() {
         .expect("a transient failure");
 
     let filter = ClaimFilter::for_queues(&["default".to_owned()]);
-    // The policy's first delay is one second, resolved to an instant by the
-    // decider so a replay reaches the same schedule.
+    // The policy's first delay for a runtime that declined is five seconds,
+    // resolved to an instant by the decider so a replay reaches the same
+    // schedule. The row carries it, so a claimant cannot take the retry early
+    // by asking again.
     assert!(
         store
-            .claim_attempt(&filter, "worker", at(10))
+            .claim_attempt(&filter, "worker", at(14))
             .await
             .expect("a claim attempt")
             .is_none(),
         "the retry was taken before its backoff"
     );
     let taken = store
-        .claim_attempt(&filter, "worker", at(11))
+        .claim_attempt(&filter, "worker", at(15))
         .await
         .expect("a claim attempt")
         .expect("the retry is claimable now");

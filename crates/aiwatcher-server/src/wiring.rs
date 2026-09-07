@@ -20,6 +20,7 @@ use aiwatcher_core::ports::{
     CompletedSpan, DeadLetterSink, MetricSample, MetricSink, PortResult, TraceStore, WorkflowRunner,
 };
 use aiwatcher_datasets::Registry as DatasetRegistry;
+use aiwatcher_execution::{ExecutionHandler, WorkflowStore};
 use aiwatcher_pipeline::{FlyteConfig, FlyteEngine};
 use aiwatcher_projector::pipeline::Outputs;
 use aiwatcher_projector::{FileDeadLetters, LiveHub, Projector, ProjectorConfig, ReadModel};
@@ -31,6 +32,7 @@ use aiwatcher_training::Registry as TrainingRegistry;
 
 use crate::config::{
     BackendKind, Config, ConversationPolicyMode, EngineKind, PromptStoreKind, WorkflowRunnerKind,
+    WorkflowStoreKind,
 };
 
 /// Discards what it is given, loudly enough to notice at startup and quietly
@@ -79,6 +81,12 @@ struct Registries {
     /// retention is its own, and it is absent unless a deployment asked for it
     /// — so it has a second switch above the store's.
     conversations: Option<Arc<ConversationArchive>>,
+    /// The store underneath all five, for the one writer that is not a
+    /// registry: a reactor putting a step's result somewhere before it hands
+    /// the digest on. A sixth prefix rather than a sixth registry, because an
+    /// artifact has no head, no labels and no list — it is bytes named by
+    /// their own hash.
+    objects: Option<Arc<dyn aiwatcher_core::prompts::ObjectStore>>,
 }
 
 /// The authored-data registries, or empty when this deployment has no object store.
@@ -167,6 +175,7 @@ async fn build_registries(
         annotations: Some(annotations),
         training: Some(training),
         conversations,
+        objects: Some(store),
     })
 }
 
@@ -392,6 +401,73 @@ fn build_engine(config: &Config) -> Result<Option<Arc<FlyteEngine>>> {
     }
 }
 
+/// Where a managed execution's history lives.
+///
+/// Not an `Option`, unlike every other store above it. There is no "this
+/// deployment configured none": the default needs a directory and nothing
+/// else, and an execution store that was absent would make `POST /executions`
+/// a 501 on the one route whose whole point is that this system does the work
+/// itself.
+///
+/// The three adapters are the pattern this repository has set twice —
+/// `memory | wal | laser` and `none | memory | file | s3`. `file` takes an
+/// exclusive lock, which is what stops a second process from interleaving
+/// appends that each look fine alone; the refusal names the variable
+/// (ADR_0025).
+async fn build_workflow_store(config: &Config) -> Result<Arc<dyn WorkflowStore>> {
+    match config.workflow_store {
+        WorkflowStoreKind::Memory => {
+            tracing::warn!(
+                "the workflow store is in memory; a managed execution will not survive a restart"
+            );
+            Ok(Arc::new(
+                aiwatcher_execution::store::memory::MemoryWorkflowStore::new(),
+            ))
+        }
+        WorkflowStoreKind::File => {
+            let directory = config.workflow_dir();
+            tracing::info!(
+                %directory,
+                "the workflow store is on disk and holds this process only"
+            );
+            Ok(Arc::new(
+                aiwatcher_execution::store::file::FileWorkflowStore::open(&directory)
+                    .await
+                    .context("opening the workflow store")?,
+            ))
+        }
+        #[cfg(feature = "postgres")]
+        WorkflowStoreKind::Postgres => {
+            let url = config.workflow_postgres_url.clone().context(
+                "AIWATCHER_WORKFLOW_POSTGRES_URL is required for AIWATCHER_WORKFLOW_STORE=postgres",
+            )?;
+            tracing::info!(
+                max_connections = config.workflow_postgres_max_connections,
+                "the workflow store is PostgreSQL; the schema is applied on connect"
+            );
+            Ok(Arc::new(
+                aiwatcher_execution::store::postgres::connect(
+                    &url,
+                    config.workflow_postgres_max_connections,
+                )
+                .await
+                .context("connecting to the workflow store")?,
+            ))
+        }
+        #[cfg(not(feature = "postgres"))]
+        WorkflowStoreKind::Postgres => {
+            // Silently falling back to `file` would be worse than not
+            // starting: a deployment that asked for the multi-process store
+            // would get the one that refuses a worker, and find out when a
+            // step was dispatched to nobody.
+            anyhow::bail!(
+                "AIWATCHER_WORKFLOW_STORE=postgres needs this binary built with the `postgres` \
+                 cargo feature (`cargo build --features postgres`, or `just run-postgres`)"
+            );
+        }
+    }
+}
+
 /// The authenticator, or `None` when this deployment has no identity provider.
 ///
 /// The same shape as the registry and the runner, and for once absence is not
@@ -437,7 +513,18 @@ async fn build_authenticator(config: &Config) -> Result<Option<Arc<Authenticator
 pub struct Runtime {
     pub state: AppState,
     pub config: Config,
-    projector: Box<dyn ProjectorTask>,
+    /// What the work role's reactors and outbox publisher run against. The
+    /// same store the API accepts commands into — one adapter, three readers.
+    pub workflow_store: Arc<dyn WorkflowStore>,
+    /// Where a reactor puts a step's result, when this deployment has one.
+    /// `None` disables every executor that produces an artifact, which is
+    /// every one of them.
+    pub artifacts: Option<Arc<dyn aiwatcher_core::prompts::ObjectStore>>,
+    /// The event log this process publishes execution facts onto, after
+    /// commit. Held whether or not HTTP ingest is enabled: the outbox is not a
+    /// second write path for producers, it is this system's own.
+    pub sink: Arc<dyn MessageSink>,
+    pub projector: Box<dyn ProjectorTask>,
 }
 
 impl std::fmt::Debug for Runtime {
@@ -452,10 +539,6 @@ impl Runtime {
     /// Consume the log until `shutdown` fires.
     pub async fn run_projector(self: Box<Self>, shutdown: CancellationToken) -> Result<()> {
         self.projector.run(shutdown).await
-    }
-
-    pub fn split(self) -> (AppState, Config, Box<dyn ProjectorTask>) {
-        (self.state, self.config, self.projector)
     }
 }
 
@@ -657,17 +740,23 @@ pub async fn build(config: Config) -> Result<Runtime> {
     )
     .await?;
     let engine = build_engine(&config)?;
+    let workflow_store = build_workflow_store(&config).await?;
     let state = AppState {
         read_model,
         live,
         source,
-        sink: config.ingest_enabled.then_some(sink),
+        sink: config.ingest_enabled.then(|| Arc::clone(&sink)),
         prompts: registries.prompts,
         datasets: registries.datasets,
         annotations: registries.annotations,
         conversations: registries.conversations,
+        executions: Some(Arc::new(ExecutionHandler::new(Arc::clone(&workflow_store)))),
         export_worker: Some(Arc::new(tokio::sync::Notify::new())),
         import_worker: Some(Arc::new(tokio::sync::Notify::new())),
+        // Held whatever this process's role is: the API accepts a command
+        // either way, and a nudge nobody is waiting for costs nothing. What
+        // decides whether anything drains it is `AIWATCHER_ROLE`.
+        execution_worker: Some(Arc::new(tokio::sync::Notify::new())),
         hubs,
         sources,
         training: registries.training,
@@ -680,6 +769,9 @@ pub async fn build(config: Config) -> Result<Runtime> {
     Ok(Runtime {
         state,
         config,
+        workflow_store,
+        artifacts: registries.objects,
+        sink,
         projector,
     })
 }

@@ -124,6 +124,17 @@ pub struct PublishDatasetRequest {
     /// the pipeline revision this names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub produced_by: Option<String>,
+    /// The managed execution that produced these rows, when one did.
+    ///
+    /// Provenance and not identity, for `produced_by`'s reason and with a
+    /// second one of its own: the same rows published by a rerun are the same
+    /// version, and a version per run would be a version history about *when*.
+    /// What it buys is the join the other way — from a published dataset back
+    /// to the run, its waterfall, and its `step.*` on the event log. Absent for
+    /// a version the panel published from an ad-hoc query (ADR_0025 withdrew
+    /// that path for managed runs only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
@@ -137,6 +148,11 @@ pub struct DatasetVersionSummary {
     pub recipe: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub produced_by: Option<String>,
+    /// The managed execution that produced this version, when one did. Kept in
+    /// the summary as well as the request so a dataset list can link to a run
+    /// without reading every version artifact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
@@ -317,6 +333,7 @@ impl Registry {
                     columns: request.columns.clone(),
                     recipe: request.recipe.clone(),
                     produced_by: request.produced_by.clone(),
+                    execution_id: request.execution_id.clone(),
                 };
                 DatasetVersion {
                     name: request.name.clone(),
@@ -554,9 +571,12 @@ fn recipe_identity(request: &SaveRecipeRequest) -> Result<Vec<u8>> {
 }
 
 fn dataset_identity(request: &PublishDatasetRequest) -> Result<Vec<u8>> {
-    // Description and recipe name are mutable catalogue/provenance fields.
-    // The version identity is only what changes the repeatable execution: the
-    // exact script, ordered rows and source window.
+    // Description, recipe name, `produced_by` and `execution_id` are mutable
+    // catalogue and provenance fields. The version identity is only what
+    // changes the repeatable execution: the exact script, ordered rows and
+    // source window. Two runs of one plan over unchanged rows are therefore
+    // one version — which is what makes a rerun idempotent rather than a
+    // version history about *when*.
     serde_json::to_vec(&(
         &request.pipeline,
         &request.columns,
@@ -631,6 +651,7 @@ mod tests {
             source: "http://api.test".to_owned(),
             window_seconds: Some(900),
             produced_by: None,
+            execution_id: None,
         }
     }
 

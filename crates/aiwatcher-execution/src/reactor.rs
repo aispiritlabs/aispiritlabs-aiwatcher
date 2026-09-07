@@ -72,6 +72,11 @@ pub struct Reactor<S> {
     handler: ExecutionHandler<S>,
     executors: ExecutorRegistry,
     owner: String,
+    /// Where a hit is looked up and a result is recorded. `None` runs
+    /// everything and remembers nothing, which is a working state and the one a
+    /// deployment with no object store is in — section 18's "deleting the index
+    /// never loses an authoritative result", taken to its limit.
+    catalog: Option<Arc<dyn crate::ArtifactCatalog>>,
 }
 
 impl<S: WorkflowStore> Reactor<S> {
@@ -86,7 +91,15 @@ impl<S: WorkflowStore> Reactor<S> {
             handler,
             executors,
             owner,
+            catalog: None,
         }
+    }
+
+    /// Give it somewhere to look a hit up and record a result.
+    #[must_use]
+    pub fn with_catalog(mut self, catalog: Arc<dyn crate::ArtifactCatalog>) -> Self {
+        self.catalog = Some(catalog);
+        self
     }
 
     #[must_use]
@@ -145,17 +158,47 @@ impl<S: WorkflowStore> Reactor<S> {
             key: row.key.clone(),
             command_id: row.command_id.clone(),
             step,
-            inputs: inputs_for(&run, &row.key.step_id),
+            inputs: run.resolved_inputs(&row.key.step_id),
             parameters: run.input.clone(),
         };
         let context = ActivityContext {
             owner: self.owner.clone(),
             timeout: Duration::from_secs(command.step.timeout_seconds),
             context_id: command.idempotency_key(),
+            // The plan this run pinned, not the definition's current head: an
+            // attempt reads what its own execution was compiled from.
+            plan: Arc::new(run.plan.clone()),
         };
 
+        // Before `step.started`, because a hit is not a start: there was no
+        // attempt at the runtime, and a zero-duration bar in the waterfall
+        // would be claiming there was. The key was computed by the decider,
+        // which may not read an index; this is the read.
+        let cache_key = run
+            .step(&row.key.step_id)
+            .and_then(|step| step.cache_key.clone());
+        if let Some(hit) = self.cached(cache_key.as_deref(), now).await {
+            self.report(
+                &row.key,
+                WorkflowEvent::StepCacheHit {
+                    step_id: row.key.step_id.clone(),
+                    attempt: row.key.attempt,
+                    cache_key: hit.cache_key,
+                    outputs: hit.artifacts,
+                },
+                now,
+                "cache-hit",
+            )
+            .await?;
+            return Ok(Performed::Reported {
+                step_id: row.key.step_id,
+                attempt: row.key.attempt,
+                succeeded: true,
+            });
+        }
+
         self.report(
-            &execution,
+            &row.key,
             WorkflowEvent::StepStarted {
                 step_id: row.key.step_id.clone(),
                 attempt: row.key.attempt,
@@ -181,6 +224,24 @@ impl<S: WorkflowStore> Reactor<S> {
             });
         }
 
+        // Recorded before the completion is reported, and only for work that
+        // actually ran. A manifest written after the fact could be lost by a
+        // crash that the completion survived, which would leave an artifact on
+        // the log that the catalog cannot describe — and a cache entry written
+        // *before* the outputs exist would be a hit resolving to nothing.
+        if let Ok(result) = &outcome
+            && result.awaiting.is_none()
+        {
+            // The key is remembered only when the executor says the work ran
+            // under the conditions the key assumes. A Flow step whose plan
+            // pinned a span against a service that narrowed it produced correct
+            // rows for a *different* question, and storing them here would
+            // serve them to the one that was asked.
+            let remember = result.cacheable.then_some(cache_key.as_deref()).flatten();
+            self.record(&row, &command.inputs, &result.outputs, remember, now)
+                .await;
+        }
+
         let succeeded = outcome.is_ok();
         let event = match outcome {
             Ok(result) => completion(&row, result),
@@ -193,13 +254,75 @@ impl<S: WorkflowStore> Reactor<S> {
         // 7–8: the fact goes into the workflow, and the outbox that publishes
         // it to the log is written in the same transaction. Nothing here
         // publishes; the ordering is ADR_0026's.
-        self.report(&execution, event, now, "outcome").await?;
+        self.report(&row.key, event, now, "outcome").await?;
 
         Ok(Performed::Reported {
             step_id: row.key.step_id,
             attempt: row.key.attempt,
             succeeded,
         })
+    }
+
+    /// A usable entry for this key, or nothing.
+    ///
+    /// A catalog that could not be read answers `None` and the work is done
+    /// again, which is what section 18 means by the index losing nothing
+    /// authoritative. It is logged rather than returned: a cache being down is
+    /// not a reason to fail a step.
+    async fn cached(
+        &self,
+        cache_key: Option<&str>,
+        now: OffsetDateTime,
+    ) -> Option<crate::CacheEntry> {
+        let (catalog, cache_key) = (self.catalog.as_ref()?, cache_key?);
+        match catalog.cached(cache_key, now).await {
+            Ok(entry) => entry,
+            Err(error) => {
+                tracing::warn!(%error, cache_key, "the artifact catalog could not be read");
+                None
+            }
+        }
+    }
+
+    /// What an attempt produced, and what key it answers for next time.
+    ///
+    /// Failures are swallowed for the same reason a miss is: the work is done
+    /// and its result is stored, and a catalog that refused the note about it
+    /// must not turn a completed step into a failed one.
+    async fn record(
+        &self,
+        row: &AttemptRow,
+        inputs: &[aiwatcher_core::ArtifactRef],
+        outputs: &[aiwatcher_core::ArtifactRef],
+        cache_key: Option<&str>,
+        now: OffsetDateTime,
+    ) {
+        let Some(catalog) = self.catalog.as_ref() else {
+            return;
+        };
+        if outputs.is_empty() {
+            return;
+        }
+        let recorded = crate::artifact::object::record_outputs(
+            catalog.as_ref(),
+            crate::Provenance {
+                execution_id: row.key.execution_id.clone(),
+                step_id: row.key.step_id.clone(),
+                attempt: row.key.attempt,
+            },
+            inputs,
+            outputs,
+            cache_key,
+            now,
+        )
+        .await;
+        if let Err(error) = recorded {
+            tracing::warn!(
+                %error,
+                attempt = %row.key,
+                "the artifact catalog could not record what this attempt produced"
+            );
+        }
     }
 
     /// Steps 3–6, with the takeover's question in front of them.
@@ -245,19 +368,30 @@ impl<S: WorkflowStore> Reactor<S> {
         Ok(replay(slice.events()).active().cloned())
     }
 
+    /// Report one fact about one attempt, under an id derived from that
+    /// attempt.
+    ///
+    /// The derivation is the whole mechanism and every part of it is
+    /// load-bearing. It is *derived* so a reactor that crashed between the
+    /// runtime's answer and this call reports the same id on its next pass,
+    /// which the inbox absorbs rather than deciding twice. And it names the
+    /// **attempt** — the step and the number, not only the execution and the
+    /// event — because two steps of one run each report a `step_started`, and
+    /// an id built from the execution and the event name alone makes the second
+    /// one a redelivery of the first. The decider then never hears about it:
+    /// the step stays `pending` behind a lease nothing releases, which reads
+    /// exactly like a runtime that is busy.
     async fn report(
         &self,
-        execution: &ExecutionId,
+        key: &crate::claim::AttemptKey,
         event: WorkflowEvent,
         now: OffsetDateTime,
         what: &str,
     ) -> Result<(), HandleError> {
-        // Derived, so a reactor that crashed between the runtime's answer and
-        // this call reports the same message id on its next pass — which the
-        // inbox absorbs rather than deciding twice.
+        let execution = &key.execution_id;
         let message_id = MessageId::new(crate::derive_uuid(&format!(
-            "aiwatcher/execution/report/{execution}/{}/{what}",
-            event.name()
+            "aiwatcher/execution/report/{execution}/{}/{}/{what}",
+            key.step_id, key.attempt
         )));
         let metadata = MessageMetadata {
             schema_version: SCHEMA_VERSION,
@@ -267,8 +401,10 @@ impl<S: WorkflowStore> Reactor<S> {
             causation_id: CausationId::new(execution.as_str()),
             trace_id: None,
             span_id: None,
-            step_id: None,
-            attempt: None,
+            // What the fact is about, so a stream read afterwards says which
+            // step a message belonged to without decoding its payload.
+            step_id: Some(key.step_id.clone()),
+            attempt: Some(key.attempt),
         };
         match self
             .handler
@@ -310,30 +446,4 @@ fn awaiting(row: &AttemptRow, request: InputRequest) -> WorkflowEvent {
         attempt: row.key.attempt,
         request,
     }
-}
-
-/// What this step reads, resolved from the steps that fed it.
-///
-/// The plan's `InputBinding` names a step and an output; the state holds what
-/// that step actually produced. Reading it from the state rather than from a
-/// catalog is what makes a retry reuse the *pinned* artifacts of its context
-/// rather than whatever is newest.
-fn inputs_for(run: &Execution, step_id: &str) -> Vec<aiwatcher_core::ArtifactRef> {
-    let Some(step) = run.plan.step(step_id) else {
-        return Vec::new();
-    };
-    step.inputs
-        .iter()
-        .filter_map(|binding| match binding {
-            crate::plan::InputBinding::Step { step, output } => {
-                let produced = run.step(step)?;
-                produced
-                    .outputs
-                    .iter()
-                    .find(|artifact| &artifact.name == output)
-                    .cloned()
-            }
-            crate::plan::InputBinding::Parameter { .. } => None,
-        })
-        .collect()
 }

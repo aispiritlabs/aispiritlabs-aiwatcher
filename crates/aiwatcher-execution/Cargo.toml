@@ -39,12 +39,20 @@ sha2.workspace = true
 sqlx = { workspace = true, optional = true }
 thiserror.workspace = true
 time.workspace = true
+# The facade only, and only in the reactor loop: a catalog that refused a note
+# about work that succeeded must not fail the step, and must not be silent
+# either. Nothing in the pure half logs.
+tracing.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "sync"] }
 utoipa.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
 aiwatcher-core.workspace = true
+# The object store's in-memory adapter, for the catalog's own tests. A
+# dev-dependency only: this crate writes through `core::prompts::ObjectStore`
+# and never constructs one.
+aiwatcher-prompts.workspace = true
 aiwatcher-execution = { workspace = true, features = ["testing"] }
 aiwatcher-jobs.workspace = true
 tokio = { workspace = true, features = ["full"] }

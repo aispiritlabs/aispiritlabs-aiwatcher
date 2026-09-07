@@ -352,8 +352,30 @@ def demo_classes(labels: dict[str, str]) -> list[dict[str, Any]]:
     anything: a filled region, a stroked line carrying its own width, an
     overlay on its own layer so it does not erase what it crosses, and a class
     the loss must skip.
+
+    **The order is the z-order, and it is load-bearing.** Classes sharing a
+    layer paint in declaration order and the last one declared wins a contested
+    pixel, so this list reads bottom-up: the region first, then the boundaries
+    that divide it, then the details that sit on top of those. A room polygon
+    is drawn to the wall centreline, so it covers the wall wherever the two
+    meet — which on a plan is the whole wall, on both sides. Declared the other
+    way round, every interior wall survives only at the two ends its rooms do
+    not reach, and the loss then scores a correct wall prediction as an error.
+    Nothing downstream reports that: the shapes are all there, the grids are
+    the right shape and dtype, and every class index is in range.
+
+    `stairs` and `column` come last because they are footprints laid *on* the
+    structure — a column embedded in a wall is still a column. They contend
+    with nothing else in this demo, but the order says which way it would go.
     """
     return [
+        {
+            "name": labels["space"],
+            "geometry": "polygon",
+            "color": "#2563eb",
+            "description": "An enclosed area.",
+            "attributes": [{"name": "label", "kind": "text"}],
+        },
         {
             "name": labels["wall_exterior"],
             "geometry": "polyline",
@@ -367,13 +389,6 @@ def demo_classes(labels: dict[str, str]) -> list[dict[str, Any]]:
             "color": "#475569",
             "description": "An interior wall, drawn as a centreline with a width.",
             "attributes": [{"name": "thickness_px", "kind": "number", "required": True}],
-        },
-        {
-            "name": labels["space"],
-            "geometry": "polygon",
-            "color": "#2563eb",
-            "description": "An enclosed area.",
-            "attributes": [{"name": "label", "kind": "text"}],
         },
         {
             "name": labels["stairs"],

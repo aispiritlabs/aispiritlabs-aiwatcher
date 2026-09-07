@@ -1,9 +1,22 @@
 //! The aiwatcher server.
 //!
-//! One process runs both the projector and the HTTP API. They are separate
-//! crates and could be separate deployments — the projector scales by consumer
-//! group, the API by replica — but a single binary is the right starting point:
-//! the live hub is then an in-process channel rather than another network hop.
+//! One binary, two roles (section 27, ADR_0025). `aiwatcher serve` holds the
+//! API, the read model and the object store; `aiwatcher work` holds the
+//! execution outbox and the reactors, and is the only role that opens a socket
+//! to Flow, a notebook runtime, an engine or the cluster.
+//!
+//! Called with no role — `just run`, `just dev`, `cargo run --bin aiwatcher` —
+//! it runs **both in one process**, which is not a third role: it is the two of
+//! them together, and it is what the `file` workflow store requires, since that
+//! store holds one process and both halves need it. A deployment that wants the
+//! network boundary runs two Deployments against `postgres`, and the one
+//! holding the cluster's credentials is the one holding no ingress.
+//!
+//! The projector runs in `serve` rather than in `work`, which is where section
+//! 27 puts "the consumers". In this codebase the projector *is* the read model
+//! the API answers from, in process, under a memory contract; a `serve` role
+//! without it would serve every read from an empty fold. See
+//! `execution`'s module docs.
 
 use std::time::Duration;
 
@@ -15,16 +28,32 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
-use aiwatcher_server::config::{Config, LogFormat};
+use aiwatcher_server::config::{Config, LogFormat, ProcessRole};
+
+/// How long a background task is given to stop before the process exits anyway.
+const GRACE: Duration = Duration::from_secs(10);
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let config = Config::from_env().context("reading configuration")?;
+    let mut config = Config::from_env().context("reading configuration")?;
+    // The argument wins over the variable: a container sets `AIWATCHER_ROLE`
+    // and a person types `aiwatcher work`, and the one typed last is the one
+    // that was meant.
+    if let Some(role) = role_argument()? {
+        config.role = role;
+    }
+    // Read again, because the argument can have made a valid configuration
+    // invalid — splitting the binary in two on a store that holds one process
+    // is the case, and it is better said here than by a lock file.
+    config.validate().context("reading configuration")?;
     init_tracing(config.log_format);
 
     tracing::info!(
+        role = config.role.as_str(),
         listen = %config.listen,
         bus = ?config.bus,
+        workflow_store = ?config.workflow_store,
+        flow = config.flow_url.as_deref().unwrap_or("<none>"),
         otlp = config.otlp_endpoint.as_deref().unwrap_or("<none>"),
         ingest_enabled = config.ingest_enabled,
         auth = config.auth.mode.as_str(),
@@ -32,9 +61,42 @@ async fn main() -> Result<()> {
     );
 
     let runtime = aiwatcher_server::build(config).await?;
-    let (state, config, projector) = runtime.split();
+    let aiwatcher_server::Runtime {
+        state,
+        config,
+        workflow_store,
+        artifacts,
+        sink,
+        projector,
+    } = runtime;
 
     let shutdown = CancellationToken::new();
+
+    // Both roles' background work, started before anything is served: a
+    // command accepted by an instance whose reactors are not running yet is a
+    // step that waits for a poll interval, and the store is durable either
+    // way — but the log line saying which runtimes this process can run
+    // belongs above "listening", not below it.
+    let execution = aiwatcher_server::execution::spawn(
+        &state,
+        &config,
+        &workflow_store,
+        &sink,
+        artifacts.as_ref(),
+        &shutdown,
+    );
+
+    if !config.role.serves() {
+        // The work role holds no ingress. It stops on a signal, drains, and
+        // that is the whole lifecycle — there is no socket to close.
+        tracing::info!("the work role is running; no HTTP listener");
+        wait_for_signal().await;
+        tracing::info!("shutdown signal received");
+        shutdown.cancel();
+        execution.drain(GRACE).await;
+        return Ok(());
+    }
+
     let projector_task = {
         let shutdown = shutdown.clone();
         tokio::spawn(async move { projector.run(shutdown).await })
@@ -78,8 +140,9 @@ async fn main() -> Result<()> {
     // Give the projector a moment to drain its open spans before exiting.
     state.health.mark_unready();
     shutdown.cancel();
+    execution.drain(GRACE).await;
     if let Some(task) = archive_task {
-        match tokio::time::timeout(Duration::from_secs(10), task).await {
+        match tokio::time::timeout(GRACE, task).await {
             Ok(Ok(())) => tracing::info!("the conversation archive worker stopped"),
             Ok(Err(error)) => tracing::error!(%error, "the conversation archive worker panicked"),
             // An export in flight has committed every shard it finished, so
@@ -88,7 +151,7 @@ async fn main() -> Result<()> {
         }
     }
     if let Some(task) = import_task {
-        match tokio::time::timeout(Duration::from_secs(10), task).await {
+        match tokio::time::timeout(GRACE, task).await {
             Ok(Ok(())) => tracing::info!("the annotation import worker stopped"),
             Ok(Err(error)) => tracing::error!(%error, "the annotation import worker panicked"),
             // An import in flight has committed every page it finished, so
@@ -104,6 +167,24 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// `aiwatcher serve` or `aiwatcher work`, when one was typed.
+///
+/// A hand-rolled read rather than a parser: this binary has exactly one
+/// argument and adding a dependency to read it would be the wrong trade. An
+/// unrecognised one is refused by name rather than ignored — a typo that
+/// silently ran both roles would be a deployment quietly holding the cluster's
+/// credentials next to its ingress.
+fn role_argument() -> Result<Option<ProcessRole>> {
+    let Some(argument) = std::env::args().nth(1) else {
+        return Ok(None);
+    };
+    argument
+        .parse()
+        .map(Some)
+        .map_err(|error| anyhow::anyhow!("{error}"))
+        .with_context(|| format!("reading the role argument {argument:?}"))
 }
 
 fn init_tracing(format: LogFormat) {

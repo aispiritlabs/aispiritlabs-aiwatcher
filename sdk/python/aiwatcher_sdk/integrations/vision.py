@@ -62,6 +62,12 @@ looking at.
             bars. Excluded from the loss rather than labelled background,
             which is the difference between "the model need not care" and "the
             model should predict nothing here".
+``counts``  what was drawn, per class, as instances.
+``pixels``  what survived, per class, as pixels. Read with ``counts`` it is
+            the one thing that separates a class nobody drew from a class that
+            was drawn and then painted over by one declared after it — the
+            second of which produces a target that teaches the opposite of the
+            drawing while passing every shape, dtype and range check there is.
 
 Layers are the generic form of a problem that does not look generic: some
 classes *overlay* others and must not erase them. An opening in a wall, a
@@ -291,6 +297,28 @@ class Targets:
     #: number that says an empty target is an empty *drawing* rather than a
     #: rasteriser that dropped everything.
     counts: dict[str, int] = field(default_factory=dict)
+    #: Class name to how many pixels of it *survived* into the grids, for every
+    #: class the schema can paint — zero for one that was drawn and then wholly
+    #: covered by a class declared after it.
+    #:
+    #: :attr:`counts` says what was drawn and this says what is left, and the
+    #: pair is the only thing that separates the two ways a class goes missing.
+    #: A boundary a region is drawn flush against is covered along its whole
+    #: length, which is a target that teaches the opposite of the drawing while
+    #: every shape is present, every grid is the declared shape and dtype, and
+    #: every index is in range — so nothing else here would report it.
+    #:
+    #: An ``ignore`` class has no key here at all, because it paints into
+    #: :attr:`ignore` rather than into a grid and so has no pixels to lose. The
+    #: absence is the distinction, and a check that reaches for a default
+    #: instead of testing membership reports every one of them as covered::
+    #:
+    #:     covered = [
+    #:         name
+    #:         for name, drawn in targets.counts.items()
+    #:         if drawn and name in targets.pixels and targets.pixels[name] == 0
+    #:     ]
+    pixels: dict[str, int] = field(default_factory=dict)
 
     def stack(self) -> Array:
         """Every layer as one ``(layers, size, size)`` array.
@@ -398,7 +426,16 @@ def rasterize(
             ),
         )
 
-    return Targets(layers=grids, ignore=ignore, letterbox=box, counts=counts)
+    # One pass per layer rather than one per class: a census is a diagnostic
+    # and must not cost a fraction of the rasterisation it describes.
+    pixels: dict[str, int] = {}
+    for layer in layers:
+        tally = numpy.bincount(grids[layer.index].ravel(), minlength=len(layer.classes))
+        for value, name in enumerate(layer.classes):
+            if value:
+                pixels[name] = int(tally[value])
+
+    return Targets(layers=grids, ignore=ignore, letterbox=box, counts=counts, pixels=pixels)
 
 
 def _declaration_index(name: str, classes: Sequence[Mapping[str, Any]]) -> int:
@@ -778,17 +815,31 @@ class ExportDataset:
             ) from error
         return DataLoader(self, **options)
 
-    def __getitem__(self, index: int) -> Item:
-        numpy = _numpy()
+    def get_targets(self, index: int) -> Targets:
+        """One sample's grids before collation, with its census attached.
+
+        :class:`Item` carries the arrays a loss function reads and deliberately
+        not :attr:`Targets.counts` or :attr:`Targets.pixels`: those are per-class
+        dictionaries whose keys differ between samples, which is not something a
+        collate can stack into a batch. They are how you check that a drawing
+        survived rasterisation, though, so there has to be a way to ask — this
+        is it, and unlike ``__getitem__`` it never flips, because an audit that
+        answered differently every other call would be worth nothing.
+        """
         sample = self.samples[index]
-        box = fit_letterbox(sample.width, sample.height, self.image_size)
-        targets = rasterize(
+        return rasterize(
             self._annotations(sample),
             self.classes,
             sample.width,
             sample.height,
-            letterbox=box,
+            letterbox=fit_letterbox(sample.width, sample.height, self.image_size),
         )
+
+    def __getitem__(self, index: int) -> Item:
+        numpy = _numpy()
+        sample = self.samples[index]
+        box = fit_letterbox(sample.width, sample.height, self.image_size)
+        targets = self.get_targets(index)
         image = decode_image(self._bytes(sample), box, channels=self.channels)
 
         stacked = targets.stack()

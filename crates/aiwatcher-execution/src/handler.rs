@@ -82,11 +82,16 @@ pub enum HandleError {
     )]
     Contended { retries: u32 },
 
+    /// The plan names work this deployment has nowhere to run.
+    ///
+    /// Answered before the run is accepted rather than when nothing claims the
+    /// step, because the second failure is invisible: a dispatched attempt
+    /// nobody can take looks exactly like a worker that is busy.
     #[error(
-        "this store holds one process, and {what} needs more than one. \
+        "the `file` workflow store holds one process, and {what} needs more than one. \
          Set AIWATCHER_WORKFLOW_STORE=postgres"
     )]
-    NeedsMultiProcess { what: &'static str },
+    NeedsMultiProcess { what: String },
 }
 
 /// Handles workflow inputs against one store.
@@ -180,6 +185,12 @@ impl<S: WorkflowStore> ExecutionHandler<S> {
                 message: input.name(),
             }));
         }
+        // Before the run, not after. Here rather than in the API, so that
+        // every caller of `StartExecution` — a route, a schedule, a test —
+        // meets the same refusal.
+        if let Some(WorkflowCommand::StartExecution { plan, .. }) = input.command() {
+            self.check_capacity(plan)?;
+        }
 
         for attempt in 0..=MAX_CONFLICT_RETRIES {
             let slice = self.store.load(execution).await?;
@@ -260,6 +271,33 @@ impl<S: WorkflowStore> ExecutionHandler<S> {
         }
         Err(HandleError::Contended {
             retries: MAX_CONFLICT_RETRIES,
+        })
+    }
+
+    /// Whether this store can carry out that plan at all.
+    ///
+    /// [`StoreCapabilities::multi_process`] is the whole check
+    /// ([`crate::store::StoreCapabilities`]), and `file` is the adapter that
+    /// answers `false`. ADR_0025: a development store must not become a
+    /// production one by omission.
+    fn check_capacity(&self, plan: &ExecutionPlan) -> Result<(), HandleError> {
+        if self.store.capabilities().multi_process {
+            return Ok(());
+        }
+        let pulled = plan.steps_needing_another_process();
+        if pulled.is_empty() {
+            return Ok(());
+        }
+        Err(HandleError::NeedsMultiProcess {
+            what: format!(
+                "{} — a worker in another process claims {}",
+                pulled
+                    .iter()
+                    .map(|step| format!("'{step}'"))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                if pulled.len() == 1 { "it" } else { "them" }
+            ),
         })
     }
 
@@ -468,6 +506,12 @@ fn retry_delay_of(
 fn settled(event: &WorkflowEvent) -> Option<(&str, u32, StateType)> {
     match event {
         WorkflowEvent::StepCompleted {
+            step_id, attempt, ..
+        } => Some((step_id, *attempt, StateType::Completed)),
+        // A hit settles the row it answered. Without this the attempt stays
+        // claimable behind a lease nobody releases — the work was never done,
+        // so nothing else would ever settle it.
+        WorkflowEvent::StepCacheHit {
             step_id, attempt, ..
         } => Some((step_id, *attempt, StateType::Completed)),
         WorkflowEvent::StepFailed {

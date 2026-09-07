@@ -144,6 +144,104 @@ impl FromStr for ConversationPolicyMode {
     }
 }
 
+/// Where a managed execution's history lives.
+///
+/// Its own setting for the reason the prompt store is: it answers a different
+/// question from the bus. The log is a rolling window of what producers said;
+/// this is the transactional record of what this system decided, and one
+/// deployment can perfectly well run Laser and keep executions on a disk.
+///
+/// `File` is the default so `cargo run --bin aiwatcher` is a working instance
+/// with nothing else running — and it holds **one process**, which is what
+/// makes a run needing a worker refuse to start rather than hang (ADR_0025).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum WorkflowStoreKind {
+    /// Nothing survives a restart. Tests and demos.
+    Memory,
+    /// A directory under `AIWATCHER_DATA_DIR`. One process, by design.
+    #[default]
+    File,
+    /// What a deployment runs. Needs the `postgres` cargo feature compiled in.
+    Postgres,
+}
+
+impl FromStr for WorkflowStoreKind {
+    type Err = ConfigError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "memory" | "in-memory" => Ok(Self::Memory),
+            "file" | "fs" | "disk" => Ok(Self::File),
+            "postgres" | "postgresql" | "pg" => Ok(Self::Postgres),
+            other => Err(ConfigError::Invalid {
+                name: "AIWATCHER_WORKFLOW_STORE",
+                value: other.to_owned(),
+                expected: "one of memory, file, postgres",
+            }),
+        }
+    }
+}
+
+/// Which half of the binary this process is (section 27, ADR_0025).
+///
+/// `Serve` holds the API, the read model and the object store, and opens no
+/// socket to Flow, a notebook runtime, an engine or the cluster. `Work` holds
+/// the outbox publisher and the reactors, and is the only role that does.
+///
+/// `Both` is the default and is not a third role: it is the two of them in one
+/// process, which is what a single-node install and `just dev` run — and what
+/// the `file` store *requires*, since it holds one process and both halves need
+/// it. A deployment that wants the network boundary runs two Deployments on
+/// `postgres`, and the one holding the cluster's credentials is the one holding
+/// no ingress.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ProcessRole {
+    #[default]
+    Both,
+    Serve,
+    Work,
+}
+
+impl ProcessRole {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Both => "both",
+            Self::Serve => "serve",
+            Self::Work => "work",
+        }
+    }
+
+    /// Whether this process listens, folds the log and answers reads.
+    #[must_use]
+    pub const fn serves(self) -> bool {
+        matches!(self, Self::Both | Self::Serve)
+    }
+
+    /// Whether this process drains the outbox and claims attempts.
+    #[must_use]
+    pub const fn works(self) -> bool {
+        matches!(self, Self::Both | Self::Work)
+    }
+}
+
+impl FromStr for ProcessRole {
+    type Err = ConfigError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "both" | "all" => Ok(Self::Both),
+            "serve" | "server" | "api" => Ok(Self::Serve),
+            "work" | "worker" => Ok(Self::Work),
+            other => Err(ConfigError::Invalid {
+                name: "AIWATCHER_ROLE",
+                value: other.to_owned(),
+                expected: "one of serve, work, both",
+            }),
+        }
+    }
+}
+
 /// Whether this deployment can ask an orchestrator to run a workflow again.
 ///
 /// `None` is the default, and deliberately so: everything else aiwatcher does
@@ -323,6 +421,36 @@ pub struct Config {
     /// Kaggle's API needs both halves; either alone is not a credential.
     pub kaggle_username: Option<String>,
     pub kaggle_key: Option<String>,
+    /// Which half of this binary this process is. See [`ProcessRole`].
+    pub role: ProcessRole,
+    /// Where a managed execution's history lives.
+    pub workflow_store: WorkflowStoreKind,
+    /// The connection string. Required when `workflow_store = Postgres`, and
+    /// the only place it may come from — a plan never names a host.
+    pub workflow_postgres_url: Option<String>,
+    pub workflow_postgres_max_connections: u32,
+    /// The Flow query service, for a managed `flow_php` step.
+    ///
+    /// `None` means this process runs no Flow executor, which means it claims
+    /// no `flow_php` attempt — the claim filter is built from what is
+    /// registered, so a process never takes work it cannot perform. It is also
+    /// the only address a Flow step ever runs against: a plan names a binding
+    /// and its parameters, never a host.
+    pub flow_url: Option<String>,
+    /// The name this process holds its leases under.
+    ///
+    /// Unique per process, or two reactors each believe they hold the other's
+    /// leases — the one thing a lease exists to prevent. Derived from the
+    /// hostname and the pid when unset, which is right in a container and in a
+    /// terminal.
+    pub reactor_owner: Option<String>,
+    /// How often a reactor asks for work when nothing has nudged it, and how
+    /// often the outbox looks for a row.
+    ///
+    /// Both mostly irrelevant: starting an execution and reporting an outcome
+    /// both wake the loops directly. This is what catches a row another replica
+    /// wrote, and an attempt left running by a process that died.
+    pub execution_poll: Duration,
     /// Whether this instance can list and start an orchestrator's work.
     pub engine: EngineKind,
     /// The control plane's base URL. Required when `engine = Flyte`, and the
@@ -421,6 +549,19 @@ impl Default for Config {
             huggingface_token: None,
             kaggle_username: None,
             kaggle_key: None,
+            role: ProcessRole::default(),
+            workflow_store: WorkflowStoreKind::default(),
+            workflow_postgres_url: None,
+            // Five: a decider, a reactor, the outbox and room for a second
+            // API replica's share of one pool. sqlx's own default is ten,
+            // which is a lot of idle connections per pod.
+            workflow_postgres_max_connections: 5,
+            flow_url: None,
+            reactor_owner: None,
+            // A second. Shorter than the conversation and import queues'
+            // fifteen because a step's latency is a person watching a canvas,
+            // and both loops are woken directly anyway.
+            execution_poll: Duration::from_secs(1),
             engine: EngineKind::default(),
             flyte_endpoint: None,
             // Flyte's own defaults, so a sandbox needs one variable set.
@@ -617,6 +758,33 @@ impl Config {
         config.kaggle_username =
             var("AIWATCHER_KAGGLE_USERNAME").or_else(|| var("KAGGLE_USERNAME"));
         config.kaggle_key = var("AIWATCHER_KAGGLE_KEY").or_else(|| var("KAGGLE_KEY"));
+        if let Some(raw) = var("AIWATCHER_ROLE") {
+            config.role = raw.parse()?;
+        }
+        if let Some(raw) = var("AIWATCHER_WORKFLOW_STORE") {
+            config.workflow_store = raw.parse()?;
+        }
+        config.workflow_postgres_url = var("AIWATCHER_WORKFLOW_POSTGRES_URL");
+        if let Some(raw) = var("AIWATCHER_WORKFLOW_POSTGRES_MAX_CONNECTIONS") {
+            config.workflow_postgres_max_connections =
+                raw.parse().map_err(|_| ConfigError::Invalid {
+                    name: "AIWATCHER_WORKFLOW_POSTGRES_MAX_CONNECTIONS",
+                    value: raw,
+                    expected: "whole number of connections",
+                })?;
+        }
+        if let Some(raw) = var("AIWATCHER_FLOW_URL") {
+            config.flow_url = Some(raw.trim_end_matches('/').to_owned());
+        }
+        config.reactor_owner = var("AIWATCHER_REACTOR_OWNER");
+        if let Some(raw) = var("AIWATCHER_EXECUTION_POLL_SECONDS") {
+            config.execution_poll =
+                Duration::from_secs(raw.parse().map_err(|_| ConfigError::Invalid {
+                    name: "AIWATCHER_EXECUTION_POLL_SECONDS",
+                    value: raw,
+                    expected: "whole number of seconds",
+                })?);
+        }
         if let Some(raw) = var("AIWATCHER_ENGINE") {
             config.engine = raw.parse()?;
         }
@@ -766,6 +934,61 @@ impl Config {
             }
         }
 
+        // The same reasoning once more, and the sharpest consequence of the
+        // set: a workflow store with no address answers every command with a
+        // connection error, and by then somebody has started an execution the
+        // panel will report as failed rather than as never accepted.
+        if self.workflow_store == WorkflowStoreKind::Postgres
+            && self.workflow_postgres_url.is_none()
+        {
+            return Err(ConfigError::Required {
+                name: "AIWATCHER_WORKFLOW_POSTGRES_URL",
+                because: "AIWATCHER_WORKFLOW_STORE=postgres",
+            });
+        }
+
+        // Splitting the binary in two means three things stop being
+        // per-process, and every one of them fails quietly if it is not
+        // shared. Refused here, naming the variable, rather than discovered by
+        // whoever reads the failure afterwards.
+        if self.role != ProcessRole::Both {
+            // The workflow store. `file` takes an exclusive lock, so this
+            // combination fails on whichever process starts second — in a
+            // message about a lock file rather than about a decision somebody
+            // made.
+            if self.workflow_store != WorkflowStoreKind::Postgres {
+                return Err(ConfigError::Required {
+                    name: "AIWATCHER_WORKFLOW_STORE",
+                    because: "AIWATCHER_ROLE splits the binary in two, and only `postgres` \
+                              can be held by more than one process",
+                });
+            }
+            // The event log. The work role's outbox publishes execution facts
+            // and the serve role's projector folds them; `memory` is one
+            // process's channel and `wal` is one process's directory, so the
+            // split would leave the facts in a log nobody reads — a run that
+            // completed, and a workflow tab that never heard about it.
+            if self.bus != BackendKind::Laser {
+                return Err(ConfigError::Required {
+                    name: "AIWATCHER_BUS",
+                    because: "AIWATCHER_ROLE splits the binary in two, and the work role's \
+                              facts have to reach the log the serve role folds",
+                });
+            }
+            // The object store. This is the one that fails loudly and *late*:
+            // the work role writes a step's rows to its own directory and the
+            // serve role reads a digest that is not there, so the run crashes
+            // three attempts in on "holds no object". Measured rather than
+            // guessed, and the refusal is cheaper than the diagnosis.
+            if self.prompt_store != PromptStoreKind::S3 {
+                return Err(ConfigError::Required {
+                    name: "AIWATCHER_PROMPT_STORE",
+                    because: "AIWATCHER_ROLE splits the binary in two, and one role stores \
+                              a step's result for the other to read",
+                });
+            }
+        }
+
         // A rerun routed through an engine that is not configured would answer
         // 501 from one route and 502 from the other, which is two different
         // stories about one missing variable.
@@ -803,6 +1026,16 @@ impl Config {
     #[must_use]
     pub fn dead_letter_path(&self) -> String {
         format!("{}/dead-letters.jsonl", self.data_dir.trim_end_matches('/'))
+    }
+
+    /// Where `AIWATCHER_WORKFLOW_STORE=file` keeps executions.
+    ///
+    /// Beside the log rather than inside it, for the prompt registry's reason:
+    /// the log is a rolling window a retention policy may delete, and a run
+    /// that is still going has to survive that.
+    #[must_use]
+    pub fn workflow_dir(&self) -> String {
+        format!("{}/workflow", self.data_dir.trim_end_matches('/'))
     }
 
     /// Where `AIWATCHER_PROMPT_STORE=file` keeps the registry.
@@ -999,6 +1232,98 @@ mod tests {
             "the default has to be durable and need nothing running"
         );
         assert_eq!(config.prompt_dir(), "./.data/prompts");
+    }
+
+    #[test]
+    fn a_managed_execution_works_with_no_configuration_at_all() {
+        let config = Config::default();
+        assert_eq!(config.workflow_store, WorkflowStoreKind::File);
+        assert_eq!(config.workflow_dir(), "./.data/workflow");
+        assert_eq!(config.role, ProcessRole::Both);
+        assert!(
+            config.flow_url.is_none(),
+            "a process with no Flow address runs no Flow executor and claims no Flow attempt"
+        );
+    }
+
+    #[test]
+    fn splitting_the_binary_in_two_is_refused_on_every_per_process_backend() {
+        // Three things stop being per-process when the roles are two
+        // processes, and every one of them fails quietly if it is not shared.
+        // The third was measured rather than guessed: with two `file` object
+        // stores the work role writes a step's rows to its own directory and
+        // the serve role crashes three attempts in on "holds no object".
+        let split = |config: Config| -> String {
+            Config {
+                role: ProcessRole::Work,
+                ..config
+            }
+            .validate()
+            .expect_err("a split role")
+            .to_string()
+        };
+
+        assert!(
+            split(Config::default()).contains("AIWATCHER_WORKFLOW_STORE"),
+            "the store that holds one process"
+        );
+        let with_store = Config {
+            workflow_store: WorkflowStoreKind::Postgres,
+            workflow_postgres_url: Some("postgres://localhost/aiwatcher".to_owned()),
+            ..Config::default()
+        };
+        assert!(
+            split(with_store.clone()).contains("AIWATCHER_BUS"),
+            "the log the other role folds"
+        );
+        let with_log = Config {
+            bus: BackendKind::Laser,
+            laser_connection_string: Some("iggy:iggy@127.0.0.1:8090".to_owned()),
+            ..with_store
+        };
+        assert!(
+            split(with_log.clone()).contains("AIWATCHER_PROMPT_STORE"),
+            "the object store one role writes and the other reads"
+        );
+
+        Config {
+            role: ProcessRole::Work,
+            prompt_store: PromptStoreKind::S3,
+            prompt_s3_endpoint: Some("http://rustfs:9000".to_owned()),
+            prompt_s3_access_key: Some("key".to_owned()),
+            prompt_s3_secret_key: Some("secret".to_owned()),
+            ..with_log
+        }
+        .validate()
+        .expect("all three shared");
+
+        // One process holding both halves is what `just dev` runs, and it is
+        // the default.
+        Config::default()
+            .validate()
+            .expect("one process, both roles");
+    }
+
+    #[test]
+    fn a_postgres_workflow_store_with_no_address_does_not_start() {
+        let missing = Config {
+            workflow_store: WorkflowStoreKind::Postgres,
+            ..Config::default()
+        };
+        let error = missing.validate().expect_err("postgres with no url");
+        assert!(
+            error
+                .to_string()
+                .contains("AIWATCHER_WORKFLOW_POSTGRES_URL"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_role_names_which_half_of_the_binary_it_is() {
+        assert!(ProcessRole::Both.serves() && ProcessRole::Both.works());
+        assert!(ProcessRole::Serve.serves() && !ProcessRole::Serve.works());
+        assert!(!ProcessRole::Work.serves() && ProcessRole::Work.works());
     }
 
     #[test]

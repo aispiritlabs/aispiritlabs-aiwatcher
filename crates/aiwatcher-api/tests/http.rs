@@ -155,10 +155,21 @@ impl Fixture {
                     aiwatcher_conversations::ArchivePolicy::default(),
                 ))
             }),
+            // The memory adapter, so the execution routes are exercised rather
+            // than answering 501 — and it is claimable, so a plan needing a
+            // worker is accepted here and refused only where a `file` store
+            // says it holds one process.
+            executions: registry_enabled.then(|| {
+                Arc::new(aiwatcher_execution::ExecutionHandler::new(Arc::new(
+                    aiwatcher_execution::store::memory::MemoryWorkflowStore::new(),
+                )
+                    as Arc<dyn aiwatcher_execution::WorkflowStore>))
+            }),
             // No worker: a router built for a test runs no background task, and
             // an export here is driven by the test rather than by a tick.
             export_worker: None,
             import_worker: None,
+            execution_worker: None,
             // Empty, like the shipped default: nothing is curated, so no hub
             // result can be promoted past `unclear`.
             sources: Arc::new(aiwatcher_annotations::SourceCatalog::default()),
@@ -241,6 +252,20 @@ impl Fixture {
                 .header(header::CONTENT_TYPE, "application/json")
                 .header("x-authentik-username", user)
                 .header("x-authentik-groups", groups)
+                .body(Body::from(body.to_string()))
+                .expect("request"),
+        )
+        .await
+    }
+
+    /// A POST carrying one extra header, for the routes that read one.
+    async fn post_keyed(&self, uri: &str, key: &str, body: Value) -> (StatusCode, Value) {
+        self.request(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("idempotency-key", key)
                 .body(Body::from(body.to_string()))
                 .expect("request"),
         )
@@ -3471,4 +3496,207 @@ async fn reading_content_that_was_erased_is_a_410_rather_than_a_404() {
     assert_eq!(body["turns"][0]["state"], json!("erased"));
     assert_eq!(body["turns"][0]["erasure"]["reason"], json!("request"));
     assert_eq!(body["turns"][0]["erasure"]["by"], json!("ada"));
+}
+
+// ── Managed execution ────────────────────────────────────────────────────────
+//
+// The store behind these is the memory adapter, which is claimable and holds
+// as many processes as it likes; what a `file` store refuses is asserted in
+// `aiwatcher-execution`'s own suite, against the rule rather than through HTTP.
+
+/// A pipeline of a source, a transform and a view — the Phase 5 shape, and the
+/// one that reaches a dataset version with Flow alone.
+fn flow_only_pipeline(name: &str) -> Value {
+    json!({
+        "name": name,
+        "description": "",
+        "blocks": [
+            {
+                "id": "read",
+                "position": { "x": 0.0, "y": 0.0 },
+                "spec": { "kind": "source", "dataset": "runs", "arguments": {} }
+            },
+            {
+                "id": "clean",
+                "position": { "x": 200.0, "y": 0.0 },
+                "spec": { "kind": "transform", "steps": "->limit(100)" }
+            },
+            {
+                "id": "write",
+                "position": { "x": 400.0, "y": 0.0 },
+                "spec": { "kind": "view", "dataset": "clean-runs" }
+            }
+        ],
+        "edges": [
+            { "from": "read", "to": "clean" },
+            { "from": "clean", "to": "write" }
+        ]
+    })
+}
+
+#[tokio::test]
+async fn a_saved_pipeline_compiles_and_starts_and_the_caller_may_leave() {
+    // The Phase 5 exit, as far as one process and no Flow service can show it:
+    // the command is durable and the answer is 202, so nothing about what
+    // happens next depends on this connection staying open.
+    let fixture = Fixture::new(false);
+    let (status, _) = fixture
+        .post("/api/v1/curation-pipelines", flow_only_pipeline("pii"))
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, accepted) = fixture
+        .post(
+            "/api/v1/executions",
+            json!({ "target": { "kind": "curation_pipeline", "name": "pii" } }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
+    assert!(accepted["created"].as_bool().expect("a flag"));
+
+    let execution = &accepted["execution"];
+    assert_eq!(execution["definition_name"], "pii");
+    assert_eq!(execution["owner"], "local");
+    assert_eq!(execution["mode"], "compiled");
+    // A source and its transforms are one Flow query, so three blocks are two
+    // steps — the fold that makes three canvas boxes light up together.
+    let steps = execution["steps"].as_array().expect("the steps");
+    assert_eq!(steps.len(), 2, "{execution}");
+    assert_eq!(steps[0]["runtime"], "flow_php");
+    assert_eq!(steps[1]["runtime"], "publish_dataset");
+    // The first step is dispatched and nothing has run: 202 means the command
+    // is durable, not that anything happened.
+    assert_eq!(steps[0]["state"]["state_type"], "pending");
+    assert_eq!(steps[1]["state"]["state_type"], "scheduled");
+
+    // And the run has its own page, read from the transactional store rather
+    // than folded from the log.
+    let id = execution["execution_id"].as_str().expect("an id");
+    let (status, run) = fixture.get(&format!("/api/v1/executions/{id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(run["plan_id"], execution["plan_id"]);
+}
+
+#[tokio::test]
+async fn one_idempotency_key_repeated_starts_one_execution() {
+    // Section 20: repeating the same key returns the original command result.
+    // The mechanism is the derived execution id and the store's own inbox, so
+    // the second request decides nothing rather than deciding again.
+    let fixture = Fixture::new(false);
+    fixture
+        .post("/api/v1/curation-pipelines", flow_only_pipeline("nightly"))
+        .await;
+    let body = json!({ "target": { "kind": "curation_pipeline", "name": "nightly" } });
+
+    let (first_status, first) = fixture
+        .post_keyed("/api/v1/executions", "2026-09-05", body.clone())
+        .await;
+    let (second_status, second) = fixture
+        .post_keyed("/api/v1/executions", "2026-09-05", body)
+        .await;
+
+    assert_eq!(first_status, StatusCode::ACCEPTED);
+    assert_eq!(second_status, StatusCode::ACCEPTED, "a repeat is not a 409");
+    assert_eq!(
+        first["execution"]["execution_id"],
+        second["execution"]["execution_id"]
+    );
+    assert!(first["created"].as_bool().expect("a flag"));
+    assert!(
+        !second["created"].as_bool().expect("a flag"),
+        "the second request started nothing"
+    );
+}
+
+#[tokio::test]
+async fn a_pipeline_that_saves_and_does_not_compile_is_refused_with_its_reasons() {
+    // Saving checks the *shape* (`order_of`, which the registry owns) and
+    // compiling checks what only compilation sees — here, a notebook nobody
+    // pinned. A managed run pins the code it ran, and unpinned it cannot say
+    // what produced its dataset version.
+    let fixture = Fixture::new(false);
+    let mut unpinned = flow_only_pipeline("unpinned");
+    unpinned["blocks"][2] = json!({
+        "id": "detect",
+        "position": { "x": 400.0, "y": 0.0 },
+        "spec": { "kind": "notebook", "notebook": "pii_scan", "params": {} }
+    });
+    unpinned["edges"] = json!([
+        { "from": "read", "to": "clean" },
+        { "from": "clean", "to": "detect" }
+    ]);
+    let (status, saved) = fixture.post("/api/v1/curation-pipelines", unpinned).await;
+    assert_eq!(status, StatusCode::CREATED, "{saved}");
+
+    let (status, refused) = fixture
+        .post(
+            "/api/v1/executions",
+            json!({ "target": { "kind": "curation_pipeline", "name": "unpinned" } }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    assert_eq!(refused["code"], "plan_refused");
+    assert!(
+        !refused["details"]
+            .as_array()
+            .expect("the reasons")
+            .is_empty(),
+        "the canvas renders these lines: {refused}"
+    );
+}
+
+#[tokio::test]
+async fn a_definition_nobody_saved_is_a_404_and_not_an_empty_run() {
+    let fixture = Fixture::new(false);
+    let (status, missing) = fixture
+        .post(
+            "/api/v1/executions",
+            json!({ "target": { "kind": "curation_pipeline", "name": "nothing" } }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{missing}");
+
+    let (status, _) = fixture.get("/api/v1/executions/never-started").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_start_naming_its_own_endpoint_is_refused() {
+    // The same absence as `LaunchBody`'s and `RerunBody`'s, and the same
+    // reason: a plan names a binding and its parameters, never a host. An
+    // ignored field would read as accepted — 422 from axum's own JSON
+    // extractor, as on the launch and the rerun.
+    let fixture = Fixture::new(false);
+    fixture
+        .post("/api/v1/curation-pipelines", flow_only_pipeline("pii"))
+        .await;
+    let (status, refused) = fixture
+        .post(
+            "/api/v1/executions",
+            json!({
+                "target": { "kind": "curation_pipeline", "name": "pii" },
+                "flow_url": "http://attacker.invalid/flow"
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+}
+
+#[tokio::test]
+async fn an_instance_with_no_workflow_store_answers_501_rather_than_404() {
+    let fixture = Fixture::without_registry();
+    let (status, body) = fixture
+        .post(
+            "/api/v1/executions",
+            json!({ "target": { "kind": "curation_pipeline", "name": "pii" } }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{body}");
+    assert!(
+        body["message"]
+            .as_str()
+            .expect("a message")
+            .contains("AIWATCHER_WORKFLOW_STORE"),
+        "{body}"
+    );
 }

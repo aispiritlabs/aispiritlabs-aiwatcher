@@ -164,9 +164,12 @@ pub fn envelopes_for(event: &WorkflowEvent, context: &FactContext<'_>) -> Vec<Ev
         // was no attempt, and a zero-duration bar in the waterfall would be
         // claiming there was.
         WorkflowEvent::StepCacheHit {
-            step_id, cache_key, ..
+            step_id,
+            attempt,
+            cache_key,
+            ..
         } => {
-            let mut payload = step_payload(context, step_id, 0);
+            let mut payload = step_payload(context, step_id, *attempt);
             if let Some(object) = payload.as_object_mut() {
                 object.insert("state_name".to_owned(), Value::String("Cached".to_owned()));
                 object.insert("cache_key".to_owned(), Value::String(cache_key.clone()));
@@ -522,12 +525,16 @@ mod tests {
         // zero-duration bar in the waterfall would be claiming there was.
         let envelopes = publish(&WorkflowEvent::StepCacheHit {
             step_id: "acquire".to_owned(),
+            attempt: 1,
             cache_key: "cd".repeat(32),
             outputs: Vec::new(),
         });
         assert_eq!(envelopes.len(), 1);
         assert_eq!(envelopes[0].event_type.as_str(), "step.completed");
         assert_eq!(envelopes[0].data["state_name"], "Cached");
+        // And it names the attempt it answered, so the waterfall's node is the
+        // one that was dispatched rather than a zeroth that never existed.
+        assert_eq!(envelopes[0].data["call_id"], "acquire/1");
     }
 
     #[test]

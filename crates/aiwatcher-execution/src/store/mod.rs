@@ -220,8 +220,21 @@ pub trait WorkflowStore: Send + Sync + std::fmt::Debug {
     /// Whatever the backend could not do.
     async fn pending_outbox(&self, limit: usize) -> Result<Vec<OutboxMessage>>;
 
-    /// Mark rows published. Safe to repeat: a row published twice is a
-    /// redelivery, which the projector already deduplicates by message id.
+    /// Forget rows the log has accepted.
+    ///
+    /// **Deleted, not flagged.** The row's only reader is the publisher, and
+    /// once the sink has taken it the fact lives on the event log — which is
+    /// the durable copy, the one every fold reads, and the one a person looks
+    /// at. A second copy in this store would answer no question and would grow
+    /// with every step of every run for as long as the deployment lives.
+    ///
+    /// `at` is what the deletion happened at, kept in the signature because an
+    /// adapter that wanted to tombstone rather than delete would need it, and
+    /// because a caller must not read a clock to call this.
+    ///
+    /// Safe to repeat: a row published twice is a redelivery, which the
+    /// projector already deduplicates by message id, and deleting a row that is
+    /// already gone is a no-op rather than an error.
     ///
     /// # Errors
     ///
@@ -283,6 +296,70 @@ pub trait WorkflowStore: Send + Sync + std::fmt::Debug {
     ///
     /// Whatever the backend could not do.
     async fn advance_checkpoint(&self, processor: &str, checkpoint: Checkpoint) -> Result<()>;
+}
+
+/// Sharing one store between the parts of a process that hold it.
+///
+/// The API accepts the next command, the outbox publisher drains what the last
+/// one wrote and a reactor claims what it dispatched — three readers of one
+/// store, in one process, and none of them owns it. Without this every one of
+/// them would have to carry the concrete adapter as a type parameter, which
+/// puts `postgres` in the signature of a struct that is built whether or not
+/// the feature is on.
+#[async_trait]
+impl<T: WorkflowStore + ?Sized> WorkflowStore for std::sync::Arc<T> {
+    fn capabilities(&self) -> StoreCapabilities {
+        (**self).capabilities()
+    }
+
+    async fn load(&self, execution: &ExecutionId) -> Result<StreamSlice> {
+        (**self).load(execution).await
+    }
+
+    async fn append(
+        &self,
+        execution: &ExecutionId,
+        request: AppendRequest,
+    ) -> Result<AppendOutcome> {
+        (**self).append(execution, request).await
+    }
+
+    async fn projection(&self, execution: &ExecutionId) -> Result<Option<RunProjection>> {
+        (**self).projection(execution).await
+    }
+
+    async fn pending_outbox(&self, limit: usize) -> Result<Vec<OutboxMessage>> {
+        (**self).pending_outbox(limit).await
+    }
+
+    async fn mark_published(&self, ids: &[MessageId], at: OffsetDateTime) -> Result<()> {
+        (**self).mark_published(ids, at).await
+    }
+
+    async fn claim_attempt(
+        &self,
+        filter: &ClaimFilter,
+        owner: &str,
+        now: OffsetDateTime,
+    ) -> Result<Option<AttemptRow>> {
+        (**self).claim_attempt(filter, owner, now).await
+    }
+
+    async fn heartbeat(&self, key: &AttemptKey, owner: &str, now: OffsetDateTime) -> Result<bool> {
+        (**self).heartbeat(key, owner, now).await
+    }
+
+    async fn attempt(&self, key: &AttemptKey) -> Result<Option<AttemptRow>> {
+        (**self).attempt(key).await
+    }
+
+    async fn checkpoint(&self, processor: &str) -> Result<Option<Checkpoint>> {
+        (**self).checkpoint(processor).await
+    }
+
+    async fn advance_checkpoint(&self, processor: &str, checkpoint: Checkpoint) -> Result<()> {
+        (**self).advance_checkpoint(processor, checkpoint).await
+    }
 }
 
 /// A row on its way to the log, with the ordering rule already applied.

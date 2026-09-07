@@ -204,6 +204,7 @@ pub async fn assert_contract(name: &str, store: &dyn WorkflowStore) {
     the_six_pieces_of_one_decision_land_together(name, store).await;
     a_refused_append_writes_none_of_them(name, store).await;
     publishing_an_outbox_row_is_safe_to_repeat(name, store).await;
+    a_published_outbox_row_is_dropped_rather_than_kept(name, store).await;
     a_stream_read_back_replays_to_the_state_it_recorded(name, store).await;
     a_message_too_large_to_store_is_refused(name, store).await;
     two_claimants_racing_for_one_attempt_produce_one_claim(name, store).await;
@@ -431,7 +432,47 @@ pub async fn publishing_an_outbox_row_is_safe_to_repeat(name: &str, store: &dyn 
         !ok!(name, store.pending_outbox(1000), "the outbox")
             .iter()
             .any(|row| row.message_id == mine),
-        "{name}: a marked row is still pending"
+        "{name}: a published row is still pending"
+    );
+}
+
+/// A published row is *gone*, not flagged.
+///
+/// The fact is on the event log once the sink has taken it, so a copy here
+/// would answer no question — and it would grow with every step of every run
+/// for as long as the deployment lives. This is the property that says the
+/// outbox is a queue rather than a second history.
+pub async fn a_published_outbox_row_is_dropped_rather_than_kept(
+    name: &str,
+    store: &dyn WorkflowStore,
+) {
+    let execution = fresh("outbox-drop");
+    ok!(
+        name,
+        store.append(
+            &execution,
+            start_request(&execution, ExpectedVersion::NoStream, "m-1")
+        ),
+        "an append"
+    );
+
+    let mine = MessageId::new(format!("{execution}/outbox-1"));
+    let before = ok!(name, store.pending_outbox(1000), "the outbox").len();
+    ok!(
+        name,
+        store.mark_published(std::slice::from_ref(&mine), OffsetDateTime::UNIX_EPOCH),
+        "publishing"
+    );
+
+    let after = ok!(name, store.pending_outbox(1000), "the outbox");
+    assert_eq!(
+        after.len(),
+        before - 1,
+        "{name}: publishing one row left the outbox the same size"
+    );
+    assert!(
+        after.iter().all(|row| row.published_at.is_none()),
+        "{name}: a row this store still holds has been published, which means it kept it"
     );
 }
 

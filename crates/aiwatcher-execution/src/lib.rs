@@ -25,9 +25,10 @@
 //! the attempt it already created — `TraceId::derive`'s rule, one layer up.
 //!
 //! [`store`] is the one transactional operation. Six writes that must land
-//! together, behind a port with `memory` and `file` adapters here and
-//! `postgres` in its own crate behind a feature. Splitting them is the
-//! dual-write gap this design exists to close.
+//! together, behind a port with three adapters — `memory`, `file` and
+//! `postgres`, the last behind a cargo feature, the shape `laser` has in
+//! `aiwatcher-bus`. Splitting the writes is the dual-write gap this design
+//! exists to close.
 //!
 //! # What this crate does not do
 //!
@@ -62,7 +63,8 @@ pub use activity::{
     ExecutorRegistry, PriorAttempt,
 };
 pub use artifact::{
-    ArtifactCatalog, CacheEntry, CatalogedArtifact, MemoryArtifactCatalog, Provenance,
+    ArtifactCatalog, CacheEntry, CatalogedArtifact, MemoryArtifactCatalog, ObjectArtifactCatalog,
+    Provenance,
 };
 pub use cache::cache_key;
 pub use claim::{AttemptKey, AttemptRow, ClaimFilter};

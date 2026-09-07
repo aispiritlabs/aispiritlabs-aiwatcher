@@ -44,6 +44,13 @@ struct Material<'a> {
     /// The digest of the code that runs: a notebook revision, the Flow script,
     /// a task's pinned version.
     code: String,
+    /// The exact bounds a windowed source resolved to.
+    ///
+    /// In the key rather than only gating it: one script over two spans is two
+    /// questions, and a key that covered only the script's text would answer
+    /// yesterday's with today's rows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    window: Option<(i64, i64)>,
     /// Input artifact digests, in the order the step reads them. Order is part
     /// of the key because two inputs swapped is a different question.
     inputs: Vec<&'a str>,
@@ -71,6 +78,7 @@ pub fn cache_key(step: &PlanStep, inputs: &[ArtifactRef]) -> Option<String> {
         runtime: step.runtime.kind().as_str(),
         implementation_version: RUNTIME_IMPLEMENTATION_VERSION,
         code,
+        window: resolved_window(&step.runtime),
         inputs: inputs.iter().map(|a| a.digest.as_str()).collect(),
         parameters: parameters(&step.runtime),
         outputs: step
@@ -95,7 +103,18 @@ pub fn cache_key(step: &PlanStep, inputs: &[ArtifactRef]) -> Option<String> {
 fn code_digest(runtime: &RuntimeBinding) -> Option<String> {
     match runtime {
         RuntimeBinding::FlowPhp(spec) => {
-            // A moving window shares a script and not a question.
+            // A pinned source *or* a pinned window, and the second only counts
+            // because the query service can now read one: `POST /flow/query`
+            // takes `window_from`/`window_to` and the API's windowed routes take
+            // `as_of`, so a plan that pinned 09:00–10:00 and a retry five
+            // minutes later read the same rows (section 43.18).
+            //
+            // The key being *well defined* is this function's question. Whether
+            // the run that produced a result actually happened under those
+            // conditions is the executor's, answered on `ActivityResult
+            // ::cacheable` — an older query service that never learnt `as_of`
+            // still reads a drifting window, and says so rather than being
+            // assumed about.
             if spec.source.window.is_none() && spec.source.resolved_revision.is_none() {
                 return None;
             }
@@ -111,6 +130,14 @@ fn code_digest(runtime: &RuntimeBinding) -> Option<String> {
         RuntimeBinding::PublishDataset(_)
         | RuntimeBinding::HumanInput(_)
         | RuntimeBinding::ExternalWorkflow(_) => None,
+    }
+}
+
+/// The bounds a windowed source resolved to, when it has any.
+fn resolved_window(runtime: &RuntimeBinding) -> Option<(i64, i64)> {
+    match runtime {
+        RuntimeBinding::FlowPhp(spec) => spec.source.window.map(|w| (w.from, w.to)),
+        _ => None,
     }
 }
 
@@ -146,6 +173,8 @@ mod tests {
         ResolvedWindow, RetryPolicy,
     };
 
+    /// A Flow step whose source is pinned, by a resolved window. See
+    /// `code_digest` for why that is enough and what it depends on.
     fn flow_step(resolved: bool) -> PlanStep {
         PlanStep {
             id: "query".to_owned(),
@@ -181,8 +210,27 @@ mod tests {
     #[test]
     fn a_window_nobody_resolved_is_not_a_question_two_runs_share() {
         // "The last hour" asked twice an hour apart is two questions. Resolved
-        // to exact bounds at compile time it is one, and cacheable.
+        // to exact bounds at compile time it is one, and — since the query
+        // service reads those bounds rather than a width from its own now — it
+        // is one the rows actually answer.
         assert!(cache_key(&flow_step(false), &[]).is_none());
+        assert!(cache_key(&flow_step(true), &[]).is_some());
+    }
+
+    #[test]
+    fn one_script_over_two_spans_is_two_keys() {
+        // The window is in the material, not merely a gate on it. A key that
+        // covered only the script's text would answer yesterday's question
+        // with today's rows.
+        let morning = flow_step(true);
+        let mut afternoon = flow_step(true);
+        if let RuntimeBinding::FlowPhp(spec) = &mut afternoon.runtime {
+            spec.source.window = Some(ResolvedWindow {
+                from: 14_400,
+                to: 18_000,
+            });
+        }
+        assert_ne!(cache_key(&morning, &[]), cache_key(&afternoon, &[]));
     }
 
     #[test]
@@ -245,6 +293,7 @@ mod tests {
                 runtime: "flow_php",
                 implementation_version: RUNTIME_IMPLEMENTATION_VERSION,
                 code: String::new(),
+                window: None,
                 inputs: Vec::new(),
                 parameters: Value::Null,
                 outputs: Vec::new(),

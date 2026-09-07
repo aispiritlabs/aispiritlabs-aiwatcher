@@ -247,6 +247,24 @@ impl FailureClass {
         matches!(self, Self::Transient | Self::Timeout | Self::Infrastructure)
     }
 
+    /// Whether the runtime may have done the work despite the failure.
+    ///
+    /// This is what decides which retry budget an attempt spends, and the
+    /// distinction is real. A `Transient` failure is the runtime *declining* —
+    /// a refused connection, a 503, no worker — so nothing ran, nothing has a
+    /// side effect, and running it again costs one call. A `Timeout` proves
+    /// only that the caller stopped waiting, and an `Infrastructure` loss means
+    /// a pod died holding work that may already be half done; both may repeat
+    /// something, so both are spent from the tighter budget.
+    ///
+    /// The consequence, measured: with one budget of three, a forty-second
+    /// outage of the query service killed a run whose step was fine. See
+    /// [`RetryPolicy`](crate::plan::RetryPolicy).
+    #[must_use]
+    pub const fn may_have_run(self) -> bool {
+        !matches!(self, Self::Transient)
+    }
+
     /// The state an attempt that failed this way is left in.
     ///
     /// Infrastructure loss is `Crashed` rather than `Failed`: nobody's code
@@ -419,6 +437,35 @@ impl Execution {
         {
             record.state = state;
         }
+    }
+
+    /// What `step_id` reads, resolved to the artifacts its parents produced.
+    ///
+    /// The plan's [`InputBinding`](crate::plan::InputBinding) names a step and
+    /// an output; the state holds what that step actually produced. Reading it
+    /// from the state rather than from a catalog is what makes a retry reuse
+    /// the *pinned* artifacts of its own context rather than whatever is
+    /// newest — and it is what lets [`cache_key`](crate::cache_key) be computed
+    /// inside `decide`, which may not perform I/O.
+    #[must_use]
+    pub fn resolved_inputs(&self, step_id: &str) -> Vec<ArtifactRef> {
+        let Some(step) = self.plan.step(step_id) else {
+            return Vec::new();
+        };
+        step.inputs
+            .iter()
+            .filter_map(|binding| match binding {
+                crate::plan::InputBinding::Step { step, output } => {
+                    let produced = self.step(step)?;
+                    produced
+                        .outputs
+                        .iter()
+                        .find(|artifact| &artifact.name == output)
+                        .cloned()
+                }
+                crate::plan::InputBinding::Parameter { .. } => None,
+            })
+            .collect()
     }
 
     /// Whether every step has stopped, one way or another.

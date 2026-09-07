@@ -383,12 +383,25 @@ final readonly class Catalog
      * question. Datasets that do not take one are read whole — see
      * `Dataset::$windowed`.
      */
-    private static function query(Dataset $dataset, int $pageSize, ?int $windowSeconds, array $arguments = []): string
-    {
+    private static function query(
+        Dataset $dataset,
+        int $pageSize,
+        ?int $windowSeconds,
+        array $arguments = [],
+        ?int $asOf = null,
+    ): string {
         $parameters = ['limit' => $pageSize];
 
         if ($dataset->windowed && $windowSeconds !== null && $windowSeconds > 0) {
             $parameters['window_seconds'] = $windowSeconds;
+        }
+
+        // The end of the window, when a managed plan pinned one. Absent for
+        // every panel query, which is what keeps a link somebody pastes meaning
+        // "the last hour" at the moment it is opened. Present, the window is a
+        // closed span and a retry five minutes later reads the same rows.
+        if ($dataset->windowed && $asOf !== null) {
+            $parameters['as_of'] = $asOf;
         }
 
         // Only what the dataset declared. The API rejects unknown query
@@ -426,12 +439,16 @@ final readonly class Catalog
      * the declared columns. Whoever writes the query sees run columns, never the
      * HTTP envelope.
      */
-    /** @param array<string, string> $arguments the read()'s declared named arguments */
+    /**
+     * @param array<string, string> $arguments the read()'s declared named arguments
+     * @param ?int                  $asOf      the instant a managed plan pinned its window to end at
+     */
     public function open(
         Dataset $dataset,
         ?string $run = null,
         ?int $windowSeconds = null,
         array $arguments = [],
+        ?int $asOf = null,
     ): DataFrame {
         $path = $dataset->requiresRun
             ? \str_replace('{run}', \rawurlencode((string) $run), $dataset->path)
@@ -439,7 +456,7 @@ final readonly class Catalog
 
         $request = new Request(
             'GET',
-            $this->baseUrl . $path . '?' . self::query($dataset, $this->pageSize, $windowSeconds, $arguments),
+            $this->baseUrl . $path . '?' . self::query($dataset, $this->pageSize, $windowSeconds, $arguments, $asOf),
         );
 
         $frame = data_frame()

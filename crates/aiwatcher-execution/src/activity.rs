@@ -91,10 +91,19 @@ pub struct ActivityContext {
     /// notebook's name, so two pipelines editing one notebook stop overwriting
     /// each other's rows (section 16.2).
     pub context_id: String,
+    /// The whole plan this step belongs to.
+    ///
+    /// The reactor has already loaded it, so this costs a clone of an `Arc`.
+    /// It is here for the one executor that has a question about its
+    /// *neighbours* rather than about itself: publishing a dataset version has
+    /// to record the query that produced the rows, and that query is a field
+    /// of the step upstream. Copying it into the publish step at compile time
+    /// would put one script in a plan twice and in `plan_id` twice.
+    pub plan: std::sync::Arc<crate::plan::ExecutionPlan>,
 }
 
 /// What an attempt produced.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct ActivityResult {
     pub outputs: Vec<ArtifactRef>,
     /// A bounded control value. Rows go in an artifact — a result that grows
@@ -107,6 +116,33 @@ pub struct ActivityResult {
     /// The lease is released while it waits: a worker that stopped to ask does
     /// not hold a pod for the answer.
     pub awaiting: Option<InputRequest>,
+    /// Whether this result may answer for its cache key later.
+    ///
+    /// `true` for almost everything, and the exception is what it is here for:
+    /// an executor that could not honour something the key assumed. A Flow step
+    /// whose plan pinned a span against a query service that narrowed it to a
+    /// duration produced *correct rows for a different question*, and storing
+    /// them under the key would serve them to the question that was asked.
+    ///
+    /// The executor answers this rather than the key's author, because only the
+    /// runtime knows what it managed to do — which is why the query service
+    /// declares `window_applied` rather than leaving it to be inferred.
+    pub cacheable: bool,
+}
+
+impl Default for ActivityResult {
+    fn default() -> Self {
+        Self {
+            outputs: Vec::new(),
+            result: None,
+            diagnostics: None,
+            awaiting: None,
+            // Derived `Default` would make this `false`, which would silently
+            // turn the cache off for every executor that built a result the
+            // short way.
+            cacheable: true,
+        }
+    }
 }
 
 /// Why an attempt did not produce a result.

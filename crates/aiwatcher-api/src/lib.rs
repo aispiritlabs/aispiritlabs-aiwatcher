@@ -30,6 +30,12 @@
 //! * **The engine** (`/api/v1/engine`) is the only group here that reads
 //!   neither the log nor an authored store: it asks the orchestrator what it
 //!   could start, and starts one. See [`engine`].
+//! * **Managed execution** (`/api/v1/executions`) is the group where this
+//!   system does the work rather than asking somebody else to: a definition is
+//!   compiled, one transaction is written, and the browser may close. It is
+//!   also the only group that reads a *transactional* store — and it serves no
+//!   list, because the workflow fold already does. See [`executions`],
+//!   ADR_0025 and ADR_0026.
 //! * **The workflow graph** (`/api/v1/workflows`) reads the same log as the
 //!   reads above, one level up: a graph rather than a run. Its rerun route is
 //!   the only endpoint in this API that asks another system to do work — see
@@ -49,6 +55,7 @@ pub mod datasets;
 pub mod engine;
 pub mod error;
 pub mod evaluations;
+pub mod executions;
 pub mod health;
 pub mod imports;
 pub mod ingest;

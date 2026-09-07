@@ -278,13 +278,16 @@ impl WorkflowStore for PostgresWorkflowStore {
         rows.iter().map(outbox_from).collect()
     }
 
-    async fn mark_published(&self, ids: &[MessageId], at: OffsetDateTime) -> Result<()> {
+    async fn mark_published(&self, ids: &[MessageId], _at: OffsetDateTime) -> Result<()> {
         if ids.is_empty() {
             return Ok(());
         }
         let ids: Vec<&str> = ids.iter().map(MessageId::as_str).collect();
-        sqlx::query("update outbox_messages set published_at = $1 where message_id = any($2)")
-            .bind(at)
+        // Deleted rather than flagged. The fact is on the event log once the
+        // sink has taken it, and a published row here would answer no question
+        // while the table grew with every step of every run — the one table in
+        // this schema whose rows have a reader that finishes with them.
+        sqlx::query("delete from outbox_messages where message_id = any($1)")
             .bind(&ids)
             .execute(&self.pool)
             .await

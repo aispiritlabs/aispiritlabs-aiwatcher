@@ -332,14 +332,13 @@ impl WorkflowStore for FileWorkflowStore {
             .collect())
     }
 
-    async fn mark_published(&self, ids: &[MessageId], at: OffsetDateTime) -> Result<()> {
+    async fn mark_published(&self, ids: &[MessageId], _at: OffsetDateTime) -> Result<()> {
         let _gate = self.gate.lock().await;
         let mut rows = self.read_outbox().await?;
-        for row in &mut rows {
-            if ids.contains(&row.message_id) {
-                row.published_at = Some(at);
-            }
-        }
+        // Dropped rather than flagged, which for this adapter is also what
+        // keeps the file from growing without bound: it is rewritten whole on
+        // every publish, so a kept row is paid for on every pass afterwards.
+        rows.retain(|row| !ids.contains(&row.message_id));
         self.write_outbox(&rows).await
     }
 

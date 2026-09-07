@@ -52,6 +52,12 @@ pub fn router(state: AppState) -> Router {
         // ── Asking another system to do something ────────────────────────────
         .merge(crate::workflows::router())
         .merge(crate::engine::router())
+        // ── Doing the work here instead ──────────────────────────────────────
+        //
+        // The one group backed by a transactional store rather than by the log
+        // or an object store, and the one whose whole promise is that closing
+        // the browser changes nothing. See ADR_0025.
+        .merge(crate::executions::router())
         // ── Reaching a service aiwatcher does not run ────────────────────────
         .merge(crate::integrations::hubs::router())
         // ── The caller, rather than the data ─────────────────────────────────

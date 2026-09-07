@@ -216,6 +216,12 @@ pub struct RunFilter {
     /// Only runs with activity in the last this-many seconds. See
     /// [`crate::window`] — zero and absent both mean everything.
     pub window_seconds: Option<i64>,
+    /// The instant the window ends at, in seconds since the epoch.
+    ///
+    /// `None` is now, which is every ordinary read and every link somebody
+    /// pastes. A managed step pins one so that a retry reads the same rows —
+    /// see [`crate::window::bounds`].
+    pub as_of: Option<i64>,
     pub conversation_id: Option<String>,
     pub agent_id: Option<String>,
     /// Runs produced by this service. See `RunSummary::runtimes`.
@@ -447,7 +453,8 @@ impl ReadModel {
     pub async fn list_at(&self, filter: &RunFilter, now: OffsetDateTime) -> RunPage {
         let state = self.state.read().await;
         let limit = filter.limit.unwrap_or(50).clamp(1, 500);
-        let since = crate::window::cutoff(filter.window_seconds, now);
+        let window =
+            crate::window::bounds(filter.window_seconds, crate::window::at(filter.as_of), now);
 
         // Newest first.
         let mut matching: Vec<&RunSummary> = state
@@ -457,7 +464,7 @@ impl ReadModel {
             .filter_map(|run_id| state.runs.get(run_id))
             // Last activity, not start: a run that began before the window and
             // is still emitting is the one most worth seeing in it.
-            .filter(|run| since.is_none_or(|start| run.last_event_at >= start))
+            .filter(|run| window.holds(run.last_event_at))
             .filter(|run| {
                 filter
                     .conversation_id
