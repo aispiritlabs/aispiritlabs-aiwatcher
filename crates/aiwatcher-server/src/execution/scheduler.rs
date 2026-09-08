@@ -120,7 +120,11 @@ async fn tick(
 
     let scheduled = schedules.all().await?;
     for definition in &scheduled {
-        for slot in definition.schedule.slots_between(previous, now) {
+        // `slots_due`, not `slots_between`: the interval is clipped to the
+        // schedule's own activation moment, so a schedule written while this
+        // worker was down does not run the days before somebody asked for it
+        // (review R7).
+        for slot in definition.slots_due(previous, now) {
             // One slot that could not start does not stop the others: a
             // definition that stopped compiling must not hold up every other
             // schedule in the instance.

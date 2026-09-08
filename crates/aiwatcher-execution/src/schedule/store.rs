@@ -46,6 +46,29 @@ pub struct ScheduledDefinition {
     pub set_by: String,
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: OffsetDateTime,
+    /// When the *current cadence* began to apply.
+    ///
+    /// Review R7: without this every schedule was handed the whole interval a
+    /// checkpoint had accumulated, so one written while the worker was down for
+    /// three days ran three days of slots the moment it came back — and
+    /// changing an hour during an outage re-ran the past under the new rule.
+    ///
+    /// Not `updated_at`, and that is the review's own warning: an edit that
+    /// does not change *when* it fires would then quietly drop a slot that was
+    /// already due. It moves only when [`Schedule::fires_the_same_as`] says the
+    /// rule changed — which makes re-enabling an activation too, so a schedule
+    /// switched back on starts from now rather than running the days it was
+    /// off.
+    ///
+    /// Optional so a schedule stored before this field existed still reads;
+    /// [`Self::effective_from`] answers for it, and the fallback is
+    /// `updated_at` because that is when such a schedule was last written.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "time::serde::rfc3339::option"
+    )]
+    pub effective_from: Option<OffsetDateTime>,
     /// What the tick last did with this schedule.
     ///
     /// `None` until it has fired once, which is also what a schedule set a
@@ -108,6 +131,40 @@ impl ScheduledDefinition {
     /// It lives here rather than in either caller because there are two: the
     /// tick in the work role, and the route that starts a schedule immediately
     /// when somebody asks it to.
+    /// When this schedule's current rule started applying.
+    #[must_use]
+    pub fn effective_from(&self) -> OffsetDateTime {
+        self.effective_from.unwrap_or(self.updated_at)
+    }
+
+    /// The slots this definition is due for in an interval.
+    ///
+    /// [`Schedule::slots_between`] with the interval clipped to the activation
+    /// moment, which is the one thing the pure rule cannot know: a cadence
+    /// describes every instant it would ever fire at, and *since when* is a
+    /// fact about this stored schedule rather than about "daily at nine".
+    #[must_use]
+    pub fn slots_due(&self, previous: OffsetDateTime, now: OffsetDateTime) -> Vec<OffsetDateTime> {
+        self.schedule
+            .slots_between(previous.max(self.effective_from()), now)
+    }
+
+    /// The activation moment a new version of this schedule should carry.
+    ///
+    /// Called with what is already stored, if anything. A rule that fires at
+    /// the same instants keeps the moment it has had all along, so an edit to
+    /// `overlap` — or to nothing at all — cannot drop a slot that is already
+    /// due; a rule that fires differently starts now.
+    #[must_use]
+    pub fn activation_after(&self, stored: Option<&Self>, now: OffsetDateTime) -> OffsetDateTime {
+        match stored {
+            Some(stored) if stored.schedule.fires_the_same_as(&self.schedule) => {
+                stored.effective_from()
+            }
+            _ => now,
+        }
+    }
+
     #[must_use]
     pub fn execution_id_for(&self, slot: OffsetDateTime) -> crate::ExecutionId {
         crate::ExecutionId::new(crate::derive_uuid(&format!(
@@ -259,6 +316,7 @@ impl ScheduleStore {
 mod tests {
     use super::*;
     use crate::schedule::rule::{Cadence, OverlapPolicy};
+    use time::macros::datetime;
 
     fn scheduled(name: &str, hour: u8) -> ScheduledDefinition {
         ScheduledDefinition {
@@ -272,6 +330,7 @@ mod tests {
             },
             set_by: "somebody".to_owned(),
             updated_at: OffsetDateTime::UNIX_EPOCH,
+            effective_from: None,
             last: None,
         }
     }
@@ -411,6 +470,130 @@ mod tests {
                 .await
                 .expect("get"),
             None
+        );
+    }
+
+    #[test]
+    fn a_schedule_written_during_an_outage_does_not_run_the_days_before_it_existed() {
+        // Review R7. The tick hands every schedule the whole interval its
+        // checkpoint accumulated, so a worker down from Monday to Thursday
+        // ticks once with `previous` on Monday — and a schedule somebody wrote
+        // on Wednesday would have run Monday's and Tuesday's nine o'clock too,
+        // for days it did not exist.
+        let mut written = scheduled("nightly", 9);
+        written.updated_at = datetime!(2026-09-09 12:00 UTC);
+        written.effective_from = Some(datetime!(2026-09-09 12:00 UTC));
+
+        let due = written.slots_due(
+            datetime!(2026-09-07 00:00 UTC),
+            datetime!(2026-09-10 12:00 UTC),
+        );
+
+        assert_eq!(
+            due,
+            vec![datetime!(2026-09-10 07:00 UTC)],
+            "only the nine o'clock after it was written — 07:00Z is 09:00 in Warsaw"
+        );
+    }
+
+    #[test]
+    fn an_edit_that_does_not_change_when_it_fires_keeps_a_slot_that_was_already_due() {
+        // The review's own warning about the naive fix: taking `updated_at` as
+        // the boundary would make every edit drop a pending slot. Somebody
+        // switching `skip` to `allow` at 08:59 must still get nine o'clock.
+        let stored = {
+            let mut stored = scheduled("nightly", 9);
+            stored.updated_at = datetime!(2026-09-01 00:00 UTC);
+            stored.effective_from = Some(datetime!(2026-09-01 00:00 UTC));
+            stored
+        };
+
+        let edited_at = datetime!(2026-09-10 06:59 UTC);
+        let mut edit = scheduled("nightly", 9);
+        edit.schedule.overlap = OverlapPolicy::Allow;
+        edit.updated_at = edited_at;
+        edit.effective_from = Some(edit.activation_after(Some(&stored), edited_at));
+
+        assert_eq!(
+            edit.effective_from, stored.effective_from,
+            "changing the overlap policy is not a change to when it fires"
+        );
+        assert_eq!(
+            edit.slots_due(
+                datetime!(2026-09-10 06:00 UTC),
+                datetime!(2026-09-10 08:00 UTC)
+            ),
+            vec![datetime!(2026-09-10 07:00 UTC)],
+            "the slot that was already due survived the edit"
+        );
+    }
+
+    #[test]
+    fn changing_the_hour_starts_the_new_rule_from_the_edit_rather_than_the_past() {
+        let stored = {
+            let mut stored = scheduled("nightly", 9);
+            stored.updated_at = datetime!(2026-09-01 00:00 UTC);
+            stored.effective_from = Some(datetime!(2026-09-01 00:00 UTC));
+            stored
+        };
+
+        let edited_at = datetime!(2026-09-10 12:00 UTC);
+        let mut edit = scheduled("nightly", 3);
+        edit.updated_at = edited_at;
+        edit.effective_from = Some(edit.activation_after(Some(&stored), edited_at));
+
+        assert_eq!(edit.effective_from, Some(edited_at));
+        assert!(
+            edit.slots_due(datetime!(2026-09-08 00:00 UTC), edited_at)
+                .is_empty(),
+            "a cadence changed today does not re-run the past two days under the new rule"
+        );
+    }
+
+    #[test]
+    fn re_enabling_a_schedule_does_not_run_the_days_it_was_off() {
+        // Enabling is a change to when it fires, so it is an activation. The
+        // alternative — carrying the moment across — would make switching a
+        // schedule back on start every slot it had missed while it was off,
+        // which is not what anybody means by the toggle.
+        let off = {
+            let mut off = scheduled("nightly", 9);
+            off.schedule.enabled = false;
+            off.updated_at = datetime!(2026-09-01 00:00 UTC);
+            off.effective_from = Some(datetime!(2026-09-01 00:00 UTC));
+            off
+        };
+
+        let back_on_at = datetime!(2026-09-10 12:00 UTC);
+        let mut back_on = scheduled("nightly", 9);
+        back_on.updated_at = back_on_at;
+        back_on.effective_from = Some(back_on.activation_after(Some(&off), back_on_at));
+
+        assert_eq!(back_on.effective_from, Some(back_on_at));
+        assert!(
+            back_on
+                .slots_due(datetime!(2026-09-01 00:00 UTC), back_on_at)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_schedule_stored_before_this_field_existed_is_effective_from_when_it_was_written() {
+        // The compatibility half: `effective_from` is absent in every schedule
+        // written by the release before it, and reading such a row must not
+        // mean "effective since the epoch", which is the answer that runs every
+        // slot since 1970.
+        let mut old = scheduled("nightly", 9);
+        old.updated_at = datetime!(2026-09-09 12:00 UTC);
+        old.effective_from = None;
+
+        assert_eq!(old.effective_from(), datetime!(2026-09-09 12:00 UTC));
+        assert!(
+            old.slots_due(
+                datetime!(2026-09-07 00:00 UTC),
+                datetime!(2026-09-09 13:00 UTC)
+            )
+            .is_empty()
         );
     }
 }

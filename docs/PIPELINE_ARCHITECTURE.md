@@ -1715,6 +1715,56 @@ removing the truncation or the attempts sweep fails one each, restoring
 
 ### Work 3 — scheduler correctness (R1, R2, R3, R5, R7)
 
+**Partly done, 2026-09-08. R5 and R7 are closed; R1, R2 and R3 are open.** The
+two that are closed are the pure half — a rule about when a slot exists — and
+they needed no storage decision, which is why they went first.
+
+*R5, the DST policy.* `slots_between` walked from `previous` in strides of the
+cadence and read the zone's offset at each sample, so around a transition the
+answer depended on where the interval had been cut: daily 02:30 in Warsaw on
+2026-10-25 gave `[00:30Z]` for one call over 00:00Z–02:00Z and
+`[00:30Z, 01:30Z]` for the same span in twenty-minute ticks. Candidates are now
+enumerated by **local calendar date**, which depends on nothing but the
+interval, and each wall time is resolved with a policy stated per cadence:
+daily and weekly take the first of an ambiguous pair and, for a time the clocks
+skipped, the instant they reach — found by bisecting on whole Unix seconds,
+because `execution_id_for` names the slot's `unix_timestamp` and a slot carrying
+nanoseconds would derive one id on the tick and another on a replay. Hourly
+lives a repeated hour twice and a skipped one not at all, because "every hour"
+counts hours.
+
+*R7, the activation moment.* `ScheduledDefinition::effective_from`, and
+`slots_due` clips the interval to it. Deliberately not `updated_at`: the review
+warns that taking every edit as a boundary would drop a slot that was already
+due, so it moves only when `Schedule::fires_the_same_as` says cadence, timezone
+or enabled changed. Re-enabling is therefore an activation and switching
+`overlap` is not. The field is optional and falls back to `updated_at`, so a
+schedule stored by the previous release is effective from when it was written
+rather than from the epoch.
+
+*Evidence:* eleven tests — six in `schedule/rule.rs`, five in
+`schedule/store.rs`. Both reproductions from the review are regression tests,
+and `cutting_an_interval_that_crosses_either_change_yields_the_same_slots` is
+the property they are instances of, over three zones, four cadences and both
+transitions. Negative controls: restoring the old walk fails three of the six,
+and ignoring `effective_from` fails all five — including the one that catches
+the naive `updated_at` boundary.
+
+*Still open, and they share one design.* R1 (`overlap=skip` reads
+`state.read_model`, which is empty in the `work` role), R2 (a transient failure
+consumes the slot, because the cursor advances past it) and R3 (the tick writes
+the whole `ScheduledDefinition` back and can undo an edit or a DELETE) are all
+the same question: where does *slot processing state* live. The answer they
+point at is to split it from configuration — configuration stays in the object
+store and the tick never writes it; admission and per-slot outcome move into
+the `WorkflowStore`, where an active execution for the definition can be
+checked in the same transaction that takes the slot. That also decouples R2
+from the cursor entirely: a slot is durable in its own right, so a transient
+failure leaves it unsettled rather than behind a checkpoint that has moved on.
+`run_now`'s request identity is in the same piece — it currently derives from
+the wall clock, so a retry in a later second is a second run.
+
+
 **Dependency:** work 2's store guarantees. Resolve the scheduler semantics and
 write the regressions before choosing its persistence layout.
 

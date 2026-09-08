@@ -5374,6 +5374,26 @@ export type ScheduleView = {
 export type ScheduledDefinition = {
     definition_kind: DefinitionKind;
     definition_name: string;
+    /**
+     * When the *current cadence* began to apply.
+     *
+     * Review R7: without this every schedule was handed the whole interval a
+     * checkpoint had accumulated, so one written while the worker was down for
+     * three days ran three days of slots the moment it came back — and
+     * changing an hour during an outage re-ran the past under the new rule.
+     *
+     * Not `updated_at`, and that is the review's own warning: an edit that
+     * does not change *when* it fires would then quietly drop a slot that was
+     * already due. It moves only when [`Schedule::fires_the_same_as`] says the
+     * rule changed — which makes re-enabling an activation too, so a schedule
+     * switched back on starts from now rather than running the days it was
+     * off.
+     *
+     * Optional so a schedule stored before this field existed still reads;
+     * [`Self::effective_from`] answers for it, and the fallback is
+     * `updated_at` because that is when such a schedule was last written.
+     */
+    effective_from?: string | null;
     last?: null | LastFiring;
     schedule: Schedule;
     /**

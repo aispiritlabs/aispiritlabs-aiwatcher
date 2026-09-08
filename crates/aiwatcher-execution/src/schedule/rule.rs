@@ -5,7 +5,7 @@
 //! inversion is the whole design.
 
 use serde::{Deserialize, Serialize};
-use time::{Duration, OffsetDateTime, Time, UtcOffset, Weekday};
+use time::{Date, Duration, OffsetDateTime, PrimitiveDateTime, Time, UtcOffset, Weekday};
 use utoipa::ToSchema;
 
 /// How often a definition runs.
@@ -116,6 +116,22 @@ impl Schedule {
         Ok(())
     }
 
+    /// Whether two versions of a schedule fire at the same instants.
+    ///
+    /// The three fields that decide *when*, and deliberately not `overlap`,
+    /// which decides what happens when a slot comes round rather than whether
+    /// one does. The distinction is the whole of review R7's second half: a new
+    /// activation moment silently drops a slot that was already due, so it may
+    /// only be taken when the rule for producing slots actually changed.
+    /// Somebody switching `skip` to `allow` at 08:59 must not lose the nine
+    /// o'clock run.
+    #[must_use]
+    pub fn fires_the_same_as(&self, other: &Self) -> bool {
+        self.cadence == other.cadence
+            && self.timezone == other.timezone
+            && self.enabled == other.enabled
+    }
+
     /// Every instant this schedule fires at, after `previous` and up to `now`.
     ///
     /// Half-open on purpose — `(previous, now]`. A slot exactly at `previous`
@@ -144,28 +160,34 @@ impl Schedule {
             return Vec::new();
         };
 
-        // Walked in local time, because that is what the schedule is written
-        // in: "nine each day" is nine after the clocks change as well as
-        // before, and an interval walked in UTC would drift by an hour.
+        // Enumerated by **local calendar date**, never by stepping from
+        // `previous`. That is the whole of the fix for review R5: the old walk
+        // sampled the zone at `previous`, `previous + step`, … and around a
+        // fall-back the same local time exists at two instants, so which of
+        // them a sample landed on depended on where the interval had been cut.
+        // Daily 02:30 in Warsaw on 2026-10-25 fired once for one call over
+        // 00:00Z–02:00Z and twice for the same span in twenty-minute ticks —
+        // two instants, two derived ids, two runs of one day's intention.
+        //
+        // A candidate set that depends only on the local calendar makes the
+        // answer a function of the interval and nothing else, which is what
+        // `how_often_the_clock_ticks_changes_nothing_about_which_slots_fire`
+        // claims and could not previously keep across a transition.
         let mut slots = Vec::new();
-        let mut at = previous;
-        // A day either side of the interval, so a slot whose local time lands
-        // inside it is still found when the offset moves.
-        let last = now + Duration::days(1);
-        while at <= last {
-            if let Some(candidate) = self.local_slot_at(at, zone)
-                && candidate > previous
-                && candidate <= now
-                && !slots.contains(&candidate)
-            {
-                slots.push(candidate);
+        let mut date = local_date(previous, zone) - Duration::days(2);
+        // Two days either side, so a candidate whose local day sits at the edge
+        // of the interval is still generated whatever the offset does to it.
+        let last = local_date(now, zone) + Duration::days(2);
+        while date <= last {
+            for wall in self.wall_times_on(date) {
+                for instant in self.resolve(wall, zone) {
+                    if instant > previous && instant <= now && !slots.contains(&instant) {
+                        slots.push(instant);
+                    }
+                }
             }
-            at += self.step();
-            // A schedule whose step is zero would spin. `check` cannot produce
-            // one, and this is what makes that true rather than assumed.
-            if self.step().is_zero() {
-                break;
-            }
+            let Some(next) = date.next_day() else { break };
+            date = next;
         }
         slots.sort_unstable();
         slots
@@ -186,43 +208,130 @@ impl Schedule {
             .next()
     }
 
-    /// How far to walk between candidates. One cadence, one stride.
-    const fn step(&self) -> Duration {
-        match self.cadence {
-            Cadence::Hourly { .. } => Duration::hours(1),
-            Cadence::Daily { .. } | Cadence::Weekly { .. } => Duration::days(1),
-        }
-    }
-
-    /// The instant this schedule fires on the local day `at` falls in, if it
-    /// fires that day at all.
-    fn local_slot_at(&self, at: OffsetDateTime, zone: &'static Tz) -> Option<OffsetDateTime> {
-        let local = at.to_offset(offset_at(zone, at));
-        let (hour, minute) = match self.cadence {
-            Cadence::Hourly { minute } => (local.hour(), minute),
-            Cadence::Daily { hour, minute } => (hour, minute),
+    /// Every wall-clock time this cadence names on one local date.
+    ///
+    /// Local, and not yet an instant: a wall time is what somebody wrote down,
+    /// and turning it into an instant is where a zone gets a say. See
+    /// [`Self::resolve`].
+    fn wall_times_on(&self, date: Date) -> Vec<PrimitiveDateTime> {
+        let (hours, minute) = match self.cadence {
+            Cadence::Hourly { minute } => ((0..24).collect::<Vec<u8>>(), minute),
+            Cadence::Daily { hour, minute } => (vec![hour], minute),
             Cadence::Weekly {
                 weekday,
                 hour,
                 minute,
             } => {
-                if weekday_number(local.weekday()) != weekday {
-                    return None;
+                if weekday_number(date.weekday()) != weekday {
+                    return Vec::new();
                 }
-                (hour, minute)
+                (vec![hour], minute)
             }
         };
-        let wall = local.replace_time(Time::from_hms(hour, minute, 0).ok()?);
-        // The offset is resolved for the *wall clock* moment rather than kept
-        // from `at`: an interval that crosses a change would otherwise place
-        // every later slot an hour out. A local time that does not exist —
-        // the hour a spring-forward skips — resolves to the instant the clocks
-        // reach, which fires once rather than not at all.
-        Some(
-            wall.replace_offset(offset_at(zone, wall))
-                .to_offset(UtcOffset::UTC),
-        )
+        hours
+            .into_iter()
+            .filter_map(|hour| {
+                Time::from_hms(hour, minute, 0)
+                    .ok()
+                    .map(|time| PrimitiveDateTime::new(date, time))
+            })
+            .collect()
     }
+
+    /// The instants one wall-clock time happens at, in this zone.
+    ///
+    /// Usually one. Twice a year a local time is **ambiguous** — the clocks go
+    /// back and the hour is lived through twice — or **nonexistent**, in the
+    /// hour a spring-forward skips. Both were previously resolved by whichever
+    /// offset the sampling instant happened to carry, which is not a policy;
+    /// it is the absence of one, and it is why the answer moved with the tick
+    /// rate.
+    ///
+    /// The policy is stated per cadence, because the cadences mean different
+    /// things by an hour:
+    ///
+    /// * **Daily and weekly** name one intention per day. An ambiguous time
+    ///   fires at the **first** of its two instants — the clock reached 02:30
+    ///   and the run happened — and a nonexistent one fires when the clocks
+    ///   **reach** it, which is the transition instant. One run either way,
+    ///   which is what "every day at 02:30" asks for.
+    /// * **Hourly** counts hours. A repeated hour is genuinely two hours and
+    ///   fires twice; an hour the clocks skipped never happens and fires not at
+    ///   all. That day has 25 runs and 23 respectively, which is the honest
+    ///   answer for "every hour".
+    ///
+    /// The pair is sorted rather than taken in the order the zone database
+    /// hands it back, so "the first" means the earlier instant whatever
+    /// `time_tz` calls it.
+    fn resolve(&self, wall: PrimitiveDateTime, zone: &'static Tz) -> Vec<OffsetDateTime> {
+        use time_tz::OffsetResult;
+        use time_tz::PrimitiveDateTimeExt as _;
+
+        let utc = |at: OffsetDateTime| at.to_offset(UtcOffset::UTC);
+        match wall.assume_timezone(zone) {
+            OffsetResult::Some(at) => vec![utc(at)],
+            OffsetResult::Ambiguous(one, other) => {
+                let mut both = [utc(one), utc(other)];
+                both.sort_unstable();
+                match self.cadence {
+                    Cadence::Hourly { .. } => both.to_vec(),
+                    Cadence::Daily { .. } | Cadence::Weekly { .. } => vec![both[0]],
+                }
+            }
+            OffsetResult::None => match self.cadence {
+                Cadence::Hourly { .. } => Vec::new(),
+                Cadence::Daily { .. } | Cadence::Weekly { .. } => {
+                    clocks_reach(wall, zone).into_iter().collect()
+                }
+            },
+        }
+    }
+}
+
+/// The first instant whose local time has reached `wall`, for a `wall` the
+/// clocks skipped.
+///
+/// A bisection rather than a scan, and over a window wide enough to hold any
+/// zone's offset: local time is strictly increasing across a spring-forward,
+/// and the nearest transition in the other direction is six months away, so
+/// the predicate is monotone over the twenty-eight hours searched. The answer
+/// is the transition instant itself — 02:30 did not happen, and this is the
+/// moment the clock passed it.
+fn clocks_reach(wall: PrimitiveDateTime, zone: &'static Tz) -> Option<OffsetDateTime> {
+    // Whole Unix seconds, not `Duration` halving: a midpoint of two instants
+    // carries nanoseconds, and a slot at 01:00:00.549316406Z is one the derived
+    // execution id would not match on a re-run, because `execution_id_for`
+    // names the slot's `unix_timestamp`. A transition is on a whole minute, so
+    // seconds are finer than the answer needs.
+    let anchor = wall.assume_utc().unix_timestamp();
+    let at = |seconds: i64| OffsetDateTime::from_unix_timestamp(seconds).ok();
+    let (mut low, mut high) = (anchor - 14 * 3600, anchor + 14 * 3600);
+    // Not a gap this window can answer for. Nothing here may guess.
+    if local_wall(at(low)?, zone) >= wall || local_wall(at(high)?, zone) < wall {
+        return None;
+    }
+    while high - low > 1 {
+        let middle = low + (high - low) / 2;
+        if local_wall(at(middle)?, zone) < wall {
+            low = middle;
+        } else {
+            high = middle;
+        }
+    }
+    at(high)
+}
+
+/// What a clock in `zone` reads at this instant, as a wall time.
+fn local_wall(at: OffsetDateTime, zone: &'static Tz) -> PrimitiveDateTime {
+    use time_tz::OffsetDateTimeExt as _;
+    let local = at.to_timezone(zone);
+    PrimitiveDateTime::new(local.date(), local.time())
+}
+
+/// The local calendar date an instant falls on.
+fn local_date(at: OffsetDateTime, zone: &'static Tz) -> Date {
+    use time_tz::OffsetDateTimeExt as _;
+    at.to_timezone(zone).date()
 }
 
 fn bounded(field: &'static str, value: u8, max: u8) -> Result<(), ScheduleError> {
@@ -243,15 +352,50 @@ fn zone(name: &str) -> Option<&'static Tz> {
     time_tz::timezones::get_by_name(name)
 }
 
-fn offset_at(zone: &'static Tz, at: OffsetDateTime) -> UtcOffset {
-    use time_tz::OffsetDateTimeExt as _;
-    at.to_timezone(zone).offset()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use time::macros::datetime;
+
+    fn daily_at(hour: u8, minute: u8, timezone: &str) -> Schedule {
+        Schedule {
+            cadence: Cadence::Daily { hour, minute },
+            timezone: timezone.to_owned(),
+            enabled: true,
+            overlap: OverlapPolicy::Skip,
+        }
+    }
+
+    fn hourly_at(minute: u8, timezone: &str) -> Schedule {
+        Schedule {
+            cadence: Cadence::Hourly { minute },
+            timezone: timezone.to_owned(),
+            enabled: true,
+            overlap: OverlapPolicy::Skip,
+        }
+    }
+
+    /// One interval, cut four ways, so a property can say "the tick rate
+    /// changed nothing" rather than checking one arbitrary split.
+    fn cut_every_way(
+        schedule: &Schedule,
+        from: OffsetDateTime,
+        to: OffsetDateTime,
+    ) -> Vec<Vec<OffsetDateTime>> {
+        [5_i64, 20, 60, 90]
+            .into_iter()
+            .map(|minutes| {
+                let mut found = Vec::new();
+                let mut at = from;
+                while at < to {
+                    let next = (at + Duration::minutes(minutes)).min(to);
+                    found.extend(schedule.slots_between(at, next));
+                    at = next;
+                }
+                found
+            })
+            .collect()
+    }
 
     fn daily(hour: u8, timezone: &str) -> Schedule {
         Schedule {
@@ -513,5 +657,174 @@ mod tests {
             Err(ScheduleError::UnknownZone("Europe/Atlantis".to_owned()))
         );
         assert!(daily(9, "Europe/Warsaw").check().is_ok());
+    }
+
+    #[test]
+    fn a_daily_slot_in_the_hour_the_clocks_repeat_fires_once_however_the_tick_is_cut() {
+        // Review R5, reproduced exactly. Warsaw goes back an hour at 01:00Z on
+        // 2026-10-25, so local 02:30 is lived through twice — at 00:30Z and at
+        // 01:30Z. The old walk sampled the zone at `previous + n * step`, so
+        // which of the two it found depended on where the interval had been
+        // cut: one call over 00:00Z–02:00Z returned 00:30Z, and the same span
+        // in twenty-minute ticks returned both. Two instants are two derived
+        // ids, so one day's intention ran twice.
+        let schedule = daily_at(2, 30, "Europe/Warsaw");
+        let (from, to) = (
+            datetime!(2026-10-25 00:00 UTC),
+            datetime!(2026-10-25 02:00 UTC),
+        );
+
+        let once = schedule.slots_between(from, to);
+        assert_eq!(
+            once,
+            vec![datetime!(2026-10-25 00:30 UTC)],
+            "the first of the two 02:30s, because a daily schedule is one intention a day"
+        );
+        for cut in cut_every_way(&schedule, from, to) {
+            assert_eq!(cut, once, "the tick rate decided which slots fired");
+        }
+    }
+
+    #[test]
+    fn a_daily_slot_in_the_hour_the_clocks_skip_fires_when_they_reach_it() {
+        // The other transition, and the one with no instant to name: Warsaw
+        // jumps 02:00 to 03:00 local at 01:00Z on 2026-03-29, so 02:30 never
+        // happens. Firing not at all would lose a day's run to a calendar
+        // quirk; this fires at the moment the clock passed it.
+        let schedule = daily_at(2, 30, "Europe/Warsaw");
+        let (from, to) = (
+            datetime!(2026-03-29 00:00 UTC),
+            datetime!(2026-03-29 04:00 UTC),
+        );
+
+        let once = schedule.slots_between(from, to);
+        assert_eq!(
+            once,
+            vec![datetime!(2026-03-29 01:00 UTC)],
+            "the transition instant itself — 03:00 local, the first reading past 02:30"
+        );
+        for cut in cut_every_way(&schedule, from, to) {
+            assert_eq!(cut, once, "the tick rate decided which slots fired");
+        }
+    }
+
+    #[test]
+    fn a_slot_the_clocks_skipped_is_a_whole_second() {
+        // `execution_id_for` names the slot's `unix_timestamp`, so a slot
+        // carrying nanoseconds from the search that found it would derive one
+        // id on the tick that started it and another on a replay.
+        let slot = daily_at(2, 30, "Europe/Warsaw")
+            .slots_between(
+                datetime!(2026-03-29 00:00 UTC),
+                datetime!(2026-03-29 04:00 UTC),
+            )
+            .into_iter()
+            .next()
+            .expect("the slot the clocks reached");
+        assert_eq!(slot.nanosecond(), 0, "{slot} is not a whole second");
+    }
+
+    #[test]
+    fn an_hourly_schedule_lives_the_repeated_hour_twice_and_the_skipped_one_not_at_all() {
+        // The policy is stated per cadence, because the cadences mean different
+        // things by an hour. "Every hour" counts hours: a day with 25 of them
+        // has 25 runs and a day with 23 has 23. "Every day at 02:30" is one
+        // intention whatever the clocks do, which the two tests above cover.
+        let schedule = hourly_at(30, "Europe/Warsaw");
+
+        assert_eq!(
+            schedule.slots_between(
+                datetime!(2026-10-25 00:00 UTC),
+                datetime!(2026-10-25 02:00 UTC)
+            ),
+            vec![
+                datetime!(2026-10-25 00:30 UTC),
+                datetime!(2026-10-25 01:30 UTC)
+            ],
+            "02:30 local happened twice and is two hours"
+        );
+        assert_eq!(
+            schedule.slots_between(
+                datetime!(2026-03-29 00:00 UTC),
+                datetime!(2026-03-29 02:00 UTC)
+            ),
+            vec![
+                datetime!(2026-03-29 00:30 UTC),
+                datetime!(2026-03-29 01:30 UTC)
+            ],
+            "01:30 and 03:30 local; 02:30 never happened, so it is not an hour"
+        );
+    }
+
+    #[test]
+    fn the_hour_the_panel_shows_is_the_hour_the_tick_fires_at_across_a_change() {
+        // The guardrail in its own words: a second implementation would have
+        // its own idea of when the clocks change, and the first hour it
+        // disagreed on would be one somebody planned a morning around.
+        for schedule in [
+            daily_at(2, 30, "Europe/Warsaw"),
+            daily_at(9, 0, "Europe/Warsaw"),
+            daily_at(0, 30, "America/New_York"),
+        ] {
+            for before in [
+                datetime!(2026-10-24 12:00 UTC),
+                datetime!(2026-03-28 12:00 UTC),
+            ] {
+                let next = schedule.next_after(before).expect("a next run");
+                assert_eq!(
+                    schedule.slots_between(before, next),
+                    vec![next],
+                    "next_after and the tick disagreed about {next}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cutting_an_interval_that_crosses_either_change_yields_the_same_slots() {
+        // The property the two reproductions above are instances of, over both
+        // transitions and every cadence — including the southern hemisphere,
+        // where the two happen the other way round in the year.
+        for zone in ["Europe/Warsaw", "America/New_York", "Australia/Sydney"] {
+            for schedule in [
+                daily_at(2, 30, zone),
+                daily_at(9, 0, zone),
+                hourly_at(30, zone),
+                Schedule {
+                    cadence: Cadence::Weekly {
+                        weekday: 6,
+                        hour: 2,
+                        minute: 30,
+                    },
+                    timezone: zone.to_owned(),
+                    enabled: true,
+                    overlap: OverlapPolicy::Skip,
+                },
+            ] {
+                for (from, to) in [
+                    (
+                        datetime!(2026-10-24 12:00 UTC),
+                        datetime!(2026-10-26 12:00 UTC),
+                    ),
+                    (
+                        datetime!(2026-03-28 12:00 UTC),
+                        datetime!(2026-03-30 12:00 UTC),
+                    ),
+                    (
+                        datetime!(2026-04-04 12:00 UTC),
+                        datetime!(2026-04-06 12:00 UTC),
+                    ),
+                ] {
+                    let once = schedule.slots_between(from, to);
+                    for cut in cut_every_way(&schedule, from, to) {
+                        assert_eq!(
+                            cut, once,
+                            "{zone} {:?} between {from} and {to}",
+                            schedule.cadence
+                        );
+                    }
+                }
+            }
+        }
     }
 }

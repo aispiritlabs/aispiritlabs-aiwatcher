@@ -198,23 +198,27 @@ async fn set_schedule(
     // *definition* — a run was started for it at that slot — and changing the
     // hour does not make it untrue. Clearing it would make every edit look
     // like a schedule that has never fired.
-    let previous = schedules(&state)?
+    let stored = schedules(&state)?
         .get(DefinitionKind::CurationPipeline, &name)
         .await
-        .map_err(aiwatcher_execution::HandleError::Store)?
-        .and_then(|existing| existing.last);
+        .map_err(aiwatcher_execution::HandleError::Store)?;
 
+    let now = OffsetDateTime::now_utc();
     let mut scheduled = ScheduledDefinition {
         definition_kind: DefinitionKind::CurationPipeline,
         definition_name: name,
         schedule,
         set_by: who.clone(),
-        updated_at: OffsetDateTime::now_utc(),
-        last: previous,
+        updated_at: now,
+        // Carried forward when this edit does not change *when* it fires, so
+        // an already-due slot survives a change to `overlap`; reset when it
+        // does, so a new rule does not reach into the past (review R7).
+        effective_from: None,
+        last: stored.as_ref().and_then(|existing| existing.last.clone()),
     };
+    scheduled.effective_from = Some(scheduled.activation_after(stored.as_ref(), now));
 
     let started = if body.run_now {
-        let now = OffsetDateTime::now_utc();
         let execution_id = scheduled.execution_id_for(now);
         crate::executions::start(
             &state,

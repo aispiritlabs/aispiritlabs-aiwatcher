@@ -17355,6 +17355,14 @@
           "definition_name": {
             "type": "string"
           },
+          "effective_from": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the *current cadence* began to apply.\n\nReview R7: without this every schedule was handed the whole interval a\ncheckpoint had accumulated, so one written while the worker was down for\nthree days ran three days of slots the moment it came back — and\nchanging an hour during an outage re-ran the past under the new rule.\n\nNot `updated_at`, and that is the review's own warning: an edit that\ndoes not change *when* it fires would then quietly drop a slot that was\nalready due. It moves only when [`Schedule::fires_the_same_as`] says the\nrule changed — which makes re-enabling an activation too, so a schedule\nswitched back on starts from now rather than running the days it was\noff.\n\nOptional so a schedule stored before this field existed still reads;\n[`Self::effective_from`] answers for it, and the fallback is\n`updated_at` because that is when such a schedule was last written."
+          },
           "last": {
             "oneOf": [
               {

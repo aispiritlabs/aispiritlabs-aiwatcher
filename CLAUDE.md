@@ -765,6 +765,26 @@ what runs a real graph.
   `/executions/{id}/stream` is struck rather than built, and
   `every_fact_a_managed_run_publishes_is_reachable_by_the_execution_id` is what
   keeps the reason true. Section 43.21.
+- **Never resolve a local time by the offset of the instant that found it.**
+  Twice a year a wall-clock time is ambiguous or does not exist, and an offset
+  read from the sampling instant answers whichever the sample happened to land
+  on — which made `slots_between` depend on the tick rate. Daily 02:30 in
+  Warsaw on 2026-10-25 fired once over one interval and twice over the same
+  span in twenty-minute ticks: two instants, two derived ids, two runs of one
+  day's intention. Candidates are enumerated by **local calendar date** and
+  each is resolved with a policy stated per cadence — daily and weekly take the
+  first of an ambiguous pair and the instant the clocks reach for a skipped
+  one, hourly lives a repeated hour twice and a skipped one not at all. Review
+  R5.
+- **Never let a new schedule version reach into the past.** The tick hands
+  every schedule the whole interval its checkpoint accumulated, so one written
+  while the worker was down for three days would run three days of slots the
+  moment it came back. `effective_from` bounds it — and it is **not**
+  `updated_at`, which is the review's own warning: an edit that does not change
+  *when* it fires would then silently drop a slot that was already due.
+  `Schedule::fires_the_same_as` decides, over cadence, timezone and enabled
+  only, so switching `overlap` at 08:59 keeps nine o'clock and re-enabling
+  starts from now rather than running the days it was off. Review R7.
 - **Never write the derived files of one decision without journalling it
   first.** The `file` adapter touches five — stream, projection, outbox,
   attempts, checkpoint — and a filesystem writes one at a time. It used to

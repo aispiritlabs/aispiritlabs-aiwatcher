@@ -68,6 +68,21 @@ negative control. `just check` and `just test-postgres` green. Recorded in
 
 ## Start here — 3. Make the scheduler reliable (R1, R2, R3, R5, R7)
 
+**R5 and R7 are closed (2026-09-08); R1, R2 and R3 remain.** The pure half is
+done: slots are enumerated by local calendar date with a DST policy stated per
+cadence, and `effective_from` stops a new schedule reaching into the past.
+Eleven tests, both review reproductions among them, each with a negative
+control. See [architecture §28](PIPELINE_ARCHITECTURE.md#28-migration-plan),
+work 3.
+
+What is left is one design rather than three fixes: R1, R2 and R3 are all the
+question of where slot processing state lives. Configuration stays in the
+object store and the tick stops writing it; admission and per-slot outcome move
+into the `WorkflowStore`, so an active execution can be checked in the same
+transaction that takes the slot, and a slot survives a transient failure
+without depending on the cursor. `run_now`'s request identity belongs to the
+same piece.
+
 Work in this order, following §28's scheduler gate:
 
 1. Specify slot lifecycle, activation/edit boundaries, DST policy, catch-up,
