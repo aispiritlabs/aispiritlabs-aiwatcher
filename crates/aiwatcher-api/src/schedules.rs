@@ -38,7 +38,8 @@ use utoipa::OpenApi;
 
 use aiwatcher_execution::plan::DefinitionKind;
 use aiwatcher_execution::{
-    Cadence, FiringOutcome, LastFiring, OverlapPolicy, Schedule, ScheduleStore, ScheduledDefinition,
+    Cadence, OverlapPolicy, Schedule, ScheduleStore, ScheduledDefinition, SlotAdmissionRequest,
+    SlotKey, SlotRecord, SlotSettlement, WorkflowStore as _,
 };
 
 use crate::auth::Caller;
@@ -79,22 +80,47 @@ pub struct SetScheduleBody {
     #[serde(default)]
     pub overlap: OverlapPolicy,
     /// Start it once, now, as well as saving it.
-    ///
-    /// The slot is this instant, so it goes through the same derived id as
-    /// every other slot — which is what makes a double-clicked button a
-    /// redelivery rather than two runs.
     #[serde(default)]
     pub run_now: bool,
+    /// What makes two `run_now` requests the same request.
+    ///
+    /// The execution id is derived from it, so a retry — a proxy repeating the
+    /// PUT, a click on a button whose first response was slow — lands on the
+    /// run it already started instead of beside it. Without it the id comes
+    /// from the second the request arrived in, which made a retry one second
+    /// later a second run.
+    ///
+    /// Any stable string the caller minds: the panel sends one per user
+    /// action.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
 }
 
 const fn yes() -> bool {
     true
 }
 
+/// How many firings the panel is given. One card shows the last; the rest are
+/// what makes "refused every morning for a week" visible as a pattern rather
+/// than as one line that keeps changing.
+const RECENT_SLOTS: usize = 20;
+
 /// A schedule, when it next fires, and what setting it started.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct ScheduleView {
     pub schedule: ScheduledDefinition,
+    /// What the tick did, newest first.
+    ///
+    /// Read from the **workflow store**, not from the schedule object. They
+    /// used to be one thing, which is what let a tick's write-back undo an
+    /// edit or resurrect a deleted schedule (review R3); configuration and slot
+    /// outcomes now have different writers and live in different places.
+    ///
+    /// Empty when this deployment wired no execution store — there is then no
+    /// tick either, so nothing has fired and an empty list is the true answer
+    /// rather than a missing one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub firings: Vec<SlotRecord>,
     /// When the tick would next start it. `None` while it is off.
     ///
     /// Answered here rather than left to the caller, and that is the same rule
@@ -111,11 +137,93 @@ pub struct ScheduleView {
 }
 
 impl ScheduleView {
-    fn of(schedule: ScheduledDefinition, started: Option<String>) -> Self {
+    async fn of(state: &AppState, schedule: ScheduledDefinition, started: Option<String>) -> Self {
+        let firings = firings_of(state, &schedule).await;
         Self {
             next_run: schedule.schedule.next_after(OffsetDateTime::now_utc()),
             schedule,
+            firings,
             started,
+        }
+    }
+}
+
+/// Write down a `run_now` as a firing of the slot it happened at.
+///
+/// Through the same admission the tick uses, so a double-clicked button is one
+/// slot and one run: the second call finds the slot settled and starts nothing.
+/// `OverlapPolicy::Allow` deliberately, whatever the schedule says — somebody
+/// pressing the button has asked for this run, and `skip` is a policy about
+/// what the *clock* should do unattended.
+async fn record_manual_firing(
+    state: &AppState,
+    scheduled: &ScheduledDefinition,
+    slot: OffsetDateTime,
+    execution_id: &aiwatcher_execution::ExecutionId,
+) {
+    let Some(executions) = state.executions.as_ref() else {
+        return;
+    };
+    let key = SlotKey::new(
+        scheduled.definition_kind,
+        scheduled.definition_name.clone(),
+        slot,
+    );
+    let owner = format!("api/{}", std::process::id());
+    let store = executions.store();
+    let admitted = store
+        .admit_slot(&SlotAdmissionRequest {
+            key: key.clone(),
+            owner: owner.clone(),
+            overlap: OverlapPolicy::Allow,
+            now: slot,
+        })
+        .await;
+    if !matches!(admitted, Ok(aiwatcher_execution::SlotAdmission::Admitted)) {
+        return;
+    }
+    if let Err(error) = store
+        .settle_slot(
+            &key,
+            &owner,
+            SlotSettlement::Started {
+                execution_id: execution_id.to_string(),
+            },
+            slot,
+        )
+        .await
+    {
+        tracing::warn!(%error, "a manual run was started and could not be written down");
+    }
+}
+
+/// One definition's firings, or none when there is no store to hold them.
+///
+/// A read failure is an empty list and a log line rather than a 500: the
+/// schedule itself was read successfully, and refusing to show it because its
+/// history could not be fetched would take the settings away over the
+/// decoration.
+async fn firings_of(state: &AppState, schedule: &ScheduledDefinition) -> Vec<SlotRecord> {
+    let Some(executions) = state.executions.as_ref() else {
+        return Vec::new();
+    };
+    match executions
+        .store()
+        .recent_slots(
+            schedule.definition_kind,
+            &schedule.definition_name,
+            RECENT_SLOTS,
+        )
+        .await
+    {
+        Ok(firings) => firings,
+        Err(error) => {
+            tracing::warn!(
+                definition = %schedule.definition_name,
+                %error,
+                "a schedule's firings could not be read"
+            );
+            Vec::new()
         }
     }
 }
@@ -143,12 +251,12 @@ async fn get_schedule(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> ApiResult<Json<ScheduleView>> {
-    schedules(&state)?
+    let schedule = schedules(&state)?
         .get(DefinitionKind::CurationPipeline, &name)
         .await
         .map_err(aiwatcher_execution::HandleError::Store)?
-        .map(|schedule| Json(ScheduleView::of(schedule, None)))
-        .ok_or_else(|| ApiError::NotFound(format!("a schedule for pipeline {name}")))
+        .ok_or_else(|| ApiError::NotFound(format!("a schedule for pipeline {name}")))?;
+    Ok(Json(ScheduleView::of(&state, schedule, None).await))
 }
 
 /// Set or replace a schedule, and optionally start it once.
@@ -214,13 +322,15 @@ async fn set_schedule(
         // an already-due slot survives a change to `overlap`; reset when it
         // does, so a new rule does not reach into the past (review R7).
         effective_from: None,
-        last: stored.as_ref().and_then(|existing| existing.last.clone()),
     };
     scheduled.effective_from = Some(scheduled.activation_after(stored.as_ref(), now));
 
     let started = if body.run_now {
-        let execution_id = scheduled.execution_id_for(now);
-        crate::executions::start(
+        let execution_id = body.request_id.as_deref().map_or_else(
+            || scheduled.execution_id_for(now),
+            |request| scheduled.execution_id_for_request(request),
+        );
+        let handled = crate::executions::start(
             &state,
             &execution_id,
             plan,
@@ -228,15 +338,18 @@ async fn set_schedule(
             &format!("schedule:{who}"),
         )
         .await?;
-        // Recorded like any other firing: a run *was* started for a slot, and
-        // a card reading "never fired" straight after somebody watched one
-        // start would be a card nobody believes again.
-        scheduled.last = Some(LastFiring {
-            slot: now,
-            outcome: FiringOutcome::Started,
-            execution_id: Some(execution_id.to_string()),
-            detail: None,
-        });
+        // Recorded like any other firing, and in the same place the tick
+        // records one: a run *was* started for a slot, and a card reading
+        // "never fired" straight after somebody watched one start would be a
+        // card nobody believes again. Best effort — the run has already
+        // started, and failing the request now would invite a retry that
+        // starts a second one.
+        // Only for the request that actually started it. A retry lands on the
+        // same execution, and writing a second firing for it would show two
+        // lines in the panel for one run.
+        if !handled.duplicate {
+            record_manual_firing(&state, &scheduled, now, &execution_id).await;
+        }
         Some(execution_id.to_string())
     } else {
         None
@@ -259,7 +372,7 @@ async fn set_schedule(
         "set a schedule"
     );
 
-    Ok(Json(ScheduleView::of(scheduled, started)))
+    Ok(Json(ScheduleView::of(&state, scheduled, started).await))
 }
 
 /// Forget a schedule.

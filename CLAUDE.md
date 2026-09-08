@@ -765,6 +765,29 @@ what runs a real graph.
   `/executions/{id}/stream` is struck rather than built, and
   `every_fact_a_managed_run_publishes_is_reachable_by_the_execution_id` is what
   keeps the reason true. Section 43.21.
+- **Never decide whether a scheduled run may start from the read model.** It is
+  an asynchronous fold and it is *empty in the `work` role*, where the tick
+  runs — `bin/aiwatcher.rs` ends that path before the projector starts — so
+  `overlap = skip` never skipped there, and in the combined role it read a
+  projection that lagged the start it was meant to block. `admit_slot` asks the
+  workflow store, in the transaction that takes the slot, against the
+  projection written by the decision itself. Review R1.
+- **Never write a transient failure down as a decision.** A refused compile
+  says the same thing on the next tick; an unreachable store does not. The tick
+  wrote both as `refused` and then advanced a global cursor past the slot, so
+  ten seconds of unavailability at 09:00 cost the day's run and left a note
+  claiming it had been refused. `SlotSettlement::TryAgain` drops the lease and
+  leaves the slot due, and the caller draws the line from the status the API
+  gave it — 4xx is about the definition, 5xx is about reaching something.
+  Review R2.
+- **Never let the tick write a schedule's configuration.** It read every
+  schedule, did its work and wrote the whole object back, so an edit or a
+  DELETE landing in between was overwritten by the snapshot — a deleted
+  schedule came back enabled. A `get` before the `put` does not close it: an
+  object store offers no compare-and-set. Configuration and slot outcomes have
+  different writers and now live in different places, and the tick is handed a
+  `ScheduleReader` so widening that trait is what a future change has to do
+  first. Review R3.
 - **Never resolve a local time by the offset of the instant that found it.**
   Twice a year a wall-clock time is ambiguous or does not exist, and an offset
   read from the sampling instant answers whichever the sample happened to land

@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CalendarClock, Play, Save, Trash2 } from 'lucide-react';
 
 import { clearSchedule, getSchedule, setSchedule } from '@/api/generated/sdk.gen';
-import type { Cadence, LastFiring, OverlapPolicy } from '@/api/generated/types.gen';
+import type { Cadence, OverlapPolicy, SlotRecord } from '@/api/generated/types.gen';
 import { rejectionDetails } from '@/lib/annotations';
 
 import { Button, Card, Spinner } from './ui/primitives';
@@ -119,7 +119,10 @@ export function ScheduleCard({ name, saved }: { name?: string; saved: boolean })
   }, [name, current.isPending, current.data]);
 
   const save = useMutation({
-    mutationFn: async (runNow: boolean) => {
+    // The identity is minted by the press and carried in, not generated here:
+    // `mutationFn` runs again on every retry, so an id created inside it would
+    // be a new one each time — which is the failure it exists to prevent.
+    mutationFn: async ({ runNow, requestId }: { runNow: boolean; requestId?: string }) => {
       const response = await setSchedule({
         path: { name: name ?? '' },
         body: {
@@ -128,6 +131,12 @@ export function ScheduleCard({ name, saved }: { name?: string; saved: boolean })
           enabled: draft.enabled,
           overlap: draft.overlap,
           run_now: runNow,
+          // One identity per press, so a retry — react-query's, a proxy's, or
+          // a second click while the first response is in flight — lands on
+          // the run it already started. Without it the server names the run
+          // after the second the request arrived in, and a retry one second
+          // later is a second curation over the same corpus.
+          request_id: requestId,
         },
       });
       if (!response.data) throw response.error ?? new Error('That schedule was refused.');
@@ -282,14 +291,14 @@ export function ScheduleCard({ name, saved }: { name?: string; saved: boolean })
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        <Button size="sm" disabled={busy} onClick={() => save.mutate(false)}>
+        <Button size="sm" disabled={busy} onClick={() => save.mutate({ runNow: false })}>
           {save.isPending ? <Spinner /> : <Save className="mr-1 h-3 w-3" />} Save
         </Button>
         <Button
           variant="outline"
           size="sm"
           disabled={busy}
-          onClick={() => save.mutate(true)}
+          onClick={() => save.mutate({ runNow: true, requestId: crypto.randomUUID() })}
           title="Save it, and start one run now as well."
         >
           <Play className="mr-1 h-3 w-3" /> Save and run now
@@ -309,7 +318,7 @@ export function ScheduleCard({ name, saved }: { name?: string; saved: boolean })
         </p>
       ) : null}
 
-      {existing?.schedule.last ? <LastFiringLine last={existing.schedule.last} /> : null}
+      {existing?.firings?.[0] ? <LastFiringLine last={existing.firings[0]} /> : null}
 
       {problems.length > 0 ? (
         <ul className="flex flex-col gap-1 text-destructive">
@@ -332,8 +341,13 @@ export function ScheduleCard({ name, saved }: { name?: string; saved: boolean })
  *
  * It exists because the alternative was a log line: a schedule refused every
  * morning for a week looked from here exactly like one that had been working.
+ *
+ * Read from `firings`, which the server answers from the workflow store, and
+ * no longer from a field on the schedule itself — the tick used to write that
+ * field back and could undo an edit or resurrect a deleted schedule with it
+ * (review R3).
  */
-function LastFiringLine({ last }: { last: LastFiring }) {
+function LastFiringLine({ last }: { last: SlotRecord }) {
   const when = new Date(last.slot).toLocaleString();
   if (last.outcome === 'refused') {
     return (

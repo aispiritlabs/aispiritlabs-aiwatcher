@@ -1103,6 +1103,9 @@ export type DatasetVersionSummary = {
  * Part of a plan's identity, so a curation pipeline and an agent graph that
  * happened to compile to identical steps stay two plans. They have different
  * editors, different permissions and different provenance.
+ * `Ord` so a [`crate::SlotKey`] is, which is what lets the memory adapter keep
+ * slots in a `BTreeMap` and answer "this definition's, newest first" without
+ * a scan of every definition's.
  */
 export const DefinitionKind = { CURATION_PIPELINE: 'curation_pipeline', WORKFLOW: 'workflow' } as const;
 
@@ -1112,6 +1115,9 @@ export const DefinitionKind = { CURATION_PIPELINE: 'curation_pipeline', WORKFLOW
  * Part of a plan's identity, so a curation pipeline and an agent graph that
  * happened to compile to identical steps stay two plans. They have different
  * editors, different permissions and different provenance.
+ * `Ord` so a [`crate::SlotKey`] is, which is what lets the memory adapter keep
+ * slots in a `BTreeMap` and answer "this definition's, newest first" without
+ * a scan of every definition's.
  */
 export type DefinitionKind = typeof DefinitionKind[keyof typeof DefinitionKind];
 
@@ -2276,14 +2282,6 @@ export type FinishRunRequest = {
     status: TrainingStatus;
 };
 
-export const FiringOutcome = {
-    STARTED: 'started',
-    SKIPPED: 'skipped',
-    REFUSED: 'refused'
-} as const;
-
-export type FiringOutcome = typeof FiringOutcome[keyof typeof FiringOutcome];
-
 /**
  * Where the rows come from, kept structured beside the generated script.
  *
@@ -3136,37 +3134,6 @@ export type LabelSchema = {
     classes: Array<LabelClass>;
     created_at: string;
     version: string;
-};
-
-/**
- * What the tick did the last time this schedule came round.
- *
- * **The scheduler's own decision, and never the run's outcome.** Whether the
- * run then succeeded is on the event log, which the Workflows view folds, and
- * a second copy here would be a second answer free to disagree with it
- * (ADR_0026). What is recorded is the thing nothing else knows: that a slot
- * came round, and what this loop did about it.
- *
- * It exists because the alternatives were a log line and silence. A schedule
- * that has been refused every morning for a week looks, from the panel,
- * exactly like one that has been working.
- */
-export type LastFiring = {
-    /**
-     * Why, when it did not start one. The refusal in the words the caller
-     * would have read.
-     */
-    detail?: string | null;
-    /**
-     * The run it started. Absent when it started none.
-     */
-    execution_id?: string | null;
-    outcome: FiringOutcome;
-    /**
-     * The slot, not the moment the tick noticed it. A run started late after
-     * an outage belongs to the nine o'clock it was for.
-     */
-    slot: string;
 };
 
 export type Latency = {
@@ -5352,6 +5319,19 @@ export type Schedule = {
  */
 export type ScheduleView = {
     /**
+     * What the tick did, newest first.
+     *
+     * Read from the **workflow store**, not from the schedule object. They
+     * used to be one thing, which is what let a tick's write-back undo an
+     * edit or resurrect a deleted schedule (review R3); configuration and slot
+     * outcomes now have different writers and live in different places.
+     *
+     * Empty when this deployment wired no execution store — there is then no
+     * tick either, so nothing has fired and an empty list is the true answer
+     * rather than a missing one.
+     */
+    firings?: Array<SlotRecord>;
+    /**
      * When the tick would next start it. `None` while it is off.
      *
      * Answered here rather than left to the caller, and that is the same rule
@@ -5394,7 +5374,6 @@ export type ScheduledDefinition = {
      * `updated_at` because that is when such a schedule was last written.
      */
     effective_from?: string | null;
-    last?: null | LastFiring;
     schedule: Schedule;
     /**
      * Who set it, from the session. Recorded because a run nobody remembers
@@ -5435,11 +5414,20 @@ export type SetScheduleBody = {
     enabled?: boolean;
     overlap?: OverlapPolicy;
     /**
-     * Start it once, now, as well as saving it.
+     * What makes two `run_now` requests the same request.
      *
-     * The slot is this instant, so it goes through the same derived id as
-     * every other slot — which is what makes a double-clicked button a
-     * redelivery rather than two runs.
+     * The execution id is derived from it, so a retry — a proxy repeating the
+     * PUT, a click on a button whose first response was slow — lands on the
+     * run it already started instead of beside it. Without it the id comes
+     * from the second the request arrived in, which made a retry one second
+     * later a second run.
+     *
+     * Any stable string the caller minds: the panel sends one per user
+     * action.
+     */
+    request_id?: string | null;
+    /**
+     * Start it once, now, as well as saving it.
      */
     run_now?: boolean;
     /**
@@ -5464,6 +5452,76 @@ export type ShardRef = {
     digest: string;
     index: number;
     rows: number;
+};
+
+/**
+ * The slot a definition is due for, as a key.
+ *
+ * The slot is the *intended* instant and never the moment the tick noticed
+ * it: a run started late after an outage belongs to the nine o'clock it was
+ * for, which is also what makes the derived execution id stable across a
+ * replay.
+ */
+export type SlotKey = {
+    definition_kind: DefinitionKind;
+    definition_name: string;
+    slot: string;
+};
+
+/**
+ * What the tick decided about one slot. Terminal: a settled slot is done.
+ *
+ * **The scheduler's own decision, and never the run's outcome.** Whether the
+ * run then succeeded is on the event log, which the Workflows view folds, and
+ * a second copy here would be free to disagree with it (ADR_0026).
+ *
+ * The three the previous release's `FiringOutcome` had, unchanged, because
+ * the panel already renders them and they are already what a person reads.
+ */
+export const SlotOutcome = {
+    STARTED: 'started',
+    SKIPPED: 'skipped',
+    REFUSED: 'refused'
+} as const;
+
+/**
+ * What the tick decided about one slot. Terminal: a settled slot is done.
+ *
+ * **The scheduler's own decision, and never the run's outcome.** Whether the
+ * run then succeeded is on the event log, which the Workflows view folds, and
+ * a second copy here would be free to disagree with it (ADR_0026).
+ *
+ * The three the previous release's `FiringOutcome` had, unchanged, because
+ * the panel already renders them and they are already what a person reads.
+ */
+export type SlotOutcome = typeof SlotOutcome[keyof typeof SlotOutcome];
+
+/**
+ * A slot as the store holds it.
+ *
+ * Flat rather than an outcome carrying its own fields, and that is not
+ * laziness: it is one row in `schedule_slots` and one shape the panel already
+ * renders, so a column, a field and a rendered line are the same three things
+ * end to end.
+ */
+export type SlotRecord = SlotKey & {
+    /**
+     * Why it was refused — or, while it is unsettled, what the last attempt
+     * ran into. A slot that has been failing every tick says what is wrong
+     * with it rather than looking untouched.
+     */
+    detail?: string | null;
+    /**
+     * The run this slot started, or the one that blocked it.
+     */
+    execution_id?: string | null;
+    /**
+     * Who is trying, and since when. Absent once it is settled.
+     */
+    lease_owner?: string | null;
+    leased_at?: string | null;
+    outcome?: null | SlotOutcome;
+    updated_at: string;
 };
 
 /**

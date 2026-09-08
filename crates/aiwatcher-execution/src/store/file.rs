@@ -62,6 +62,10 @@ use aiwatcher_core::{Checkpoint, MessageId};
 use crate::claim::{AttemptKey, AttemptRow, AttemptWrite, ClaimFilter};
 use crate::error::{Result, StoreError};
 use crate::message::{OutboxMessage, RecordedMessage, RunProjection};
+use crate::plan::DefinitionKind;
+use crate::schedule::slot::{
+    SlotAdmission, SlotAdmissionRequest, SlotKey, SlotRecord, SlotSettlement,
+};
 use crate::state::ExecutionId;
 
 use super::{
@@ -77,6 +81,9 @@ const CHECKPOINTS_DIR: &str = "checkpoints";
 const ATTEMPTS_FILE: &str = "attempts.json";
 /// One record per decision that has been accepted and not yet fully applied.
 const COMMITS_DIR: &str = "commits";
+/// One definition's slots. Keyed like a stream, so a schedule with a name full
+/// of separators does not become a path.
+const SLOTS_DIR: &str = "slots";
 
 /// A single-process workflow store under a directory.
 #[derive(Debug)]
@@ -162,6 +169,7 @@ impl FileWorkflowStore {
         fs::create_dir_all(root.join(CHECKPOINTS_DIR)).await?;
 
         fs::create_dir_all(root.join(COMMITS_DIR)).await?;
+        fs::create_dir_all(root.join(SLOTS_DIR)).await?;
 
         // The kernel decides who wins, and the loser is told which store to use
         // instead. `try_lock` is `std`'s since 1.89 and this workspace is on
@@ -465,6 +473,55 @@ impl FileWorkflowStore {
         Ok(())
     }
 
+    fn slots_path(&self, kind: DefinitionKind, name: &str) -> PathBuf {
+        self.root
+            .join(SLOTS_DIR)
+            .join(format!("{}-{}.json", kind.as_str(), sanitise(name)))
+    }
+
+    async fn read_slots(&self, kind: DefinitionKind, name: &str) -> Result<Vec<SlotRecord>> {
+        let Ok(body) = fs::read(self.slots_path(kind, name)).await else {
+            return Ok(Vec::new());
+        };
+        Ok(serde_json::from_slice::<Vec<SlotRecord>>(&body).unwrap_or_default())
+    }
+
+    async fn write_slots(
+        &self,
+        kind: DefinitionKind,
+        name: &str,
+        rows: &[SlotRecord],
+    ) -> Result<()> {
+        write_atomically(&self.slots_path(kind, name), &serde_json::to_vec(rows)?).await
+    }
+
+    /// Whether any execution of this definition has not finished.
+    ///
+    /// A scan of the projection directory, which is what this adapter already
+    /// does for `prune` and is affordable for the same reason: a store one
+    /// process holds is a development store. What matters is that it happens
+    /// under the same gate as the slot write, so the check and the claim are
+    /// one critical section.
+    async fn running_execution_of(&self, definition: &str) -> Result<Option<String>> {
+        let mut entries = fs::read_dir(self.root.join(PROJECTIONS_DIR)).await?;
+        let mut running: Option<String> = None;
+        while let Some(entry) = entries.next_entry().await? {
+            let Ok(body) = fs::read(entry.path()).await else {
+                continue;
+            };
+            let Ok(run) = serde_json::from_slice::<RunProjection>(&body) else {
+                continue;
+            };
+            if run.definition_name == definition && !run.state.state_type.is_terminal() {
+                let found = run.execution_id.to_string();
+                if running.as_ref().is_none_or(|held| &found < held) {
+                    running = Some(found);
+                }
+            }
+        }
+        Ok(running)
+    }
+
     /// Bring a claim table written by an older build up to this one's shape.
     ///
     /// The file-store half of migration 0004. Until section 43.34 a completion
@@ -614,6 +671,104 @@ impl WorkflowStore for FileWorkflowStore {
         // every publish, so a kept row is paid for on every pass afterwards.
         rows.retain(|row| !ids.contains(&row.message_id));
         self.write_outbox(&rows).await
+    }
+
+    async fn admit_slot(&self, request: &SlotAdmissionRequest) -> Result<SlotAdmission> {
+        // The same gate as an append. This store holds one process, so the
+        // mutex is the whole exclusion — which is also why
+        // `capabilities().multi_process` is `false` and a deployment that wants
+        // two ticks is told to pick another store.
+        let _gate = self.gate.lock().await;
+
+        let kind = request.key.definition_kind;
+        let mut rows = self.read_slots(kind, &request.key.definition_name).await?;
+        if let Some(held) = rows.iter().find(|row| row.key == request.key) {
+            if let Some(outcome) = &held.outcome {
+                return Ok(SlotAdmission::Settled { outcome: *outcome });
+            }
+            if !held.is_available(request.now) {
+                return Ok(SlotAdmission::Held {
+                    owner: held.lease_owner.clone().unwrap_or_default(),
+                });
+            }
+        }
+
+        if request.overlap == crate::OverlapPolicy::Skip
+            && let Some(running) = self
+                .running_execution_of(&request.key.definition_name)
+                .await?
+        {
+            return Ok(SlotAdmission::Blocked {
+                execution_id: running,
+            });
+        }
+
+        let detail = rows
+            .iter()
+            .find(|row| row.key == request.key)
+            .and_then(|row| row.detail.clone());
+        rows.retain(|row| row.key != request.key);
+        rows.push(SlotRecord {
+            key: request.key.clone(),
+            outcome: None,
+            execution_id: None,
+            lease_owner: Some(request.owner.clone()),
+            leased_at: Some(request.now),
+            detail,
+            updated_at: request.now,
+        });
+        rows.sort_by_key(|row| row.key.slot);
+        self.write_slots(kind, &request.key.definition_name, &rows)
+            .await?;
+        Ok(SlotAdmission::Admitted)
+    }
+
+    async fn settle_slot(
+        &self,
+        key: &SlotKey,
+        owner: &str,
+        settlement: SlotSettlement,
+        now: OffsetDateTime,
+    ) -> Result<()> {
+        let _gate = self.gate.lock().await;
+        let mut rows = self
+            .read_slots(key.definition_kind, &key.definition_name)
+            .await?;
+        let Some(record) = rows.iter_mut().find(|row| &row.key == key) else {
+            return Ok(());
+        };
+        if record.lease_owner.as_deref() != Some(owner) {
+            return Ok(());
+        }
+        match settlement {
+            SlotSettlement::TryAgain { detail } => {
+                record.lease_owner = None;
+                record.leased_at = None;
+                record.detail = Some(detail);
+            }
+            decided => {
+                record.outcome = decided.outcome();
+                record.execution_id = decided.execution_id().map(str::to_owned);
+                record.detail = decided.detail().map(str::to_owned);
+                record.lease_owner = None;
+                record.leased_at = None;
+            }
+        }
+        record.updated_at = now;
+        self.write_slots(key.definition_kind, &key.definition_name, &rows)
+            .await
+    }
+
+    async fn recent_slots(
+        &self,
+        kind: DefinitionKind,
+        name: &str,
+        limit: usize,
+    ) -> Result<Vec<SlotRecord>> {
+        let mut rows = self.read_slots(kind, name).await?;
+        rows.sort_by_key(|row| std::cmp::Reverse(row.key.slot));
+        rows.truncate(limit);
+        Ok(rows)
     }
 
     async fn checkpoint(&self, processor: &str) -> Result<Option<Checkpoint>> {

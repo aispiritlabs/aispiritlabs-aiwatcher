@@ -87,7 +87,8 @@ pub use plan::{
 };
 pub use reactor::{Performed, Reactor};
 pub use schedule::{
-    Cadence, FiringOutcome, LastFiring, OverlapPolicy, Schedule, ScheduleStore, ScheduledDefinition,
+    Cadence, OverlapPolicy, Schedule, ScheduleReader, ScheduleStore, ScheduledDefinition,
+    SlotAdmission, SlotAdmissionRequest, SlotKey, SlotOutcome, SlotRecord, SlotSettlement,
 };
 pub use state::{
     Execution, ExecutionId, ExecutionMode, ExecutionOwner, ExecutionState, FailureClass, RunState,

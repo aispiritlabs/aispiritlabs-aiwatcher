@@ -50,6 +50,10 @@ use crate::error::{Result, StoreError};
 use crate::message::{
     Direction, MAX_PAYLOAD_BYTES, OutboxMessage, PendingMessage, RecordedMessage, RunProjection,
 };
+use crate::plan::DefinitionKind;
+use crate::schedule::slot::{
+    SlotAdmission, SlotAdmissionRequest, SlotKey, SlotRecord, SlotSettlement,
+};
 use crate::state::ExecutionId;
 
 /// What the caller believed the stream was at.
@@ -337,6 +341,70 @@ pub trait WorkflowStore: Send + Sync + std::fmt::Debug {
     /// Whatever the backend could not do.
     async fn attempt(&self, key: &AttemptKey) -> Result<Option<AttemptRow>>;
 
+    /// Take one schedule slot, or say why not.
+    ///
+    /// **The transactional half of the scheduler** (review R1, R2, R3). Three
+    /// things happen inside one transaction and none of them can be split:
+    /// the slot is created if it does not exist, it is refused if somebody
+    /// already settled it or holds a live lease on it, and — when the policy
+    /// is [`OverlapPolicy::Skip`] — the definition is checked for a run that
+    /// has not finished.
+    ///
+    /// The overlap check is here rather than in the caller because the caller
+    /// that had it was reading `state.read_model`, an asynchronous fold that is
+    /// *empty in the `work` role* where the tick runs, so `skip` never skipped.
+    /// A projection this store already holds, read in the transaction that
+    /// takes the slot, is the only answer two replicas cannot both get wrong.
+    ///
+    /// Exactly one caller is [`SlotAdmission::Admitted`] for a given slot until
+    /// it is settled or the lease expires. Everything else is an answer rather
+    /// than a failure: a second replica racing the first is the expected shape.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the backend could not do.
+    async fn admit_slot(&self, request: &SlotAdmissionRequest) -> Result<SlotAdmission>;
+
+    /// Write down what happened to a slot this caller holds.
+    ///
+    /// [`SlotSettlement::Decided`] is terminal and the slot is never taken
+    /// again. [`SlotSettlement::TryAgain`] drops the lease and leaves it due,
+    /// which is R2's whole point: an infrastructure failure is not a decision,
+    /// and the release before this one wrote one down and then moved the cursor
+    /// past the slot, so a store that was briefly unreachable at 09:00 cost the
+    /// day's run.
+    ///
+    /// A settlement from somebody who no longer holds the lease is ignored
+    /// rather than an error — it is a slow caller whose work was taken over,
+    /// and the holder's answer is the one that counts.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the backend could not do.
+    async fn settle_slot(
+        &self,
+        key: &SlotKey,
+        owner: &str,
+        settlement: SlotSettlement,
+        now: OffsetDateTime,
+    ) -> Result<()>;
+
+    /// One definition's slots, newest first.
+    ///
+    /// What the panel reads for "when this last fired", which used to be a
+    /// field on the schedule object the tick wrote back over. Bounded by
+    /// `limit`, because this is a list that grows with time.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the backend could not do.
+    async fn recent_slots(
+        &self,
+        kind: DefinitionKind,
+        name: &str,
+        limit: usize,
+    ) -> Result<Vec<SlotRecord>>;
+
     /// Where a processor got to.
     ///
     /// # Errors
@@ -460,6 +528,29 @@ impl<T: WorkflowStore + ?Sized> WorkflowStore for std::sync::Arc<T> {
 
     async fn attempt(&self, key: &AttemptKey) -> Result<Option<AttemptRow>> {
         (**self).attempt(key).await
+    }
+
+    async fn admit_slot(&self, request: &SlotAdmissionRequest) -> Result<SlotAdmission> {
+        (**self).admit_slot(request).await
+    }
+
+    async fn settle_slot(
+        &self,
+        key: &SlotKey,
+        owner: &str,
+        settlement: SlotSettlement,
+        now: OffsetDateTime,
+    ) -> Result<()> {
+        (**self).settle_slot(key, owner, settlement, now).await
+    }
+
+    async fn recent_slots(
+        &self,
+        kind: DefinitionKind,
+        name: &str,
+        limit: usize,
+    ) -> Result<Vec<SlotRecord>> {
+        (**self).recent_slots(kind, name, limit).await
     }
 
     async fn checkpoint(&self, processor: &str) -> Result<Option<Checkpoint>> {

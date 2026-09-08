@@ -32,6 +32,10 @@ use crate::plan::{
     CachePolicy, DefinitionKind, DefinitionRevision, ExecutionPlan, PlanStep, PythonTaskSpec,
     RetryPolicy, RuntimeBinding, RuntimeKind,
 };
+use crate::schedule::rule::OverlapPolicy;
+use crate::schedule::slot::{
+    SlotAdmission, SlotAdmissionRequest, SlotKey, SlotOutcome, SlotSettlement,
+};
 use crate::state::{ExecutionId, ExecutionMode, ExecutionOwner, RunState, StateType, StepState};
 use crate::store::{AppendRequest, ExpectedVersion, WorkflowStore};
 use crate::{Result, StoreError};
@@ -240,6 +244,11 @@ pub async fn assert_contract(name: &str, store: &dyn WorkflowStore) {
     a_cursor_advances_on_its_own_for_a_message_the_inbox_knew(name, store).await;
     a_finished_execution_is_forgotten_and_a_running_one_is_not(name, store).await;
     an_execution_the_outbox_still_speaks_for_is_kept(name, store).await;
+    two_replicas_that_both_find_a_slot_due_admit_one(name, store).await;
+    a_settled_slot_is_never_admitted_again(name, store).await;
+    a_slot_put_back_after_a_transient_failure_is_due_again(name, store).await;
+    a_slot_whose_holder_vanished_is_taken_over_when_the_lease_expires(name, store).await;
+    a_definition_with_a_run_that_has_not_finished_blocks_its_next_slot(name, store).await;
 }
 
 macro_rules! ok {
@@ -1045,4 +1054,268 @@ pub async fn appending_the_same_decision_twice_is_idempotent(
         "{name}: the second append wrote something"
     );
     Ok(())
+}
+
+/// Two replicas both find one slot due, and one of them starts it.
+///
+/// The derived execution id already makes the *start* idempotent, so this is
+/// not about two runs of one slot — it is about the decision. Exactly one
+/// caller is admitted, and the other is told the slot is held rather than
+/// given a second lease on it.
+pub async fn two_replicas_that_both_find_a_slot_due_admit_one(
+    name: &str,
+    store: &dyn WorkflowStore,
+) {
+    let definition = format!("{name}-two-replicas-{}", stamp());
+    let slot = OffsetDateTime::UNIX_EPOCH + time::Duration::days(1);
+    let key = SlotKey::new(DefinitionKind::CurationPipeline, definition, slot);
+
+    let first = ok!(
+        name,
+        store.admit_slot(&admission(&key, "a", slot)),
+        "the first"
+    );
+    let second = ok!(
+        name,
+        store.admit_slot(&admission(&key, "b", slot)),
+        "the second"
+    );
+
+    assert_eq!(first, SlotAdmission::Admitted, "{name}");
+    assert!(
+        matches!(second, SlotAdmission::Held { .. }),
+        "{name}: the second replica was given the slot too: {second:?}"
+    );
+}
+
+/// A settled slot is never taken again — by anybody, ever.
+///
+/// This is what makes a replay of an interval free: the tick re-derives the
+/// same slots after a crash, and every one of them comes back settled.
+pub async fn a_settled_slot_is_never_admitted_again(name: &str, store: &dyn WorkflowStore) {
+    let definition = format!("{name}-settled-{}", stamp());
+    let slot = OffsetDateTime::UNIX_EPOCH + time::Duration::days(2);
+    let key = SlotKey::new(DefinitionKind::CurationPipeline, definition, slot);
+
+    ok!(
+        name,
+        store.admit_slot(&admission(&key, "a", slot)),
+        "a claim"
+    );
+    ok!(
+        name,
+        store.settle_slot(
+            &key,
+            "a",
+            SlotSettlement::Started {
+                execution_id: "run-1".to_owned(),
+            },
+            slot,
+        ),
+        "a settlement"
+    );
+
+    // Long after the lease would have expired, which is the point: a settled
+    // slot is not an expired claim.
+    let later = slot + time::Duration::seconds(aiwatcher_jobs::LEASE_SECONDS * 10);
+    let again = ok!(
+        name,
+        store.admit_slot(&admission(&key, "b", later)),
+        "a replay"
+    );
+    assert_eq!(
+        again,
+        SlotAdmission::Settled {
+            outcome: SlotOutcome::Started
+        },
+        "{name}"
+    );
+}
+
+/// A transient failure leaves the slot due rather than consuming it.
+///
+/// Review R2. The release before this one wrote every failure down as
+/// `refused` and then moved the global cursor past the slot, so a store that
+/// was unreachable for ten seconds at 09:00 cost the day's run and left a note
+/// saying it had been refused.
+pub async fn a_slot_put_back_after_a_transient_failure_is_due_again(
+    name: &str,
+    store: &dyn WorkflowStore,
+) {
+    let definition = format!("{name}-try-again-{}", stamp());
+    let slot = OffsetDateTime::UNIX_EPOCH + time::Duration::days(3);
+    let key = SlotKey::new(DefinitionKind::CurationPipeline, definition, slot);
+
+    ok!(
+        name,
+        store.admit_slot(&admission(&key, "a", slot)),
+        "a claim"
+    );
+    ok!(
+        name,
+        store.settle_slot(
+            &key,
+            "a",
+            SlotSettlement::TryAgain {
+                detail: "the object store was unreachable".to_owned(),
+            },
+            slot,
+        ),
+        "a release"
+    );
+
+    // Immediately, not after the lease: nothing holds it.
+    let again = ok!(
+        name,
+        store.admit_slot(&admission(&key, "b", slot)),
+        "the next tick"
+    );
+    assert_eq!(
+        again,
+        SlotAdmission::Admitted,
+        "{name}: a transient failure consumed the slot"
+    );
+}
+
+/// A tick that died holding a slot does not keep it.
+pub async fn a_slot_whose_holder_vanished_is_taken_over_when_the_lease_expires(
+    name: &str,
+    store: &dyn WorkflowStore,
+) {
+    let definition = format!("{name}-expired-{}", stamp());
+    let slot = OffsetDateTime::UNIX_EPOCH + time::Duration::days(4);
+    let key = SlotKey::new(DefinitionKind::CurationPipeline, definition, slot);
+
+    ok!(
+        name,
+        store.admit_slot(&admission(&key, "dead", slot)),
+        "a claim"
+    );
+    let stale = slot + time::Duration::seconds(aiwatcher_jobs::LEASE_SECONDS + 1);
+    let taken = ok!(
+        name,
+        store.admit_slot(&admission(&key, "alive", stale)),
+        "a takeover"
+    );
+    assert_eq!(taken, SlotAdmission::Admitted, "{name}");
+
+    // And the process that died no longer speaks for it.
+    ok!(
+        name,
+        store.settle_slot(
+            &key,
+            "dead",
+            SlotSettlement::Refused {
+                detail: "from the grave".to_owned(),
+            },
+            stale,
+        ),
+        "a settlement from the previous holder"
+    );
+    let firings = ok!(
+        name,
+        store.recent_slots(key.definition_kind, &key.definition_name, 10),
+        "the firings"
+    );
+    assert_eq!(
+        firings.first().and_then(|record| record.outcome),
+        None,
+        "{name}: a caller whose lease was taken over settled the slot anyway"
+    );
+}
+
+/// `overlap = skip` is answered from this store, in the transaction that takes
+/// the slot.
+///
+/// Review R1, and the property the previous implementation could not have: it
+/// asked an asynchronous read model that is **empty in the role the tick runs
+/// in**, so skip never skipped there. `allow` is checked in the same property,
+/// because the two answers have to come from one place to be worth anything.
+pub async fn a_definition_with_a_run_that_has_not_finished_blocks_its_next_slot(
+    name: &str,
+    store: &dyn WorkflowStore,
+) {
+    let execution = fresh("overlap");
+    ok!(
+        name,
+        store.append(
+            &execution,
+            start_request(&execution, ExpectedVersion::NoStream, "overlap-1")
+        ),
+        "a run that is going"
+    );
+    let projection = ok!(name, store.projection(&execution), "the projection")
+        .expect("a projection the append wrote");
+    assert!(
+        !projection.state.state_type.is_terminal(),
+        "{name}: this property needs a run that has not finished"
+    );
+
+    // The definition name comes from the fixture and is shared, so the *slot*
+    // is what makes this property's key its own. Against PostgreSQL these run
+    // over a database other runs also used — which is the point of running
+    // them there — and a fixed slot found the previous run's unsettled row
+    // instead of the overlap it was asking about.
+    let slot = OffsetDateTime::now_utc();
+    let key = SlotKey::new(
+        DefinitionKind::CurationPipeline,
+        projection.definition_name.clone(),
+        slot,
+    );
+
+    let blocked = ok!(
+        name,
+        store.admit_slot(&admission(&key, "a", slot)),
+        "a skip"
+    );
+    let SlotAdmission::Blocked { execution_id } = blocked else {
+        panic!("{name}: the run that is still going did not block the slot: {blocked:?}");
+    };
+    // *Which* run blocks it is not the property — every fixture in this suite
+    // shares one definition name, so the answer is whichever of them is still
+    // going. What is the property is that the store named a real one: a
+    // blocking id nothing backs would be an answer invented rather than read,
+    // which is exactly what the read model was giving before (review R1).
+    let blocker = ok!(
+        name,
+        store.projection(&ExecutionId::new(execution_id.clone())),
+        "the blocking run"
+    )
+    .unwrap_or_else(|| panic!("{name}: blocked by {execution_id}, which has no projection"));
+    assert!(
+        !blocker.state.state_type.is_terminal(),
+        "{name}: blocked by {execution_id}, which has finished"
+    );
+    assert_eq!(
+        blocker.definition_name, projection.definition_name,
+        "{name}: blocked by a run of a different definition"
+    );
+
+    // The other half: the same state, the other policy.
+    let allowed = ok!(
+        name,
+        store.admit_slot(&SlotAdmissionRequest {
+            overlap: OverlapPolicy::Allow,
+            ..admission(&key, "a", slot)
+        }),
+        "an allow"
+    );
+    assert_eq!(
+        allowed,
+        SlotAdmission::Admitted,
+        "{name}: `allow` was blocked by a run that is still going"
+    );
+}
+
+fn admission(key: &SlotKey, owner: &str, now: OffsetDateTime) -> SlotAdmissionRequest {
+    SlotAdmissionRequest {
+        key: key.clone(),
+        owner: owner.to_owned(),
+        overlap: OverlapPolicy::Skip,
+        now,
+    }
+}
+
+fn stamp() -> i128 {
+    OffsetDateTime::now_utc().unix_timestamp_nanos()
 }

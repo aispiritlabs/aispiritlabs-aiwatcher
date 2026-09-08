@@ -44,6 +44,10 @@ use crate::claim::{AttemptKey, AttemptRow, AttemptWrite, ClaimFilter};
 use crate::message::{
     Direction, MessageMetadata, OutboxMessage, RecordedMessage, RunProjection, WorkflowMessage,
 };
+use crate::plan::DefinitionKind;
+use crate::schedule::slot::{
+    SlotAdmission, SlotAdmissionRequest, SlotKey, SlotOutcome, SlotRecord, SlotSettlement,
+};
 use crate::state::{ExecutionId, StateType};
 use crate::store::{
     AppendOutcome, AppendRequest, ExpectedVersion, Pruned, StoreCapabilities, StreamSlice,
@@ -408,6 +412,159 @@ impl WorkflowStore for PostgresWorkflowStore {
         row.map(|row| attempt_from(&row)).transpose()
     }
 
+    async fn admit_slot(&self, request: &SlotAdmissionRequest) -> Result<SlotAdmission> {
+        // One transaction, and the row lock is what makes it one. `SELECT …
+        // FOR UPDATE` on the slot serialises two replicas that both found the
+        // same slot due, so the overlap check below cannot be read by both
+        // before either writes.
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|error| StoreError::Backend(error.to_string()))?;
+
+        let held = sqlx::query(
+            "select state, execution_id, detail, lease_owner, leased_at
+               from schedule_slots
+              where definition_kind = $1 and definition_name = $2 and slot = $3
+                for update",
+        )
+        .bind(request.key.definition_kind.as_str())
+        .bind(&request.key.definition_name)
+        .bind(request.key.slot)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|error| StoreError::Backend(error.to_string()))?;
+
+        let mut detail: Option<String> = None;
+        if let Some(row) = &held {
+            if let Some(outcome) = outcome_from(row) {
+                return Ok(SlotAdmission::Settled { outcome });
+            }
+            let leased_at: Option<OffsetDateTime> = row.get("leased_at");
+            let owner: Option<String> = row.get("lease_owner");
+            let live = leased_at.is_some_and(|at| {
+                request.now - at < time::Duration::seconds(aiwatcher_jobs::LEASE_SECONDS)
+            });
+            if live {
+                return Ok(SlotAdmission::Held {
+                    owner: owner.unwrap_or_default(),
+                });
+            }
+            detail = row.get("detail");
+        }
+
+        if request.overlap == crate::OverlapPolicy::Skip {
+            // In the same transaction as the claim, and against the projection
+            // this store already holds — never the read model, which is what
+            // review R1 is about.
+            let running: Option<String> = sqlx::query_scalar(
+                "select execution_id from execution_runs
+                  where definition_name = $1 and state_type <> all($2)
+                  order by execution_id
+                  limit 1",
+            )
+            .bind(&request.key.definition_name)
+            .bind(
+                StateType::TERMINAL
+                    .iter()
+                    .map(|state| state.as_str())
+                    .collect::<Vec<&str>>(),
+            )
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(|error| StoreError::Backend(error.to_string()))?;
+            if let Some(execution_id) = running {
+                return Ok(SlotAdmission::Blocked { execution_id });
+            }
+        }
+
+        sqlx::query(
+            "insert into schedule_slots
+               (definition_kind, definition_name, slot, state, execution_id,
+                detail, lease_owner, leased_at, updated_at)
+             values ($1, $2, $3, null, null, $4, $5, $6, $6)
+             on conflict (definition_kind, definition_name, slot) do update set
+               detail = excluded.detail,
+               lease_owner = excluded.lease_owner,
+               leased_at = excluded.leased_at,
+               updated_at = excluded.updated_at",
+        )
+        .bind(request.key.definition_kind.as_str())
+        .bind(&request.key.definition_name)
+        .bind(request.key.slot)
+        .bind(detail)
+        .bind(&request.owner)
+        .bind(request.now)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|error| StoreError::Backend(error.to_string()))?;
+
+        transaction
+            .commit()
+            .await
+            .map_err(|error| StoreError::Backend(error.to_string()))?;
+        Ok(SlotAdmission::Admitted)
+    }
+
+    async fn settle_slot(
+        &self,
+        key: &SlotKey,
+        owner: &str,
+        settlement: SlotSettlement,
+        now: OffsetDateTime,
+    ) -> Result<()> {
+        let state = settlement.outcome().map(outcome_str);
+        let execution_id = settlement.execution_id();
+        let detail = settlement.detail();
+
+        // `lease_owner = $5` in the predicate is what makes a settlement from a
+        // caller whose lease was taken over a no-op rather than a stale write
+        // over a fresh decision.
+        sqlx::query(
+            "update schedule_slots
+                set state = $4, execution_id = $6, detail = $7,
+                    lease_owner = null, leased_at = null, updated_at = $8
+              where definition_kind = $1 and definition_name = $2 and slot = $3
+                and lease_owner = $5 and state is null",
+        )
+        .bind(key.definition_kind.as_str())
+        .bind(&key.definition_name)
+        .bind(key.slot)
+        .bind(state)
+        .bind(owner)
+        .bind(execution_id)
+        .bind(detail)
+        .bind(now)
+        .execute(&self.pool)
+        .await
+        .map_err(|error| StoreError::Backend(error.to_string()))?;
+        Ok(())
+    }
+
+    async fn recent_slots(
+        &self,
+        kind: DefinitionKind,
+        name: &str,
+        limit: usize,
+    ) -> Result<Vec<SlotRecord>> {
+        let rows = sqlx::query(
+            "select definition_name, slot, state, execution_id,
+                    detail, lease_owner, leased_at, updated_at
+               from schedule_slots
+              where definition_kind = $1 and definition_name = $2
+              order by slot desc
+              limit $3",
+        )
+        .bind(kind.as_str())
+        .bind(name)
+        .bind(i64::try_from(limit).unwrap_or(i64::MAX))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|error| StoreError::Backend(error.to_string()))?;
+        Ok(rows.iter().map(|row| slot_from(row, kind)).collect())
+    }
+
     async fn checkpoint(&self, processor: &str) -> Result<Option<Checkpoint>> {
         let value: Option<String> = sqlx::query_scalar(
             "select checkpoint from processor_checkpoints where processor_id = $1",
@@ -516,6 +673,42 @@ impl WorkflowStore for PostgresWorkflowStore {
             executions: doomed.len(),
             attempts: usize::try_from(attempts).unwrap_or(0),
         })
+    }
+}
+
+/// The decision a slot row carries, if it carries one.
+fn outcome_from(row: &PgRow) -> Option<SlotOutcome> {
+    match row.get::<Option<String>, _>("state")?.as_str() {
+        "started" => Some(SlotOutcome::Started),
+        "skipped" => Some(SlotOutcome::Skipped),
+        // A state this build does not know reads as refused rather than as an
+        // unsettled slot a newer build already decided — re-running somebody's
+        // curation is the worse of the two failures.
+        _ => Some(SlotOutcome::Refused),
+    }
+}
+
+const fn outcome_str(outcome: SlotOutcome) -> &'static str {
+    match outcome {
+        SlotOutcome::Started => "started",
+        SlotOutcome::Skipped => "skipped",
+        SlotOutcome::Refused => "refused",
+    }
+}
+
+fn slot_from(row: &PgRow, kind: DefinitionKind) -> SlotRecord {
+    SlotRecord {
+        key: SlotKey {
+            definition_kind: kind,
+            definition_name: row.get("definition_name"),
+            slot: row.get("slot"),
+        },
+        outcome: outcome_from(row),
+        execution_id: row.get("execution_id"),
+        detail: row.get("detail"),
+        lease_owner: row.get("lease_owner"),
+        leased_at: row.get("leased_at"),
+        updated_at: row.get("updated_at"),
     }
 }
 

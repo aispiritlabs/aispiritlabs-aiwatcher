@@ -37,6 +37,13 @@ fn url() -> String {
         .unwrap_or_else(|_| "postgres://aiwatcher:aiwatcher@127.0.0.1:5433/aiwatcher".to_owned())
 }
 
+/// Every version this build brings a database to.
+///
+/// One place, because four tests assert it and a fifth migration should be a
+/// one-line change here rather than a hunt. It is written out rather than read
+/// from `schema`'s own list, which would make the assertion agree with itself.
+const APPLIED: [i64; 6] = [1, 2, 3, 4, 5, 6];
+
 /// Every schema file a released build could have applied, with its version.
 ///
 /// Deliberately not [`schema`]'s own list: this is what a database *arrived*
@@ -247,7 +254,7 @@ async fn a_database_at_schema_two_upgrades_to_one_the_previous_release_can_still
     let pool = database_at("aiwatcher_upgrade_from_two", 2).await;
     schema::apply(&pool).await.expect("an upgrade from 2");
     assert_the_old_binary_still_works(&pool, "schema 2").await;
-    assert_eq!(applied_versions(&pool).await, vec![1, 2, 3, 4, 5]);
+    assert_eq!(applied_versions(&pool).await, APPLIED);
 }
 
 #[tokio::test]
@@ -262,7 +269,7 @@ async fn a_database_at_schema_three_upgrades_to_one_the_previous_release_can_sti
     );
     schema::apply(&pool).await.expect("an upgrade from 3");
     assert_the_old_binary_still_works(&pool, "schema 3").await;
-    assert_eq!(applied_versions(&pool).await, vec![1, 2, 3, 4, 5]);
+    assert_eq!(applied_versions(&pool).await, APPLIED);
 }
 
 #[tokio::test]
@@ -274,7 +281,7 @@ async fn reopening_a_database_already_at_schema_four_restores_the_columns_it_dro
     let pool = database_at("aiwatcher_upgrade_from_four", 4).await;
     schema::apply(&pool).await.expect("an upgrade from 4");
     assert_the_old_binary_still_works(&pool, "schema 4").await;
-    assert_eq!(applied_versions(&pool).await, vec![1, 2, 3, 4, 5]);
+    assert_eq!(applied_versions(&pool).await, APPLIED);
 }
 
 #[tokio::test]
@@ -283,7 +290,7 @@ async fn a_fresh_database_ends_with_the_columns_the_previous_release_names() {
     let pool = database_at("aiwatcher_upgrade_from_nothing", 0).await;
     schema::apply(&pool).await.expect("a fresh schema");
     assert_the_old_binary_still_works(&pool, "an empty database").await;
-    assert_eq!(applied_versions(&pool).await, vec![1, 2, 3, 4, 5]);
+    assert_eq!(applied_versions(&pool).await, APPLIED);
 }
 
 #[tokio::test]
@@ -294,7 +301,7 @@ async fn applying_the_schema_again_after_an_upgrade_changes_nothing() {
     let after_one = columns_of(&pool, "execution_runs").await;
     schema::apply(&pool).await.expect("the second");
     schema::apply(&pool).await.expect("a restarted pod");
-    assert_eq!(applied_versions(&pool).await, vec![1, 2, 3, 4, 5]);
+    assert_eq!(applied_versions(&pool).await, APPLIED);
     assert_eq!(after_one, columns_of(&pool, "execution_runs").await);
 }
 

@@ -9598,7 +9598,7 @@
       },
       "DefinitionKind": {
         "type": "string",
-        "description": "What kind of definition a plan was compiled from.\n\nPart of a plan's identity, so a curation pipeline and an agent graph that\nhappened to compile to identical steps stay two plans. They have different\neditors, different permissions and different provenance.",
+        "description": "What kind of definition a plan was compiled from.\n\nPart of a plan's identity, so a curation pipeline and an agent graph that\nhappened to compile to identical steps stay two plans. They have different\neditors, different permissions and different provenance.\n`Ord` so a [`crate::SlotKey`] is, which is what lets the memory adapter keep\nslots in a `BTreeMap` and answer \"this definition's, newest first\" without\na scan of every definition's.",
         "enum": [
           "curation_pipeline",
           "workflow"
@@ -11915,14 +11915,6 @@
         },
         "additionalProperties": false
       },
-      "FiringOutcome": {
-        "type": "string",
-        "enum": [
-          "started",
-          "skipped",
-          "refused"
-        ]
-      },
       "FlowSourceRef": {
         "type": "object",
         "description": "Where the rows come from, kept structured beside the generated script.\n\nA historical editor regenerates the query from *this*, never from the\npipeline's current head — which is the whole point: opening a step of a run\nfrom last week has to show what that run read.",
@@ -13460,38 +13452,6 @@
           },
           "version": {
             "type": "string"
-          }
-        }
-      },
-      "LastFiring": {
-        "type": "object",
-        "description": "What the tick did the last time this schedule came round.\n\n**The scheduler's own decision, and never the run's outcome.** Whether the\nrun then succeeded is on the event log, which the Workflows view folds, and\na second copy here would be a second answer free to disagree with it\n(ADR_0026). What is recorded is the thing nothing else knows: that a slot\ncame round, and what this loop did about it.\n\nIt exists because the alternatives were a log line and silence. A schedule\nthat has been refused every morning for a week looks, from the panel,\nexactly like one that has been working.",
-        "required": [
-          "slot",
-          "outcome"
-        ],
-        "properties": {
-          "detail": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Why, when it did not start one. The refusal in the words the caller\nwould have read."
-          },
-          "execution_id": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The run it started. Absent when it started none."
-          },
-          "outcome": {
-            "$ref": "#/components/schemas/FiringOutcome"
-          },
-          "slot": {
-            "type": "string",
-            "format": "date-time",
-            "description": "The slot, not the moment the tick noticed it. A run started late after\nan outage belongs to the nine o'clock it was for."
           }
         }
       },
@@ -17319,6 +17279,13 @@
           "schedule"
         ],
         "properties": {
+          "firings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SlotRecord"
+            },
+            "description": "What the tick did, newest first.\n\nRead from the **workflow store**, not from the schedule object. They\nused to be one thing, which is what let a tick's write-back undo an\nedit or resurrect a deleted schedule (review R3); configuration and slot\noutcomes now have different writers and live in different places.\n\nEmpty when this deployment wired no execution store — there is then no\ntick either, so nothing has fired and an empty list is the true answer\nrather than a missing one."
+          },
           "next_run": {
             "type": [
               "string",
@@ -17362,17 +17329,6 @@
             ],
             "format": "date-time",
             "description": "When the *current cadence* began to apply.\n\nReview R7: without this every schedule was handed the whole interval a\ncheckpoint had accumulated, so one written while the worker was down for\nthree days ran three days of slots the moment it came back — and\nchanging an hour during an outage re-ran the past under the new rule.\n\nNot `updated_at`, and that is the review's own warning: an edit that\ndoes not change *when* it fires would then quietly drop a slot that was\nalready due. It moves only when [`Schedule::fires_the_same_as`] says the\nrule changed — which makes re-enabling an activation too, so a schedule\nswitched back on starts from now rather than running the days it was\noff.\n\nOptional so a schedule stored before this field existed still reads;\n[`Self::effective_from`] answers for it, and the fallback is\n`updated_at` because that is when such a schedule was last written."
-          },
-          "last": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/LastFiring",
-                "description": "What the tick last did with this schedule.\n\n`None` until it has fired once, which is also what a schedule set a\nminute ago looks like."
-              }
-            ]
           },
           "schedule": {
             "$ref": "#/components/schemas/Schedule"
@@ -17464,9 +17420,16 @@
           "overlap": {
             "$ref": "#/components/schemas/OverlapPolicy"
           },
+          "request_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What makes two `run_now` requests the same request.\n\nThe execution id is derived from it, so a retry — a proxy repeating the\nPUT, a click on a button whose first response was slow — lands on the\nrun it already started instead of beside it. Without it the id comes\nfrom the second the request arrived in, which made a retry one second\nlater a second run.\n\nAny stable string the caller minds: the panel sends one per user\naction."
+          },
           "run_now": {
             "type": "boolean",
-            "description": "Start it once, now, as well as saving it.\n\nThe slot is this instant, so it goes through the same derived id as\nevery other slot — which is what makes a double-clicked button a\nredelivery rather than two runs."
+            "description": "Start it once, now, as well as saving it."
           },
           "timezone": {
             "type": "string",
@@ -17497,6 +17460,95 @@
             "minimum": 0
           }
         }
+      },
+      "SlotKey": {
+        "type": "object",
+        "description": "The slot a definition is due for, as a key.\n\nThe slot is the *intended* instant and never the moment the tick noticed\nit: a run started late after an outage belongs to the nine o'clock it was\nfor, which is also what makes the derived execution id stable across a\nreplay.",
+        "required": [
+          "definition_kind",
+          "definition_name",
+          "slot"
+        ],
+        "properties": {
+          "definition_kind": {
+            "$ref": "#/components/schemas/DefinitionKind"
+          },
+          "definition_name": {
+            "type": "string"
+          },
+          "slot": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "SlotOutcome": {
+        "type": "string",
+        "description": "What the tick decided about one slot. Terminal: a settled slot is done.\n\n**The scheduler's own decision, and never the run's outcome.** Whether the\nrun then succeeded is on the event log, which the Workflows view folds, and\na second copy here would be free to disagree with it (ADR_0026).\n\nThe three the previous release's `FiringOutcome` had, unchanged, because\nthe panel already renders them and they are already what a person reads.",
+        "enum": [
+          "started",
+          "skipped",
+          "refused"
+        ]
+      },
+      "SlotRecord": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/SlotKey"
+          },
+          {
+            "type": "object",
+            "required": [
+              "updated_at"
+            ],
+            "properties": {
+              "detail": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Why it was refused — or, while it is unsettled, what the last attempt\nran into. A slot that has been failing every tick says what is wrong\nwith it rather than looking untouched."
+              },
+              "execution_id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The run this slot started, or the one that blocked it."
+              },
+              "lease_owner": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Who is trying, and since when. Absent once it is settled."
+              },
+              "leased_at": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time"
+              },
+              "outcome": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SlotOutcome",
+                    "description": "`None` while it is still being decided."
+                  }
+                ]
+              },
+              "updated_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          }
+        ],
+        "description": "A slot as the store holds it.\n\nFlat rather than an outcome carrying its own fields, and that is not\nlaziness: it is one row in `schedule_slots` and one shape the panel already\nrenders, so a column, a field and a rendered line are the same three things\nend to end."
       },
       "Source": {
         "type": "object",

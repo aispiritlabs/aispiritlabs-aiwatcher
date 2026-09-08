@@ -40,7 +40,8 @@ use aiwatcher_api::state::AppState;
 use aiwatcher_core::Checkpoint;
 use aiwatcher_execution::plan::DefinitionKind;
 use aiwatcher_execution::{
-    FiringOutcome, LastFiring, OverlapPolicy, ScheduleStore, ScheduledDefinition, WorkflowStore,
+    ScheduleReader, ScheduleStore, ScheduledDefinition, SlotAdmission, SlotAdmissionRequest,
+    SlotKey, SlotSettlement, WorkflowStore,
 };
 use time::OffsetDateTime;
 use tokio::task::JoinHandle;
@@ -101,7 +102,7 @@ pub fn spawn(
 /// One pass: read the interval, start what is in it, then move the cursor.
 async fn tick(
     state: &AppState,
-    schedules: &ScheduleStore,
+    schedules: &dyn ScheduleReader,
     store: &dyn WorkflowStore,
 ) -> anyhow::Result<()> {
     let now = OffsetDateTime::now_utc();
@@ -128,40 +129,12 @@ async fn tick(
             // One slot that could not start does not stop the others: a
             // definition that stopped compiling must not hold up every other
             // schedule in the instance.
-            let last = match fire(state, definition, slot).await {
-                Ok(last) => last,
-                Err(error) => {
-                    tracing::warn!(
-                        definition = %definition.definition_name,
-                        slot = %slot,
-                        %error,
-                        "a scheduled run could not be started"
-                    );
-                    LastFiring {
-                        slot,
-                        outcome: FiringOutcome::Refused,
-                        execution_id: None,
-                        detail: Some(error.to_string()),
-                    }
-                }
-            };
-            // Written to the schedule so somebody can see it. A log line and
-            // silence were the alternatives, and a schedule refused every
-            // morning for a week looks from the panel exactly like one that
-            // has been working.
-            //
-            // After the run, never before: a note saying `started` for a run
-            // that was not is the one wrong answer here, and the other order —
-            // a run with no note — is a repeat of the note next tick at worst.
-            let recorded = ScheduledDefinition {
-                last: Some(last),
-                ..definition.clone()
-            };
-            if let Err(error) = schedules.set(&recorded).await {
+            if let Err(error) = process(state, store, definition, slot, now).await {
                 tracing::warn!(
                     definition = %definition.definition_name,
+                    slot = %slot,
                     %error,
-                    "a scheduled run happened and could not be written down"
+                    "a scheduled slot could not be processed"
                 );
             }
         }
@@ -177,35 +150,132 @@ async fn tick(
     Ok(())
 }
 
-/// Start one definition for one slot, unless its last run is still going.
-async fn fire(
+/// Take one slot, start what it asks for, and write down what happened.
+///
+/// The order is the whole of review R1, R2 and R3. The slot is taken in the
+/// workflow store — where the overlap check happens in the same transaction —
+/// the run is started, and only then is the slot settled. Nothing here writes
+/// the schedule object, which is what stops a tick undoing an edit or bringing
+/// a deleted schedule back.
+async fn process(
+    state: &AppState,
+    store: &dyn WorkflowStore,
+    definition: &ScheduledDefinition,
+    slot: OffsetDateTime,
+    now: OffsetDateTime,
+) -> anyhow::Result<()> {
+    let key = SlotKey::new(
+        definition.definition_kind,
+        definition.definition_name.clone(),
+        slot,
+    );
+    let owner = owner();
+    let admission = store
+        .admit_slot(&SlotAdmissionRequest {
+            key: key.clone(),
+            owner: owner.clone(),
+            overlap: definition.schedule.overlap,
+            now,
+        })
+        .await?;
+
+    match admission {
+        SlotAdmission::Settled { outcome } => {
+            // The expected answer for the second of two replicas, and for a
+            // replay of an interval this instance has already processed.
+            tracing::debug!(
+                definition = %definition.definition_name,
+                slot = %slot,
+                ?outcome,
+                "a slot somebody already decided"
+            );
+            return Ok(());
+        }
+        SlotAdmission::Held { owner: holder } => {
+            tracing::debug!(
+                definition = %definition.definition_name,
+                slot = %slot,
+                %holder,
+                "a slot somebody else is starting"
+            );
+            return Ok(());
+        }
+        SlotAdmission::Blocked { execution_id } => {
+            // `skip`, decided against a projection this store holds rather than
+            // against a read model that is empty in this role. Settled by the
+            // caller, because "skipped" is a decision and `admit_slot` is only
+            // ever asked whether this caller *may* start.
+            tracing::info!(
+                definition = %definition.definition_name,
+                slot = %slot,
+                still_running = %execution_id,
+                "skipped a scheduled slot because the last run has not finished"
+            );
+            store
+                .settle_slot(&key, &owner, SlotSettlement::Skipped { execution_id }, now)
+                .await?;
+            return Ok(());
+        }
+        SlotAdmission::Admitted => {}
+    }
+
+    let settlement = match start_run(state, definition, slot).await {
+        Ok(execution_id) => {
+            tracing::info!(
+                execution_id = %execution_id,
+                definition = %definition.definition_name,
+                slot = %slot,
+                "started a scheduled run"
+            );
+            SlotSettlement::Started { execution_id }
+        }
+        Err(failure) => {
+            // The distinction review R2 is about, and the only place that can
+            // draw it: a definition that stopped compiling will not compile on
+            // the next tick either, and a store that was unreachable for ten
+            // seconds will. The first is a decision; the second must leave the
+            // slot due, which is what `TryAgain` does.
+            let detail = failure.detail;
+            if failure.permanent {
+                tracing::warn!(
+                    definition = %definition.definition_name,
+                    slot = %slot,
+                    %detail,
+                    "a scheduled run was refused"
+                );
+                SlotSettlement::Refused { detail }
+            } else {
+                tracing::warn!(
+                    definition = %definition.definition_name,
+                    slot = %slot,
+                    %detail,
+                    "a scheduled run could not be started yet; the slot stays due"
+                );
+                SlotSettlement::TryAgain { detail }
+            }
+        }
+    };
+    store.settle_slot(&key, &owner, settlement, now).await?;
+    Ok(())
+}
+
+/// Why a slot could not be started, and whether trying again would help.
+struct StartFailure {
+    permanent: bool,
+    detail: String,
+}
+
+/// Compile the head, pin it, and start the run named after this slot.
+async fn start_run(
     state: &AppState,
     definition: &ScheduledDefinition,
     slot: OffsetDateTime,
-) -> anyhow::Result<LastFiring> {
-    let execution_id = definition.execution_id_for(slot);
-
-    if definition.schedule.overlap == OverlapPolicy::Skip
-        && let Some(running) = last_run_still_going(state, definition).await?
-    {
-        tracing::info!(
-            definition = %definition.definition_name,
-            slot = %slot,
-            still_running = %running,
-            "skipped a scheduled slot because the last run has not finished"
-        );
-        return Ok(LastFiring {
-            slot,
-            outcome: FiringOutcome::Skipped,
-            // The run that was in the way, so "skipped" is followed rather
-            // than merely reported.
-            execution_id: Some(running),
-            detail: None,
-        });
-    }
-
+) -> std::result::Result<String, StartFailure> {
     let DefinitionKind::CurationPipeline = definition.definition_kind else {
-        anyhow::bail!("only a curation pipeline can be scheduled so far");
+        return Err(StartFailure {
+            permanent: true,
+            detail: "only a curation pipeline can be scheduled so far".to_owned(),
+        });
     };
     // The head, read and pinned now. A schedule says *what* to run and never
     // which revision: "every day at nine, the latest saved version" is what
@@ -218,9 +288,10 @@ async fn fire(
         None,
     )
     .await
-    .map_err(|error| anyhow::anyhow!("{error}"))?;
+    .map_err(failure_of)?;
 
-    let handled = aiwatcher_api::executions::start(
+    let execution_id = definition.execution_id_for(slot);
+    aiwatcher_api::executions::start(
         state,
         &execution_id,
         plan,
@@ -228,46 +299,34 @@ async fn fire(
         &format!("schedule:{}", definition.set_by),
     )
     .await
-    .map_err(|error| anyhow::anyhow!("{error}"))?;
-
-    tracing::info!(
-        execution_id = %execution_id,
-        definition = %definition.definition_name,
-        slot = %slot,
-        // True when another worker got there first, which is the expected
-        // outcome of two replicas rather than a problem.
-        duplicate = handled.duplicate,
-        "started a scheduled run"
-    );
-    Ok(LastFiring {
-        slot,
-        outcome: FiringOutcome::Started,
-        execution_id: Some(execution_id.to_string()),
-        detail: None,
-    })
+    .map_err(failure_of)?;
+    Ok(execution_id.to_string())
 }
 
-/// Whichever of this definition's runs has not finished, if one has not.
+/// Which side of R2's line an API refusal falls on.
 ///
-/// Read from the *log's* fold rather than the workflow store, because that is
-/// the one that lists executions by definition — the inline projection is per
-/// run and ADR_0026 is explicit that a list comes from the fold.
-async fn last_run_still_going(
-    state: &AppState,
-    definition: &ScheduledDefinition,
-) -> anyhow::Result<Option<String>> {
-    let page = state
-        .read_model
-        .workflow_executions(&aiwatcher_projector::ExecutionFilter {
-            workflow_id: Some(definition.definition_name.clone()),
-            status: Some(aiwatcher_projector::ExecutionStatus::Running),
-            limit: Some(1),
-            ..Default::default()
-        })
-        .await;
-    Ok(page
-        .executions
-        .into_iter()
-        .next()
-        .map(|execution| execution.workflow_run_id))
+/// A 4xx is about the definition and says the same thing every tick; a 5xx is
+/// about something being unreachable and may not. Read from the status the
+/// caller would have been given rather than from the message, because the
+/// message is prose and the status is the classification the API already made.
+fn failure_of(error: aiwatcher_api::ApiError) -> StartFailure {
+    let status = error.status();
+    StartFailure {
+        permanent: status.is_client_error(),
+        detail: error.to_string(),
+    }
+}
+
+/// This process, for the lease on a slot.
+///
+/// A name rather than an id, because the only thing read off it is whether the
+/// holder is still this caller — and after a restart it deliberately is not,
+/// so a slot the previous process died holding is taken over once its lease
+/// runs out.
+fn owner() -> String {
+    format!(
+        "scheduler/{}/{}",
+        std::process::id(),
+        std::env::var("HOSTNAME").unwrap_or_else(|_| "local".to_owned())
+    )
 }

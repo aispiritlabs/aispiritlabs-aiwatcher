@@ -43,7 +43,11 @@
 //! second.
 
 pub mod rule;
+pub mod slot;
 pub mod store;
 
 pub use rule::{Cadence, OverlapPolicy, Schedule, ScheduleError};
-pub use store::{FiringOutcome, LastFiring, ScheduleStore, ScheduledDefinition};
+pub use slot::{
+    SlotAdmission, SlotAdmissionRequest, SlotKey, SlotOutcome, SlotRecord, SlotSettlement,
+};
+pub use store::{ScheduleReader, ScheduleStore, ScheduledDefinition};

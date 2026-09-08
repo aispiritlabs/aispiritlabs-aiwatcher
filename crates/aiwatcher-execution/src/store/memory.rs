@@ -23,6 +23,10 @@ use aiwatcher_core::{Checkpoint, MessageId};
 use crate::claim::{AttemptKey, AttemptRow, AttemptWrite, ClaimFilter};
 use crate::error::{Result, StoreError};
 use crate::message::{Direction, OutboxMessage, RecordedMessage, RunProjection};
+use crate::plan::DefinitionKind;
+use crate::schedule::slot::{
+    SlotAdmission, SlotAdmissionRequest, SlotKey, SlotRecord, SlotSettlement,
+};
 use crate::state::ExecutionId;
 
 use super::{
@@ -43,6 +47,9 @@ struct Inner {
     /// Ordered so `claim_attempt` takes the oldest, which is what stops a
     /// backlog from being served newest-first while its head starves.
     attempts: BTreeMap<AttemptKey, AttemptRow>,
+    /// Ordered by `(kind, name, slot)`, so one definition's slots are a
+    /// contiguous range rather than a scan of every definition's.
+    slots: BTreeMap<SlotKey, SlotRecord>,
 }
 
 /// An in-memory workflow store.
@@ -199,6 +206,113 @@ impl WorkflowStore for MemoryWorkflowStore {
             .outbox
             .retain(|row| !ids.contains(&row.message_id));
         Ok(())
+    }
+
+    async fn admit_slot(&self, request: &SlotAdmissionRequest) -> Result<SlotAdmission> {
+        // The mutex is the transaction, exactly as it is for `append`: the
+        // overlap check and the claim are one critical section, so two logical
+        // workers cannot both read "nothing is running" and both start.
+        let mut inner = self.inner.lock().await;
+
+        if let Some(held) = inner.slots.get(&request.key) {
+            if let Some(outcome) = &held.outcome {
+                return Ok(SlotAdmission::Settled { outcome: *outcome });
+            }
+            if !held.is_available(request.now) {
+                return Ok(SlotAdmission::Held {
+                    owner: held.lease_owner.clone().unwrap_or_default(),
+                });
+            }
+        }
+
+        if request.overlap == crate::OverlapPolicy::Skip
+            && let Some(running) = inner
+                .projections
+                .values()
+                .filter(|run| {
+                    run.definition_name == request.key.definition_name
+                        && !run.state.state_type.is_terminal()
+                })
+                .map(|run| run.execution_id.to_string())
+                .min()
+        {
+            return Ok(SlotAdmission::Blocked {
+                execution_id: running,
+            });
+        }
+
+        let detail = inner
+            .slots
+            .get(&request.key)
+            .and_then(|record| record.detail.clone());
+        inner.slots.insert(
+            request.key.clone(),
+            SlotRecord {
+                key: request.key.clone(),
+                outcome: None,
+                execution_id: None,
+                lease_owner: Some(request.owner.clone()),
+                leased_at: Some(request.now),
+                detail,
+                updated_at: request.now,
+            },
+        );
+        Ok(SlotAdmission::Admitted)
+    }
+
+    async fn settle_slot(
+        &self,
+        key: &SlotKey,
+        owner: &str,
+        settlement: SlotSettlement,
+        now: OffsetDateTime,
+    ) -> Result<()> {
+        let mut inner = self.inner.lock().await;
+        let Some(record) = inner.slots.get_mut(key) else {
+            return Ok(());
+        };
+        // A caller whose lease was taken over says nothing. The holder's answer
+        // is the one that counts, and a slow tick overwriting a fresh decision
+        // with a stale one is exactly the shape of R3 in a second place.
+        if record.lease_owner.as_deref() != Some(owner) {
+            return Ok(());
+        }
+        match settlement {
+            SlotSettlement::TryAgain { detail } => {
+                record.lease_owner = None;
+                record.leased_at = None;
+                record.detail = Some(detail);
+            }
+            decided => {
+                record.outcome = decided.outcome();
+                record.execution_id = decided.execution_id().map(str::to_owned);
+                record.detail = decided.detail().map(str::to_owned);
+                record.lease_owner = None;
+                record.leased_at = None;
+            }
+        }
+        record.updated_at = now;
+        Ok(())
+    }
+
+    async fn recent_slots(
+        &self,
+        kind: DefinitionKind,
+        name: &str,
+        limit: usize,
+    ) -> Result<Vec<SlotRecord>> {
+        let inner = self.inner.lock().await;
+        let mut found: Vec<SlotRecord> = inner
+            .slots
+            .values()
+            .filter(|record| {
+                record.key.definition_kind == kind && record.key.definition_name == name
+            })
+            .cloned()
+            .collect();
+        found.sort_by_key(|row| std::cmp::Reverse(row.key.slot));
+        found.truncate(limit);
+        Ok(found)
     }
 
     async fn checkpoint(&self, processor: &str) -> Result<Option<Checkpoint>> {

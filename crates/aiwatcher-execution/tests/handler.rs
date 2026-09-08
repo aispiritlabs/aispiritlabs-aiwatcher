@@ -226,6 +226,32 @@ impl WorkflowStore for OneProcess {
         self.0.attempt(key).await
     }
 
+    async fn admit_slot(
+        &self,
+        request: &aiwatcher_execution::SlotAdmissionRequest,
+    ) -> aiwatcher_execution::Result<aiwatcher_execution::SlotAdmission> {
+        self.0.admit_slot(request).await
+    }
+
+    async fn settle_slot(
+        &self,
+        key: &aiwatcher_execution::SlotKey,
+        owner: &str,
+        settlement: aiwatcher_execution::SlotSettlement,
+        now: OffsetDateTime,
+    ) -> aiwatcher_execution::Result<()> {
+        self.0.settle_slot(key, owner, settlement, now).await
+    }
+
+    async fn recent_slots(
+        &self,
+        kind: aiwatcher_execution::plan::DefinitionKind,
+        name: &str,
+        limit: usize,
+    ) -> aiwatcher_execution::Result<Vec<aiwatcher_execution::SlotRecord>> {
+        self.0.recent_slots(kind, name, limit).await
+    }
+
     async fn checkpoint(&self, processor: &str) -> aiwatcher_execution::Result<Option<Checkpoint>> {
         self.0.checkpoint(processor).await
     }
@@ -358,6 +384,32 @@ impl WorkflowStore for Contends {
 
     async fn attempt(&self, key: &AttemptKey) -> aiwatcher_execution::Result<Option<AttemptRow>> {
         self.inner.attempt(key).await
+    }
+
+    async fn admit_slot(
+        &self,
+        request: &aiwatcher_execution::SlotAdmissionRequest,
+    ) -> aiwatcher_execution::Result<aiwatcher_execution::SlotAdmission> {
+        self.inner.admit_slot(request).await
+    }
+
+    async fn settle_slot(
+        &self,
+        key: &aiwatcher_execution::SlotKey,
+        owner: &str,
+        settlement: aiwatcher_execution::SlotSettlement,
+        now: OffsetDateTime,
+    ) -> aiwatcher_execution::Result<()> {
+        self.inner.settle_slot(key, owner, settlement, now).await
+    }
+
+    async fn recent_slots(
+        &self,
+        kind: aiwatcher_execution::plan::DefinitionKind,
+        name: &str,
+        limit: usize,
+    ) -> aiwatcher_execution::Result<Vec<aiwatcher_execution::SlotRecord>> {
+        self.inner.recent_slots(kind, name, limit).await
     }
 
     async fn checkpoint(&self, processor: &str) -> aiwatcher_execution::Result<Option<Checkpoint>> {

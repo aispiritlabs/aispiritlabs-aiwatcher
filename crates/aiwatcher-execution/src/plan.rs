@@ -59,7 +59,10 @@ impl std::fmt::Display for PlanId {
 /// Part of a plan's identity, so a curation pipeline and an agent graph that
 /// happened to compile to identical steps stay two plans. They have different
 /// editors, different permissions and different provenance.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
+/// `Ord` so a [`crate::SlotKey`] is, which is what lets the memory adapter keep
+/// slots in a `BTreeMap` and answer "this definition's, newest first" without
+/// a scan of every definition's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DefinitionKind {
     /// ADR_0024's source/transform/notebook/view chain.

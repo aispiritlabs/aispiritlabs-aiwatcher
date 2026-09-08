@@ -69,54 +69,20 @@ pub struct ScheduledDefinition {
         with = "time::serde::rfc3339::option"
     )]
     pub effective_from: Option<OffsetDateTime>,
-    /// What the tick last did with this schedule.
-    ///
-    /// `None` until it has fired once, which is also what a schedule set a
-    /// minute ago looks like.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last: Option<LastFiring>,
 }
 
-/// What the tick did the last time this schedule came round.
+/// A schedule's firings live in the workflow store, not here.
 ///
-/// **The scheduler's own decision, and never the run's outcome.** Whether the
-/// run then succeeded is on the event log, which the Workflows view folds, and
-/// a second copy here would be a second answer free to disagree with it
-/// (ADR_0026). What is recorded is the thing nothing else knows: that a slot
-/// came round, and what this loop did about it.
+/// They were a field on the struct above until review R3. The tick read every
+/// schedule, did its work and wrote the whole object back, so an edit or a
+/// DELETE that landed in between was overwritten by a snapshot taken before
+/// it — a deleted schedule came back enabled, and a `get`-before-`put` does
+/// not close that, because the object store offers no compare-and-set.
 ///
-/// It exists because the alternatives were a log line and silence. A schedule
-/// that has been refused every morning for a week looks, from the panel,
-/// exactly like one that has been working.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
-pub struct LastFiring {
-    /// The slot, not the moment the tick noticed it. A run started late after
-    /// an outage belongs to the nine o'clock it was for.
-    #[serde(with = "time::serde::rfc3339")]
-    pub slot: OffsetDateTime,
-    pub outcome: FiringOutcome,
-    /// The run it started. Absent when it started none.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub execution_id: Option<String>,
-    /// Why, when it did not start one. The refusal in the words the caller
-    /// would have read.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub detail: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum FiringOutcome {
-    /// A run was started. Whether it *succeeded* is the log's answer, by the
-    /// id beside this.
-    Started,
-    /// The last run had not finished and the policy is `OverlapPolicy::Skip`.
-    Skipped,
-    /// Nothing could be started — the definition stopped compiling, or the
-    /// store was unreachable. The one outcome that is a problem.
-    Refused,
-}
-
+/// Configuration and slot outcomes have different writers and different
+/// lifetimes, so they now live in different places: this object is written
+/// only by whoever sets a schedule, and [`crate::SlotRecord`] is written only
+/// by whoever takes a slot. See [`crate::schedule::slot`].
 impl ScheduledDefinition {
     /// The id the run for one slot is named by.
     ///
@@ -165,6 +131,27 @@ impl ScheduledDefinition {
         }
     }
 
+    /// The id a run somebody asked for by hand is named by.
+    ///
+    /// Derived from a **request identity** rather than from the clock, which is
+    /// the whole difference. `execution_id_for(now)` names a slot's second, so
+    /// a double-clicked button inside one second was one run and a retry a
+    /// second later was two — a network retry, a proxy repeating a PUT, or
+    /// somebody clicking again because the first response was slow.
+    ///
+    /// The caller supplies the identity because only the caller knows whether
+    /// this is the same intention as last time. Absent, there is nothing
+    /// better than the clock and the second is what it falls back to.
+    #[must_use]
+    pub fn execution_id_for_request(&self, request_id: &str) -> crate::ExecutionId {
+        crate::ExecutionId::new(crate::derive_uuid(&format!(
+            "aiwatcher/execution/schedule/{}/{}/request/{}",
+            self.definition_kind.as_str(),
+            self.definition_name,
+            request_id,
+        )))
+    }
+
     #[must_use]
     pub fn execution_id_for(&self, slot: OffsetDateTime) -> crate::ExecutionId {
         crate::ExecutionId::new(crate::derive_uuid(&format!(
@@ -173,6 +160,35 @@ impl ScheduledDefinition {
             self.definition_name,
             slot.unix_timestamp(),
         )))
+    }
+}
+
+/// What the tick may do with schedules: read them.
+///
+/// **Review R3, enforced by the signature rather than by remembering.** The
+/// loop used to hold a whole [`ScheduleStore`], and it wrote back to it — the
+/// snapshot it had taken before doing its work, which overwrote any edit or
+/// DELETE that landed in between. A deleted schedule came back enabled, and no
+/// amount of re-reading before the write closes that, because an object store
+/// offers no compare-and-set.
+///
+/// So the tick is handed this instead. A future change that wants the tick to
+/// write configuration has to widen this trait first, which is the moment to
+/// re-read R3 rather than a line in a review nobody runs.
+#[async_trait::async_trait]
+pub trait ScheduleReader: Send + Sync + std::fmt::Debug {
+    /// Every schedule, for the tick to read.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the store could not do.
+    async fn all(&self) -> crate::Result<Vec<ScheduledDefinition>>;
+}
+
+#[async_trait::async_trait]
+impl ScheduleReader for ScheduleStore {
+    async fn all(&self) -> crate::Result<Vec<ScheduledDefinition>> {
+        Self::all(self).await
     }
 }
 
@@ -331,7 +347,6 @@ mod tests {
             set_by: "somebody".to_owned(),
             updated_at: OffsetDateTime::UNIX_EPOCH,
             effective_from: None,
-            last: None,
         }
     }
 
@@ -412,35 +427,6 @@ mod tests {
             .expect("set");
 
         assert_eq!(store.all().await.expect("all").len(), 2);
-    }
-
-    #[tokio::test]
-    async fn what_the_tick_did_is_read_back_with_the_schedule() {
-        // The gap this closes: a schedule refused every morning for a week
-        // looked, from the panel, exactly like one that had been working.
-        let store = store();
-        let mut row = scheduled("curation/pii", 9);
-        row.last = Some(LastFiring {
-            slot: OffsetDateTime::from_unix_timestamp(1_788_000_000).expect("a slot"),
-            outcome: FiringOutcome::Refused,
-            execution_id: None,
-            detail: Some("curation/pii does not compile".to_owned()),
-        });
-        store.set(&row).await.expect("set");
-
-        let found = store
-            .get(DefinitionKind::CurationPipeline, "curation/pii")
-            .await
-            .expect("get")
-            .expect("a schedule");
-        assert_eq!(
-            found.last.as_ref().map(|last| last.outcome),
-            Some(FiringOutcome::Refused)
-        );
-        assert_eq!(
-            found.last.and_then(|last| last.detail).as_deref(),
-            Some("curation/pii does not compile")
-        );
     }
 
     #[tokio::test]

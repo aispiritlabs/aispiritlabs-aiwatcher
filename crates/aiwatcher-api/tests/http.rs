@@ -4130,9 +4130,12 @@ async fn setting_a_schedule_with_run_now_starts_one_run_and_says_which() {
 
     let started = set["started"].as_str().expect("a run was started");
     // Written down as a firing, so a card does not read "never fired" straight
-    // after somebody watched one start.
-    assert_eq!(set["schedule"]["last"]["outcome"], "started", "{set}");
-    assert_eq!(set["schedule"]["last"]["execution_id"], started, "{set}");
+    // after somebody watched one start. In the workflow store beside the
+    // tick's own firings, never on the schedule object — that field is
+    // configuration, and a writer that is not the person setting it is what
+    // review R3 is about.
+    assert_eq!(set["firings"][0]["outcome"], "started", "{set}");
+    assert_eq!(set["firings"][0]["execution_id"], started, "{set}");
     let (status, run) = fixture.get(&format!("/api/v1/executions/{started}")).await;
     assert_eq!(status, StatusCode::OK, "{run}");
     // Recorded as the schedule's, not as somebody clicking Run: a run nobody
@@ -4214,7 +4217,7 @@ async fn editing_a_schedule_keeps_what_the_tick_last_did() {
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{first}");
-    let ran = first["schedule"]["last"]["execution_id"].clone();
+    let ran = first["firings"][0]["execution_id"].clone();
     assert!(ran.is_string(), "{first}");
 
     let (status, edited) = fixture
@@ -4228,5 +4231,78 @@ async fn editing_a_schedule_keeps_what_the_tick_last_did() {
         .await;
     assert_eq!(status, StatusCode::OK, "{edited}");
     assert_eq!(edited["schedule"]["schedule"]["cadence"]["hour"], 10);
-    assert_eq!(edited["schedule"]["last"]["execution_id"], ran, "{edited}");
+    // And it survives the edit because nothing about an edit touches it: the
+    // firings live in the workflow store and the edit writes the object.
+    assert_eq!(edited["firings"][0]["execution_id"], ran, "{edited}");
+}
+
+#[tokio::test]
+async fn a_repeated_run_now_request_starts_one_run_however_long_the_retry_took() {
+    // The exit criterion in its own words: "a repeated `run_now` request has
+    // one result even when the retry occurs in a later second". The id used to
+    // come from the second the request arrived in, so a proxy repeating the
+    // PUT — or somebody clicking again because the first response was slow —
+    // started a second curation over the same corpus.
+    let fixture = Fixture::new(false);
+    let (status, _) = fixture
+        .post("/api/v1/curation-pipelines", flow_only_pipeline("nightly"))
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let body = || {
+        json!({
+            "cadence": { "every": "daily", "hour": 9, "minute": 0 },
+            "timezone": "UTC",
+            "run_now": true,
+            "request_id": "one-click"
+        })
+    };
+
+    let (status, first) = fixture
+        .put("/api/v1/curation-pipelines/nightly/schedule", body())
+        .await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let started = first["started"].as_str().expect("a run").to_owned();
+
+    // The retry. A different second, deliberately: this is the case the clock
+    // could not answer.
+    tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
+    let (status, again) = fixture
+        .put("/api/v1/curation-pipelines/nightly/schedule", body())
+        .await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["started"], started, "{again}");
+
+    // And one firing, not two: the second request started nothing, so it wrote
+    // nothing down either.
+    let (status, view) = fixture
+        .get("/api/v1/curation-pipelines/nightly/schedule")
+        .await;
+    assert_eq!(status, StatusCode::OK, "{view}");
+    let firings = view["firings"].as_array().expect("firings");
+    assert_eq!(firings.len(), 1, "{view}");
+    assert_eq!(firings[0]["execution_id"], started, "{view}");
+}
+
+#[tokio::test]
+async fn a_run_now_without_a_request_id_still_starts_one_run() {
+    // The fallback stays: an older client that sends no identity gets the
+    // clock's second, which is what it always had.
+    let fixture = Fixture::new(false);
+    let (status, _) = fixture
+        .post("/api/v1/curation-pipelines", flow_only_pipeline("nightly"))
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, set) = fixture
+        .put(
+            "/api/v1/curation-pipelines/nightly/schedule",
+            json!({
+                "cadence": { "every": "daily", "hour": 9, "minute": 0 },
+                "timezone": "UTC", "run_now": true
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{set}");
+    assert!(set["started"].is_string(), "{set}");
 }

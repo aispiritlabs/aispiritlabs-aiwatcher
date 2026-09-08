@@ -59,6 +59,10 @@ const MIGRATIONS: &[(i64, &str)] = &[
         5,
         include_str!("../../../migrations/0005_restore_run_timestamps.sql"),
     ),
+    (
+        6,
+        include_str!("../../../migrations/0006_schedule_slots.sql"),
+    ),
 ];
 
 /// Bring the database up to the schema this build expects.

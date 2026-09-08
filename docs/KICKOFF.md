@@ -1,14 +1,14 @@
 # Kick-off — the next work, in delivery order
 
 - **Status:** active backlog after the 2026-09-08 review. Every item below is
-  open until its acceptance evidence is recorded. Items 1 and 2 are closed;
-  items 3–6 are open.
+  open until its acceptance evidence is recorded. Items 1, 2 and 3 are closed;
+  items 4–6 are open.
 - **Audience:** whoever picks this up next, in a session that starts cold.
 - **Last updated:** 2026-09-08
 
 Managed Flow and marimo runs, execution controls, retention, schedules and the
-chart exist. Upgrade compatibility and local recovery are closed; scheduler
-concurrency still has gaps. Do not infer production readiness from “Phases 0–7 built” or from a
+chart exist. Upgrade compatibility, local recovery and the scheduler are
+closed; items 4–6 remain. Do not infer production readiness from “Phases 0–7 built” or from a
 green happy-path suite. The authoritative delivery order and acceptance gates
 are in [architecture §28](PIPELINE_ARCHITECTURE.md#28-migration-plan).
 
@@ -66,46 +66,34 @@ the filesystem the way the review reproduced the original. Each fix has its own
 negative control. `just check` and `just test-postgres` green. Recorded in
 [architecture §28](PIPELINE_ARCHITECTURE.md#28-migration-plan), work 2.
 
-## Start here — 3. Make the scheduler reliable (R1, R2, R3, R5, R7)
+## 3. Make the scheduler reliable (R1, R2, R3, R5, R7) — **done, 2026-09-08**
 
-**R5 and R7 are closed (2026-09-08); R1, R2 and R3 remain.** The pure half is
-done: slots are enumerated by local calendar date with a DST policy stated per
-cadence, and `effective_from` stops a new schedule reaching into the past.
-Eleven tests, both review reproductions among them, each with a negative
-control. See [architecture §28](PIPELINE_ARCHITECTURE.md#28-migration-plan),
+R5 and R7 first, being the pure half: slots are enumerated by local calendar
+date with a DST policy stated per cadence, and `effective_from` stops a new
+schedule reaching into the past.
+
+R1, R2 and R3 turned out to be one design rather than three fixes — all three
+were the question of **where slot processing state lives**. Configuration stays
+in the object store and the tick no longer writes it; admission and per-slot
+outcome moved into the `WorkflowStore`. `admit_slot` creates the slot, refuses
+it if somebody settled it or holds a live lease, and checks the definition for
+a run that has not finished — all in one transaction, against the projection
+this store already holds rather than the read model that is empty in the `work`
+role. `settle_slot`'s `TryAgain` leaves a slot due after a transient failure,
+with the caller drawing the line from the API's own status. R3 is closed by the
+type system: the tick is handed a `ScheduleReader`, whose one method is `all`.
+
+`run_now` gained a caller-supplied `request_id`, minted by the panel per press
+and outside `mutationFn` — that function runs again on every retry.
+
+Evidence: five properties in the storage contract suite, so all three adapters
+prove the same things; two HTTP tests for the request identity; a negative
+control for each fix. Migration 0006 adds a table, which is compatible by
+construction under item 1's rule. `just check` and `just test-postgres` green.
+Recorded in [architecture §28](PIPELINE_ARCHITECTURE.md#28-migration-plan),
 work 3.
 
-What is left is one design rather than three fixes: R1, R2 and R3 are all the
-question of where slot processing state lives. Configuration stays in the
-object store and the tick stops writing it; admission and per-slot outcome move
-into the `WorkflowStore`, so an active execution can be checked in the same
-transaction that takes the slot, and a slot survives a transient failure
-without depending on the cursor. `run_now`'s request identity belongs to the
-same piece.
-
-Work in this order, following §28's scheduler gate:
-
-1. Specify slot lifecycle, activation/edit boundaries, DST policy, catch-up,
-   overlap scope and `run_now` request identity. Turn the review's examples
-   into regression tests with supplied time and controllable I/O boundaries.
-2. Implement transactional admission and durable per-slot processing. An
-   asynchronous read model must not decide whether a run may start. Separate
-   versioned schedule configuration from slot outcomes so a tick cannot undo
-   an edit or DELETE.
-3. Implement transient retry, restart/replay and edit-safe catch-up against
-   those contracts. Verify the rule against both memory/file and PostgreSQL
-   where each adapter's capabilities permit it.
-
-**Exit:** two work replicas with a delayed projector cannot violate `skip`;
-transient failures lose no slot; replay creates no duplicate; DELETE stays
-applied; no slot predates activation; daily 02:30 in Warsaw has the same result
-for one interval and many ticks across DST. A repeated `run_now` request has
-one result even when the retry occurs in a later second.
-
-Do not start Phase 8 to fix overlap. Transactional admission is execution state;
-the product's history list still comes from the log's fold.
-
-## 4. Make the panel report the server's answer (R6)
+## Start here — 4. Make the panel report the server's answer (R6)
 
 Handle SDK errors in pause/resume/cancel/retry/answer/delete mutations. Treat
 404 as absence and show other read errors as failures. Preserve form state
@@ -182,6 +170,8 @@ Use the dedicated test database (`rtk just postgres-up` if it is not running).
 The review recorded 334 Rust tests, 5 PostgreSQL tests, 101 Flow tests, 41 Python
 tests and panel typecheck passing. It did not run full `just check`, browser
 acceptance or rolling upgrade tests. That is baseline evidence, not proof that
-any item above is closed. Items 1 and 2 have since added seven PostgreSQL tests
-— 12 now — and seven file-store fault tests, and run full `just check` green. Record the new regression/acceptance evidence in §28
+any item above is closed. Items 1–3 have since added seven PostgreSQL upgrade
+tests, seven file-store fault tests, five storage-contract slot properties
+proved on all three adapters, and eleven schedule-rule tests — with `just check`
+and `just test-postgres` green. Record the new regression/acceptance evidence in §28
 when an item is complete; keep the review as the dated finding record.

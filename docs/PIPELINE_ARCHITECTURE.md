@@ -1577,8 +1577,8 @@ to build every lower-numbered feature before a higher-numbered one.
 [KICKOFF.md](KICKOFF.md) is the short entry point.
 [PIPELINE_REVIEW_2026-09-08.md](PIPELINE_REVIEW_2026-09-08.md) records the evidence:
 `R1–R7` concern the pending changes, `A1` is a pre-existing file-store defect.
-Work items 1 and 2 are **closed** (2026-09-08, evidence under each); items 3–6
-remain **open**. Updating this plan closes none of the rest.
+Work items 1, 2 and 3 are **closed** (2026-09-08, evidence under each); items
+4–6 remain **open**. Updating this plan closes none of the rest.
 
 ### Current capabilities and unproved exits
 
@@ -1590,7 +1590,7 @@ remain **open**. Updating this plan closes none of the rest.
 | Managed Flow and marimo (Phases 5–6) | Executors, artifacts, lookup and publication | Historical notebook source remains mutable at the runtime | 5 |
 | Context (Phase 4) | Artifact metadata/lineage/cache, ContextSnapshot, context-based staging | Source snapshots and editor sessions | 5 |
 | Panel (Phase 7) | Managed run, controls, allowed actions, URL restoration | Error handling and revision-aware canvas mapping | 4, 5 |
-| Scheduler | Cadence, CRUD, derived slot IDs and last firing | Admission, retry, concurrent edits, activation and DST | 3 |
+| Scheduler | Cadence, CRUD, transactional admission, per-slot outcomes | **Closed:** admission, retry, concurrent edits, activation and DST | 3 |
 | Worker/Planner (Phases 10–11) | Design and domain vocabulary | Working protocol, SDK task and end-to-end integration | 6 |
 | Human input (Phase 14) | Answer/control path | Authored HumanInput step, timeout/authorization acceptance | Own use-case gate |
 
@@ -1715,9 +1715,10 @@ removing the truncation or the attempts sweep fails one each, restoring
 
 ### Work 3 — scheduler correctness (R1, R2, R3, R5, R7)
 
-**Partly done, 2026-09-08. R5 and R7 are closed; R1, R2 and R3 are open.** The
-two that are closed are the pure half — a rule about when a slot exists — and
-they needed no storage decision, which is why they went first.
+**Closed 2026-09-08.** R5 and R7 went first, being the pure half — a rule about
+when a slot exists, needing no storage decision. R1, R2 and R3 turned out to be
+one design rather than three fixes and were done together; the `run_now`
+identity in the exit came with them.
 
 *R5, the DST policy.* `slots_between` walked from `previous` in strides of the
 cadence and read the zone's offset at each sample, so around a transition the
@@ -1750,55 +1751,45 @@ transitions. Negative controls: restoring the old walk fails three of the six,
 and ignoring `effective_from` fails all five — including the one that catches
 the naive `updated_at` boundary.
 
-*Still open, and they share one design.* R1 (`overlap=skip` reads
-`state.read_model`, which is empty in the `work` role), R2 (a transient failure
-consumes the slot, because the cursor advances past it) and R3 (the tick writes
-the whole `ScheduledDefinition` back and can undo an edit or a DELETE) are all
-the same question: where does *slot processing state* live. The answer they
-point at is to split it from configuration — configuration stays in the object
-store and the tick never writes it; admission and per-slot outcome move into
-the `WorkflowStore`, where an active execution for the definition can be
-checked in the same transaction that takes the slot. That also decouples R2
-from the cursor entirely: a slot is durable in its own right, so a transient
-failure leaves it unsettled rather than behind a checkpoint that has moved on.
-`run_now`'s request identity is in the same piece — it currently derives from
-the wall clock, so a retry in a later second is a second run.
+*R1, R2 and R3 — one design.* All three were the question of **where slot
+processing state lives**. Configuration stays in the object store and the tick
+no longer writes it; admission and per-slot outcome moved into the
+`WorkflowStore`, which is transactional by construction and is what ADR_0025
+chose it for. Three port methods — `admit_slot`, `settle_slot`, `recent_slots`
+— across `memory`, `file` and `postgres` (migration 0006, a table nothing
+before it names, so no release pair is owed under 0005's rule).
 
+`admit_slot` does three things in one transaction: create the slot if it is
+new, refuse it if somebody settled it or holds a live lease, and — under
+`OverlapPolicy::Skip` — check the definition for a run that has not finished.
+That last one is R1: the caller it replaced read `state.read_model`, an
+asynchronous fold that is empty in the `work` role, so skip never skipped where
+the tick actually runs. `settle_slot` carries R2: `TryAgain` drops the lease
+and leaves the slot due, and the caller draws the transient/permanent line from
+the status the API gave it rather than from prose. R3 is closed structurally —
+the tick is handed a `ScheduleReader`, which has one method and it is `all`, so
+a future change that wants to write configuration from the tick has to widen
+the trait first.
 
-**Dependency:** work 2's store guarantees. Resolve the scheduler semantics and
-write the regressions before choosing its persistence layout.
+The lease is the claim table's, for the same reason: a tick that dies holding a
+slot must not keep it. `run_now` gained a caller-supplied `request_id` and
+derives its execution id from that instead of from the second the request
+arrived in — the panel mints one per press, deliberately outside `mutationFn`,
+because that function runs again on every retry.
 
-1. Define schedule versions and their effective time; creation, edits, disabling,
-   deletion and re-enabling must have explicit effects on pending slots. Choose
-   catch-up and DST policies and the scope of overlap across scheduled, ad-hoc,
-   paused, awaiting-input and `run_now` executions. Give retried `run_now`
-   requests a stable identity across seconds and a recoverable result if saving
-   the schedule fails after starting the run.
-2. Make time and I/O boundaries controllable in tick tests. Preserve interval
-   partition invariance across both DST transitions, including daily 02:30 in
-   Warsaw. A new schedule must not invent slots before it became effective.
-3. Enforce admission atomically in the execution store. Separate versioned
-   configuration writes from durable slot outcomes. Deriving an execution ID
-   deduplicates a single slot; it does not prevent overlap of different slots
-   or make an object-store read/modify/write atomic.
-4. Preserve error classes and retry transient failures durably. Advance a
-   checkpoint only when each earlier slot has a durable outcome or durable work
-   that will retry it independently. Permanent validation refusal must remain
-   visible without blocking unrelated schedules.
-5. Verify crash/replay around start, outcome persistence and checkpoint advance;
-   two replicas; delayed outbox/projector; and concurrent PUT/DELETE. A replay
-   must recognise an already-started slot before misclassifying its own run as
-   an overlap. Expose slot decisions without duplicating the run's final state.
+*Evidence:* five properties added to the storage contract suite, so `memory`,
+`file` and PostgreSQL prove the same things — two replicas admit one, a settled
+slot is never re-admitted, a `TryAgain` slot is due immediately, an expired
+lease is taken over and the previous holder can no longer settle it, and a run
+that has not finished blocks the next slot while `allow` is admitted. Two HTTP
+tests for the `run_now` identity, including a retry a second later. Negative
+controls: removing the transactional overlap check fails the block property,
+treating `TryAgain` as a decision fails the transient one, and dropping the
+request identity starts two runs and writes two firings.
 
-**Exit:** no lost slot on transient failure, no duplicate slot run, no overlap
-under `skip`, no resurrected schedule after DELETE, no retroactive slot before
-activation, and identical cadence results for one interval and split ticks.
-The results hold in split `serve/work` with PostgreSQL and in the supported
-single-process configuration. `run_now` retry returns the original result.
-
-**Boundary:** the log's fold remains the product history list. Transactional
-admission and pending slot state are execution control data; fixing them does
-not depend on Phase 8 or require moving all observability into PostgreSQL.
+Running the suite against a shared PostgreSQL found a real defect in the tests
+themselves — the overlap property used a fixed slot and picked up the previous
+run's row — which is what that database is there for.
 
 ### Work 4 — truthful panel errors and client compatibility (R6)
 
@@ -2210,15 +2201,20 @@ may leave a silently stuck run.
     **Done** — `store/file.rs`'s test module, work item 2.
 19. In split `serve/work`, process two overdue slots on two workers under
     `overlap=skip` with delayed projection; allow at most one active execution.
+    **Done** — work item 3.
 20. Recover from a transient slot-start failure without losing that slot or
     duplicating one that committed before a response was lost.
+    **Done** — work item 3.
 21. Edit, disable and delete schedules during a tick; no stale writer undoes
     the user action. Create/re-enable during downtime using the chosen effective
     time and catch-up policy; no slot predates its applicable schedule version.
+    **Done** — work item 3.
 22. Compare one interval with many ticks across both DST transitions, including
     daily 02:30 in Warsaw; match the same slots and `next_after` policy.
+    **Done** — work item 3.
 23. Retry `run_now` across seconds and around partial persistence; return the
     original execution with a recoverable schedule operation.
+    **Done** — work item 3.
 24. Exercise panel 403/409/503 and successful DELETE 204; only 404 is absence,
     failures do not enter success handlers, and refused writes preserve forms.
 25. Render a matching canvas from server-provided block mapping; edit the draft
