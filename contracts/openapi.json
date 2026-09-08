@@ -3001,6 +3001,163 @@
         }
       }
     },
+    "/api/v1/curation-pipelines/{name}/schedule": {
+      "get": {
+        "tags": [
+          "data-curation"
+        ],
+        "summary": "One definition's schedule, or 404 when it has none.",
+        "operationId": "get_schedule",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The saved pipeline",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "data-curation"
+        ],
+        "summary": "Set or replace a schedule, and optionally start it once.",
+        "description": "The definition is read first and a name nobody saved is a 404: a schedule\nfor a pipeline that does not exist is a run that fails every morning at nine\nwith nobody watching.",
+        "operationId": "set_schedule",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The saved pipeline",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetScheduleBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The schedule cannot mean anything",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "data-curation"
+        ],
+        "summary": "Forget a schedule.",
+        "description": "Deleting and `enabled: false` are different things and both are offered:\none says \"not any more\", the other \"not for now, and these are still the\nsettings\".",
+        "operationId": "clear_schedule",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The saved pipeline",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/curations": {
       "get": {
         "tags": [
@@ -4463,7 +4620,7 @@
         "tags": [
           "execution"
         ],
-        "summary": "One run's own page: where it is, and where each of its steps is.",
+        "summary": "One run's own page: where it is, where each of its steps is, and what may be\ndone to it.",
         "description": "The store's inline projection rather than a fold of the log, and the two are\nnot interchangeable. This one is transactional with the decision that\nproduced it, which is what makes it safe to accept the next command from;\nthe fold is what draws the run beside every other execution, with `Pending`\nnodes and a live stream, and it is the one a list comes from.",
         "operationId": "get_execution",
         "parameters": [
@@ -4483,7 +4640,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RunProjection"
+                  "$ref": "#/components/schemas/RunView"
                 }
               }
             }
@@ -4555,7 +4712,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RunProjection"
+                  "$ref": "#/components/schemas/RunView"
                 }
               }
             }
@@ -4628,7 +4785,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RunProjection"
+                  "$ref": "#/components/schemas/RunView"
                 }
               }
             }
@@ -4700,7 +4857,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RunProjection"
+                  "$ref": "#/components/schemas/RunView"
                 }
               }
             }
@@ -4782,7 +4939,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RunProjection"
+                  "$ref": "#/components/schemas/RunView"
                 }
               }
             }
@@ -4945,7 +5102,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RunProjection"
+                  "$ref": "#/components/schemas/RunView"
                 }
               }
             }
@@ -7831,7 +7988,7 @@
       },
       "AttemptRecord": {
         "type": "object",
-        "description": "One physical attempt to perform a step. Immutable once terminal.",
+        "description": "One physical attempt to perform a step. Immutable once terminal.\n\n**When it started and ended is not here.** An attempt's `step.*` events form\na span (ADR_0003), so the waterfall already times it — from the trace store,\nwith the shape a duration is actually read in. The two fields were here,\nwritten by nothing and read by nothing (43.33).",
         "required": [
           "attempt",
           "state"
@@ -7841,13 +7998,6 @@
             "type": "integer",
             "format": "int32",
             "minimum": 0
-          },
-          "ended_at": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "date-time"
           },
           "error": {
             "oneOf": [
@@ -7866,13 +8016,6 @@
             ],
             "format": "date-time",
             "description": "When a retry may be dispatched. `None` means \"now\"."
-          },
-          "started_at": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "date-time"
           },
           "state": {
             "$ref": "#/components/schemas/RunState"
@@ -8159,6 +8302,92 @@
           "never",
           "by_content"
         ]
+      },
+      "Cadence": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Every hour, at `minute` past.",
+            "required": [
+              "minute",
+              "every"
+            ],
+            "properties": {
+              "every": {
+                "type": "string",
+                "enum": [
+                  "hourly"
+                ]
+              },
+              "minute": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Every day, at `hour`:`minute` local time.",
+            "required": [
+              "hour",
+              "minute",
+              "every"
+            ],
+            "properties": {
+              "every": {
+                "type": "string",
+                "enum": [
+                  "daily"
+                ]
+              },
+              "hour": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "minute": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "One day a week, at `hour`:`minute` local time.",
+            "required": [
+              "weekday",
+              "hour",
+              "minute",
+              "every"
+            ],
+            "properties": {
+              "every": {
+                "type": "string",
+                "enum": [
+                  "weekly"
+                ]
+              },
+              "hour": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "minute": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "weekday": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              }
+            }
+          }
+        ],
+        "description": "How often a definition runs.\n\nNot a cron expression, and the reason is the one that settled decision 15\nthe other way: a cron parser is a small, closed grammar somebody would have\nto learn, while this covers what people ask for — hourly, a time each day, a\ntime each week — and is readable in a form. A cron expression can be added\nlater as a fourth variant without changing anything here, because every\nvariant answers the same question: which instants of this cadence fall in an\ninterval."
       },
       "CancelBody": {
         "type": "object",
@@ -11686,6 +11915,14 @@
         },
         "additionalProperties": false
       },
+      "FiringOutcome": {
+        "type": "string",
+        "enum": [
+          "started",
+          "skipped",
+          "refused"
+        ]
+      },
       "FlowSourceRef": {
         "type": "object",
         "description": "Where the rows come from, kept structured beside the generated script.\n\nA historical editor regenerates the query from *this*, never from the\npipeline's current head — which is the whole point: opening a step of a run\nfrom last week has to show what that run read.",
@@ -13226,6 +13463,38 @@
           }
         }
       },
+      "LastFiring": {
+        "type": "object",
+        "description": "What the tick did the last time this schedule came round.\n\n**The scheduler's own decision, and never the run's outcome.** Whether the\nrun then succeeded is on the event log, which the Workflows view folds, and\na second copy here would be a second answer free to disagree with it\n(ADR_0026). What is recorded is the thing nothing else knows: that a slot\ncame round, and what this loop did about it.\n\nIt exists because the alternatives were a log line and silence. A schedule\nthat has been refused every morning for a week looks, from the panel,\nexactly like one that has been working.",
+        "required": [
+          "slot",
+          "outcome"
+        ],
+        "properties": {
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why, when it did not start one. The refusal in the words the caller\nwould have read."
+          },
+          "execution_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The run it started. Absent when it started none."
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/FiringOutcome"
+          },
+          "slot": {
+            "type": "string",
+            "format": "date-time",
+            "description": "The slot, not the moment the tick noticed it. A run started late after\nan outage belongs to the nine o'clock it was for."
+          }
+        }
+      },
       "Latency": {
         "type": "object",
         "required": [
@@ -14446,6 +14715,14 @@
           }
         }
       },
+      "OverlapPolicy": {
+        "type": "string",
+        "description": "What to do when a slot comes round and the last one is still going.",
+        "enum": [
+          "skip",
+          "allow"
+        ]
+      },
       "ParameterKind": {
         "type": "string",
         "description": "How a form should render one input.",
@@ -15161,7 +15438,7 @@
             "minimum": 0
           },
           "response": {
-            "type": "object"
+            "description": "Whatever the question asked for, as JSON.\n\nAny value, and deliberately not an object: a step that offered\n`choices` is answered with one of them, which `decide` reads as a JSON\n**string**. Declaring this an object made the contract unable to express\nthe commonest valid request, so the generated client could not send one."
           }
         },
         "additionalProperties": false
@@ -16349,6 +16626,15 @@
         ],
         "description": "What happened to one row."
       },
+      "RunAction": {
+        "type": "string",
+        "description": "Something a caller may do to a **run**, given where it got to.\n\nThe sibling of [`ContextAction`] and deliberately a separate enum: these are\ndone to an execution and those to a block, and one list holding both would\nbe a step's panel offering to stop the whole run.\n\nIt exists so a caller never re-derives a precondition. The rules are three\nlines and a panel could hold them — and then there would be two copies of\n`decide`'s mind, in two languages, and the day they disagree is the day\nsomebody trusts the wrong one. Same reasoning as `ContextAction::allowed`\nand as the annotation canvas implementing no validation.",
+        "enum": [
+          "cancel",
+          "pause",
+          "resume"
+        ]
+      },
       "RunDetail": {
         "type": "object",
         "description": "A run plus what is needed to draw it.",
@@ -16397,7 +16683,7 @@
       },
       "RunProjection": {
         "type": "object",
-        "description": "The run projection a store keeps beside the stream.\n\nRebuildable from the stream, and updated in the same transaction that\nappends to it. It exists to *accept the next command* without folding a\nwhole history, and for the run's own page — never as the source of a list the\nevent log's own folds already serve (ADR_0026).",
+        "description": "The run projection a store keeps beside the stream.\n\nRebuildable from the stream, and updated in the same transaction that\nappends to it. It exists to *accept the next command* without folding a\nwhole history, and for the run's own page — never as the source of a list the\nevent log's own folds already serve (ADR_0026).\n\n**When a run started and ended is not here**, and that is the same rule\nrather than an omission: ADR_0026 puts every managed run's facts on the log\nunder this id, and the workflow fold answers it with `started_at`,\n`ended_at` *and* `duration_ms`. The two fields were here once, written by\nnothing and read by nothing, which is the shape 43.15 is about (43.33).",
         "required": [
           "execution_id",
           "plan_id",
@@ -16418,13 +16704,6 @@
           "definition_name": {
             "type": "string"
           },
-          "ended_at": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "date-time"
-          },
           "execution_id": {
             "$ref": "#/components/schemas/ExecutionId"
           },
@@ -16444,13 +16723,6 @@
           },
           "requested_by": {
             "type": "string"
-          },
-          "started_at": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "date-time"
           },
           "state": {
             "$ref": "#/components/schemas/RunState"
@@ -16600,6 +16872,26 @@
               "null"
             ],
             "description": "The orchestration this run executes, when the producer names one."
+          }
+        }
+      },
+      "RunView": {
+        "type": "object",
+        "description": "A run, with what may be done to it.\n\nThe actions are computed here rather than left to the caller, for\n`ContextAction::allowed`'s reason one level up: a panel that decided for\nitself which of cancel, pause and resume apply would be a second copy of\n`decide`'s preconditions, in another language, drifting from the first.",
+        "required": [
+          "execution",
+          "allowed"
+        ],
+        "properties": {
+          "allowed": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunAction"
+            },
+            "description": "Which run-level commands would be accepted right now. Empty for a run\nthat has finished."
+          },
+          "execution": {
+            "$ref": "#/components/schemas/RunProjection"
           }
         }
       },
@@ -16995,6 +17287,98 @@
           }
         }
       },
+      "Schedule": {
+        "type": "object",
+        "description": "A definition's schedule, as somebody set it.\n\n**Mutable, and deliberately not part of the definition's content address.**\nChanging the hour must not mint a new pipeline revision: that would be a\nrevision history about scheduling, which is the same mistake as making\n`produced_by` part of a dataset version's identity. It lives as a head\nbeside the definition, the way a prompt's labels live beside its versions.",
+        "required": [
+          "cadence",
+          "timezone"
+        ],
+        "properties": {
+          "cadence": {
+            "$ref": "#/components/schemas/Cadence",
+            "description": "A field rather than a flattened one, and not for taste: serde's\n`deny_unknown_fields` and `flatten` do not compose, and the bodies here\ndeny unknown fields so a `cron` somebody hoped would work is named\nrather than ignored. Nesting is what keeps that guardrail."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Off keeps the schedule and starts nothing. Deleting it and re-typing it\nnext month is how a schedule gets re-typed wrongly."
+          },
+          "overlap": {
+            "$ref": "#/components/schemas/OverlapPolicy"
+          },
+          "timezone": {
+            "type": "string",
+            "description": "An IANA name — `Europe/Warsaw`, not an offset.\n\nAn offset is unambiguous and wrong twice a year: somebody who asked for\nnine in the morning means nine in the morning in March and in October.\nStoring the zone is what lets the answer change when the zone's rules\nsay it should."
+          }
+        }
+      },
+      "ScheduleView": {
+        "type": "object",
+        "description": "A schedule, when it next fires, and what setting it started.",
+        "required": [
+          "schedule"
+        ],
+        "properties": {
+          "next_run": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the tick would next start it. `None` while it is off.\n\nAnswered here rather than left to the caller, and that is the same rule\nas `RunView::allowed`: the panel computing it would be a second\nimplementation of `slots_between` — in another language, with its own\nidea of when the clocks change — free to show an hour the run does not\nhappen at."
+          },
+          "schedule": {
+            "$ref": "#/components/schemas/ScheduledDefinition"
+          },
+          "started": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The run `run_now` started, when it was asked for."
+          }
+        }
+      },
+      "ScheduledDefinition": {
+        "type": "object",
+        "description": "A definition's schedule, as stored.",
+        "required": [
+          "definition_kind",
+          "definition_name",
+          "schedule",
+          "updated_at"
+        ],
+        "properties": {
+          "definition_kind": {
+            "$ref": "#/components/schemas/DefinitionKind"
+          },
+          "definition_name": {
+            "type": "string"
+          },
+          "last": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LastFiring",
+                "description": "What the tick last did with this schedule.\n\n`None` until it has fired once, which is also what a schedule set a\nminute ago looks like."
+              }
+            ]
+          },
+          "schedule": {
+            "$ref": "#/components/schemas/Schedule"
+          },
+          "set_by": {
+            "type": "string",
+            "description": "Who set it, from the session. Recorded because a run nobody remembers\nasking for at three in the morning is a question with an answer."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
       "Score": {
         "type": "object",
         "description": "One metric, on the baseline and on the candidate.",
@@ -17054,6 +17438,34 @@
           }
         ],
         "description": "Which SDK produced an event.\n\nSerialised as a plain string with an unknown value passing through: an SDK\nthis backend has never heard of must still be able to publish."
+      },
+      "SetScheduleBody": {
+        "type": "object",
+        "description": "What a caller sets.\n\n`deny_unknown_fields`, like every other command body here: a `cron` somebody\nhoped would work is a 400 naming it rather than a field that is ignored and\nreads as accepted.",
+        "required": [
+          "cadence",
+          "timezone"
+        ],
+        "properties": {
+          "cadence": {
+            "$ref": "#/components/schemas/Cadence"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "overlap": {
+            "$ref": "#/components/schemas/OverlapPolicy"
+          },
+          "run_now": {
+            "type": "boolean",
+            "description": "Start it once, now, as well as saving it.\n\nThe slot is this instant, so it goes through the same derived id as\nevery other slot — which is what makes a double-clicked button a\nredelivery rather than two runs."
+          },
+          "timezone": {
+            "type": "string",
+            "description": "An IANA name — `Europe/Warsaw`. Never an offset; see [`Schedule`]."
+          }
+        },
+        "additionalProperties": false
       },
       "ShardRef": {
         "type": "object",

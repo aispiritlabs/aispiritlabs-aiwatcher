@@ -40,6 +40,16 @@ pub struct AppState {
     /// rows each execution produced. It shares the configured object store
     /// with prompts, under a separate key prefix.
     pub datasets: Option<Arc<DatasetRegistry>>,
+
+    /// When a definition runs unattended. `None` when this deployment has no
+    /// object store, which is the same condition that leaves it no definitions
+    /// to schedule.
+    ///
+    /// Its own field rather than a method on the dataset registry: a schedule
+    /// is keyed by [`DefinitionKind`](aiwatcher_execution::plan::DefinitionKind)
+    /// and will hold a workflow's as readily as a pipeline's, and it lives
+    /// under its own prefix for that reason.
+    pub schedules: Option<Arc<aiwatcher_execution::ScheduleStore>>,
     /// Vector image annotations and the training exports built from them.
     /// Same store, third prefix, and the same reason all three are here rather
     /// than on the log: a training label has to outlive every run that used

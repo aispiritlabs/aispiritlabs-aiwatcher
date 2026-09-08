@@ -54,6 +54,7 @@ pub mod message;
 pub mod outbox;
 pub mod plan;
 pub mod reactor;
+pub mod schedule;
 pub mod state;
 pub mod store;
 #[cfg(feature = "testing")]
@@ -68,9 +69,9 @@ pub use artifact::{
     Provenance,
 };
 pub use cache::cache_key;
-pub use claim::{AttemptKey, AttemptRow, ClaimFilter};
+pub use claim::{AttemptKey, AttemptRow, AttemptWrite, ClaimFilter};
 pub use compile::{CompileOptions, compile_curation};
-pub use context::{ContextAction, ContextSnapshot};
+pub use context::{ContextAction, ContextSnapshot, RunAction, allowed_run_actions};
 pub use decide::{Decision, Now, decide, evolve, idempotency_key, initial_state, replay};
 pub use error::{CompileError, DecisionError, Result, StoreError};
 pub use facts::{FactContext, PublishedBy, envelopes_for};
@@ -85,6 +86,9 @@ pub use plan::{
     RuntimeBinding, RuntimeKind,
 };
 pub use reactor::{Performed, Reactor};
+pub use schedule::{
+    Cadence, FiringOutcome, LastFiring, OverlapPolicy, Schedule, ScheduleStore, ScheduledDefinition,
+};
 pub use state::{
     Execution, ExecutionId, ExecutionMode, ExecutionOwner, ExecutionState, FailureClass, RunState,
     StateType, StepError, StepState,

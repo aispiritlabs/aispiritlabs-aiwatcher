@@ -62,6 +62,7 @@ pub fn router(state: AppState) -> Router {
         // screen — which is the one thing that is certainly not what an old run
         // read. Section 19.
         .merge(crate::context::router())
+        .merge(crate::schedules::router())
         // ── Reaching a service aiwatcher does not run ────────────────────────
         .merge(crate::integrations::hubs::router())
         // ── The caller, rather than the data ─────────────────────────────────

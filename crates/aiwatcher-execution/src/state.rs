@@ -338,18 +338,17 @@ pub struct InputRequest {
 }
 
 /// One physical attempt to perform a step. Immutable once terminal.
+///
+/// **When it started and ended is not here.** An attempt's `step.*` events form
+/// a span (ADR_0003), so the waterfall already times it — from the trace store,
+/// with the shape a duration is actually read in. The two fields were here,
+/// written by nothing and read by nothing (43.33).
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, ToSchema)]
 pub struct AttemptRecord {
     pub attempt: u32,
     pub state: RunState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<StepError>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[serde(with = "time::serde::rfc3339::option")]
-    pub started_at: Option<OffsetDateTime>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[serde(with = "time::serde::rfc3339::option")]
-    pub ended_at: Option<OffsetDateTime>,
     /// When a retry may be dispatched. `None` means "now".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(with = "time::serde::rfc3339::option")]
@@ -441,8 +440,6 @@ pub struct Execution {
     /// A cancel was accepted and the running steps have not all stopped.
     pub cancelling: bool,
     pub created_at: OffsetDateTime,
-    pub started_at: Option<OffsetDateTime>,
-    pub ended_at: Option<OffsetDateTime>,
 }
 
 impl Execution {

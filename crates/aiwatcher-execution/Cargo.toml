@@ -46,6 +46,7 @@ tracing.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "sync"] }
 utoipa.workspace = true
 uuid.workspace = true
+time-tz = { version = "2.0.0", features = ["db"] }
 
 [dev-dependencies]
 aiwatcher-core.workspace = true

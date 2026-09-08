@@ -77,6 +77,47 @@ pub enum ContextAction {
     Answer,
 }
 
+/// Something a caller may do to a **run**, given where it got to.
+///
+/// The sibling of [`ContextAction`] and deliberately a separate enum: these are
+/// done to an execution and those to a block, and one list holding both would
+/// be a step's panel offering to stop the whole run.
+///
+/// It exists so a caller never re-derives a precondition. The rules are three
+/// lines and a panel could hold them — and then there would be two copies of
+/// `decide`'s mind, in two languages, and the day they disagree is the day
+/// somebody trusts the wrong one. Same reasoning as `ContextAction::allowed`
+/// and as the annotation canvas implementing no validation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RunAction {
+    /// Stop this run. Cooperative: what is in flight is asked to stop.
+    Cancel,
+    /// Schedule nothing further until it is resumed.
+    Pause,
+    /// Let a paused run schedule again.
+    Resume,
+}
+
+/// Which run-level commands would be accepted right now.
+///
+/// Each is listed exactly where `decide` accepts it. `Pause` and `Cancel` are
+/// refused only on a run that has finished; `Resume` only applies to one that
+/// is paused. Both of the first two are *idempotent* rather than refused when
+/// they have already been asked for — a second pause is `Ok` with no events —
+/// so they stay listed while a run is pausing or cancelling, which is honest:
+/// asking again is accepted and changes nothing.
+#[must_use]
+pub fn allowed_run_actions(state: StateType) -> Vec<RunAction> {
+    if state.is_terminal() {
+        return Vec::new();
+    }
+    if state == StateType::Paused {
+        return vec![RunAction::Resume, RunAction::Cancel];
+    }
+    vec![RunAction::Pause, RunAction::Cancel]
+}
+
 /// Everything needed to reopen one block as it was.
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct ContextSnapshot {
@@ -424,5 +465,27 @@ mod tests {
     fn a_view_offers_nothing_ad_hoc_because_publishing_has_no_ad_hoc_form() {
         let context = ContextSnapshot::of_block(&plan(), "write").expect("a context");
         assert!(context.allowed.is_empty());
+    }
+
+    #[test]
+    fn a_finished_run_is_offered_nothing_and_a_paused_one_is_offered_resume() {
+        for state in StateType::TERMINAL {
+            assert!(
+                allowed_run_actions(state).is_empty(),
+                "{} offered an action decide would refuse",
+                state.as_str()
+            );
+        }
+        assert_eq!(
+            allowed_run_actions(StateType::Paused),
+            vec![RunAction::Resume, RunAction::Cancel]
+        );
+        assert_eq!(
+            allowed_run_actions(StateType::Running),
+            vec![RunAction::Pause, RunAction::Cancel]
+        );
+        // Not `Resume`: `decide` answers `NotPaused`, and a button that 409s is
+        // worse than an absent one.
+        assert!(!allowed_run_actions(StateType::AwaitingInput).contains(&RunAction::Resume));
     }
 }

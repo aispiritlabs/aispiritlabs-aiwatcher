@@ -335,16 +335,19 @@ export type ArtifactRef = {
 
 /**
  * One physical attempt to perform a step. Immutable once terminal.
+ *
+ * **When it started and ended is not here.** An attempt's `step.*` events form
+ * a span (ADR_0003), so the waterfall already times it — from the trace store,
+ * with the shape a duration is actually read in. The two fields were here,
+ * written by nothing and read by nothing (43.33).
  */
 export type AttemptRecord = {
     attempt: number;
-    ended_at?: string | null;
     error?: null | StepError;
     /**
      * When a retry may be dispatched. `None` means "now".
      */
     not_before?: string | null;
-    started_at?: string | null;
     state: RunState;
 };
 
@@ -486,6 +489,31 @@ export const CachePolicy = { NEVER: 'never', BY_CONTENT: 'by_content' } as const
  * Whether a step may be answered from an earlier identical one.
  */
 export type CachePolicy = typeof CachePolicy[keyof typeof CachePolicy];
+
+/**
+ * How often a definition runs.
+ *
+ * Not a cron expression, and the reason is the one that settled decision 15
+ * the other way: a cron parser is a small, closed grammar somebody would have
+ * to learn, while this covers what people ask for — hourly, a time each day, a
+ * time each week — and is readable in a form. A cron expression can be added
+ * later as a fourth variant without changing anything here, because every
+ * variant answers the same question: which instants of this cadence fall in an
+ * interval.
+ */
+export type Cadence = {
+    every: 'hourly';
+    minute: number;
+} | {
+    every: 'daily';
+    hour: number;
+    minute: number;
+} | {
+    every: 'weekly';
+    hour: number;
+    minute: number;
+    weekday: number;
+};
 
 /**
  * A reason, for the one command that carries one.
@@ -2248,6 +2276,14 @@ export type FinishRunRequest = {
     status: TrainingStatus;
 };
 
+export const FiringOutcome = {
+    STARTED: 'started',
+    SKIPPED: 'skipped',
+    REFUSED: 'refused'
+} as const;
+
+export type FiringOutcome = typeof FiringOutcome[keyof typeof FiringOutcome];
+
 /**
  * Where the rows come from, kept structured beside the generated script.
  *
@@ -3102,6 +3138,37 @@ export type LabelSchema = {
     version: string;
 };
 
+/**
+ * What the tick did the last time this schedule came round.
+ *
+ * **The scheduler's own decision, and never the run's outcome.** Whether the
+ * run then succeeded is on the event log, which the Workflows view folds, and
+ * a second copy here would be a second answer free to disagree with it
+ * (ADR_0026). What is recorded is the thing nothing else knows: that a slot
+ * came round, and what this loop did about it.
+ *
+ * It exists because the alternatives were a log line and silence. A schedule
+ * that has been refused every morning for a week looks, from the panel,
+ * exactly like one that has been working.
+ */
+export type LastFiring = {
+    /**
+     * Why, when it did not start one. The refusal in the words the caller
+     * would have read.
+     */
+    detail?: string | null;
+    /**
+     * The run it started. Absent when it started none.
+     */
+    execution_id?: string | null;
+    outcome: FiringOutcome;
+    /**
+     * The slot, not the moment the tick noticed it. A run started late after
+     * an outage belongs to the nine o'clock it was for.
+     */
+    slot: string;
+};
+
 export type Latency = {
     /**
      * Per LLM call.
@@ -3777,6 +3844,16 @@ export type OutputDeclaration = {
 };
 
 /**
+ * What to do when a slot comes round and the last one is still going.
+ */
+export const OverlapPolicy = { SKIP: 'skip', ALLOW: 'allow' } as const;
+
+/**
+ * What to do when a slot comes round and the last one is still going.
+ */
+export type OverlapPolicy = typeof OverlapPolicy[keyof typeof OverlapPolicy];
+
+/**
  * How a form should render one input.
  */
 export const ParameterKind = {
@@ -4152,9 +4229,15 @@ export type ProvideInputBody = {
      * that no human made.
      */
     attempt: number;
-    response: {
-        [key: string]: unknown;
-    };
+    /**
+     * Whatever the question asked for, as JSON.
+     *
+     * Any value, and deliberately not an object: a step that offered
+     * `choices` is answered with one of them, which `decide` reads as a JSON
+     * **string**. Declaring this an object made the contract unable to express
+     * the commonest valid request, so the generated client could not send one.
+     */
+    response: unknown;
 };
 
 /**
@@ -4910,6 +4993,40 @@ export type RowOutcome = {
 };
 
 /**
+ * Something a caller may do to a **run**, given where it got to.
+ *
+ * The sibling of [`ContextAction`] and deliberately a separate enum: these are
+ * done to an execution and those to a block, and one list holding both would
+ * be a step's panel offering to stop the whole run.
+ *
+ * It exists so a caller never re-derives a precondition. The rules are three
+ * lines and a panel could hold them — and then there would be two copies of
+ * `decide`'s mind, in two languages, and the day they disagree is the day
+ * somebody trusts the wrong one. Same reasoning as `ContextAction::allowed`
+ * and as the annotation canvas implementing no validation.
+ */
+export const RunAction = {
+    CANCEL: 'cancel',
+    PAUSE: 'pause',
+    RESUME: 'resume'
+} as const;
+
+/**
+ * Something a caller may do to a **run**, given where it got to.
+ *
+ * The sibling of [`ContextAction`] and deliberately a separate enum: these are
+ * done to an execution and those to a block, and one list holding both would
+ * be a step's panel offering to stop the whole run.
+ *
+ * It exists so a caller never re-derives a precondition. The rules are three
+ * lines and a panel could hold them — and then there would be two copies of
+ * `decide`'s mind, in two languages, and the day they disagree is the day
+ * somebody trusts the wrong one. Same reasoning as `ContextAction::allowed`
+ * and as the annotation canvas implementing no validation.
+ */
+export type RunAction = typeof RunAction[keyof typeof RunAction];
+
+/**
  * A run plus what is needed to draw it.
  */
 export type RunDetail = {
@@ -4939,18 +5056,22 @@ export type RunPage = {
  * appends to it. It exists to *accept the next command* without folding a
  * whole history, and for the run's own page — never as the source of a list the
  * event log's own folds already serve (ADR_0026).
+ *
+ * **When a run started and ended is not here**, and that is the same rule
+ * rather than an omission: ADR_0026 puts every managed run's facts on the log
+ * under this id, and the workflow fold answers it with `started_at`,
+ * `ended_at` *and* `duration_ms`. The two fields were here once, written by
+ * nothing and read by nothing, which is the shape 43.15 is about (43.33).
  */
 export type RunProjection = {
     created_at: string;
     definition_name: string;
-    ended_at?: string | null;
     execution_id: ExecutionId;
     last_message_version: number;
     mode: ExecutionMode;
     owner: ExecutionOwner;
     plan_id: string;
     requested_by: string;
-    started_at?: string | null;
     state: RunState;
     steps: Array<StepState>;
 };
@@ -5020,6 +5141,23 @@ export type RunSummary = {
      * The orchestration this run executes, when the producer names one.
      */
     workflow?: string | null;
+};
+
+/**
+ * A run, with what may be done to it.
+ *
+ * The actions are computed here rather than left to the caller, for
+ * `ContextAction::allowed`'s reason one level up: a panel that decided for
+ * itself which of cancel, pause and resume apply would be a second copy of
+ * `decide`'s preconditions, in another language, drifting from the first.
+ */
+export type RunView = {
+    /**
+     * Which run-level commands would be accepted right now. Empty for a run
+     * that has finished.
+     */
+    allowed: Array<RunAction>;
+    execution: RunProjection;
 };
 
 /**
@@ -5176,6 +5314,77 @@ export type SavedRevision = {
 };
 
 /**
+ * A definition's schedule, as somebody set it.
+ *
+ * **Mutable, and deliberately not part of the definition's content address.**
+ * Changing the hour must not mint a new pipeline revision: that would be a
+ * revision history about scheduling, which is the same mistake as making
+ * `produced_by` part of a dataset version's identity. It lives as a head
+ * beside the definition, the way a prompt's labels live beside its versions.
+ */
+export type Schedule = {
+    /**
+     * A field rather than a flattened one, and not for taste: serde's
+     * `deny_unknown_fields` and `flatten` do not compose, and the bodies here
+     * deny unknown fields so a `cron` somebody hoped would work is named
+     * rather than ignored. Nesting is what keeps that guardrail.
+     */
+    cadence: Cadence;
+    /**
+     * Off keeps the schedule and starts nothing. Deleting it and re-typing it
+     * next month is how a schedule gets re-typed wrongly.
+     */
+    enabled?: boolean;
+    overlap?: OverlapPolicy;
+    /**
+     * An IANA name — `Europe/Warsaw`, not an offset.
+     *
+     * An offset is unambiguous and wrong twice a year: somebody who asked for
+     * nine in the morning means nine in the morning in March and in October.
+     * Storing the zone is what lets the answer change when the zone's rules
+     * say it should.
+     */
+    timezone: string;
+};
+
+/**
+ * A schedule, when it next fires, and what setting it started.
+ */
+export type ScheduleView = {
+    /**
+     * When the tick would next start it. `None` while it is off.
+     *
+     * Answered here rather than left to the caller, and that is the same rule
+     * as `RunView::allowed`: the panel computing it would be a second
+     * implementation of `slots_between` — in another language, with its own
+     * idea of when the clocks change — free to show an hour the run does not
+     * happen at.
+     */
+    next_run?: string | null;
+    schedule: ScheduledDefinition;
+    /**
+     * The run `run_now` started, when it was asked for.
+     */
+    started?: string | null;
+};
+
+/**
+ * A definition's schedule, as stored.
+ */
+export type ScheduledDefinition = {
+    definition_kind: DefinitionKind;
+    definition_name: string;
+    last?: null | LastFiring;
+    schedule: Schedule;
+    /**
+     * Who set it, from the session. Recorded because a run nobody remembers
+     * asking for at three in the morning is a question with an answer.
+     */
+    set_by?: string;
+    updated_at: string;
+};
+
+/**
  * One metric, on the baseline and on the candidate.
  */
 export type Score = {
@@ -5192,6 +5401,31 @@ export type Score = {
  */
 export type Sdk = 'Python' | 'Typescript' | 'Rust' | {
     Other: string;
+};
+
+/**
+ * What a caller sets.
+ *
+ * `deny_unknown_fields`, like every other command body here: a `cron` somebody
+ * hoped would work is a 400 naming it rather than a field that is ignored and
+ * reads as accepted.
+ */
+export type SetScheduleBody = {
+    cadence: Cadence;
+    enabled?: boolean;
+    overlap?: OverlapPolicy;
+    /**
+     * Start it once, now, as well as saving it.
+     *
+     * The slot is this instant, so it goes through the same derived id as
+     * every other slot — which is what makes a double-clicked button a
+     * redelivery rather than two runs.
+     */
+    run_now?: boolean;
+    /**
+     * An IANA name — `Europe/Warsaw`. Never an offset; see [`Schedule`].
+     */
+    timezone: string;
 };
 
 /**
@@ -7233,6 +7467,84 @@ export type BlockContextResponses = {
 
 export type BlockContextResponse = BlockContextResponses[keyof BlockContextResponses];
 
+export type ClearScheduleData = {
+    body?: never;
+    path: {
+        /**
+         * The saved pipeline
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/curation-pipelines/{name}/schedule';
+};
+
+export type ClearScheduleErrors = {
+    501: ErrorBody;
+};
+
+export type ClearScheduleError = ClearScheduleErrors[keyof ClearScheduleErrors];
+
+export type ClearScheduleResponses = {
+    204: void;
+};
+
+export type ClearScheduleResponse = ClearScheduleResponses[keyof ClearScheduleResponses];
+
+export type GetScheduleData = {
+    body?: never;
+    path: {
+        /**
+         * The saved pipeline
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/curation-pipelines/{name}/schedule';
+};
+
+export type GetScheduleErrors = {
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type GetScheduleError = GetScheduleErrors[keyof GetScheduleErrors];
+
+export type GetScheduleResponses = {
+    200: ScheduleView;
+};
+
+export type GetScheduleResponse = GetScheduleResponses[keyof GetScheduleResponses];
+
+export type SetScheduleData = {
+    body: SetScheduleBody;
+    path: {
+        /**
+         * The saved pipeline
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/curation-pipelines/{name}/schedule';
+};
+
+export type SetScheduleErrors = {
+    404: ErrorBody;
+    /**
+     * The schedule cannot mean anything
+     */
+    422: ErrorBody;
+    501: ErrorBody;
+};
+
+export type SetScheduleError = SetScheduleErrors[keyof SetScheduleErrors];
+
+export type SetScheduleResponses = {
+    200: ScheduleView;
+};
+
+export type SetScheduleResponse = SetScheduleResponses[keyof SetScheduleResponses];
+
 export type ListRecipesData = {
     body?: never;
     path?: never;
@@ -7846,7 +8158,7 @@ export type GetExecutionErrors = {
 export type GetExecutionError = GetExecutionErrors[keyof GetExecutionErrors];
 
 export type GetExecutionResponses = {
-    200: RunProjection;
+    200: RunView;
 };
 
 export type GetExecutionResponse = GetExecutionResponses[keyof GetExecutionResponses];
@@ -7876,7 +8188,7 @@ export type CancelExecutionErrors = {
 export type CancelExecutionError = CancelExecutionErrors[keyof CancelExecutionErrors];
 
 export type CancelExecutionResponses = {
-    200: RunProjection;
+    200: RunView;
 };
 
 export type CancelExecutionResponse = CancelExecutionResponses[keyof CancelExecutionResponses];
@@ -7906,7 +8218,7 @@ export type PauseExecutionErrors = {
 export type PauseExecutionError = PauseExecutionErrors[keyof PauseExecutionErrors];
 
 export type PauseExecutionResponses = {
-    200: RunProjection;
+    200: RunView;
 };
 
 export type PauseExecutionResponse = PauseExecutionResponses[keyof PauseExecutionResponses];
@@ -7936,7 +8248,7 @@ export type ResumeExecutionErrors = {
 export type ResumeExecutionError = ResumeExecutionErrors[keyof ResumeExecutionErrors];
 
 export type ResumeExecutionResponses = {
-    200: RunProjection;
+    200: RunView;
 };
 
 export type ResumeExecutionResponse = ResumeExecutionResponses[keyof ResumeExecutionResponses];
@@ -7970,7 +8282,7 @@ export type RetryStepErrors = {
 export type RetryStepError = RetryStepErrors[keyof RetryStepErrors];
 
 export type RetryStepResponses = {
-    200: RunProjection;
+    200: RunView;
 };
 
 export type RetryStepResponse = RetryStepResponses[keyof RetryStepResponses];
@@ -8034,7 +8346,7 @@ export type ProvideInputErrors = {
 export type ProvideInputError = ProvideInputErrors[keyof ProvideInputErrors];
 
 export type ProvideInputResponses = {
-    200: RunProjection;
+    200: RunView;
 };
 
 export type ProvideInputResponse = ProvideInputResponses[keyof ProvideInputResponses];

@@ -131,6 +131,11 @@ impl Fixture {
                     "datasets",
                 ))
             }),
+            schedules: registry_enabled.then(|| {
+                Arc::new(aiwatcher_execution::ScheduleStore::new(Arc::new(
+                    MemoryObjectStore::new(),
+                )))
+            }),
             annotations: registry_enabled.then(|| {
                 Arc::new(AnnotationRegistry::new(
                     Arc::new(MemoryObjectStore::new()),
@@ -197,6 +202,17 @@ impl Fixture {
 
     async fn put(&self, uri: &str, body: Value) -> (StatusCode, Value) {
         self.with_body("PUT", uri, body).await
+    }
+
+    async fn delete(&self, uri: &str) -> (StatusCode, Value) {
+        self.request(
+            Request::builder()
+                .method("DELETE")
+                .uri(uri)
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
     }
 
     async fn with_body(&self, method: &str, uri: &str, body: Value) -> (StatusCode, Value) {
@@ -3574,7 +3590,10 @@ async fn a_saved_pipeline_compiles_and_starts_and_the_caller_may_leave() {
     let id = execution["execution_id"].as_str().expect("an id");
     let (status, run) = fixture.get(&format!("/api/v1/executions/{id}")).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(run["plan_id"], execution["plan_id"]);
+    assert_eq!(run["execution"]["plan_id"], execution["plan_id"]);
+    // And what may be done to it, decided where `decide`'s preconditions are
+    // rather than by whoever renders the buttons.
+    assert_eq!(run["allowed"], json!(["pause", "cancel"]), "{run}");
 }
 
 #[tokio::test]
@@ -3878,7 +3897,9 @@ async fn a_pause_after_a_resume_is_a_command_and_not_a_redelivery_of_the_first_p
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{paused}");
-    assert_eq!(paused["state"]["state_type"], "paused");
+    assert_eq!(paused["execution"]["state"]["state_type"], "paused");
+    // A paused run is offered resume, and never pause again.
+    assert_eq!(paused["allowed"], json!(["resume", "cancel"]), "{paused}");
 
     let (status, resumed) = fixture
         .post(
@@ -3888,7 +3909,7 @@ async fn a_pause_after_a_resume_is_a_command_and_not_a_redelivery_of_the_first_p
         .await;
     assert_eq!(status, StatusCode::OK, "{resumed}");
     assert_ne!(
-        resumed["state"]["state_type"], "paused",
+        resumed["execution"]["state"]["state_type"], "paused",
         "a resume un-pauses"
     );
 
@@ -3900,7 +3921,7 @@ async fn a_pause_after_a_resume_is_a_command_and_not_a_redelivery_of_the_first_p
         .await;
     assert_eq!(status, StatusCode::OK, "{again}");
     assert_eq!(
-        again["state"]["state_type"], "paused",
+        again["execution"]["state"]["state_type"], "paused",
         "the second pause is its own command"
     );
 }
@@ -3934,7 +3955,12 @@ async fn a_cancelled_run_reports_the_state_rather_than_only_accepting_the_comman
     assert_eq!(status, StatusCode::OK, "{cancelled}");
     // Nothing had been dispatched, so the run is stopped outright rather than
     // waiting for an attempt somebody else's process is still holding.
-    assert_eq!(cancelled["state"]["state_type"], "cancelled", "{cancelled}");
+    assert_eq!(
+        cancelled["execution"]["state"]["state_type"], "cancelled",
+        "{cancelled}"
+    );
+    // Nothing is offered for a run that has finished.
+    assert_eq!(cancelled["allowed"], json!([]), "{cancelled}");
 }
 
 #[tokio::test]
@@ -4035,4 +4061,172 @@ async fn an_answer_may_not_say_who_gave_it() {
         )
         .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn a_schedule_is_set_read_back_and_forgotten() {
+    let fixture = Fixture::new(false);
+    let (status, _) = fixture
+        .post("/api/v1/curation-pipelines", flow_only_pipeline("nightly"))
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, set) = fixture
+        .put(
+            "/api/v1/curation-pipelines/nightly/schedule",
+            json!({ "cadence": { "every": "daily", "hour": 9, "minute": 0 }, "timezone": "Europe/Warsaw" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{set}");
+    // Nothing started: setting when it runs is not asking it to run.
+    assert_eq!(set["started"], Value::Null, "{set}");
+
+    let (status, read) = fixture
+        .get("/api/v1/curation-pipelines/nightly/schedule")
+        .await;
+    assert_eq!(status, StatusCode::OK, "{read}");
+    assert_eq!(read["schedule"]["schedule"]["cadence"]["every"], "daily");
+    assert_eq!(read["schedule"]["schedule"]["cadence"]["hour"], 9);
+    assert_eq!(read["schedule"]["schedule"]["timezone"], "Europe/Warsaw");
+    assert_eq!(read["schedule"]["schedule"]["enabled"], true);
+    // Answered by the server, so the panel never computes an hour of its own.
+    assert!(read["next_run"].is_string(), "{read}");
+    // The default, because a curation that overlaps itself is two runs writing
+    // one dataset version.
+    assert_eq!(read["schedule"]["schedule"]["overlap"], "skip");
+
+    let (status, _) = fixture
+        .delete("/api/v1/curation-pipelines/nightly/schedule")
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, _) = fixture
+        .get("/api/v1/curation-pipelines/nightly/schedule")
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn setting_a_schedule_with_run_now_starts_one_run_and_says_which() {
+    // The user's "run it once, and from tomorrow every day at nine": one
+    // intention, one request, so the second half cannot fail after the first
+    // succeeded.
+    let fixture = Fixture::new(false);
+    let (status, _) = fixture
+        .post("/api/v1/curation-pipelines", flow_only_pipeline("nightly"))
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, set) = fixture
+        .put(
+            "/api/v1/curation-pipelines/nightly/schedule",
+            json!({
+                "cadence": { "every": "daily", "hour": 9, "minute": 0 },
+                "timezone": "UTC", "run_now": true
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{set}");
+
+    let started = set["started"].as_str().expect("a run was started");
+    // Written down as a firing, so a card does not read "never fired" straight
+    // after somebody watched one start.
+    assert_eq!(set["schedule"]["last"]["outcome"], "started", "{set}");
+    assert_eq!(set["schedule"]["last"]["execution_id"], started, "{set}");
+    let (status, run) = fixture.get(&format!("/api/v1/executions/{started}")).await;
+    assert_eq!(status, StatusCode::OK, "{run}");
+    // Recorded as the schedule's, not as somebody clicking Run: a run nobody
+    // remembers asking for at three in the morning is a question with an
+    // answer.
+    assert!(
+        run["execution"]["requested_by"]
+            .as_str()
+            .is_some_and(|who| who.starts_with("schedule:")),
+        "{run}"
+    );
+}
+
+#[tokio::test]
+async fn a_schedule_for_a_pipeline_nobody_saved_is_refused_now_rather_than_at_nine() {
+    // Otherwise it is a run that fails every morning with nobody watching.
+    let fixture = Fixture::new(false);
+
+    let (status, refused) = fixture
+        .put(
+            "/api/v1/curation-pipelines/never-saved/schedule",
+            json!({ "cadence": { "every": "daily", "hour": 9, "minute": 0 }, "timezone": "UTC" }),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::NOT_FOUND, "{refused}");
+}
+
+#[tokio::test]
+async fn a_schedule_nobody_could_mean_is_refused_by_the_field_that_is_wrong() {
+    let fixture = Fixture::new(false);
+    let (status, _) = fixture
+        .post("/api/v1/curation-pipelines", flow_only_pipeline("nightly"))
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, refused) = fixture
+        .put(
+            "/api/v1/curation-pipelines/nightly/schedule",
+            json!({ "cadence": { "every": "daily", "hour": 9, "minute": 0 }, "timezone": "Europe/Atlantis" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert!(
+        refused["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("Europe/Atlantis")),
+        "{refused}"
+    );
+
+    // A cron expression somebody hoped would work is named rather than ignored.
+    let (status, refused) = fixture
+        .put(
+            "/api/v1/curation-pipelines/nightly/schedule",
+            json!({ "cadence": { "every": "daily", "hour": 9, "minute": 0 }, "timezone": "UTC", "cron": "0 9 * * *" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+}
+
+#[tokio::test]
+async fn editing_a_schedule_keeps_what_the_tick_last_did() {
+    // It is a fact about the definition — a run was started for it at that
+    // slot — and changing the hour does not make it untrue. Clearing it would
+    // make every edit look like a schedule that has never fired.
+    let fixture = Fixture::new(false);
+    let (status, _) = fixture
+        .post("/api/v1/curation-pipelines", flow_only_pipeline("nightly"))
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, first) = fixture
+        .put(
+            "/api/v1/curation-pipelines/nightly/schedule",
+            json!({
+                "cadence": { "every": "daily", "hour": 9, "minute": 0 },
+                "timezone": "UTC", "run_now": true
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let ran = first["schedule"]["last"]["execution_id"].clone();
+    assert!(ran.is_string(), "{first}");
+
+    let (status, edited) = fixture
+        .put(
+            "/api/v1/curation-pipelines/nightly/schedule",
+            json!({
+                "cadence": { "every": "daily", "hour": 10, "minute": 30 },
+                "timezone": "UTC"
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{edited}");
+    assert_eq!(edited["schedule"]["schedule"]["cadence"]["hour"], 10);
+    assert_eq!(edited["schedule"]["last"]["execution_id"], ran, "{edited}");
 }

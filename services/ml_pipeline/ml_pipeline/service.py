@@ -10,6 +10,7 @@ from one screen and nothing else (ADR_0008, ADR_0024).
     GET  /ml-pipeline/notebooks/{name}    one notebook's source
     PUT  /ml-pipeline/notebooks/{name}    write it, if it parses and is a marimo app
     POST /ml-pipeline/run                 run one notebook over rows, return its rows
+    GET  /ml-pipeline/executions/{key}    did this key run here, and is it still going
     ANY  /ml-pipeline/app/{name}/         the notebook itself, live, for an iframe
 
 SECURITY: this runs notebook code, with no sandbox, in this process (the app
@@ -23,6 +24,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import anyio.to_thread
 import marimo
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -31,6 +33,7 @@ from starlette.routing import Mount, Route
 
 from ml_pipeline.config import Config
 from ml_pipeline.log import logger
+from ml_pipeline.memory import ExecutionMemory
 from ml_pipeline.notebooks import (
     NotebookDirectory,
     NotebookNotFoundError,
@@ -63,6 +66,7 @@ def create_app(config: Config | None = None) -> Starlette:
     settings.data.mkdir(parents=True, exist_ok=True)
     directory = NotebookDirectory(root=settings.notebooks)
     staging = Staging(root=settings.data)
+    memory = ExecutionMemory()
 
     async def healthz(_: Request) -> JSONResponse:
         return JSONResponse(
@@ -118,14 +122,30 @@ def create_app(config: Config | None = None) -> Starlette:
     async def run(request: Request) -> JSONResponse:
         body = await _body(request)
         notebook = directory.get_notebook(_named(body))
-        result = run_notebook(
-            notebook,
-            _rows(body, settings.max_rows),
-            _params(body),
-            staging,
-            settings,
-            _context(body),
-        )
+        rows = _rows(body, settings.max_rows)
+        params = _params(body)
+        context = _context(body)
+
+        if context is not None:
+            memory.started(context)
+        try:
+            # Off the event loop. `run_notebook` is a blocking `subprocess.run`,
+            # and called directly it held every other request for the length of
+            # the notebook — measured at 657 ms of a 704 ms run, on a notebook
+            # that finishes in under a second. Two things depend on this: the
+            # lookup below has to be answerable *while* a notebook runs, which
+            # is the only case it exists for, and marimo's live app is served
+            # by this same process for the panel's iframe.
+            result = await anyio.to_thread.run_sync(
+                run_notebook, notebook, rows, params, staging, settings, context
+            )
+        except BaseException:
+            if context is not None:
+                memory.failed(context)
+            raise
+        if context is not None:
+            memory.finished(context, result.revision, result.row_count)
+
         return JSONResponse(
             {
                 "notebook": result.notebook,
@@ -145,6 +165,17 @@ def create_app(config: Config | None = None) -> Starlette:
             }
         )
 
+    async def seen(request: Request) -> JSONResponse:
+        """What this service knows about one idempotency key.
+
+        A reactor asks after a timeout, before it runs the same key again — a
+        timeout says the caller stopped waiting and nothing about whether this
+        service stopped working. `absent` is the ordinary answer and the safe
+        one, so an older build that does not serve this route at all is read the
+        same way.
+        """
+        return JSONResponse(memory.seen(request.path_params["key"]))
+
     # marimo's public embedding API. The dynamic directory turns every notebook
     # in the directory into a live app; `include_code=False` is not decoration
     # — the panel is where a notebook is edited, and a second editor in the
@@ -162,6 +193,10 @@ def create_app(config: Config | None = None) -> Starlette:
             Route("/ml-pipeline/notebooks/{name}", get_notebook, methods=["GET"]),
             Route("/ml-pipeline/notebooks/{name}", save_notebook, methods=["PUT"]),
             Route("/ml-pipeline/run", run, methods=["POST"]),
+            # `:path` because the key is `<execution>/<step>/<attempt>` and
+            # carries its own separators. Sent as it is rather than encoded, so
+            # a person reading a log sees the key they would grep for.
+            Route("/ml-pipeline/executions/{key:path}", seen, methods=["GET"]),
             # Last, and mounted at the root rather than at `APP_PATH`: marimo's
             # app serves its own assets from paths it chooses, and its dynamic
             # directory matches the full path itself.

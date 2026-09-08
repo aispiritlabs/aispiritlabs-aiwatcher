@@ -22,7 +22,7 @@ use time::OffsetDateTime;
 
 use aiwatcher_core::{CausationId, Checkpoint, CorrelationId, MessageId};
 
-use crate::claim::{AttemptKey, AttemptRow, ClaimFilter};
+use crate::claim::{AttemptKey, AttemptRow, AttemptWrite, ClaimFilter};
 use crate::decide::{Now, decide, replay};
 use crate::message::{
     MessageMetadata, OutboxMessage, PendingMessage, RunProjection, SCHEMA_VERSION, WorkflowCommand,
@@ -107,8 +107,6 @@ fn projection(execution: &ExecutionId, version: u64, state: StateType) -> RunPro
         )],
         last_message_version: version,
         created_at: OffsetDateTime::UNIX_EPOCH,
-        started_at: None,
-        ended_at: None,
     }
 }
 
@@ -177,7 +175,7 @@ fn mine(execution: &ExecutionId) -> ClaimFilter {
 }
 
 /// An append whose only content is attempt rows.
-fn dispatch(execution: &ExecutionId, message_id: &str, rows: Vec<AttemptRow>) -> AppendRequest {
+fn dispatch(execution: &ExecutionId, message_id: &str, rows: Vec<AttemptWrite>) -> AppendRequest {
     AppendRequest {
         expected_version: ExpectedVersion::Any,
         input: PendingMessage::input(
@@ -237,7 +235,7 @@ pub async fn assert_contract(name: &str, store: &dyn WorkflowStore) {
     a_claimant_only_takes_what_it_said_it_could_run(name, store).await;
     a_lost_claim_expires_and_the_next_claimant_takes_it_over(name, store).await;
     a_heartbeat_keeps_a_long_step_from_being_taken_over(name, store).await;
-    a_settled_attempt_is_out_of_every_claimants_view(name, store).await;
+    a_finished_attempt_leaves_no_row_behind(name, store).await;
     a_retry_is_not_claimable_before_its_delay(name, store).await;
     a_cursor_advances_on_its_own_for_a_message_the_inbox_knew(name, store).await;
     a_finished_execution_is_forgotten_and_a_running_one_is_not(name, store).await;
@@ -574,7 +572,11 @@ pub async fn two_claimants_racing_for_one_attempt_produce_one_claim(
         name,
         store.append(
             &execution,
-            dispatch(&execution, "m-1", vec![claimable(&execution)])
+            dispatch(
+                &execution,
+                "m-1",
+                vec![AttemptWrite::Dispatch(claimable(&execution))]
+            )
         ),
         "a dispatch"
     );
@@ -609,7 +611,11 @@ pub async fn a_claimant_only_takes_what_it_said_it_could_run(
         name,
         store.append(
             &execution,
-            dispatch(&execution, "m-1", vec![claimable(&execution)])
+            dispatch(
+                &execution,
+                "m-1",
+                vec![AttemptWrite::Dispatch(claimable(&execution))]
+            )
         ),
         "a dispatch"
     );
@@ -656,7 +662,11 @@ pub async fn a_lost_claim_expires_and_the_next_claimant_takes_it_over(
         name,
         store.append(
             &execution,
-            dispatch(&execution, "m-1", vec![claimable(&execution)])
+            dispatch(
+                &execution,
+                "m-1",
+                vec![AttemptWrite::Dispatch(claimable(&execution))]
+            )
         ),
         "a dispatch"
     );
@@ -698,7 +708,11 @@ pub async fn a_heartbeat_keeps_a_long_step_from_being_taken_over(
         name,
         store.append(
             &execution,
-            dispatch(&execution, "m-1", vec![claimable(&execution)])
+            dispatch(
+                &execution,
+                "m-1",
+                vec![AttemptWrite::Dispatch(claimable(&execution))]
+            )
         ),
         "a dispatch"
     );
@@ -730,16 +744,22 @@ pub async fn a_heartbeat_keeps_a_long_step_from_being_taken_over(
     );
 }
 
-pub async fn a_settled_attempt_is_out_of_every_claimants_view(
-    name: &str,
-    store: &dyn WorkflowStore,
-) {
+/// A finished attempt is retired, not stored in a terminal state.
+///
+/// Two assertions, and the second is the one that costs something to break: a
+/// terminal row is invisible to a claimant either way, so keeping one looks
+/// correct until the table is the size of the history. Section 43.34.
+pub async fn a_finished_attempt_leaves_no_row_behind(name: &str, store: &dyn WorkflowStore) {
     let execution = fresh("claim-settled");
     ok!(
         name,
         store.append(
             &execution,
-            dispatch(&execution, "m-1", vec![claimable(&execution)])
+            dispatch(
+                &execution,
+                "m-1",
+                vec![AttemptWrite::Dispatch(claimable(&execution))]
+            )
         ),
         "a dispatch"
     );
@@ -750,11 +770,11 @@ pub async fn a_settled_attempt_is_out_of_every_claimants_view(
             dispatch(
                 &execution,
                 "m-2",
-                vec![AttemptRow::settled(
-                    AttemptKey::new(execution.clone(), "extract", 1),
-                    RuntimeKind::PythonTask,
-                    StateType::Completed,
-                )],
+                vec![AttemptWrite::Retire(AttemptKey::new(
+                    execution.clone(),
+                    "extract",
+                    1,
+                ))],
             ),
         ),
         "a completion"
@@ -769,6 +789,15 @@ pub async fn a_settled_attempt_is_out_of_every_claimants_view(
         .is_none(),
         "{name}: a finished attempt was claimed again"
     );
+    assert!(
+        ok!(
+            name,
+            store.attempt(&AttemptKey::new(execution.clone(), "extract", 1)),
+            "reading the finished attempt"
+        )
+        .is_none(),
+        "{name}: a finished attempt was kept as a row, so the claim table grows with the history"
+    );
 }
 
 pub async fn a_retry_is_not_claimable_before_its_delay(name: &str, store: &dyn WorkflowStore) {
@@ -781,7 +810,9 @@ pub async fn a_retry_is_not_claimable_before_its_delay(name: &str, store: &dyn W
             dispatch(
                 &execution,
                 "m-1",
-                vec![claimable(&execution).not_before(later)]
+                vec![AttemptWrite::Dispatch(
+                    claimable(&execution).not_before(later)
+                )]
             )
         ),
         "a dispatch"
@@ -876,7 +907,11 @@ pub async fn a_finished_execution_is_forgotten_and_a_running_one_is_not(
         name,
         store.append(
             &finished,
-            dispatch(&finished, "m-2", vec![claimable(&finished)])
+            dispatch(
+                &finished,
+                "m-2",
+                vec![AttemptWrite::Dispatch(claimable(&finished))],
+            )
         ),
         "a dispatch"
     );

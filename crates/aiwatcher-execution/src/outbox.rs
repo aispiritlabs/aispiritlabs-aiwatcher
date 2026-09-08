@@ -125,8 +125,6 @@ mod tests {
             steps: Vec::new(),
             last_message_version: 1,
             created_at: OffsetDateTime::UNIX_EPOCH,
-            started_at: None,
-            ended_at: None,
         }
     }
 

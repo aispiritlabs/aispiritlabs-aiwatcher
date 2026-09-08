@@ -37,6 +37,7 @@ pub mod artifacts;
 pub mod flow;
 pub mod marimo;
 pub mod publish;
+pub mod scheduler;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -68,6 +69,7 @@ const BACKOFF: Duration = Duration::from_secs(30);
 pub struct Tasks {
     pub outbox: Option<JoinHandle<()>>,
     pub retention: Option<JoinHandle<()>>,
+    pub scheduler: Option<JoinHandle<()>>,
     pub reactors: Vec<(&'static str, JoinHandle<()>)>,
 }
 
@@ -84,6 +86,15 @@ impl Tasks {
                 // the failure ADR_0026 is about, and this ordering is what
                 // makes the first outcome the one that happens.
                 Err(_) => tracing::warn!("the execution outbox did not stop within the grace"),
+            }
+        }
+        if let Some(task) = self.scheduler {
+            match tokio::time::timeout(grace, task).await {
+                Ok(Ok(())) => tracing::info!("the scheduler stopped"),
+                Ok(Err(error)) => tracing::error!(%error, "the scheduler panicked"),
+                // Nothing is half-started: a slot the cursor has not passed is
+                // a slot the next tick covers.
+                Err(_) => tracing::warn!("the scheduler did not stop within the grace"),
             }
         }
         if let Some(task) = self.retention {
@@ -171,6 +182,19 @@ pub fn spawn(
         tasks.retention = config
             .workflow_retention
             .map(|window| spawn_retention(Arc::clone(store), window, shutdown.clone()));
+
+        // Schedules live in the object store, so a deployment with none keeps
+        // none — and the loop that would read them is not started rather than
+        // started to find nothing. Absence is a working state, as it is for
+        // every runtime executor.
+        tasks.scheduler = objects.map(|objects| {
+            scheduler::spawn(
+                state,
+                Arc::new(aiwatcher_execution::ScheduleStore::new(Arc::clone(objects))),
+                Arc::clone(store),
+                shutdown.clone(),
+            )
+        });
 
         tasks.outbox = Some(spawn_outbox(
             Arc::clone(store),
@@ -499,8 +523,6 @@ mod tests {
                 steps: Vec::new(),
                 last_message_version: 1,
                 created_at: OffsetDateTime::UNIX_EPOCH,
-                started_at: None,
-                ended_at: None,
             },
             outbox: Vec::new(),
             checkpoint: None,

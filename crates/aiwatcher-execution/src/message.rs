@@ -427,6 +427,12 @@ pub struct OutboxMessage {
 /// appends to it. It exists to *accept the next command* without folding a
 /// whole history, and for the run's own page — never as the source of a list the
 /// event log's own folds already serve (ADR_0026).
+///
+/// **When a run started and ended is not here**, and that is the same rule
+/// rather than an omission: ADR_0026 puts every managed run's facts on the log
+/// under this id, and the workflow fold answers it with `started_at`,
+/// `ended_at` *and* `duration_ms`. The two fields were here once, written by
+/// nothing and read by nothing, which is the shape 43.15 is about (43.33).
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, ToSchema)]
 pub struct RunProjection {
     pub execution_id: ExecutionId,
@@ -440,12 +446,6 @@ pub struct RunProjection {
     pub last_message_version: u64,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[serde(with = "time::serde::rfc3339::option")]
-    pub started_at: Option<OffsetDateTime>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[serde(with = "time::serde::rfc3339::option")]
-    pub ended_at: Option<OffsetDateTime>,
 }
 
 #[cfg(test)]

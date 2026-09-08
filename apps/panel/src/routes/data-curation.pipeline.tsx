@@ -13,6 +13,7 @@ import {
 import type { BlockSpec, CurationPipeline, PipelineBlock } from '@/api/generated/types.gen';
 import { BlockInspector } from '@/components/block-inspector';
 import { ManagedRunCard, useManagedRun } from '@/components/managed-run';
+import { ScheduleCard } from '@/components/schedule-card';
 import { FlowResultView } from '@/components/flow-preview';
 import { PipelineCanvas, blockLabel } from '@/components/pipeline-canvas';
 import { DEFAULT_WINDOW_SECONDS, TimeRange, windowParam } from '@/components/time-range';
@@ -56,6 +57,13 @@ const searchSchema = z.object({
   name: z.string().optional(),
   block: z.string().optional(),
   window: z.number().int().nonnegative().optional(),
+  // The managed run this page is following. In the URL rather than in state
+  // for the usual reason and one that is load-bearing here: ADR_0025's whole
+  // claim is that the browser may close, and a run held in `useState` is a run
+  // a reload loses. The run itself survives either way — it is on the log,
+  // under this id, in the Workflows view — but the page could not be pointed
+  // back at it.
+  execution: z.string().optional(),
 });
 
 export const Route = createFileRoute('/data-curation/pipeline')({
@@ -107,12 +115,32 @@ function PipelinePage() {
     },
   });
 
+  // The canvas comes back from the URL too, and for the same reason the run
+  // does: `name` was already written there and never read, so a reload landed
+  // on an empty canvas beside a running execution — the chain gone and the run
+  // it was running still going. Once, and only onto a draft nobody has touched,
+  // so this can never overwrite unsaved edits.
+  const hydrated = React.useRef(false);
+  React.useEffect(() => {
+    if (hydrated.current || !search.name || draft.blocks.length > 0) return;
+    const pipeline = saved.data?.find((candidate) => candidate.name === search.name);
+    if (!pipeline) return;
+    hydrated.current = true;
+    setDraft({
+      name: pipeline.name,
+      description: pipeline.description ?? '',
+      blocks: pipeline.blocks,
+      edges: pipeline.edges,
+    });
+  }, [saved.data, search.name, draft.blocks.length]);
+
   const chain = React.useMemo(() => orderOf(draft.blocks, draft.edges), [draft]);
   const selected = draft.blocks.find((block) => block.id === search.block);
   const view = chain?.find((block) => block.spec.kind === 'view');
   const publishTo = view?.spec.kind === 'view' ? view.spec.dataset : undefined;
 
   const load = (pipeline: CurationPipeline | typeof PII_DETECTION_EXAMPLE) => {
+    hydrated.current = true;
     setDraft({
       name: pipeline.name,
       description: pipeline.description ?? '',
@@ -194,10 +222,10 @@ function PipelinePage() {
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['datasets'] }),
   });
 
-  // The run the server owns, if this page started one. Held by id rather than
-  // by object: the projection is re-read from the store on every frame, and a
-  // copy here would be the stale one.
-  const [executionId, setExecutionId] = React.useState<string>();
+  // The run the server owns, if this page is following one. Held by id rather
+  // than by object: the projection is re-read from the store on every frame,
+  // and a copy here would be the stale one.
+  const executionId = search.execution;
   const managed = useManagedRun(executionId);
 
   const startOnServer = useMutation({
@@ -215,7 +243,11 @@ function PipelinePage() {
       if (!response.data) throw response.error ?? new Error('The run could not be started.');
       return response.data;
     },
-    onSuccess: (accepted) => setExecutionId(accepted.execution.execution_id),
+    onSuccess: (accepted) =>
+      void navigate({
+        search: (previous) => ({ ...previous, execution: accepted.execution.execution_id }),
+        replace: true,
+      }),
     onError: (error) => setProblems(rejectionDetails(error)),
   });
 
@@ -418,8 +450,24 @@ function PipelinePage() {
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_26rem]">
         <div className="flex min-w-0 flex-col gap-4">
+          {/* Beside the managed run rather than under the canvas: both answer
+              "what does the server do with this", and a schedule read next to
+              the run it produces is how somebody checks it did. */}
+          <ScheduleCard name={search.name} saved={Boolean(search.name)} />
+
           {executionId || startOnServer.isPending ? (
-            <ManagedRunCard run={managed.data} pending={startOnServer.isPending} />
+            <ManagedRunCard
+              run={managed.data}
+              executionId={executionId}
+              pending={startOnServer.isPending}
+              missing={managed.isError}
+              onForget={() =>
+                void navigate({
+                  search: (previous) => ({ ...previous, execution: undefined }),
+                  replace: true,
+                })
+              }
+            />
           ) : null}
 
           {publish.data ? (

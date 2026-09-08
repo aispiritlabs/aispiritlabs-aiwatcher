@@ -118,6 +118,95 @@ jobs:
           cargo test -p aiwatcher-bus --features laser --test laser_integration \
             -- --ignored --test-threads=1
 
+  workflow-store:
+    name: Workflow store (PostgreSQL)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      # The adapter a deployment uses, and the one the default suite never
+      # touches: `cargo test --workspace` runs the storage contract against
+      # `memory` and `file` only, because `postgres` is behind a feature so
+      # `sqlx` stays out of every build that does not ask for it. Without this
+      # job the eighteen properties prove nothing about the store that holds
+      # production, and a migration is applied for the first time in a cluster.
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: aiwatcher
+          POSTGRES_PASSWORD: aiwatcher
+          POSTGRES_DB: aiwatcher
+        # 5433, matching `just postgres-up`, so the connection string in the
+        # recipe and the one here are the same string. That port was chosen so
+        # a suite never lands in a project database somebody already has on
+        # 5432; keeping it here means a failure reproduces locally verbatim.
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U aiwatcher"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.98.0'
+      - uses: Swatinem/rust-cache@v2
+      - uses: extractions/setup-just@v3
+
+      # The same suite the other two adapters pass, plus what is true of this
+      # one alone: two replicas racing for a claim, a takeover after a worker
+      # died, and applying the schema twice.
+      - name: storage contract against a real database
+        run: just test-postgres
+
+  flow:
+    name: Flow query service
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: shivammathur/setup-php@v2
+        with:
+          # The floor `composer.json` declares. Testing on it rather than on
+          # the newest means a syntax somebody's 8.5 accepts does not ship
+          # broken to an 8.3.
+          php-version: '8.3'
+          coverage: none
+      - uses: extractions/setup-just@v3
+
+      - name: install
+        run: just flow-install
+
+      # `just check` covers neither optional service, deliberately: PHP may not
+      # be installed on a machine that only touches the Rust crates. That was a
+      # statement about a *developer's* laptop and it was never one about CI —
+      # a managed `flow_php` step runs through this service, so a break here is
+      # a break in the execution path.
+      - name: format, lint, tests
+        run: just flow-check
+
+  notebooks:
+    name: Notebook runtime
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      # Pinned exactly, for the reason the SDK job records: setup-uv stopped
+      # publishing major tags, so a floating `@v10` would not resolve.
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          version: '0.12.7'
+          enable-cache: true
+          cache-dependency-glob: services/ml_pipeline/uv.lock
+      - uses: extractions/setup-just@v3
+
+      # The other half of the same argument: a managed `marimo` step runs
+      # through this service. `uv` reads the Python version this project pins,
+      # so nothing here names one.
+      - name: ruff, mypy and pytest
+        run: just ml-pipeline-check
+
   k8s:
     name: Kubernetes manifests
     runs-on: ubuntu-latest

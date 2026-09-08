@@ -1,13 +1,14 @@
 # Pipeline and Workflow Execution Architecture
 
-- **Status:** implementation plan — revision 3. Phases 0–3 are built; section
-  43 records what building them changed in this document, and the note above
-  Phase 0 says exactly what exists. Revision 2 was checked against the
-  aiwatcher crates and services, against planner, and against
-  `ai_spirit_agent` (section 33)
+- **Status:** implementation plan — revision 3.1. Managed Flow/marimo execution,
+  controls, retention, schedules and the chart exist; recovery, scheduler and
+  upgrade guarantees remain open after the 2026-09-08 review. Section 28 owns
+  the current delivery order and acceptance gates; `KICKOFF.md` is the entry
+  point. Section 43 records implementation history, qualified by 43.35.
+  Revision 2's cross-repository review remains in section 33.
 - **Audience:** maintainers of the Rust API, event pipeline, curation services,
   panel, the Python SDK, and the planner and `ai_spirit_agent` integrations
-- **Last updated:** 2026-09-05
+- **Last updated:** 2026-09-08
 - **Related decisions:** ADR 0002, 0004, 0008, 0011, 0012, 0014, 0016, 0018,
   0021, 0022, 0023, 0024, and — written from this plan — 0025 and 0026
 
@@ -1030,11 +1031,16 @@ arbitrary Python code.
 
 ### 16.1 Code revision
 
-On save:
+**Target behaviour; not yet complete.** The current implementation pins a
+digest and refuses drift against the runtime's current file. It does not keep
+the historical source needed to run after that file changes. Work 5 in section
+28 closes that gap.
+
+On save, the completed path must:
 
 1. the notebook service validates the source as a marimo app;
 2. Rust stores a content-addressed source snapshot through `ObjectStore`;
-3. PostgreSQL records the code artifact and digest;
+3. the artifact catalog records the code artifact and digest;
 4. the pipeline revision pins that digest.
 
 The working notebook file is an editable materialisation. The immutable code
@@ -1056,7 +1062,8 @@ silently replace the data shown by the other pipeline.
 
 ### 16.3 Editor sessions
 
-Rust issues a short-lived `EditorSession` containing:
+**Planned in work 5; context staging already exists.** Rust issues a short-lived
+`EditorSession` containing:
 
 - context id;
 - notebook code revision;
@@ -1207,18 +1214,18 @@ machine.
 
 ## 20. Product API
 
-Suggested resource model:
+Current curation and managed execution routes:
 
 ```text
 POST /api/v1/curation-pipelines
 GET  /api/v1/curation-pipelines
-GET  /api/v1/curation-pipelines/{name}
-GET  /api/v1/curation-pipelines/{name}/revisions/{revision}
+GET  /api/v1/curation-pipelines/{name}/revisions/{revision}/blocks/{block_id}/context
+GET  /api/v1/curation-pipelines/{name}/schedule
+PUT  /api/v1/curation-pipelines/{name}/schedule
+DELETE /api/v1/curation-pipelines/{name}/schedule
 
 POST /api/v1/executions
-GET  /api/v1/executions
 GET  /api/v1/executions/{execution_id}
-GET  /api/v1/executions/{execution_id}/events
 
 POST /api/v1/executions/{execution_id}/commands/cancel
 POST /api/v1/executions/{execution_id}/commands/pause
@@ -1227,16 +1234,20 @@ POST /api/v1/executions/{execution_id}/steps/{step_id}/commands/retry
 POST /api/v1/executions/{execution_id}/steps/{step_id}/input
 
 GET  /api/v1/executions/{execution_id}/steps/{step_id}/context
-POST /api/v1/editor-sessions
 ```
+
+`POST /api/v1/editor-sessions` remains planned in work 5.
+
+The execution list is served by the existing workflow fold, not by a second
+`GET /executions` projection. The generated OpenAPI contract describes current
+routes; the worker/engine resources below remain future scope.
 
 A live stream of one execution is **not** in that list, and 43.21 says why: it
 was written before ADR_0026, which put a managed run's facts on the log under
 the execution's own id. `/api/v1/workflow-executions/{id}/stream` already
 follows one.
 
-Revision 2 adds the routes the worker, the hosted decider and the human step
-need:
+Planned resources for the worker and hosted decider:
 
 ```text
 POST /api/v1/definitions                         register a WorkflowDefinition (editor); idempotent by content
@@ -1244,8 +1255,6 @@ GET  /api/v1/definitions?kind=…                  curation_pipeline | workflow 
 
 POST /api/v1/executions/{execution_id}/stream    hosted decider: append at expected version (worker)
 GET  /api/v1/executions/{execution_id}/stream    page the stream (viewer); payloads as refs, never inline
-
-POST /api/v1/executions/{execution_id}/steps/{step_id}/input   answer a HumanInput (the role the step declared)
 
 POST /api/v1/worker/claims                       section 36.1 (worker)
 POST /api/v1/worker/attempts/{ref}/heartbeat
@@ -1261,7 +1270,7 @@ its catalog stay what ADR 0016 made them — what an *engine* could start — an
 both, each row naming its source, and never merges them into one list that
 cannot say which is which.
 
-Start request:
+Start request for the current compiled curation path:
 
 ```json
 {
@@ -1270,18 +1279,26 @@ Start request:
     "name": "curation/pii-detection",
     "revision": "sha256:..."
   },
-  "mode": "preview",
-  "backend": "local",
-  "parameters": {},
-  "publish": false
+  "parameters": {}
 }
 ```
 
-The response is `202 Accepted` once the command and workflow input are durable.
-It returns an execution representation plus links for valid next actions.
+Whole-execution `mode: "preview"` is outside the current delivery scope.
+`mode`, `backend` and `publish` are not accepted fields on this request.
+The compiled plan determines publication; bounded step previews and explicit
+ad-hoc editor tests remain available. Revisit simulation only for a named use
+case that needs to run without publishing (section 28, work 5).
 
-All mutating command endpoints accept an `Idempotency-Key`. Repeating the same
-key returns the original command result.
+The response is `202 Accepted` once the command and workflow input are durable.
+It identifies the accepted execution. Reading the run and applying its commands
+returns `RunView`, containing `execution` and the server-derived `allowed`
+actions. Work 4 documents compatibility with the earlier bare `RunProjection`.
+
+The target command contract is a stable `Idempotency-Key`: a retried intention
+must not create additional work. Do not infer that every current mutation
+satisfies it. In particular, the schedule's `run_now` currently derives its ID
+from a wall-clock second; work 3 must make a retry across seconds return the
+original result and cover partial success of start plus schedule persistence.
 
 ## 21. Panel boundary
 
@@ -1551,104 +1568,193 @@ because both roles are one process.
 
 ## 28. Migration plan
 
-Revision 2 keeps the order of revision 1 through Phase 7, changes what
-Phases 1, 3 and 9 build, moves Phase 8 behind its own gate, and adds Phases
-10–15 for the worker, planner, the hosted decider and the human step. Each
-phase names its exit; a phase without a green exit does not start the next.
+**Current delivery order, 2026-09-08.** The review reopened guarantees that
+happy-path implementation and manual runs had not proved. The numbered work
+items below are the order of remaining delivery. Phase 0–15 labels are kept
+for existing references and describe feature scope; they are not a requirement
+to build every lower-numbered feature before a higher-numbered one.
 
-> **Implementation status, 2026-09-05.** Phases 0, 1, 2, 3, 5 and the
-> context half of 4 are done. What is left of Phase 4 is a code snapshot and a
-> staging key, and both wait on Phase 6 rather than on anybody's time — section
-> 43.19 says why. Section 45 records what building it changed in this
-> document.
->
-> **Recorded.** ADR_0025 (the server owns managed execution) and ADR_0026 (the
-> engine is a producer on its own log). ADR_0014 and ADR_0024 marked partially
-> superseded. `CLAUDE.md` has the terminology table of section 4 and thirteen
-> new guardrails.
->
-> **In `aiwatcher-core`.** `Subject::Execution` and eight `execution.*` types,
-> `forms_span = false`. `ArtifactRef` moved here from `aiwatcher-training` with
-> `kind` and `schema_ref` added, defaulted and skipped so every stored
-> `ModelPackage` reads and re-writes byte-identically.
->
-> **In `aiwatcher-execution`.** The plan IR and `plan_id`; the states; the
-> messages; the pure `decide`/`evolve`; the cache key; the compiler from
-> ADR_0024's blocks, with the Flow script generator ported from the panel line
-> for line; the `WorkflowStore` port with `memory`, `file` and `postgres`
-> adapters; the atomic command handler of section 10; the attempt claim table of
-> 9.3; the fact encoder of section 34; the outbox publisher; the
-> `ActivityExecutor` and `ArtifactCatalog` ports of sections 14, 17 and 18; and
-> the reactor loop that claims, runs and reports.
->
-> **In `aiwatcher-projector`.** The workflow fold records `data.published_by`
-> and `NodeState::has_two_publishers` flags a node with two.
->
-> **Wired, in `aiwatcher-server`.** `AIWATCHER_WORKFLOW_STORE`
-> (`memory | file | postgres`, `file` by default under `AIWATCHER_DATA_DIR`,
-> `postgres` behind a cargo feature); `AIWATCHER_ROLE` and the `serve` / `work`
-> arguments; the outbox publisher and the reactor loops as background tasks;
-> `execution::artifacts` — the object store's sixth prefix, with the receipt of
-> section 43.14; `execution::flow` — the Flow activity executor, addressed by
-> `AIWATCHER_FLOW_URL`; and `execution::publish` — the `PublishDataset`
-> executor, which runs in `serve` because it executes nothing.
->
-> **In `aiwatcher-api`.** `POST /api/v1/executions` and
-> `GET /api/v1/executions/{id}`, as a module facade. No list: the workflow fold
-> already serves one, and a second would be ADR_0026's two pictures of one run.
->
-> **In `services/flow`.** Section 15.4 as written: `execution_id` on
-> `POST /flow/query`, and `GET /flow/executions/{id}` answering
-> `running | done {digest, rows} | absent`. The service remembers that it ran
-> and what the result hashed to, never the rows.
->
-> **Proven.** The Phase 4 exit, by hand: a pipeline saved, edited and saved
-> again, and the *old* revision's block still opening with the script it was
-> saved with — plus a finished run's publish step reporting the exact artifact
-> digest it read, resolved from the stream rather than guessed. The Phase 5
-> exit, by hand and end to end: a saved pipeline
-> submitted over HTTP, the client gone, the process killed mid-run, and one
-> published dataset version carrying `produced_by` and `execution_id` after the
-> restart. The Phase 3 exit, in
-> `aiwatcher-projector/tests/managed_execution.rs`, and again in that run — the
-> managed execution draws itself in the existing workflow tab with `Pending`
-> nodes, from `workflow.declared` and `step.*` alone, with no second read path
-> and no panel work. The Phase 1 exit, three times over: the contract suite is
-> `aiwatcher_execution::testing` behind a `testing` feature, and all three
-> adapters assert the same eighteen properties rather than three similar sets.
-> `just postgres-up && just test-postgres` runs it against a real database.
->
-> Phases 6 and 7 followed (43.24, 43.23): the marimo executor, the panel's
-> "Run on the server", and with them Phase 4's staging by context id. Retention
-> and the chart came after (43.25).
->
-> **Not built, and each blocks something named:**
->
-> * Phase 4's editor sessions and its content-addressed notebook source
->   snapshot. The block pins a `sha256` and the runtime checks it twice, which
->   is what the snapshot was for; a session that survives a reload is not
->   built (43.19).
-> * Section 20's `mode: "preview"`. A managed step already reports a bounded
->   inline preview *beside* its artifact, which is what a canvas renders; what
->   does not exist is a whole execution that runs at simulation size and
->   publishes nothing. `POST /executions` refuses the field by name rather than
->   ignoring it.
-> * **A caller for the five command routes.** Cancel, pause, resume, retry and
->   provide-input are served, tested and reachable by `curl`; nothing in the
->   panel sends one, and `ContextSnapshot::allowed` lists `Retry` and `Answer`
->   for a canvas that renders neither — as do both context routes, which have
->   no caller at all. Section 43.27.
-> * **A managed run that outlives the tab that started it.** The execution id
->   is `React.useState` in the Pipeline view, against this repository's own
->   rule that a view's state lives in the URL — so a reload loses the run
->   ADR_0025 exists to let you walk away from. It is not lost from the system:
->   the Workflows view draws it from the log, by the same id. There is also no
->   `GET /api/v1/executions` to find one with. Section 43.27.
-> * **A trigger that is not a person.** ADR_0025 named "unattended, on a
->   schedule" as a motivation and `POST /executions` is still the only way in.
->   Nothing forecloses a scheduler — it would post the same body — and nothing
->   provides one.
-> * Everything from Phase 8 on.
+[KICKOFF.md](KICKOFF.md) is the short entry point.
+[PIPELINE_REVIEW_2026-09-08.md](PIPELINE_REVIEW_2026-09-08.md) records the evidence:
+`R1–R7` concern the pending changes, `A1` is a pre-existing file-store defect.
+All six work items below remain **open**. Updating this plan closes none of them.
+
+### Current capabilities and unproved exits
+
+| Capability | Implemented | Remaining acceptance gap | Work item |
+|---|---|---|---|
+| Decisions and workflow facts (Phases 0–3) | ADRs, plan/compiler, pure decider, outbox producer and workflow fold | Happy-path contract tests do not prove partial-commit recovery on file | 2 |
+| PostgreSQL and deployment | Adapter, four migrations, retention, combined/split chart | Old/new compatibility and rollback across 0003/0004 | 1 |
+| Local execution | File adapter and single-process exclusion | Partial-write repair, SIGKILL/restart, terminal-row cleanup on upgrade | 2 |
+| Managed Flow and marimo (Phases 5–6) | Executors, artifacts, lookup and publication | Historical notebook source remains mutable at the runtime | 5 |
+| Context (Phase 4) | Artifact metadata/lineage/cache, ContextSnapshot, context-based staging | Source snapshots and editor sessions | 5 |
+| Panel (Phase 7) | Managed run, controls, allowed actions, URL restoration | Error handling and revision-aware canvas mapping | 4, 5 |
+| Scheduler | Cadence, CRUD, derived slot IDs and last firing | Admission, retry, concurrent edits, activation and DST | 3 |
+| Worker/Planner (Phases 10–11) | Design and domain vocabulary | Working protocol, SDK task and end-to-end integration | 6 |
+| Human input (Phase 14) | Answer/control path | Authored HumanInput step, timeout/authorization acceptance | Own use-case gate |
+
+The 2026-09-08 review ran the focused Rust suite, PostgreSQL suite, both optional
+service checks and panel typecheck successfully. It also reproduced a stale
+schedule overwrite, tick-dependent DST results and a file commit that could not
+recover. Those results narrow the earlier manual acceptance claims in section
+43; they do not erase the features that already work.
+
+### Work 1 — upgrade compatibility before release (R4)
+
+**Dependency:** none. This is the first task because starting a new process may
+migrate the shared database before the other fixes are delivered.
+
+- Decide the supported old/new version overlap. Prefer removing SQL references
+  in one release and dropping the columns in a later release after the old
+  processes and supported rollback versions no longer need them.
+- Account for databases already at schema 4. Changing an applied migration
+  file does not repair such a database; use an explicit forward-compatible
+  change or a documented restore/rollback procedure as appropriate.
+- Test upgrade from schema 2 and 3, reopening schema 4, and retention of
+  `awaiting_input` through 0004. Include old/new readers and writers under the
+  selected deployment procedure, not only a fresh schema and repeated `apply`.
+- Document startup migration behaviour, deployment ordering and rollback in
+  `INSTALL.md`. If mixed versions are unsupported for a migration, stop all
+  incompatible processes before it runs and prove that procedure.
+
+**Exit:** the supported upgrade and rollback paths preserve accepted executions
+and do not expose old SQL to an incompatible schema. Migration advisory locking
+alone does not satisfy this exit.
+
+### Work 2 — local commit and restart recovery (A1)
+
+**Dependency:** work 1 defines a safe release path. Complete this before relying
+on new scheduler control state stored through the same port.
+
+- Choose an atomic local commit journal with reconstruction of its derived
+  files, or a transactional local adapter, and record the storage decision.
+- Ensure replay/dedup repairs missing projection, outbox, attempts and checkpoint
+  writes. An input ID present in the stream is not proof that every dependent
+  write completed.
+- Inject failure after each commit boundary, then retry and reopen. Include
+  truncated writes and SIGKILL/restart with stale-lock handling.
+- Upgrade old file-store terminal attempt rows while preserving live and
+  `awaiting_input` rows. Keep `WorkflowStore::attempt()` as an explicit contract
+  observation method; document that reason rather than removing test visibility.
+
+**Exit:** every accepted decision survives restart with its work recoverable or
+an explicit terminal outcome. No duplicate response may strand an execution
+without its required outbox/attempt. The same relevant contract runs on memory,
+file and PostgreSQL, with adapter-specific fault tests beside it.
+
+### Work 3 — scheduler correctness (R1, R2, R3, R5, R7)
+
+**Dependency:** work 2's store guarantees. Resolve the scheduler semantics and
+write the regressions before choosing its persistence layout.
+
+1. Define schedule versions and their effective time; creation, edits, disabling,
+   deletion and re-enabling must have explicit effects on pending slots. Choose
+   catch-up and DST policies and the scope of overlap across scheduled, ad-hoc,
+   paused, awaiting-input and `run_now` executions. Give retried `run_now`
+   requests a stable identity across seconds and a recoverable result if saving
+   the schedule fails after starting the run.
+2. Make time and I/O boundaries controllable in tick tests. Preserve interval
+   partition invariance across both DST transitions, including daily 02:30 in
+   Warsaw. A new schedule must not invent slots before it became effective.
+3. Enforce admission atomically in the execution store. Separate versioned
+   configuration writes from durable slot outcomes. Deriving an execution ID
+   deduplicates a single slot; it does not prevent overlap of different slots
+   or make an object-store read/modify/write atomic.
+4. Preserve error classes and retry transient failures durably. Advance a
+   checkpoint only when each earlier slot has a durable outcome or durable work
+   that will retry it independently. Permanent validation refusal must remain
+   visible without blocking unrelated schedules.
+5. Verify crash/replay around start, outcome persistence and checkpoint advance;
+   two replicas; delayed outbox/projector; and concurrent PUT/DELETE. A replay
+   must recognise an already-started slot before misclassifying its own run as
+   an overlap. Expose slot decisions without duplicating the run's final state.
+
+**Exit:** no lost slot on transient failure, no duplicate slot run, no overlap
+under `skip`, no resurrected schedule after DELETE, no retroactive slot before
+activation, and identical cadence results for one interval and split ticks.
+The results hold in split `serve/work` with PostgreSQL and in the supported
+single-process configuration. `run_now` retry returns the original result.
+
+**Boundary:** the log's fold remains the product history list. Transactional
+admission and pending slot state are execution control data; fixing them does
+not depend on Phase 8 or require moving all observability into PostgreSQL.
+
+### Work 4 — truthful panel errors and client compatibility (R6)
+
+**Dependency:** none for implementation; it can be delivered earlier while the
+storage work is open. It does not waive works 1–3's acceptance gates.
+
+- Check generated SDK outcomes or use `throwOnError` for every execution and
+  schedule mutation. Successful DELETE is 204, with no data body to require.
+- Distinguish 404 from unavailable services, authentication failures and command
+  conflicts. An unsuccessful read must not announce that a run was forgotten.
+- Preserve forms on refused writes and show the server's refusal. Allowed
+  actions remain server-derived; a stale action can still legitimately conflict.
+- Record the `RunProjection` to `RunView` response change and regenerate the
+  OpenAPI contract/client whenever implementation changes their shape.
+
+**Exit:** UI acceptance covers 403, 409, 503 and successful 204; rejected commands
+never follow the success path, and only 404 is rendered as absence.
+
+### Work 5 — historical code, editor sessions, then canvas (Phases 4, 6, 7)
+
+**Dependency:** reliable execution/storage and command feedback from works 1–4.
+
+- Store immutable notebook source by digest; the run and retry resolve that
+  artifact rather than requiring the editable notebook head to remain unchanged.
+- Build editor sessions over the pinned code/input/parameters with permissions
+  and expiry (16.3). Context staging exists already; finish its historical reload
+  behaviour rather than implementing another staging mechanism.
+- Serve the authored-block-to-plan-step mapping and revision compatibility from
+  the server. A matching canvas displays the managed states; a changed draft
+  displays drift instead of borrowing an old run's outcome.
+
+**Exit:** change the notebook head, reopen an old execution and see its exact
+source and data; retry executes the pinned source. Reload retains the context.
+Canvas acceptance covers both a matching revision and an edited draft.
+A digest mismatch refusal protects provenance but does not satisfy this exit.
+
+Whole-execution preview/simulation is excluded from the current delivery scope.
+Bounded step previews and explicit ad-hoc editor tests remain. Reintroduce a
+simulation mode only with a named requirement for execution without publication.
+
+### Work 6 — one worker integration, then Planner (Phase 10 → Phase 11 Level 2)
+
+**Dependency:** works 1–5's applicable execution and product gates. Phase 9,
+Phase 8 and container jobs are not prerequisites. Planner Level 0 observation
+can be delivered earlier because it leaves execution ownership unchanged.
+
+- Deliver worker scope/identity, claims, heartbeat, completion/failure, artifact
+  access and the Python task API around one real task.
+- Prove a two-step worker plan, worker death/takeover and late-result rejection.
+- Move Planner's four stages to that boundary and compare artifacts with the
+  direct path in Planner's own suite using a pinned SDK revision (29.5).
+
+**Exit:** the laptop worker path survives restart; Planner runs with Flyte off
+and produces byte-identical review artifacts. Keep the existing direct path
+available until that comparison passes.
+
+### What follows, by dependency rather than phase number
+
+- **Phase 12:** after work 6, when one pod per stage is needed; keep the
+  byte-identical output gate before removing Flyte from the chart.
+- **Phase 13:** after work 6, when the agent graph needs a durable hosted join.
+  It does not wait for container jobs; one worker is its first acceptance case.
+- **Phase 14:** a curation approval can follow work 5 when there is a real
+  authored gate; it need not wait for hosted mode. Approval inside an agent turn
+  depends on Phase 13. The existing Answer route alone does not meet either exit.
+- **Phase 9:** own consumer gate for unified engine launches; not a prerequisite
+  for the worker. **Phase 8** retains its measurement gate; **Phase 15** retains
+  its evaluation/distributed use-case gate.
+- Schedules for another definition kind wait for a compiler for that kind.
+  Flow `join` waits for a concrete sub-pipeline use case. Schedule window/parameter
+  policies must be explicit before promising “process the previous day”.
+- Measure slot lateness/backlog and artifact/staging growth. Add observability
+  and reference-aware GC where the measurements justify them; workflow retention
+  does not automatically clean every artifact or staged context.
+
+The original phase scopes follow. Interpret their exits against the capability
+table and work items above; a phase with an open exit remains partially complete.
 
 ### Phase 0 — record the decisions
 
@@ -1672,12 +1778,14 @@ producer decision and the panel boundary.
 - Define `WorkflowStore` in `aiwatcher-execution`: append at expected version,
   load, dedup by message id, inline projection, outbox, checkpoints, claims.
 - Implement `memory` and `file` adapters in the crate; `postgres` in
-  `aiwatcher-execution-postgres` behind a feature, with configuration, pool,
+  `aiwatcher-execution::store::postgres` behind a feature, with configuration, pool,
   health, migrations, and ADR 0009's `install | external | none` in the chart.
 - Run the contract suite (29.2) against all three.
 
 **Exit:** a pure test workflow survives process restart and duplicate input on
 every adapter, and a multi-process run refuses to start on `file`.
+**Partially met:** the existing suites pass, but partial-write recovery on file
+is reopened by A1. Works 1–2 add upgrade and failure-boundary acceptance.
 
 ### Phase 2 — execution domain
 
@@ -1713,24 +1821,25 @@ nodes — before any panel work.
   `artifact::object` over the same `ObjectStore` — the manifest beside the
   bytes, the cache index beside both, and a lineage prefix because an object
   store lists by prefix and nothing else.
-- Store results *(done)* and code snapshots *(not — see 43.19)* through
-  `ObjectStore`.
-- ~~Implement `ContextSnapshot`~~ done, with two routes; **editor-session APIs
-  deferred to Phase 6**, which is when a session has something to open.
-- Change marimo staging keys from notebook name to context id (16.4) — **not**,
-  and 43.19 says what it waits for.
+- Store results *(done)* and immutable code snapshots *(open, work 5)* through
+  `ObjectStore`. Digest checking alone does not preserve executable source.
+- ~~Implement `ContextSnapshot`~~ done, with two routes; editor-session APIs
+  remain open in work 5, after code can be resolved by digest.
+- ~~Change marimo staging keys from notebook name to context id (16.4).~~ Done
+  with the marimo executor (43.24); historical session reload remains open.
 
 **Exit:** an old Flow or marimo block opens with its exact historical data and
-code revision. **Met**, with one honest limit: the code revision is the digest
-the pipeline *pinned*, and whether the notebook file still hashes to it is the
-notebook runtime's answer rather than this one's.
+code revision. **Partially met:** contexts and pinned digests exist. Work 5 must
+prove that the source can still be opened and executed after the notebook head
+changes; a mismatch refusal does not meet that requirement.
 
 ### Phase 5 — Flow-only managed execution
 
 - Move authoritative Flow script compilation from TypeScript to Rust.
 - Add `execution_id` and the lookup route to the query service (15.4).
 - Add a Flow activity executor with idempotency, timeout, and result artifact.
-- Implement preview and full modes.
+- Return bounded step previews alongside full result artifacts; keep explicit
+  ad-hoc editor tests. Whole-execution simulation is outside current scope.
 - Implement Flow-only dataset publication as a managed plan: `produced_by`
   and `execution_id` on the version.
 - Leave Observability Query and explicit editor tests available.
@@ -1748,11 +1857,15 @@ submission.
   artifact is valid.
 
 **Exit:** the existing PII example runs end to end under Rust orchestration.
+**Functional path built:** the example and context staging work; source
+snapshots remain open in work 5 and are required for historical retry.
 
 ### Phase 7 — thin the panel
 
-- Replace browser `runPipeline` with `POST /executions`.
-- Replace local block ordering and compilation with server validation/preview.
+- Use `POST /executions` for managed runs; retain browser `runPipeline` only
+  for explicit ad-hoc tests.
+- Use server validation and compilation for managed execution; derive canvas
+  mapping and revision compatibility on the server (work 5).
 - Render allowed action links from API state.
 - Follow execution SSE rather than synthesising block outcomes locally.
 - Remove panel-driven publication of managed results.
@@ -1760,6 +1873,9 @@ submission.
 **Exit:** closing or refreshing the panel cannot affect execution progress,
 and `data-curation.pipeline.tsx` imports none of `orderOf`, `compileFlow`,
 `runQuery`, `runNotebook`, `publishDataset` for a managed run.
+**Partially met:** managed execution survives the tab; work 4 closes command
+error handling and work 5 closes revision-aware block rendering. Imports used
+only by the explicit ad-hoc path are not a failure of this boundary.
 
 ### Phase 8 — PostgreSQL observability read models — **deferred, own gate**
 
@@ -1879,7 +1995,7 @@ race, and retry limit without I/O.
 
 ### 29.2 Storage contract tests
 
-Run the same workflow-store suite against in-memory and PostgreSQL adapters:
+Run the same workflow-store suite against memory, file and PostgreSQL adapters:
 
 - append at expected version;
 - reject conflicting version;
@@ -1887,6 +2003,11 @@ Run the same workflow-store suite against in-memory and PostgreSQL adapters:
 - input, outputs, inline projection, checkpoint, and outbox are atomic;
 - outbox publication is safely repeatable;
 - replay reconstructs identical state.
+
+The successful-append suite is necessary but insufficient. Add partial-write
+recovery and process-death tests for the file adapter (work 2), and upgrade,
+mixed-version and rollback coverage for PostgreSQL (work 1). Tests must prove
+the adapter's documented guarantees, including repair after deduplication.
 
 Run the same artifact suite against in-memory, filesystem, and RustFS adapters:
 
@@ -1907,6 +2028,19 @@ Kill or disconnect components at each boundary:
 - during a projection rebuild;
 - while cancelling a running notebook;
 - while two workers race to claim the same attempt.
+
+The review adds boundaries that must be covered before the scheduler is
+treated as reliable (works 2–3):
+
+- between stream, projection, outbox, attempt and checkpoint writes on file;
+- after a slot start commits but before its outcome or checkpoint is written;
+- while definition lookup or execution start fails transiently but checkpoint
+  persistence is healthy;
+- while a tick holds a stale schedule and PUT/DELETE commits;
+- while two work replicas admit different overdue slots with the projector
+  delayed or absent from the work process;
+- during a retried `run_now` across a wall-clock second and after partial
+  start/schedule persistence.
 
 Every test must demonstrate either recovery or an explicit terminal state; none
 may leave a silently stuck run.
@@ -1947,6 +2081,30 @@ may leave a silently stuck run.
 16. Run a managed execution and prove the workflow tab draws it from the
     log's `workflow.declared` and `step.*` alone, with the PostgreSQL
     projection disabled for reads.
+17. Upgrade from schema 2/3 and reopen schema 4; prove the chosen old/new
+    deployment procedure and rollback path, preserving waiting attempts.
+18. Interrupt a local commit after each write, retry and reopen; all accepted
+    work is recoverable, and SIGKILL does not require abandoning the run.
+19. In split `serve/work`, process two overdue slots on two workers under
+    `overlap=skip` with delayed projection; allow at most one active execution.
+20. Recover from a transient slot-start failure without losing that slot or
+    duplicating one that committed before a response was lost.
+21. Edit, disable and delete schedules during a tick; no stale writer undoes
+    the user action. Create/re-enable during downtime using the chosen effective
+    time and catch-up policy; no slot predates its applicable schedule version.
+22. Compare one interval with many ticks across both DST transitions, including
+    daily 02:30 in Warsaw; match the same slots and `next_after` policy.
+23. Retry `run_now` across seconds and around partial persistence; return the
+    original execution with a recoverable schedule operation.
+24. Exercise panel 403/409/503 and successful DELETE 204; only 404 is absence,
+    failures do not enter success handlers, and refused writes preserve forms.
+25. Render a matching canvas from server-provided block mapping; edit the draft
+    and show revision drift instead of applying the old run's states.
+
+Each case belongs to its work/feature gate in section 28. For example, Phase 8's
+projection migration case does not block worker delivery; cases 17–24 close
+current reliability gaps. Record new evidence when closing a gate rather than
+reusing the review's baseline test counts as proof.
 
 ### 29.5 The rule for planner and `ai_spirit_agent`
 
@@ -2796,7 +2954,10 @@ because this plan moves no content.
 
 ## 42. Open decisions
 
-Each with the recommendation and what would settle it.
+Each with the recommendation and what would settle it. Decisions 1–15 retain
+their original identifiers, including those already settled. New delivery
+decisions below are resolved in their work item from section 28; they are not
+a requirement to settle every future integration before fixing current defects.
 
 1. **PostgreSQL for execution.** Yes, behind the port, with `file` for
    development. Settled by the object-store and Iggy findings in 7.1.
@@ -2832,18 +2993,48 @@ Each with the recommendation and what would settle it.
     routes Flow reads with a window. Absent it is now and every link means
     what it meant; present the window is a closed span, and a windowed Flow
     step is cacheable.
-15. **A second query engine, run locally.** Open, and worth keeping possible
-    rather than building: DuckDB from a console over the same authored
-    source, for the case where the corpus is on the machine somebody is
-    sitting at. Nothing forecloses it — `RuntimeBinding` is an enum of
-    bindings and never a host, `ActivityExecutor` assumes no transport, and
-    `FlowSourceRef` keeps the source **structured** beside the generated
-    script (15.3), which is what a second compiler would read. What *would*
-    foreclose it is a transform block whose only representation is Flow DSL
-    text, which is what `BlockSpec::Transform` is today: a SQL compiler could
-    not read it, so a DuckDB engine would take the source and not the
-    transforms. Settled by whoever wants the second engine, and cheapest to
-    fix before there are many saved transforms.
+15. **A second query engine, run locally.** *Settled by the maintainer:* a
+    transform stays **Flow DSL text**, and a second engine authors its own.
+    DuckDB from a console over the same corpus remains possible and is not
+    made cheaper by this — `RuntimeBinding` is an enum of bindings and never a
+    host, `ActivityExecutor` assumes no transport, and `FlowSourceRef` keeps
+    the *source* structured beside the generated script (15.3), so a second
+    compiler can read where the rows come from. What it cannot read is
+    `BlockSpec::Transform`, which is a string.
+
+    The alternative was a structured transform, and the reason against it is
+    not effort. Flow ships 239 DSL functions and 43.22 replaced a hand-written
+    list of 37 names with a rule, deliberately, so that what a person may write
+    is bounded by a *signature* rather than by a queue somebody maintains. A
+    structured representation is that queue again, one layer up: every
+    transform a user could express would have to be a case the model has, and
+    the day somebody needs the 240th function they would be waiting on this
+    repository rather than on Flow. Structure *beside* the text was considered
+    and is worse than either — two authored representations of one thing, free
+    to drift, with no rule saying which is the truth.
+
+    The consequence, stated so nobody rediscovers it as a surprise: a SQL
+    engine over this data reads the source and re-authors the transforms. That
+    is a real cost and it is the one that was chosen.
+
+16. **Upgrade compatibility (work 1).** Prefer staged removal of database
+    columns. Define supported old/new overlap and rollback, including databases
+    already migrated to schema 4, before releasing the pending migration.
+17. **Local commit recovery (work 2).** Choose a recoverable commit journal or
+    a transactional local adapter. The acceptance criterion is A1's partial
+    write followed by retry and reopen, plus SIGKILL; the choice must preserve
+    the port's observable contract.
+18. **Scheduler authority and semantics (work 3).** Keep admission and pending
+    slot state transactional; product history remains on the log. Decide
+    schedule version/effective time, DST ambiguity and gap policies, catch-up,
+    overlap scope and stable `run_now` identity before selecting the storage
+    layout. No new read model project is needed to make admission atomic.
+19. **Canvas mapping (work 5).** Prefer a server-provided mapping from authored
+    blocks to pinned plan steps, with draft/revision compatibility. Historical
+    states may light only a matching draft; a different draft displays drift.
+20. **Scope choices for this delivery.** Whole-execution preview is excluded
+    until a named simulation use case requires it. Retain `WorkflowStore::attempt()`
+    to observe adapter contracts and document that purpose during work 2.
 
 ## 43. What building it changed
 
@@ -3435,14 +3626,12 @@ rather than a gap: the key contains the pinned revision, and the cached rows
 were produced by a run that verified it. The file on disk having changed since
 says nothing about bytes that were produced by the revision the plan names.
 
-**What `lookup` cannot do here.** The query service remembers that it ran a key
-(15.4); the notebook runtime remembers nothing — a run is a subprocess it holds
-open and there is no route to ask. So `lookup` asks the object store's receipt
-and nothing else, which answers honestly whether a *previous attempt got all
-the way through*. It does not cover a notebook still running in a process this
-one cannot see, and such a step may run twice. Recorded rather than hidden:
-giving the notebook runtime the query service's execution memory is the fix,
-and it is a change to that service.
+**What `lookup` could not do here**, at the time: the query service remembers
+that it ran a key (15.4) and the notebook runtime remembered nothing, so
+`lookup` asked the object store's receipt and nothing else — which answers
+honestly whether a *previous attempt got all the way through* and not whether
+one is still going. Such a step could run twice. Closed in 43.30, which turned
+out to have a prerequisite nobody had noticed.
 
 ### 43.25 The store grew and the chart could not hold it
 
@@ -3453,7 +3642,9 @@ about a design that was wrong.
 it did not fix: streams, attempt rows and the projection are never pruned, and
 the `file` adapter rewrites its whole attempt table on every claim. So
 `WorkflowStore` gained `prune(before, limit)`, every adapter implements it, and
-the contract suite has a seventeenth and eighteenth property. The rules are
+the contract suite has a seventeenth and eighteenth property. (The attempt table
+turned out not to need bounding at all — a finished attempt should never have
+been a row. Section 43.34.) The rules are
 `store::prunable` and the outbox check, in one place because an adapter that
 decided them itself would keep a *different* retention policy:
 
@@ -3566,32 +3757,433 @@ sites, and neither field has a reader either.
 
 ### 43.27 What is served and what is reachable are two lists
 
-Written down because the gap between them is invisible from either side.
+The gap between them is invisible from either side: every route was tested,
+every button that existed worked, and the two lists had drifted anyway.
 
-**Five commands with no caller.** 43.20 added cancel, pause, resume, retry and
-provide-input, and 43.19's `ContextSnapshot::allowed` says which of them apply
-to a block, precisely so a panel never offers one that would 409. Nothing in
-the panel sends any of them, and the canvas renders neither `Retry` nor
-`Answer`. The routes are right and the guardrail about not listing an action
-whose command would be refused is kept — by rendering no actions at all, which
-is the trivial way to keep it.
+**Seven routes with no caller.** 43.20 added cancel, pause, resume, retry and
+provide-input; 43.19 added the two context routes. Each was served, tested and
+reachable by `curl`, and nothing in the panel sent one. The guardrail about not
+listing an action whose command would be refused was kept the trivial way — by
+rendering no actions at all.
 
-**A managed run that does not outlive its tab.** The Pipeline view holds the
-execution id in `React.useState`. This repository's own rule is that a view's
-state lives in the URL so a link lands the reader on the same view, and here it
-is load-bearing rather than a convenience: ADR_0025's whole claim is that the
-browser may close. It may — the run finishes, publishes its dataset version and
-draws itself in the Workflows view from the log — but the Pipeline view cannot
-be pointed back at it, and there is no `GET /api/v1/executions` to find it with
-either. The fix is small and is two things, not one: the id in the search
-params, and a list route.
+They have callers now, and the shape of the fix is the guardrail rather than
+the buttons. `ContextAction::allowed` already answered "which of these apply to
+this block", so its sibling `allowed_run_actions` answers it for the run, and
+`GET /executions/{id}` returns a `RunView` — the projection *and* what may be
+done to it — as do all five command routes, so a caller that has just paused
+knows Resume is the one that applies without asking again. Three lines of
+`state.is_terminal()` in TypeScript would have worked and would have been a
+second copy of `decide`'s preconditions in another language; the day they
+disagree is the day somebody trusts the wrong one.
+
+Verified in a browser against a real run: a paused run offers Resume and Cancel
+and never Pause; a terminal run offers nothing; a failed step offers "Take this
+step again" and a pending one says no command applies. The ad-hoc actions —
+validate, test, open the editor — are deliberately *not* rendered here: they
+belong to the block inspector, where somebody is editing, and this card follows
+a run.
+
+**A managed run that did not outlive its tab.** The Pipeline view held the
+execution id in `React.useState`, against this repository's own rule that a
+view's state lives in the URL — load-bearing here rather than a convenience,
+since ADR_0025's whole claim is that the browser may close. The card even said
+so in as many words, which made it a lie in the UI.
+
+The id is a search param now. What is **not** built is the
+`GET /api/v1/executions` this was first written down as needing: a list over
+the inline projection is precisely the second read path ADR_0026 forbids, and
+`GET /api/v1/workflow-executions` already lists managed runs from the log, by
+the same id. The inventory was half wrong and the half that was wrong would
+have been a guardrail violation.
+
+Fixing it exposed the same defect one field over: `name` was written to the URL
+and never read back, so a reload restored the run and left the canvas empty —
+the chain gone, the run it was running still going. Hydrated once, and only
+onto a draft nobody has touched, so it can never overwrite unsaved edits.
 
 **No trigger that is not a person.** ADR_0025 named three things that would
-make ADR_0024's browser-driven chain wrong, and one of them was "has to run
-unattended, on a schedule". The other two arrived and are handled; this one is
-not built. Nothing forecloses it — a scheduler posts the same body to the same
-route — and nothing provides it, so a nightly curation is a cron job somebody
-writes outside this system.
+make ADR_0024's browser-driven chain wrong, and one was "unattended, on a
+schedule". The other two arrived and are handled; this one is not built.
+Nothing forecloses it — a scheduler posts the same body to the same route — and
+nothing provides it, so a nightly curation is a cron job somebody writes
+outside this system.
+
+**`Answer` has a caller and no producer.** The form renders the question's own
+`prompt` and its `choices` as buttons, because `decide` refuses anything that
+is not one of them by name. Nothing reaches it yet: `compile_curation` emits no
+`HumanInput` step, so a plan holding a question is one somebody builds by hand.
+The path is wired for the definition kind that will have one.
+
+### 43.28 An error from aiwatcher arrived as a missing array path
+
+Found by running the shipped PII example against a default install, which is
+the configuration everybody has on their first day.
+
+The Flow service reads aiwatcher over HTTP and pulls rows out of the body with
+`array_get(__body, 'rows')`. Nothing checked the status first. So a 501 saying
+*this instance searches no dataset hubs (AIWATCHER_HUGGINGFACE_ENABLED, …)*
+reached a person as:
+
+```
+Path "rows" does not exists in array
+array('code'=>'hubs_disabled','message'=>'thisinstancesearchesnodatasethubs(…)')
+```
+
+— the sentence that would have fixed it, spelled without its spaces, inside one
+about an array path. And the service answered **502**, which
+`execution::flow`'s classifier reads as `Transient`: nobody answered, worth ten
+attempts over ten minutes. The run had reached attempt 8 of a configuration
+flag that was never going to turn itself on.
+
+The check goes at the seam where the answer arrives, because that is the only
+place that has both the status and the body — by the time the pipeline reaches
+for `rows` there is no status left to branch on. `CheckedClient` is a PSR-18
+decorator that throws `UpstreamFailed` carrying aiwatcher's own message, the
+status and the route; `index.php` relays a permanent one (4xx, and 501) as a
+422 so a managed step classifies it `UserCode` and stops. Everything else stays
+502, which is the honest reading of a store that may come back.
+
+Confirmed end to end: the step went from `AwaitingRetry` at attempt 8 straight
+to `failed`, carrying the sentence that names the variable, instead of
+spending attempts 9 and 10 on it.
+
+### 43.29 CI proved nothing about the store a deployment uses
+
+Found while checking the panel worked, which is the sort of place these turn up.
+
+`.github/workflows/ci.yml` had seven jobs and none of them ran the PostgreSQL
+adapter, `services/flow` or `services/ml_pipeline`. The word "postgres" did not
+appear in the file.
+
+The database one is the sharpest. `postgres` is behind a cargo feature so
+`sqlx` stays out of every build that does not ask for it (the shape `laser` has
+in `aiwatcher-bus`), which means `cargo test --workspace` runs the eighteen
+storage properties against `memory` and `file` **only** — and those are the two
+adapters nothing deploys. 43.25 had just added a migration and a retention
+sweep to the third. `just test-postgres` existed and nothing called it, so the
+first cluster to upgrade would have been the first machine other than a
+developer's laptop to apply `0002_retention.sql`.
+
+The other two are one argument: `just check` covers neither optional service
+deliberately, because PHP and a Python toolchain may not be on a machine that
+only touches the Rust crates. That was always a statement about a *developer's*
+laptop and never one about CI — and it stopped being defensible the moment a
+managed step began running through both. 43.28's fix is in code no CI job
+compiled.
+
+Three jobs now: a `postgres:17-alpine` service container on 5433 — the port
+`just postgres-up` chose so a suite never lands in a database somebody already
+has on 5432, kept here so a CI failure reproduces locally verbatim — plus
+`just flow-check` on PHP 8.3, the floor `composer.json` declares rather than
+the newest, and `just ml-pipeline-check` behind the same pinned `setup-uv` the
+SDK job records a reason for. That recipe gained `--locked`: it is what CI
+runs, so a lock that no longer matches `pyproject.toml` should be a red build
+rather than a quiet re-resolve testing a dependency set nobody committed.
+
+### 43.30 The runtime could not answer while it was working
+
+43.24 recorded that a notebook step may run twice: the query service remembers
+that it ran a key and the notebook runtime remembered nothing, so `lookup` asked
+the object store's receipt alone — which says whether a *previous* attempt
+finished and nothing about one still going.
+
+Building the memory found the reason it would not have worked. `run_notebook` is
+a blocking `subprocess.run`, and `service.py` called it straight from an `async`
+handler, so the event loop was held for the length of every run. Measured on a
+notebook that finishes in under a second: a 704 ms run held `/healthz` for
+**657 ms**. A `running` answer would have been unreachable by construction —
+the one question the route exists for is asked precisely while the loop is
+blocked.
+
+That is also, on its own, worse than the thing it was hiding. marimo's live app
+is served by this same process for the panel's iframe, so one managed step made
+the editor unresponsive for as long as it ran. The run goes to a worker thread
+now (`anyio.to_thread.run_sync`). Same script, after: a 438 ms run, slowest
+probe **13 ms**.
+
+The memory itself is the query service's, in the shape this runtime allows. Same
+three answers — `running`, `done`, `absent` — and the same reason for each. Two
+differences, both from the host rather than from the design:
+
+* **A dict, not files.** The query service writes files because `php -S` forks
+  workers, so a static array would answer `absent` to whichever worker took the
+  lookup. This is one uvicorn process, so the equivalent of that reasoning is a
+  dict — and every write happens on the event loop, before the run is handed to
+  a thread and after it comes back, so there is no lock and nothing to get wrong
+  about one. It expires on write, which is the one way an in-process store is
+  worse than a file the operating system eventually clears.
+* **`done` carries the notebook's revision**, not a digest of rows. That is what
+  the receipt records for this runtime, so the two can be compared — the
+  guardrail against comparing a runtime's digest with an artifact's still
+  holds, because this is the runtime's answer against the digest *in the
+  receipt*.
+
+The key needs no new field: `context_id` and `idempotency_key` are the same
+string, `<execution>/<step>/<attempt>`, so a run already carries it and the
+route takes it whole (`{key:path}`) rather than encoded — a person reading a log
+sees the key they would grep for.
+
+And `lookup` asks the runtime **best effort**, which is where it departs from
+the query service's. A runtime that is unreachable, or an older build with no
+such route, must not stop the caller reading the receipt: that one is durable
+and the memory is a fifteen-minute window, so failing to reach the volatile
+source would hide the answer that outlives it.
+
+### 43.31 The scheduler that decides nothing
+
+ADR_0025 named three things that would make ADR_0024's browser-driven chain
+wrong. Two arrived and were handled; the third was "unattended, on a schedule",
+and the shape it took came from a reference the maintainer supplied — Oskar
+Dudycz's `PassageOfTimeJob`.
+
+What that job does is publish a **fact**: `DayHasPassed(now, previousFireTime)`
+— a closed *interval* — and let whoever cares work out what is due. The first
+design drafted here did the opposite: a loop that read schedules, consulted a
+clock and decided what to start. Three properties came free from the inversion,
+each of which the drafted version would have had to build:
+
+* **Catch-up.** A process down from 08:59 to 10:05 ticks once with
+  `previous = 08:59`, and the 09:00 slot is in that interval. The draft had a
+  "grace window" to tune; there is nothing to tune.
+* **The tick rate stops being a correctness question.**
+  `how_often_the_clock_ticks_changes_nothing_about_which_slots_fire` cuts a
+  three-day span into 37-minute pieces and asserts the same slots as one call
+  over the whole of it. What the interval decides is how *late* a nine o'clock
+  run may be, and nothing else.
+* **A replay is a replay.** The same interval always yields the same slots, so
+  re-processing a tick after a crash cannot invent a run.
+
+**What was not taken.** The reference publishes onto the event bus so anything
+may subscribe. Here the only subscriber would be the scheduler, and the event
+log is the durable one every projector folds — a minute-tick on it is five
+hundred thousand records a year that mean nothing to any of them, which is the
+flooding ADR_0026's guardrail is about. The tick stays in process and what is
+durable is its *cursor*: a Unix second in `processor_checkpoints`, the table the
+projector already uses, because this processor's axis **is** time and "how far
+have I read" is the same question. Quartz was not taken either — it is a library
+for the case where schedules are the product, and the work role already runs
+three interval loops.
+
+**Two workers, and no lease at all.** An execution is named after its slot, so
+two workers that both notice 09:00 is due derive one id and
+`ExpectedVersion::NoStream` makes the second a conflict — ADR_0001's "ids are
+derived, not generated" one layer up, and the mechanism that already makes two
+API replicas racing a start safe. Derived from the *definition and the slot*
+rather than from a compiled plan, because two workers reading the head a moment
+apart could compile different `plan_id`s and an id built on one of those would
+let both runs through.
+
+**The cursor moves last.** `aiwatcher_jobs::ORDERING` in a seventh place: the
+starts commit, then the checkpoint advances. A crash between them re-derives the
+same ids next tick and the inbox recognises them, so the failure is a repeat
+that costs nothing — while the other order skips a slot with nothing anywhere to
+say it had.
+
+**`run_now` is not a special case.** "Run it once, and from tomorrow every day
+at nine" is one intention, so it is one request: a flag on the schedule, and a
+run *now* is the slot at this instant going through the same derived id. A
+double-clicked button within one second is a redelivery.
+
+Two things this forced, both improvements. `executions::start` and
+`compile_curation_named` came out of the HTTP handler, because a scheduler with
+its own copy would have been a second way to start a run, free to disagree about
+the owner, the mode or the derived message id — the route decides *who is
+asking* and *which id*, the function decides what starting means. And `Schedule`
+stopped being `#[serde(flatten)]`: serde's `flatten` and `deny_unknown_fields`
+do not compose, and the bodies here deny unknown fields so a `cron` somebody
+hoped would work is named rather than ignored. Nesting the cadence is what kept
+that guardrail.
+
+**The panel computes no hour of its own.** `next_run` comes back on the
+schedule, from `Schedule::next_after` — which is `slots_between` over eight
+days rather than a second walk, so the hour a card shows and the hour the tick
+fires at cannot differ. A card that worked it out in TypeScript would have its
+own idea of when the clocks change, and the first hour it disagreed on would be
+one somebody planned a morning around. Which hours are *legal* is the server's
+too: the form sends what was typed and renders the refusal.
+
+The one thing the panel does decide is the default zone, from
+`Intl.DateTimeFormat().resolvedOptions().timeZone` — better than UTC, and
+better than a list of six hundred names, because an hour typed into a form
+almost always means an hour where the typist is sitting. It is still checked:
+a name the database does not know is a refusal naming it.
+
+Verified against the running stack: `run_now` completed the four-engine chain;
+the tick fired a slot due two minutes later and completed it again; across the
+ticks in between it fired **once**, with the cursor sitting where the last one
+left it; and the card showed `next 9/9/2026, 9:00:00 AM` for a nine-o'clock
+Warsaw schedule set after nine — tomorrow's, today's having gone.
+
+### 43.32 A schedule with no history is a schedule nobody can check
+
+The question that started this was an orphan: what happens to a schedule whose
+definition is deleted. The answer turned out to be that **no registry in this
+system offers deletion** — prompts, datasets, pipelines, annotations, training,
+none — and the only `DELETE` route in the API is the one 43.31 added for
+schedules themselves. So the orphan is unreachable, and building deletion to
+close it would be building the problem in order to solve it.
+
+Its reachable sibling is the real gap, and it is worse. A schedule had no
+history at all. The tick logged a warning when it could not start something and
+an info line when it skipped a slot, and nothing else recorded either — so a
+schedule that had been refused every morning for a week looked, from the panel,
+exactly like one that had been working. 43.28's Hugging Face 501 is precisely
+that shape: fires at nine, fails, silence.
+
+The schedule head now carries `last`: the slot, the outcome (`started`,
+`skipped`, `refused`), the execution it started or the one that was in the way,
+and the refusal in the words the caller would have read. Two rules keep it
+honest:
+
+* **It is the scheduler's own decision and never the run's outcome.** Whether
+  the run then succeeded is on the event log, which the Workflows view folds,
+  one click away by the id beside it. A second copy here would be a second
+  answer free to disagree with the fold (ADR_0026).
+* **It is written after the run, never before.** A stored `started` always has
+  one behind it. The other order costs a note the next tick rewrites; this one
+  cannot claim a run that did not happen.
+
+It survives an edit, because it is a fact about the *definition* — a run was
+started for it at that slot — and changing the hour does not make it untrue.
+Clearing it would make every edit look like a schedule that has never fired.
+`run_now` records one too, for the same reason in the other direction: a card
+reading "never fired" straight after somebody watched a run start is a card
+nobody believes again.
+
+Verified against the running stack in all three outcomes: `run_now` wrote
+`started` with its execution id; the tick overwrote it with its own slot; and a
+schedule planted for a definition that is not there came back
+**`refused — pipeline curation/deleted-yesterday not found`**, rendered in the
+card in red beside the next run, with `Forget` next to it. That last one is
+also the mitigation for the orphan on the day deletion arrives: it is visible,
+and it can be cleared from the panel.
+
+### 43.33 Four dead timestamps, and the reason they stayed dead
+
+`RunProjection::started_at` and `ended_at` had no writer — `evolve` reads no
+clock and the terminal events carry no timestamp, so both had been `None` since
+they were added — and no reader either. Removing them turned up a second pair
+in the same state on `AttemptRecord`, and two columns in PostgreSQL that had
+been NULL in every row the table ever held.
+
+The interesting part is not the deletion, which is mechanical. It is that
+**writing them would have been wrong**, and the cost was never the argument.
+ADR_0026 puts every managed run's facts on the event log under the execution's
+id, so the workflow fold already answers when a run started and ended — with
+`duration_ms` beside them — and an attempt's `step.*` events form a span
+(ADR_0003), so the waterfall already times it from the trace store, in the
+shape a duration is actually read in. Filling these in would have been a second
+answer to a question something else answers better, in the projection whose own
+docstring says it is not for that.
+
+So this is 43.15's shape a third time, and the resolution differs from both
+earlier ones. `CachePolicy::ByContent` was a policy with no reader and was
+wired up. `started_at` is a field with no writer and is deleted. What decides
+between them is whether anything else already answers it.
+
+The columns go with a third migration, and the machinery `schema.rs` was built
+for earns its keep again: verified by running the upgrade against a database
+that had reached version 2 with both columns present, which came out at version
+3 with neither and the whole eighteen-property contract still passing against
+it. Every value was NULL, so nothing was lost.
+
+### 43.34 A finished attempt is not a row
+
+The file adapter's own docstring said the claim table was "small by
+construction — one live row per running step". It was not. A completion wrote
+`AttemptRow::settled(...)` under the same key, so the table held one row per
+attempt of every execution the store still had, and the file adapter re-read,
+re-parsed, re-serialised and `fsync`ed all of it on **every claim and every
+heartbeat**.
+
+Measured on the real `FileWorkflowStore`: 14 ms at a thousand rows, 94 ms at ten
+thousand, 458 ms at fifty thousand, 1.8 s at two hundred thousand — linear, about
+9 µs a row, and the heartbeat paid it again every half-lease. The note on the
+open-items list said retention bounded it. It did not:
+`AIWATCHER_WORKFLOW_RETENTION_DAYS` is unset by default and `0` means *keep*,
+which is a guardrail this document argues for elsewhere. Nothing pruned.
+
+PostgreSQL was checked on the suspicion it had the same fault, because
+`step_attempts_claimable` is `(queue, runtime, updated_at)` and does not carry
+`state`. It does not: the index is **partial**, over exactly the non-terminal
+states. At 200 028 rows in the table the index was 16 kB and the claim ran in
+0.06 ms. So the sentence in the file adapter was true of the *design*, and the
+thing implementing it was an index in a different adapter.
+
+The fix is not a bound on the growth. It is that the row should never have been
+written. `AttemptRow::settled` had to blank `command_id` — to the empty string —
+along with `queue`, `task_ref`, `lease_owner` and `not_before`, overwriting the
+real values that were there, in order to store a record that described nothing.
+Every field that gives an attempt row its meaning had to be destroyed to write
+one. That is a tombstone wearing a record's type, and the type now says so:
+
+```rust
+pub enum AttemptWrite {
+    Dispatch(AttemptRow),
+    Retire(AttemptKey),
+}
+```
+
+A settlement is the row **ceasing to exist**, in all three adapters — a
+`remove` in memory and in the file, a `delete` in PostgreSQL. Nothing read a
+finished attempt back: `attempt()` has no production caller, a redelivered
+dispatch is recognised by the stream's inbox key and never by this table, and a
+takeover reads `previous_owner` on a row that is still live. `awaiting_input`
+keeps its row, because it is not an ending — it resumes on the answer it asked
+for, which is why it is a state of its own (section 41).
+
+`0004_retire_finished_attempts.sql` deletes what the old shape left behind. Run
+against a database at version 3 holding 5 000 terminal rows and one
+`awaiting_input`, it came out at version 4 with the 5 000 gone and the
+`awaiting_input` row kept — the distinction a careless `delete` would have lost.
+
+The property is in the contract suite, so it is proved about all three adapters
+rather than about the one that was slow:
+`a_finished_attempt_leaves_no_row_behind`. Its second assertion is the one that
+costs something to break, because a terminal row is invisible to a claimant
+either way and keeping one looks correct right up until the table is the size of
+the history. End to end on the file store, a thousand dispatched-and-finished
+steps now leave `attempts.json` at **2 bytes**.
+
+This is the third time the same question has been asked and the second answer it
+has had. `CachePolicy::ByContent` was a policy with no reader and was wired up
+(43.15); the four timestamps were fields with no writer and were deleted
+(43.33); a settled attempt is a row with no reader and is now not written at
+all. What decides is never the cost — it is whether something else already
+answers the question better. The event log answers a run's timings; the claim
+filter answers what may be taken. Neither needed a second copy.
+
+### 43.35 The review reopened guarantees, not the implemented feature set
+
+The 2026-09-08 [review](PIPELINE_REVIEW_2026-09-08.md) checked the pending
+changes and the plan's acceptance claims. Existing Rust, PostgreSQL, Flow,
+Python and panel type checks passed; additional reproductions demonstrated
+three cases those suites did not cover: a deleted schedule restored by a stale
+writer, different DST slots for one interval versus many ticks, and a file-store
+commit whose retry/reopen left no outbox or attempt to execute.
+
+That changes how the preceding implementation notes must be read:
+
+- **43.31:** derived IDs deduplicate one slot. They do not make overlap checks
+  against a delayed or absent fold authoritative, protect schedule edits, or
+  retain a slot whose transient start error was followed by checkpoint advance.
+- **43.32:** `last` records only the latest firing outcome. A failed note write
+  is not repaired merely because the tick runs again, and writing a whole stale
+  schedule can undo an edit or deletion. Durable slot processing and versioned
+  configuration need separate write semantics.
+- **43.33:** removing NULL columns loses no values, but the old binary's SQL
+  still names them. Upgrade compatibility and rollback require work 1.
+- **43.34:** retiring new finished attempts stops new terminal rows accumulating;
+  upgrading an existing `attempts.json` still needs cleanup in work 2.
+- **43.19/43.24:** detecting notebook drift is useful, but a digest is not the
+  historical source. Phase 4's full exit remains open until work 5 preserves
+  and reopens that source after the head changes.
+
+Section 28 now starts with upgrade compatibility, local recovery and scheduler
+correctness, followed by panel error handling, historical context and one worker
+integration. Phase numbers remain stable for references; their order no longer
+stands in for a dependency graph. This is a correction to the plan and its
+reported status. None of the review findings is marked fixed by this revision.
 
 ### 43.9 What did not need changing
 
@@ -3625,6 +4217,13 @@ execution with **no** special case for it.
   PostgreSQL adapter is a feature, not a crate), the Phase 0–3 status. Nine
   findings, of which four are corrections to this document and five are rules
   the code needed and the plan had not stated.
+- **Revision 3.1** (2026-09-08): reordered remaining delivery after the review.
+  Section 28 now owns a capability table, six open work items and their
+  acceptance gates; `KICKOFF.md` mirrors their order. Reopened file recovery,
+  scheduler and migration guarantees; clarified historical notebook source,
+  preview scope and current versus planned API behaviour. Extended section 29's
+  failure/acceptance cases, added decisions 16–20 and the qualifications in
+  43.35. Documentation update only; implementation fixes remain open.
 
 ## 45. References
 
@@ -3668,4 +4267,3 @@ In the neighbouring repositories, the files this revision was checked against:
   `packages/agentic_runtime/src/agentic_runtime/distributed/{transport,service}.py`,
   `packages/workshops/src/workshops/resumable_research/`,
   `packages/workshops/diagrams.md`.
-

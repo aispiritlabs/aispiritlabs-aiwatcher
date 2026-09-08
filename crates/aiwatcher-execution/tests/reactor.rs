@@ -313,8 +313,9 @@ async fn every_step_of_one_run_reaches_the_decider_and_the_run_finishes() {
     }
     assert_eq!(run.state.state_type, StateType::Completed);
 
-    // And nothing is left claimable: both rows are settled, so a third poll
-    // has nothing to take rather than the second step's lease to wait out.
+    // And nothing is left claimable: both rows were retired as they finished,
+    // so a third poll has nothing to take rather than the second step's lease
+    // to wait out.
     assert_eq!(
         reactor.poll_once(at(30)).await.expect("a third poll"),
         Performed::Idle
@@ -468,7 +469,7 @@ async fn an_opted_in_step_is_answered_from_the_catalog_without_running() {
     assert_eq!(step.outputs, vec![reused]);
     assert_eq!(run.state.state_type, StateType::Completed);
 
-    // And the attempt it answered is settled, so nothing claims it again.
+    // And the attempt it answered was retired, so nothing claims it again.
     assert_eq!(
         reactor.poll_once(at(20)).await.expect("a second poll"),
         Performed::Idle

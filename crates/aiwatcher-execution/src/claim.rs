@@ -64,6 +64,30 @@ impl std::fmt::Display for AttemptKey {
     }
 }
 
+/// What one decision does to the claim table.
+///
+/// The two are not symmetrical, and that asymmetry is the point. A dispatch is
+/// a row somebody may take. A settlement is that row **ceasing to exist** —
+/// not a row in a terminal state, which is what this used to write.
+///
+/// The older shape had to blank every field that gives an [`AttemptRow`] its
+/// meaning in order to store one: the command that dispatched it, the queue it
+/// was claimable on, the code a worker had to match. What was left described
+/// nothing and was still carried past every claim. Section 43.34.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AttemptWrite {
+    /// An attempt somebody may claim.
+    Dispatch(AttemptRow),
+    /// An attempt that has reached a terminal state, so there is no row.
+    ///
+    /// Nothing reads a finished attempt back. A redelivered dispatch is
+    /// recognised by the stream's inbox key and never by this table, and a
+    /// takeover reads `previous_owner` on a row that is still live — so the
+    /// only question a stored terminal row could answer is one the claim
+    /// filter answers by excluding it.
+    Retire(AttemptKey),
+}
+
 /// One dispatched attempt, and whether anybody holds it.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
 pub struct AttemptRow {
@@ -130,24 +154,6 @@ impl AttemptRow {
     pub fn not_before(mut self, at: OffsetDateTime) -> Self {
         self.not_before = Some(at);
         self
-    }
-
-    /// A row in a terminal state. What a completion or a failure writes, and
-    /// what takes the attempt out of every claimant's view.
-    #[must_use]
-    pub fn settled(key: AttemptKey, runtime: RuntimeKind, state: StateType) -> Self {
-        Self {
-            key,
-            runtime,
-            command_id: MessageId::new(String::new()),
-            queue: None,
-            task_ref: None,
-            state,
-            lease_owner: None,
-            previous_owner: None,
-            claimed_at: None,
-            not_before: None,
-        }
     }
 
     /// Whether this row may be taken now.

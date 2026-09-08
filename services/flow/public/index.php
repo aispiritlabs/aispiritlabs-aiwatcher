@@ -26,6 +26,8 @@ declare(strict_types=1);
  */
 
 use Aiwatcher\Flow\Dataset\Catalog;
+use Aiwatcher\Flow\Dataset\CheckedClient;
+use Aiwatcher\Flow\Dataset\UpstreamFailed;
 use Aiwatcher\Flow\Dsl\ParseError;
 use Aiwatcher\Flow\ExecutionMemory;
 use Aiwatcher\Flow\Lint\MagoLinter;
@@ -38,7 +40,9 @@ require \dirname(__DIR__) . '/vendor/autoload.php';
 
 $aiwatcher = \rtrim((string) (\getenv('AIWATCHER_URL') ?: '') ?: 'http://127.0.0.1:8080', '/');
 
-$client = new Psr18Client();
+// Wrapped, so an error from aiwatcher arrives as aiwatcher's own message and
+// its own status rather than as Flow failing to find `rows` in an error body.
+$client = new CheckedClient(new Psr18Client());
 $catalog = new Catalog($client, $aiwatcher);
 $linter = MagoLinter::fromVendor($catalog, \dirname(__DIR__));
 $runner = new QueryRunner($catalog, $aiwatcher, ExecutionMemory::default());
@@ -195,6 +199,17 @@ try {
     // 422, not 400: the request was well-formed, the query was not. The column
     // is what lets the panel point at the character instead of the query.
     $send(422, ['error' => $error->toArray()]);
+} catch (UpstreamFailed $error) {
+    // aiwatcher answered, and its answer decides this one. A 501 naming an
+    // unset variable is relayed as a 4xx so the caller reads it as permanent:
+    // a managed step classifies a 5xx from here as "nobody answered" and
+    // spends ten attempts over ten minutes discovering that a configuration
+    // flag is still off. Everything else stays 502, which is the honest
+    // reading of a store that may come back.
+    $send($error->isPermanent() ? 422 : 502, ['error' => [
+        'message' => \sprintf('The query could not be run: %s', $error->getMessage()),
+        'column' => 0,
+    ]]);
 } catch (\Throwable $error) {
     // Anything else is aiwatcher being unreachable, or a bug here. Both are
     // worth saying plainly rather than as an empty table.

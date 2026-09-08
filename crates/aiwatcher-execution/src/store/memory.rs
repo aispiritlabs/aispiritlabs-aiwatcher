@@ -20,7 +20,7 @@ use tokio::sync::Mutex;
 
 use aiwatcher_core::{Checkpoint, MessageId};
 
-use crate::claim::{AttemptKey, AttemptRow, ClaimFilter};
+use crate::claim::{AttemptKey, AttemptRow, AttemptWrite, ClaimFilter};
 use crate::error::{Result, StoreError};
 use crate::message::{Direction, OutboxMessage, RecordedMessage, RunProjection};
 use crate::state::ExecutionId;
@@ -149,8 +149,16 @@ impl WorkflowStore for MemoryWorkflowStore {
             .or_default()
             .insert(request.input.metadata.message_id.to_string(), input_version);
         inner.projections.insert(key, request.projection);
-        for row in request.attempts {
-            inner.attempts.insert(row.key.clone(), row);
+        for write in request.attempts {
+            match write {
+                AttemptWrite::Dispatch(row) => {
+                    inner.attempts.insert(row.key.clone(), row);
+                }
+                // A finished attempt is not a row. See `AttemptWrite`.
+                AttemptWrite::Retire(key) => {
+                    inner.attempts.remove(&key);
+                }
+            }
         }
         inner.outbox.extend(request.outbox);
         if let Some((processor, checkpoint)) = request.checkpoint {

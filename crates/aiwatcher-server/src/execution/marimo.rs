@@ -222,9 +222,39 @@ impl ActivityExecutor for MarimoExecutor {
 
     async fn lookup(&self, command: &ActivityCommand) -> Result<PriorAttempt, ActivityError> {
         let key = command.idempotency_key();
+
+        // Two sources, and only one of them can answer the question that
+        // matters after a timeout. The runtime knows whether it is *still
+        // executing* this key — nothing else can. The object store's receipt
+        // knows what a finished attempt produced. Asked in that order, because
+        // running a notebook again beside one that is still going is the
+        // failure this route exists to prevent.
+        if let Some(seen) = self.seen(&key).await {
+            if seen.state == "running" {
+                return Ok(PriorAttempt::Running);
+            }
+            if seen.state == "done"
+                && let Some(revision) = seen.revision.as_deref()
+                && let Some(receipt) = self.artifacts.receipt(&key).await?
+                && receipt.runtime_digest != revision
+            {
+                // The runtime ran this key under a different notebook than the
+                // receipt describes. The stored rows are another run's, so they
+                // are not this attempt's answer.
+                tracing::warn!(
+                    key,
+                    stored = %receipt.runtime_digest,
+                    reported = revision,
+                    "the notebook runtime describes a different revision of this key than the receipt does"
+                );
+                return Ok(PriorAttempt::Absent);
+            }
+        }
+
+        // The durable half, and the one that survives a restart the memory does
+        // not: a receipt is written after the bytes and keyed by this exact
+        // attempt, so its existence is proof on its own.
         let Some(receipt) = self.artifacts.receipt(&key).await? else {
-            // Not "it did not run" — "nothing here can say". See the module
-            // docs: the notebook runtime keeps no memory of keys.
             return Ok(PriorAttempt::Absent);
         };
         if !self.artifacts.holds(&receipt.artifact).await? {
@@ -241,7 +271,33 @@ impl ActivityExecutor for MarimoExecutor {
     }
 }
 
+/// What the runtime remembers about one key.
+#[derive(Debug, serde::Deserialize)]
+struct PriorAnswer {
+    state: String,
+    #[serde(default)]
+    revision: Option<String>,
+}
+
 impl MarimoExecutor {
+    /// Ask the runtime about a key, or `None` when it cannot be asked.
+    ///
+    /// Best effort on purpose, and this is where it departs from the query
+    /// service's lookup. A runtime that is unreachable, or an older build with
+    /// no such route, must not stop the caller reading the *receipt* — that one
+    /// is durable and this one is a fifteen-minute window, so failing to reach
+    /// the volatile source would hide the answer that outlives it.
+    async fn seen(&self, key: &str) -> Option<PriorAnswer> {
+        let answered = self
+            .get(&format!("/ml-pipeline/executions/{key}"), LOOKUP_TIMEOUT)
+            .await
+            .inspect_err(|error| {
+                tracing::debug!(key, %error, "the notebook runtime could not be asked about this key");
+            })
+            .ok()?;
+        answered.decode().await.ok()
+    }
+
     async fn post(
         &self,
         path: &str,
@@ -343,6 +399,14 @@ fn drifted(
 /// somebody reads next to a block, not a log. The tail rather than the head,
 /// because a traceback ends with the line that mattered.
 const DIAGNOSTICS_BYTES: usize = 4 * 1024;
+
+/// How long to wait for the runtime to say whether it is still running a key.
+///
+/// Short, because this is asked on the takeover path and the answer is a dict
+/// lookup: a runtime that cannot answer it in ten seconds is one whose event
+/// loop is blocked, which is the state this question was added to make
+/// visible rather than to wait through.
+const LOOKUP_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// What a notebook printed, at a size a message can carry.
 fn bounded(stdout: &str) -> Option<String> {

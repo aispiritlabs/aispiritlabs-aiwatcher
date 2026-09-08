@@ -32,7 +32,7 @@
 use aiwatcher_core::Checkpoint;
 use time::OffsetDateTime;
 
-use crate::claim::{AttemptKey, AttemptRow};
+use crate::claim::{AttemptKey, AttemptRow, AttemptWrite};
 use crate::decide::{Now, decide, replay};
 use crate::error::{DecisionError, StoreError};
 use crate::facts::{FactContext, envelopes_for, outbox_rows};
@@ -365,8 +365,6 @@ pub fn projection_of(
             steps: run.steps.values().cloned().collect(),
             last_message_version: version,
             created_at: run.created_at,
-            started_at: run.started_at,
-            ended_at: run.ended_at,
         },
         // A stream with no `ExecutionRequested` in it. Reachable only through
         // the checkpoint-only append above, and a placeholder rather than a
@@ -382,8 +380,6 @@ pub fn projection_of(
             steps: Vec::new(),
             last_message_version: version,
             created_at: OffsetDateTime::UNIX_EPOCH,
-            started_at: None,
-            ended_at: None,
         },
     }
 }
@@ -429,7 +425,7 @@ pub fn attempt_rows(
     execution: &ExecutionId,
     after: &ExecutionState,
     outputs: &[PendingMessage],
-) -> Vec<AttemptRow> {
+) -> Vec<AttemptWrite> {
     let Some(run) = after.active() else {
         return Vec::new();
     };
@@ -456,21 +452,15 @@ pub fn attempt_rows(
                 if let Some(not_before) = retry_delay_of(outputs, step_id, *attempt) {
                     row = row.not_before(not_before);
                 }
-                rows.push(row);
+                rows.push(AttemptWrite::Dispatch(row));
             }
             WorkflowMessage::Event(event) => {
-                if let Some((step_id, attempt, state)) = settled(event) {
-                    let runtime = run
-                        .plan
-                        .step(step_id)
-                        .map_or(crate::plan::RuntimeKind::PythonTask, |step| {
-                            step.runtime.kind()
-                        });
-                    rows.push(AttemptRow::settled(
-                        AttemptKey::new(execution.clone(), step_id, attempt),
-                        runtime,
-                        state,
-                    ));
+                if let Some((step_id, attempt)) = settled(event) {
+                    rows.push(AttemptWrite::Retire(AttemptKey::new(
+                        execution.clone(),
+                        step_id,
+                        attempt,
+                    )));
                 }
             }
             WorkflowMessage::Command(_) => {}
@@ -502,27 +492,31 @@ fn retry_delay_of(
         })
 }
 
-/// Which attempt this fact ends, and how.
-fn settled(event: &WorkflowEvent) -> Option<(&str, u32, StateType)> {
+/// Which attempt this fact ends.
+///
+/// Only *how* it ended is missing, and deliberately: the outcome is on the
+/// event that carries it and in the run's own state, and the claim table's one
+/// question is what may still be taken. Every arm here is terminal — an
+/// attempt waiting for a person is `awaiting_input`, which is not an ending
+/// and keeps its row.
+fn settled(event: &WorkflowEvent) -> Option<(&str, u32)> {
     match event {
         WorkflowEvent::StepCompleted {
             step_id, attempt, ..
-        } => Some((step_id, *attempt, StateType::Completed)),
+        } => Some((step_id, *attempt)),
         // A hit settles the row it answered. Without this the attempt stays
         // claimable behind a lease nobody releases — the work was never done,
         // so nothing else would ever settle it.
         WorkflowEvent::StepCacheHit {
             step_id, attempt, ..
-        } => Some((step_id, *attempt, StateType::Completed)),
+        } => Some((step_id, *attempt)),
         WorkflowEvent::StepFailed {
-            step_id,
-            attempt,
-            error,
-        } => Some((step_id, *attempt, error.class.attempt_state())),
+            step_id, attempt, ..
+        } => Some((step_id, *attempt)),
         // Nothing ran, so nothing is claimable. Settling the row is what takes
         // a dispatched attempt out of every claimant's view when a cancel or an
         // upstream failure overtook it.
-        WorkflowEvent::StepSkipped { step_id, .. } => Some((step_id, 0, StateType::Cancelled)),
+        WorkflowEvent::StepSkipped { step_id, .. } => Some((step_id, 0)),
         _ => None,
     }
 }

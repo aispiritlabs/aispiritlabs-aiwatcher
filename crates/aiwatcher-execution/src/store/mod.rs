@@ -45,7 +45,7 @@ use time::OffsetDateTime;
 
 use aiwatcher_core::{Checkpoint, MessageId};
 
-use crate::claim::{AttemptKey, AttemptRow, ClaimFilter};
+use crate::claim::{AttemptKey, AttemptRow, AttemptWrite, ClaimFilter};
 use crate::error::{Result, StoreError};
 use crate::message::{
     Direction, MAX_PAYLOAD_BYTES, OutboxMessage, PendingMessage, RecordedMessage, RunProjection,
@@ -84,13 +84,13 @@ pub struct AppendRequest {
     pub outbox: Vec<OutboxMessage>,
     /// `(processor_id, checkpoint)` when this input came from the log.
     pub checkpoint: Option<(String, Checkpoint)>,
-    /// The attempt rows this decision dispatched or settled.
+    /// What this decision does to the claim table.
     ///
-    /// Written in the same transaction as the decision that authorised them, so
-    /// a claimable row always has a `StepScheduled` behind it and a settled one
+    /// Applied in the same transaction as the decision that authorised it, so a
+    /// claimable row always has a `StepScheduled` behind it and a retirement
     /// always has its completion. A row inserted separately would be work
     /// nobody decided on.
-    pub attempts: Vec<AttemptRow>,
+    pub attempts: Vec<AttemptWrite>,
 }
 
 impl AppendRequest {

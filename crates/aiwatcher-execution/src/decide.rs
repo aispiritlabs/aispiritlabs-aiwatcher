@@ -97,8 +97,6 @@ pub fn evolve(state: ExecutionState, event: &WorkflowEvent) -> ExecutionState {
                 steps,
                 cancelling: false,
                 created_at: OffsetDateTime::UNIX_EPOCH,
-                started_at: None,
-                ended_at: None,
             }))
         }
         // A second `ExecutionRequested`, or anything at all before the first,
@@ -133,8 +131,6 @@ fn apply(execution: &mut Execution, event: &WorkflowEvent) {
                     attempt: *attempt,
                     state: RunState::of(StateType::Pending),
                     error: None,
-                    started_at: None,
-                    ended_at: None,
                     not_before: None,
                 });
             }
@@ -151,8 +147,6 @@ fn apply(execution: &mut Execution, event: &WorkflowEvent) {
                     attempt: *attempt,
                     state: RunState::named(StateType::Pending, "AwaitingRetry"),
                     error: None,
-                    started_at: None,
-                    ended_at: None,
                     not_before: Some(*not_before),
                 });
             }

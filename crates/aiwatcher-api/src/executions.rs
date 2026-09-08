@@ -50,7 +50,8 @@ use aiwatcher_execution::message::RunProjection;
 use aiwatcher_execution::plan::ResolvedWindow;
 use aiwatcher_execution::{
     ExecutionHandler, ExecutionId, ExecutionMode, ExecutionOwner, ExecutionPlan, MessageMetadata,
-    Now, WorkflowCommand, WorkflowMessage, WorkflowStore, compile_curation, derive_uuid,
+    Now, RunAction, WorkflowCommand, WorkflowMessage, WorkflowStore, allowed_run_actions,
+    compile_curation, derive_uuid,
 };
 
 use crate::auth::Caller;
@@ -187,6 +188,20 @@ pub struct ExecutionAccepted {
     pub created: bool,
 }
 
+/// A run, with what may be done to it.
+///
+/// The actions are computed here rather than left to the caller, for
+/// `ContextAction::allowed`'s reason one level up: a panel that decided for
+/// itself which of cancel, pause and resume apply would be a second copy of
+/// `decide`'s preconditions, in another language, drifting from the first.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct RunView {
+    pub execution: RunProjection,
+    /// Which run-level commands would be accepted right now. Empty for a run
+    /// that has finished.
+    pub allowed: Vec<RunAction>,
+}
+
 fn handler(state: &AppState) -> ApiResult<&Arc<ExecutionHandler<Arc<dyn WorkflowStore>>>> {
     state
         .executions
@@ -232,42 +247,15 @@ async fn start_execution(
         .require(aiwatcher_auth::Role::Editor)?
         .log_subject()
         .to_owned();
-    let handler = handler(&state)?;
+    // Before the compile, and the order matters: an instance with no workflow
+    // store cannot run *anything*, and saying so is a better answer than
+    // reporting whichever other thing is also missing. `start` checks it again
+    // because it has a second caller.
+    handler(&state)?;
 
     let plan = compile(&state, &body).await?;
     let execution_id = ExecutionId::new(execution_id_for(&headers, &plan));
-    // Derived from the execution, so a redelivered request — a retried POST, a
-    // proxy that repeated it — lands on the inbox rather than beside it.
-    let message_id = aiwatcher_core::MessageId::new(derive_uuid(&format!(
-        "aiwatcher/execution/start/{execution_id}"
-    )));
-
-    let now = time::OffsetDateTime::now_utc();
-    let handled = handler
-        .handle(
-            &execution_id,
-            WorkflowMessage::Command(WorkflowCommand::StartExecution {
-                execution_id: execution_id.clone(),
-                plan: Box::new(plan),
-                // Local: the Rust decider schedules the steps and owns their
-                // retries. `engine:` and `worker` are Phases 9 and 10, and the
-                // field is here rather than derived so that a run always
-                // records who was responsible for it.
-                owner: ExecutionOwner::Local,
-                mode: ExecutionMode::Compiled,
-                requested_by: requester.clone(),
-                input: body.parameters,
-            }),
-            MessageMetadata::caused_by(&execution_id, &message_id, message_id.clone(), now),
-            Now::at(now),
-        )
-        .await?;
-
-    // The outbox has rows and the claim table has a dispatched attempt; both
-    // are drained by loops that would otherwise wait a poll interval. Nothing
-    // is lost if this process runs neither — the store is durable and whichever
-    // one does run them picks the work up.
-    state.notify_execution_worker();
+    let handled = start(&state, &execution_id, plan, body.parameters, &requester).await?;
 
     tracing::info!(
         execution_id = %execution_id,
@@ -291,7 +279,8 @@ async fn start_execution(
     ))
 }
 
-/// One run's own page: where it is, and where each of its steps is.
+/// One run's own page: where it is, where each of its steps is, and what may be
+/// done to it.
 ///
 /// The store's inline projection rather than a fold of the log, and the two are
 /// not interchangeable. This one is transactional with the decision that
@@ -303,7 +292,7 @@ async fn start_execution(
     path = "/api/v1/executions/{execution_id}",
     params(("execution_id" = String, Path, description = "The id a start returned")),
     responses(
-        (status = 200, body = RunProjection),
+        (status = 200, body = RunView),
         (status = 404, body = crate::error::ErrorBody),
         (status = 501, body = crate::error::ErrorBody),
         (status = 503, body = crate::error::ErrorBody),
@@ -313,14 +302,71 @@ async fn start_execution(
 async fn get_execution(
     State(state): State<AppState>,
     Path(execution_id): Path<String>,
-) -> ApiResult<Json<RunProjection>> {
-    handler(&state)?
+) -> ApiResult<Json<RunView>> {
+    let execution = handler(&state)?
         .store()
         .projection(&ExecutionId::new(execution_id.clone()))
         .await
         .map_err(aiwatcher_execution::HandleError::Store)?
-        .map(Json)
-        .ok_or_else(|| ApiError::NotFound(format!("execution {execution_id}")))
+        .ok_or_else(|| ApiError::NotFound(format!("execution {execution_id}")))?;
+    Ok(Json(RunView {
+        allowed: allowed_run_actions(execution.state.state_type),
+        execution,
+    }))
+}
+
+/// Start one execution: the only path there is.
+///
+/// Taken out of the route rather than left in it because it has a second
+/// caller — the scheduler in the work role — and a scheduler with its own copy
+/// would be a second way to start a run, free to disagree with this one about
+/// the owner, the mode or the derived message id. The route decides *who is
+/// asking* and *which id*; this decides what starting means.
+///
+/// # Errors
+///
+/// Whatever the handler could not do.
+pub async fn start(
+    state: &AppState,
+    execution_id: &ExecutionId,
+    plan: ExecutionPlan,
+    parameters: BTreeMap<String, Value>,
+    requested_by: &str,
+) -> ApiResult<aiwatcher_execution::Handled> {
+    // Derived from the execution, so a redelivered request — a retried POST, a
+    // proxy that repeated it, a second worker on the same slot — lands on the
+    // inbox rather than beside it.
+    let message_id = aiwatcher_core::MessageId::new(derive_uuid(&format!(
+        "aiwatcher/execution/start/{execution_id}"
+    )));
+
+    let now = time::OffsetDateTime::now_utc();
+    let handled = handler(state)?
+        .handle(
+            execution_id,
+            WorkflowMessage::Command(WorkflowCommand::StartExecution {
+                execution_id: execution_id.clone(),
+                plan: Box::new(plan),
+                // Local: the Rust decider schedules the steps and owns their
+                // retries. `engine:` and `worker` are Phases 9 and 10, and the
+                // field is here rather than derived so that a run always
+                // records who was responsible for it.
+                owner: ExecutionOwner::Local,
+                mode: ExecutionMode::Compiled,
+                requested_by: requested_by.to_owned(),
+                input: parameters,
+            }),
+            MessageMetadata::caused_by(execution_id, &message_id, message_id.clone(), now),
+            Now::at(now),
+        )
+        .await?;
+
+    // The outbox has rows and the claim table has a dispatched attempt; both
+    // are drained by loops that would otherwise wait a poll interval. Nothing
+    // is lost if this process runs neither — the store is durable and whichever
+    // one does run them picks the work up.
+    state.notify_execution_worker();
+    Ok(handled)
 }
 
 /// Read the definition at the revision it names, and compile it.
@@ -330,29 +376,42 @@ async fn get_execution(
 /// refusal carries every problem at once, which is what the canvas renders.
 async fn compile(state: &AppState, body: &StartExecutionBody) -> ApiResult<ExecutionPlan> {
     let TargetKind::CurationPipeline = body.target.kind;
+    compile_curation_named(
+        state,
+        &body.target.name,
+        body.target.revision.as_deref(),
+        body.window_seconds
+            .map(|seconds| resolve_window(seconds, body.as_of)),
+    )
+    .await
+}
+
+/// The same compile, by name, for a caller that has no request body.
+///
+/// The scheduler is that caller. Sharing it rather than repeating it is what
+/// keeps "which revision does a run pin" one answer: the head, read and pinned
+/// at the moment the run starts.
+///
+/// # Errors
+///
+/// A 404 when the definition is not there, or a 422 carrying every reason it
+/// does not compile.
+pub async fn compile_curation_named(
+    state: &AppState,
+    name: &str,
+    revision: Option<&str>,
+    window: Option<ResolvedWindow>,
+) -> ApiResult<ExecutionPlan> {
     let pipeline = definitions(state)?
-        .pipeline(&body.target.name, body.target.revision.as_deref())
+        .pipeline(name, revision)
         .await?
-        .ok_or_else(|| match &body.target.revision {
-            Some(revision) => {
-                ApiError::NotFound(format!("pipeline {} at {revision}", body.target.name))
-            }
-            None => ApiError::NotFound(format!("pipeline {}", body.target.name)),
+        .ok_or_else(|| match revision {
+            Some(revision) => ApiError::NotFound(format!("pipeline {name} at {revision}")),
+            None => ApiError::NotFound(format!("pipeline {name}")),
         })?;
 
-    compile_curation(
-        &pipeline,
-        CompileOptions {
-            window: body
-                .window_seconds
-                .map(|seconds| resolve_window(seconds, body.as_of)),
-        },
-    )
-    .map_err(|error| ApiError::PlanRefused {
-        summary: format!(
-            "{} does not compile to something that can be run",
-            body.target.name
-        ),
+    compile_curation(&pipeline, CompileOptions { window }).map_err(|error| ApiError::PlanRefused {
+        summary: format!("{name} does not compile to something that can be run"),
         problems: error.problems().to_vec(),
     })
 }
@@ -510,7 +569,13 @@ pub struct ProvideInputBody {
     /// silently applying it to the new attempt would record a human decision
     /// that no human made.
     pub attempt: u32,
-    #[schema(value_type = Object)]
+    /// Whatever the question asked for, as JSON.
+    ///
+    /// Any value, and deliberately not an object: a step that offered
+    /// `choices` is answered with one of them, which `decide` reads as a JSON
+    /// **string**. Declaring this an object made the contract unable to express
+    /// the commonest valid request, so the generated client could not send one.
+    #[schema(value_type = Value)]
     pub response: Value,
 }
 
@@ -545,7 +610,7 @@ async fn apply<F>(
     execution_id: &str,
     caller: &Caller,
     build: F,
-) -> ApiResult<Json<RunProjection>>
+) -> ApiResult<Json<RunView>>
 where
     F: FnOnce(&str) -> WorkflowCommand,
 {
@@ -603,7 +668,12 @@ where
         "applied a command to a managed execution"
     );
 
-    Ok(Json(handled.projection))
+    // The actions come back with the run, so a caller that has just paused
+    // knows Resume is the one that applies now without asking again.
+    Ok(Json(RunView {
+        allowed: allowed_run_actions(handled.projection.state.state_type),
+        execution: handled.projection,
+    }))
 }
 
 /// Stop a run, and everything it has not already dispatched.
@@ -613,7 +683,7 @@ where
     params(("execution_id" = String, Path, description = "The id a start returned")),
     request_body = CancelBody,
     responses(
-        (status = 200, body = RunProjection),
+        (status = 200, body = RunView),
         (status = 403, body = crate::error::ErrorBody),
         (status = 404, body = crate::error::ErrorBody),
         (status = 409, body = crate::error::ErrorBody, description = "The run is in no state to accept this"),
@@ -626,7 +696,7 @@ async fn cancel_execution(
     caller: Caller,
     Path(execution_id): Path<String>,
     body: Option<Json<CancelBody>>,
-) -> ApiResult<Json<RunProjection>> {
+) -> ApiResult<Json<RunView>> {
     let reason = body.map(|Json(body)| body.reason).unwrap_or_default();
 
     apply(&state, &execution_id, &caller, |_| {
@@ -645,7 +715,7 @@ async fn cancel_execution(
     path = "/api/v1/executions/{execution_id}/commands/pause",
     params(("execution_id" = String, Path, description = "The id a start returned")),
     responses(
-        (status = 200, body = RunProjection),
+        (status = 200, body = RunView),
         (status = 403, body = crate::error::ErrorBody),
         (status = 404, body = crate::error::ErrorBody),
         (status = 409, body = crate::error::ErrorBody, description = "The run is in no state to accept this"),
@@ -657,7 +727,7 @@ async fn pause_execution(
     State(state): State<AppState>,
     caller: Caller,
     Path(execution_id): Path<String>,
-) -> ApiResult<Json<RunProjection>> {
+) -> ApiResult<Json<RunView>> {
     apply(&state, &execution_id, &caller, |_| {
         WorkflowCommand::PauseExecution
     })
@@ -670,7 +740,7 @@ async fn pause_execution(
     path = "/api/v1/executions/{execution_id}/commands/resume",
     params(("execution_id" = String, Path, description = "The id a start returned")),
     responses(
-        (status = 200, body = RunProjection),
+        (status = 200, body = RunView),
         (status = 403, body = crate::error::ErrorBody),
         (status = 404, body = crate::error::ErrorBody),
         (status = 409, body = crate::error::ErrorBody, description = "The run is in no state to accept this"),
@@ -682,7 +752,7 @@ async fn resume_execution(
     State(state): State<AppState>,
     caller: Caller,
     Path(execution_id): Path<String>,
-) -> ApiResult<Json<RunProjection>> {
+) -> ApiResult<Json<RunView>> {
     apply(&state, &execution_id, &caller, |_| {
         WorkflowCommand::ResumeExecution
     })
@@ -702,7 +772,7 @@ async fn resume_execution(
         ("step_id" = String, Path, description = "A step of that run's pinned plan"),
     ),
     responses(
-        (status = 200, body = RunProjection),
+        (status = 200, body = RunView),
         (status = 403, body = crate::error::ErrorBody),
         (status = 404, body = crate::error::ErrorBody),
         (status = 409, body = crate::error::ErrorBody, description = "The step is in no state to be retried"),
@@ -714,7 +784,7 @@ async fn retry_step(
     State(state): State<AppState>,
     caller: Caller,
     Path((execution_id, step_id)): Path<(String, String)>,
-) -> ApiResult<Json<RunProjection>> {
+) -> ApiResult<Json<RunView>> {
     apply(&state, &execution_id, &caller, |_| {
         WorkflowCommand::RetryStep { step_id }
     })
@@ -731,7 +801,7 @@ async fn retry_step(
     ),
     request_body = ProvideInputBody,
     responses(
-        (status = 200, body = RunProjection),
+        (status = 200, body = RunView),
         (status = 403, body = crate::error::ErrorBody),
         (status = 404, body = crate::error::ErrorBody),
         (status = 409, body = crate::error::ErrorBody, description = "That step is not waiting for this answer"),
@@ -744,7 +814,7 @@ async fn provide_input(
     caller: Caller,
     Path((execution_id, step_id)): Path<(String, String)>,
     Json(body): Json<ProvideInputBody>,
-) -> ApiResult<Json<RunProjection>> {
+) -> ApiResult<Json<RunView>> {
     apply(&state, &execution_id, &caller, |who| {
         // Who answered comes from the session, never from the body. A field a
         // caller could set would make the one record of a human decision say

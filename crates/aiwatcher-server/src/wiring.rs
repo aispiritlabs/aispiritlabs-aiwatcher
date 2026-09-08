@@ -748,6 +748,11 @@ pub async fn build(config: Config) -> Result<Runtime> {
         sink: config.ingest_enabled.then(|| Arc::clone(&sink)),
         prompts: registries.prompts,
         datasets: registries.datasets,
+        // The same object store the definitions live in, under its own prefix.
+        schedules: registries
+            .objects
+            .as_ref()
+            .map(|store| Arc::new(aiwatcher_execution::ScheduleStore::new(Arc::clone(store)))),
         annotations: registries.annotations,
         conversations: registries.conversations,
         executions: Some(Arc::new(ExecutionHandler::new(Arc::clone(&workflow_store)))),

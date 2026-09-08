@@ -164,9 +164,13 @@ Everything else: `apps/panel` (React), `sdk/python`, `sdk/typescript`,
 Rust binary does not know exist. `services/flow` is the PHP query surface behind
 the panel's Query tab and its curation transforms (`just flow-check`).
 `services/ml_pipeline` is the Python 3.14 notebook runtime behind a pipeline's
-marimo blocks: it runs one as a step through marimo's own `App.run(defs=…)` and
-serves the same file as a live app for the block's editor (`just
-ml-pipeline-check`). `just check` covers neither.
+marimo blocks: it runs one as a step through marimo's own `App.run(defs=…)` — in
+a worker thread, so a run does not hold the loop that serves everything else —
+and serves the same file as a live app for the block's editor (`just
+ml-pipeline-check`). `just check` covers neither — PHP and a Python toolchain
+may not be on a machine that only touches the Rust crates — but **CI runs both**,
+in their own jobs, because a managed `flow_php` or `marimo` step runs through
+them and a break there is a break in the execution path.
 
 ### The words, since "workflow" meant four things
 
@@ -668,7 +672,11 @@ what runs a real graph.
   the whole curation is one query.
 - `data-curation` is also the one area with a *managed* path beside its ad-hoc
   one: **Run on the server** saves the revision, calls `POST /api/v1/executions`
-  and the browser may close (ADR_0025). It follows that run with the stream that
+  and the browser may close (ADR_0025) — which is why both the pipeline's name
+  and the execution's id live in the search params, and why a reload comes back
+  to the same canvas following the same run. Beside it is the **schedule**: when
+  that definition runs unattended, with `Save and run now` for the case where it
+  should also go once immediately. It renders `next_run` and never computes one. It follows that run with the stream that
   already exists — `openWorkflowStream`, because a managed run's facts carry the
   execution as their `workflow_run_id` — and the stream is only the *signal*:
   every frame re-reads `GET /executions/{id}`, whose projection was written in
@@ -733,6 +741,23 @@ what runs a real graph.
   offered where the command 409s is a button that does not work, which is worse
   than an absent one. Cancel, pause and resume are not there at all: they are
   done to a run, and that is a block's context.
+- **Never store a finished attempt as a row.** A settlement is the claim row
+  ceasing to exist — `AttemptWrite::Retire`, a `remove` in two adapters and a
+  `delete` in the third. The older shape wrote a terminal row, which meant
+  blanking `command_id`, `queue`, `task_ref` and the holder to store a record
+  that described nothing, and left the file adapter reading and `fsync`ing the
+  whole history on every claim: 458 ms over fifty thousand rows, unbounded
+  because retention is opt-in. Nothing reads a finished attempt back — a
+  redelivery is recognised by the stream's inbox key, and a takeover reads
+  `previous_owner` on a row that is still live. `awaiting_input` keeps its row,
+  because it is not an ending. Section 43.34.
+- **Never put a run's timings in the workflow store.** When an execution
+  started and ended is the log fold's answer — with `duration_ms` — and an
+  attempt's is the span assembler's, from `step.*`. `RunProjection` and
+  `AttemptRecord` carried four such fields, written by nothing and read by
+  nothing; filling them in would have been the second answer, not the fix. The
+  projection is for accepting the next command and for the run's own page.
+  Section 43.33.
 - **Never build a second live view of one run.** ADR_0026 puts a managed run's
   facts on the log carrying the execution as `workflow_run_id`, and
   `/api/v1/workflow-executions/{id}/stream` scopes by that field — so a managed
@@ -772,6 +797,51 @@ what runs a real graph.
   for drawing and never an explanation of a refusal, and a managed run's Flow
   script is compiled in Rust — the browser may show the same text, and what runs
   is what the server produced.
+- **Never let a scheduler decide what is due.** The tick supplies an
+  *interval* — where the last one stopped, and now — and `Schedule::slots_between`
+  answers what fell in it, purely. That inversion is where catch-up comes from
+  (a slot missed during an outage is simply inside the next interval) and why
+  the tick rate is an operational choice rather than a correctness one. A loop
+  that asked "is it 09:00?" would answer no at 10:05 and lose the day's run with
+  nothing to say so. Section 43.31.
+- **Never let a schedule fire without writing down what happened.** The tick
+  records the slot, the outcome and the reason on the schedule head — what it
+  logged before was a warning nobody reads, and a schedule refused every morning
+  for a week looked from the panel exactly like one that had been working. What
+  it records is the *scheduler's* decision and never the run's outcome: whether
+  the run succeeded is the log's answer, one click away by the id beside it, and
+  a second copy would be free to disagree with the fold. Written after the run,
+  so a stored `started` always has one behind it. Section 43.32.
+- **Never work out in the panel when a schedule next fires.** `next_run` comes
+  from the server, from `Schedule::next_after` — which is `slots_between` over
+  eight days rather than a second walk, so the hour a card shows and the hour
+  the tick fires at cannot differ. The same rule as `RunView::allowed`, and with
+  a sharper failure: a second implementation would have its own idea of when the
+  clocks change, and the first hour it disagreed on would be one somebody
+  planned a morning around.
+- **Never put a clock tick on the event log.** The reference this is taken from
+  publishes `MinuteHasPassed` on a bus; here the only subscriber is the
+  scheduler and the log is the durable one every projector folds. What is
+  durable instead is the tick's *cursor*, a Unix second in
+  `processor_checkpoints` — the same table and the same question the projector's
+  answers.
+- **Never give a scheduled run an id that is not its slot's.** Derived from the
+  definition and the slot, so two workers that both find 09:00 due produce one
+  execution and one conflict — no lease, nothing to expire. Never from the
+  compiled plan: two workers reading the head a moment apart compile different
+  `plan_id`s, and both runs would go through. And the cursor advances *after*
+  the starts commit, so a crash between them repeats rather than skips.
+- **Never let a schedule mint a definition revision.** It is a mutable head
+  under its own `schedules/` prefix, keyed by definition kind and name. Changing
+  nine to ten is not a new pipeline, any more than `produced_by` is part of a
+  dataset version's identity — and the prefix is its own because
+  `aiwatcher-datasets` owns `pipelines/` and two crates writing one prefix is
+  what the private-key-layout rule exists to prevent.
+- **Never flatten a body that denies unknown fields.** serde's `flatten` and
+  `deny_unknown_fields` do not compose: every field the flattened struct owns is
+  reported as unknown. The bodies here deny unknown fields so a `cron` somebody
+  hoped would work is a refusal naming it rather than a field silently ignored,
+  so the nested shape is the one that keeps the guardrail.
 - **Never let `decide` read a clock, open a socket or generate a random
   value.** Time arrives in `Now`, ids are derived from what they name. That is
   what makes a replay reach the same schedule and the same command id, so a
@@ -912,6 +982,25 @@ what runs a real graph.
   live is the panel's own routing or the generated client's. And an action whose
   route does not exist is not listed — a retry nobody can perform reads as a
   feature.
+- **Never decide in the panel which commands a run would accept.**
+  `allowed_run_actions` answers it beside `ContextAction::allowed`, and both
+  ride back with the thing they describe — `GET /executions/{id}` and every
+  command route return a `RunView`, the projection *and* what may be done to
+  it. `state.is_terminal()` in TypeScript is three lines and a second copy of
+  `decide`'s preconditions in another language. Section 43.27.
+- **Never keep a managed run's id out of the URL.** ADR_0025's claim is that
+  the browser may close, so a run held in `useState` is a run a reload loses —
+  the panel's own URL-state rule, in the one place where it is load-bearing
+  rather than a convenience. And the way back to an old run is
+  `GET /api/v1/workflow-executions`, which folds the log: a list over the
+  inline projection is the second read path ADR_0026 forbids. Section 43.27.
+- **Never read a body from aiwatcher without checking the status first.** In
+  `services/flow` the pipeline is lazy, so by the time `array_get(__body,
+  'rows')` runs there is no status left to branch on — a 501 naming an unset
+  variable arrives as `Path "rows" does not exists`. `CheckedClient` throws at
+  the seam, carrying aiwatcher's own message, and a permanent answer is relayed
+  as a 4xx so a managed step reads it as `UserCode` rather than spending ten
+  attempts on a flag that is still off. Section 43.28.
 - **Never re-implement a pipeline's rules in the panel.** `aiwatcher-datasets`
   decides whether blocks form a runnable chain and returns every problem as
   `details` on a 422; the canvas renders those lines. `lib/pipeline.ts`'s
@@ -929,6 +1018,19 @@ what runs a real graph.
   only that cell uses is underscored. `ml_pipeline.step` catches marimo's own
   message for this and answers it, because that message names the missing
   definitions without saying what to do about them.
+- **Never run a notebook on the event loop.** `run_notebook` is a blocking
+  `subprocess.run`, and called from an `async` handler it held every other
+  request for the length of the run — measured at 657 ms of a 704 ms run. Two
+  things depend on it not doing that: `GET /ml-pipeline/executions/{key}` has to
+  be answerable *while* a notebook runs, which is the only case it exists for,
+  and marimo's live app is served by the same process for the panel's iframe.
+  Section 43.30.
+- **Never let a runtime be asked only about what it stored.** A receipt says
+  what a finished attempt produced; only the runtime knows whether it is *still
+  executing* a key, and after a timeout that is the question. Both runtimes
+  answer it now — and the notebook one is asked **best effort**, because the
+  receipt is durable and the memory is a fifteen-minute window: failing to reach
+  the volatile source must not hide the answer that outlives it.
 - **Never expose the notebook runtime.** It runs notebook code with no sandbox,
   in its own process for a live app and in a child process for a step, and it
   has no authentication. It binds to `127.0.0.1` and is a development surface —
@@ -1397,6 +1499,14 @@ what runs a real graph.
   a `match` branch, is never called by string, and there is no `eval` anywhere in
   the service. `tests/Dsl/ParserRejectionTest.php` is the list of things that
   must keep failing; adding to it is cheap and is the point.
+- **Never give a transform a second representation.** `BlockSpec::Transform` is
+  Flow DSL text and stays text (decision 15, settled). A structured model would
+  be the enumeration of 43.22 one layer up — every transform a user could write
+  would have to be a case this repository has, and Flow ships 239 functions.
+  Structure *beside* the text is worse than either: two authored representations
+  of one thing, free to drift, with no rule saying which is the truth. The cost
+  is named rather than hidden — a second query engine reads `FlowSourceRef` and
+  re-authors the transforms.
 - **Never enumerate what a signature can decide.** ADR_0008's rule is about
   *dispatch*: a name from a query may select a key, never become a callable. A
   hand-written list of 37 names was an enumeration on top of that rule, and an
@@ -1425,7 +1535,7 @@ what runs a real graph.
 - **Never make the security boundary depend on Mago.** It is a dev dependency
   and may be absent. It reports syntax; `src/Dsl` decides what runs. `just
   flow-check` is the service's own gate (format, lint, tests) — `just check`
-  does not cover PHP.
+  does not cover PHP, and the `flow` job in CI does.
 - **Never expose the Flow service without authentication.** It has none. The
   parser bounds what a query can say, not who may ask, and `just flow-serve`
   binds it to localhost.

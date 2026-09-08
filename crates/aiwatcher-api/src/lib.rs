@@ -71,6 +71,7 @@ pub mod openapi;
 pub mod prompts;
 pub mod routes;
 pub mod runs;
+pub mod schedules;
 pub mod state;
 pub mod stream;
 pub mod training;

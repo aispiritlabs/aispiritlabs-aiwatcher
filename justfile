@@ -501,10 +501,14 @@ ml-pipeline-check:
     #!/usr/bin/env bash
     set -euo pipefail
     cd {{ml_pipeline}}
-    uv run ruff format --check .
-    uv run ruff check .
-    uv run mypy
-    uv run pytest -q
+    # `--locked` rather than a plain `uv run`: this recipe is what CI runs, and
+    # a lock that no longer matches `pyproject.toml` should be a red build with
+    # a message rather than a quiet re-resolve that tests a dependency set
+    # nobody committed.
+    uv run --locked ruff format --check .
+    uv run --locked ruff check .
+    uv run --locked mypy
+    uv run --locked pytest -q
 
 # Open http://localhost:5173/data-curation/pipeline and press "Load the PII
 # example".

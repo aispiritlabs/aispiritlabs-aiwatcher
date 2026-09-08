@@ -31,6 +31,14 @@ const ADVISORY_LOCK: i64 = 0x00A1_0025;
 const MIGRATIONS: &[(i64, &str)] = &[
     (1, include_str!("../../../migrations/0001_execution.sql")),
     (2, include_str!("../../../migrations/0002_retention.sql")),
+    (
+        3,
+        include_str!("../../../migrations/0003_drop_dead_timestamps.sql"),
+    ),
+    (
+        4,
+        include_str!("../../../migrations/0004_retire_finished_attempts.sql"),
+    ),
 ];
 
 /// Bring the database up to the schema this build expects.

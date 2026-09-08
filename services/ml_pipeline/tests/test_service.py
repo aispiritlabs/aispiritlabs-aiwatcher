@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import anyio
 import pytest
+from httpx import ASGITransport, AsyncClient
 from starlette.testclient import TestClient
 
 from ml_pipeline.config import Config
+from ml_pipeline.memory import ABSENT, DONE, RUNNING
 from ml_pipeline.service import create_app
 from ml_pipeline.staging import SLUG, Staging
 
@@ -157,3 +160,134 @@ def test_the_live_app_is_served_under_the_path_health_advertises(client: TestCli
 
     assert page.status_code == 200
     assert "text/html" in page.headers["content-type"]
+
+
+def test_a_key_this_service_never_ran_is_absent_rather_than_a_404(client: TestClient) -> None:
+    # `absent` is the safe answer and the ordinary one, so the route says it
+    # rather than making the caller read a status code as a state.
+    body = client.get("/ml-pipeline/executions/01a0/detect/1").json()
+
+    assert body == {"state": ABSENT}
+
+
+def test_a_finished_run_is_remembered_under_the_key_the_reactor_will_ask_with(
+    scratch: Config,
+) -> None:
+    # The context *is* the idempotency key — `<execution>/<step>/<attempt>`,
+    # the same string the reactor derives — so a run needs no second field for
+    # this and a lookup needs no translation.
+    client = TestClient(create_app(scratch))
+    client.put("/ml-pipeline/notebooks/demo", json={"source": NOTEBOOK})
+    key = "01a0/detect/1"
+
+    ran = client.post(
+        "/ml-pipeline/run",
+        json={"notebook": "demo", "rows": [{"a": 1}], "params": {}, "context": key},
+    )
+    assert ran.status_code == 200, ran.text
+
+    body = client.get(f"/ml-pipeline/executions/{key}").json()
+    assert body["state"] == DONE
+    # The revision it ran, which is what a receipt records too. Two answers
+    # that disagree mean the stored rows came from a different notebook.
+    assert body["revision"] == ran.json()["revision"]
+    assert body["rows"] == ran.json()["row_count"]
+
+
+def test_a_run_with_no_context_is_not_remembered_at_all(scratch: Config) -> None:
+    # An ad-hoc preview from the panel is not a managed attempt: it is not
+    # keyed, not resumed and not deduplicated. Remembering it would put notes
+    # in this dict for every keystroke somebody previews.
+    client = TestClient(create_app(scratch))
+    client.put("/ml-pipeline/notebooks/demo", json={"source": NOTEBOOK})
+
+    ran = client.post(
+        "/ml-pipeline/run", json={"notebook": "demo", "rows": [{"a": 1}], "params": {}}
+    )
+    assert ran.status_code == 200, ran.text
+
+    assert client.get("/ml-pipeline/executions/adhoc").json() == {"state": ABSENT}
+
+
+def test_a_notebook_that_raised_leaves_no_note_saying_it_is_still_running(
+    scratch: Config,
+) -> None:
+    # Otherwise a reactor waits for something that stopped, and only the lease
+    # expiring frees it.
+    (scratch.notebooks / "boom.py").write_text(
+        NOTEBOOK.replace('{**row, "seen": True} for row in rows', "1 / 0 for row in rows")
+    )
+    client = TestClient(create_app(scratch), raise_server_exceptions=False)
+    key = "01a0/boom/1"
+
+    failed = client.post(
+        "/ml-pipeline/run",
+        json={"notebook": "boom", "rows": [{"a": 1}], "params": {}, "context": key},
+    )
+    assert failed.status_code == 422, failed.text
+
+    assert client.get(f"/ml-pipeline/executions/{key}").json() == {"state": ABSENT}
+
+
+def test_a_running_notebook_does_not_hold_every_other_request_behind_it(
+    scratch: Config,
+) -> None:
+    """The reason `run_notebook` is handed to a worker thread.
+
+    Called straight from the async handler it blocked the event loop for the
+    whole subprocess — measured at 657 ms of a 704 ms run on a notebook that
+    finishes in under a second. Two things depend on it not doing that: the
+    lookup below has to be answerable *while* a notebook runs, which is the only
+    case it exists for, and marimo's live app is served by this same process for
+    the panel's iframe.
+
+    Asserted through the lookup rather than through a stopwatch: a timing test on
+    a shared runner measures the runner. What this needs to be true is that the
+    key reads `running` from outside while the run is in flight, which is only
+    possible if the loop is free to answer.
+    """
+    slow = NOTEBOOK.replace(
+        "    from ml_pipeline import Block",
+        "    import time\n    from ml_pipeline import Block",
+    ).replace(
+        '{**row, "seen": True} for row in rows',
+        '{**row, "seen": not time.sleep(0.05)} for row in rows',
+    )
+    (scratch.notebooks / "slow.py").write_text(slow)
+    key = "01a0/slow/1"
+
+    seen: list[str] = []
+
+    async def watch() -> None:
+        # Two clients on one app: `run` blocks its own request by design, so the
+        # question has to come from somewhere that is not waiting on it.
+        while not seen or seen[-1] == RUNNING:
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
+                answer = await client.get(f"/ml-pipeline/executions/{key}")
+            seen.append(answer.json()["state"])
+            await anyio.sleep(0.02)
+
+    async def exercise() -> None:
+        async with (
+            anyio.create_task_group() as group,
+            AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client,
+        ):
+            await client.put("/ml-pipeline/notebooks/slow", json={"source": slow})
+            group.start_soon(watch)
+            ran = await client.post(
+                "/ml-pipeline/run",
+                json={
+                    "notebook": "slow",
+                    "rows": [{"a": index} for index in range(20)],
+                    "params": {},
+                    "context": key,
+                },
+                timeout=120,
+            )
+            assert ran.status_code == 200, ran.text
+
+    app = create_app(scratch)
+    anyio.run(exercise)
+
+    assert RUNNING in seen, f"the service never answered while a notebook ran: {seen}"
+    assert seen[-1] == DONE, seen

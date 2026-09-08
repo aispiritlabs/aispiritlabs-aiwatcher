@@ -40,7 +40,7 @@ use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Row as _};
 use time::OffsetDateTime;
 
-use crate::claim::{AttemptKey, AttemptRow, ClaimFilter};
+use crate::claim::{AttemptKey, AttemptRow, AttemptWrite, ClaimFilter};
 use crate::message::{
     Direction, MessageMetadata, OutboxMessage, RecordedMessage, RunProjection, WorkflowMessage,
 };
@@ -212,8 +212,16 @@ impl WorkflowStore for PostgresWorkflowStore {
 
         upsert_projection(&mut transaction, &request.projection).await?;
 
-        for row in request.attempts {
-            upsert_attempt(&mut transaction, &row).await?;
+        for write in request.attempts {
+            match write {
+                AttemptWrite::Dispatch(row) => {
+                    upsert_attempt(&mut transaction, &row).await?;
+                }
+                // A finished attempt is not a row. See `AttemptWrite`.
+                AttemptWrite::Retire(key) => {
+                    retire_attempt(&mut transaction, &key).await?;
+                }
+            }
         }
 
         for row in request.outbox {
@@ -253,7 +261,7 @@ impl WorkflowStore for PostgresWorkflowStore {
         let row = sqlx::query(
             "select execution_id, plan_id, definition_name, owner, mode, state_type,
                     state_name, requested_by, steps, last_message_version,
-                    created_at, started_at, ended_at
+                    created_at
                from execution_runs where execution_id = $1",
         )
         .bind(execution.as_str())
@@ -521,8 +529,8 @@ async fn upsert_projection(
         "insert into execution_runs
            (execution_id, plan_id, definition_name, owner, mode, state_type,
             state_name, requested_by, steps, last_message_version,
-            created_at, started_at, ended_at, updated_at)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now())
+            created_at, updated_at)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
          on conflict (execution_id) do update set
            plan_id = excluded.plan_id,
            definition_name = excluded.definition_name,
@@ -533,8 +541,6 @@ async fn upsert_projection(
            requested_by = excluded.requested_by,
            steps = excluded.steps,
            last_message_version = excluded.last_message_version,
-           started_at = excluded.started_at,
-           ended_at = excluded.ended_at,
            -- The retention clock. A clock read in the store rather than in
            -- `decide`, which is the one place that may not have one: this is
            -- when the row was written, not a fact the fold produced.
@@ -551,8 +557,26 @@ async fn upsert_projection(
     .bind(serde_json::to_value(&projection.steps).map_err(StoreError::Encoding)?)
     .bind(projection.last_message_version as i64)
     .bind(projection.created_at)
-    .bind(projection.started_at)
-    .bind(projection.ended_at)
+    .execute(&mut **transaction)
+    .await
+    .map_err(|error| StoreError::Backend(error.to_string()))?;
+    Ok(())
+}
+
+/// Take a finished attempt out of the claim table.
+///
+/// A delete rather than a state change, so the table is bounded by how much is
+/// unfinished rather than by how much has ever run. `step_attempts_claimable`
+/// is still partial, because `awaiting_input` is neither claimable nor an
+/// ending and keeps its row.
+async fn retire_attempt(transaction: &mut Transaction<'_>, key: &AttemptKey) -> Result<()> {
+    sqlx::query(
+        "delete from step_attempts
+          where execution_id = $1 and step_id = $2 and attempt = $3",
+    )
+    .bind(key.execution_id.as_str())
+    .bind(&key.step_id)
+    .bind(i32::try_from(key.attempt).unwrap_or(i32::MAX))
     .execute(&mut **transaction)
     .await
     .map_err(|error| StoreError::Backend(error.to_string()))?;
@@ -650,8 +674,6 @@ fn projection_from(row: &PgRow) -> Result<RunProjection> {
         steps: serde_json::from_value(row.get("steps")).map_err(StoreError::Encoding)?,
         last_message_version: row.get::<i64, _>("last_message_version") as u64,
         created_at: row.get("created_at"),
-        started_at: row.get("started_at"),
-        ended_at: row.get("ended_at"),
     })
 }
 

@@ -39,7 +39,7 @@ use tokio::sync::Mutex;
 
 use aiwatcher_core::{Checkpoint, MessageId};
 
-use crate::claim::{AttemptKey, AttemptRow, ClaimFilter};
+use crate::claim::{AttemptKey, AttemptRow, AttemptWrite, ClaimFilter};
 use crate::error::{Result, StoreError};
 use crate::message::{OutboxMessage, RecordedMessage, RunProjection};
 use crate::state::ExecutionId;
@@ -154,9 +154,16 @@ impl FileWorkflowStore {
         Ok(messages)
     }
 
-    /// Every attempt row, keyed. One file rather than one per row: a claim
-    /// table is small by construction — one live row per running step — and a
-    /// single-process store has no reader racing the writer.
+    /// Every attempt row, keyed. One file rather than one per row, and that
+    /// is affordable because the table really is one row per *unfinished*
+    /// step: a settled attempt is retired rather than stored, so this file is
+    /// bounded by concurrency and not by history (section 43.34). A
+    /// single-process store also has no reader racing the writer.
+    ///
+    /// It was not always: while a completion wrote a terminal row, every claim
+    /// and every heartbeat read, parsed, re-serialised and `fsync`ed the whole
+    /// of it — measured at 458 ms per claim over 50 000 rows, growing without
+    /// limit because retention is opt-in.
     async fn read_attempts(&self) -> Result<BTreeMap<AttemptKey, AttemptRow>> {
         let Ok(body) = fs::read(self.root.join(ATTEMPTS_FILE)).await else {
             return Ok(BTreeMap::new());
@@ -313,8 +320,16 @@ impl WorkflowStore for FileWorkflowStore {
 
         if !request.attempts.is_empty() {
             let mut rows = self.read_attempts().await?;
-            for row in request.attempts {
-                rows.insert(row.key.clone(), row);
+            for write in request.attempts {
+                match write {
+                    AttemptWrite::Dispatch(row) => {
+                        rows.insert(row.key.clone(), row);
+                    }
+                    // A finished attempt is not a row. See `AttemptWrite`.
+                    AttemptWrite::Retire(key) => {
+                        rows.remove(&key);
+                    }
+                }
             }
             self.write_attempts(&rows).await?;
         }
@@ -422,8 +437,14 @@ impl WorkflowStore for FileWorkflowStore {
     /// There is no index here to ask instead, and building one would be a
     /// second file to keep in sync with the directory that is already the
     /// truth. A store this holds is a development store — one process,
-    /// `just dev` — and the pass it pays for is what keeps the *claim* table
-    /// small, which is the cost that was actually growing.
+    /// `just dev`, sweeping a directory it can hold.
+    ///
+    /// It is not what bounds the claim table. That was true while a completion
+    /// wrote a terminal row; a finished attempt is now retired rather than
+    /// stored, so the table is the size of what is unfinished whether this ever
+    /// runs or not (section 43.34). What a sweep still reclaims is streams and
+    /// projections, which are the history and are meant to be kept until a
+    /// deployment says otherwise.
     async fn prune(&self, before: OffsetDateTime, limit: usize) -> Result<Pruned> {
         let _guard = self.gate.lock().await;
 
