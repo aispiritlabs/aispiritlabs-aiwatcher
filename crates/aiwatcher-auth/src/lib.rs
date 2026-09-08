@@ -280,12 +280,18 @@ impl AuthConfig {
 pub struct IngestToken {
     pub label: String,
     pub secret: String,
+    /// The worker queues this token authorises claiming on. Empty for a
+    /// producer's token, which is every token that does not say otherwise —
+    /// so a secret that leaks out of an agent's environment can publish
+    /// events and cannot pick up somebody's work.
+    pub queues: Vec<String>,
 }
 
 impl std::fmt::Debug for IngestToken {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("IngestToken")
             .field("label", &self.label)
+            .field("queues", &self.queues)
             .finish_non_exhaustive()
     }
 }
@@ -293,12 +299,22 @@ impl std::fmt::Debug for IngestToken {
 impl std::str::FromStr for IngestToken {
     type Err = AuthError;
 
-    /// `name=secret`, or a bare secret that takes the label `ingest`.
+    /// `name=secret`, `name[queue other]=secret`, or a bare secret that takes
+    /// the label `ingest`.
+    ///
+    /// The queues sit in the *label* rather than after the secret, and that is
+    /// not a stylistic choice: the secret is split off with `split_once`, so it
+    /// stays opaque and may contain an `=` — which a base64 one does. A third
+    /// field after it would silently truncate those. Inside the brackets the
+    /// separator is whitespace, because the entries of
+    /// `AIWATCHER_AUTH_INGEST_TOKENS` are separated by commas and a queue name
+    /// has no spaces in it.
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
         let (label, secret) = match raw.split_once('=') {
             Some((label, secret)) => (label.trim(), secret.trim()),
             None => ("ingest", raw.trim()),
         };
+        let (label, queues) = split_queues(label)?;
 
         // A guessable shared secret is a worse hole than no authentication,
         // because it looks like authentication. Refused at start-up, where the
@@ -312,8 +328,69 @@ impl std::str::FromStr for IngestToken {
         Ok(Self {
             label: label.to_owned(),
             secret: secret.to_owned(),
+            queues,
         })
     }
+}
+
+impl IngestToken {
+    /// The caller this token authenticates as.
+    ///
+    /// Here rather than in [`Authenticator`] because everything it decides is
+    /// a property of the token: the role is hard-coded, the queues are what
+    /// the label named, and neither consults the provider or the group
+    /// mapping. That is also what makes it testable without a provider.
+    #[must_use]
+    pub fn identity(&self) -> Identity {
+        Identity {
+            subject: format!("token:{}", self.label),
+            username: Some(self.label.clone()),
+            name: None,
+            email: None,
+            groups: Vec::new(),
+            // Never from the role mapping, and never admin. A secret sitting
+            // in an agent's environment must not be able to ask an
+            // orchestrator to run something.
+            roles: vec![Role::Editor],
+            expires_at: None,
+            // The one thing a token carries that a session does not, and it
+            // only ever narrows: empty is a producer, and a producer claims
+            // nothing.
+            queues: self.queues.clone(),
+            credential: Credential::Token,
+        }
+    }
+}
+
+/// `name` or `name[queue other]`, split into the two.
+///
+/// An unclosed bracket is a refusal rather than a label with a `[` in it: the
+/// failure it would otherwise produce is a worker that authenticates, claims
+/// nothing forever, and has no error anywhere saying why.
+fn split_queues(label: &str) -> Result<(&str, Vec<String>), AuthError> {
+    let Some((name, rest)) = label.split_once('[') else {
+        if label.contains(']') {
+            return Err(AuthError::Configuration(format!(
+                "the token {label:?} closes a queue list it never opened; \
+                 write it as `name[queue other]=secret`"
+            )));
+        }
+        return Ok((label, Vec::new()));
+    };
+    let Some(inside) = rest.strip_suffix(']') else {
+        return Err(AuthError::Configuration(format!(
+            "the token {label:?} opens a queue list it never closes; \
+             write it as `name[queue other]=secret`"
+        )));
+    };
+    let queues: Vec<String> = inside.split_whitespace().map(str::to_owned).collect();
+    if queues.is_empty() {
+        return Err(AuthError::Configuration(format!(
+            "the token {label:?} names an empty queue list; \
+             leave the brackets off for a producer's token"
+        )));
+    }
+    Ok((name.trim(), queues))
 }
 
 /// Short enough to guess is short enough to refuse.
@@ -588,19 +665,7 @@ impl Authenticator {
             constant_time_eq(candidate.secret.as_bytes(), presented.as_bytes())
         })?;
 
-        Some(Identity {
-            subject: format!("token:{}", matched.label),
-            username: Some(matched.label.clone()),
-            name: None,
-            email: None,
-            groups: Vec::new(),
-            // Never from the role mapping, and never admin. A secret sitting
-            // in an agent's environment must not be able to ask an
-            // orchestrator to run something.
-            roles: vec![Role::Editor],
-            expires_at: None,
-            credential: Credential::Token,
-        })
+        Some(matched.identity())
     }
 
     /// A machine caller's token, verified the same way an id token is.
@@ -628,6 +693,11 @@ impl Authenticator {
             email: claims.email,
             groups,
             roles,
+            // Never from the group mapping. A provider that grew a group
+            // called `houses` must not thereby authorise claiming work on a
+            // queue of that name — a queue is what a worker's own secret
+            // says, and this identity did not present one.
+            queues: Vec::new(),
             expires_at: claims.exp,
             credential,
         })
@@ -1064,6 +1134,68 @@ mod tests {
         assert_eq!(labelled.label, "agents");
         let bare: IngestToken = "0123456789abcdef0123456789".parse().expect("valid");
         assert_eq!(bare.label, "ingest");
+    }
+
+    #[test]
+    fn a_token_names_the_queues_it_may_claim_on_and_most_name_none() {
+        // The queues are in the label so the secret stays opaque: a base64
+        // secret contains `=`, and a third field after it would truncate one.
+        let worker: IngestToken = "houses[houses plans]=0123456789abcdef0123456789=="
+            .parse()
+            .expect("valid");
+        assert_eq!(worker.label, "houses");
+        assert_eq!(worker.queues, ["houses", "plans"]);
+        assert_eq!(worker.secret, "0123456789abcdef0123456789==");
+
+        let producer: IngestToken = "agents=0123456789abcdef0123456789".parse().expect("valid");
+        assert!(
+            producer.queues.is_empty(),
+            "a producer's token claims nothing"
+        );
+    }
+
+    #[test]
+    fn a_queue_list_that_does_not_close_is_refused_rather_than_read_as_a_label() {
+        // The failure it would otherwise produce is a worker that
+        // authenticates, claims nothing forever, and says why nowhere.
+        for broken in [
+            "houses[houses=0123456789abcdef0123456789",
+            "houses houses]=0123456789abcdef0123456789",
+            "houses[]=0123456789abcdef0123456789",
+        ] {
+            assert!(broken.parse::<IngestToken>().is_err(), "{broken}");
+        }
+    }
+
+    #[test]
+    fn a_producers_token_may_publish_and_may_not_claim() {
+        // The guardrail, amended rather than dropped: the role is still
+        // hard-coded, and what a queue does is narrow.
+        let producer: IngestToken = "agents=0123456789abcdef0123456789".parse().expect("valid");
+        let producer = producer.identity();
+        assert!(producer.can(Role::Editor));
+        assert!(!producer.can(Role::Admin));
+        assert!(!producer.may_claim("houses"), "it named no queue");
+        assert_eq!(producer.claimable_queues(), Some(&[][..]));
+
+        let worker: IngestToken = "houses[houses]=abcdef01234567890123456789"
+            .parse()
+            .expect("valid");
+        let worker = worker.identity();
+        assert!(worker.may_claim("houses"));
+        assert!(!worker.may_claim("plans"), "and only the one it named");
+        assert_eq!(worker.role(), Role::Editor, "a queue is not a role");
+    }
+
+    #[test]
+    fn a_person_claims_nothing_and_an_unconfigured_instance_claims_anything() {
+        // Two ends of the same rule. A browser cannot renew a lease, so a
+        // session holds no queue however the provider mapped its groups; and
+        // `AIWATCHER_AUTH_MODE=none` means every check passes, of which this
+        // is one rather than an exception to it.
+        let anonymous = Identity::anonymous();
+        assert!(anonymous.may_claim("anything"));
+        assert_eq!(anonymous.claimable_queues(), None);
     }
 
     #[test]

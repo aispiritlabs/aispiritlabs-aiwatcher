@@ -9,9 +9,9 @@ use aiwatcher_auth::Authenticator;
 use aiwatcher_bus::{MessageSink, MessageSource};
 use aiwatcher_conversations::Registry as ConversationArchive;
 use aiwatcher_core::engine::WorkflowEngine;
-use aiwatcher_core::ports::{EditorHost, WorkflowRunner};
+use aiwatcher_core::ports::{AttemptArtifacts, EditorHost, WorkflowRunner};
 use aiwatcher_datasets::Registry as DatasetRegistry;
-use aiwatcher_execution::{ExecutionHandler, WorkflowStore};
+use aiwatcher_execution::{ArtifactCatalog, ExecutionHandler, WorkflowStore};
 use aiwatcher_projector::{LiveHub, ReadModel};
 use aiwatcher_prompts::Registry;
 use aiwatcher_training::Registry as TrainingRegistry;
@@ -134,6 +134,22 @@ pub struct AppState {
     /// that acknowledged without staging would send somebody to a live app
     /// showing last week's rows and say nothing.
     pub editor: Option<Arc<dyn EditorHost>>,
+    /// The bytes a worker reads and writes, proxied through this process.
+    ///
+    /// `None` when there is no object store, which makes every artifact route
+    /// under `/api/v1/worker` answer 501 naming the variable. A worker can
+    /// still claim and settle without one — a task that takes its parameters
+    /// and returns a bounded value needs no artifact at all — so this is a
+    /// separate field from the handler rather than a condition on it.
+    pub artifacts: Option<Arc<dyn AttemptArtifacts>>,
+    /// Where a cache hit is looked up and a result is recorded.
+    ///
+    /// The same catalog the work role's reactors hold, because a worker's step
+    /// is cached and traced like any other. `None` runs everything and
+    /// remembers nothing, which is the state a deployment with no object store
+    /// is in — section 18's "deleting the index never loses an authoritative
+    /// result", taken to its limit.
+    pub catalog: Option<Arc<dyn ArtifactCatalog>>,
     /// `None` when no identity provider is configured, which is the default.
     /// Unlike `prompts` and `runner`, absence here is not a 501 on a few
     /// routes — it is every caller being [`aiwatcher_auth::Identity::anonymous`]

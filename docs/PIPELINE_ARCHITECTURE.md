@@ -1934,19 +1934,72 @@ simulation mode only with a named requirement for execution without publication.
 
 ### Work 6 — one worker integration, then Planner (Phase 10 → Phase 11 Level 2)
 
+**In progress. The protocol is delivered; the SDK, the authoring path and
+Planner are not.**
+
 **Dependency:** works 1–5's applicable execution and product gates. Phase 9,
 Phase 8 and container jobs are not prerequisites. Planner Level 0 observation
 can be delivered earlier because it leaves execution ownership unchanged.
 
-- Deliver worker scope/identity, claims, heartbeat, completion/failure, artifact
-  access and the Python task API around one real task.
-- Prove a two-step worker plan, worker death/takeover and late-result rejection.
-- Move Planner's four stages to that boundary and compare artifacts with the
-  direct path in Planner's own suite using a pinned SDK revision (29.5).
+- ~~Worker scope and identity.~~ **Done.** `AIWATCHER_AUTH_INGEST_TOKENS` reads
+  `name[queue other]=secret`, and the guardrail is amended rather than dropped:
+  the role stays hard-coded to `Editor` and a queue only ever *narrows* what may
+  be claimed. A producer's token names none; so does a person's session and an
+  OIDC identity, because claiming takes a lease a browser cannot renew.
+- ~~Claims, heartbeat, completion and failure.~~ **Done**, and the shape is the
+  point. `Reactor::poll_once` is claim → plan → cache → `step.started` →
+  **perform** → lease → catalog → report, and only `perform` crosses the wire:
+  `take`, `settle` and `resume` split the loop so the worker routes call the
+  same code the in-process reactor does. A worker owns its own function and
+  nothing else — not which cache entry answers, not when a retry is due, and
+  above all not whether it still holds its lease, which is the one thing a
+  claimant cannot check about itself.
+- ~~Artifact access.~~ **Done, proxied rather than presigned.** A worker runs on
+  somebody's laptop, and a presigned URL is a bearer credential for a store that
+  also holds prompts, datasets, annotations, conversations and training; the
+  route it replaces checks the one thing that matters, which is that the caller
+  holds the lease on the attempt whose bytes it wants.
+  `core::ports::AttemptArtifacts` is that port. Every byte through the API
+  process is the cost, stated rather than hidden, and a presigned path for
+  in-cluster workers is an addition behind the same port when it is measured to
+  be the problem.
+- **Open:** `aiwatcher_sdk.worker` — `@task`, `Worker`, `TaskContext`, the poll
+  loop, the heartbeat and `run-attempt`.
+- **Open:** the authoring path. Nothing compiles a `python_task` step yet —
+  `compile_curation` is the only compiler, and these tests seal a plan directly.
+  A worker workflow needs a definition somebody can save.
+- **Open:** `just dev` runs one worker; a two-step plan surviving worker death
+  end to end, and late-result rejection through the SDK rather than through a
+  request written by hand.
+- **Open:** move Planner's four stages to that boundary and compare artifacts
+  with the direct path in Planner's own suite using a pinned SDK revision
+  (29.5).
+
+*Evidence so far:* four auth tests (the queue syntax, an unclosed list, a
+producer that publishes and cannot claim, and the two ends of "a person claims
+nothing"); one claim-filter test for the version pin; nine HTTP tests — the
+assignment's shape and that a claim is one attempt, the version pin as a
+negative control with its positive twin, a queue the token does not hold refused
+*by name*, a result reaching the decider and starting the next step, an impostor
+refused on both the result and the heartbeat with the holder accepted beside it,
+a fabricated output reference refused with the attempt left claimable, a failure
+becoming a backoff rather than a dead run, and the artifact path end to end
+across two claims with its 404 and its 409. The contract suite gained a property
+so all three adapters prove the version pin.
+
+The ninth of those was written because the negative controls found it missing.
+Removing the queue-scope check in `worker::held` failed nothing: the impostor
+test names the wrong *worker*, so the lease check refuses it first, and the
+check that stops a token for one queue settling another's attempt under the
+right name had no test at all. It has one now, over the heartbeat, the result
+and the input route, with the correctly-scoped token accepted beside them.
+Removing the postgres `task_ref` predicate fails the contract suite on all
+three adapters. `just check` and `just test-postgres` green.
 
 **Exit:** the laptop worker path survives restart; Planner runs with Flyte off
 and produces byte-identical review artifacts. Keep the existing direct path
-available until that comparison passes.
+available until that comparison passes. *Not met — the SDK and the authoring
+path are what stand between the protocol and this.*
 
 ### What follows, by dependency rather than phase number
 

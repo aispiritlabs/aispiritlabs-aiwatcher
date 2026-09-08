@@ -353,6 +353,42 @@ pub struct EditorSession {
     pub rows: usize,
 }
 
+/// The bytes one attempt reads and writes, from outside this process.
+///
+/// A worker is a process somebody else operates, on a laptop in the case this
+/// was built for — so it reaches the object store the way it reaches everything
+/// else here, through the API it already holds a token for. That is the whole
+/// reason this port exists rather than a presigned URL on the claim: a
+/// presigned URL is a bearer credential for a bucket that also holds prompts,
+/// datasets, annotations, conversations and training, scoped by a path prefix
+/// and a clock, handed to a process that may be behind somebody's NAT. The
+/// route it replaces can check the one thing that actually matters — that the
+/// caller holds the lease on the attempt whose artifact it is asking for.
+///
+/// The cost is stated rather than hidden: every byte a worker reads or writes
+/// passes through the API process. When that is measured to be the problem, a
+/// presigned path is an addition behind the same port, for a deployment whose
+/// workers are inside the cluster.
+#[async_trait]
+pub trait AttemptArtifacts: Send + Sync + std::fmt::Debug {
+    /// The rows a reference names, verified against its digest.
+    async fn read_rows(&self, artifact: &ArtifactRef) -> PortResult<Vec<serde_json::Value>>;
+
+    /// Store rows and hand back the pointer.
+    ///
+    /// The digest is of the bytes this stored, never of what a caller claimed —
+    /// the prompt registry's rule, and the reason a worker cannot fabricate a
+    /// reference by describing one.
+    async fn put_rows(&self, name: &str, rows: Vec<serde_json::Value>) -> PortResult<ArtifactRef>;
+
+    /// Whether the bytes a reference names are actually there.
+    ///
+    /// What a settlement checks before it accepts a worker's outputs. A
+    /// completed step pointing at an object that 404s is the one failure this
+    /// catches that nothing downstream would.
+    async fn holds(&self, artifact: &ArtifactRef) -> PortResult<bool>;
+}
+
 /// What is asked of the orchestrator.
 ///
 /// Deliberately thin, and deliberately not a description of *how* to run

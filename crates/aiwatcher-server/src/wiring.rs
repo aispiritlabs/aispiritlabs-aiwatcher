@@ -775,6 +775,23 @@ pub async fn build(config: Config) -> Result<Runtime> {
             .clone()
             .map(crate::execution::artifacts::Artifacts::new)
             .and_then(|artifacts| crate::execution::editor::host(&config, Some(&artifacts))),
+        // The worker's half of the same store, in the `serve` role for the
+        // same reason the editor is: a worker is a client waiting on a
+        // request, not a reactor this process runs. Absent with no object
+        // store, which makes the artifact routes answer 501 while claiming and
+        // settling still work — a task that takes its parameters and returns a
+        // bounded value needs no artifact at all.
+        artifacts: registries.objects.clone().map(|store| {
+            Arc::new(crate::execution::artifacts::Artifacts::new(store))
+                as Arc<dyn aiwatcher_core::ports::AttemptArtifacts>
+        }),
+        // The same catalog the work role's reactors hold. A worker's step is
+        // cached and its lineage recorded like any other, and building a
+        // second one here would be a second index over one store.
+        catalog: registries.objects.clone().map(|store| {
+            Arc::new(aiwatcher_execution::ObjectArtifactCatalog::new(store))
+                as Arc<dyn aiwatcher_execution::ArtifactCatalog>
+        }),
         engine: engine.map(|engine| engine as Arc<dyn aiwatcher_core::engine::WorkflowEngine>),
         auth: build_authenticator(&config).await?,
         health,

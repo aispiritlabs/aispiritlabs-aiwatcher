@@ -320,21 +320,24 @@ pub trait WorkflowStore: Send + Sync + std::fmt::Debug {
     /// Whatever the backend could not do.
     async fn heartbeat(&self, key: &AttemptKey, owner: &str, now: OffsetDateTime) -> Result<bool>;
 
-    /// One attempt row, by key. **This exists so the contract suite can look.**
+    /// One attempt row, by key.
     ///
-    /// Nothing in the running system calls it, and that is deliberate rather
-    /// than an oversight waiting to be tidied away. The properties worth
-    /// proving about a claim table are all statements about a row that no
-    /// operation returns: that a dispatch put one there, that a settlement took
-    /// it away again (section 43.34), that `awaiting_input` kept its own. A
-    /// suite with no way to read a row proves those by asking `claim_attempt`
-    /// what it would hand out next, which is a different question — it cannot
-    /// tell a retired row from one that is merely not claimable yet, and those
-    /// are the two outcomes most worth distinguishing.
+    /// Written for the contract suite, and it stayed the right shape when a
+    /// second caller arrived. The properties worth proving about a claim table
+    /// are all statements about a row that no other operation returns: that a
+    /// dispatch put one there, that a settlement took it away again (section
+    /// 43.34), that `awaiting_input` kept its own. A suite with no way to read
+    /// a row proves those by asking `claim_attempt` what it would hand out
+    /// next, which is a different question — it cannot tell a retired row from
+    /// one that is merely not claimable yet, and those are the two outcomes
+    /// most worth distinguishing.
     ///
-    /// So: a deliberate observation point, not a production read. A caller
-    /// re-checking a lease wants [`WorkflowStore::heartbeat`], whose answer is
-    /// whether it still holds the thing rather than what the row says.
+    /// The production caller is
+    /// [`Reactor::resume`](crate::reactor::Reactor::resume), which rebuilds a
+    /// claim an HTTP worker holds across two requests and needs the row's
+    /// `command_id` and holder rather than a yes-or-no. A caller that only
+    /// wants to know whether it still holds something wants
+    /// [`WorkflowStore::heartbeat`], which renews as it answers.
     ///
     /// # Errors
     ///

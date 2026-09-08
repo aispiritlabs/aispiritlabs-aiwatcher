@@ -88,6 +88,9 @@ pub fn identity_from<'a>(
             .map(ToOwned::to_owned),
         groups,
         roles,
+        // A person behind the outpost, so nothing to claim on. Claiming is a
+        // machine's job and takes a lease something has to renew.
+        queues: Vec::new(),
         // No expiry of our own. The proxy decides when the session ends, and
         // the next request simply does not carry the headers.
         expires_at: None,

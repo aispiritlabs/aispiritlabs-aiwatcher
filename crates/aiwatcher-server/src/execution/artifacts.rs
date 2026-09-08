@@ -32,6 +32,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use aiwatcher_core::ports::{PortError, PortResult};
 use aiwatcher_core::prompts::ObjectStore;
 use aiwatcher_core::{ArtifactKind, ArtifactRef};
 use aiwatcher_execution::{ActivityError, FailureClass};
@@ -278,6 +279,91 @@ pub fn preview(columns: &[String], rows: &Rows, took_ms: Option<u64>) -> Value {
         "preview": sample,
         "took_ms": took_ms,
     })
+}
+
+/// The worker's half of the same store.
+///
+/// A worker is a process somebody else operates, so it reads and writes through
+/// the API rather than through this store directly — [`AttemptArtifacts`] is
+/// that port and this is the only implementation of it. Everything it does is
+/// [`Artifacts`]' own work with the row shape widened by one step: the port
+/// speaks `Vec<Value>` because a JSON body is what crosses the wire, and this
+/// is where that becomes the [`Rows`] every other reader expects.
+///
+/// A row that is not an object is refused rather than dropped. `Rows` is a
+/// table, and a worker sending `[1, 2, 3]` has a bug worth being told about at
+/// the moment it happens rather than three steps later when something tries to
+/// group by a column.
+#[async_trait::async_trait]
+impl aiwatcher_core::ports::AttemptArtifacts for Artifacts {
+    async fn read_rows(&self, artifact: &ArtifactRef) -> PortResult<Vec<Value>> {
+        let rows = Artifacts::read_rows(self, artifact)
+            .await
+            .map_err(as_port_error)?;
+        Ok(rows
+            .into_iter()
+            .map(|row| Value::Object(row.into_iter().collect()))
+            .collect())
+    }
+
+    async fn put_rows(&self, name: &str, rows: Vec<Value>) -> PortResult<ArtifactRef> {
+        let table: Rows = rows
+            .into_iter()
+            .map(|row| match row {
+                Value::Object(map) => Ok(map.into_iter().collect()),
+                other => Err(PortError::Rejected {
+                    target: TARGET,
+                    message: format!(
+                        "a row has to be an object with named columns, and this one is {}",
+                        kind_of(&other)
+                    ),
+                }),
+            })
+            .collect::<Result<_, _>>()?;
+        Artifacts::put_rows(self, name, &table)
+            .await
+            .map_err(as_port_error)
+    }
+
+    async fn holds(&self, artifact: &ArtifactRef) -> PortResult<bool> {
+        Artifacts::holds(self, artifact)
+            .await
+            .map_err(as_port_error)
+    }
+}
+
+/// What this port calls the thing it could not reach.
+const TARGET: &str = "the object store";
+
+fn kind_of(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "a boolean",
+        Value::Number(_) => "a number",
+        Value::String(_) => "a string",
+        Value::Array(_) => "an array",
+        Value::Object(_) => "an object",
+    }
+}
+
+/// An activity failure as a port failure, keeping the retry decision.
+///
+/// The classes carry it already, so this reads rather than re-decides: an
+/// unreachable store is `Unavailable` and worth repeating, and bytes that do
+/// not hash to what they are named by are `Rejected` and will not hash
+/// differently on the next call.
+fn as_port_error(error: ActivityError) -> PortError {
+    if error.class.is_retryable() {
+        PortError::Unavailable {
+            target: TARGET,
+            message: error.message,
+        }
+    } else {
+        PortError::Rejected {
+            target: TARGET,
+            message: error.message,
+        }
+    }
 }
 
 #[cfg(test)]

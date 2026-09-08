@@ -75,6 +75,7 @@ pub mod schedules;
 pub mod state;
 pub mod stream;
 pub mod training;
+pub mod worker;
 pub mod workflows;
 
 pub use auth::Caller;

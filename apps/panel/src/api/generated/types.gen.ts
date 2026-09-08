@@ -570,6 +570,34 @@ export type CheckpointRecord = {
 };
 
 /**
+ * A worker saying what it is and what it can run.
+ */
+export type ClaimRequest = {
+    /**
+     * The queues to take from. Every one must be a queue this caller's token
+     * authorises; an empty list means all of them.
+     */
+    queues?: Array<string>;
+    /**
+     * The `name@version` refs this worker has code for.
+     *
+     * Required, and an empty list claims nothing. **Never let a process claim
+     * work it cannot perform**: a worker holding `stage@1` that took a
+     * `stage@2` attempt would fail a run over a rolling deploy in which both
+     * versions are briefly alive.
+     */
+    tasks: Array<string>;
+    /**
+     * The name this worker holds leases under.
+     *
+     * Unique per process — a pod name, a host and a pid. Two workers sharing
+     * one name would each believe they hold the other's leases, which is the
+     * one thing the lease exists to prevent.
+     */
+    worker: string;
+};
+
+/**
  * Who this is about, on what basis, and what that permits.
  */
 export type ConsentRecord = {
@@ -2615,6 +2643,20 @@ export type Identity = {
      */
     groups?: Array<string>;
     name?: string | null;
+    /**
+     * The worker queues this caller may claim attempts on.
+     *
+     * Not a role, and it can only ever *narrow*: a token holds [`Role::Editor`]
+     * whether or not it names a queue, and naming none is what every producer
+     * token does. It is here rather than derived from the group mapping for
+     * the same reason the role is — a queue is what a shared secret in a
+     * worker's environment authorises, and a provider that grew a group
+     * called `houses` must not thereby authorise claiming.
+     *
+     * Empty on every human session on purpose. Claiming takes a lease that
+     * something has to renew, and a browser is not that something.
+     */
+    queues?: Array<string>;
     /**
      * The roles the groups above resolved to, highest last.
      */
@@ -4982,6 +5024,15 @@ export type RowOutcome = {
 };
 
 /**
+ * Rows, on their way to or from a worker.
+ */
+export type RowsBody = {
+    rows: Array<{
+        [key: string]: unknown;
+    }>;
+};
+
+/**
  * Something a caller may do to a **run**, given where it got to.
  *
  * The sibling of [`ContextAction`] and deliberately a separate enum: these are
@@ -5489,6 +5540,15 @@ export type SetScheduleBody = {
      * An IANA name — `Europe/Warsaw`. Never an offset; see [`Schedule`].
      */
     timezone: string;
+};
+
+/**
+ * What the decider did with a report.
+ */
+export type Settled = {
+    attempt: number;
+    step_id: string;
+    succeeded: boolean;
 };
 
 /**
@@ -6378,6 +6438,120 @@ export type Withdrawal = {
      * The conversations whose erasure caused this.
      */
     conversations: Array<string>;
+};
+
+/**
+ * One attempt, and everything performing it needs.
+ */
+export type WorkAssignment = {
+    attempt: number;
+    /**
+     * `<execution>/<step>/<attempt>` — what the work is idempotent by, and
+     * what a task with a side effect keys it on.
+     */
+    context_id: string;
+    execution_id: string;
+    /**
+     * What the parents produced, by name. The bytes are read one at a time
+     * through this attempt's own `inputs/{name}` route.
+     */
+    inputs: Array<ArtifactRef>;
+    /**
+     * Whether somebody else held this attempt first.
+     *
+     * The reactor asks its runtime by idempotency key before re-running a
+     * takeover, because a timeout proves nothing about whether the previous
+     * call finished. A worker has no such lookup to offer, so it is told
+     * instead: a task with a side effect must be idempotent by `context_id`,
+     * and this is when that matters.
+     */
+    is_retake: boolean;
+    /**
+     * When this claim stops being trusted unless it is renewed.
+     *
+     * An instant rather than a duration, and the difference matters: a worker
+     * told "five minutes" has to agree with this process about when the five
+     * minutes started, and the two clocks are the whole question. A deadline
+     * is one fact. It also means a client cannot hard-code the lease length
+     * and keep beating at the wrong rate the day the rule moves —
+     * `aiwatcher_jobs` owns that number, and nothing here restates it.
+     */
+    lease_expires_at: string;
+    /**
+     * What the run itself was started with.
+     */
+    parameters: {
+        [key: string]: unknown;
+    };
+    /**
+     * The step's authored parameters.
+     */
+    params: {
+        [key: string]: unknown;
+    };
+    queue: string;
+    step_id: string;
+    /**
+     * `name@version`, from the plan. The worker matches it against what it
+     * registered; the server already did, which is why this is a fact rather
+     * than a request.
+     */
+    task_ref: string;
+    /**
+     * The step's own deadline. Past it the server stops waiting for a report.
+     */
+    timeout_seconds: number;
+};
+
+/**
+ * What a worker did with its attempt.
+ */
+export type WorkReport = {
+    /**
+     * Whether this may answer for its cache key later. The worker
+     * answers it because only the process that ran the work knows what it
+     * managed to do.
+     */
+    cacheable?: boolean;
+    diagnostics?: string | null;
+    outcome: 'completed';
+    /**
+     * References this attempt's own `outputs/{name}` route handed back.
+     */
+    outputs?: Array<ArtifactRef>;
+    /**
+     * A bounded control value. Rows go in an artifact — a result that
+     * grows with the data is one that eventually cannot be replayed.
+     */
+    result?: unknown;
+} | {
+    /**
+     * Whether trying again could plausibly produce a different answer.
+     * The worker classifies it, because the process that made the call is
+     * the one that knows.
+     */
+    class: FailureClass;
+    diagnostics?: string | null;
+    message: string;
+    outcome: 'failed';
+};
+
+/**
+ * A worker saying which attempt it is talking about.
+ */
+export type WorkerBody = {
+    worker: string;
+};
+
+/**
+ * A report, with the worker that is making it.
+ *
+ * Two structs rather than a flattened one: serde's `flatten` and
+ * `deny_unknown_fields` do not compose, and the report is a tagged enum whose
+ * variants are the whole point of the body being checked.
+ */
+export type WorkerReport = WorkReport & {
+    worker: string;
 };
 
 /**
@@ -9272,6 +9446,190 @@ export type RecordTrainingProgressResponses = {
 };
 
 export type RecordTrainingProgressResponse = RecordTrainingProgressResponses[keyof RecordTrainingProgressResponses];
+
+export type ClaimData = {
+    body: ClaimRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/worker/claims';
+};
+
+export type ClaimErrors = {
+    403: ErrorBody;
+    501: ErrorBody;
+    503: ErrorBody;
+};
+
+export type ClaimError = ClaimErrors[keyof ClaimErrors];
+
+export type ClaimResponses = {
+    200: WorkAssignment;
+    /**
+     * nothing claimable
+     */
+    204: void;
+};
+
+export type ClaimResponse = ClaimResponses[keyof ClaimResponses];
+
+export type HeartbeatData = {
+    body: WorkerBody;
+    path: {
+        /**
+         * The run this attempt belongs to
+         */
+        execution_id: string;
+        /**
+         * The step of that run's pinned plan
+         */
+        step_id: string;
+        /**
+         * Which attempt
+         */
+        attempt: number;
+    };
+    query?: never;
+    url: '/api/v1/worker/claims/{execution_id}/{step_id}/{attempt}/heartbeat';
+};
+
+export type HeartbeatErrors = {
+    403: ErrorBody;
+    409: ErrorBody;
+    501: ErrorBody;
+};
+
+export type HeartbeatError = HeartbeatErrors[keyof HeartbeatErrors];
+
+export type HeartbeatResponses = {
+    /**
+     * still held
+     */
+    204: void;
+};
+
+export type HeartbeatResponse = HeartbeatResponses[keyof HeartbeatResponses];
+
+export type ReadInputData = {
+    body?: never;
+    path: {
+        /**
+         * The run this attempt belongs to
+         */
+        execution_id: string;
+        /**
+         * The step of that run's pinned plan
+         */
+        step_id: string;
+        /**
+         * Which attempt
+         */
+        attempt: number;
+        /**
+         * The input's name, as the assignment listed it
+         */
+        name: string;
+    };
+    query: {
+        /**
+         * The name the claim was made under
+         */
+        worker: string;
+    };
+    url: '/api/v1/worker/claims/{execution_id}/{step_id}/{attempt}/inputs/{name}';
+};
+
+export type ReadInputErrors = {
+    403: ErrorBody;
+    404: ErrorBody;
+    409: ErrorBody;
+    501: ErrorBody;
+};
+
+export type ReadInputError = ReadInputErrors[keyof ReadInputErrors];
+
+export type ReadInputResponses = {
+    200: RowsBody;
+};
+
+export type ReadInputResponse = ReadInputResponses[keyof ReadInputResponses];
+
+export type WriteOutputData = {
+    body: RowsBody;
+    path: {
+        /**
+         * The run this attempt belongs to
+         */
+        execution_id: string;
+        /**
+         * The step of that run's pinned plan
+         */
+        step_id: string;
+        /**
+         * Which attempt
+         */
+        attempt: number;
+        /**
+         * What the reader will call it
+         */
+        name: string;
+    };
+    query: {
+        /**
+         * The name the claim was made under
+         */
+        worker: string;
+    };
+    url: '/api/v1/worker/claims/{execution_id}/{step_id}/{attempt}/outputs/{name}';
+};
+
+export type WriteOutputErrors = {
+    403: ErrorBody;
+    409: ErrorBody;
+    501: ErrorBody;
+};
+
+export type WriteOutputError = WriteOutputErrors[keyof WriteOutputErrors];
+
+export type WriteOutputResponses = {
+    200: ArtifactRef;
+};
+
+export type WriteOutputResponse = WriteOutputResponses[keyof WriteOutputResponses];
+
+export type ReportData = {
+    body: WorkerReport;
+    path: {
+        /**
+         * The run this attempt belongs to
+         */
+        execution_id: string;
+        /**
+         * The step of that run's pinned plan
+         */
+        step_id: string;
+        /**
+         * Which attempt
+         */
+        attempt: number;
+    };
+    query?: never;
+    url: '/api/v1/worker/claims/{execution_id}/{step_id}/{attempt}/result';
+};
+
+export type ReportErrors = {
+    403: ErrorBody;
+    409: ErrorBody;
+    422: ErrorBody;
+    501: ErrorBody;
+};
+
+export type ReportError = ReportErrors[keyof ReportErrors];
+
+export type ReportResponses = {
+    200: Settled;
+};
+
+export type ReportResponse = ReportResponses[keyof ReportResponses];
 
 export type ListWorkflowExecutionsData = {
     body?: never;

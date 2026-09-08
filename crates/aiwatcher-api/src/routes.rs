@@ -63,6 +63,10 @@ pub fn router(state: AppState) -> Router {
         // read. Section 19.
         .merge(crate::context::router())
         .merge(crate::schedules::router())
+        // The one claimant here that is not this binary. Phase 10: a worker
+        // runs registered code somebody else operates, and speaks the reactor's
+        // own loop with a seam where the work happens.
+        .merge(crate::worker::router())
         // ── Reaching a service aiwatcher does not run ────────────────────────
         .merge(crate::integrations::hubs::router())
         // ── The caller, rather than the data ─────────────────────────────────

@@ -170,13 +170,16 @@ fn claimable(execution: &ExecutionId) -> AttemptRow {
         RuntimeKind::PythonTask,
         MessageId::new(format!("{execution}/cmd-1")),
     )
-    .on_queue(queue_of(execution), "stage@1".to_owned())
+    .on_queue(queue_of(execution), STAGE_TASK.to_owned())
 }
 
 /// A filter that sees only this execution's rows.
 fn mine(execution: &ExecutionId) -> ClaimFilter {
-    ClaimFilter::for_queues(&[queue_of(execution)])
+    ClaimFilter::for_queues(&[queue_of(execution)], &[STAGE_TASK.to_owned()])
 }
+
+/// The `name@version` every fixture row pins.
+const STAGE_TASK: &str = "stage@1";
 
 /// An append whose only content is attempt rows.
 fn dispatch(execution: &ExecutionId, message_id: &str, rows: Vec<AttemptWrite>) -> AppendRequest {
@@ -649,7 +652,7 @@ pub async fn a_claimant_only_takes_what_it_said_it_could_run(
         ok!(
             name,
             store.claim_attempt(
-                &ClaimFilter::for_queues(&["other".to_owned()]),
+                &ClaimFilter::for_queues(&["other".to_owned()], &[STAGE_TASK.to_owned()]),
                 "worker",
                 OffsetDateTime::UNIX_EPOCH
             ),
@@ -657,6 +660,19 @@ pub async fn a_claimant_only_takes_what_it_said_it_could_run(
         )
         .is_none(),
         "{name}: a worker took another queue's attempt"
+    );
+    assert!(
+        ok!(
+            name,
+            store.claim_attempt(
+                &ClaimFilter::for_queues(&[queue_of(&execution)], &["stage@2".to_owned()]),
+                "worker",
+                OffsetDateTime::UNIX_EPOCH
+            ),
+            "another version's claim"
+        )
+        .is_none(),
+        "{name}: a worker took an attempt pinning code it does not have"
     );
 }
 

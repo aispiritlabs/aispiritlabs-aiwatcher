@@ -153,7 +153,7 @@ Crates, in dependency order. A crate may only depend on ones above it.
 | `aiwatcher-pipeline` | Pipeline engines behind `core::engine::WorkflowEngine`: the orchestrator's launchable catalog, the inputs each entry declares, and starting one. Flyte 2 over its `/api/v1/` gateway, plus the literal encoder that binds a form's JSON to Flyte's declared types. With the runner, the second and last thing here that asks another system to do work. |
 | `aiwatcher-auth` | Single sign-on: OIDC discovery, a JWKS cache, the authorization-code flow with PKCE, HMAC-signed session cookies, authentik's forward-auth headers, and the group-to-role mapping. Knows nothing about axum. |
 | `aiwatcher-projector` | The pipeline, live hub, read model, dimension, span, evaluation and workflow-graph folds, dedup, retry, dead letters |
-| `aiwatcher-api` | axum router: REST, SSE, WebSocket, OpenAPI |
+| `aiwatcher-api` | axum router: REST, SSE, WebSocket, OpenAPI. `worker` is the one module whose caller is not a browser: the reactor's own loop with an HTTP seam where the work happens (Phase 10). |
 | `aiwatcher-server` | Config, wiring, graceful shutdown, and the **reactors** — the one place an executor's client lives, because an executor holds a socket and a credential. `execution/` is mostly the work role: `artifacts` (the object store's sixth prefix, and the receipt a lookup reads), `flow` (the Flow activity executor) and `publish` (the dataset version, which runs in `serve` because it executes nothing) — and `editor`, which runs in `serve` because opening a block on a step's rows is a person waiting on a request rather than an attempt somebody claimed. The only crate that knows every implementation exists. |
 
 Everything else: `apps/panel` (React), `sdk/python`, `sdk/typescript`,
@@ -729,6 +729,42 @@ what runs a real graph.
   reactor's "no executor for this runtime" branch is defensive rather than
   reachable, and a runtime whose client would not build is one this process
   claims nothing for rather than one it fails every attempt of.
+- **Never let a worker decide anything but its own function.** The reactor's
+  loop is claim → load the plan → cache lookup → `step.started` → **perform** →
+  re-check the lease → record → report, and only `perform` crosses the HTTP
+  seam. `Reactor::take`, `settle` and `resume` are that split, so the worker
+  routes call the same code the in-process reactor does. A worker written in
+  another language re-implementing any of the rest — which cache entry answers,
+  when a retry is due, whether its lease still holds — is the drift the seam
+  exists to prevent, and the last of those is one a claimant cannot check about
+  itself at all.
+- **Never authorise a worker route by the name it claimed under.** Worker names
+  are not secret, so holding the lease and the token's own queue scope are
+  checked *together* in `worker::held`. Either alone is a hole: without the
+  lease a token settles any attempt on its queue, and without the scope a token
+  for one queue settles another's by guessing the name that claimed it.
+- **Never let a queue widen a token.** `AIWATCHER_AUTH_INGEST_TOKENS` grew
+  `name[queue other]=secret`, and the guardrail below it is amended rather than
+  dropped: the role is still hard-coded to `Editor`, and a queue only ever
+  *narrows* what may be claimed. A producer's token names none and claims
+  nothing. Neither does a person's session or an OIDC identity, whatever the
+  group mapping says — claiming takes a lease something has to renew, and a
+  browser is not that something. The queues sit in the label because the secret
+  is split off with `split_once` and may contain an `=`.
+- **Never accept an artifact reference a worker described rather than wrote.**
+  Rows go through the attempt's own `outputs/{name}` route, which digests what
+  it stored — the prompt registry's rule — and the result route checks every
+  reported output exists before it settles. A completed step pointing at an
+  object that 404s is the one failure nothing downstream catches.
+- **Never presign a bucket to a process outside the cluster.** A worker runs on
+  somebody's laptop, and a presigned URL is a bearer credential for a store that
+  also holds prompts, datasets, annotations, conversations and training, scoped
+  by a prefix and a clock. `core::ports::AttemptArtifacts` proxies instead,
+  because the route can check the one thing that matters: that the caller holds
+  the lease on the attempt whose bytes it is asking for. The cost — every byte
+  through the API process — is stated rather than hidden, and a presigned path
+  for in-cluster workers is an addition behind the same port when it is measured
+  to be the problem.
 - **Never derive a message id from less than what it identifies.** A reactor's
   report id *is* the inbox key. Derived from the execution and the event name
   it is unique for a one-step plan and collides for a two-step one — the second
@@ -1281,8 +1317,9 @@ what runs a real graph.
   producer reaches the Service directly, never passes the ingress that
   authenticates a browser, and cannot complete an interactive sign-in — not so
   that a leaked environment file can ask an orchestrator to run something. The
-  role is hard-coded in `identity_from_ingest_token` and never comes from the
-  group mapping.
+  role is hard-coded in `IngestToken::identity` and never comes from the group
+  mapping. Amended, not widened, by the queue scope above: `name[queue]=secret`
+  adds what may be *claimed* and takes nothing away.
 - **Never take the issuer from the discovery document.** `ProviderMetadata::discover`
   compares what the document declares against what was configured and refuses a
   mismatch. Every token accepted afterwards is validated against that issuer, so

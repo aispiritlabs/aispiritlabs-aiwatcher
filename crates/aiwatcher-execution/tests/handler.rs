@@ -584,7 +584,7 @@ async fn a_dispatch_becomes_a_row_the_reactor_that_holds_that_client_can_claim()
 
     let claimed = store
         .claim_attempt(
-            &ClaimFilter::for_queues(&["default".to_owned()]),
+            &ClaimFilter::for_queues(&["default".to_owned()], &["stage@1".to_owned()]),
             "worker-1",
             at(0),
         )
@@ -628,7 +628,7 @@ async fn a_completion_settles_the_row_so_nobody_runs_the_step_twice() {
     assert!(
         store
             .claim_attempt(
-                &ClaimFilter::for_queues(&["default".to_owned()]),
+                &ClaimFilter::for_queues(&["default".to_owned()], &["stage@1".to_owned()]),
                 "worker-2",
                 past,
             )
@@ -663,7 +663,7 @@ async fn a_scheduled_retry_is_not_claimable_until_its_delay_has_passed() {
         .await
         .expect("a transient failure");
 
-    let filter = ClaimFilter::for_queues(&["default".to_owned()]);
+    let filter = ClaimFilter::for_queues(&["default".to_owned()], &["stage@1".to_owned()]);
     // The policy's first delay for a runtime that declined is five seconds,
     // resolved to an instant by the decider so a replay reaches the same
     // schedule. The row carries it, so a claimant cannot take the retry early

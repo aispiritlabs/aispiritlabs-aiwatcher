@@ -2,8 +2,8 @@
 
 - **Status:** active backlog after the 2026-09-08 review. Every item below is
   open until its acceptance evidence is recorded. Items 1–5 are closed; item 6
-  has not started. Every finding in the review is closed; what remains is one
-  integration.
+  is part-delivered — the worker protocol is in, the SDK and Planner are not.
+  Every finding in the review is closed; what remains is one integration.
 - **Audience:** whoever picks this up next, in a session that starts cold.
 - **Last updated:** 2026-09-08
 
@@ -164,14 +164,45 @@ when a named use case requires execution without publication.
 
 ## Start here — 6. Deliver one worker integration (Phase 10 → Phase 11 Level 2)
 
-Implement worker identity, claim/heartbeat/report, artifact access and the Python
-SDK around one real task. Then move Planner's four stages onto that boundary
-and compare their output with the direct path. Level 0 observation can precede
-this because it does not hand execution ownership to aiwatcher.
+**The protocol is delivered. The SDK, the authoring path and Planner are not.**
+
+Done, 2026-09-08:
+
+1. **Worker identity.** `AIWATCHER_AUTH_INGEST_TOKENS` reads
+   `name[queue other]=secret`. The guardrail is amended rather than dropped —
+   the role stays `Editor` and a queue only ever *narrows* what may be claimed,
+   so a producer's token claims nothing and neither does a person's session.
+2. **Claim, heartbeat, result.** `Reactor::take` / `settle` / `resume` split the
+   reactor's loop so only `perform` crosses the wire. The server keeps every
+   rule it kept before — which cache entry answers, when a retry is due, whether
+   the lease still holds — and the worker owns its own function and nothing
+   else. Worker names are not secret, so a route checks the lease *and* the
+   token's queue scope.
+3. **Artifact access, proxied.** `core::ports::AttemptArtifacts`, because a
+   presigned URL is a bearer credential for a store holding five other
+   registries, handed to a process on somebody's laptop. Rows are
+   content-addressed on the way in and every reported output is checked to exist
+   before a step is settled.
+
+Left to do, in order:
+
+4. **`aiwatcher_sdk.worker`** — `@task`, `Worker`, `TaskContext`, the poll loop,
+   the heartbeat, `run-attempt`. The registry half of the SDK's dependency
+   split (`httpx`, `tenacity`), not the telemetry half.
+5. **The authoring path.** Nothing compiles a `python_task` step: `compile_curation`
+   is the only compiler, and the tests seal a plan directly. A worker workflow
+   needs a definition somebody can save and schedule.
+6. **`just dev` runs one worker**, and the two-step plan survives worker death
+   end to end rather than through requests written by hand.
+7. **Planner's four stages** on that boundary, compared with the direct path in
+   Planner's own suite against a pinned SDK revision.
+
+Level 0 observation can precede all of this because it does not hand execution
+ownership to aiwatcher.
 
 **Exit:** a two-step worker plan survives worker death; the four-stage import
 runs with Flyte off and produces byte-identical review artifacts. Run the
-integration's own tests in its repository against the pinned SDK.
+integration's own tests in its repository against the pinned SDK. *Not met.*
 
 ## After these gates
 

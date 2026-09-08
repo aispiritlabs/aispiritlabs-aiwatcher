@@ -296,16 +296,24 @@ impl ExecutorRegistry {
             .find(|executor| executor.runtime() == runtime)
     }
 
+    /// The runtimes this process registered an executor for.
+    ///
+    /// The same list [`Self::claim_filter`] is built from, as the claimant's
+    /// own answer rather than as a query — which is what
+    /// [`Reactor::take`](crate::reactor::Reactor::take) checks the claimed row
+    /// against before it reports a start.
+    #[must_use]
+    pub fn runtimes(&self) -> Vec<RuntimeKind> {
+        self.executors
+            .iter()
+            .map(|executor| executor.runtime())
+            .collect()
+    }
+
     /// What this process may claim: exactly the runtimes it registered.
     #[must_use]
     pub fn claim_filter(&self) -> crate::claim::ClaimFilter {
-        crate::claim::ClaimFilter::for_runtimes(
-            &self
-                .executors
-                .iter()
-                .map(|executor| executor.runtime())
-                .collect::<Vec<_>>(),
-        )
+        crate::claim::ClaimFilter::for_runtimes(&self.runtimes())
     }
 
     #[must_use]

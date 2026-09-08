@@ -88,6 +88,7 @@ dependencies = [
  "aiwatcher-core",
  "aiwatcher-datasets",
  "aiwatcher-execution",
+ "aiwatcher-jobs",
  "aiwatcher-projector",
  "aiwatcher-prompts",
  "aiwatcher-training",

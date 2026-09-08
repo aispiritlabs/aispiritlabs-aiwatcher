@@ -314,7 +314,7 @@ impl WorkflowStore for PostgresWorkflowStore {
         owner: &str,
         now: OffsetDateTime,
     ) -> Result<Option<AttemptRow>> {
-        if filter.runtimes.is_empty() && filter.queues.is_empty() {
+        if filter.is_empty() {
             // A claimant that named nothing takes nothing. Without this the
             // query below would match every row and hand a reactor a worker's
             // attempt.
@@ -332,12 +332,19 @@ impl WorkflowStore for PostgresWorkflowStore {
             .iter()
             .map(|runtime| runtime.as_str())
             .collect();
+        let tasks: Vec<&str> = filter.tasks.iter().map(String::as_str).collect();
         let stale = now - time::Duration::seconds(aiwatcher_jobs::LEASE_SECONDS);
 
         // `SKIP LOCKED` is what makes two claimants polling together take two
         // attempts rather than one waiting on the other's lock. `queue is null`
         // is the reactor's half and `queue = any($1)` the worker's, and they do
         // not overlap: a pulled attempt belongs to whoever holds its queue.
+        //
+        // `task_ref = any($5)` is [`ClaimFilter::matches`]' second condition in
+        // SQL, and it has to be here rather than checked after the row comes
+        // back: a claim that filtered in Rust would have already taken the
+        // lease, and releasing it again is a five-minute stall on a row
+        // somebody else could have run.
         let row = sqlx::query(
             "select execution_id, step_id, attempt, runtime, command_id, queue,
                     task_ref, state, lease_owner, previous_owner, claimed_at, not_before
@@ -346,7 +353,8 @@ impl WorkflowStore for PostgresWorkflowStore {
                                   'awaiting_input')
                 and (claimed_at is null or claimed_at <= $3)
                 and (not_before is null or not_before <= $4)
-                and ( (queue is not null and queue = any($1))
+                and ( (queue is not null and queue = any($1)
+                       and task_ref is not null and task_ref = any($5))
                    or (queue is null and runtime = any($2)) )
               order by updated_at
               for update skip locked
@@ -356,6 +364,7 @@ impl WorkflowStore for PostgresWorkflowStore {
         .bind(&runtimes)
         .bind(stale)
         .bind(now)
+        .bind(&tasks)
         .fetch_optional(&mut *transaction)
         .await
         .map_err(|error| StoreError::Backend(error.to_string()))?;

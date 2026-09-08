@@ -77,6 +77,30 @@ pub enum ApiError {
     #[error("this instance has no pipeline engine configured (AIWATCHER_ENGINE)")]
     EngineDisabled,
 
+    /// A worker asked for the bytes of an attempt on an instance with no
+    /// object store. Claiming and settling still work — a task that takes its
+    /// parameters and returns a bounded value needs no artifact — so this is
+    /// its own variant rather than a condition on the whole worker surface.
+    #[error("this instance stores no attempt artifacts (AIWATCHER_PROMPT_STORE)")]
+    WorkerArtifactsDisabled,
+
+    /// The object store would not give up or take a worker's rows. Same split
+    /// as `Editor`: unreachable is a 503 worth repeating, and a refusal is a
+    /// 502 that will refuse identically forever.
+    #[error("this attempt's artifacts could not be reached: {0}")]
+    WorkerArtifacts(aiwatcher_core::ports::PortError),
+
+    /// A worker named an attempt it does not hold: the lease expired, somebody
+    /// took it over, or it was never dispatched.
+    ///
+    /// A 409 rather than a 404 or a 403, and the difference is what the worker
+    /// does next. Its work is discarded — that is the reactor's rule, that a
+    /// claimant whose lease went must not write beside its replacement — and
+    /// the right response is to go back to claiming rather than to retry this
+    /// call or to re-authenticate.
+    #[error("this worker no longer holds {0}")]
+    LeaseLost(String),
+
     /// The one `Option` in [`AppState`](crate::state::AppState) that is never
     /// `None` in the server binary: an execution store needs no more
     /// configuration than a directory. What answers this is a router built
@@ -243,6 +267,19 @@ impl ApiError {
             // this deployment wired no orchestrator behind them. The message
             // names the variable to set.
             Self::EngineDisabled => (StatusCode::NOT_IMPLEMENTED, "engine_disabled"),
+            Self::WorkerArtifactsDisabled => {
+                (StatusCode::NOT_IMPLEMENTED, "worker_artifacts_disabled")
+            }
+            Self::WorkerArtifacts(error) => match error {
+                aiwatcher_core::ports::PortError::Rejected { .. } => {
+                    (StatusCode::BAD_GATEWAY, "worker_artifacts_refused")
+                }
+                _ => (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "worker_artifacts_unavailable",
+                ),
+            },
+            Self::LeaseLost(_) => (StatusCode::CONFLICT, "lease_lost"),
             Self::ExecutionsDisabled => (StatusCode::NOT_IMPLEMENTED, "executions_disabled"),
             // The same 422 a refused pipeline gets, for the same reason: the
             // request was well formed and the thing it describes cannot be

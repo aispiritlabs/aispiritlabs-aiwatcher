@@ -36,6 +36,12 @@ use aiwatcher_auth::{AuthConfig, AuthMode, Authenticator, IngestToken, RoleMappi
 /// What a producer presents. Long enough that the parser accepts it, which is
 /// itself part of what is under test in `aiwatcher_auth`.
 const INGEST_TOKEN: &str = "agents=0123456789abcdef0123456789abcdef";
+/// A worker's token: the same shape, plus the one queue it may claim on.
+const WORKER_TOKEN: &str = "houses[houses]=fedcba9876543210fedcba9876543210";
+const WORKER_SECRET: &str = "fedcba9876543210fedcba9876543210";
+/// A second worker's token, on a queue this plan's steps never use.
+const OTHER_WORKER_TOKEN: &str = "planner[plans]=0f0f0f0f0f0f0f0f0f0f0f0f0f0f";
+const OTHER_WORKER_SECRET: &str = "0f0f0f0f0f0f0f0f0f0f0f0f0f0f";
 const INGEST_SECRET: &str = "0123456789abcdef0123456789abcdef";
 
 struct Fixture {
@@ -92,6 +98,12 @@ impl Fixture {
             roles: RoleMapping::default(),
             ingest_tokens: vec![
                 INGEST_TOKEN
+                    .parse::<IngestToken>()
+                    .expect("long enough to be accepted"),
+                WORKER_TOKEN
+                    .parse::<IngestToken>()
+                    .expect("long enough to be accepted"),
+                OTHER_WORKER_TOKEN
                     .parse::<IngestToken>()
                     .expect("long enough to be accepted"),
             ],
@@ -175,6 +187,13 @@ impl Fixture {
                 )
                     as Arc<dyn aiwatcher_execution::WorkflowStore>))
             }),
+            // Content-addressed and in memory, so the worker routes are
+            // exercised rather than answering 501 — and so the check that a
+            // reported output really exists has something to check against.
+            artifacts: Some(Arc::new(MemoryArtifacts::default()) as _),
+            catalog: Some(Arc::new(
+                aiwatcher_execution::artifact::memory::MemoryArtifactCatalog::new(),
+            ) as _),
             // No worker: a router built for a test runs no background task, and
             // an export here is driven by the test rather than by a tick.
             export_worker: None,
@@ -278,6 +297,27 @@ impl Fixture {
                 .expect("request"),
         )
         .await
+    }
+
+    /// A request presenting a shared secret, which is how a worker arrives.
+    async fn send_with_token(
+        &self,
+        method: &str,
+        uri: &str,
+        token: &str,
+        body: Option<Value>,
+    ) -> (StatusCode, Value) {
+        let builder = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .header(header::CONTENT_TYPE, "application/json");
+        let request = match body {
+            Some(body) => builder.body(Body::from(body.to_string())),
+            None => builder.body(Body::empty()),
+        }
+        .expect("request");
+        self.request(request).await
     }
 
     /// A POST carrying one extra header, for the routes that read one.
@@ -483,6 +523,65 @@ impl RecordingRunner {
 /// The real one reads the rows from the object store and posts them; what the
 /// route is responsible for is *which* step, *which* context and *which*
 /// revision, so this records the request and answers.
+/// A content-addressed artifact store, in memory.
+///
+/// Behaves like the real one in the way that matters to these tests: the
+/// digest is of the bytes it stored, never of anything a caller claimed. A
+/// double that took the caller's word would let a worker fabricate a reference
+/// and would pass the very test written to stop it.
+#[derive(Debug, Default)]
+struct MemoryArtifacts {
+    objects: std::sync::Mutex<std::collections::HashMap<String, Vec<serde_json::Value>>>,
+}
+
+#[async_trait::async_trait]
+impl aiwatcher_core::ports::AttemptArtifacts for MemoryArtifacts {
+    async fn read_rows(
+        &self,
+        artifact: &aiwatcher_core::ArtifactRef,
+    ) -> Result<Vec<serde_json::Value>, PortError> {
+        self.objects
+            .lock()
+            .expect("not poisoned")
+            .get(&artifact.digest)
+            .cloned()
+            .ok_or_else(|| PortError::Rejected {
+                target: "the object store",
+                message: format!("{} holds no object", artifact.uri),
+            })
+    }
+
+    async fn put_rows(
+        &self,
+        name: &str,
+        rows: Vec<serde_json::Value>,
+    ) -> Result<aiwatcher_core::ArtifactRef, PortError> {
+        let body = serde_json::to_vec(&rows).expect("json");
+        let digest = aiwatcher_jobs::digest(&body);
+        self.objects
+            .lock()
+            .expect("not poisoned")
+            .insert(digest.clone(), rows);
+        Ok(aiwatcher_core::ArtifactRef {
+            name: name.to_owned(),
+            uri: format!("object://artifacts/rows/{digest}/data"),
+            digest,
+            size_bytes: Some(body.len() as u64),
+            content_type: "application/json".to_owned(),
+            kind: aiwatcher_core::ArtifactKind::Rows,
+            schema_ref: None,
+        })
+    }
+
+    async fn holds(&self, artifact: &aiwatcher_core::ArtifactRef) -> Result<bool, PortError> {
+        Ok(self
+            .objects
+            .lock()
+            .expect("not poisoned")
+            .contains_key(&artifact.digest))
+    }
+}
+
 #[derive(Debug)]
 struct RecordingEditor {
     seen: std::sync::Mutex<Vec<aiwatcher_core::ports::EditorRequest>>,
@@ -4610,4 +4709,570 @@ async fn a_run_now_without_a_request_id_still_starts_one_run() {
         .await;
     assert_eq!(status, StatusCode::OK, "{set}");
     assert!(set["started"].is_string(), "{set}");
+}
+
+// ── The worker protocol ──────────────────────────────────────────────────────
+//
+// Phase 10. What these check is the *seam*: the server keeps every rule the
+// reactor keeps and the worker keeps none of them, so a claimant cannot decide
+// its own lease, answer its own cache, or name an artifact this instance never
+// stored.
+
+/// A two-step plan whose steps a worker claims, on the `houses` queue.
+///
+/// Built and started directly rather than through `POST /executions`, because
+/// nothing compiles a `python_task` step yet — the authoring path is the next
+/// slice, and the protocol is testable without it.
+fn worker_plan() -> aiwatcher_execution::ExecutionPlan {
+    use aiwatcher_execution::plan::{
+        CachePolicy, DefinitionKind, DefinitionRevision, PlanEdge, PlanStep, PythonTaskSpec,
+        RetryPolicy, RuntimeBinding,
+    };
+    use aiwatcher_execution::plan::{InputBinding, OutputDeclaration};
+    let step = |id: &str, task: &str| PlanStep {
+        id: id.to_owned(),
+        runtime: RuntimeBinding::PythonTask(PythonTaskSpec {
+            task_ref: task.to_owned(),
+            queue: "houses".to_owned(),
+            params: [("threshold".to_owned(), json!(0.8))].into_iter().collect(),
+        }),
+        inputs: Vec::new(),
+        outputs: Vec::new(),
+        retry: RetryPolicy::default(),
+        timeout_seconds: 60,
+        cache: CachePolicy::Never,
+    };
+    // `review` reads what `stage` produced, which is what makes the artifact
+    // routes worth having: the rows cross a process boundary twice.
+    let mut stage = step("stage", "stage@1");
+    stage.outputs = vec![OutputDeclaration {
+        name: "rows".to_owned(),
+        kind: aiwatcher_core::ArtifactKind::Rows,
+        schema_ref: None,
+    }];
+    let mut review = step("review", "review@1");
+    review.inputs = vec![InputBinding::Step {
+        step: "stage".to_owned(),
+        output: "rows".to_owned(),
+    }];
+    aiwatcher_execution::ExecutionPlan::seal(
+        DefinitionKind::Workflow,
+        "house-import".to_owned(),
+        DefinitionRevision("ab".repeat(32)),
+        vec![stage, review],
+        vec![PlanEdge {
+            from: "stage".to_owned(),
+            to: "review".to_owned(),
+        }],
+    )
+}
+
+impl Fixture {
+    /// Start `worker_plan` under `execution_id`, so there is something to claim.
+    async fn seed_worker_run(&self, execution_id: &str) {
+        use aiwatcher_execution::message::{MessageMetadata, SCHEMA_VERSION};
+        use aiwatcher_execution::{
+            ExecutionId, ExecutionMode, ExecutionOwner, Now, WorkflowCommand, WorkflowMessage,
+        };
+
+        let execution = ExecutionId::new(execution_id.to_owned());
+        let handler = self.state.executions.as_ref().expect("a store");
+        handler
+            .handle(
+                &execution,
+                WorkflowMessage::Command(WorkflowCommand::StartExecution {
+                    execution_id: execution.clone(),
+                    plan: Box::new(worker_plan()),
+                    // `local`, not `worker`: the Rust decider schedules this
+                    // static plan and workers only *perform* its steps.
+                    // `worker`/`hosted` is a decider living in the worker,
+                    // which is Phase 13 and not this.
+                    owner: ExecutionOwner::Local,
+                    mode: ExecutionMode::Compiled,
+                    requested_by: "mk".to_owned(),
+                    input: std::collections::BTreeMap::new(),
+                }),
+                MessageMetadata {
+                    schema_version: SCHEMA_VERSION,
+                    message_id: aiwatcher_core::MessageId::new(format!("start/{execution_id}")),
+                    occurred_at: time::OffsetDateTime::now_utc(),
+                    correlation_id: aiwatcher_core::CorrelationId::new(execution_id),
+                    causation_id: aiwatcher_core::CausationId::new(execution_id),
+                    trace_id: None,
+                    span_id: None,
+                    step_id: None,
+                    attempt: None,
+                },
+                Now::at(time::OffsetDateTime::now_utc()),
+            )
+            .await
+            .expect("a start");
+    }
+
+    async fn claim_as(&self, token: &str, body: Value) -> (StatusCode, Value) {
+        self.send_with_token("POST", "/api/v1/worker/claims", token, Some(body))
+            .await
+    }
+}
+
+#[tokio::test]
+async fn a_worker_is_handed_one_attempt_with_everything_needed_to_run_it() {
+    // The claim does the whole front half of the reactor: the row, the plan the
+    // run pinned, the cache lookup and `step.started`. What comes back is the
+    // work and nothing about how to decide anything.
+    let fixture = Fixture::behind_a_proxy(false).await;
+    fixture.seed_worker_run("exec-w1").await;
+
+    let (status, body) = fixture
+        .claim_as(
+            WORKER_SECRET,
+            json!({ "worker": "laptop-1", "tasks": ["stage@1", "review@1"] }),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["execution_id"], "exec-w1");
+    assert_eq!(body["step_id"], "stage", "the root, not the step behind it");
+    assert_eq!(body["attempt"], 1);
+    assert_eq!(body["task_ref"], "stage@1");
+    assert_eq!(body["queue"], "houses");
+    assert_eq!(body["context_id"], "exec-w1/stage/1");
+    assert_eq!(body["params"]["threshold"], json!(0.8));
+    assert!(!body["is_retake"].as_bool().expect("a flag"));
+    assert!(
+        body["lease_expires_at"].is_string(),
+        "a deadline, not a duration: the two clocks are the whole question"
+    );
+
+    // And exactly one: a claim is one attempt, so a second poll finds the
+    // second step still waiting on the first.
+    let (status, body) = fixture
+        .claim_as(
+            WORKER_SECRET,
+            json!({ "worker": "laptop-2", "tasks": ["stage@1", "review@1"] }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+}
+
+#[tokio::test]
+async fn a_worker_that_does_not_hold_the_pinned_version_is_handed_nothing() {
+    // The first guardrail, in the pulled half. A worker mid-deploy holds one
+    // version; taking the other's attempt would fail a run over a rollout
+    // rather than leave it for the pod that can run it.
+    let fixture = Fixture::behind_a_proxy(false).await;
+    fixture.seed_worker_run("exec-w2").await;
+
+    let (status, body) = fixture
+        .claim_as(
+            WORKER_SECRET,
+            json!({ "worker": "laptop-1", "tasks": ["stage@2"] }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    // Negative control: the same worker with the right version gets it, so the
+    // refusal above is about the pin and not about the claim path being broken.
+    let (status, body) = fixture
+        .claim_as(
+            WORKER_SECRET,
+            json!({ "worker": "laptop-1", "tasks": ["stage@1"] }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+#[tokio::test]
+async fn a_token_that_does_not_authorise_a_queue_is_refused_by_name() {
+    // Silently narrowing to the queues the token does hold would leave a
+    // misconfigured worker polling an empty filter forever, with nothing
+    // anywhere saying why.
+    let fixture = Fixture::behind_a_proxy(false).await;
+    fixture.seed_worker_run("exec-w3").await;
+
+    let (status, body) = fixture
+        .claim_as(
+            WORKER_SECRET,
+            json!({ "worker": "laptop-1", "queues": ["plans"], "tasks": ["stage@1"] }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        body["message"]
+            .as_str()
+            .expect("a message")
+            .contains("plans"),
+        "{body}"
+    );
+
+    // And a producer's token claims nothing at all, however it asks. The role
+    // is the same `Editor`; what it lacks is a queue.
+    let (status, body) = fixture
+        .claim_as(
+            "0123456789abcdef0123456789abcdef",
+            json!({ "worker": "laptop-1", "tasks": ["stage@1"] }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+}
+
+#[tokio::test]
+async fn a_workers_result_reaches_the_decider_and_starts_what_comes_next() {
+    let fixture = Fixture::behind_a_proxy(false).await;
+    fixture.seed_worker_run("exec-w4").await;
+    let (_, claimed) = fixture
+        .claim_as(
+            WORKER_SECRET,
+            json!({ "worker": "laptop-1", "tasks": ["stage@1", "review@1"] }),
+        )
+        .await;
+    assert_eq!(claimed["step_id"], "stage");
+
+    // Rows go through this attempt's own route, which content-addresses them.
+    let (status, stored) = fixture
+        .send_with_token(
+            "POST",
+            "/api/v1/worker/claims/exec-w4/stage/1/outputs/rows?worker=laptop-1",
+            WORKER_SECRET,
+            Some(json!({ "rows": [{ "id": 1, "town": "Poznań" }] })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{stored}");
+    assert_eq!(
+        stored["digest"].as_str().expect("a digest").len(),
+        64,
+        "the digest is of the bytes this instance wrote"
+    );
+
+    let (status, settled) = fixture
+        .send_with_token(
+            "POST",
+            "/api/v1/worker/claims/exec-w4/stage/1/result",
+            WORKER_SECRET,
+            Some(json!({
+                "worker": "laptop-1",
+                "outcome": "completed",
+                "outputs": [stored],
+                "result": { "rows": 1 }
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{settled}");
+    assert!(settled["succeeded"].as_bool().expect("a flag"), "{settled}");
+
+    // The decider took it from there: the second step is now claimable, which
+    // is the whole point of the report going through the handler rather than
+    // being written down by the worker.
+    let (status, next) = fixture
+        .claim_as(
+            WORKER_SECRET,
+            json!({ "worker": "laptop-1", "tasks": ["stage@1", "review@1"] }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{next}");
+    assert_eq!(next["step_id"], "review");
+}
+
+#[tokio::test]
+async fn a_worker_may_not_settle_an_attempt_it_does_not_hold() {
+    // Worker names are not secret, so this is the check that stops one from
+    // reporting over somebody else's work by guessing the name it was claimed
+    // under. Its own work is discarded — the reactor's rule, that a claimant
+    // whose lease went must not write beside its replacement.
+    let fixture = Fixture::behind_a_proxy(false).await;
+    fixture.seed_worker_run("exec-w5").await;
+    fixture
+        .claim_as(
+            WORKER_SECRET,
+            json!({ "worker": "laptop-1", "tasks": ["stage@1"] }),
+        )
+        .await;
+
+    for (what, body) in [
+        (
+            "a result",
+            json!({ "worker": "impostor", "outcome": "completed" }),
+        ),
+        ("a heartbeat", json!({ "worker": "impostor" })),
+    ] {
+        let uri = if what == "a result" {
+            "/api/v1/worker/claims/exec-w5/stage/1/result"
+        } else {
+            "/api/v1/worker/claims/exec-w5/stage/1/heartbeat"
+        };
+        let (status, answer) = fixture
+            .send_with_token("POST", uri, WORKER_SECRET, Some(body))
+            .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{what}: {answer}");
+        assert_eq!(answer["code"], "lease_lost", "{what}");
+    }
+
+    // Negative control: the holder is accepted, so the refusals above are
+    // about the name rather than about the routes being broken.
+    let (status, answer) = fixture
+        .send_with_token(
+            "POST",
+            "/api/v1/worker/claims/exec-w5/stage/1/heartbeat",
+            WORKER_SECRET,
+            Some(json!({ "worker": "laptop-1" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{answer}");
+}
+
+#[tokio::test]
+async fn an_output_this_instance_never_stored_is_refused_rather_than_recorded() {
+    // A worker could otherwise describe a reference instead of writing one, and
+    // a completed step pointing at an object that 404s is the one failure
+    // nothing downstream would catch.
+    let fixture = Fixture::behind_a_proxy(false).await;
+    fixture.seed_worker_run("exec-w6").await;
+    fixture
+        .claim_as(
+            WORKER_SECRET,
+            json!({ "worker": "laptop-1", "tasks": ["stage@1"] }),
+        )
+        .await;
+
+    let (status, body) = fixture
+        .send_with_token(
+            "POST",
+            "/api/v1/worker/claims/exec-w6/stage/1/result",
+            WORKER_SECRET,
+            Some(json!({
+                "worker": "laptop-1",
+                "outcome": "completed",
+                "outputs": [{
+                    "name": "rows",
+                    "uri": "object://artifacts/rows/deadbeef/data",
+                    "digest": "de".repeat(32),
+                }]
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        body["message"]
+            .as_str()
+            .expect("a message")
+            .contains("outputs route"),
+        "{body}"
+    );
+
+    // And the attempt is still claimable by its holder, so a refused report
+    // costs the work rather than the run.
+    let (status, again) = fixture
+        .send_with_token(
+            "POST",
+            "/api/v1/worker/claims/exec-w6/stage/1/heartbeat",
+            WORKER_SECRET,
+            Some(json!({ "worker": "laptop-1" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{again}");
+}
+
+#[tokio::test]
+async fn a_failed_attempt_is_the_deciders_business_and_not_the_end_of_the_run() {
+    // The worker classifies its failure because the process that made the call
+    // is the one that knows; what happens next is the decider's, and a worker
+    // that scheduled its own retry would be the second orchestrator ADR_0025
+    // refuses.
+    let fixture = Fixture::behind_a_proxy(false).await;
+    fixture.seed_worker_run("exec-w7").await;
+    fixture
+        .claim_as(
+            WORKER_SECRET,
+            json!({ "worker": "laptop-1", "tasks": ["stage@1"] }),
+        )
+        .await;
+
+    let (status, settled) = fixture
+        .send_with_token(
+            "POST",
+            "/api/v1/worker/claims/exec-w7/stage/1/result",
+            WORKER_SECRET,
+            Some(json!({
+                "worker": "laptop-1",
+                "outcome": "failed",
+                "class": "transient",
+                "message": "the geocoder answered 503"
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{settled}");
+    assert!(
+        !settled["succeeded"].as_bool().expect("a flag"),
+        "{settled}"
+    );
+
+    // A retryable class means a second attempt, not a dead run. It is not
+    // claimable *yet*, and that is the decider's backoff rather than an
+    // absence — a worker that took it back instantly would be retrying at the
+    // rate of its own poll loop.
+    let (status, waiting) = fixture
+        .claim_as(
+            WORKER_SECRET,
+            json!({ "worker": "laptop-1", "tasks": ["stage@1"] }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{waiting}");
+
+    let (status, run) = fixture
+        .get_as("/api/v1/executions/exec-w7", "alice", "aiwatcher-editors")
+        .await;
+    assert_eq!(status, StatusCode::OK, "{run}");
+    assert_eq!(run["execution"]["state"]["state_type"], "running", "{run}");
+    let step = run["execution"]["steps"]
+        .as_array()
+        .expect("steps")
+        .iter()
+        .find(|step| step["step_id"] == "stage")
+        .expect("the step that failed");
+    assert_eq!(step["state"]["name"], "AwaitingRetry", "{step}");
+    assert_eq!(step["current_attempt"], 2, "{step}");
+    assert!(
+        step["attempts"][1]["not_before"].is_string(),
+        "the backoff is why the claim above was empty: {step}"
+    );
+}
+
+#[tokio::test]
+async fn a_second_step_reads_what_the_first_produced_and_nothing_else() {
+    // The proxied artifact path, end to end and across two claims. Presigning
+    // was the alternative and this is why it was not taken: what the route can
+    // check is that the caller holds the lease on the attempt whose input it
+    // is asking for, and a URL scoped by a prefix and a clock cannot.
+    let fixture = Fixture::behind_a_proxy(false).await;
+    fixture.seed_worker_run("exec-w8").await;
+    let tasks = json!({ "worker": "laptop-1", "tasks": ["stage@1", "review@1"] });
+
+    fixture.claim_as(WORKER_SECRET, tasks.clone()).await;
+    let (_, stored) = fixture
+        .send_with_token(
+            "POST",
+            "/api/v1/worker/claims/exec-w8/stage/1/outputs/rows?worker=laptop-1",
+            WORKER_SECRET,
+            Some(json!({ "rows": [{ "id": 1, "town": "Poznań" }, { "id": 2, "town": "Kraków" }] })),
+        )
+        .await;
+    fixture
+        .send_with_token(
+            "POST",
+            "/api/v1/worker/claims/exec-w8/stage/1/result",
+            WORKER_SECRET,
+            Some(json!({
+                "worker": "laptop-1",
+                "outcome": "completed",
+                "outputs": [stored]
+            })),
+        )
+        .await;
+
+    let (status, next) = fixture.claim_as(WORKER_SECRET, tasks).await;
+    assert_eq!(status, StatusCode::OK, "{next}");
+    assert_eq!(next["step_id"], "review");
+    assert_eq!(
+        next["inputs"][0]["name"], "rows",
+        "the assignment names what the parent produced: {next}"
+    );
+
+    let (status, rows) = fixture
+        .send_with_token(
+            "GET",
+            "/api/v1/worker/claims/exec-w8/review/1/inputs/rows?worker=laptop-1",
+            WORKER_SECRET,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{rows}");
+    assert_eq!(rows["rows"].as_array().expect("rows").len(), 2);
+    assert_eq!(rows["rows"][1]["town"], "Kraków");
+
+    // An input this attempt does not have is a 404, and one belonging to an
+    // attempt this worker does not hold is a 409 — two different sentences,
+    // because "there is no such input" and "you no longer hold this" send a
+    // worker to two different places.
+    let (status, missing) = fixture
+        .send_with_token(
+            "GET",
+            "/api/v1/worker/claims/exec-w8/review/1/inputs/nope?worker=laptop-1",
+            WORKER_SECRET,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{missing}");
+
+    let (status, refused) = fixture
+        .send_with_token(
+            "GET",
+            "/api/v1/worker/claims/exec-w8/review/1/inputs/rows?worker=impostor",
+            WORKER_SECRET,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert_eq!(refused["code"], "lease_lost");
+}
+
+#[tokio::test]
+async fn holding_the_lease_is_not_enough_if_the_token_is_for_another_queue() {
+    // The other half of `worker::held`, and the half a name check does not
+    // reach: this caller names the worker that really holds the attempt and
+    // gets the name right. What it does not have is a token for the queue the
+    // attempt was dispatched to — and worker names are not secret, so without
+    // this check that is all it would need.
+    let fixture = Fixture::behind_a_proxy(false).await;
+    fixture.seed_worker_run("exec-w9").await;
+    let (status, claimed) = fixture
+        .claim_as(
+            WORKER_SECRET,
+            json!({ "worker": "laptop-1", "tasks": ["stage@1"] }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{claimed}");
+
+    for (what, uri, body) in [
+        (
+            "a heartbeat",
+            "/api/v1/worker/claims/exec-w9/stage/1/heartbeat",
+            json!({ "worker": "laptop-1" }),
+        ),
+        (
+            "a result",
+            "/api/v1/worker/claims/exec-w9/stage/1/result",
+            json!({ "worker": "laptop-1", "outcome": "completed" }),
+        ),
+    ] {
+        let (status, answer) = fixture
+            .send_with_token("POST", uri, OTHER_WORKER_SECRET, Some(body))
+            .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{what}: {answer}");
+        assert_eq!(answer["code"], "forbidden", "{what}");
+    }
+
+    // And the rows too: a token for another queue may not read what this
+    // attempt was handed, which is the check that makes proxying the bytes
+    // worth more than a presigned URL.
+    let (status, refused) = fixture
+        .send_with_token(
+            "GET",
+            "/api/v1/worker/claims/exec-w9/stage/1/inputs/rows?worker=laptop-1",
+            OTHER_WORKER_SECRET,
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+
+    // Negative control: the token that does hold the queue is accepted with
+    // the same worker name, so the refusals above are about the scope.
+    let (status, ok) = fixture
+        .send_with_token(
+            "POST",
+            "/api/v1/worker/claims/exec-w9/stage/1/heartbeat",
+            WORKER_SECRET,
+            Some(json!({ "worker": "laptop-1" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{ok}");
 }

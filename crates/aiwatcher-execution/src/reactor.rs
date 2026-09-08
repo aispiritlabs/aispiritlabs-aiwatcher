@@ -66,6 +66,37 @@ pub enum Performed {
     Released { step_id: String, reason: String },
 }
 
+/// One claimed attempt, and everything performing it needs.
+///
+/// What [`Reactor::take`] hands out and [`Reactor::settle`] takes back. The
+/// lease is live while a caller holds one of these, so it is not something to
+/// keep: a worker that put one in a queue would be holding a claim nothing is
+/// renewing.
+#[derive(Debug)]
+pub struct Claimed {
+    pub row: AttemptRow,
+    pub command: ActivityCommand,
+    pub context: ActivityContext,
+    /// The key this result may answer for later, if it may answer for one.
+    ///
+    /// Carried across the seam rather than recomputed at settlement, because
+    /// it is read from the *decision* that dispatched the attempt and a second
+    /// read could see a plan that has since been superseded.
+    pub(crate) cache_key: Option<String>,
+}
+
+/// What one claim found.
+#[derive(Debug)]
+pub enum Taken {
+    /// Nothing was claimable.
+    Idle,
+    /// A row was claimed and is already finished with — a cache hit, or a row
+    /// this claimant released. Nobody performs anything.
+    Settled(Performed),
+    /// Work for the caller to perform, and then to [`Reactor::settle`].
+    Work(Box<Claimed>),
+}
+
 /// One process's reactors: what it can run, and the name it holds leases under.
 #[derive(Debug)]
 pub struct Reactor<S> {
@@ -112,6 +143,9 @@ impl<S: WorkflowStore> Reactor<S> {
     /// One attempt per call, so the caller owns the pacing and the shutdown.
     /// A loop inside here would be a process that cannot be drained.
     ///
+    /// [`Self::take`] and [`Self::settle`] are the two halves, and this is the
+    /// only caller that has an [`ActivityExecutor`] to put between them.
+    ///
     /// # Errors
     ///
     /// Whatever the store could not do. An executor's failure is not an error
@@ -120,39 +154,93 @@ impl<S: WorkflowStore> Reactor<S> {
         if self.executors.is_empty() {
             return Ok(Performed::Idle);
         }
+        let performable: Vec<crate::plan::RuntimeKind> = self.executors.runtimes();
+        let claimed = match self
+            .take(&self.executors.claim_filter(), &performable, now)
+            .await?
+        {
+            Taken::Idle => return Ok(Performed::Idle),
+            Taken::Settled(performed) => return Ok(performed),
+            Taken::Work(claimed) => claimed,
+        };
+
+        // Defensive rather than reachable: the filter was built from this
+        // registry, so a row it handed back is one this process registered an
+        // executor for. `take` has already checked the same list.
+        let Some(executor) = self.executors.get(claimed.command.step.runtime.kind()) else {
+            return Ok(Performed::Released {
+                step_id: claimed.row.key.step_id.clone(),
+                reason: format!(
+                    "this process holds no {} executor",
+                    claimed.command.step.runtime.kind().as_str()
+                ),
+            });
+        };
+
+        let outcome = self
+            .perform(executor, &claimed.command, &claimed.context, &claimed.row)
+            .await;
+        self.settle(*claimed, outcome, now).await
+    }
+
+    /// Steps 1 and 2: claim an attempt, and get it as far as somebody can
+    /// perform it.
+    ///
+    /// The half of [`Self::poll_once`] that runs **before** anybody does the
+    /// work, and it is public because a worker's is done in another process.
+    /// What it decides here rather than there is everything that must not be
+    /// decided twice: which row, whether the plan still holds the step, whether
+    /// a cache entry already answers, and the `step.started` that says an
+    /// attempt began. A worker re-implementing any of it in another language
+    /// is the drift this seam exists to prevent.
+    ///
+    /// `performable` is what the caller can actually run. It is separate from
+    /// the filter because a filter is a *query* and this is the claimant's own
+    /// answer about the row that came back — and it is checked before
+    /// `step.started`, so a released attempt never leaves a start on the log.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the store could not do.
+    pub async fn take(
+        &self,
+        filter: &crate::claim::ClaimFilter,
+        performable: &[crate::plan::RuntimeKind],
+        now: OffsetDateTime,
+    ) -> Result<Taken, HandleError> {
         // 1–2: the claim is the deduplication and the lease at once. A second
         // reactor polling this instant sees the row taken.
         let Some(row) = self
             .handler
             .store()
-            .claim_attempt(&self.executors.claim_filter(), &self.owner, now)
+            .claim_attempt(filter, &self.owner, now)
             .await?
         else {
-            return Ok(Performed::Idle);
+            return Ok(Taken::Idle);
         };
 
         let execution = row.key.execution_id.clone();
         let Some(run) = self.load_execution(&execution).await? else {
-            return Ok(Performed::Released {
+            return Ok(Taken::Settled(Performed::Released {
                 step_id: row.key.step_id.clone(),
                 reason: "the execution's stream holds no plan".to_owned(),
-            });
+            }));
         };
         let Some(step) = run.plan.step(&row.key.step_id).cloned() else {
-            return Ok(Performed::Released {
+            return Ok(Taken::Settled(Performed::Released {
                 step_id: row.key.step_id.clone(),
                 reason: "the plan has no such step".to_owned(),
-            });
+            }));
         };
-        let Some(executor) = self.executors.get(step.runtime.kind()) else {
-            return Ok(Performed::Released {
+        if !performable.contains(&step.runtime.kind()) {
+            return Ok(Taken::Settled(Performed::Released {
                 step_id: row.key.step_id.clone(),
                 reason: format!(
-                    "this process holds no {} executor",
+                    "this claimant does not perform {}",
                     step.runtime.kind().as_str()
                 ),
-            });
-        };
+            }));
+        }
 
         let command = ActivityCommand {
             key: row.key.clone(),
@@ -190,11 +278,11 @@ impl<S: WorkflowStore> Reactor<S> {
                 "cache-hit",
             )
             .await?;
-            return Ok(Performed::Reported {
+            return Ok(Taken::Settled(Performed::Reported {
                 step_id: row.key.step_id,
                 attempt: row.key.attempt,
                 succeeded: true,
-            });
+            }));
         }
 
         self.report(
@@ -208,7 +296,96 @@ impl<S: WorkflowStore> Reactor<S> {
         )
         .await?;
 
-        let outcome = self.perform(executor, &command, &context, &row).await;
+        Ok(Taken::Work(Box::new(Claimed {
+            row,
+            command,
+            context,
+            cache_key,
+        })))
+    }
+
+    /// Rebuild a claim this owner still holds, without claiming anything.
+    ///
+    /// The seam's third method, and it exists because an HTTP claimant does not
+    /// keep a [`Claimed`] across requests — the assignment went out over the
+    /// wire and the result comes back in a different one. `None` is a caller
+    /// asking about an attempt it does not hold: an expired lease, a takeover,
+    /// or an attempt that was never dispatched.
+    ///
+    /// It re-reads rather than trusting the key, which is the point. A worker
+    /// naming somebody else's attempt gets `None` here rather than the ability
+    /// to settle it, and that one check is what makes every other worker route
+    /// safe to expose — the lease *is* the authorization.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the store could not do.
+    pub async fn resume(
+        &self,
+        key: &crate::claim::AttemptKey,
+        now: OffsetDateTime,
+    ) -> Result<Option<Claimed>, HandleError> {
+        let Some(row) = self.handler.store().attempt(key).await? else {
+            return Ok(None);
+        };
+        if !row.is_held_by(&self.owner, now) {
+            return Ok(None);
+        }
+        let Some(run) = self.load_execution(&key.execution_id).await? else {
+            return Ok(None);
+        };
+        let Some(step) = run.plan.step(&key.step_id).cloned() else {
+            return Ok(None);
+        };
+
+        let command = ActivityCommand {
+            key: row.key.clone(),
+            command_id: row.command_id.clone(),
+            step,
+            inputs: run.resolved_inputs(&key.step_id),
+            parameters: run.input.clone(),
+        };
+        let context = ActivityContext {
+            owner: self.owner.clone(),
+            timeout: Duration::from_secs(command.step.timeout_seconds),
+            context_id: command.idempotency_key(),
+            plan: Arc::new(run.plan.clone()),
+        };
+        let cache_key = run
+            .step(&key.step_id)
+            .and_then(|step| step.cache_key.clone());
+
+        Ok(Some(Claimed {
+            row,
+            command,
+            context,
+            cache_key,
+        }))
+    }
+
+    /// Steps 7 and 8: check the lease still holds, record what was produced,
+    /// and report the outcome.
+    ///
+    /// The half of [`Self::poll_once`] that runs **after** the work, and the
+    /// reason a worker cannot simply post its own result: the lease re-check
+    /// is a precondition a claimant cannot be trusted to apply to itself, and
+    /// the cache entry must not be written by whoever benefits from it.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the store could not do.
+    pub async fn settle(
+        &self,
+        claimed: Claimed,
+        outcome: Result<ActivityResult, StepError>,
+        now: OffsetDateTime,
+    ) -> Result<Performed, HandleError> {
+        let Claimed {
+            row,
+            command,
+            cache_key,
+            ..
+        } = claimed;
 
         // 7's precondition. A worker whose lease expired under it stops rather
         // than writing beside its replacement.

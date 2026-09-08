@@ -142,6 +142,19 @@ pub struct Identity {
     /// issued.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<i64>,
+    /// The worker queues this caller may claim attempts on.
+    ///
+    /// Not a role, and it can only ever *narrow*: a token holds [`Role::Editor`]
+    /// whether or not it names a queue, and naming none is what every producer
+    /// token does. It is here rather than derived from the group mapping for
+    /// the same reason the role is — a queue is what a shared secret in a
+    /// worker's environment authorises, and a provider that grew a group
+    /// called `houses` must not thereby authorise claiming.
+    ///
+    /// Empty on every human session on purpose. Claiming takes a lease that
+    /// something has to renew, and a browser is not that something.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub queues: Vec<String>,
     pub credential: Credential,
 }
 
@@ -157,7 +170,37 @@ impl Identity {
             groups: Vec::new(),
             roles: vec![Role::Admin],
             expires_at: None,
+            // Unrestricted rather than empty — see `may_claim`. An empty list
+            // here would make `AIWATCHER_AUTH_MODE=none` the one mode in which
+            // no worker can claim anything, which is not what "none" means
+            // anywhere else in this crate.
+            queues: Vec::new(),
             credential: Credential::Anonymous,
+        }
+    }
+
+    /// Whether this caller may claim an attempt dispatched to `queue`.
+    ///
+    /// The anonymous identity may claim any: with no provider configured every
+    /// role check passes, and this is a scope rather than an exception to that.
+    /// Everybody else may claim exactly what their token named, which for a
+    /// person's session and for a producer's token is nothing.
+    #[must_use]
+    pub fn may_claim(&self, queue: &str) -> bool {
+        matches!(self.credential, Credential::Anonymous)
+            || self.queues.iter().any(|held| held == queue)
+    }
+
+    /// The queues this caller may claim on, or `None` for unrestricted.
+    ///
+    /// `None` is what an anonymous caller gets, and a claim filter built from
+    /// it takes whatever is on offer. Every other caller gets a list, which is
+    /// empty unless a token named queues.
+    #[must_use]
+    pub fn claimable_queues(&self) -> Option<&[String]> {
+        match self.credential {
+            Credential::Anonymous => None,
+            _ => Some(&self.queues),
         }
     }
 

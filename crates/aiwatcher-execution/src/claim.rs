@@ -218,6 +218,19 @@ impl AttemptRow {
 pub struct ClaimFilter {
     pub runtimes: Vec<RuntimeKind>,
     pub queues: Vec<String>,
+    /// The `name@version` refs a worker has registered code for.
+    ///
+    /// Empty for a reactor, which claims by runtime and has no such notion.
+    /// For a worker it is the second half of the same rule the runtimes are
+    /// for a reactor: **never let a process claim work it cannot perform.** A
+    /// worker holding `stage@1` that took a `stage@2` attempt would fail a run
+    /// over a rolling deploy in which both versions are briefly alive.
+    ///
+    /// The cost is stated rather than hidden: an attempt whose `task_ref` no
+    /// deployed worker registers is claimed by nobody and its run sits
+    /// `pending`. That is the same shape as a `flow_php` step in a process with
+    /// no Flow client, and the panel draws it the same way.
+    pub tasks: Vec<String>,
 }
 
 impl ClaimFilter {
@@ -227,15 +240,17 @@ impl ClaimFilter {
         Self {
             runtimes: runtimes.to_vec(),
             queues: Vec::new(),
+            tasks: Vec::new(),
         }
     }
 
-    /// A worker: the queues its token authorises.
+    /// A worker: the queues its token authorises, and the tasks it registered.
     #[must_use]
-    pub fn for_queues(queues: &[String]) -> Self {
+    pub fn for_queues(queues: &[String], tasks: &[String]) -> Self {
         Self {
             runtimes: Vec::new(),
             queues: queues.to_vec(),
+            tasks: tasks.to_vec(),
         }
     }
 
@@ -245,10 +260,26 @@ impl ClaimFilter {
         match &row.queue {
             // A pulled attempt belongs to whoever holds its queue, and to
             // nobody else — a reactor listing `python_task` must not take work
-            // scheduled for somebody's worker.
-            Some(queue) => self.queues.iter().any(|allowed| allowed == queue),
+            // scheduled for somebody's worker. And within a queue, only to a
+            // worker that has the code the attempt pins.
+            Some(queue) => {
+                self.queues.iter().any(|allowed| allowed == queue)
+                    && row
+                        .task_ref
+                        .as_ref()
+                        .is_some_and(|task| self.tasks.iter().any(|held| held == task))
+            }
             None => self.runtimes.contains(&row.runtime),
         }
+    }
+
+    /// Whether this claimant named anything at all.
+    ///
+    /// A claimant that named nothing takes nothing, and every adapter checks
+    /// this before it queries rather than each writing the rule out.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.runtimes.is_empty() && self.queues.is_empty()
     }
 }
 
@@ -342,9 +373,28 @@ mod tests {
         )
         .on_queue("houses".to_owned(), "stage@1".to_owned());
 
+        let stage = ["stage@1".to_owned()];
         assert!(!ClaimFilter::for_runtimes(&[RuntimeKind::PythonTask]).matches(&pulled));
-        assert!(ClaimFilter::for_queues(&["houses".to_owned()]).matches(&pulled));
-        assert!(!ClaimFilter::for_queues(&["other".to_owned()]).matches(&pulled));
+        assert!(ClaimFilter::for_queues(&["houses".to_owned()], &stage).matches(&pulled));
+        assert!(!ClaimFilter::for_queues(&["other".to_owned()], &stage).matches(&pulled));
+    }
+
+    #[test]
+    fn a_worker_on_the_right_queue_still_declines_code_it_does_not_have() {
+        // The first guardrail, in the pulled half: a worker mid-deploy holds
+        // one version, and taking the other's attempt would fail a run over a
+        // rollout rather than wait for the pod that can run it.
+        let pinned = AttemptRow::claimable(
+            AttemptKey::new(ExecutionId::new("exec-1"), "stage", 1),
+            RuntimeKind::PythonTask,
+            MessageId::new("cmd-1"),
+        )
+        .on_queue("houses".to_owned(), "stage@2".to_owned());
+
+        let queues = ["houses".to_owned()];
+        assert!(!ClaimFilter::for_queues(&queues, &["stage@1".to_owned()]).matches(&pinned));
+        assert!(!ClaimFilter::for_queues(&queues, &[]).matches(&pinned));
+        assert!(ClaimFilter::for_queues(&queues, &["stage@2".to_owned()]).matches(&pinned));
     }
 
     #[test]

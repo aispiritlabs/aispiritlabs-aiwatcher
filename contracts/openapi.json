@@ -7191,6 +7191,482 @@
         }
       }
     },
+    "/api/v1/worker/claims": {
+      "post": {
+        "tags": [
+          "worker"
+        ],
+        "summary": "Take one attempt, or say there was none.",
+        "description": "The server does everything up to the work itself: it claims the row, loads\nthe plan the run pinned, answers from the cache if an entry already covers\nthis key, and reports `step.started`. A 204 means there was nothing — or\nthat a cache entry settled it without anybody running anything, which is a\nfinished attempt rather than an idle one and looks the same from here.",
+        "operationId": "claim",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkAssignment"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "nothing claimable"
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/worker/claims/{execution_id}/{step_id}/{attempt}/heartbeat": {
+      "post": {
+        "tags": [
+          "worker"
+        ],
+        "summary": "Renew a claim.",
+        "description": "A 409 is the signal to stop rather than to try harder: the lease went, the\nattempt has been taken over, and whatever this worker is in the middle of\nwill not be accepted.",
+        "operationId": "heartbeat",
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "description": "The run this attempt belongs to",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "step_id",
+            "in": "path",
+            "description": "The step of that run's pinned plan",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "attempt",
+            "in": "path",
+            "description": "Which attempt",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkerBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "still held"
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/worker/claims/{execution_id}/{step_id}/{attempt}/inputs/{name}": {
+      "get": {
+        "tags": [
+          "worker"
+        ],
+        "summary": "Read one of this attempt's inputs.",
+        "description": "Proxied rather than presigned. A presigned URL is a bearer credential for a\nbucket that also holds prompts, datasets, annotations, conversations and\ntraining, scoped by a prefix and a clock and handed to a process that may be\nbehind somebody's NAT; this route can check the one thing that matters,\nwhich is that the caller holds the lease on the attempt whose input it is\nasking for.",
+        "operationId": "read_input",
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "description": "The run this attempt belongs to",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "step_id",
+            "in": "path",
+            "description": "The step of that run's pinned plan",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "attempt",
+            "in": "path",
+            "description": "Which attempt",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The input's name, as the assignment listed it",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "worker",
+            "in": "query",
+            "description": "The name the claim was made under",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RowsBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/worker/claims/{execution_id}/{step_id}/{attempt}/outputs/{name}": {
+      "post": {
+        "tags": [
+          "worker"
+        ],
+        "summary": "Store rows this attempt produced, and get the pointer back.",
+        "description": "The digest is of the bytes this instance wrote and never of anything the\ncaller claimed — the prompt registry's rule, and what makes the reference\nsafe to accept back on the result route.",
+        "operationId": "write_output",
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "description": "The run this attempt belongs to",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "step_id",
+            "in": "path",
+            "description": "The step of that run's pinned plan",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "attempt",
+            "in": "path",
+            "description": "Which attempt",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "What the reader will call it",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "worker",
+            "in": "query",
+            "description": "The name the claim was made under",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RowsBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactRef"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/worker/claims/{execution_id}/{step_id}/{attempt}/result": {
+      "post": {
+        "tags": [
+          "worker"
+        ],
+        "summary": "Report what an attempt produced, and let the decider decide what follows.",
+        "description": "The server re-checks the lease, records the outputs and the cache entry,\nand reports `step.completed` or `step.failed`. None of that is the worker's\nto do: a claimant is the one party that cannot check its own lease, and a\ncache entry must not be written by whoever benefits from it.",
+        "operationId": "report",
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "description": "The run this attempt belongs to",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "step_id",
+            "in": "path",
+            "description": "The step of that run's pinned plan",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "attempt",
+            "in": "path",
+            "description": "Which attempt",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkerReport"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Settled"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/workflow-executions": {
       "get": {
         "tags": [
@@ -8691,6 +9167,35 @@
             "format": "double"
           }
         }
+      },
+      "ClaimRequest": {
+        "type": "object",
+        "description": "A worker saying what it is and what it can run.",
+        "required": [
+          "worker",
+          "tasks"
+        ],
+        "properties": {
+          "queues": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The queues to take from. Every one must be a queue this caller's token\nauthorises; an empty list means all of them."
+          },
+          "tasks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The `name@version` refs this worker has code for.\n\nRequired, and an empty list claims nothing. **Never let a process claim\nwork it cannot perform**: a worker holding `stage@1` that took a\n`stage@2` attempt would fail a run over a rolling deploy in which both\nversions are briefly alive."
+          },
+          "worker": {
+            "type": "string",
+            "description": "The name this worker holds leases under.\n\nUnique per process — a pod name, a host and a pid. Two workers sharing\none name would each believe they hold the other's leases, which is the\none thing the lease exists to prevent."
+          }
+        },
+        "additionalProperties": false
       },
       "ConsentRecord": {
         "type": "object",
@@ -12698,6 +13203,13 @@
               "string",
               "null"
             ]
+          },
+          "queues": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The worker queues this caller may claim attempts on.\n\nNot a role, and it can only ever *narrow*: a token holds [`Role::Editor`]\nwhether or not it names a queue, and naming none is what every producer\ntoken does. It is here rather than derived from the group mapping for\nthe same reason the role is — a queue is what a shared secret in a\nworker's environment authorises, and a provider that grew a group\ncalled `houses` must not thereby authorise claiming.\n\nEmpty on every human session on purpose. Claiming takes a lease that\nsomething has to renew, and a browser is not that something."
           },
           "roles": {
             "type": "array",
@@ -16783,6 +17295,21 @@
         ],
         "description": "What happened to one row."
       },
+      "RowsBody": {
+        "type": "object",
+        "description": "Rows, on their way to or from a worker.",
+        "required": [
+          "rows"
+        ],
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      },
       "RunAction": {
         "type": "string",
         "description": "Something a caller may do to a **run**, given where it got to.\n\nThe sibling of [`ContextAction`] and deliberately a separate enum: these are\ndone to an execution and those to a block, and one list holding both would\nbe a step's panel offering to stop the whole run.\n\nIt exists so a caller never re-derives a precondition. The rules are three\nlines and a panel could hold them — and then there would be two copies of\n`decide`'s mind, in two languages, and the day they disagree is the day\nsomebody trusts the wrong one. Same reasoning as `ContextAction::allowed`\nand as the annotation canvas implementing no validation.",
@@ -17667,6 +18194,28 @@
           }
         },
         "additionalProperties": false
+      },
+      "Settled": {
+        "type": "object",
+        "description": "What the decider did with a report.",
+        "required": [
+          "step_id",
+          "attempt",
+          "succeeded"
+        ],
+        "properties": {
+          "attempt": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "step_id": {
+            "type": "string"
+          },
+          "succeeded": {
+            "type": "boolean"
+          }
+        }
       },
       "ShardRef": {
         "type": "object",
@@ -19317,6 +19866,180 @@
             "description": "The conversations whose erasure caused this."
           }
         }
+      },
+      "WorkAssignment": {
+        "type": "object",
+        "description": "One attempt, and everything performing it needs.",
+        "required": [
+          "execution_id",
+          "step_id",
+          "attempt",
+          "task_ref",
+          "queue",
+          "context_id",
+          "timeout_seconds",
+          "lease_expires_at",
+          "params",
+          "parameters",
+          "inputs",
+          "is_retake"
+        ],
+        "properties": {
+          "attempt": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "context_id": {
+            "type": "string",
+            "description": "`<execution>/<step>/<attempt>` — what the work is idempotent by, and\nwhat a task with a side effect keys it on."
+          },
+          "execution_id": {
+            "type": "string"
+          },
+          "inputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ArtifactRef"
+            },
+            "description": "What the parents produced, by name. The bytes are read one at a time\nthrough this attempt's own `inputs/{name}` route."
+          },
+          "is_retake": {
+            "type": "boolean",
+            "description": "Whether somebody else held this attempt first.\n\nThe reactor asks its runtime by idempotency key before re-running a\ntakeover, because a timeout proves nothing about whether the previous\ncall finished. A worker has no such lookup to offer, so it is told\ninstead: a task with a side effect must be idempotent by `context_id`,\nand this is when that matters."
+          },
+          "lease_expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this claim stops being trusted unless it is renewed.\n\nAn instant rather than a duration, and the difference matters: a worker\ntold \"five minutes\" has to agree with this process about when the five\nminutes started, and the two clocks are the whole question. A deadline\nis one fact. It also means a client cannot hard-code the lease length\nand keep beating at the wrong rate the day the rule moves —\n`aiwatcher_jobs` owns that number, and nothing here restates it."
+          },
+          "parameters": {
+            "type": "object",
+            "description": "What the run itself was started with."
+          },
+          "params": {
+            "type": "object",
+            "description": "The step's authored parameters."
+          },
+          "queue": {
+            "type": "string"
+          },
+          "step_id": {
+            "type": "string"
+          },
+          "task_ref": {
+            "type": "string",
+            "description": "`name@version`, from the plan. The worker matches it against what it\nregistered; the server already did, which is why this is a fact rather\nthan a request."
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The step's own deadline. Past it the server stops waiting for a report.",
+            "minimum": 0
+          }
+        }
+      },
+      "WorkReport": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "It ran and produced something.",
+            "required": [
+              "outcome"
+            ],
+            "properties": {
+              "cacheable": {
+                "type": "boolean",
+                "description": "Whether this may answer for its cache key later. The worker\nanswers it because only the process that ran the work knows what it\nmanaged to do."
+              },
+              "diagnostics": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "completed"
+                ]
+              },
+              "outputs": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ArtifactRef"
+                },
+                "description": "References this attempt's own `outputs/{name}` route handed back."
+              },
+              "result": {
+                "description": "A bounded control value. Rows go in an artifact — a result that\ngrows with the data is one that eventually cannot be replayed."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "It did not.",
+            "required": [
+              "class",
+              "message",
+              "outcome"
+            ],
+            "properties": {
+              "class": {
+                "$ref": "#/components/schemas/FailureClass",
+                "description": "Whether trying again could plausibly produce a different answer.\nThe worker classifies it, because the process that made the call is\nthe one that knows."
+              },
+              "diagnostics": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "message": {
+                "type": "string"
+              },
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "failed"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "What a worker did with its attempt."
+      },
+      "WorkerBody": {
+        "type": "object",
+        "description": "A worker saying which attempt it is talking about.",
+        "required": [
+          "worker"
+        ],
+        "properties": {
+          "worker": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkerReport": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/WorkReport"
+          },
+          {
+            "type": "object",
+            "required": [
+              "worker"
+            ],
+            "properties": {
+              "worker": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "A report, with the worker that is making it.\n\nTwo structs rather than a flattened one: serde's `flatten` and\n`deny_unknown_fields` do not compose, and the report is a tagged enum whose\nvariants are the whole point of the body being checked."
       },
       "WorkflowDefinition": {
         "type": "object",
