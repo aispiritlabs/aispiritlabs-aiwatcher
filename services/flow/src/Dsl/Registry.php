@@ -5,14 +5,27 @@ declare(strict_types=1);
 namespace Aiwatcher\Flow\Dsl;
 
 /**
- * What a query may name, derived from Flow rather than listed by hand.
+ * What a query may name. The whole decision, and the only one.
  *
  * ADR 0008's rule is that a name from the query never becomes a callable. That
  * rule is about **dispatch**, not about enumeration: a string that selects a
  * key in a map built here is exactly as safe as one that selects a `match`
  * arm, and it is what lets this file admit Flow's own function namespace
- * without widening the boundary by one call. The hand-written list it stands
- * beside admitted 37 names of the 239 Flow ships.
+ * without widening the boundary by one call.
+ *
+ * There used to be a hand-written `Whitelist` beside it, holding 24 names that
+ * this class already admitted by signature and reading, to anybody opening the
+ * file, like the boundary. It was not: the two were consulted with `||`, so
+ * the effective vocabulary had been this class's since the day it landed. A
+ * list that decides nothing and looks like it decides everything is worse than
+ * no list, so it is gone.
+ *
+ * Two vocabularies are not Flow's and are therefore not here, and both are
+ * enums that *are* their own implementation rather than a list beside one:
+ * [`Sink`] — the three loaders that mean "give the rows back" — and
+ * [`Statistics\Descriptive`] — `median`, `stddev`, `variance`, `percentile`,
+ * which Flow does not ship. Neither can grow by accident: a case is a `match`
+ * arm somebody had to write.
  *
  * ## Three rules decide admission, and none of them is a name
  *
@@ -27,8 +40,8 @@ namespace Aiwatcher\Flow\Dsl;
  * service exists to refuse. Refused by *signature* rather than by name, so a
  * function Flow adds later is refused before anybody here has heard of it.
  *
- * **[`Whitelist::DECLINED`]**, which is about correctness rather than safety
- * and keeps its own reasons.
+ * **[`self::DECLINED`]**, which is about correctness rather than safety and
+ * keeps its own reasons.
  *
  * ## Why the return type is read as a string
  *
@@ -50,6 +63,11 @@ final class Registry
         'Flow\ETL\Function\\',
         'Flow\ETL\Row\\',
         'Flow\ETL\Window',
+        // `identical()` and `join_on()`: a join's condition is a comparison
+        // between two columns, which composes values and opens nothing. The
+        // frame it joins *to* comes from the catalog, through a nested query,
+        // and never from a name in this namespace.
+        'Flow\ETL\Join\\',
     ];
 
     /**
@@ -67,6 +85,39 @@ final class Registry
         'ulid',
         'uuid_v4',
         'uuid_v7',
+    ];
+
+    /**
+     * Names Flow offers that a query may not use, and why.
+     *
+     * The one refusal here that is about correctness rather than safety. Flow
+     * 0.43's loose comparisons fall through to an array comparison when either
+     * side is null, which makes them silently wrong on nullable data —
+     * measured on three rows where one column is null:
+     *
+     * ```text
+     * ref('op')->equals(lit('execute_tool'))     -> ['execute_tool', null]   wrong
+     * ref('op')->notEquals(lit('execute_tool'))  -> ['chat']                 wrong
+     * ref('op')->same(lit('execute_tool'))       -> ['execute_tool']         right
+     * ref('op')->notSame(lit('execute_tool'))    -> ['chat', null]           right
+     * ```
+     *
+     * Every column in every dataset here is nullable, so admitting these would
+     * be offering a filter that quietly returns the wrong rows. They are
+     * refused *with the reason* rather than silently absent, because "unknown
+     * function" would send somebody looking for a typo.
+     */
+    public const array DECLINED = [
+        'equals' =>
+            'Use ->same(...). Flow\'s ->equals() compares loosely and, when either side is '
+                . 'null, falls through to an array comparison that matches anything — and every column '
+                . 'in these datasets can be null.',
+        'notEquals' =>
+            'Use ->notSame(...). Flow\'s ->notEquals() drops rows where the column is '
+                . 'null, rather than keeping them as "not equal".',
+        'equal' =>
+            'Use ref(\'a\')->same(ref(\'b\')) or ->same(lit(\'value\')). The standalone '
+                . 'equal() compares loosely and mishandles nulls.',
     ];
 
     /** @var array<string, \ReflectionFunction>|null Built once per request; see the measurement below. */
@@ -96,7 +147,7 @@ final class Registry
             $function = new \ReflectionFunction($name);
             $short = $function->getShortName();
 
-            if (Whitelist::declined($short) !== null || self::takesACallable($function)) {
+            if (self::declined($short) !== null || self::takesACallable($function)) {
                 continue;
             }
 
@@ -111,6 +162,11 @@ final class Registry
     public static function has(string $name): bool
     {
         return isset(self::functions()[$name]);
+    }
+
+    public static function declined(string $name): ?string
+    {
+        return self::DECLINED[$name] ?? null;
     }
 
     public static function function(string $name): ?\ReflectionFunction

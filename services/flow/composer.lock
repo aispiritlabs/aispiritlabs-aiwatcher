@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "db7c70be5e279db5b7395a7cbfc8eaba",
+    "content-hash": "81547ef6670015fe5916e0022a39406f",
     "packages": [
         {
             "name": "brick/math",
@@ -441,6 +441,59 @@
                 }
             ],
             "time": "2026-08-10T13:25:59+00:00"
+        },
+        {
+            "name": "hi-folks/statistics",
+            "version": "v1.5.2",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/Hi-Folks/statistics.git",
+                "reference": "5d1b723c57ca4a8f23ae2b8966f77dea26b59548"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/Hi-Folks/statistics/zipball/5d1b723c57ca4a8f23ae2b8966f77dea26b59548",
+                "reference": "5d1b723c57ca4a8f23ae2b8966f77dea26b59548",
+                "shasum": ""
+            },
+            "require": {
+                "php": "^8.2|^8.3|^8.4|8.5"
+            },
+            "require-dev": {
+                "friendsofphp/php-cs-fixer": "^3.65",
+                "phpstan/phpstan": "^2",
+                "phpstan/phpstan-phpunit": "^2.0",
+                "phpunit/phpunit": "^11.0",
+                "rector/rector": "^2"
+            },
+            "type": "library",
+            "autoload": {
+                "psr-4": {
+                    "HiFolks\\Statistics\\": "src"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "authors": [
+                {
+                    "name": "Roberto B.",
+                    "email": "roberto.butti@gmail.com",
+                    "role": "Developer"
+                }
+            ],
+            "description": "PHP package that provides functions for calculating mathematical statistics of numeric data.",
+            "homepage": "https://github.com/hi-folks/statistics",
+            "keywords": [
+                "hi-folks",
+                "statistics"
+            ],
+            "support": {
+                "issues": "https://github.com/Hi-Folks/statistics/issues",
+                "source": "https://github.com/Hi-Folks/statistics/tree/v1.5.2"
+            },
+            "time": "2026-05-13T06:01:10+00:00"
         },
         {
             "name": "nyholm/psr7",

@@ -1,15 +1,17 @@
 # Kick-off — the next work, in delivery order
 
 - **Status:** active backlog after the 2026-09-08 review. Every item below is
-  open until its acceptance evidence is recorded. Items 1, 2 and 3 are closed;
-  items 4–6 are open.
+  open until its acceptance evidence is recorded. Items 1–5 are closed; item 6
+  has not started. Every finding in the review is closed; what remains is one
+  integration.
 - **Audience:** whoever picks this up next, in a session that starts cold.
 - **Last updated:** 2026-09-08
 
 Managed Flow and marimo runs, execution controls, retention, schedules and the
-chart exist. Upgrade compatibility, local recovery and the scheduler are
-closed; items 4–6 remain. Do not infer production readiness from “Phases 0–7 built” or from a
-green happy-path suite. The authoritative delivery order and acceptance gates
+chart exist. Upgrade compatibility, local recovery, the scheduler, the panel's
+error handling and historical context are closed; item 6 remains. Do not infer
+production readiness from “Phases 0–7 built” or from a green happy-path
+suite. The authoritative delivery order and acceptance gates
 are in [architecture §28](PIPELINE_ARCHITECTURE.md#28-migration-plan).
 
 ## Read in this order
@@ -93,39 +95,74 @@ construction under item 1's rule. `just check` and `just test-postgres` green.
 Recorded in [architecture §28](PIPELINE_ARCHITECTURE.md#28-migration-plan),
 work 3.
 
-## Start here — 4. Make the panel report the server's answer (R6)
+## 4. Make the panel report the server's answer (R6) — **done, 2026-09-08**
 
-Handle SDK errors in pause/resume/cancel/retry/answer/delete mutations. Treat
-404 as absence and show other read errors as failures. Preserve form state
-when DELETE is refused. Keep the server's allowed actions authoritative.
+One reader rather than a rule people remember. The generated client resolves on
+a refusal by design, so every call site was one forgotten check from running its
+success path over a 403 — and four had already grown four identical private
+`apiError` helpers. `apps/panel/src/lib/result.ts` is the one place:
+`ApiFailure` carries the status the error body does not, and the three readers
+are named for what absence means on that route — `answerOf`, `answerOrNone`,
+`confirmDone`. The four copies are gone.
 
-**Exit:** UI tests cover 403, 409, 503 and successful 204; failures do not invoke
-the success flow or present existing data as deleted. Record the API response
-change from `RunProjection` to `RunView` for clients.
+The three refusals that read as something else: a command's ran `onSuccess`, a
+run's read turned every failure into "no run under this id" (`missing` was
+`managed.isError`), and a refused DELETE cleared the schedule form, because a
+204 has no body and "is there data" answers yes for both. A fourth the review
+did not name: after a failed schedule read the form held this component's
+defaults and a working Save. The `RunProjection` → `RunView` note now rides on
+the schema itself, so it reaches the contract and every generated client.
 
-This is independent of storage implementation and may be completed earlier;
-it does not remove the release gates in items 1–3.
+Evidence: the panel gained a test runner — vitest and React Testing Library,
+in `just check` and CI, because it had none, which is how a refusal drawn as a
+success typechecked cleanly. Ten tests drive the **real** generated client
+against a stubbed `fetch` and cover 403, 409, 501, 503, 404, 422 and the
+successful 204; the refused-command test counts requests, because "did not run
+the success path" is observable as the re-read that did not happen. Four
+negative controls, one per fix. `just check` green. Recorded in
+[architecture §28](PIPELINE_ARCHITECTURE.md#28-migration-plan), work 4.
 
-## 5. Finish historical context, then the canvas (Phases 4, 6, 7)
+## 5. Finish historical context, then the canvas (Phases 4, 6, 7) — **done, 2026-09-08**
 
-1. Preserve notebook source as an immutable artifact and execute it by digest.
-   Checking the current file against an old SHA detects drift but cannot recover
-   the historical source.
-2. Add editor sessions that resolve the pinned code, input and parameters after
-   a reload, with permissions and expiry as in §16.3.
-3. Serve the authored-block-to-plan-step mapping from the server. Light canvas
-   blocks only when the draft matches the run's pinned revision; show drift
-   otherwise. The browser must not reconstruct the mapping or execution rules.
+1. ~~Preserve notebook source as an immutable artifact and execute it by
+   digest.~~ **Done.** The runtime keeps every source it is given at
+   `.revisions/<name>/<sha256>.py`, and a managed step names its pin instead of
+   asking the head to still match. Editing a notebook no longer strands the
+   runs that came before the edit — which is what the old behaviour did, by
+   refusing them. A revision the runtime does not hold is a 404, never a
+   fallback to the head. Reopening a step shows the code that ran.
+2. ~~Add editor sessions that resolve the pinned code, input and parameters
+   after a reload.~~ **Done, without §16.3's token.** That section asked for a
+   signature, and the runtime it would be presented to has no authentication to
+   check one against — a boundary drawn where nothing enforces it reads as
+   protection. So the session is resolved server-side: `EditorHost`, and
+   `POST /executions/{id}/steps/{step}/editor` as the gate, asking for `Editor`
+   because staging replaces what everybody looking at that notebook's live app
+   sees. aiwatcher reads *this attempt's* rows from its own object store and
+   posts them to the runtime's new staging route, which stages and runs
+   nothing. Two limits stated rather than hidden: the live app serves the
+   notebook's head, so the session names the revision that ran and the code is
+   read beside it by digest; and the host is built in the `serve` role, because
+   a person is waiting on the request rather than claiming an attempt.
+3. ~~Serve the authored-block-to-plan-step mapping from the server.~~ **Done.**
+   `GET /executions/{id}/blocks`, from the pinned plan, with
+   `RuntimeBinding::blocks` as the one place that knows which specs carry one.
+   A source and its transforms fold into one Flow query and light together;
+   `followsTheRun` decides whether they may light at all, and an edited draft
+   shows drift instead.
 
 **Exit:** change the notebook head, reload an old execution and open its exact
 source and input; retry uses the pinned source. A matching canvas shows step
-states, and an edited draft is explicitly marked as different.
+states, and an edited draft is explicitly marked as different. *Met.* Evidence:
+13 runtime tests, 5 HTTP tests, 12 panel tests, 7 negative controls; `just
+check` and `just ml-pipeline-check` green. Recorded in
+[architecture §28](PIPELINE_ARCHITECTURE.md#28-migration-plan), work 5.
 
 Whole-execution `mode: "preview"` is outside the current delivery scope. The
 ad-hoc editor path and bounded step previews remain; revisit simulation only
 when a named use case requires execution without publication.
 
-## 6. Deliver one worker integration (Phase 10 → Phase 11 Level 2)
+## Start here — 6. Deliver one worker integration (Phase 10 → Phase 11 Level 2)
 
 Implement worker identity, claim/heartbeat/report, artifact access and the Python
 SDK around one real task. Then move Planner's four stages onto that boundary
@@ -163,15 +200,16 @@ rtk just test-postgres
 ```
 
 Use the dedicated test database (`rtk just postgres-up` if it is not running).
-`just check` does not cover PHP or Python; run `rtk just flow-check` and
-`rtk just ml-pipeline-check` when those paths change. Route/type changes require
+`just check` covers the panel's tests as well as its build (`rtk just
+panel-test` runs them alone). It does not cover PHP or Python; run `rtk just
+flow-check` and `rtk just ml-pipeline-check` when those paths change. Route/type changes require
 `rtk just openapi` and both the contract and generated panel client.
 
 The review recorded 334 Rust tests, 5 PostgreSQL tests, 101 Flow tests, 41 Python
 tests and panel typecheck passing. It did not run full `just check`, browser
 acceptance or rolling upgrade tests. That is baseline evidence, not proof that
-any item above is closed. Items 1–3 have since added seven PostgreSQL upgrade
+any item above is closed. Items 1–4 have since added seven PostgreSQL upgrade
 tests, seven file-store fault tests, five storage-contract slot properties
-proved on all three adapters, and eleven schedule-rule tests — with `just check`
-and `just test-postgres` green. Record the new regression/acceptance evidence in §28
+proved on all three adapters, eleven schedule-rule tests, and the panel's first
+ten — with `just check` and `just test-postgres` green. Record the new regression/acceptance evidence in §28
 when an item is complete; keep the review as the dated finding record.

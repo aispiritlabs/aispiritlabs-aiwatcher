@@ -50,7 +50,7 @@ line-length = 100
 # shadowed builtins to a linter that does not know the format. They are checked
 # by being *run* — `tests/test_notebooks.py` executes each one against a fixture
 # — which is the check that would actually catch a broken one.
-extend-exclude = ["notebooks"]
+extend-exclude = ["notebooks", ".revisions"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "C4", "SIM", "RUF", "ASYNC", "PTH", "BLE", "N", "S"]

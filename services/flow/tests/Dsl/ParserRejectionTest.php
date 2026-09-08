@@ -4,15 +4,18 @@ declare(strict_types=1);
 
 namespace Aiwatcher\Flow\Tests\Dsl;
 
+use Aiwatcher\Flow\Dataset\Catalog;
 use Aiwatcher\Flow\Dsl\ParseError;
 use Aiwatcher\Flow\Dsl\Parser;
+use Aiwatcher\Flow\Dsl\PipelineBuilder;
+use Aiwatcher\Flow\Tests\Fake\FakeApi;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 /**
- * The rejection half of the whitelist.
+ * The rejection half of the boundary.
  *
- * These matter more than the acceptance tests. A whitelist is only worth
+ * These matter more than the acceptance tests. Admission is only worth
  * something if the things outside it are provably outside it, and the failure
  * mode being guarded against is not "the query does not work" — it is "the
  * query works, on the server, as the server's user".
@@ -20,6 +23,12 @@ use PHPUnit\Framework\TestCase;
  * Each case below is a way someone might try to get PHP to run. None of them
  * may parse; a `ParseError` is the only acceptable outcome. If any of these
  * ever starts passing, the parser has stopped being a boundary.
+ *
+ * Since the hand-written whitelist was deleted, the second block below matters
+ * as much as the first: what refuses `to_csv('/etc/passwd')` is no longer a
+ * name missing from a list — it is [`Registry`] admitting three return-type
+ * namespaces and refusing every parameter that accepts a callable. These are
+ * the cases that say so out loud.
  */
 final class ParserRejectionTest extends TestCase
 {
@@ -86,6 +95,89 @@ final class ParserRejectionTest extends TestCase
      * happens *before* anything executes — a parser that threw only after
      * calling `system()` would pass every test above.
      */
+    /**
+     * Steps Flow has and this service does not offer, and why not.
+     *
+     * The step vocabulary is derived from `DataFrame` now, so what keeps these
+     * out is a rule about their parameters rather than their absence from a
+     * list — which is the thing worth testing, because the list is what used
+     * to be doing it.
+     *
+     * @return iterable<string, array{string}>
+     */
+    public static function stepsTheAdmissionRuleRefuses(): iterable
+    {
+        // Takes a Loader: this is where rows would leave the process.
+        yield 'load' => ['data_frame()->read(default)->load(to_output())'];
+        // Takes a callable: this is where a query would become code.
+        yield 'map' => ['data_frame()->read(default)->map(strtoupper)'];
+        yield 'forEach' => ['data_frame()->read(default)->forEach(strtoupper)'];
+        // Takes a Transformer: the same hole with a longer name.
+        yield 'transform' => ['data_frame()->read(default)->transform(rename_replace())'];
+        // Takes a SaveMode, which is about writing files.
+        yield 'saveMode' => ['data_frame()->read(default)->saveMode(save_mode_overwrite())'];
+        // Reads a filesystem path.
+        yield 'filterPartitions' => ["data_frame()->read(default)->filterPartitions(ref('x'))"];
+    }
+
+    #[DataProvider('stepsTheAdmissionRuleRefuses')]
+    public function test_a_frame_method_that_could_leave_the_process_is_not_a_step(string $source): void
+    {
+        $this->expectException(ParseError::class);
+        Parser::parse($source);
+    }
+
+    public function test_a_method_on_a_value_is_looked_up_on_that_value_and_nowhere_else(): void
+    {
+        // The chained-method list is gone, so this is what stands in its
+        // place: a name is resolved against the object the query built, and
+        // PHP's own machinery is not part of that object's admitted surface.
+        foreach ([
+            "data_frame()->read(default)->filter(ref('status')->getIterator())",
+            "data_frame()->read(default)->filter(ref('status')->eval())",
+        ] as $query) {
+            try {
+                (new PipelineBuilder(new Catalog(FakeApi::withDemoRuns(), 'http://api.test')))->build(Parser::parse(
+                    $query,
+                ));
+                self::fail('expected a parse error');
+            } catch (ParseError $error) {
+                self::assertStringContainsString('is not something a', $error->getMessage());
+            }
+        }
+    }
+
+    /** @return iterable<string, array{string, string}> */
+    public static function categoriesTheRegistryRefuses(): iterable
+    {
+        // A loader is where rows would leave this process, and the name of one
+        // looks as harmless as any other. `write()`'s three sinks are an enum
+        // of things that mean "give the rows back", not a hole in this rule.
+        yield 'writing a file' => ["data_frame()->read(default)->write(to_csv('/etc/passwd'))", 'to_csv'];
+        yield 'writing json' => ["data_frame()->read(default)->write(to_json('/tmp/x'))", 'to_json'];
+        // An extractor is the other direction: the catalog decides what may be
+        // read, so a query may not open a source of its own.
+        yield 'reading an array' => ['data_frame()->read(default)->filter(from_array([]))', 'from_array'];
+        yield 'reading a directory' => ["data_frame()->read(default)->withEntry('x', files('/etc'))", 'files'];
+        // The two functions Flow has that take a callable, refused by
+        // signature rather than by name — which is what keeps a function Flow
+        // adds next year refused before anybody here has heard of it.
+        yield 'a callable parameter' => ["data_frame()->read(default)->withEntry('x', call('system'))", 'call'];
+        yield 'a callable loader' => ["data_frame()->read(default)->write(to_callable('system'))", 'to_callable'];
+    }
+
+    #[DataProvider('categoriesTheRegistryRefuses')]
+    public function test_a_category_outside_the_admitted_namespaces_is_refused(string $source, string $named): void
+    {
+        try {
+            Parser::parse($source);
+            self::fail("expected {$named} to be refused");
+        } catch (ParseError $error) {
+            self::assertStringContainsString($named, $error->getMessage());
+            self::assertStringContainsString('not part of the query language', $error->getMessage());
+        }
+    }
+
     public function test_nothing_executes_while_a_hostile_query_is_refused(): void
     {
         $marker = \sys_get_temp_dir() . '/aiwatcher-flow-parser-should-never-write-this';
@@ -139,18 +231,6 @@ final class ParserRejectionTest extends TestCase
             self::fail('expected a parse error');
         } catch (ParseError $error) {
             self::assertStringContainsString('groupBy', $error->getMessage());
-        }
-    }
-
-    public function test_an_alias_on_an_aggregation_names_the_correct_form(): void
-    {
-        try {
-            Parser::parse("data_frame()->read(default)->aggregate(count(ref('run_id'))->as('runs'))");
-            self::fail('expected a parse error');
-        } catch (ParseError $error) {
-            // Flow puts the alias on the reference. Saying only "not supported"
-            // would leave someone stuck on the most common first mistake.
-            self::assertStringContainsString("count(ref('…')->as(", $error->getMessage());
         }
     }
 

@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use time::OffsetDateTime;
 
+use crate::artifact::ArtifactRef;
 use crate::catalog::EventType;
 use crate::checkpoint::Checkpoint;
 use crate::envelope::RecordedEvent;
@@ -294,6 +295,62 @@ pub trait DeadLetterSink: Send + Sync + std::fmt::Debug {
 #[async_trait]
 pub trait WorkflowRunner: Send + Sync + std::fmt::Debug {
     async fn rerun(&self, request: RerunRequest) -> PortResult<RerunAccepted>;
+}
+
+/// Open one step's editor on what that step actually read.
+///
+/// The second port here that asks another system to do something, and the
+/// second whose absence is a 501 rather than a no-op — an editor that reported
+/// success without staging anything would send somebody to a live app showing
+/// last week's rows.
+///
+/// **Why a port and not a client in the API.** The rows are an artifact in the
+/// object store and the address is `AIWATCHER_ML_PIPELINE_URL`; both live in
+/// `aiwatcher-server`, which is below the API in nothing and above it in
+/// dependency order. So the API names this and the server implements it,
+/// exactly as it does for a rerun.
+///
+/// **What it does not do.** It stages and stops. Running the notebook to fill
+/// its editor would execute somebody's code because they clicked "open", and
+/// would overwrite the output of the very run being looked at. And the live app
+/// serves the notebook's *head*, so a session opened on an old run's rows shows
+/// those rows under the code that is there now — the code that ran is read
+/// separately, by its digest.
+#[async_trait]
+pub trait EditorHost: Send + Sync + std::fmt::Debug {
+    async fn open(&self, request: EditorRequest) -> PortResult<EditorSession>;
+}
+
+/// Which block, at which revision, over whose rows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EditorRequest {
+    /// `<execution>/<step>/<attempt>`, the key the runtime stages under. The
+    /// attempt is in it because a retry read different rows.
+    pub context_id: String,
+    pub notebook: String,
+    /// The source that ran. Carried so the answer can name it; the live app
+    /// still serves the head.
+    pub code_revision: String,
+    pub params: serde_json::Value,
+    /// Where the rows this step read are stored. `None` for a step with no
+    /// upstream, whose editor then opens on nothing rather than on somebody
+    /// else's table.
+    pub input: Option<ArtifactRef>,
+}
+
+/// Where to look, and what is under it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct EditorSession {
+    /// The live app, on this instance's own origin.
+    pub app_url: String,
+    pub context_id: String,
+    pub notebook: String,
+    /// The revision that produced these rows. The app shows the head; this is
+    /// what to read beside it when the two have moved apart.
+    pub code_revision: String,
+    /// How many rows were staged. `0` is a real answer — a step whose parent
+    /// produced nothing.
+    pub rows: usize,
 }
 
 /// What is asked of the orchestrator.

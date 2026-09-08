@@ -9,7 +9,7 @@ use aiwatcher_auth::Authenticator;
 use aiwatcher_bus::{MessageSink, MessageSource};
 use aiwatcher_conversations::Registry as ConversationArchive;
 use aiwatcher_core::engine::WorkflowEngine;
-use aiwatcher_core::ports::WorkflowRunner;
+use aiwatcher_core::ports::{EditorHost, WorkflowRunner};
 use aiwatcher_datasets::Registry as DatasetRegistry;
 use aiwatcher_execution::{ExecutionHandler, WorkflowStore};
 use aiwatcher_projector::{LiveHub, ReadModel};
@@ -127,6 +127,13 @@ pub struct AppState {
     /// two ports answer different questions — a deployment can perfectly well
     /// dispatch reruns to a webhook while having no inventory to browse.
     pub engine: Option<Arc<dyn WorkflowEngine>>,
+    /// `None` when this process has no notebook runtime address or no object
+    /// store, which makes `POST /executions/{id}/steps/{step}/editor` answer
+    /// 501 naming the variable. The third port here that makes something
+    /// happen, and the third whose absence has to be unmistakable: an editor
+    /// that acknowledged without staging would send somebody to a live app
+    /// showing last week's rows and say nothing.
+    pub editor: Option<Arc<dyn EditorHost>>,
     /// `None` when no identity provider is configured, which is the default.
     /// Unlike `prompts` and `runner`, absence here is not a 501 on a few
     /// routes — it is every caller being [`aiwatcher_auth::Identity::anonymous`]
@@ -183,6 +190,7 @@ impl std::fmt::Debug for AppState {
             .field("dataset_hubs", &self.hubs.is_some())
             .field("dataset_sources", &self.sources.sources.len())
             .field("workflow_runner", &self.runner)
+            .field("editor", &self.editor)
             .field("engine", &self.engine)
             .field("auth", &self.auth)
             .finish_non_exhaustive()

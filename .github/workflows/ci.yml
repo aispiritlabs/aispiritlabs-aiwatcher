@@ -252,6 +252,12 @@ jobs:
         run: npm run build
         working-directory: apps/panel
 
+      # A refusal the panel draws as a success is not a type error, so the
+      # build above cannot see it. These do.
+      - name: tests
+        run: npm run test
+        working-directory: apps/panel
+
       - name: generated client matches the contract
         working-directory: apps/panel
         run: |

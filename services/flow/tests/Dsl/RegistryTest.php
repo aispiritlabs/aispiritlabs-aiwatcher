@@ -101,7 +101,7 @@ final class RegistryTest extends TestCase
         // the vocabulary must not quietly re-admit what was refused on purpose.
         self::assertFalse(Registry::has('equals'));
         self::assertFalse(Registry::has('notEquals'));
-        self::assertNotNull(\Aiwatcher\Flow\Dsl\Whitelist::declined('equals'));
+        self::assertNotNull(Registry::declined('equals'));
     }
 
     public function test_window_functions_are_reachable_at_all(): void

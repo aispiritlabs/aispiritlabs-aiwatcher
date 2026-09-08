@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { cva, type VariantProps } from 'class-variance-authority';
+import { ApiFailure } from '@/lib/result';
 import { cn } from '@/lib/utils';
 
 /**
@@ -157,6 +158,40 @@ export function EmptyState({ title, hint }: { title: string; hint?: string }) {
     <div className="flex flex-col items-center gap-1 rounded-lg border border-dashed border-border p-10 text-center">
       <p className="text-sm font-medium">{title}</p>
       {hint ? <p className="max-w-md text-xs text-muted-foreground">{hint}</p> : null}
+    </div>
+  );
+}
+
+/**
+ * A refusal, in the server's own words.
+ *
+ * One component rather than a ternary at every call site, because the three
+ * things worth showing are the same everywhere: the message, the lines a route
+ * that reports every problem at once returned, and — when nothing answered —
+ * something other than a blank space. The `fallback` is what a caller says
+ * when the failure is not an `Error` at all.
+ */
+export function Refusal({
+  error,
+  fallback,
+  className,
+}: {
+  error: unknown;
+  fallback: string;
+  className?: string;
+}) {
+  const details = error instanceof ApiFailure ? error.details : [];
+  const message = error instanceof Error ? error.message : fallback;
+  return (
+    <div role="alert" className={cn('flex flex-col gap-1 text-xs text-destructive', className)}>
+      <p>{message}</p>
+      {details.length > 0 ? (
+        <ul className="flex flex-col gap-0.5 pl-3">
+          {details.map((detail) => (
+            <li key={detail}>{detail}</li>
+          ))}
+        </ul>
+      ) : null}
     </div>
   );
 }

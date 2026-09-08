@@ -154,7 +154,7 @@ Crates, in dependency order. A crate may only depend on ones above it.
 | `aiwatcher-auth` | Single sign-on: OIDC discovery, a JWKS cache, the authorization-code flow with PKCE, HMAC-signed session cookies, authentik's forward-auth headers, and the group-to-role mapping. Knows nothing about axum. |
 | `aiwatcher-projector` | The pipeline, live hub, read model, dimension, span, evaluation and workflow-graph folds, dedup, retry, dead letters |
 | `aiwatcher-api` | axum router: REST, SSE, WebSocket, OpenAPI |
-| `aiwatcher-server` | Config, wiring, graceful shutdown, and the **reactors** — the one place an executor's client lives, because an executor holds a socket and a credential. `execution/` is the work role: `artifacts` (the object store's sixth prefix, and the receipt a lookup reads), `flow` (the Flow activity executor) and `publish` (the dataset version, which runs in `serve` because it executes nothing). The only crate that knows every implementation exists. |
+| `aiwatcher-server` | Config, wiring, graceful shutdown, and the **reactors** — the one place an executor's client lives, because an executor holds a socket and a credential. `execution/` is mostly the work role: `artifacts` (the object store's sixth prefix, and the receipt a lookup reads), `flow` (the Flow activity executor) and `publish` (the dataset version, which runs in `serve` because it executes nothing) — and `editor`, which runs in `serve` because opening a block on a step's rows is a person waiting on a request rather than an attempt somebody claimed. The only crate that knows every implementation exists. |
 
 Everything else: `apps/panel` (React), `sdk/python`, `sdk/typescript`,
 `contracts/` (the OpenAPI document and the envelope JSON Schema), `deploy/`
@@ -264,9 +264,12 @@ area.
 10. **A Flow PHP query is parsed, never executed**
    ([ADR_0008](docs/ADR/ADR_0008_FLOW_QUERY_SURFACE.md)). The Query tab accepts
    a `data_frame()->…` pipeline, which `services/flow` lexes with
-   `token_get_all()`, checks against a whitelist, and turns into Flow objects
-   through an explicit `match` — no `eval`, and no name from a query ever
-   becomes a callable. Syntax errors come from Mago, which reads the query after
+   `token_get_all()`, admits through `Dsl\Registry` — Flow's own signatures,
+   by return-type namespace and by refusing any parameter that takes a
+   callable — and turns into Flow objects through an explicit `match`: no
+   `eval`, and no name from a query ever becomes a callable. There is no
+   hand-written whitelist; the one that used to sit beside the registry decided
+   nothing and read like the boundary, and is deleted (ADR_0008, amended). Syntax errors come from Mago, which reads the query after
    `Enrichment` substitutes the bareword dataset names that are not valid PHP;
    it advises, it never decides what may run. It reads the aiwatcher API: measured at 210 ms for
    `groupBy(agent)` over 1500 runs, against 5 ms for the Rust dimension route
@@ -420,7 +423,12 @@ area.
    that can run it** ([ADR_0024](docs/ADR/ADR_0024_CURATION_BLOCKS.md)).
    ADR_0014's answer is right while the whole curation is one query. Detecting
    personal data in a hub corpus is not: something has to read the text, and
-   Flow's whitelist exists precisely so that it cannot. So a pipeline is
+   the Flow surface admits no way to — a query composes values and never reaches
+   arbitrary code. That line is narrower than this repository first drew it:
+   arithmetic, a group's median beside a row and a join were all called
+   "the far side of the seam" when they were only missing from a hand-written
+   list. They are in the query now (ADR_0008, amended); a notebook is for what
+   the language has *no vocabulary* for, which is a model or a scanner. So a pipeline is
    `source → transform → notebook → view`, saved as a content-addressed revision
    beside the recipes, and **the panel drives it** — every source and transform
    compiles to one Flow query, its rows go to a marimo notebook the
@@ -946,13 +954,25 @@ what runs a real graph.
   processes, and a workflow stream has a decider, a reactor and a worker racing
   to append — so a second process is refused at `open` rather than allowed to
   interleave writes that each look fine alone.
-- **Never run a notebook a plan did not pin.** The revision is checked against
-  the runtime *before* anything executes and against what actually ran
-  *after* — the first so drift costs nothing, the second so a notebook saved
-  between those two moments cannot be recorded as the pinned one. `UserCode`,
-  so it is not retried, and the message carries both revisions. A cache *hit*
-  re-checks nothing, and that is correct: the key holds the pinned revision, so
-  the stored rows came from it whatever the file says now. Section 43.24.
+- **Never run a notebook a plan did not pin.** A managed step names its
+  `code_revision` and the runtime resolves *that* source, from the history it
+  keeps under `.revisions/<name>/<sha256>.py`. What it may not do is fall back
+  to the head when the revision is missing — running something else under a
+  pinned run's name produces rows that look exactly like a successful run. The
+  revision is still checked twice: a GET before anything executes, where the
+  runtime recomputes the digest from the stored bytes, and a comparison after
+  against what the subprocess imported. `UserCode`, so neither is retried. A
+  cache *hit* re-checks nothing, and that is correct: the key holds the pinned
+  revision. Section 43.24.
+- **Never make an edit strand the runs that came before it.** This read the
+  *head's* digest once and refused a run whose pin no longer matched, which
+  protected provenance by making every earlier execution unrepeatable — and a
+  retry is not something anybody can perform on a run that already happened.
+  The history is what replaces it, and the two orderings it keeps are
+  ADR_0011's: the revision is written before the head that names it, and
+  `keep_current` at start-up keeps what a directory holds *now*, because what
+  it held yesterday was never written down. `.revisions` is the one durable
+  thing that service has; `.data` beside it is staging and is scratch.
 - **Never let a staged file be keyed by the notebook alone.** Two pipelines
   using one notebook then overwrite each other's rows, and a block that passed
   its preview reads somebody else's table on the next one. A run stages under
@@ -1045,6 +1065,39 @@ what runs a real graph.
   hand it what a notebook produced. A chain that tried would silently run the
   transform against the *source* again and produce something else. The registry
   refuses it by name — the message says why rather than "invalid".
+- **Never issue a token to a service that cannot check one.** §16.3 asked an
+  editor session to carry permissions, expiry and a signature; the notebook
+  runtime has no authentication at all, so a signed token presented to it would
+  be ceremony rather than a boundary. The gate is the route that mints the
+  session — `Editor`, because staging replaces what everybody looking at that
+  notebook's live app is shown — and aiwatcher reads the rows from its own
+  object store rather than telling the runtime where to find them. A boundary
+  drawn where nothing enforces it is worse than an honest absence: it reads as
+  protection.
+- **Never run a notebook to fill its editor.** `EditorHost::open` stages and
+  stops. Executing would run somebody's code because they clicked "open", and
+  would overwrite the output of the run being looked at. And what opens is the
+  notebook's **head** — marimo serves the notebook root and the history is kept
+  out of it deliberately — so the session names the revision that ran, and the
+  code itself is read beside it by digest. Two facts side by side rather than
+  one that quietly conflates them.
+- **Never work out in the panel which block became which step.**
+  `GET /executions/{id}/blocks` answers it from the pinned plan, and
+  `RuntimeBinding::blocks` is the one place that knows which specs carry one —
+  so the forward lookup and the reverse map cannot come to disagree. A browser
+  deciding it would decide from the draft on screen, and the interesting case
+  is exactly the one it would get wrong: the compiler folds a source and every
+  transform behind it into a single Flow query, so three boxes light from one
+  `step.started`. The mapping is immutable, so it is asked once per run rather
+  than re-sent with every frame and every command.
+- **Never draw a run's outcome on a canvas that is not what it compiled.**
+  `followsTheRun` compares the run's `definition_revision` with the revision the
+  draft was last loaded or saved at, and `undefined` — an edited draft, whose
+  content address the browser cannot compute — reads as drift. A false drift
+  costs a line of prose; the other direction claims an outcome for a block that
+  never ran. Its three answers are not two: no managed run at all is
+  `undefined`, and an edited draft is the ordinary state of working rather than
+  a warning about something being wrong.
 - **Never let the panel reconstruct a block's context.** Every part of the
   answer is somewhere the browser is not — the pinned plan, the artifacts a
   parent produced, the attempt a staging key is named after — so a canvas that
@@ -1068,6 +1121,25 @@ what runs a real graph.
   rather than a convenience. And the way back to an old run is
   `GET /api/v1/workflow-executions`, which folds the log: a list over the
   inline projection is the second read path ADR_0026 forbids. Section 43.27.
+- **Never let the generated client's default decide whether a call worked.** It
+  does not throw: a 403 comes back as `{ data: undefined, error }` and the
+  promise *resolves*, so a mutation that returns the SDK call runs react-query's
+  `onSuccess` over a refusal — the run re-read, nothing changed, nothing said.
+  Every call goes through `lib/result.ts`, whose three readers are named for
+  what absence means on that route: `answerOf` where there is always a body,
+  `answerOrNone` where "no such thing" is an ordinary answer, and `confirmDone`
+  where success carries no body at all. That last one is not a nicety — a
+  successful DELETE is a 204, which the client turns into `{}`, so "is there
+  data" answers yes for the refusal and yes for the success alike. Review R6.
+- **Never draw a failed read as an empty state.** 404 is the server saying there
+  is no such thing; a 501, a 503 or an expired session is the server saying
+  nothing usable, and rendering the second as the first tells somebody their run
+  was forgotten or their schedule never existed. `answerOrNone` is the split:
+  `null` for the first, an `ApiFailure` for the second. And what follows an
+  empty state must not follow a failure — the run card offers *Forget it* only
+  when the run is really gone, and the schedule form disables Save while the
+  read has failed, because the alternative is writing this component's own
+  defaults over a schedule nobody has seen.
 - **Never read a body from aiwatcher without checking the status first.** In
   `services/flow` the pipeline is lazy, so by the time `array_get(__body,
   'rows')` runs there is no status left to branch on — a 501 naming an unset
@@ -1085,7 +1157,9 @@ what runs a real graph.
   serves, what `ml_pipeline.step` imports and what a test reads. The block names
   it and pins the `sha256` it was saved against; the panel says when the two have
   drifted. A copy in the registry would be a second source of truth for a file
-  that has to stay runnable on its own.
+  that has to stay runnable on its own — and the *history* is not that copy: a
+  revision is named by the digest of its own bytes, so it cannot disagree with
+  anything. The head answers "what runs next"; a revision answers "what ran".
 - **Never let a notebook's injected cell define anything else.** `App.run(defs=)`
   replaces a whole cell, not one name, so the cell binding `rows` and `params`
   binds nothing downstream needs — imports go in a cell of their own, and what
@@ -1581,13 +1655,76 @@ what runs a real graph.
   of one thing, free to drift, with no rule saying which is the truth. The cost
   is named rather than hidden — a second query engine reads `FlowSourceRef` and
   re-authors the transforms.
+- **Never let a statistic answer zero for a group it has no answer for.**
+  `median`, `stddev`, `variance` and `percentile` are `services/flow`'s own
+  aggregations over hi-folks/statistics — Flow ships nothing that says how a
+  column is distributed — and each is undefined below some number of values:
+  one for a median, two for the rest. Below it the column is **null**. Flow's
+  own `average()` answers 0 for an empty group, which is its choice and the
+  wrong one to copy: a dataset version is read months later by somebody who was
+  not there when it ran, and `0` there is a claim nobody made. These four are
+  admitted by `Statistics\Descriptive::tryFrom` rather than by `Registry`,
+  because that class's rule is about Flow's namespace and these are ours — the
+  enum *is* the implementation, so the vocabulary cannot grow without a `match`
+  arm, and ADR_0008's dispatch rule is unchanged.
+- **Never refuse a windowed statistic the way a bare one is refused.** An
+  aggregation on its own answers one row per group, so `withEntry('typical_age',
+  median(ref('age')))` is refused — and the message names *both* ways out,
+  because since ADR_0008's third amendment the second one exists:
+  `median(ref('age'))->over(window()->partitionBy(ref('status')))` answers it
+  beside every row. `PipelineBuilder::isWindowed` is the check, and it asks the
+  value rather than the name: `WindowFunction::window()` throws when there is no
+  OVER clause, which is Flow's way of saying "not windowed" and the only way to
+  ask.
 - **Never enumerate what a signature can decide.** ADR_0008's rule is about
   *dispatch*: a name from a query may select a key, never become a callable. A
   hand-written list of 37 names was an enumeration on top of that rule, and an
   enumeration is a queue — Flow ships 239. `Dsl\Registry` derives the
   vocabulary by return-type namespace, refuses any function with a
   `callable`/`Closure` parameter, and keeps `DECLINED`. Adding a name by hand
-  now means the rule did not cover it, which is a reason to look at the rule.
+  now means the rule did not cover it, which is a reason to look at the rule —
+  and the list that stayed beside it was deleted for the same reason, once it
+  turned out to hold 23 names the registry already admitted and one that no
+  position accepted.
+- **Never decide where a name may appear from a second list of names.** What
+  may sit inside `aggregate()` is what turned out to be an `AggregatingFunction`
+  once the builder constructed it; `withEntry()` takes a `ScalarFunction` and
+  refuses an aggregation by saying what it is; `write()` takes a `Dsl\Sink`.
+  A list of aggregation names beside the arms that build them is the same
+  enumeration one layer down, and it drifts in exactly one direction: a name
+  Flow adds is usable everywhere except the position somebody forgot to list it
+  in. What stays written is `Parser::STEPS` and `Parser::REFERENCE_METHODS`,
+  because a step is a `DataFrame` method this service implements and a chained
+  method is the one place a name from a query would have to reach a method —
+  which is the dispatch ADR_0008 refuses, and what keeps Flow's window
+  functions closed here.
+- **Never answer "what may a query reach" with a list.** Three surfaces, one
+  rule: `Dsl\Admission` refuses any call with a parameter that accepts a
+  callable, a `Loader`, an `Extractor`, a `Path`, a `Filesystem`, a
+  `Transformer`, a `SaveMode` or Flow's own evaluation machinery, and
+  `Registry` (functions), `Frame` (steps) and `Values` (methods on the value in
+  hand) apply it. The lists this replaced were the reason this language was
+  said to have no arithmetic, no join and no window functions — none of which
+  was ever true of Flow, all of which was true of the list. A name added by
+  hand now means the rule did not cover it, which is a reason to look at the
+  rule.
+- **Never dispatch a name globally, and do not confuse that with a `match`.**
+  `$name(...)` on a global appears nowhere and never may. A `ReflectionMethod`
+  taken from `Frame` or `Values` and invoked against the frame or value in hand
+  is not that: the reachable set is fixed, derived from types, and every member
+  of it reshapes rows. The `match` arms that remain are the steps needing
+  something a signature cannot know — the catalog, the window, which columns
+  exist afterwards.
+- **Never let a refusal a signature cannot make go unnamed.** `cache(?string
+  $id)` passes every type rule and writes files under a name the query chose;
+  it is in `Frame::DECLINED` with the reason, as `equals` is in
+  `Registry::DECLINED`. A wider type rule to catch it would refuse innocent
+  strings everywhere else.
+- **Never make a query write `::`.** Some Flow parameters take a pure enum —
+  `Rounding` on `divide()`, without which an inexact division throws from
+  inside Brick\Math — so a written string is matched against the enum's case
+  names, from the parameter's own declared type. That is the *only* coercion in
+  the builder, and it is derived rather than listed.
 - **Never let a query name something that opens a source or writes a sink.**
   The catalog decides what may be read and `write()` decides where rows go, so
   `Flow\ETL\Loader`, `Extractor` and `Filesystem` are outside the admitted
@@ -1602,10 +1739,11 @@ what runs a real graph.
   and a wrong cache entry in a managed step. The answer carries `deterministic`
   beside `window_applied`, for the same reason: only the service knows what its
   query resolved to. Section 43.22.
-- **Never offer Flow's loose comparisons in the whitelist.** In Flow 0.43
-  `equals` matches null against anything and `notEquals` drops nulls. Every
-  column in every dataset is nullable, so both silently return the wrong rows.
-  See `Whitelist::DECLINED`.
+- **Never offer Flow's loose comparisons.** In Flow 0.43 `equals` matches null
+  against anything and `notEquals` drops nulls. Every column in every dataset is
+  nullable, so both silently return the wrong rows. Refused *with the reason*
+  rather than silently absent, because "unknown function" sends somebody looking
+  for a typo. See `Registry::DECLINED`.
 - **Never make the security boundary depend on Mago.** It is a dev dependency
   and may be absent. It reports syntax; `src/Dsl` decides what runs. `just
   flow-check` is the service's own gate (format, lint, tests) — `just check`

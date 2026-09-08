@@ -766,6 +766,15 @@ pub async fn build(config: Config) -> Result<Runtime> {
         sources,
         training: registries.training,
         runner: build_workflow_runner(&config, engine.as_ref())?,
+        // Built in the `serve` role too, unlike an executor: opening a block's
+        // editor is a person waiting on a request, not an attempt somebody
+        // claimed. It still registers nothing without an address and an object
+        // store, so a deployment that runs no notebook runtime answers 501.
+        editor: registries
+            .objects
+            .clone()
+            .map(crate::execution::artifacts::Artifacts::new)
+            .and_then(|artifacts| crate::execution::editor::host(&config, Some(&artifacts))),
         engine: engine.map(|engine| engine as Arc<dyn aiwatcher_core::engine::WorkflowEngine>),
         auth: build_authenticator(&config).await?,
         health,

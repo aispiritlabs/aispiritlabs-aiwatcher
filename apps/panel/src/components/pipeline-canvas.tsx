@@ -110,13 +110,7 @@ function BlockNode({ data }: NodeProps<Node<BlockData, 'block'>>) {
         {label} · {describeBlock(block.spec)}
       </p>
       <p className="mt-1 truncate text-[0.7rem] tabular-nums text-muted-foreground">
-        {outcome.status === 'done'
-          ? `${formatCount(outcome.rows)} rows · ${outcome.tookMs} ms${outcome.note ? ` · ${outcome.note}` : ''}`
-          : outcome.status === 'failed'
-            ? outcome.message
-            : outcome.status === 'running'
-              ? 'running…'
-              : 'not run'}
+        {describeOutcome(outcome)}
       </p>
       {block.spec.kind !== 'view' ? (
         <Handle
@@ -127,6 +121,26 @@ function BlockNode({ data }: NodeProps<Node<BlockData, 'block'>>) {
       ) : null}
     </div>
   );
+}
+
+/**
+ * The line under a block, from whichever of the two ran it.
+ *
+ * The ad-hoc path counted rows and milliseconds; a managed run reports the word
+ * the server used and nothing else, because a step's timings are the log's
+ * answer rather than the workflow store's. So the counts are printed when they
+ * exist and the note carries the rest — never `0 rows · 0 ms`, which would be a
+ * measurement nobody took.
+ */
+function describeOutcome(outcome: BlockOutcome): string {
+  if (outcome.status === 'failed') return outcome.message;
+  if (outcome.status === 'running') return outcome.note ?? 'running…';
+  if (outcome.status === 'idle') return outcome.note ?? 'not run';
+  const measured =
+    outcome.rows === undefined
+      ? undefined
+      : `${formatCount(outcome.rows)} rows · ${outcome.tookMs ?? 0} ms`;
+  return [measured, outcome.note].filter(Boolean).join(' · ') || 'done';
 }
 
 const NODE_TYPES = { block: BlockNode };

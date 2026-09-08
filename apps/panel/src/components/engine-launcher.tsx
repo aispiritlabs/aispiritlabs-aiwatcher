@@ -16,6 +16,7 @@ import type {
   PipelineStage,
 } from '@/api/generated/types.gen';
 import { needsRole, useCan } from '@/lib/auth';
+import { answerOf } from '@/lib/result';
 import { Badge, Button, Card, EmptyState, IdChip, Spinner } from '@/components/ui/primitives';
 
 /**
@@ -57,18 +58,6 @@ export type LaunchContext = {
 export function isEngineDisabled(error: unknown): boolean {
   const body = error as { code?: string } | null | undefined;
   return body?.code === 'engine_disabled';
-}
-
-function apiError(error: unknown, fallback: string): Error {
-  if (
-    error &&
-    typeof error === 'object' &&
-    'message' in error &&
-    typeof error.message === 'string'
-  ) {
-    return new Error(error.message);
-  }
-  return new Error(fallback);
 }
 
 const ISO = (date: Date) => date.toISOString().replace(/\.\d{3}Z$/, 'Z');
@@ -220,8 +209,7 @@ export function EngineLauncher({
       const response = await listEngineWorkflows({
         query: { stage, search: search || undefined, limit: 25 },
       });
-      if (!response.data) throw apiError(response.error, 'The engine catalog could not be read.');
-      return response.data.workflows;
+      return answerOf(response, 'The engine catalog could not be read.').workflows;
     },
   });
 
@@ -242,8 +230,7 @@ export function EngineLauncher({
       if (!workflow) throw new Error('Pick a workflow first.');
       const inputs = readDraft(workflow, draft);
       const response = await launchWorkflow({ body: { workflow: workflow.id, inputs } });
-      if (!response.data) throw apiError(response.error, 'The engine would not take the launch.');
-      return response.data;
+      return answerOf(response, 'The engine would not take the launch.');
     },
     onSuccess: setAccepted,
   });
@@ -526,8 +513,7 @@ function Accepted({ accepted }: { accepted: LaunchAccepted }) {
     queryKey: ['engine', 'launch', accepted.reference],
     queryFn: async () => {
       const response = await getLaunch({ path: { reference: accepted.reference } });
-      if (!response.data) throw apiError(response.error, 'The engine lost the execution.');
-      return response.data;
+      return answerOf(response, 'The engine lost the execution.');
     },
     // Until it stops moving. A finished execution is not worth asking about
     // again, and an engine is not a metrics store.

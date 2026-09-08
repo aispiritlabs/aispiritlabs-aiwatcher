@@ -22,6 +22,7 @@ import type {
 } from '@/api/generated/types.gen';
 import { Badge, Button, Card, EmptyState, Spinner } from '@/components/ui/primitives';
 import { StatusBadge } from '@/components/status-badge';
+import { answerOf } from '@/lib/result';
 import { cn, formatTime } from '@/lib/utils';
 
 export type DatasetView = 'rows' | 'evaluations' | 'lineage';
@@ -74,8 +75,7 @@ export function DatasetExplorer({
           search,
         },
       });
-      if (!response.data) throw apiError(response.error, 'Could not load dataset rows.');
-      return response.data;
+      return answerOf(response, 'Could not load dataset rows.');
     },
     getNextPageParam: (last) => last.next_offset ?? undefined,
   });
@@ -581,11 +581,4 @@ function inferColumnType(rows: DatasetRow[], column: string): string {
 
 function formatRate(value: number | null | undefined): string {
   return value === null || value === undefined ? '—' : `${(value * 100).toFixed(1)}%`;
-}
-
-function apiError(error: unknown, fallback: string): Error {
-  if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string') {
-    return new Error(error.message);
-  }
-  return new Error(fallback);
 }

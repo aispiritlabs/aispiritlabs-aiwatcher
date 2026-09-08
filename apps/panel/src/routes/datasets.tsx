@@ -18,6 +18,7 @@ import { DEFAULT_WINDOW_SECONDS, TimeRange, windowParam } from '@/components/tim
 import { Badge, Button, Card, EmptyState, Spinner } from '@/components/ui/primitives';
 import { isFlowAvailable, runQuery, simulateQuery } from '@/lib/flow';
 import { cn } from '@/lib/utils';
+import { answerOf } from '@/lib/result';
 
 const searchSchema = z.object({
   window: z.number().int().nonnegative().optional(),
@@ -57,8 +58,7 @@ function DatasetsPage() {
     queryKey: ['datasets'],
     queryFn: async () => {
       const response = await listDatasets();
-      if (!response.data) throw apiError(response.error, 'Could not load datasets.');
-      return response.data.datasets;
+      return answerOf(response, 'Could not load datasets.').datasets;
     },
   });
   const conversations = useQuery({
@@ -121,8 +121,7 @@ function DatasetsPage() {
           window_seconds: result.window_seconds ?? undefined,
         },
       });
-      if (!response.data) throw apiError(response.error, 'The dataset could not be saved.');
-      return { result, published: response.data };
+      return { result, published: answerOf(response, 'The dataset could not be saved.') };
     },
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['datasets'] }),
   });
@@ -570,16 +569,4 @@ function promotionDescription(
 
 function phpString(value: string): string {
   return value.replaceAll('\\', '\\\\').replaceAll("'", "\\'");
-}
-
-function apiError(error: unknown, fallback: string): Error {
-  if (
-    error &&
-    typeof error === 'object' &&
-    'message' in error &&
-    typeof error.message === 'string'
-  ) {
-    return new Error(error.message);
-  }
-  return new Error(fallback);
 }

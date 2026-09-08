@@ -1,21 +1,25 @@
 import * as React from 'react';
 import { Link } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Ban, Pause, Play, RotateCcw } from 'lucide-react';
+import { Ban, FileCode2, Pause, Play, RotateCcw, SquareArrowOutUpRight } from 'lucide-react';
 
 import {
   cancelExecution,
   getExecution,
   pauseExecution,
+  openEditor,
   provideInput,
   resumeExecution,
   retryStep,
+  runBlocks,
   stepContext,
 } from '@/api/generated/sdk.gen';
 import type { ContextSnapshot, RunAction, RunView, StateType } from '@/api/generated/types.gen';
 import { openWorkflowStream } from '@/lib/live';
+import { getNotebookRevision } from '@/lib/ml-pipeline';
+import { answerOf, answerOrNone } from '@/lib/result';
 
-import { Badge, Button, Card, IdChip, Spinner } from './ui/primitives';
+import { Badge, Button, Card, IdChip, Refusal, Spinner } from './ui/primitives';
 
 /**
  * A run the server owns, followed rather than driven.
@@ -40,13 +44,15 @@ export function useManagedRun(executionId: string | undefined) {
     queryKey: key,
     enabled: Boolean(executionId),
     // A stale link and a pruned run are the same 404 and neither is worth
-    // three more requests: the card offers to forget it instead.
+    // three more requests: the card offers to forget it instead. Everything
+    // else *is* a failure and is not offered that — telling somebody their run
+    // was forgotten because a session expired is the thing R6 is about.
     retry: false,
-    queryFn: async () => {
-      const response = await getExecution({ path: { execution_id: executionId ?? '' } });
-      if (!response.data) throw response.error ?? new Error('That run could not be read.');
-      return response.data;
-    },
+    queryFn: async () =>
+      answerOrNone(
+        await getExecution({ path: { execution_id: executionId ?? '' } }),
+        'That run could not be read.',
+      ),
   });
 
   React.useEffect(() => {
@@ -60,6 +66,34 @@ export function useManagedRun(executionId: string | undefined) {
   }, [executionId, queryClient]);
 
   return run;
+}
+
+/**
+ * Which authored blocks this run's steps came from, asked once.
+ *
+ * A plan is immutable, so this answer cannot change while the run does — which
+ * is why it is a separate request with no refetch rather than a field on the
+ * run's own page, re-sent on every frame and on every command.
+ *
+ * The mapping is the server's and is never worked out here: three source and
+ * transform boxes fold into one Flow query, and a browser deciding which is
+ * which would decide it from the draft on screen rather than from what the run
+ * compiled (section 19).
+ */
+export function useManagedBlocks(executionId: string | undefined) {
+  return useQuery({
+    queryKey: ['execution', executionId, 'blocks'],
+    enabled: Boolean(executionId),
+    retry: false,
+    // Immutable. Asking again would be asking a question whose answer is
+    // already known to be the same one.
+    staleTime: Infinity,
+    queryFn: async () =>
+      answerOrNone(
+        await runBlocks({ path: { execution_id: executionId ?? '' } }),
+        'The blocks this run came from could not be read.',
+      ),
+  });
 }
 
 /** What a state is called, and how loudly. */
@@ -105,12 +139,16 @@ export function ManagedRunCard({
   executionId,
   pending,
   missing,
+  failure,
   onForget,
 }: {
   run?: RunView;
   executionId?: string;
   pending: boolean;
+  /** The server answered, and there is no such run. Not "the read failed". */
   missing?: boolean;
+  /** The read did not get an answer it could use. Never rendered as absence. */
+  failure?: unknown;
   onForget: () => void;
 }) {
   const queryClient = useQueryClient();
@@ -119,14 +157,36 @@ export function ManagedRunCard({
     void queryClient.invalidateQueries({ queryKey: ['execution', executionId] });
 
   const command = useMutation({
+    // Read through `answerOf`, because the generated client resolves on a
+    // refusal: without it a 403 or a 409 ran `onSuccess`, the run was
+    // re-read, nothing had changed and nothing said why (review R6).
     mutationFn: async (action: RunAction) => {
       const path = { execution_id: executionId ?? '' };
-      if (action === 'pause') return pauseExecution({ path });
-      if (action === 'resume') return resumeExecution({ path });
-      return cancelExecution({ path, body: { reason: 'stopped from the pipeline view' } });
+      const refused = `That ${action} was refused.`;
+      if (action === 'pause') return answerOf(await pauseExecution({ path }), refused);
+      if (action === 'resume') return answerOf(await resumeExecution({ path }), refused);
+      return answerOf(
+        await cancelExecution({ path, body: { reason: 'stopped from the pipeline view' } }),
+        refused,
+      );
     },
     onSuccess: invalidate,
   });
+
+  if (failure) {
+    // Not the missing card, and deliberately without "Forget it": the run may
+    // be perfectly well there, and offering to drop it from the address bar
+    // would be inviting somebody to lose the only link to it over an outage.
+    return (
+      <Card className="flex flex-col gap-2 p-3 text-sm">
+        <Refusal error={failure} fallback="That run could not be read." className="text-sm" />
+        <span className="text-xs text-muted-foreground">
+          The run is on the server either way. This page comes back to it by the id in the address
+          bar.
+        </span>
+      </Card>
+    );
+  }
 
   if (missing) {
     // A link to a run that is not there. Two ways to get here and neither is a
@@ -196,9 +256,7 @@ export function ManagedRunCard({
       </div>
 
       {command.isError ? (
-        <p className="text-xs text-destructive">
-          {command.error instanceof Error ? command.error.message : 'That command was refused.'}
-        </p>
+        <Refusal error={command.error} fallback="That command was refused." />
       ) : null}
 
       <ul className="flex flex-col gap-1">
@@ -207,7 +265,9 @@ export function ManagedRunCard({
             <button
               type="button"
               className="flex items-center gap-2 text-left text-xs hover:underline"
-              onClick={() => setOpen((current) => (current === step.step_id ? undefined : step.step_id))}
+              onClick={() =>
+                setOpen((current) => (current === step.step_id ? undefined : step.step_id))
+              }
             >
               <Badge tone={tone(step.state.state_type)}>{step.state.state_type}</Badge>
               <span className="font-medium">{step.step_id}</span>
@@ -261,13 +321,11 @@ function StepActions({
   const context = useQuery({
     queryKey: ['execution', executionId, 'step', stepId],
     retry: false,
-    queryFn: async (): Promise<ContextSnapshot> => {
-      const response = await stepContext({
-        path: { execution_id: executionId, step_id: stepId },
-      });
-      if (!response.data) throw response.error ?? new Error('That step could not be read.');
-      return response.data;
-    },
+    queryFn: async (): Promise<ContextSnapshot> =>
+      answerOf(
+        await stepContext({ path: { execution_id: executionId, step_id: stepId } }),
+        'That step could not be read.',
+      ),
   });
 
   const [answer, setAnswer] = React.useState('');
@@ -279,18 +337,25 @@ function StepActions({
 
   const retry = useMutation({
     mutationFn: async () =>
-      retryStep({ path: { execution_id: executionId, step_id: stepId } }),
+      answerOf(
+        await retryStep({ path: { execution_id: executionId, step_id: stepId } }),
+        'That step could not be taken again.',
+      ),
     onSuccess: onDone,
   });
 
   const answerIt = useMutation({
     mutationFn: async (response: string) =>
-      provideInput({
-        path: { execution_id: executionId, step_id: stepId },
-        // The answer and the attempt only; `answered_by` comes from the session
-        // and the body refuses an unknown field rather than ignoring it.
-        body: { attempt, response },
-      }),
+      answerOf(
+        await provideInput({
+          path: { execution_id: executionId, step_id: stepId },
+          // The answer and the attempt only; `answered_by` comes from the
+          // session and the body refuses an unknown field rather than
+          // ignoring it.
+          body: { attempt, response },
+        }),
+        'That answer was refused.',
+      ),
     onSuccess: onDone,
   });
 
@@ -302,27 +367,50 @@ function StepActions({
     );
   }
   if (context.isError || !context.data) {
-    return <span className="pl-2 text-xs text-destructive">That step could not be read.</span>;
+    return (
+      <Refusal error={context.error} fallback="That step could not be read." className="pl-2" />
+    );
   }
 
   const allowed = context.data.allowed;
+  const runtime = context.data.runtime;
   return (
     <div className="flex flex-col gap-2 border-l border-border pl-2 text-xs">
       <div className="flex flex-wrap items-center gap-2 text-muted-foreground">
         <span>context</span>
-        <IdChip label="key" value={context.data.context_id.slice(0, 24)} full={context.data.context_id} />
+        <IdChip
+          label="key"
+          value={context.data.context_id.slice(0, 24)}
+          full={context.data.context_id}
+        />
       </div>
 
+      {runtime.runtime === 'marimo' ? (
+        <>
+          <PinnedNotebook notebook={runtime.notebook} revision={runtime.code_revision} />
+          <OpenEditor executionId={executionId} stepId={stepId} />
+        </>
+      ) : null}
+
       {allowed.includes('retry') ? (
-        <div>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={retry.isPending}
-            onClick={() => retry.mutate()}
-          >
-            <RotateCcw className="mr-1 h-3 w-3" /> Take this step again
-          </Button>
+        <div className="flex flex-col gap-1">
+          <div>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={retry.isPending}
+              onClick={() => retry.mutate()}
+            >
+              <RotateCcw className="mr-1 h-3 w-3" /> Take this step again
+            </Button>
+          </div>
+          {/* `allowed` is computed where `decide` would accept the command, so
+              a refusal here is a state that moved between the read and the
+              press — which is exactly the sentence worth showing rather than a
+              button that appears to do nothing. */}
+          {retry.isError ? (
+            <Refusal error={retry.error} fallback="That step could not be taken again." />
+          ) : null}
         </div>
       ) : null}
 
@@ -366,9 +454,7 @@ function StepActions({
             </form>
           )}
           {answerIt.isError ? (
-            <span className="text-destructive">
-              {answerIt.error instanceof Error ? answerIt.error.message : 'That answer was refused.'}
-            </span>
+            <Refusal error={answerIt.error} fallback="That answer was refused." />
           ) : null}
         </div>
       ) : null}
@@ -381,6 +467,121 @@ function StepActions({
         // nothing when the other three came back would be an empty panel with
         // no explanation.
         <span className="text-muted-foreground">No command applies to this step right now.</span>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * The code this step ran, not the code that is there now.
+ *
+ * The runtime keeps every source it has been given, named by its own digest, so
+ * this reads the pin rather than the head — which is what makes reopening a
+ * step of last month's execution show last month's notebook however many times
+ * it has been edited since. Read-only for the same reason: editing here would
+ * be editing history.
+ *
+ * Absent rather than a failure when the runtime is not running. This is a
+ * detail beside the two commands, and a chain of source and transform blocks
+ * works perfectly well without that service.
+ */
+function PinnedNotebook({ notebook, revision }: { notebook: string; revision: string }) {
+  const [open, setOpen] = React.useState(false);
+  const source = useQuery({
+    queryKey: ['ml-pipeline', 'notebook', notebook, revision],
+    enabled: open,
+    retry: false,
+    // A revision is immutable; asking twice asks the same question.
+    staleTime: Infinity,
+    queryFn: () => getNotebookRevision(notebook, revision),
+  });
+
+  return (
+    <div className="flex flex-col gap-1">
+      <button
+        type="button"
+        className="flex items-center gap-2 text-left text-muted-foreground hover:underline"
+        onClick={() => setOpen((current) => !current)}
+      >
+        <FileCode2 className="h-3 w-3" />
+        {open ? 'Hide' : 'Show'} the code this step ran
+        <IdChip label={notebook} value={revision.slice(0, 12)} full={revision} />
+      </button>
+      {open && source.isPending ? (
+        <span className="flex items-center gap-2 text-muted-foreground">
+          <Spinner /> Reading it…
+        </span>
+      ) : null}
+      {open && source.isError ? (
+        <span className="text-muted-foreground">
+          The notebook runtime is not answering, so the source this step ran cannot be read from
+          here. It is still what the run executed.
+        </span>
+      ) : null}
+      {open && source.data ? (
+        <pre className="max-h-72 overflow-auto rounded-md border border-border bg-muted/30 p-2 text-[0.7rem] leading-relaxed">
+          {source.data.source}
+        </pre>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Open the notebook's live app on the rows this step read.
+ *
+ * The server resolves it — §16.3, without the token that section asked for,
+ * because the runtime it would be presented to has no authentication to check
+ * it against. What exists instead is the gate on the route: aiwatcher decides
+ * who may open which run's rows, reads them from its own object store and
+ * stages them.
+ *
+ * A button rather than something that happens on open, because it *changes*
+ * what the notebook's live app shows for everybody looking at it — which is
+ * also why the route asks for the editor role rather than the viewer one.
+ */
+function OpenEditor({ executionId, stepId }: { executionId: string; stepId: string }) {
+  const open = useMutation({
+    mutationFn: async () =>
+      answerOf(
+        await openEditor({ path: { execution_id: executionId, step_id: stepId } }),
+        'The editor could not be opened on this step.',
+      ),
+  });
+
+  if (open.data) {
+    return (
+      <div className="flex flex-col gap-1">
+        <a
+          href={open.data.app_url}
+          target="_blank"
+          rel="noreferrer"
+          className="flex items-center gap-1 text-primary hover:underline"
+        >
+          <SquareArrowOutUpRight className="h-3 w-3" /> Open the notebook on{' '}
+          {open.data.rows === 0 ? 'no rows' : `${open.data.rows} rows`} →
+        </a>
+        {/* Said rather than hidden: marimo serves the notebook's head, so the
+            widgets move against this run's rows under today's code. The code
+            that ran is the panel above, read by its digest. */}
+        <span className="text-muted-foreground">
+          Those are the rows this attempt read. The app runs the notebook as it is now — the code
+          this step ran is above.
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      <div>
+        <Button variant="outline" size="sm" disabled={open.isPending} onClick={() => open.mutate()}>
+          {open.isPending ? <Spinner /> : <SquareArrowOutUpRight className="mr-1 h-3 w-3" />} Open
+          the editor on this step&apos;s rows
+        </Button>
+      </div>
+      {open.isError ? (
+        <Refusal error={open.error} fallback="The editor could not be opened on this step." />
       ) : null}
     </div>
   );

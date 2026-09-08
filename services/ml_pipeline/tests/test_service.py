@@ -136,7 +136,12 @@ def test_a_context_may_not_be_a_path(scratch: Config) -> None:
 def test_more_rows_than_this_service_accepts_is_a_refusal_not_a_silent_slice(
     scratch: Config,
 ) -> None:
-    small = Config(notebooks=scratch.notebooks, data=scratch.data, max_rows=2)
+    small = Config(
+        notebooks=scratch.notebooks,
+        revisions=scratch.revisions,
+        data=scratch.data,
+        max_rows=2,
+    )
     with TestClient(create_app(small)) as client:
         client.put("/ml-pipeline/notebooks/demo", json={"source": NOTEBOOK})
 
@@ -291,3 +296,140 @@ def test_a_running_notebook_does_not_hold_every_other_request_behind_it(
 
     assert RUNNING in seen, f"the service never answered while a notebook ran: {seen}"
     assert seen[-1] == DONE, seen
+
+
+def test_a_run_that_pins_a_revision_executes_that_source_after_the_head_moved(
+    scratch: Config,
+) -> None:
+    """Work 5's exit, in one test.
+
+    Save a notebook, note the revision a pipeline would pin, edit the notebook,
+    then run the pinned revision. What comes back is the *first* notebook's
+    output. Before the revision store this was a refusal — the run was told the
+    notebook had been edited and to save the pipeline again, which is not a
+    thing anybody can do to a run that already happened.
+    """
+    edited = NOTEBOOK.replace('"seen": True', '"seen": "edited"')
+    with TestClient(create_app(scratch)) as client:
+        pinned = client.put("/ml-pipeline/notebooks/demo", json={"source": NOTEBOOK}).json()
+        moved = client.put("/ml-pipeline/notebooks/demo", json={"source": edited}).json()
+        assert pinned["revision"] != moved["revision"]
+
+        result = client.post(
+            "/ml-pipeline/run",
+            json={
+                "notebook": "demo",
+                "rows": [{"text": "a"}],
+                "code_revision": pinned["revision"],
+            },
+        ).json()
+
+        assert result["rows"] == [{"text": "a", "seen": True}]
+        # And it says which source ran, which is what the reactor compares
+        # against the plan's pin after the fact.
+        assert result["revision"] == pinned["revision"]
+
+
+def test_a_run_that_pins_nothing_gets_the_head_somebody_is_editing(scratch: Config) -> None:
+    """The editor's own path, section 16.3's `ad_hoc`.
+
+    Expressed as an absent field rather than a flag, so there is no way for the
+    flag and the revision to disagree.
+    """
+    edited = NOTEBOOK.replace('"seen": True', '"seen": "edited"')
+    with TestClient(create_app(scratch)) as client:
+        client.put("/ml-pipeline/notebooks/demo", json={"source": NOTEBOOK})
+        moved = client.put("/ml-pipeline/notebooks/demo", json={"source": edited}).json()
+
+        result = client.post(
+            "/ml-pipeline/run", json={"notebook": "demo", "rows": [{"text": "a"}]}
+        ).json()
+
+        assert result["rows"] == [{"text": "a", "seen": "edited"}]
+        assert result["revision"] == moved["revision"]
+
+
+def test_a_pinned_revision_this_runtime_never_held_is_a_404_and_not_the_head(
+    scratch: Config,
+) -> None:
+    """The one outcome content addressing exists to prevent.
+
+    Falling back to the head here would run *something else* under a pinned
+    run's name, and the rows would look exactly like a successful run.
+    """
+    with TestClient(create_app(scratch)) as client:
+        client.put("/ml-pipeline/notebooks/demo", json={"source": NOTEBOOK})
+
+        absent = client.post(
+            "/ml-pipeline/run",
+            json={"notebook": "demo", "rows": [{"text": "a"}], "code_revision": "0" * 64},
+        )
+
+        assert absent.status_code == 404
+        assert "saving the notebook again" in absent.json()["error"]["message"]
+
+
+def test_one_exact_source_is_readable_by_its_digest_before_anything_runs(
+    scratch: Config,
+) -> None:
+    """What a managed step asks first, so a lost revision costs one GET."""
+    with TestClient(create_app(scratch)) as client:
+        pinned = client.put("/ml-pipeline/notebooks/demo", json={"source": NOTEBOOK}).json()
+        client.put(
+            "/ml-pipeline/notebooks/demo",
+            json={"source": NOTEBOOK.replace('"seen": True', '"seen": "edited"')},
+        )
+
+        found = client.get(f"/ml-pipeline/notebooks/demo/revisions/{pinned['revision']}")
+        missing = client.get(f"/ml-pipeline/notebooks/demo/revisions/{'0' * 64}")
+        refused = client.get("/ml-pipeline/notebooks/demo/revisions/not-a-digest")
+
+        assert found.json()["source"] == NOTEBOOK
+        assert found.json()["name"] == "demo"
+        assert missing.status_code == 404
+        assert refused.status_code == 422
+
+
+def test_staging_puts_rows_where_the_live_app_reads_them_and_runs_nothing(
+    scratch: Config,
+) -> None:
+    """The editor half of a run, without the run.
+
+    aiwatcher calls this to open a block on what an old execution read. Running
+    the notebook to fill its editor would execute somebody's code because
+    somebody clicked "open", and would overwrite the output being looked at.
+    """
+    with TestClient(create_app(scratch)) as client:
+        client.put("/ml-pipeline/notebooks/demo", json={"source": NOTEBOOK})
+
+        staged = client.post(
+            "/ml-pipeline/staging",
+            json={
+                "notebook": "demo",
+                "rows": [{"text": "what that run read"}],
+                "params": {"threshold": 0.8},
+                "context": "exec-9/detect/2",
+            },
+        ).json()
+
+        assert staged["rows"] == 1
+        assert staged["context"] == "exec-9/detect/2"
+        assert staged["app_url"] == "/ml-pipeline/app/demo/"
+        staging = Staging(scratch.data)
+        assert staging.get_input("demo", "exec-9/detect/2").rows == [{"text": "what that run read"}]
+        # And the pointer the live app follows, which knows only the name.
+        assert staging.get_input("demo").rows == [{"text": "what that run read"}]
+        assert staging.get_input("demo").params == {"threshold": 0.8}
+        # Nothing ran: no output beside the input it staged.
+        assert not (scratch.data / "blocks" / "demo" / "adhoc" / "output.json").exists()
+
+
+def test_staging_for_a_notebook_nobody_wrote_is_a_404(scratch: Config) -> None:
+    """Rows under a name that will never be read, answered 200, is worse than
+    a refusal: the editor opens on an empty table and nothing says why."""
+    with TestClient(create_app(scratch)) as client:
+        absent = client.post(
+            "/ml-pipeline/staging", json={"notebook": "absent", "rows": [{"a": 1}]}
+        )
+
+        assert absent.status_code == 404

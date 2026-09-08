@@ -4621,7 +4621,7 @@
           "execution"
         ],
         "summary": "One run's own page: where it is, where each of its steps is, and what may be\ndone to it.",
-        "description": "The store's inline projection rather than a fold of the log, and the two are\nnot interchangeable. This one is transactional with the decision that\nproduced it, which is what makes it safe to accept the next command from;\nthe fold is what draws the run beside every other execution, with `Pending`\nnodes and a live stream, and it is the one a list comes from.",
+        "description": "The store's inline projection rather than a fold of the log, and the two are\nnot interchangeable. This one is transactional with the decision that\nproduced it, which is what makes it safe to accept the next command from;\nthe fold is what draws the run beside every other execution, with `Pending`\nnodes and a live stream, and it is the one a list comes from.\n\nAnswers [`RunView`] — the projection under `execution`, beside the actions\nthe run would accept. It answered the bare projection once; see that type\nfor what a hand-written client has to change.",
         "operationId": "get_execution",
         "parameters": [
           {
@@ -4641,6 +4641,69 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RunView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/executions/{execution_id}/blocks": {
+      "get": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "Which authored blocks became which steps, for the run the canvas is following.",
+        "description": "One request per execution rather than one per frame: a plan is immutable, so\nthis answer cannot change while the run does. The states themselves come\nfrom `GET /executions/{id}`, which is re-read on every frame.",
+        "operationId": "run_blocks",
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "description": "The id a start returned",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunBlocks"
                 }
               }
             }
@@ -5037,6 +5100,108 @@
             }
           },
           "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/executions/{execution_id}/steps/{step_id}/editor": {
+      "post": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "Open this step's editor on the rows this step actually read.",
+        "description": "§16.3, resolved server-side and without a token — see\n`aiwatcher_core::ports::EditorHost` for why the token it described would\nhave been ceremony. The gate is here: this route decides who may open which\nrun's rows, reads them from the object store itself, and hands the runtime\na staging request. `Editor`, not `Viewer`, because staging replaces what\nevery other person looking at that notebook's live app is shown.\n\nIt stages and stops. And the live app serves the notebook's *head*, so what\nopens is this run's rows under today's code — `code_revision` in the answer\nis what ran, read beside it through the runtime's revision route.",
+        "operationId": "open_editor",
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "description": "The id a start returned",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "step_id",
+            "in": "path",
+            "description": "A step of that run's plan",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EditorSession"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "That step is not a notebook",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
             "description": "",
             "content": {
               "application/json": {
@@ -9745,6 +9910,38 @@
           "tool_calls": {
             "type": "integer",
             "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "EditorSession": {
+        "type": "object",
+        "description": "Where to look, and what is under it.",
+        "required": [
+          "app_url",
+          "context_id",
+          "notebook",
+          "code_revision",
+          "rows"
+        ],
+        "properties": {
+          "app_url": {
+            "type": "string",
+            "description": "The live app, on this instance's own origin."
+          },
+          "code_revision": {
+            "type": "string",
+            "description": "The revision that produced these rows. The app shows the head; this is\nwhat to read beside it when the two have moved apart."
+          },
+          "context_id": {
+            "type": "string"
+          },
+          "notebook": {
+            "type": "string"
+          },
+          "rows": {
+            "type": "integer",
+            "description": "How many rows were staged. `0` is a real answer — a step whose parent\nproduced nothing.",
             "minimum": 0
           }
         }
@@ -16595,6 +16792,39 @@
           "resume"
         ]
       },
+      "RunBlocks": {
+        "type": "object",
+        "description": "Which authored blocks a run's steps cover, and what they were authored as.\n\nEvery field comes from the **pinned plan**. `definition_revision` is what\nmakes the rest safe to draw with: a canvas holding a different revision is\nholding different blocks, and lighting them from these step ids would be\nborrowing one run's outcome for another run's drawing.",
+        "required": [
+          "definition_kind",
+          "definition_name",
+          "definition_revision",
+          "plan_id",
+          "steps"
+        ],
+        "properties": {
+          "definition_kind": {
+            "$ref": "#/components/schemas/DefinitionKind"
+          },
+          "definition_name": {
+            "type": "string"
+          },
+          "definition_revision": {
+            "$ref": "#/components/schemas/DefinitionRevision",
+            "description": "The authored revision this run compiled from. Compare it with the one\nthe canvas was loaded at; unequal means drift, and drift means the\nstates below belong to blocks that are not the ones on screen."
+          },
+          "plan_id": {
+            "$ref": "#/components/schemas/PlanId",
+            "description": "The compiled plan, addressed over the executable fields only. Two\nrevisions that differ by a dragged block share this."
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StepBlocks"
+            }
+          }
+        }
+      },
       "RunDetail": {
         "type": "object",
         "description": "A run plus what is needed to draw it.",
@@ -16837,7 +17067,7 @@
       },
       "RunView": {
         "type": "object",
-        "description": "A run, with what may be done to it.\n\nThe actions are computed here rather than left to the caller, for\n`ContextAction::allowed`'s reason one level up: a panel that decided for\nitself which of cancel, pause and resume apply would be a second copy of\n`decide`'s preconditions, in another language, drifting from the first.",
+        "description": "A run, with what may be done to it.\n\nThe actions are computed here rather than left to the caller, for\n`ContextAction::allowed`'s reason one level up: a panel that decided for\nitself which of cancel, pause and resume apply would be a second copy of\n`decide`'s preconditions, in another language, drifting from the first.\n\n**Compatibility.** `GET /api/v1/executions/{execution_id}` and every\ncommand route answered with a bare `RunProjection` before this type\nexisted; they now answer with this. The projection is unchanged and moved\nunder `execution`, so a field read as `state` is read as\n`execution.state`. Clients generated from `contracts/openapi.json` follow\nit by regenerating; a hand-written one does not, and this is the note that\nsays so.",
         "required": [
           "execution",
           "allowed"
@@ -18104,6 +18334,30 @@
           "cancelled",
           "paused"
         ]
+      },
+      "StepBlocks": {
+        "type": "object",
+        "description": "One plan step, and the blocks somebody drew that became it.",
+        "required": [
+          "step_id",
+          "runtime",
+          "blocks"
+        ],
+        "properties": {
+          "blocks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The authored block ids, in order. Empty for a step no canvas block\ncompiled to, where the step id is the address."
+          },
+          "runtime": {
+            "$ref": "#/components/schemas/RuntimeKind"
+          },
+          "step_id": {
+            "type": "string"
+          }
+        }
       },
       "StepBreakdown": {
         "type": "object",

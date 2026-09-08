@@ -12,7 +12,7 @@ import {
 } from '@/api/generated/sdk.gen';
 import type { BlockSpec, CurationPipeline, PipelineBlock } from '@/api/generated/types.gen';
 import { BlockInspector } from '@/components/block-inspector';
-import { ManagedRunCard, useManagedRun } from '@/components/managed-run';
+import { ManagedRunCard, useManagedBlocks, useManagedRun } from '@/components/managed-run';
 import { ScheduleCard } from '@/components/schedule-card';
 import { FlowResultView } from '@/components/flow-preview';
 import { PipelineCanvas, blockLabel } from '@/components/pipeline-canvas';
@@ -22,11 +22,14 @@ import { rejectionDetails } from '@/lib/annotations';
 import { isFlowAvailable } from '@/lib/flow';
 import { isMlPipelineAvailable } from '@/lib/ml-pipeline';
 import {
-  PII_DETECTION_EXAMPLE,
+  CURATION_EXAMPLES,
   compileFlow,
+  followsTheRun,
+  managedOutcomes,
   orderOf,
   runPipeline,
   withPinnedNotebooks,
+  type CurationExample,
   type PipelineOutcomes,
   type PipelineResult,
 } from '@/lib/pipeline';
@@ -78,6 +81,13 @@ type Draft = {
   edges: { from: string; to: string }[];
 };
 
+/** What the canvas was last known to be, and under which content address. */
+type Pinned = {
+  revision: string;
+  blocks: PipelineBlock[];
+  edges: { from: string; to: string }[];
+};
+
 const EMPTY_DRAFT: Draft = {
   name: 'curation/untitled',
   description: '',
@@ -92,6 +102,10 @@ function PipelinePage() {
   const windowSeconds = search.window ?? DEFAULT_WINDOW_SECONDS;
 
   const [draft, setDraft] = React.useState<Draft>(EMPTY_DRAFT);
+  // The revision this canvas was last loaded or saved at, with the blocks it
+  // held then. A managed run's states may be drawn over the draft only while
+  // the two still agree — see `atRevision`.
+  const [pinned, setPinned] = React.useState<Pinned>();
   const [outcomes, setOutcomes] = React.useState<PipelineOutcomes>({});
   const [result, setResult] = React.useState<PipelineResult | null>(null);
   const [problems, setProblems] = React.useState<string[]>([]);
@@ -132,15 +146,41 @@ function PipelinePage() {
       blocks: pipeline.blocks,
       edges: pipeline.edges,
     });
+    setPinned({ revision: pipeline.revision, blocks: pipeline.blocks, edges: pipeline.edges });
   }, [saved.data, search.name, draft.blocks.length]);
+
+  /**
+   * The revision this canvas *is*, or `undefined` once somebody has changed it.
+   *
+   * A revision is a content address the server computes over the whole authored
+   * request, positions included, so the browser cannot work out what the draft
+   * would be saved as. What it can do is notice that the draft is still exactly
+   * what it was loaded as — and an edit that a comparison like this reads as a
+   * change when it is not costs a "you have edited this" line, which is the
+   * safe direction to be wrong in.
+   */
+  const atRevision = React.useMemo(() => {
+    if (!pinned) return undefined;
+    const same =
+      JSON.stringify(pinned.blocks) === JSON.stringify(draft.blocks) &&
+      JSON.stringify(pinned.edges) === JSON.stringify(draft.edges);
+    return same ? pinned.revision : undefined;
+  }, [pinned, draft.blocks, draft.edges]);
 
   const chain = React.useMemo(() => orderOf(draft.blocks, draft.edges), [draft]);
   const selected = draft.blocks.find((block) => block.id === search.block);
   const view = chain?.find((block) => block.spec.kind === 'view');
   const publishTo = view?.spec.kind === 'view' ? view.spec.dataset : undefined;
 
-  const load = (pipeline: CurationPipeline | typeof PII_DETECTION_EXAMPLE) => {
+  const load = (pipeline: CurationPipeline | CurationExample) => {
     hydrated.current = true;
+    // An example has no revision — nothing saved it — so loading one leaves
+    // the canvas at no revision, which is the truth.
+    setPinned(
+      'revision' in pipeline
+        ? { revision: pipeline.revision, blocks: pipeline.blocks, edges: pipeline.edges }
+        : undefined,
+    );
     setDraft({
       name: pipeline.name,
       description: pipeline.description ?? '',
@@ -174,7 +214,14 @@ function PipelinePage() {
     },
     onSuccess: (stored) => {
       setProblems([]);
+      // The stored blocks rather than the draft's: saving pins each notebook's
+      // revision, so what came back is what this canvas now is.
       setDraft((previous) => ({ ...previous, blocks: stored.pipeline.blocks }));
+      setPinned({
+        revision: stored.pipeline.revision,
+        blocks: stored.pipeline.blocks,
+        edges: stored.pipeline.edges,
+      });
       void queryClient.invalidateQueries({ queryKey: ['curation-pipelines'] });
     },
     // Every reason at once, from the registry, which is the only place that
@@ -227,6 +274,30 @@ function PipelinePage() {
   // and a copy here would be the stale one.
   const executionId = search.execution;
   const managed = useManagedRun(executionId);
+  const authored = useManagedBlocks(executionId);
+
+  /**
+   * Whether the canvas on screen is the canvas that run compiled.
+   *
+   * `undefined` while there is no managed run to compare against. Otherwise
+   * the run's own pinned revision against this draft's — and the states below
+   * are drawn only when they are the same, because lighting a block that was
+   * added after the run is claiming an outcome for something that never ran.
+   */
+  const following = followsTheRun(atRevision, authored.data?.definition_revision);
+
+  /**
+   * What the canvas draws: the managed run's step states while it is following
+   * one, and the browser's own run otherwise.
+   *
+   * Never merged. Two runs of one chain produce two sets of outcomes, and a box
+   * showing the ad-hoc preview's row count beside a managed run's `running` is
+   * two answers to one question.
+   */
+  const canvasOutcomes = React.useMemo(() => {
+    if (!following || !managed.data || !authored.data) return outcomes;
+    return managedOutcomes(managed.data.execution.steps, authored.data.steps);
+  }, [following, managed.data, authored.data, outcomes]);
 
   const startOnServer = useMutation({
     mutationFn: async () => {
@@ -251,8 +322,7 @@ function PipelinePage() {
     onError: (error) => setProblems(rejectionDetails(error)),
   });
 
-  const busy =
-    execute.isPending || save.isPending || publish.isPending || startOnServer.isPending;
+  const busy = execute.isPending || save.isPending || publish.isPending || startOnServer.isPending;
 
   const addBlock = (kind: BlockSpec['kind']) => {
     const id = nextId(kind, draft.blocks);
@@ -323,9 +393,30 @@ function PipelinePage() {
         >
           {save.isPending ? <Spinner /> : <Save className="h-3.5 w-3.5" />} Save
         </Button>
-        <Button variant="outline" onClick={() => load(PII_DETECTION_EXAMPLE)} disabled={busy}>
-          <Sparkles className="h-3.5 w-3.5" /> Load the PII example
-        </Button>
+      </Card>
+
+      {/* Every example is a chain over a public corpus that runs as it stands,
+          so loading one and pressing Preview is the shortest way to see all
+          three engines answer. The one that needs no notebook runtime says so
+          the moment that runtime is known to be down, because it is then the
+          only one that still finishes. */}
+      <Card className="flex flex-wrap items-center gap-2 p-3">
+        <span className="text-xs font-medium text-muted-foreground">Load an example</span>
+        {CURATION_EXAMPLES.map((example) => (
+          <Button
+            key={example.name}
+            variant="outline"
+            size="sm"
+            title={example.description}
+            onClick={() => load(example)}
+            disabled={busy}
+          >
+            <Sparkles className="h-3.5 w-3.5" /> {example.title}
+            {!example.needsNotebooks && notebooksReady.data === false ? (
+              <span className="text-muted-foreground"> · no notebook needed</span>
+            ) : null}
+          </Button>
+        ))}
       </Card>
 
       {problems.length > 0 ? (
@@ -339,16 +430,31 @@ function PipelinePage() {
         </Card>
       ) : null}
 
+      {following === false ? (
+        // Not a warning about something being wrong: an edited draft is the
+        // ordinary state of somebody working. What it may not do is borrow the
+        // run's outcomes, because those belong to blocks that are not these.
+        <Card className="border-warning/40 p-3 text-sm">
+          <p className="font-medium">This canvas is not what the run below compiled</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            The run pinned revision {authored.data?.definition_revision.slice(0, 10)}, and this
+            draft has moved since. Its steps are listed under the run itself; the boxes here stay
+            unlit rather than claiming an outcome that belongs to a different drawing. Save this
+            pipeline and start it again to follow it on the canvas.
+          </p>
+        </Card>
+      ) : null}
+
       {draft.blocks.length === 0 ? (
         <EmptyState
           title="No blocks yet"
-          hint="Add a source, or load the PII detection example — a Hugging Face corpus, a Flow PHP transform, a marimo notebook and a view, wired together."
+          hint="Add a source, or load one of the examples above — a Hugging Face corpus, a Flow PHP transform, a marimo notebook and a view, wired together."
         />
       ) : (
         <PipelineCanvas
           blocks={draft.blocks}
           edges={draft.edges}
-          outcomes={outcomes}
+          outcomes={canvasOutcomes}
           selected={search.block}
           onSelect={(block) =>
             void navigate({ search: (previous) => ({ ...previous, block }), replace: true })
@@ -457,10 +563,14 @@ function PipelinePage() {
 
           {executionId || startOnServer.isPending ? (
             <ManagedRunCard
-              run={managed.data}
+              run={managed.data ?? undefined}
               executionId={executionId}
               pending={startOnServer.isPending}
-              missing={managed.isError}
+              // `null` is the server saying there is no such run; an error is
+              // the server not saying anything usable. Only the first is
+              // absence, and only the first offers to forget the link.
+              missing={managed.data === null}
+              failure={managed.error}
               onForget={() =>
                 void navigate({
                   search: (previous) => ({ ...previous, execution: undefined }),

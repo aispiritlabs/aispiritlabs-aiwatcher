@@ -256,8 +256,10 @@ function NotebookEditor({
         <p className="rounded-md border border-warning/40 bg-warning/5 p-2 text-xs">
           This pipeline was saved against revision{' '}
           <code className="id">{spec.revision?.slice(0, 12)}</code> and the notebook is now{' '}
-          <code className="id">{notebook.data?.revision.slice(0, 12)}</code>. Saving the pipeline
-          pins the new one.
+          <code className="id">{notebook.data?.revision.slice(0, 12)}</code>. A managed run still
+          executes the revision it pinned — the runtime keeps every source it has been given — so
+          this is what runs next rather than something that is broken. Saving the pipeline pins the
+          new one.
         </p>
       ) : null}
 

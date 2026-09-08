@@ -145,6 +145,13 @@ openapi-check:
 panel-build:
     cd {{panel}} && npm run build
 
+# The panel's own tests. What they are for is narrow and worth saying: the
+# generated client does not throw on a refusal, so a component that forgets to
+# read the outcome runs its success path over a 403. These render a component
+# against a stubbed `fetch` and assert on what a person would see.
+panel-test:
+    cd {{panel}} && npm run test
+
 # ── Running locally ──────────────────────────────────────────────────────────
 
 # The prompt registry defaults to ./.data/prompts, so this needs nothing
@@ -514,10 +521,12 @@ ml-pipeline-check:
     uv run --locked mypy
     uv run --locked pytest -q
 
-# Open http://localhost:5173/data-curation/pipeline and press "Load the PII
-# example".
+# Open http://localhost:5173/data-curation/pipeline and load an example: PII
+# detection, Titanic features, or — the one that needs no notebook runtime —
+# Titanic survival rates. The Recipe view beside it ships the same corpus as
+# two single-script curations.
 
-# The whole curation example: the API with hub search on, both engines, the panel.
+# The whole curation chain: the API with hub search on, both engines, the panel.
 pii-demo:
     #!/usr/bin/env bash
     set -euo pipefail

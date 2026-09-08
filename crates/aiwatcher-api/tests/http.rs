@@ -47,27 +47,27 @@ struct Fixture {
 
 impl Fixture {
     fn new(ingest_enabled: bool) -> Self {
-        Self::build(ingest_enabled, true, None, None, None)
+        Self::build(ingest_enabled, true, None, None, None, None)
     }
 
     /// An instance configured without a prompt store, which is what
     /// `AIWATCHER_PROMPT_STORE=none` produces.
     fn without_registry() -> Self {
-        Self::build(false, false, None, None, None)
+        Self::build(false, false, None, None, None, None)
     }
 
     /// An instance with a runner wired, which is what
     /// `AIWATCHER_WORKFLOW_RUNNER=http` produces. The default has none, so
     /// every other test also asserts that reruns are 501 by construction.
     fn with_runner(runner: Arc<RecordingRunner>) -> Self {
-        Self::build(false, true, Some(runner), None, None)
+        Self::build(false, true, Some(runner), None, None, None)
     }
 
     /// An instance with a pipeline engine wired, which is what
     /// `AIWATCHER_ENGINE=flyte` produces. The default has none, so every other
     /// test also asserts that the engine routes are 501 by construction.
     fn with_engine(engine: Arc<RecordingEngine>) -> Self {
-        Self::build(false, true, None, None, Some(engine))
+        Self::build(false, true, None, None, Some(engine), None)
     }
 
     /// An instance behind an authenticating reverse proxy, which is what
@@ -76,14 +76,14 @@ impl Fixture {
     /// all: there is no provider to discover, only headers to read.
     async fn behind_a_proxy(ingest_enabled: bool) -> Self {
         let auth = Self::proxy_authenticator().await;
-        Self::build(ingest_enabled, true, None, Some(auth), None)
+        Self::build(ingest_enabled, true, None, Some(auth), None, None)
     }
 
     /// Both: an identity to check the role against, and an engine to reach
     /// once the check passes.
     async fn behind_a_proxy_with_engine(engine: Arc<RecordingEngine>) -> Self {
         let auth = Self::proxy_authenticator().await;
-        Self::build(false, true, None, Some(auth), Some(engine))
+        Self::build(false, true, None, Some(auth), Some(engine), None)
     }
 
     async fn proxy_authenticator() -> Arc<Authenticator> {
@@ -103,12 +103,17 @@ impl Fixture {
         Arc::new(auth)
     }
 
+    fn with_editor(editor: Arc<RecordingEditor>) -> Self {
+        Self::build(false, true, None, None, None, Some(editor))
+    }
+
     fn build(
         ingest_enabled: bool,
         registry_enabled: bool,
         runner: Option<Arc<RecordingRunner>>,
         auth: Option<Arc<Authenticator>>,
         engine: Option<Arc<RecordingEngine>>,
+        editor: Option<Arc<RecordingEditor>>,
     ) -> Self {
         let bus = Arc::new(InMemoryBus::new());
         let read_model = Arc::new(ReadModel::default());
@@ -184,6 +189,7 @@ impl Fixture {
             // is worth asserting here is the 501, and that needs `None`.
             hubs: None,
             runner: runner.map(|runner| runner as Arc<dyn WorkflowRunner>),
+            editor: editor.map(|editor| editor as Arc<dyn aiwatcher_core::ports::EditorHost>),
             engine: engine.map(|engine| engine as Arc<dyn WorkflowEngine>),
             auth,
             health,
@@ -469,6 +475,63 @@ impl RecordingRunner {
 
     fn seen(&self) -> Vec<RerunRequest> {
         self.seen.lock().expect("not poisoned").clone()
+    }
+}
+
+/// A notebook runtime that records what it was asked to stage.
+///
+/// The real one reads the rows from the object store and posts them; what the
+/// route is responsible for is *which* step, *which* context and *which*
+/// revision, so this records the request and answers.
+#[derive(Debug)]
+struct RecordingEditor {
+    seen: std::sync::Mutex<Vec<aiwatcher_core::ports::EditorRequest>>,
+    refuse: bool,
+}
+
+impl RecordingEditor {
+    fn new() -> Self {
+        Self {
+            seen: std::sync::Mutex::new(Vec::new()),
+            refuse: false,
+        }
+    }
+
+    fn refusing() -> Self {
+        Self {
+            seen: std::sync::Mutex::new(Vec::new()),
+            refuse: true,
+        }
+    }
+
+    fn seen(&self) -> Vec<aiwatcher_core::ports::EditorRequest> {
+        self.seen.lock().expect("not poisoned").clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl aiwatcher_core::ports::EditorHost for RecordingEditor {
+    async fn open(
+        &self,
+        request: aiwatcher_core::ports::EditorRequest,
+    ) -> Result<aiwatcher_core::ports::EditorSession, PortError> {
+        self.seen
+            .lock()
+            .expect("not poisoned")
+            .push(request.clone());
+        if self.refuse {
+            return Err(PortError::Rejected {
+                target: "the notebook runtime",
+                message: "there is no notebook called 'pii_scan'".to_owned(),
+            });
+        }
+        Ok(aiwatcher_core::ports::EditorSession {
+            app_url: format!("/ml-pipeline/app/{}/", request.notebook),
+            context_id: request.context_id,
+            notebook: request.notebook,
+            code_revision: request.code_revision,
+            rows: 3,
+        })
     }
 }
 
@@ -3866,6 +3929,248 @@ async fn a_running_steps_context_is_the_plan_that_run_pinned() {
         .get("/api/v1/executions/never/steps/read/context")
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_run_says_which_authored_blocks_became_which_steps() {
+    // What lets a canvas light up. A run reports `step.started` for a *step*,
+    // and a person is looking at *blocks* — three of which fold into one Flow
+    // query. Working that out in the browser would mean working it out from
+    // the draft on screen, which is not what this run compiled.
+    let fixture = Fixture::new(false);
+    let (_, saved) = fixture
+        .post("/api/v1/curation-pipelines", flow_only_pipeline("lit"))
+        .await;
+    let revision = saved["pipeline"]["revision"]
+        .as_str()
+        .expect("a revision")
+        .to_owned();
+    let (_, accepted) = fixture
+        .post(
+            "/api/v1/executions",
+            json!({ "target": { "kind": "curation_pipeline", "name": "lit" } }),
+        )
+        .await;
+    let execution = accepted["execution"]["execution_id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+
+    let (status, map) = fixture
+        .get(&format!("/api/v1/executions/{execution}/blocks"))
+        .await;
+
+    assert_eq!(status, StatusCode::OK, "{map}");
+    // The revision the canvas has to match before it may draw these states.
+    assert_eq!(map["definition_revision"], revision);
+    assert_eq!(map["definition_name"], "lit");
+    assert_eq!(map["plan_id"], accepted["execution"]["plan_id"]);
+
+    let steps = map["steps"].as_array().expect("the steps");
+    let flow = steps
+        .iter()
+        .find(|step| step["step_id"] == "read")
+        .expect("the query step");
+    // One step, both boxes: the compiler folds a source and its transforms
+    // into a single query, and they light together.
+    assert_eq!(flow["runtime"], "flow_php");
+    assert_eq!(flow["blocks"], json!(["read", "clean"]));
+
+    let view = steps
+        .iter()
+        .find(|step| step["runtime"] == "publish_dataset")
+        .expect("the view step");
+    assert_eq!(view["blocks"], json!(["write"]));
+
+    // A run nobody started has no plan to answer from.
+    let (status, _) = fixture.get("/api/v1/executions/never/blocks").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+fn notebook_pipeline(name: &str) -> Value {
+    json!({
+        "name": name,
+        "description": "",
+        "blocks": [
+            {
+                "id": "read",
+                "position": { "x": 0.0, "y": 0.0 },
+                "spec": { "kind": "source", "dataset": "runs", "arguments": {} }
+            },
+            {
+                "id": "detect",
+                "position": { "x": 200.0, "y": 0.0 },
+                "spec": {
+                    "kind": "notebook",
+                    "notebook": "pii_scan",
+                    "revision": "cd".repeat(32),
+                    "params": { "threshold": 0.8 }
+                }
+            },
+            {
+                "id": "write",
+                "position": { "x": 400.0, "y": 0.0 },
+                "spec": { "kind": "view", "dataset": "scanned" }
+            }
+        ],
+        "edges": [
+            { "from": "read", "to": "detect" },
+            { "from": "detect", "to": "write" }
+        ]
+    })
+}
+
+#[tokio::test]
+async fn opening_a_steps_editor_stages_that_attempts_own_context_and_pinned_revision() {
+    // §16.3, resolved server-side. What the route is responsible for is
+    // *which* context and *which* revision — the rows themselves are the
+    // adapter's job, against the object store.
+    let editor = Arc::new(RecordingEditor::new());
+    let fixture = Fixture::with_editor(Arc::clone(&editor));
+    fixture
+        .post("/api/v1/curation-pipelines", notebook_pipeline("scan"))
+        .await;
+    let (_, accepted) = fixture
+        .post(
+            "/api/v1/executions",
+            json!({ "target": { "kind": "curation_pipeline", "name": "scan" } }),
+        )
+        .await;
+    let execution = accepted["execution"]["execution_id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+
+    let (status, session) = fixture
+        .post(
+            &format!("/api/v1/executions/{execution}/steps/detect/editor"),
+            json!({}),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::OK, "{session}");
+    assert_eq!(session["app_url"], "/ml-pipeline/app/pii_scan/");
+    // The attempt is in the context because a retry read different rows —
+    // and `0` here is the honest answer for a step nothing has dispatched yet,
+    // whose editor therefore opens on no rows rather than on the last run's.
+    assert_eq!(session["context_id"], format!("{execution}/detect/0"));
+    // What ran, beside the app that serves the head. The two are never merged.
+    assert_eq!(session["code_revision"], "cd".repeat(32));
+
+    let asked = editor.seen();
+    assert_eq!(asked.len(), 1);
+    assert_eq!(asked[0].notebook, "pii_scan");
+    assert_eq!(asked[0].code_revision, "cd".repeat(32));
+    assert_eq!(asked[0].params["threshold"], 0.8);
+}
+
+#[tokio::test]
+async fn a_step_that_is_not_a_notebook_has_no_editor_and_says_which_runtime_it_is() {
+    // A 422 rather than a 404: the step is there. "There is no such step" and
+    // "that step runs a Flow query" send somebody to different places.
+    let editor = Arc::new(RecordingEditor::new());
+    let fixture = Fixture::with_editor(Arc::clone(&editor));
+    fixture
+        .post("/api/v1/curation-pipelines", notebook_pipeline("scan"))
+        .await;
+    let (_, accepted) = fixture
+        .post(
+            "/api/v1/executions",
+            json!({ "target": { "kind": "curation_pipeline", "name": "scan" } }),
+        )
+        .await;
+    let execution = accepted["execution"]["execution_id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+
+    let (status, body) = fixture
+        .post(
+            &format!("/api/v1/executions/{execution}/steps/read/editor"),
+            json!({}),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        body["message"]
+            .as_str()
+            .expect("a message")
+            .contains("flow_php"),
+        "{body}"
+    );
+    // And nothing was staged, so nobody's live app moved.
+    assert!(editor.seen().is_empty());
+}
+
+#[tokio::test]
+async fn a_runtime_that_refuses_to_stage_is_a_bad_gateway_and_not_a_failed_run() {
+    let editor = Arc::new(RecordingEditor::refusing());
+    let fixture = Fixture::with_editor(Arc::clone(&editor));
+    fixture
+        .post("/api/v1/curation-pipelines", notebook_pipeline("scan"))
+        .await;
+    let (_, accepted) = fixture
+        .post(
+            "/api/v1/executions",
+            json!({ "target": { "kind": "curation_pipeline", "name": "scan" } }),
+        )
+        .await;
+    let execution = accepted["execution"]["execution_id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+
+    let (status, body) = fixture
+        .post(
+            &format!("/api/v1/executions/{execution}/steps/detect/editor"),
+            json!({}),
+        )
+        .await;
+
+    // The runtime understood and refused, which it will do identically forever.
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
+    assert!(
+        body["message"]
+            .as_str()
+            .expect("a message")
+            .contains("no notebook called"),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn an_instance_with_no_notebook_runtime_names_what_to_set_rather_than_failing_oddly() {
+    let fixture = Fixture::new(false);
+    fixture
+        .post("/api/v1/curation-pipelines", notebook_pipeline("scan"))
+        .await;
+    let (_, accepted) = fixture
+        .post(
+            "/api/v1/executions",
+            json!({ "target": { "kind": "curation_pipeline", "name": "scan" } }),
+        )
+        .await;
+    let execution = accepted["execution"]["execution_id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+
+    let (status, body) = fixture
+        .post(
+            &format!("/api/v1/executions/{execution}/steps/detect/editor"),
+            json!({}),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{body}");
+    assert!(
+        body["message"]
+            .as_str()
+            .expect("a message")
+            .contains("AIWATCHER_ML_PIPELINE_URL"),
+        "{body}"
+    );
 }
 
 #[tokio::test]

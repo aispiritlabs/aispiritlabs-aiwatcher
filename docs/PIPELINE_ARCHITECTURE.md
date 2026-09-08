@@ -1292,7 +1292,9 @@ case that needs to run without publishing (section 28, work 5).
 The response is `202 Accepted` once the command and workflow input are durable.
 It identifies the accepted execution. Reading the run and applying its commands
 returns `RunView`, containing `execution` and the server-derived `allowed`
-actions. Work 4 documents compatibility with the earlier bare `RunProjection`.
+actions. The change from the earlier bare `RunProjection` is recorded on the
+`RunView` schema itself, so it reaches the contract and every generated client
+(work 4).
 
 The target command contract is a stable `Idempotency-Key`: a retried intention
 must not create additional work. Do not infer that every current mutation
@@ -1577,8 +1579,10 @@ to build every lower-numbered feature before a higher-numbered one.
 [KICKOFF.md](KICKOFF.md) is the short entry point.
 [PIPELINE_REVIEW_2026-09-08.md](PIPELINE_REVIEW_2026-09-08.md) records the evidence:
 `R1–R7` concern the pending changes, `A1` is a pre-existing file-store defect.
-Work items 1, 2 and 3 are **closed** (2026-09-08, evidence under each); items
-4–6 remain **open**. Updating this plan closes none of the rest.
+Work items 1, 2, 3 and 4 are **closed** (2026-09-08, evidence under each).
+Item 5 is closed as well, editor sessions included — in a shape 16.3 did not
+describe, for the reason recorded under it. Item 6 has not started. Updating
+this plan closes none of the rest.
 
 ### Current capabilities and unproved exits
 
@@ -1587,15 +1591,17 @@ Work items 1, 2 and 3 are **closed** (2026-09-08, evidence under each); items
 | Decisions and workflow facts (Phases 0–3) | ADRs, plan/compiler, pure decider, outbox producer and workflow fold | **Closed:** partial-commit recovery journalled and fault-tested | 2 |
 | PostgreSQL and deployment | Adapter, five migrations, retention, combined/split chart | **Closed:** upgrade, reopen, old/new and rollback covered by `tests/postgres_upgrade.rs` | 1 |
 | Local execution | File adapter, OS-held exclusion, intent journal | **Closed:** repair, torn tails, stale locks and the attempts upgrade covered | 2 |
-| Managed Flow and marimo (Phases 5–6) | Executors, artifacts, lookup and publication | Historical notebook source remains mutable at the runtime | 5 |
-| Context (Phase 4) | Artifact metadata/lineage/cache, ContextSnapshot, context-based staging | Source snapshots and editor sessions | 5 |
-| Panel (Phase 7) | Managed run, controls, allowed actions, URL restoration | Error handling and revision-aware canvas mapping | 4, 5 |
+| Managed Flow and marimo (Phases 5–6) | Executors, artifacts, lookup, publication, and a run that resolves its pinned source | **Closed:** the runtime keeps every revision and a step names its pin | 5 |
+| Context (Phase 4) | Artifact metadata/lineage/cache, ContextSnapshot, context-based staging, the code a step ran, a server-resolved editor session | **Closed:** the gate is the route, not a token the runtime could not check | — |
+| Panel (Phase 7) | Managed run, controls, allowed actions, URL restoration, one reader for every server answer, a canvas that follows a managed run | **Closed:** errors cover 403/409/501/503/404/422/204, and the canvas draws a run's states only at the revision it compiled | — |
 | Scheduler | Cadence, CRUD, transactional admission, per-slot outcomes | **Closed:** admission, retry, concurrent edits, activation and DST | 3 |
 | Worker/Planner (Phases 10–11) | Design and domain vocabulary | Working protocol, SDK task and end-to-end integration | 6 |
 | Human input (Phase 14) | Answer/control path | Authored HumanInput step, timeout/authorization acceptance | Own use-case gate |
 
 The 2026-09-08 review ran the focused Rust suite, PostgreSQL suite, both optional
-service checks and panel typecheck successfully. It also reproduced a stale
+service checks and panel typecheck successfully — the panel had no tests of its
+own to run, which is what let a refusal drawn as a success typecheck cleanly;
+work 4 added the runner. It also reproduced a stale
 schedule overwrite, tick-dependent DST results and a file commit that could not
 recover. Those results narrow the earlier manual acceptance claims in section
 43; they do not erase the features that already work.
@@ -1793,38 +1799,134 @@ run's row — which is what that database is there for.
 
 ### Work 4 — truthful panel errors and client compatibility (R6)
 
-**Dependency:** none for implementation; it can be delivered earlier while the
-storage work is open. It does not waive works 1–3's acceptance gates.
+**Closed 2026-09-08.** One reader rather than a rule people remember. The
+generated client resolves on a refusal — `{ data: undefined, error }`, by
+design, `throwOnError` being opt-in — so *every* call site is one forgotten
+check away from running its success path over a 403, and four call sites had
+already grown four byte-identical private copies of the same `apiError` helper
+to cope. `lib/result.ts` is the one place: `ApiFailure` carrying the status the
+error body does not, and three readers named for what absence means on that
+route — `answerOf` where there is always a body, `answerOrNone` where "no such
+thing" is an ordinary answer, `confirmDone` where success carries no body at
+all. The four copies are gone; their call sites read through it.
 
-- Check generated SDK outcomes or use `throwOnError` for every execution and
-  schedule mutation. Successful DELETE is 204, with no data body to require.
-- Distinguish 404 from unavailable services, authentication failures and command
-  conflicts. An unsuccessful read must not announce that a run was forgotten.
-- Preserve forms on refused writes and show the server's refusal. Allowed
-  actions remain server-derived; a stale action can still legitimately conflict.
-- Record the `RunProjection` to `RunView` response change and regenerate the
-  OpenAPI contract/client whenever implementation changes their shape.
+*The three refusals that read as something else.* A command's refusal ran
+`onSuccess`, so a 403 or a 409 re-read the run, changed nothing and said
+nothing — `answerOf`, and the message with the server's own words. A run's read
+turned every failure into `missing`, because the route passed `managed.isError`
+where it meant "the server says there is no such run": `answerOrNone` makes 404
+a `null` and everything else an error, and the card draws a failure *without*
+the Forget button, since dropping the only link to a run over an outage is the
+opposite of help. And a refused DELETE cleared the schedule form, because a
+successful 204 has no body and "is there data" therefore answered yes for both
+— `confirmDone` asks HTTP success instead.
 
-**Exit:** UI acceptance covers 403, 409, 503 and successful 204; rejected commands
-never follow the success path, and only 404 is rendered as absence.
+One thing the review did not name and the same reading found: a failed schedule
+read left the form holding this component's own defaults *and* a working Save,
+so the next click would have written 09:00 daily over a schedule nobody had
+seen. Save is disabled while the read has failed, with the refusal beside it.
+
+*Compatibility.* The `RunProjection` → `RunView` change is recorded where a
+client reads it rather than in a document they do not have: on the schema and
+on `GET /executions/{id}`, so it rides in `contracts/openapi.json` and into the
+generated client's own JSDoc. The projection is unchanged and moved under
+`execution`; a generated client follows by regenerating, a hand-written one
+reads `execution.state` where it read `state`.
+
+*Evidence:* the panel gained a test runner, because it had none — vitest and
+React Testing Library, wired into `just check` and CI. Ten tests across the two
+components, driving the **real** generated client against a stubbed `fetch`:
+mocking the SDK would replace precisely the behaviour under test. They cover
+403 on a command and on a DELETE, 409 on a command, 501 and 503 on a read, 404
+on both reads, 422 with two problem lines, and the successful 204 — and the
+refused-command test counts requests, because "did not run the success path"
+is observable as the re-read that did not happen. Negative controls: restoring
+the old command mutation fails two, restoring `missing={managed.isError}` fails
+two, restoring the unchecked DELETE fails the form-preservation test, and
+restoring "any failure is no schedule" fails the unread-schedule test. `just
+check` green.
 
 ### Work 5 — historical code, editor sessions, then canvas (Phases 4, 6, 7)
 
-**Dependency:** reliable execution/storage and command feedback from works 1–4.
+**Closed 2026-09-08.** All three: historical code, the canvas, and editor
+sessions — the last in a shape 16.3 did not describe, for a reason written
+below rather than worked around.
 
-- Store immutable notebook source by digest; the run and retry resolve that
-  artifact rather than requiring the editable notebook head to remain unchanged.
-- Build editor sessions over the pinned code/input/parameters with permissions
-  and expiry (16.3). Context staging exists already; finish its historical reload
-  behaviour rather than implementing another staging mechanism.
-- Serve the authored-block-to-plan-step mapping and revision compatibility from
-  the server. A matching canvas displays the managed states; a changed draft
-  displays drift instead of borrowing an old run's outcome.
+*Historical notebook source.* The runtime now keeps every source it has been
+given, at `.revisions/<name>/<sha256>.py`, and a managed step **names its pin**
+in the run request rather than asking the head to still match it. The store is
+in the runtime — the alternative, a seventh object-store prefix, needs the bytes
+to reach aiwatcher, and the only paths for that are a socket from the `serve`
+role to a service the guardrails call a development surface, or the panel, which
+ADR_0025 will not make the durability path.
+
+What it replaced is worth naming: this used to read the head's digest and refuse
+a run whose pin no longer matched, so editing a notebook made every earlier
+execution unrepeatable — provenance protected by removing the retry, which is
+not something anybody can perform on a run that already happened. Two orderings
+carry it, both ADR_0011's: the revision is written before the head that names
+it, and `keep_current` at start-up keeps what a directory holds *now*, because
+what it held yesterday was never written down. A revision the runtime does not
+hold is a 404 and never a fallback to the head — running something else under a
+pinned run's name produces rows that look exactly like a success.
+
+*The canvas.* `GET /executions/{id}/blocks` answers which authored blocks became
+which steps, from the pinned plan, and `RuntimeBinding::blocks` is the one place
+that knows which specs carry one — so the forward lookup and the reverse map
+cannot disagree. The interesting case is the one a browser would get wrong: the
+compiler folds a source and every transform behind it into a single Flow query,
+so three boxes light from one `step.started`. `followsTheRun` decides whether
+they may light at all, and its three answers are not two — no managed run is
+`undefined`, an edited draft is `false` and is the ordinary state of working
+rather than a warning. Reopening a step now shows **the code that ran**, read by
+the pinned digest through the revision route.
+
+*Editor sessions, without the token.* 16.3 asked for a short-lived session
+carrying permissions, expiry and a signature. The service it would be presented
+to has **no authentication at all** — localhost, development surface, by
+design — so a token it cannot validate would be ceremony rather than a boundary,
+and a boundary drawn where nothing enforces it is worse than an honest absence.
+
+So the session is **resolved server-side and carries no token**. `EditorHost` is
+the port; `POST /executions/{id}/steps/{step}/editor` is the gate, and it asks
+for `Editor` rather than `Viewer` because staging replaces what everybody
+looking at that notebook's live app is shown. aiwatcher resolves the pinned
+binding, reads the rows *this attempt* read from its own object store, and posts
+them to the runtime's new `POST /ml-pipeline/staging` — which stages and runs
+nothing, because running a notebook to fill its editor would execute somebody's
+code on a click and overwrite the output being looked at.
+
+Two limits are stated rather than hidden. The live app serves the notebook's
+**head**, since marimo turns the notebook root into apps and the history is kept
+out of that root on purpose; the session therefore names the revision that ran,
+and the code itself is read beside it by digest. And the editor host is built in
+the `serve` role — the first thing in `execution/` that is — because a person is
+waiting on the request, not claiming an attempt. Without an address and an
+object store it registers nothing and the route answers 501 naming both
+variables, which is the claim filter's rule one layer up.
+
+*Evidence:* thirteen tests in the runtime — the revision store, its refusals,
+the name a revision keeps, idempotent writes, the start-up backfill, a pinned
+run after the head moved, an unpinned run getting the head, a lost revision as a
+404, the revision route, staging that runs nothing, and staging for a notebook
+nobody wrote. Five HTTP tests: the block map including the folded Flow step, and
+the editor's context, its 422 for a step that is not a notebook, its 502 for a
+runtime that refused, and its 501 naming both variables. Twelve panel tests —
+the mapping, the drift rule, the pinned source a reopened step shows, and the
+open-editor button and its refusal. Negative controls: ignoring the pin fails
+two, falling back to the head fails three, saving without keeping history fails
+five, keying the map by step id fails the HTTP test, treating drift as a match
+fails the drift test, reading the head in the step panel fails the historical
+one, and dropping the attempt from the context fails the editor one. `just
+check` and `just ml-pipeline-check` green.
 
 **Exit:** change the notebook head, reopen an old execution and see its exact
 source and data; retry executes the pinned source. Reload retains the context.
 Canvas acceptance covers both a matching revision and an edited draft.
 A digest mismatch refusal protects provenance but does not satisfy this exit.
+*Met. "Reload retains the context" is the editor session above: the context is
+addressed by execution, step and attempt in the URL, and reopening it stages
+that attempt's own rows rather than the newest.*
 
 Whole-execution preview/simulation is excluded from the current delivery scope.
 Bounded step previews and explicit ad-hoc editor tests remain. Reintroduce a
@@ -1985,9 +2087,11 @@ snapshots remain open in work 5 and are required for historical retry.
 **Exit:** closing or refreshing the panel cannot affect execution progress,
 and `data-curation.pipeline.tsx` imports none of `orderOf`, `compileFlow`,
 `runQuery`, `runNotebook`, `publishDataset` for a managed run.
-**Partially met:** managed execution survives the tab; work 4 closes command
-error handling and work 5 closes revision-aware block rendering. Imports used
-only by the explicit ad-hoc path are not a failure of this boundary.
+**Partially met:** managed execution survives the tab and command error
+handling closed with work 4 — a refusal is now the server's own sentence, and
+only a 404 draws as absence. Work 5 closes revision-aware block rendering.
+Imports used only by the explicit ad-hoc path are not a failure of this
+boundary.
 
 ### Phase 8 — PostgreSQL observability read models — **deferred, own gate**
 

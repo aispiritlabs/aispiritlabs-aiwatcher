@@ -176,6 +176,38 @@ impl RuntimeBinding {
             Self::ExternalWorkflow(_) => RuntimeKind::ExternalWorkflow,
         }
     }
+
+    /// The authored canvas blocks this binding came from, in order.
+    ///
+    /// `None` is not "no blocks" — it is *this kind is not drawn on a canvas*,
+    /// and the two answers are used differently: a block id is matched against
+    /// the list when there is one, and against the step's own id when there is
+    /// not, because a plan carrying one of those came from a
+    /// `WorkflowDefinition`, whose editor addresses steps by their own id.
+    ///
+    /// One place that knows which specs carry a block, so the forward lookup
+    /// and the reverse map cannot come to disagree about it.
+    #[must_use]
+    pub fn blocks(&self) -> Option<&[String]> {
+        match self {
+            // Many, and that is the interesting one: the compiler folds a
+            // source and every transform behind it into a single query.
+            Self::FlowPhp(spec) => Some(&spec.blocks),
+            Self::Marimo(spec) => Some(spec.block.as_slice()),
+            Self::PublishDataset(spec) => Some(spec.block.as_slice()),
+            Self::PythonTask(_) | Self::HumanInput(_) | Self::ExternalWorkflow(_) => None,
+        }
+    }
+}
+
+/// One plan step, and the blocks somebody drew that became it.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
+pub struct StepBlocks {
+    pub step_id: String,
+    pub runtime: RuntimeKind,
+    /// The authored block ids, in order. Empty for a step no canvas block
+    /// compiled to, where the step id is the address.
+    pub blocks: Vec<String>,
 }
 
 /// Where the rows come from, kept structured beside the generated script.
@@ -515,17 +547,33 @@ impl ExecutionPlan {
     /// reach it.
     #[must_use]
     pub fn step_for_block(&self, block_id: &str) -> Option<&PlanStep> {
-        self.steps.iter().find(|step| match &step.runtime {
-            RuntimeBinding::FlowPhp(spec) => spec.blocks.iter().any(|id| id == block_id),
-            RuntimeBinding::Marimo(spec) => spec.block.as_deref() == Some(block_id),
-            RuntimeBinding::PublishDataset(spec) => spec.block.as_deref() == Some(block_id),
-            // The three that no canvas block compiles to. A plan carrying one
-            // came from a `WorkflowDefinition`, whose editor addresses steps by
-            // their own id rather than by a block.
-            RuntimeBinding::PythonTask(_)
-            | RuntimeBinding::HumanInput(_)
-            | RuntimeBinding::ExternalWorkflow(_) => step.id == block_id,
+        self.steps.iter().find(|step| match step.runtime.blocks() {
+            Some(blocks) => blocks.iter().any(|id| id == block_id),
+            None => step.id == block_id,
         })
+    }
+
+    /// Which authored blocks each step covers, in the plan's own order.
+    ///
+    /// The inverse of [`Self::step_for_block`], and the answer the canvas needs:
+    /// a run reports `step.started` for a step, and the blocks a person drew
+    /// are what they are looking at. Three source blocks folded into one Flow
+    /// query light together, which is the truth about how they ran.
+    ///
+    /// Derived from the pinned plan and never from a draft — section 19's rule
+    /// for a step's context, at the grain of a whole run. A browser working
+    /// this out would work it out from the canvas on screen, which is the one
+    /// thing that is certainly not what the run compiled.
+    #[must_use]
+    pub fn blocks_by_step(&self) -> Vec<StepBlocks> {
+        self.steps
+            .iter()
+            .map(|step| StepBlocks {
+                step_id: step.id.clone(),
+                runtime: step.runtime.kind(),
+                blocks: step.runtime.blocks().unwrap_or_default().to_vec(),
+            })
+            .collect()
     }
 
     /// The steps that cannot be performed by this process alone.

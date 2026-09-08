@@ -70,6 +70,38 @@ Two rules follow from marimo replacing a **whole cell** rather than one name:
 
 Get the first one wrong and the run says so, in those words.
 
+## The two blocks that ship
+
+`pii_detection` scans a text column for the shapes of personal data, counts what
+it finds and hands on the masked text. It is the one that answers "why a
+notebook at all": nothing in a query language reads prose, and the alternative
+to a regular expression here is a model.
+
+`titanic_features` fills a missing age from its status group's median and sizes
+a family. It used to be the second half of that argument, and is not any more:
+the query surface stopped being a hand-written list, so a window function and
+`->plus(...)` do the same work in one query (`titanic/features`, in the Recipe
+view). It stays as a worked example of the block contract — and as the reminder
+that "the query cannot do this" is worth checking before a chain grows a second
+engine.
+
+Both are loadable from the panel: `Data Curation → Pipeline → Load an example`.
+
+## The head moves; a revision does not
+
+A notebook is one editable file, and a saved pipeline block pins the `sha256` of
+the source it was saved against. Every save also writes that exact source into
+`.revisions/<name>/<sha256>.py`, and a managed run **names its pin** — so
+editing a notebook changes what runs next and changes nothing about what already
+ran. `POST /run` with no `code_revision` gets the head, which is the editor's
+own path and the unsaved code somebody is looking at.
+
+That directory is the only durable thing this service holds.
+`AIWATCHER_ML_PIPELINE_REVISIONS` moves it; deleting it deletes the provenance
+of every execution that pinned one of those sources, which no later run can
+reconstruct. At start-up the service writes whatever heads it finds into the
+history, so an upgrade keeps what is there — and only what is there.
+
 ## What it is not
 
 There is no authentication and no sandbox: it runs notebook code in this process
@@ -84,7 +116,9 @@ expose it on a public interface.
 | `step.py` | one run: import the notebook, `App.run(defs=…)`, read `output` |
 | `runner.py` | the process that happens in — bounded, timed, isolated |
 | `staging.py` | the rows a block reads, on disk, under a name both sides compute |
-| `notebooks.py` | the notebook files: list, read, and the two checks before a write |
-| `service.py` | the five control routes, with marimo's app host under them |
+| `notebooks.py` | the notebook files and their history: list, read, pin, and the two checks before a write |
+| `service.py` | the seven control routes, with marimo's app host under them |
 | `log.py` | console for a person, JSON for a collector |
-| `notebooks/` | the notebooks themselves, `pii_detection.py` among them |
+| `notebooks/` | the notebooks themselves: `pii_detection.py` and `titanic_features.py` |
+| `.revisions/` | one exact source per digest, kept forever — **the one directory here that must survive** |
+| `.data/` | staged rows and outputs; scratch, safe to delete |

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Aiwatcher\Flow\Dsl;
 
+use Aiwatcher\Flow\Statistics\Descriptive;
+
 /**
  * Reads a query into a tree of calls. Builds nothing and runs nothing.
  *
@@ -44,7 +46,7 @@ final class Parser
         return (new self(new Lexer($source)))->query();
     }
 
-    private function query(): Query
+    private function query(bool $nested = false): Query
     {
         $head = $this->expectName();
 
@@ -58,6 +60,13 @@ final class Parser
         $steps = [];
 
         while (!$this->lexer->done()) {
+            // A nested query is an argument, so it ends where the argument
+            // list does: at the comma before the next one or at the bracket
+            // that closes the call it sits in.
+            if ($nested && ($this->lexer->peek()?->is(',') || $this->lexer->peek()?->is(')'))) {
+                break;
+            }
+
             if ($this->lexer->peek()?->is(';')) {
                 $this->lexer->next();
 
@@ -72,8 +81,8 @@ final class Parser
             $this->expect('->');
             $name = $this->expectName();
 
-            if (!Whitelist::isMethod($name->text)) {
-                throw new ParseError($this->explainName($name->text), $name->column, $name->text);
+            if (!Frame::isStep($name->text)) {
+                throw new ParseError($this->explainStep($name->text), $name->column, $name->text);
             }
 
             $this->expect('(');
@@ -128,6 +137,17 @@ final class Parser
 
     private function value(): Node
     {
+        // A whole query, where a value goes: the right-hand side of a join.
+        $ahead = $this->lexer->peek();
+
+        if (
+            $ahead !== null
+            && ($ahead->text === 'data_frame' || $ahead->text === 'df')
+            && $this->lexer->peek(1)?->is('(')
+        ) {
+            return new Nested($this->query(nested: true), $ahead->column);
+        }
+
         $token = $this->lexer->next();
 
         if ($token === null) {
@@ -179,7 +199,7 @@ final class Parser
             return new Bareword($token->text, $token->column);
         }
 
-        if (!Whitelist::isValueFunction($token->text)) {
+        if (!self::names($token->text)) {
             throw new ParseError($this->explainName($token->text), $token->column, $token->text);
         }
 
@@ -206,24 +226,6 @@ final class Parser
         while ($this->lexer->peek()?->is('->')) {
             $arrow = $this->lexer->next();
             $method = $this->expectName();
-
-            if (!\in_array($method->text, Whitelist::REFERENCE_METHODS, true)) {
-                throw new ParseError($this->explainName($method->text), $method->column, $method->text);
-            }
-
-            if (Whitelist::isAggregation($call->name)) {
-                throw new ParseError(
-                    \sprintf(
-                        'Name the reference, not the aggregation: write '
-                        . '%s(ref(\'…\')->%s(…)) rather than %s(…)->%s(…).',
-                        $call->name,
-                        $method->text,
-                        $call->name,
-                        $method->text,
-                    ),
-                    $arrow->column ?? $method->column,
-                );
-            }
 
             $this->expect('(');
             $args = $this->arguments();
@@ -256,16 +258,6 @@ final class Parser
                 continue;
             }
 
-            $wants = Whitelist::comparisonTakesArgument($method->text);
-
-            if ($wants && \count($args) !== 1) {
-                throw new ParseError(\sprintf('->%s() takes one value.', $method->text), $method->column);
-            }
-
-            if (!$wants && $args !== []) {
-                throw new ParseError(\sprintf('->%s() takes no arguments.', $method->text), $method->column);
-            }
-
             $call = new Call($call->name, $call->args, $call->column(), $call->alias, $call->order, [
                 ...$call->chain,
                 new Step($method->text, $args, $method->column),
@@ -275,19 +267,98 @@ final class Parser
         return $call;
     }
 
+    /**
+     * Whether a query may name this at all.
+     *
+     * Three sources and no fourth: everything Flow offers in an admitted
+     * category ([`Registry`], by return type and by refusing any parameter
+     * that accepts a callable), the three sinks that mean "give the rows
+     * back", and the statistics this service implements because Flow ships
+     * none. The first is derived from signatures; the other two are enums that
+     * are their own implementation.
+     */
+    private static function names(string $name): bool
+    {
+        return Registry::has($name) || Sink::tryFrom($name) !== null || Descriptive::tryFrom($name) !== null;
+    }
+
+    /**
+     * Why a name is not a step, which is a different question from the above.
+     *
+     * `write` is a step and not a value; `median` is a value and not a step.
+     * Answering both with "not part of the query language" would be true and
+     * useless — the second half of this message is the one somebody acts on.
+     */
+    private function explainStep(string $name): string
+    {
+        $declined = Frame::declined($name);
+
+        if ($declined !== null) {
+            return \sprintf('->%s() is deliberately not available. %s', $name, $declined);
+        }
+
+        if (self::names($name)) {
+            return \sprintf(
+                '"%s" is a value rather than a step: it goes inside one, e.g. ->withEntry(\'x\', %s(...)).',
+                $name,
+                $name,
+            );
+        }
+
+        $nearest = self::nearest($name);
+
+        return $nearest === null
+            ? \sprintf('"%s" is not a pipeline step.', $name)
+            : \sprintf('"%s" is not a pipeline step. Did you mean "%s"?', $name, $nearest);
+    }
+
     private function explainName(string $name): string
     {
-        $declined = Whitelist::declined($name);
+        $declined = Registry::declined($name);
 
         if ($declined !== null) {
             return \sprintf('"%s" is deliberately not available. %s', $name, $declined);
         }
 
-        $nearest = Whitelist::nearest($name);
+        $nearest = self::nearest($name);
 
         return $nearest === null
             ? \sprintf('"%s" is not part of the query language.', $name)
             : \sprintf('"%s" is not part of the query language. Did you mean "%s"?', $name, $nearest);
+    }
+
+    /**
+     * The nearest thing a query could have said, when there is one close enough.
+     *
+     * Over everything a query may write — the vocabulary, the steps and the
+     * methods a value supports — because somebody who typed `groupby` and
+     * somebody who mistyped `average` have made the same kind of mistake and
+     * neither of them cares which list the right word came from.
+     */
+    private static function nearest(string $name): ?string
+    {
+        $closest = null;
+        $distance = \PHP_INT_MAX;
+
+        $everything = [
+            ...Registry::names(),
+            ...Frame::names(),
+            ...Sink::names(),
+            ...Descriptive::names(),
+        ];
+
+        foreach ($everything as $known) {
+            $candidate = \levenshtein($name, $known);
+
+            if ($candidate >= $distance) {
+                continue;
+            }
+
+            $distance = $candidate;
+            $closest = $known;
+        }
+
+        return $distance <= 3 ? $closest : null;
     }
 
     private function expect(string $text): Token

@@ -1211,6 +1211,28 @@ export type DimensionSummary = {
 };
 
 /**
+ * Where to look, and what is under it.
+ */
+export type EditorSession = {
+    /**
+     * The live app, on this instance's own origin.
+     */
+    app_url: string;
+    /**
+     * The revision that produced these rows. The app shows the head; this is
+     * what to read beside it when the two have moved apart.
+     */
+    code_revision: string;
+    context_id: string;
+    notebook: string;
+    /**
+     * How many rows were staged. `0` is a real answer — a step whose parent
+     * produced nothing.
+     */
+    rows: number;
+};
+
+/**
  * A page of launchable things.
  */
 export type EngineCatalog = {
@@ -4994,6 +5016,31 @@ export const RunAction = {
 export type RunAction = typeof RunAction[keyof typeof RunAction];
 
 /**
+ * Which authored blocks a run's steps cover, and what they were authored as.
+ *
+ * Every field comes from the **pinned plan**. `definition_revision` is what
+ * makes the rest safe to draw with: a canvas holding a different revision is
+ * holding different blocks, and lighting them from these step ids would be
+ * borrowing one run's outcome for another run's drawing.
+ */
+export type RunBlocks = {
+    definition_kind: DefinitionKind;
+    definition_name: string;
+    /**
+     * The authored revision this run compiled from. Compare it with the one
+     * the canvas was loaded at; unequal means drift, and drift means the
+     * states below belong to blocks that are not the ones on screen.
+     */
+    definition_revision: DefinitionRevision;
+    /**
+     * The compiled plan, addressed over the executable fields only. Two
+     * revisions that differ by a dragged block share this.
+     */
+    plan_id: PlanId;
+    steps: Array<StepBlocks>;
+};
+
+/**
  * A run plus what is needed to draw it.
  */
 export type RunDetail = {
@@ -5117,6 +5164,14 @@ export type RunSummary = {
  * `ContextAction::allowed`'s reason one level up: a panel that decided for
  * itself which of cancel, pause and resume apply would be a second copy of
  * `decide`'s preconditions, in another language, drifting from the first.
+ *
+ * **Compatibility.** `GET /api/v1/executions/{execution_id}` and every
+ * command route answered with a bare `RunProjection` before this type
+ * existed; they now answer with this. The projection is unchanged and moved
+ * under `execution`, so a field read as `state` is read as
+ * `execution.state`. Clients generated from `contracts/openapi.json` follow
+ * it by regenerating; a hand-written one does not, and this is the note that
+ * says so.
  */
 export type RunView = {
     /**
@@ -5842,6 +5897,19 @@ export const StateType = {
  * What drives orchestration. Nine, and no more without a reason written down.
  */
 export type StateType = typeof StateType[keyof typeof StateType];
+
+/**
+ * One plan step, and the blocks somebody drew that became it.
+ */
+export type StepBlocks = {
+    /**
+     * The authored block ids, in order. Empty for a step no canvas block
+     * compiled to, where the step id is the address.
+     */
+    blocks: Array<string>;
+    runtime: RuntimeKind;
+    step_id: string;
+};
 
 /**
  * Retrieval, embedding, rerank, guardrail — grouped by kind, then by name.
@@ -8241,6 +8309,32 @@ export type GetExecutionResponses = {
 
 export type GetExecutionResponse = GetExecutionResponses[keyof GetExecutionResponses];
 
+export type RunBlocksData = {
+    body?: never;
+    path: {
+        /**
+         * The id a start returned
+         */
+        execution_id: string;
+    };
+    query?: never;
+    url: '/api/v1/executions/{execution_id}/blocks';
+};
+
+export type RunBlocksErrors = {
+    404: ErrorBody;
+    501: ErrorBody;
+    503: ErrorBody;
+};
+
+export type RunBlocksError = RunBlocksErrors[keyof RunBlocksErrors];
+
+export type RunBlocksResponses = {
+    200: RunBlocks;
+};
+
+export type RunBlocksResponse = RunBlocksResponses[keyof RunBlocksResponses];
+
 export type CancelExecutionData = {
     body: CancelBody;
     path: {
@@ -8394,6 +8488,42 @@ export type StepContextResponses = {
 };
 
 export type StepContextResponse = StepContextResponses[keyof StepContextResponses];
+
+export type OpenEditorData = {
+    body?: never;
+    path: {
+        /**
+         * The id a start returned
+         */
+        execution_id: string;
+        /**
+         * A step of that run's plan
+         */
+        step_id: string;
+    };
+    query?: never;
+    url: '/api/v1/executions/{execution_id}/steps/{step_id}/editor';
+};
+
+export type OpenEditorErrors = {
+    403: ErrorBody;
+    404: ErrorBody;
+    /**
+     * That step is not a notebook
+     */
+    422: ErrorBody;
+    501: ErrorBody;
+    502: ErrorBody;
+    503: ErrorBody;
+};
+
+export type OpenEditorError = OpenEditorErrors[keyof OpenEditorErrors];
+
+export type OpenEditorResponses = {
+    200: EditorSession;
+};
+
+export type OpenEditorResponse = OpenEditorResponses[keyof OpenEditorResponses];
 
 export type ProvideInputData = {
     body: ProvideInputBody;

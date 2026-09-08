@@ -6,9 +6,13 @@ namespace Aiwatcher\Flow\Dsl;
 
 use Aiwatcher\Flow\Dataset\Catalog;
 use Aiwatcher\Flow\Dataset\Dataset;
+use Aiwatcher\Flow\Statistics\Descriptive;
+use Aiwatcher\Flow\Statistics\Statistic;
 use Flow\ETL\DataFrame;
 use Flow\ETL\DataFrame\GroupedDataFrame;
+use Flow\ETL\Function\AggregatingFunction;
 use Flow\ETL\Function\ScalarFunction;
+use Flow\ETL\Function\WindowFunction;
 use Flow\ETL\Row\EntryReference;
 use Flow\ETL\Row\Reference;
 
@@ -28,7 +32,6 @@ use function Flow\ETL\DSL\count;
 use function Flow\ETL\DSL\exists;
 use function Flow\ETL\DSL\first;
 use function Flow\ETL\DSL\hash;
-use function Flow\ETL\DSL\identical;
 use function Flow\ETL\DSL\last;
 use function Flow\ETL\DSL\lit;
 use function Flow\ETL\DSL\lower;
@@ -50,11 +53,17 @@ use function Flow\ETL\DSL\when;
  *
  * ## The one rule
  *
- * Every name that came from the query is resolved through an explicit `match`,
- * never through a variable function call. `$name(...)` after a whitelist check
- * would probably be safe; a `match` is safe without the "probably", and stays
- * safe if the whitelist check is ever refactored badly. This file is the only
- * place a name in the query text becomes a call, so it is worth the verbosity.
+ * A name from the query is only ever resolved against something looked up
+ * first: an arm of a `match` here, or a `ReflectionMethod` that [`Frame`] or
+ * [`Values`] admitted by signature. `$name(...)` — a *global* call by string —
+ * appears nowhere, and that is the difference that matters: the reachable set
+ * is fixed and derived from types, and every member of it reshapes rows rather
+ * than reaching a file, a socket or a callable.
+ *
+ * The arms below are the steps that need something this file knows and a
+ * signature does not — the catalog, the window, which columns exist afterwards.
+ * Everything else Flow's `DataFrame` offers goes through [`Frame`], which is
+ * why `join()` works without anybody adding an arm for it.
  *
  * ## Column checking
  *
@@ -67,6 +76,9 @@ final class PipelineBuilder
 {
     /** @var array<string, true> Columns a reference may name at this point. */
     private array $known = [];
+
+    /** @var array<string, true> What a nested query brought, until the join takes it. */
+    private array $joined = [];
 
     private bool $truncate = true;
 
@@ -378,8 +390,261 @@ final class PipelineBuilder
             // applied. A trailing run() or fetch() is accepted so a query
             // written for the CLI pastes in unchanged, and does nothing here.
             'run', 'fetch' => $frame,
-            default => throw new ParseError(\sprintf('"%s" is not a pipeline step.', $step->name), $step->column),
+            // Everything else Flow offers under the admission rule: join,
+            // crossJoin, offset, until, batchBy, collect, void… Nothing here
+            // had to be written down for those to work, which is the point.
+            default => $this->step($frame, $step),
         };
+    }
+
+    /**
+     * Whether an aggregation was given a window to answer over.
+     *
+     * `WindowFunction::window()` throws when there is no OVER clause, which is
+     * Flow's way of saying "not windowed" and the only way to ask.
+     */
+    private static function isWindowed(mixed $value): bool
+    {
+        if (!$value instanceof WindowFunction) {
+            return false;
+        }
+
+        try {
+            $value->window();
+
+            return true;
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    /**
+     * A step this file has no arm for, applied through the one Flow declares.
+     *
+     * This is where `join`, `crossJoin`, `offset`, `until`, `batchBy`,
+     * `collect` and the rest arrived from — not by being written down, but by
+     * [`Frame`] admitting every `DataFrame` method that returns a frame and
+     * takes nothing [`Admission`] refuses. A step that was refused says which
+     * of those two rules refused it.
+     */
+    private function step(DataFrame $frame, Step $step): DataFrame
+    {
+        $method = Frame::method($step->name);
+
+        if ($method === null) {
+            throw new ParseError(\sprintf('"%s" is not a pipeline step.', $step->name), $step->column);
+        }
+
+        $before = $this->known;
+        $arguments = $this->bind($method, $step->name, $step->args, $step->column);
+        $result = $this->invoke(
+            static fn(): mixed => $method->invokeArgs($frame, $arguments),
+            $step->name,
+            $method,
+            $step->column,
+        );
+
+        if (!$result instanceof DataFrame) {
+            throw new ParseError(\sprintf('->%s() did not produce a frame.', $step->name), $step->column);
+        }
+
+        // A join is the one admitted step that changes which columns exist, so
+        // it is the one this has to say something about. Everything else Flow
+        // admits here reshapes rows rather than columns, and leaving the set
+        // alone keeps "unknown column" answering the question it answers.
+        if (\in_array($step->name, ['join', 'crossJoin'], true)) {
+            $this->known = [...$before, ...$this->joined];
+        }
+
+        $this->joined = [];
+
+        return $result;
+    }
+
+    /**
+     * The arguments of a call, in the order the signature wants them.
+     *
+     * Named arguments are matched by parameter name — `type: 'left'` — which
+     * is how somebody writes a join without remembering that the expression
+     * comes second. A variadic parameter takes everything that is left.
+     *
+     * @param list<Argument> $args
+     *
+     * @return list<mixed>
+     */
+    private function bind(\ReflectionFunctionAbstract $method, string $name, array $args, int $column): array
+    {
+        $parameters = $method->getParameters();
+        $positional = [];
+        $named = [];
+
+        foreach ($args as $index => $argument) {
+            $value = $this->argument($argument->value);
+
+            if ($argument->name === null) {
+                $positional[] = self::coerce($value, $parameters[$index] ?? null);
+
+                continue;
+            }
+
+            $named[$argument->name] = $value;
+        }
+
+        $bound = $positional;
+
+        foreach ($parameters as $index => $parameter) {
+            if (!\array_key_exists($parameter->getName(), $named)) {
+                continue;
+            }
+
+            if ($index < \count($bound)) {
+                throw new ParseError(\sprintf('->%s() was given %s twice.', $name, $parameter->getName()), $column);
+            }
+
+            // Positions between the last positional argument and this one are
+            // filled with their own defaults, which is what PHP would do.
+            while (\count($bound) < $index) {
+                $missing = $parameters[\count($bound)];
+
+                if (!$missing->isOptional()) {
+                    throw new ParseError(
+                        \sprintf(
+                            '->%s() needs %s. It is written %s.',
+                            $name,
+                            $missing->getName(),
+                            Admission::signature($name, $method),
+                        ),
+                        $column,
+                    );
+                }
+
+                $bound[] = $missing->getDefaultValue();
+            }
+
+            $bound[] = self::coerce($named[$parameter->getName()], $parameter);
+            unset($named[$parameter->getName()]);
+        }
+
+        if ($named !== []) {
+            throw new ParseError(
+                \sprintf(
+                    '->%s() has no argument called %s. It is written %s.',
+                    $name,
+                    \implode(', ', \array_keys($named)),
+                    Admission::signature($name, $method),
+                ),
+                $column,
+            );
+        }
+
+        return $bound;
+    }
+
+    /**
+     * A written value, as the parameter it is going into needs it.
+     *
+     * One coercion, and it is here because of a hole the admission rule cannot
+     * close on its own: some of Flow's parameters take a **pure enum** —
+     * `Rounding` on `divide()` is the one that bites — and a query has no way
+     * to write one, because `::` is not part of this language and never will
+     * be. Without this, division throws from inside Brick\Math the moment a
+     * result does not divide exactly, which is most of the time.
+     *
+     * Matched on the case *name*, case-insensitively, so
+     * `->divide(ref('n'), lit(2), 'half_up')` reads like the rest of the
+     * language. Derived rather than listed: it is the parameter's own declared
+     * type that says which enum, so an enum Flow adds later works the same
+     * way.
+     */
+    private static function coerce(mixed $value, ?\ReflectionParameter $parameter): mixed
+    {
+        if (!\is_string($value) || $parameter === null) {
+            return $value;
+        }
+
+        foreach (self::enums($parameter) as $enum) {
+            foreach ($enum->getCases() as $case) {
+                if (\strcasecmp($case->getName(), $value) === 0) {
+                    return $case->getValue();
+                }
+            }
+        }
+
+        return $value;
+    }
+
+    /**
+     * The enum types a parameter accepts, if any.
+     *
+     * @return list<\ReflectionEnum<\UnitEnum>>
+     */
+    private static function enums(\ReflectionParameter $parameter): array
+    {
+        $type = $parameter->getType();
+        $types = $type instanceof \ReflectionUnionType ? $type->getTypes() : [$type];
+        $enums = [];
+
+        foreach ($types as $one) {
+            if (!$one instanceof \ReflectionNamedType || $one->isBuiltin() || !\enum_exists($one->getName())) {
+                continue;
+            }
+
+            $enums[] = new \ReflectionEnum($one->getName());
+        }
+
+        return $enums;
+    }
+
+    /** One argument, which may itself be a whole query. */
+    private function argument(Node $node): mixed
+    {
+        if ($node instanceof Nested) {
+            return $this->nested($node);
+        }
+
+        return $this->node($node);
+    }
+
+    /**
+     * The right-hand side of a join: another query, read the same way.
+     *
+     * A child builder rather than this one, because the nested query has its
+     * own dataset, its own columns and its own steps — and because the two
+     * `known` sets have to stay apart until the join puts them together. It
+     * shares the catalog, the window and the pinned instant, so a join never
+     * reads a different span from the query it is joined into.
+     */
+    private function nested(Nested $node): DataFrame
+    {
+        $builder = new self($this->catalog, $this->effectiveWindowSeconds, $this->asOf);
+        $plan = $builder->build($node->query);
+
+        // What the right side brings, for the column check after the join.
+        $this->joined = $builder->known;
+
+        if (!$plan->deterministic) {
+            $this->deterministic = false;
+        }
+
+        return $plan->frame;
+    }
+
+    /**
+     * Call it, and turn Flow's type errors into the message a person needs.
+     *
+     * A signature is checked by PHP rather than re-implemented here, so a
+     * wrong argument arrives as a `TypeError` naming a parameter nobody wrote.
+     * What is useful instead is how the call is written.
+     *
+     * @param \Closure(): mixed $call
+     */
+    private function invoke(\Closure $call, string $name, \ReflectionFunctionAbstract $method, int $column): mixed
+    {
+        try {
+            return $call();
+        } catch (\TypeError|\ArgumentCountError $error) {
+            throw new ParseError(\sprintf('%s is written %s.', $name, Admission::signature($name, $method)), $column);
+        }
     }
 
     private function withEntry(DataFrame $frame, Step $step): DataFrame
@@ -395,8 +660,28 @@ final class PipelineBuilder
         }
 
         $value = $this->node($step->args[1]->value);
+        $written = $step->args[1]->value;
 
-        if (!$value instanceof ScalarFunction) {
+        // An aggregation answers one row per group, so on its own it cannot
+        // fill a column. With an OVER clause it can — that is exactly what a
+        // window is for — so the refusal is only for the bare one, and it says
+        // both ways out rather than only the one that changes the shape of the
+        // result.
+        if ($value instanceof AggregatingFunction && !self::isWindowed($value)) {
+            throw new ParseError(
+                \sprintf(
+                    '%s() is an aggregation: it answers one row per group. Put it in aggregate() after groupBy(), '
+                    . 'or give it a window — %s(...)->over(window()->partitionBy(ref(\'…\'))) answers it beside every row.',
+                    $written instanceof Call ? $written->name : 'That',
+                    $written instanceof Call ? $written->name : 'it',
+                ),
+                $written->column(),
+            );
+        }
+
+        // `DataFrame::withEntry` takes either, and the second one is what a
+        // windowed statistic is.
+        if (!$value instanceof ScalarFunction && !$value instanceof WindowFunction) {
             throw new ParseError('withEntry() needs a value built from ref(), lit() or a function.', $step->column);
         }
 
@@ -444,14 +729,31 @@ final class PipelineBuilder
         foreach ($step->args as $argument) {
             $call = $argument->value;
 
-            if (!$call instanceof Call || !Whitelist::isAggregation($call->name)) {
+            if (!$call instanceof Call) {
                 throw new ParseError(
-                    \sprintf('aggregate() takes aggregations: %s.', \implode(', ', Whitelist::AGGREGATIONS)),
+                    'aggregate() takes aggregations, e.g. count(ref(\'run_id\')->as(\'runs\')).',
                     $argument->value->column(),
                 );
             }
 
-            $aggregations[] = $this->node($call);
+            $aggregation = $this->node($call);
+
+            // What may sit here is decided by what the name turned out to
+            // build, not by a list of names kept beside the ones that build
+            // them. `count()` is an aggregation because `Count` implements
+            // Flow's interface for one; `lower()` is not, and the message says
+            // what it is instead rather than reciting what it is not.
+            if (!$aggregation instanceof AggregatingFunction) {
+                throw new ParseError(
+                    \sprintf(
+                        '%s() is not an aggregation: it answers a value per row, so it belongs in withEntry() or filter() rather than in aggregate().',
+                        $call->name,
+                    ),
+                    $call->column(),
+                );
+            }
+
+            $aggregations[] = $aggregation;
             $produced[] = $this->aggregateOutputName($call);
         }
 
@@ -494,9 +796,9 @@ final class PipelineBuilder
         foreach ($step->args as $argument) {
             $sink = $argument->value;
 
-            if (!$sink instanceof Call || !Whitelist::isSink($sink->name)) {
+            if (!$sink instanceof Call || Sink::tryFrom($sink->name) === null) {
                 throw new ParseError(
-                    \sprintf('write() takes one of: %s.', \implode(', ', Whitelist::SINKS)),
+                    \sprintf('write() takes one of: %s.', \implode(', ', Sink::names())),
                     $argument->value->column(),
                 );
             }
@@ -619,6 +921,17 @@ final class PipelineBuilder
             'last' => last(...$this->fns($node, $args)),
             'collect' => collect(...$this->fns($node, $args)),
             'collect_unique' => collect_unique(...$this->fns($node, $args)),
+            // Ours rather than Flow's, and constructed here like everything
+            // else: the name selects a branch, never a callable (ADR_0008).
+            'median', 'stddev', 'variance' => new Statistic(
+                $this->statisticOver($node, $args, 1),
+                Descriptive::from($node->name),
+            ),
+            'percentile' => new Statistic(
+                $this->statisticOver($node, $args, 2),
+                Descriptive::Percentile,
+                $this->percentage($node, $args),
+            ),
             'array_get' => array_get($args[0], (string) $args[1]),
             'array_expand' => array_expand($args[0]),
             'concat' => concat(...$args),
@@ -636,7 +949,6 @@ final class PipelineBuilder
             'regex_match' => regex_match($args[0], $args[1]),
             'split' => split($args[0], (string) $args[1]),
             'hash' => hash($args[0]),
-            'identical' => identical($args[0], $args[1]),
             'optional' => optional($args[0]),
             'all' => all(...$this->scalarFns($node, $args)),
             'any' => any(...$this->scalarFns($node, $args)),
@@ -649,57 +961,117 @@ final class PipelineBuilder
             default => $this->viaRegistry($node, $args),
         };
 
+        // The first thing everyone gets wrong: Flow puts the alias on the
+        // *reference*, so `count(ref('run_id'))->as('runs')` silently names
+        // nothing. Answered here rather than in the parser because what makes
+        // it wrong is what the name built, and only this side knows that.
+        // `over()` is the legitimate thing to chain onto an aggregation — it is
+        // how a group's answer is put beside the rows — so this is only about
+        // the alias and the ordering, which belong on the reference.
+        if ($value instanceof AggregatingFunction) {
+            $chained = $node->alias !== null ? 'as' : $node->order;
+
+            if ($chained !== null) {
+                throw new ParseError(
+                    \sprintf(
+                        'Name the reference, not the aggregation: write %s(ref(\'…\')->%s(…)) rather than %s(…)->%s(…).',
+                        $node->name,
+                        $chained,
+                        $node->name,
+                        $chained,
+                    ),
+                    $node->column(),
+                );
+            }
+        }
+
         // `ref`/`col` already applied their own chain above; applying it twice
         // would compare the comparison.
-        return \in_array($node->name, ['ref', 'col'], true) ? $value : $this->compare($value, $node);
+        return \in_array($node->name, ['ref', 'col'], true) ? $value : $this->methods($value, $node);
     }
 
     /**
-     * Apply `->equals(...)`, `->greaterThan(...)` and friends.
+     * Apply `->plus(...)`, `->same(...)`, `->over(...)` — whatever the value has.
      *
-     * Same rule as everywhere else: the method name selects a branch, never a
-     * callable. Flow puts these on the value because the standalone `equal()`
-     * compares two columns — comparing a column to a literal is the chained
-     * form, and it is the one people actually want.
+     * Flow puts an enormous fluent API on a reference and on every scalar
+     * function: arithmetic, string work, dates, regular expressions, and
+     * `over()` on an aggregation, which is how a group's answer is put back
+     * beside the rows it was taken over. [`Values`] admits them the way
+     * [`Registry`] admits functions — by signature, on the class of the object
+     * actually in hand — so `ref('sib_sp')->plus(ref('parch'))` works and
+     * `->equals(...)` is still refused with its reason.
+     *
+     * The list this replaced offered seventeen comparisons. It is the reason
+     * this query language was said to have no arithmetic, which was never true
+     * of the engine.
      */
-    private function compare(mixed $value, Call $node): mixed
+    private function methods(mixed $value, Call $node): mixed
     {
         foreach ($node->chain as $method) {
-            if (!$value instanceof ScalarFunction) {
+            if (!\is_object($value)) {
                 throw new ParseError(
                     \sprintf('->%s(...) needs a value, e.g. ref(\'…\')->%s(…).', $method->name, $method->name),
                     $method->column,
                 );
             }
 
-            $argument = isset($method->args[0]) ? $this->node($method->args[0]->value) : null;
+            $declined = Registry::declined($method->name);
 
-            $value = match ($method->name) {
-                'equals' => $value->equals($argument),
-                'notEquals' => $value->notEquals($argument),
-                'same' => $value->same($argument),
-                'notSame' => $value->notSame($argument),
-                'greaterThan' => $value->greaterThan($argument),
-                'greaterThanEqual' => $value->greaterThanEqual($argument),
-                'lessThan' => $value->lessThan($argument),
-                'lessThanEqual' => $value->lessThanEqual($argument),
-                'isIn' => $value->isIn($this->haystack($argument, $method)),
-                'contains' => $value->contains($this->text($argument, $method)),
-                'startsWith' => $value->startsWith($this->text($argument, $method)),
-                'endsWith' => $value->endsWith($this->text($argument, $method)),
-                'isNull' => $value->isNull(),
-                'isNotNull' => $value->isNotNull(),
-                'isTrue' => $value->isTrue(),
-                'isFalse' => $value->isFalse(),
-                'isEmpty' => $value->isEmpty(),
-                default => throw new ParseError(
-                    \sprintf('"%s" is not something a value supports.', $method->name),
+            if ($declined !== null) {
+                throw new ParseError(
+                    \sprintf('->%s(...) is deliberately not available. %s', $method->name, $declined),
                     $method->column,
-                ),
-            };
+                );
+            }
+
+            $reflected = Values::method($value, $method->name);
+
+            if ($reflected === null) {
+                throw new ParseError($this->explainMethod($value, $method->name), $method->column);
+            }
+
+            $target = $value;
+            $arguments = $this->bind($reflected, $method->name, $method->args, $method->column);
+            $value = $this->invoke(
+                static fn(): mixed => $reflected->invokeArgs($target, $arguments),
+                $method->name,
+                $reflected,
+                $method->column,
+            );
         }
 
         return $value;
+    }
+
+    /**
+     * Why this value does not support that method.
+     *
+     * Named against the object in hand rather than against a list, because the
+     * answer depends on it: an aggregation supports `over` and not `plus`, a
+     * window supports `partitionBy` and neither.
+     */
+    private function explainMethod(object $value, string $name): string
+    {
+        $closest = null;
+        $distance = \PHP_INT_MAX;
+
+        foreach (Values::names($value) as $known) {
+            $candidate = \levenshtein($name, $known);
+
+            if ($candidate >= $distance) {
+                continue;
+            }
+
+            $distance = $candidate;
+            $closest = $known;
+        }
+
+        $what = \strrchr($value::class, '\\');
+        $what = $what === false ? $value::class : \substr($what, 1);
+
+        return $distance <= 3 && $closest !== null
+            ? \sprintf('->%s(...) is not something a %s supports. Did you mean "%s"?', $name, $what, $closest)
+            : \sprintf('->%s(...) is not something a %s supports.', $name, $what);
     }
 
     private function text(mixed $value, Step $method): ScalarFunction|string
@@ -722,6 +1094,65 @@ final class PipelineBuilder
             \sprintf('->%s() takes a column holding a list, e.g. ref(\'agents\').', $method->name),
             $method->column,
         );
+    }
+
+    /**
+     * The one column a [`Statistic`] is taken over.
+     *
+     * A statistic reads exactly one column, so an extra argument is a mistake
+     * worth naming rather than ignoring: `median(ref('age'), 90)` is somebody
+     * reaching for `percentile`, and silently dropping the 90 would answer a
+     * different question with no sign that it had.
+     *
+     * @param list<mixed> $args
+     */
+    private function statisticOver(Call $node, array $args, int $arity): Reference
+    {
+        if (\count($args) !== $arity) {
+            throw new ParseError(
+                $arity === 1
+                    ? \sprintf('%s() takes one column, written as ref(\'name\').', $node->name)
+                    : \sprintf(
+                        '%s() takes a column and a percentage, e.g. %s(ref(\'age\'), 90).',
+                        $node->name,
+                        $node->name,
+                    ),
+                $node->column(),
+            );
+        }
+
+        return $this->fns($node, \array_slice($args, 0, 1))[0];
+    }
+
+    /**
+     * Which percentage `percentile()` was asked for.
+     *
+     * Bounded here rather than in the statistic, because this is the one place
+     * that knows where the number came from — a query somebody typed, at a
+     * column the message can point at.
+     *
+     * @param list<mixed> $args
+     */
+    private function percentage(Call $node, array $args): float
+    {
+        /** @var mixed $value */
+        $value = $args[1] ?? null;
+
+        if (!\is_int($value) && !\is_float($value)) {
+            throw new ParseError(
+                'percentile() takes a percentage as its second argument, e.g. percentile(ref(\'age\'), 90).',
+                $node->column(),
+            );
+        }
+
+        if ($value < 0 || $value > 100) {
+            throw new ParseError(
+                \sprintf('A percentile is between 0 and 100; %s is not.', (string) $value),
+                $node->column(),
+            );
+        }
+
+        return (float) $value;
     }
 
     /**
@@ -798,7 +1229,7 @@ final class PipelineBuilder
     {
         $reference = $this->reference($node);
 
-        return $node->chain === [] ? $reference : $this->compare($reference, $node);
+        return $node->chain === [] ? $reference : $this->methods($reference, $node);
     }
 
     /**

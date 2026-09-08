@@ -129,6 +129,121 @@ final class PipelineBuilderTest extends TestCase
         self::assertSame('researcher', $rows[0]['agent']);
     }
 
+    public function test_an_alias_on_an_aggregation_names_the_correct_form(): void
+    {
+        // Flow puts the alias on the reference, so this names nothing and the
+        // column comes out as `run_id_count`. Answered by the builder rather
+        // than the parser: what makes it wrong is that `count()` built an
+        // aggregation, and a name alone does not say that.
+        try {
+            $this->build("data_frame()->read(default)->aggregate(count(ref('run_id'))->as('runs'))");
+            self::fail('expected a parse error');
+        } catch (ParseError $error) {
+            self::assertStringContainsString("count(ref('…')->as(", $error->getMessage());
+        }
+    }
+
+    public function test_a_value_function_inside_aggregate_is_refused_with_what_it_is_instead(): void
+    {
+        // Nothing lists which names are aggregations any more: `lower()` is
+        // refused because `Lower` is not an `AggregatingFunction`, and the
+        // message says where it does belong rather than reciting a list.
+        try {
+            $this->build("data_frame()->read(default)->groupBy(ref('status'))->aggregate(lower(ref('status')))");
+            self::fail('expected a parse error');
+        } catch (ParseError $error) {
+            self::assertStringContainsString('is not an aggregation', $error->getMessage());
+            self::assertStringContainsString('withEntry()', $error->getMessage());
+        }
+    }
+
+    public function test_an_aggregation_flow_ships_that_nobody_listed_still_works(): void
+    {
+        // The point of deleting the whitelist: admission is derived, so an
+        // aggregation this repository never wrote down is usable the day Flow
+        // ships it. `string_agg` was on the old list; `max` was too — this one
+        // is here to prove the mechanism rather than the name.
+        $rows = $this->build(
+            "data_frame()->read(default)->groupBy(ref('workflow'))->aggregate(max(ref('duration_ms')->as('slowest')))",
+        );
+
+        self::assertSame(2000, $rows[0]['slowest']);
+    }
+
+    public function test_a_group_statistic_can_be_answered_beside_every_row(): void
+    {
+        // What the old list made impossible and called a design: an
+        // aggregation with an OVER clause answers per row, so a value worked
+        // out over the group lands beside the rows it was taken over. This is
+        // the imputation everybody writes on their first afternoon with a
+        // dataset, and it needs no second engine.
+        $rows = $this->build(
+            "data_frame()->read(default)
+                ->withEntry('agent', array_expand(ref('agents')))
+                ->withEntry('typical', average(ref('input_tokens'))->over(window()->partitionBy(ref('agent'))))
+                ->select(ref('run_id'), ref('agent'), ref('input_tokens'), ref('typical'))",
+        );
+
+        self::assertNotSame([], $rows);
+
+        foreach ($rows as $row) {
+            self::assertNotNull($row['typical'], 'every row carries its own group\'s answer');
+        }
+    }
+
+    public function test_a_join_reads_a_second_query_through_the_same_catalog(): void
+    {
+        // The right-hand side is a whole query rather than a table name,
+        // because joining what another query worked out is the case that
+        // matters. It shares the catalog and the window, so a join cannot
+        // quietly read a different span from the query it is joined into.
+        $rows = $this->build("data_frame()->read(default)
+                ->withEntry('agent', array_expand(ref('agents')))
+                ->join(
+                    data_frame()->read(default)
+                        ->withEntry('agent', array_expand(ref('agents')))
+                        ->groupBy(ref('agent'))
+                        ->aggregate(count(ref('run_id')->as('runs_by_agent'))),
+                    on: join_on(identical(ref('agent'), ref('agent'))),
+                    type: 'left'
+                )
+                ->select(ref('run_id'), ref('agent'), ref('runs_by_agent'))");
+
+        $byAgent = [];
+
+        foreach ($rows as $row) {
+            $byAgent[$row['agent']] = $row['runs_by_agent'];
+        }
+
+        // researcher is in all three runs, writer in one — the same answer the
+        // grouped query gives, now beside each run.
+        self::assertSame(['researcher' => 3, 'writer' => 1], $byAgent);
+    }
+
+    public function test_arithmetic_is_something_this_language_has(): void
+    {
+        // It always was — on Flow's reference, which the old list did not
+        // offer. Two columns and a one, which is a family size in every
+        // tabular corpus anybody starts with.
+        $rows = $this->build(
+            "data_frame()->read(default)
+                ->withEntry('calls', ref('llm_calls')->plus(ref('tool_calls')))
+                ->select(ref('run_id'), ref('llm_calls'), ref('tool_calls'), ref('calls'))",
+        );
+
+        self::assertSame(3, $rows[0]['calls'], '2 llm calls and 1 tool call');
+    }
+
+    public function test_a_step_flow_offers_that_nobody_listed_still_works(): void
+    {
+        // `offset` was never in the hand-written list, for no reason anybody
+        // could have defended. It works now because `Frame` derives the steps
+        // from `DataFrame` rather than repeating them.
+        $rows = $this->build("data_frame()->read(default)->offset(2)->select(ref('run_id'))");
+
+        self::assertSame([['run_id' => 'run-3']], $rows);
+    }
+
     public function test_a_sink_outside_write_is_refused(): void
     {
         $this->expectExceptionMessage('to_output() belongs inside write()');

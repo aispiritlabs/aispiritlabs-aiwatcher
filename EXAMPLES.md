@@ -225,6 +225,134 @@ without reading data, simulate a small bounded result, execute it, then publish
 that exact output. Saved recipes preserve the transformation rather than only
 its result.
 
+### The examples, and the seam they show
+
+Three chains ship in `Data Curation → Pipeline`, and five single-script
+curations in the Recipe view beside it — four of them over this corpus. They read public corpora and run as they
+stand — loading one and pressing Preview reaches Hugging Face, the Flow service
+and, where the chain has a notebook, the notebook runtime.
+
+![The Titanic chain, previewed through all three engines](docs/screenshots/curation-titanic-pipeline.png)
+
+Every screenshot below is a real preview: 25 rows out of Hugging Face, one Flow
+query, a marimo block and a view. The two boxes reading *run as one Flow query*
+are the source and the transform lighting up together, because that is what they
+are — the compiler folds every transform behind a source into a single query,
+and three boxes finishing at the same millisecond is honest rather than a
+rounding.
+
+The Titanic pair are the Kaggle competition's training split, mirrored as
+`phihung/titanic`: 891 passengers and the twelve columns everybody's first
+notebook starts from. Flow does what a row can answer on its own —
+
+```php
+->withEntry('sex_code', when(ref('sex')->same(lit('female')), lit(1), lit(0)))
+->withEntry('title', regex_replace(lit('/^[^,]*,\s*([^.]+)\..*$/'), lit('$1'), ref('name')))
+->withEntry('status', lit('rare'))
+->withEntry('status', when(ref('title')->same(lit('Mr')), lit('mr'), ref('status')))
+->withEntry('status', when(any(ref('title')->same(lit('Mrs')), ref('title')->same(lit('Mme'))), lit('mrs'), ref('status')))
+->withEntry('outcome', when(ref('survived')->same(lit(1)), lit('survived'), lit('died')))
+```
+
+— recoding sex, pulling the title out of the name and collapsing `Mlle.` and
+`Mme.` into the buckets they belong in, one `when` at a time so that every line
+stays a line. `curation/titanic-survival` stops there and asks the table a
+question instead, with `groupBy`, `average` and `median`: three blocks, no
+notebook, and the one example that still runs end to end with the notebook
+runtime switched off.
+
+![Survival rate by status and class, as one query](docs/screenshots/curation-titanic-survival.png)
+
+Twelve groups out of a hundred passengers, sorted by rate. The `mrs` and `miss`
+rows include the `Mme.` and `Mlle.` the recode folded in, which is the whole
+reason to recode a title before grouping by it.
+
+The rest of that Kaggle notebook — `family_size`, and a missing age filled from
+the median age of the passengers sharing its status — used to be the reason the
+chain had a marimo block after the query. It is not any more, and the correction
+is worth reading as one: the query language had no arithmetic and no way to put
+a group's answer beside a row because its vocabulary was a hand-written list,
+not because Flow lacked either. Since that list was deleted
+([ADR_0008](docs/ADR/ADR_0008_FLOW_QUERY_SURFACE.md), amended), the whole thing
+is one query — `titanic/features` in the Recipe view:
+
+```php
+->withEntry('age_imputed', ref('age')->isNull())
+->withEntry('typical_age', median(ref('age'))->over(window()->partitionBy(ref('status'))))
+->withEntry('age_filled', coalesce(ref('age'), ref('typical_age')))
+->withEntry('family_size', ref('sib_sp')->plus(ref('parch'))->plus(lit(1)))
+```
+
+![A missing age filled from its status group, in the query](docs/screenshots/curation-titanic-query.png)
+
+`Moran, Mr. James` and `Williams, Mr. Charles Eugene` are the two rows to read:
+the corpus records no age for either, `age` still says so, and `age_filled`
+carries 28 — the median age of the passengers whose title is also `Mr.` —
+beside an `age_imputed` that says where the number came from. A dataset in which
+a measurement and a guess are the same column is one nothing downstream can take
+apart again.
+
+`curation/titanic-features` keeps its notebook block, and what it demonstrates
+now is the block itself rather than a limit of the query. The line
+[ADR_0024](docs/ADR/ADR_0024_CURATION_BLOCKS.md) draws is still real and it is
+narrower than this repository first claimed: a notebook is for what the query
+language has no vocabulary for at all — reading prose, running a model — which
+is what `pii_detection` does and what arithmetic never was.
+
+The Recipe view's third Titanic script asks the other half of the question,
+and it needs four names Flow does not have:
+
+```php
+->groupBy(ref('pclass'))
+->aggregate(
+    average(ref('age')->as('mean_age')),
+    median(ref('age')),
+    stddev(ref('age')->as('age_spread')),
+    percentile(ref('fare')->as('fare_p90'), 90)
+)
+```
+
+Flow ships `count`, `sum`, `average`, `min`, `max` and the collectors — "how
+many" and "how much", and nothing about how a column is *spread*. `median`,
+`stddev`, `variance` and `percentile` are `services/flow`'s own, over
+[hi-folks/statistics](https://github.com/Hi-Folks/statistics). What admits them
+is the enum that also implements them, rather than the registry that derives
+Flow's own vocabulary from its signatures — these four are this repository's —
+and the rule that a name from a query selects a `match` arm and never becomes a
+callable is unchanged
+([ADR_0008](docs/ADR/ADR_0008_FLOW_QUERY_SURFACE.md), amended twice: once for
+these, once to delete the hand-written whitelist that had stopped deciding
+anything). A mean fare and
+a median fare are different numbers, and a dataset version that published only
+the first leaves its reader unable to tell which one they got.
+
+![Median, deviation and a 90th percentile per class](docs/screenshots/curation-titanic-spread.png)
+
+Three classes, and the pair of numbers worth having side by side: first class
+has a mean age of 40.6 against a median of 39, and a median fare of 61 — where
+third class paid 8 and is seventeen years younger, with the tightest age spread
+of the three.
+
+Two behaviours are deliberate. A group with fewer values than a statistic is
+defined over answers **null**, never zero — a group of one passenger has no
+sample deviation, and saying `0` would be publishing a claim nobody made.
+And a statistic is refused inside `withEntry()`, by name, saying where it
+belongs: an aggregation answers one row per group, and filling a missing age
+from its group's median needs that answer joined back onto the rows, which this
+language cannot do. That refusal is the shortest explanation of why the chain
+below has a notebook in it.
+
+The notebook block keeps one rule worth repeating: an imputed age never
+overwrites a reported one. `age_filled` is what a model would read, `age_imputed` says
+whether it was invented, and the original column still holds its null. A
+pipeline that filled the column in place would publish a dataset in which a
+measurement and a guess are the same thing.
+
+Two things the examples do not do. They read the first 100 rows, because the
+hub rows route caps a read there. And they endorse nothing: the mirror declares
+`license:other`, `usage` stays `unclear`, and that rule does not bend for an
+example ([ADR_0019](docs/ADR/ADR_0019_DATASET_HUB_DISCOVERY.md)).
+
 ![Searching a configured dataset hub](docs/screenshots/dataset-hub.png)
 
 Discover searches Hugging Face, and Kaggle when credentials are configured.

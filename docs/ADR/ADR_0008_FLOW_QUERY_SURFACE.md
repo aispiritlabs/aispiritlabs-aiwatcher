@@ -166,3 +166,162 @@ probably wrong, not the engine. And if a later Flow fixes the null handling in
 its loose comparisons, the declined list should shrink; the test named
 `test_the_loose_comparisons_are_declined_with_the_reason` is where that will
 show up.
+
+
+## Amendment, 2026-09-08: four statistics that are not Flow's
+
+Flow's aggregations are `count`, `sum`, `average`, `min`, `max`, `first`,
+`last` and the two collectors. That is "how many" and "how much", and nothing
+that says how a column is *distributed* — no median, no quantile, no deviation.
+Half of what anybody opens a curation to find out is missing, and the gap shows
+up the moment a query is pointed at something other than run summaries: a
+median fare and a mean fare on the Titanic corpus are different numbers, and a
+dataset version that published the mean is a dataset version whose reader
+cannot tell which one it got.
+
+**Decision: `median`, `stddev`, `variance` and `percentile` join the whitelist,
+implemented here over [hi-folks/statistics][lib] (MIT, no dependencies of its
+own, the Python `statistics` module's definitions, PHPStan level 8).** They are
+`Statistics\Statistic`, an `AggregatingFunction` Flow runs like its own, and
+`Dsl\PipelineBuilder` constructs them in the same explicit `match` every other
+name goes through. Writing the quantile interpolation by hand was the
+alternative and is how you get a wrong number that looks right.
+
+Three things this deliberately does not do.
+
+**It does not widen [`Dsl\Registry`].** That class admits Flow's *own*
+namespace by return type, which is a rule about a vocabulary somebody else
+maintains and adds to. These four are ours and are listed by name in
+`Whitelist::AGGREGATIONS`, exactly as `aggregate()`'s other arms are. The
+boundary is untouched: a name from a query still selects a branch and never
+becomes a callable.
+
+**It does not answer zero for a group it has no answer for.** Every one of
+these is undefined below some number of values — one for a median, two for the
+rest — and below it the column is `null`. Flow's own `average()` answers 0 for
+an empty group; that is its choice and the wrong one to copy here, because a
+curation is read months later by somebody who was not there when it ran.
+
+**It does not make a statistic available per row.** An aggregation answers one
+row per group, and there is no join in this language to put that answer back
+beside the rows it was taken over. `withEntry('typical_age', median(ref('age')))`
+is refused *by name*, saying where a statistic belongs — because the mistake it
+invites is the useful one to answer: filling a missing age from its group's
+median is exactly what the `titanic_features` notebook block does after the
+query, and why ADR_0024's chain has more than one engine in it.
+
+[lib]: https://github.com/Hi-Folks/statistics
+
+
+## Amendment, 2026-09-08 (second): the whitelist is deleted; admission is derived
+
+The decision above says "a whitelist decides what those tokens may be", and by
+the time the statistics landed that sentence had stopped being true. `Registry`
+— added earlier to stop the vocabulary being an enumeration — derives admission
+from Flow's own signatures: an admitted return-type namespace, and no parameter
+that accepts a callable. `Whitelist::isValueFunction` consulted **both**, with
+`||`, so the effective vocabulary had been `Registry`'s for as long as it had
+existed. Of the 24 names the two lists still held, 23 were already admitted by
+signature and one — `identical`, which returns a *join* comparison — could not
+be used in any position this surface has.
+
+A list that decides nothing and reads, to whoever opens the file, like the
+boundary is worse than no list. `Dsl\Whitelist` is deleted.
+
+**What decides what a query may name.** `Registry`, alone, for everything Flow
+offers; plus two enums for the two vocabularies that are not Flow's and are
+their own implementation — `Dsl\Sink` (the three loaders that mean "give the
+rows back") and `Statistics\Descriptive` (`median`, `stddev`, `variance`,
+`percentile`). A case is a `match` arm somebody wrote, so neither can grow by
+accident.
+
+**What decides where a name may appear.** The type the name turned out to
+build, not a second list of names. `aggregate()` takes what is an
+`AggregatingFunction`; `withEntry()` takes a `ScalarFunction` and refuses an
+aggregation *by saying what it is*; `write()` takes a `Sink`. The old
+`aggregate() takes aggregations: count, sum, …` recited a list; the message now
+says `lower() is not an aggregation: it answers a value per row, so it belongs
+in withEntry() or filter()`.
+
+**What is still a written list, and why.** The pipeline steps and the methods
+chainable on a value (`Parser::STEPS`, `Parser::REFERENCE_METHODS`). Neither is
+a vocabulary question: a step is a `DataFrame` method this service implements
+with a `match` arm, and a chained method is the one place a name from a query
+would have to reach a method — which is exactly the dispatch ADR_0008 refuses.
+That is also what keeps `->over(window()->partitionBy(…))` closed: Flow has
+window functions, and they are not reachable from here.
+
+**Nothing widened.** The admitted set lost `identical` and gained nothing;
+`to_csv`, `from_array`, `files`, `call` and `to_callable` are refused by
+`Registry` exactly as before, and `ParserRejectionTest` now proves each
+category by name rather than by their absence from a list. What changed is that
+there is one place to read to find out what a query may say.
+
+
+## Amendment, 2026-09-08 (third): three surfaces, all derived; join and windows open
+
+Deleting the whitelist left three questions being answered three ways: what a
+query may *name* was derived (`Registry`), but which *steps* a pipeline could
+take and which *methods* a value supported were still two hand-written lists —
+fourteen steps and twenty methods. Those two lists were the reason this query
+language was described, in this repository and in its panel, as having no
+arithmetic, no join and no window functions. None of that was true of Flow.
+`DataFrame` has 53 public methods including `join`, `crossJoin` and `offset`;
+an `EntryReference` has over a hundred and thirty fluent methods including
+`plus`, `minus`, `divide`, `regexReplace` and `dateFormat`; an aggregation has
+`over()`. Every one of them was reachable in the engine and unreachable here
+because nobody had typed its name.
+
+**Decision: the same signature rule decides all three surfaces.**
+[`Admission`] holds it once — a call is refused when any parameter accepts a
+**callable**, a **Loader**, an **Extractor**, a **Path**, a **Filesystem**, a
+**Transformer**, a **SaveMode** or Flow's own evaluation machinery — and three
+thin classes apply it: `Registry` for functions (return type in Flow's value
+namespaces), [`Frame`] for steps (returns a frame), [`Values`] for methods (on
+the class of the object the query actually built). On Flow 0.43 that is 108
+functions, 25 steps and per-value method sets, all derived.
+
+**Dispatch is now a `ReflectionMethod` looked up in one of those maps, invoked
+against the frame or the value in hand.** That is a real change from "an
+explicit `match` is the only place a name becomes a call", and the reasoning is
+that the property which mattered was never the `match` — it was the *reachable
+set*. A `match` gave that set by hand and got it wrong in the safe direction
+for a year; the rule gives it by type and keeps giving it when Flow adds a
+method. What is still true, and is the sentence to keep: **a global call by
+string appears nowhere**, and every name is resolved against something looked
+up first.
+
+**What this opens.** `join(<a whole query>, on: join_on(identical(…)), type:
+'left')` — the right-hand side is a nested query read through the same catalog
+and the same window, because joining what another query worked out is the case
+that matters. `median(ref('age'))->over(window()->partitionBy(ref('status')))`
+— a group's answer beside every row. `ref('sib_sp')->plus(ref('parch'))` —
+arithmetic. Together they made the Titanic chain's notebook block unnecessary:
+the whole feature engineering is one query, and `ADR_0024`'s seam is where it
+always should have been, at "the query language has no vocabulary for this at
+all" rather than at "our list is short".
+
+**What this does not open.** `write` and `load` take a `Loader`; `map` and
+`forEach` take a `callable`; `transform` takes a `Transformer`;
+`filterPartitions` takes a `Path\Filter`; `saveMode` takes a `SaveMode`. All
+refused by the rule rather than by their absence, which is what
+`ParserRejectionTest` now proves one category at a time. `cache(?string $id)`
+is the one refusal a signature cannot make — a nullable string is not a path as
+far as a type is concerned, and it writes files under a name the query chose —
+so it is declined by name with the reason, the way `equals` is.
+
+**One coercion, and only one.** Some of Flow's parameters take a pure enum;
+`Rounding` on `divide()` is the one that bites, and without a rounding mode a
+division throws from inside Brick\Math the moment it is not exact. `::` is not
+part of this language and never will be, so a written string is matched against
+the enum's case names — `->divide(ref('n'), lit(2), 'half_up')` — from the
+parameter's own declared type.
+
+**What would make this wrong.** If a Flow release adds a method that reaches
+outside the process through a parameter type none of the refusals name, the
+rule admits it silently. That is the cost of deriving, and the mitigation is
+that the refusals are about *categories* rather than classes: a new sink still
+takes a `Loader`, a new source still takes an `Extractor`. The test that would
+catch it is `stepsTheAdmissionRuleRefuses`, which is a list of things that must
+keep failing — and, unlike the whitelist, it is cheap to extend and costs
+nothing when it is right.

@@ -87,8 +87,10 @@ run "openapi contract is current" just openapi-check
 # ── Panel ────────────────────────────────────────────────────────────────────
 if [[ -d apps/panel/node_modules ]]; then
   run "panel build + typecheck" bash -c "cd apps/panel && npm run build"
+  run "panel tests" bash -c "cd apps/panel && npm run test"
 else
   skip "panel build" "run 'just install' first"
+  skip "panel tests" "run 'just install' first"
 fi
 
 if [[ -d sdk/typescript/node_modules ]]; then

@@ -8,22 +8,31 @@
 //! artifact of its own.
 //!
 //! ```text
-//!   execute   GET  {runtime}/ml-pipeline/notebooks/{name}   the code that is there
-//!             POST {runtime}/ml-pipeline/run  {notebook, rows, params, context}
+//!   execute   GET  {runtime}/ml-pipeline/notebooks/{name}/revisions/{sha256}
+//!             POST {runtime}/ml-pipeline/run  {notebook, code_revision, rows, …}
 //!             └─► rows ─► object store ─► ArtifactRef ─► receipt
 //!   lookup    the receipt, and only the receipt — see below
 //! ```
 //!
-//! ## The pinned revision is checked twice, and both are the same rule
+//! ## The run resolves the pin; it does not ask the head to still match it
 //!
 //! A managed run pins the code it ran, which is why the compiler refuses a
-//! notebook block with no revision. So this asks the runtime what source it
-//! holds *before* anything executes, and compares what actually ran *after*.
-//! The first is what makes drift a refusal that cost nothing; the second is
-//! what makes it impossible for a notebook edited between those two moments to
-//! be recorded as the pinned one. Neither is a warning: a run whose provenance
-//! says one thing and whose rows came from another is the failure the whole
-//! content-addressing exists to prevent.
+//! notebook block with no revision. The runtime keeps every source it has been
+//! given, named by its own `sha256`, so this **names the revision** and gets
+//! exactly those bytes however far the editable head has moved since.
+//!
+//! It was not always so. This used to read the head's digest and refuse a run
+//! whose pin no longer matched — provenance protected by making every earlier
+//! execution unrepeatable, which is a strange thing to call protection, and
+//! which work 5 exists to undo.
+//!
+//! The revision is still checked twice, and both are the same rule. The GET
+//! *before* anything executes says the runtime holds that source and that the
+//! stored bytes still hash to the pin — a refusal there costs one request
+//! rather than a run and an artifact. The comparison *after* says which source
+//! the subprocess actually imported. Neither is a warning: a run whose
+//! provenance says one thing and whose rows came from another is the failure
+//! the whole content-addressing exists to prevent.
 //!
 //! Note what this does **not** do: it never sends the source. The notebook file
 //! is what marimo serves, what `ml_pipeline.step` imports and what a test
@@ -128,17 +137,30 @@ impl ActivityExecutor for MarimoExecutor {
         };
         let key = command.idempotency_key();
 
-        // Before anything runs. A refusal here costs one GET; a refusal after
-        // the run costs the run, and a *missing* refusal costs the provenance.
+        // Before anything runs. A revision the runtime no longer holds costs
+        // one GET here; found after the rows are read it costs the read, and
+        // never found at all it costs the provenance. The runtime's own 404
+        // arrives as `UserCode` carrying its message, which names the notebook
+        // and says that saving it again pins what is there now.
         let served: NotebookAnswer = self
             .get(
-                &format!("/ml-pipeline/notebooks/{}", spec.notebook),
+                &format!(
+                    "/ml-pipeline/notebooks/{}/revisions/{}",
+                    spec.notebook, spec.code_revision
+                ),
                 Duration::from_secs(30),
             )
             .await?
             .decode()
             .await?;
-        drifted(spec, &served.revision, "is what the runtime holds")?;
+        // Not a tautology: the runtime recomputes the digest from the stored
+        // bytes, so this is what catches a revision file that is no longer
+        // what it is named after.
+        drifted(
+            spec,
+            &served.revision,
+            "is what the runtime holds under that name",
+        )?;
 
         // Rows come from the artifact a parent produced, and the digest is
         // verified on the way in. A notebook with no upstream is a chain the
@@ -367,6 +389,10 @@ fn request_of(
 ) -> Value {
     json!({
         "notebook": spec.notebook,
+        // The pin, not the name alone. Absent is the editor's request and gets
+        // the head; a managed step always sends one, and the runtime refuses a
+        // revision it does not hold rather than falling back.
+        "code_revision": spec.code_revision,
         "rows": rows,
         "params": spec.params,
         "context": context.context_id,
@@ -375,9 +401,11 @@ fn request_of(
 
 /// The one comparison this file exists to make.
 ///
-/// A message rather than a boolean, because "the notebook changed" sends
-/// somebody looking at the wrong thing: what they need is which revision was
-/// pinned, which one is there, and that saving the pipeline again is the fix.
+/// It no longer fires when somebody edits a notebook — the run resolves its
+/// pin, so the head is free to move. What is left is the case where the bytes
+/// stored under a digest are not what that digest names, which is corruption
+/// rather than an edit, and the message says so rather than sending somebody
+/// to re-save a pipeline that is perfectly correct.
 fn drifted(
     spec: &aiwatcher_execution::plan::MarimoStepSpec,
     found: &str,
@@ -388,7 +416,8 @@ fn drifted(
     }
     Err(ActivityError::user_code(format!(
         "this run pinned '{}' at {}, and {found} {when}. \
-         The notebook was edited after the pipeline was saved; save it again to pin the new code",
+         The two disagree, so the source this run is named after is not the source it \
+         would have executed",
         spec.notebook, spec.code_revision
     )))
 }
@@ -546,17 +575,40 @@ mod tests {
     }
 
     #[test]
-    fn a_notebook_edited_after_the_pipeline_was_saved_is_refused_and_says_how_to_fix_it() {
-        let refused = drifted(&spec(), "def456", "is what the runtime holds")
-            .expect_err("a different revision is a refusal");
+    fn a_managed_run_names_the_revision_it_pinned_rather_than_the_notebook_alone() {
+        // The difference between this and the editor's own request, and the
+        // whole of work 5's first half: with the pin the runtime resolves the
+        // source this run is named after, and without it the head somebody is
+        // in the middle of editing.
+        let rows: Rows = vec![BTreeMap::from([("text".to_owned(), json!("a"))])];
+
+        let body = request_of(&spec(), &context(), &rows);
+
+        assert_eq!(body["code_revision"], "abc123");
+    }
+
+    #[test]
+    fn a_revision_whose_stored_bytes_are_not_what_it_is_named_after_is_refused() {
+        // No longer the edit case: the head is free to move, because the run
+        // resolves its pin. What is left is corruption, and the message says
+        // that rather than sending somebody to re-save a correct pipeline.
+        let refused = drifted(
+            &spec(),
+            "def456",
+            "is what the runtime holds under that name",
+        )
+        .expect_err("a different revision is a refusal");
 
         assert_eq!(refused.class, FailureClass::UserCode);
         let message = refused.to_string();
-        // Both revisions, because "the notebook changed" sends somebody
-        // looking at the wrong thing.
+        // Both revisions, because one of them alone sends somebody looking at
+        // the wrong thing.
         assert!(message.contains("abc123"), "{message}");
         assert!(message.contains("def456"), "{message}");
-        assert!(message.contains("save it again"), "{message}");
+        assert!(
+            message.contains("not the source it would have executed"),
+            "{message}"
+        );
 
         drifted(&spec(), "abc123", "is what ran").expect("the pinned revision is what runs");
     }

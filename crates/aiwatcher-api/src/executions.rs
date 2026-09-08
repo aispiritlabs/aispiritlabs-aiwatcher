@@ -194,6 +194,14 @@ pub struct ExecutionAccepted {
 /// `ContextAction::allowed`'s reason one level up: a panel that decided for
 /// itself which of cancel, pause and resume apply would be a second copy of
 /// `decide`'s preconditions, in another language, drifting from the first.
+///
+/// **Compatibility.** `GET /api/v1/executions/{execution_id}` and every
+/// command route answered with a bare `RunProjection` before this type
+/// existed; they now answer with this. The projection is unchanged and moved
+/// under `execution`, so a field read as `state` is read as
+/// `execution.state`. Clients generated from `contracts/openapi.json` follow
+/// it by regenerating; a hand-written one does not, and this is the note that
+/// says so.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct RunView {
     pub execution: RunProjection,
@@ -287,6 +295,10 @@ async fn start_execution(
 /// produced it, which is what makes it safe to accept the next command from;
 /// the fold is what draws the run beside every other execution, with `Pending`
 /// nodes and a live stream, and it is the one a list comes from.
+///
+/// Answers [`RunView`] — the projection under `execution`, beside the actions
+/// the run would accept. It answered the bare projection once; see that type
+/// for what a hand-written client has to change.
 #[utoipa::path(
     get,
     path = "/api/v1/executions/{execution_id}",

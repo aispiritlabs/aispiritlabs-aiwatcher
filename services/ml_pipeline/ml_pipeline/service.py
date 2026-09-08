@@ -7,9 +7,11 @@ from one screen and nothing else (ADR_0008, ADR_0024).
 
     GET  /ml-pipeline/healthz             is it up, and which notebooks does it hold
     GET  /ml-pipeline/notebooks           every notebook, by name and revision
-    GET  /ml-pipeline/notebooks/{name}    one notebook's source
+    GET  /ml-pipeline/notebooks/{name}    one notebook's source, as it is now
     PUT  /ml-pipeline/notebooks/{name}    write it, if it parses and is a marimo app
+    GET  .../notebooks/{name}/revisions/{revision}   one exact source, forever
     POST /ml-pipeline/run                 run one notebook over rows, return its rows
+    POST /ml-pipeline/staging             put rows under a context, run nothing
     GET  /ml-pipeline/executions/{key}    did this key run here, and is it still going
     ANY  /ml-pipeline/app/{name}/         the notebook itself, live, for an iframe
 
@@ -63,8 +65,15 @@ def create_app(config: Config | None = None) -> Starlette:
     """The whole service, as one ASGI application."""
     settings = config or Config.from_env()
     settings.notebooks.mkdir(parents=True, exist_ok=True)
+    settings.revisions.mkdir(parents=True, exist_ok=True)
     settings.data.mkdir(parents=True, exist_ok=True)
-    directory = NotebookDirectory(root=settings.notebooks)
+    directory = NotebookDirectory(root=settings.notebooks, revisions=settings.revisions)
+    # An upgrade keeps the sources that are here. It cannot keep the ones that
+    # were here yesterday — those were never written down — so this is stated
+    # rather than logged as a success.
+    kept = directory.keep_current()
+    if kept:
+        log.info("notebook.history.backfilled", notebooks=kept)
     staging = Staging(root=settings.data)
     memory = ExecutionMemory()
 
@@ -75,6 +84,7 @@ def create_app(config: Config | None = None) -> Starlette:
                 "marimo": marimo.__version__,
                 "notebooks": len(directory.get_notebooks()),
                 "notebook_directory": str(settings.notebooks),
+                "revision_directory": str(settings.revisions),
                 "app_path": APP_PATH,
                 "max_rows": settings.max_rows,
                 "timeout_seconds": settings.timeout_seconds,
@@ -91,6 +101,25 @@ def create_app(config: Config | None = None) -> Starlette:
 
     async def get_notebook(request: Request) -> JSONResponse:
         notebook = directory.get_notebook(request.path_params["name"])
+        return JSONResponse(
+            {
+                **notebook.summary.__dict__,
+                "source": notebook.source,
+                "app_url": app_url(notebook.name),
+            }
+        )
+
+    async def get_revision(request: Request) -> JSONResponse:
+        """One exact source, by the digest a plan pinned.
+
+        A managed step asks this before it reads its rows, so a revision this
+        runtime no longer holds costs one GET rather than a run. It never falls
+        back to the head: that would run something else under a pinned run's
+        name.
+        """
+        notebook = directory.get_revision(
+            request.path_params["name"], request.path_params["revision"]
+        )
         return JSONResponse(
             {
                 **notebook.summary.__dict__,
@@ -121,7 +150,17 @@ def create_app(config: Config | None = None) -> Starlette:
 
     async def run(request: Request) -> JSONResponse:
         body = await _body(request)
-        notebook = directory.get_notebook(_named(body))
+        name = _named(body)
+        # A managed run pins a revision and gets exactly that; the panel's
+        # editor test sends none and gets the head, which is the unsaved code
+        # somebody is looking at. Section 16.3's `ad_hoc`, expressed as an
+        # absent field rather than a flag that could disagree with it.
+        revision = _revision(body)
+        notebook = (
+            directory.get_revision(name, revision)
+            if revision is not None
+            else directory.get_notebook(name)
+        )
         rows = _rows(body, settings.max_rows)
         params = _params(body)
         context = _context(body)
@@ -165,6 +204,52 @@ def create_app(config: Config | None = None) -> Starlette:
             }
         )
 
+    async def stage(request: Request) -> JSONResponse:
+        """Put rows where a notebook's live app will read them, and run nothing.
+
+        The editor half of what `run` does as a side effect. aiwatcher calls
+        this to open a block on what an *old* execution actually read: the rows
+        are in its object store, the live app knows only a notebook's name, and
+        `latest` is the join between them.
+
+        It stages and stops. Running the notebook to fill its editor would
+        execute somebody's code because somebody clicked "open", and would
+        overwrite the output of the run being looked at.
+
+        The **head** is what marimo serves, so a session opened on an old run's
+        rows shows those rows under the code that is there now. The code that
+        ran is read separately, by its digest, through the revision route — a
+        live app per revision would mean putting the history under the notebook
+        root, which is the one place it is kept out of.
+        """
+        body = await _body(request)
+        name = _named(body)
+        # It has to exist: staging for a notebook nobody has written puts rows
+        # under a name that will never be read, and answers 200.
+        directory.get_notebook(name)
+        staged = staging.stage(
+            name,
+            _rows(body, settings.max_rows),
+            params=_params(body),
+            context=_context(body),
+        )
+        log.info(
+            "notebook.staged",
+            notebook=staged.notebook,
+            context=staged.context,
+            rows=len(staged.rows),
+        )
+        return JSONResponse(
+            {
+                "notebook": staged.notebook,
+                "context": staged.context,
+                "rows": len(staged.rows),
+                "columns": staged.columns,
+                "staged_at": staged.staged_at,
+                "app_url": app_url(staged.notebook),
+            }
+        )
+
     async def seen(request: Request) -> JSONResponse:
         """What this service knows about one idempotency key.
 
@@ -192,7 +277,13 @@ def create_app(config: Config | None = None) -> Starlette:
             Route("/ml-pipeline/notebooks", list_notebooks),
             Route("/ml-pipeline/notebooks/{name}", get_notebook, methods=["GET"]),
             Route("/ml-pipeline/notebooks/{name}", save_notebook, methods=["PUT"]),
+            Route(
+                "/ml-pipeline/notebooks/{name}/revisions/{revision}",
+                get_revision,
+                methods=["GET"],
+            ),
             Route("/ml-pipeline/run", run, methods=["POST"]),
+            Route("/ml-pipeline/staging", stage, methods=["POST"]),
             # `:path` because the key is `<execution>/<step>/<attempt>` and
             # carries its own separators. Sent as it is rather than encoded, so
             # a person reading a log sees the key they would grep for.
@@ -268,6 +359,21 @@ def _context(body: dict[str, Any]) -> str | None:
     if not isinstance(context, str) or len(context) > 512:
         raise ValueError('"context" is a string of at most 512 characters')
     return context
+
+
+def _revision(body: dict[str, Any]) -> str | None:
+    """Which source to run, when the caller pinned one.
+
+    Absent is the editor's answer and is not a default the managed path can
+    fall into: the reactor always sends it, and a plan with no revision is one
+    the compiler refuses.
+    """
+    revision = body.get("code_revision")
+    if revision is None or revision == "":
+        return None
+    if not isinstance(revision, str):
+        raise ValueError('"code_revision" is a sha256 digest as a string')
+    return revision
 
 
 def _params(body: dict[str, Any]) -> dict[str, Any]:

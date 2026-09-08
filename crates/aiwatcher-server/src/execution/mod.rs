@@ -34,6 +34,7 @@
 //! runs here is the outbox, and the plan is corrected rather than followed.
 
 pub mod artifacts;
+pub mod editor;
 pub mod flow;
 pub mod marimo;
 pub mod publish;

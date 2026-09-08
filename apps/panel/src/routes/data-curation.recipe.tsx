@@ -10,7 +10,16 @@ import { EngineLauncher } from '@/components/engine-launcher';
 import { FlowDiagnostics, FlowResultView } from '@/components/flow-preview';
 import { DEFAULT_WINDOW_SECONDS, TimeRange, windowParam } from '@/components/time-range';
 import { Badge, Button, Card, EmptyState, Spinner } from '@/components/ui/primitives';
-import { STARTER_CURATION, checkQuery, isFlowAvailable, runQuery, simulateQuery } from '@/lib/flow';
+import {
+  QUERY_EXAMPLES,
+  STARTER_CURATION,
+  checkQuery,
+  isFlowAvailable,
+  runQuery,
+  simulateQuery,
+  type QueryExample,
+} from '@/lib/flow';
+import { answerOf } from '@/lib/result';
 
 const searchSchema = z.object({
   q: z.string().optional(),
@@ -34,6 +43,21 @@ const TRANSFORMATIONS = [
   ['Filter', "->filter(ref('status')->same(lit('succeeded')))", 'Keep cases matching a condition.'],
   ['Enrich', "->withEntry('label', lit('production'))", 'Add labels or derived fields.'],
   [
+    'Recode',
+    "->withEntry('sex_code', when(ref('sex')->same(lit('female')), lit(1), lit(0)))",
+    'Map a category onto a number or a shorter label.',
+  ],
+  [
+    'Extract',
+    "->withEntry('title', regex_replace(lit('/^[^,]*, ([^.]+)\\..*$/'), lit('$1'), ref('name')))",
+    'Pull a field out of a string. A replace returns the group; a match only says it fired.',
+  ],
+  [
+    'Band',
+    "->withEntry('band', when(ref('age')->isNull(), lit('unknown'), when(ref('age')->lessThan(lit(13)), lit('child'), lit('adult'))))",
+    'Turn a number into buckets. Check for null first — between() throws on one.',
+  ],
+  [
     'Expand',
     "->withEntry('agent', array_expand(ref('agents')))",
     'Turn a list into one row per value.',
@@ -42,6 +66,26 @@ const TRANSFORMATIONS = [
   ['Rename', "->rename('run_id', 'source_run_id')", 'Shape the dataset contract.'],
   ['Combine', '->filter(any(condition_a, condition_b))', 'Match one of several agents or rules.'],
   ['Aggregate', '->groupBy(…)->aggregate(…)', 'Build summaries or grouped cases.'],
+  [
+    'Distribution',
+    "->aggregate(median(ref('fare')), percentile(ref('fare')->as('p90'), 90))",
+    'median, stddev, variance and percentile — this service adds them; Flow ships none. A group too small for one answers null, not zero.',
+  ],
+  [
+    'Arithmetic',
+    "->withEntry('family', ref('sib_sp')->plus(ref('parch'))->plus(lit(1)))",
+    "plus, minus, multiply, divide, mod, power — Flow's own, on any value. A divide names its rounding, e.g. divide(ref('n'), lit(2), 'half_up').",
+  ],
+  [
+    'Window',
+    "->withEntry('typical', median(ref('age'))->over(window()->partitionBy(ref('status'))))",
+    "A group's answer beside every row, which is how a missing value is filled from the rows around it.",
+  ],
+  [
+    'Join',
+    "->join(data_frame()->read(…)->groupBy(…)->aggregate(…), on: join_on(identical(ref('k'), ref('k'))), type: 'left')",
+    'The right-hand side is a whole query, read through the same catalog and the same period.',
+  ],
 ] as const;
 
 function DataCurationPage() {
@@ -65,8 +109,7 @@ function DataCurationPage() {
     queryKey: ['curations'],
     queryFn: async () => {
       const response = await listRecipes();
-      if (!response.data) throw apiError(response.error, 'Could not load saved recipes.');
-      return response.data.recipes;
+      return answerOf(response, 'Could not load saved recipes.').recipes;
     },
   });
 
@@ -80,8 +123,7 @@ function DataCurationPage() {
       if (!checked.ok)
         throw new Error(checked.diagnostics[0]?.message ?? 'The pipeline is invalid.');
       const response = await saveRecipe({ body: { name, description, pipeline: draft } });
-      if (!response.data) throw apiError(response.error, 'Could not save the recipe.');
-      return response.data;
+      return answerOf(response, 'Could not save the recipe.');
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['curations'] });
@@ -108,12 +150,35 @@ function DataCurationPage() {
           window_seconds: result.window_seconds ?? undefined,
         },
       });
-      if (!response.data)
-        throw apiError(response.error, 'The pipeline ran, but its dataset could not be saved.');
-      return { result, published: response.data };
+      return {
+        result,
+        published: answerOf(response, 'The pipeline ran, but its dataset could not be saved.'),
+      };
     },
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['datasets'] }),
   });
+
+  // An example is a recipe nobody saved, so it fills in the two boxes a saved
+  // one already carries — and lands in the URL like every other filter here,
+  // which is what makes "look at this curation" a link rather than a paragraph.
+  const loadExample = (example: QueryExample) => {
+    setName(example.name);
+    setDataset(example.dataset);
+    setDescription(example.description);
+    setDraft(example.query);
+    test.reset();
+    simulate.reset();
+    execute.reset();
+    void navigate({
+      search: (previous) => ({
+        ...previous,
+        q: example.query,
+        name: example.name,
+        dataset: example.dataset,
+      }),
+      replace: true,
+    });
+  };
 
   const loadRecipe = (recipe: CurationRecipe) => {
     setName(recipe.name);
@@ -257,6 +322,23 @@ function DataCurationPage() {
 
         <div className="flex flex-col gap-4">
           <Card className="overflow-hidden">
+            <div className="border-b border-border p-3 text-xs font-semibold">Examples</div>
+            <div className="divide-y divide-border/50">
+              {QUERY_EXAMPLES.map((example) => (
+                <button
+                  key={example.name}
+                  type="button"
+                  onClick={() => loadExample(example)}
+                  className="w-full p-3 text-left hover:bg-accent/40"
+                >
+                  <p className="truncate text-sm font-medium">{example.title}</p>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">{example.description}</p>
+                </button>
+              ))}
+            </div>
+          </Card>
+
+          <Card className="overflow-hidden">
             <div className="border-b border-border p-3 text-xs font-semibold">Transformations</div>
             <div className="divide-y divide-border/50">
               {TRANSFORMATIONS.map(([label, example, help]) => (
@@ -319,18 +401,6 @@ function Field({
       {children}
     </label>
   );
-}
-
-function apiError(error: unknown, fallback: string): Error {
-  if (
-    error &&
-    typeof error === 'object' &&
-    'message' in error &&
-    typeof error.message === 'string'
-  ) {
-    return new Error(error.message);
-  }
-  return new Error(fallback);
 }
 
 function ErrorCard({ error }: { error: Error }) {

@@ -29,6 +29,12 @@ class Config:
     host: str = DEFAULT_HOST
     port: int = DEFAULT_PORT
     notebooks: Path = SERVICE_ROOT / "notebooks"
+    #: One exact source per digest, kept forever. Separate from `data`, which
+    #: is staging and is safe to delete: this is what an old run resolves, so
+    #: deleting it is deleting the provenance of every execution that pinned
+    #: one of these. Separate from `notebooks` because marimo serves every file
+    #: under that root as a live app.
+    revisions: Path = SERVICE_ROOT / ".revisions"
     data: Path = SERVICE_ROOT / ".data"
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
     max_rows: int = DEFAULT_MAX_ROWS
@@ -39,6 +45,7 @@ class Config:
             host=os.environ.get("AIWATCHER_ML_PIPELINE_HOST", DEFAULT_HOST),
             port=_int("AIWATCHER_ML_PIPELINE_PORT", DEFAULT_PORT),
             notebooks=_path("AIWATCHER_ML_PIPELINE_NOTEBOOKS", SERVICE_ROOT / "notebooks"),
+            revisions=_path("AIWATCHER_ML_PIPELINE_REVISIONS", SERVICE_ROOT / ".revisions"),
             data=_path("AIWATCHER_ML_PIPELINE_DATA", SERVICE_ROOT / ".data"),
             timeout_seconds=float(
                 _int("AIWATCHER_ML_PIPELINE_TIMEOUT", int(DEFAULT_TIMEOUT_SECONDS))

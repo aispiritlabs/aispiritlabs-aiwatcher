@@ -6,8 +6,9 @@ import { CalendarClock, Play, Save, Trash2 } from 'lucide-react';
 import { clearSchedule, getSchedule, setSchedule } from '@/api/generated/sdk.gen';
 import type { Cadence, OverlapPolicy, SlotRecord } from '@/api/generated/types.gen';
 import { rejectionDetails } from '@/lib/annotations';
+import { answerOf, answerOrNone, confirmDone } from '@/lib/result';
 
-import { Button, Card, Spinner } from './ui/primitives';
+import { Button, Card, Refusal, Spinner } from './ui/primitives';
 
 /**
  * When a saved pipeline runs unattended.
@@ -92,18 +93,24 @@ export function ScheduleCard({ name, saved }: { name?: string; saved: boolean })
     queryKey: ['schedule', name],
     enabled: Boolean(name) && saved,
     retry: false,
-    queryFn: async () => {
-      const response = await getSchedule({ path: { name: name ?? '' } });
-      // A pipeline with no schedule is a 404 and is not a failure — it is the
-      // ordinary state of most of them.
-      if (!response.data) return null;
-      return response.data;
-    },
+    // A pipeline with no schedule is a 404 and is not a failure — it is the
+    // ordinary state of most of them. Anything else is, and used to arrive
+    // here as `null` too: a 501 from an instance with no workflow store read
+    // as "no schedule", loaded an empty form over it, and offered Save
+    // (review R6).
+    queryFn: async () =>
+      answerOrNone(
+        await getSchedule({ path: { name: name ?? '' } }),
+        'That schedule could not be read.',
+      ),
   });
 
   React.useEffect(() => {
     if (!name || loaded.current === name) return;
-    if (current.isPending) return;
+    // Not `isPending` alone: a failed read has no data either, and treating
+    // that as "no schedule" writes an empty form over one that exists and
+    // then never loads it, because this ran once.
+    if (current.isPending || current.isError) return;
     loaded.current = name;
     const found = current.data?.schedule.schedule;
     setDraft(
@@ -139,8 +146,7 @@ export function ScheduleCard({ name, saved }: { name?: string; saved: boolean })
           request_id: requestId,
         },
       });
-      if (!response.data) throw response.error ?? new Error('That schedule was refused.');
-      return response.data;
+      return answerOf(response, 'That schedule was refused.');
     },
     onSuccess: () => {
       setProblems([]);
@@ -150,12 +156,21 @@ export function ScheduleCard({ name, saved }: { name?: string; saved: boolean })
   });
 
   const forget = useMutation({
-    mutationFn: async () => clearSchedule({ path: { name: name ?? '' } }),
+    // A successful DELETE is 204 with no body, so "is there data" was never
+    // the question — and asking it is what let a refused DELETE clear the
+    // form for a schedule that is still there (review R6).
+    mutationFn: async () =>
+      confirmDone(
+        await clearSchedule({ path: { name: name ?? '' } }),
+        'That schedule could not be forgotten.',
+      ),
     onSuccess: () => {
+      setProblems([]);
       loaded.current = undefined as string | undefined;
       setDraft(EMPTY);
       void queryClient.invalidateQueries({ queryKey: ['schedule', name] });
     },
+    onError: (error) => setProblems(rejectionDetails(error)),
   });
 
   if (!saved || !name) {
@@ -170,6 +185,11 @@ export function ScheduleCard({ name, saved }: { name?: string; saved: boolean })
   }
 
   const busy = save.isPending || forget.isPending;
+  // The read failed, so nothing was loaded into the form. Saving now would
+  // write this component's own defaults over a schedule nobody has seen —
+  // which is the same mistake as drawing a failed read as an empty state,
+  // arriving one button later.
+  const unread = current.isError;
   const existing = current.data;
   const field = 'h-8 rounded-md border border-border bg-background px-2 text-xs';
 
@@ -275,7 +295,10 @@ export function ScheduleCard({ name, saved }: { name?: string; saved: boolean })
           />
           On
         </label>
-        <label className="flex items-center gap-2" title="What to do if the last run is still going">
+        <label
+          className="flex items-center gap-2"
+          title="What to do if the last run is still going"
+        >
           <input
             type="checkbox"
             checked={draft.overlap === 'allow'}
@@ -291,13 +314,13 @@ export function ScheduleCard({ name, saved }: { name?: string; saved: boolean })
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        <Button size="sm" disabled={busy} onClick={() => save.mutate({ runNow: false })}>
+        <Button size="sm" disabled={busy || unread} onClick={() => save.mutate({ runNow: false })}>
           {save.isPending ? <Spinner /> : <Save className="mr-1 h-3 w-3" />} Save
         </Button>
         <Button
           variant="outline"
           size="sm"
-          disabled={busy}
+          disabled={busy || unread}
           onClick={() => save.mutate({ runNow: true, requestId: crypto.randomUUID() })}
           title="Save it, and start one run now as well."
         >
@@ -311,6 +334,13 @@ export function ScheduleCard({ name, saved }: { name?: string; saved: boolean })
           <span className="text-muted-foreground">off — it starts nothing</span>
         ) : null}
       </div>
+
+      {unread ? (
+        <Refusal
+          error={current.error}
+          fallback="That schedule could not be read, so this form was not filled in."
+        />
+      ) : null}
 
       {save.data?.started ? (
         <p className="text-muted-foreground">

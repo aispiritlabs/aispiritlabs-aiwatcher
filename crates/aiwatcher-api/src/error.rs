@@ -60,6 +60,20 @@ pub enum ApiError {
     #[error("this instance has no workflow runner configured (AIWATCHER_WORKFLOW_RUNNER)")]
     RunnerDisabled,
 
+    /// No notebook runtime address, or no object store to read a step's rows
+    /// from. Both are needed and either alone is useless, so one variant says
+    /// so rather than two that a caller would have to tell apart.
+    #[error(
+        "this instance opens no notebook editor (AIWATCHER_ML_PIPELINE_URL, AIWATCHER_PROMPT_STORE)"
+    )]
+    EditorDisabled,
+
+    /// The notebook runtime would not stage this step's rows. Same split as
+    /// `Runner`: unreachable is a 503 worth repeating, and a refusal is a 502
+    /// that will refuse identically forever.
+    #[error("the notebook runtime would not open this editor: {0}")]
+    Editor(aiwatcher_core::ports::PortError),
+
     #[error("this instance has no pipeline engine configured (AIWATCHER_ENGINE)")]
     EngineDisabled,
 
@@ -218,6 +232,13 @@ impl ApiError {
             // null runner that answered 202 would be worse than this: it would
             // report success for a rerun that never happened.
             Self::RunnerDisabled => (StatusCode::NOT_IMPLEMENTED, "runner_disabled"),
+            Self::EditorDisabled => (StatusCode::NOT_IMPLEMENTED, "editor_disabled"),
+            Self::Editor(error) => match error {
+                aiwatcher_core::ports::PortError::Rejected { .. } => {
+                    (StatusCode::BAD_GATEWAY, "editor_refused")
+                }
+                _ => (StatusCode::SERVICE_UNAVAILABLE, "editor_unavailable"),
+            },
             // And again for the engine: the routes exist in the contract and
             // this deployment wired no orchestrator behind them. The message
             // names the variable to set.

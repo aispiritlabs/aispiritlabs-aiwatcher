@@ -127,6 +127,21 @@ export async function getNotebook(name: string): Promise<NotebookSource> {
   return notebookSchema.parse(await call(`/notebooks/${encodeURIComponent(name)}`));
 }
 
+/**
+ * One exact source, by the digest a run pinned.
+ *
+ * Not `getNotebook`, and the difference is the whole of what a historical
+ * reload means: that one answers "what would run next", this one answers "what
+ * did run". The runtime keeps every source it has been given, so reopening a
+ * step of last month's execution shows last month's code however many times
+ * the notebook has been edited since.
+ */
+export async function getNotebookRevision(name: string, revision: string): Promise<NotebookSource> {
+  return notebookSchema.parse(
+    await call(`/notebooks/${encodeURIComponent(name)}/revisions/${encodeURIComponent(revision)}`),
+  );
+}
+
 export async function saveNotebook(name: string, source: string): Promise<NotebookSource> {
   return notebookSchema.parse(
     await call(`/notebooks/${encodeURIComponent(name)}`, {
