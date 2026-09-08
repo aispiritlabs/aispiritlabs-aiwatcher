@@ -765,6 +765,37 @@ what runs a real graph.
   `/executions/{id}/stream` is struck rather than built, and
   `every_fact_a_managed_run_publishes_is_reachable_by_the_execution_id` is what
   keeps the reason true. Section 43.21.
+- **Never write the derived files of one decision without journalling it
+  first.** The `file` adapter touches five — stream, projection, outbox,
+  attempts, checkpoint — and a filesystem writes one at a time. It used to
+  write them in sequence, which failed in a way no successful-path test could
+  see: a crash after the stream left the input's message id recorded with none
+  of its consequences, and because that id *is* the inbox key, the retry was
+  answered `Duplicate` over a run with no outbox row to publish and no attempt
+  to claim. `PendingCommit` is written whole and `fsync`ed first, that rename
+  is the commit point, everything after it is idempotent, and the record is
+  deleted only once it has all been applied. `recover` runs at `open` **and** at
+  the top of every `append` — the second is not belt-and-braces, because A1's
+  reproduction never restarted anything. Review A1.
+- **Never hold a single-process lock by a file's existence.** The lock is the
+  operating system's, taken with `File::try_lock` on the open file, because the
+  kernel releases it however the process ends. `create_new` plus a `Drop` that
+  removes the file is exactly the code a `SIGKILL` does not run: after one, every
+  later start refused a store no process was holding and the only way out was to
+  delete a file by hand. And the file is never unlinked while held — that lets
+  the next process create a second inode and lock *that*, after which two
+  processes each hold "the" lock.
+- **Never remove in one release what the release before it names.** The schema
+  is applied at start-up by whichever replica gets there first, workers roll
+  rather than stop, and an image rollback runs the old binary against the new
+  schema. So a removal is two releases: one that stops using the column, and a
+  later one that drops it. NULL in every row makes the *data* safe to lose and
+  says nothing about the query still naming it — 0003 dropped two dead columns
+  the previous release names in both of its projection statements, and 0005 put
+  them back. And an applied migration is never edited: a version is recorded
+  once and skipped forever after, so a rewrite reaches no database that already
+  ran it and only makes two installations at one version disagree about what
+  that version did. What withdraws a migration is another migration. Review R4.
 - **Never split the binary in two without sharing all three backends.** The
   workflow store (`postgres`), the log the outbox publishes to and the projector
   folds (`laser`), and the object store one role writes a step's result into for

@@ -74,7 +74,9 @@ impl std::fmt::Display for AttemptKey {
 /// meaning in order to store one: the command that dispatched it, the queue it
 /// was claimable on, the code a worker had to match. What was left described
 /// nothing and was still carried past every claim. Section 43.34.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// `Deserialize`/`Serialize` because the `file` adapter journals a whole
+/// decision before applying any of it, and these are part of one.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub enum AttemptWrite {
     /// An attempt somebody may claim.
     Dispatch(AttemptRow),

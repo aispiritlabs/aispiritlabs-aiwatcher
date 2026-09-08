@@ -14,6 +14,13 @@ extend-exclude = [
   # A base64url modulus and a PEM key. Base64 of anything eventually contains
   # four letters that spell something the dictionary has an opinion about.
   "crates/aiwatcher-auth/tests/fixtures/",
+  # Written in Polish. Every finding here is a real word the English dictionary
+  # reads as a near-miss for another one — `proces`, `tekst`, `minut`, `daty` —
+  # so there is nothing to correct and no per-word entry that would help. A
+  # review document written in English is checked like everything else; this
+  # exclusion is by file, so the next one is a deliberate decision rather than
+  # an inherited exemption.
+  "docs/PIPELINE_REVIEW_2026-09-08.md",
 ]
 
 [default.extend-words]

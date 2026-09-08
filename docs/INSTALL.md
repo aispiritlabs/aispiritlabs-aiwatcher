@@ -243,6 +243,43 @@ execution:
 More than one worker is the point: an attempt is claimed by exactly one of them
 under a lease, and one that dies has its lease expire and its work taken over.
 
+### Upgrading its schema
+
+The schema is applied at start-up, once, by whichever replica reaches it first —
+there is no migration step to run and nothing to sequence by hand. What that
+costs is a rule about what a migration may contain: **a release may not remove
+something the release before it still names.** Workers roll rather than stop, so
+for the length of a `RollingUpdate` the old process keeps serving against the
+schema the new one has just changed, and an image rollback runs it against that
+schema again. NULL in every row makes the *data* safe to lose and says nothing
+about the query still naming the column.
+
+So a removal is two releases: one that stops using the thing and leaves it in
+place, and a later one that drops it, once no binary that names it can still be
+running. Nothing here can enforce that at render time — it is a review question
+about the file being added — and
+`crates/aiwatcher-execution/src/store/postgres/schema.rs` states it beside the
+list of files.
+
+This release is the first half of one such pair, and needs nothing from you.
+`execution_runs.started_at` and `ended_at` have never been written and are
+answered from the log's fold instead (ADR_0026). Migration 0003 dropped them,
+0005 puts them back, and a database that already ran 0003 — a development one
+that has opened a build from this branch — gets them back when it is reopened.
+They go for good in a later release.
+
+**Rolling back.** Supported across this boundary, with no database work: the
+schema an upgraded database ends at is one the previous release reads and
+writes. What a rollback does not undo is the schema version itself — a version
+is recorded once and skipped forever after, so a database a newer binary has
+opened stays where that binary left it. Rolling back the image is the supported
+direction; rolling back the schema is not, which is what the two-release rule
+exists to make survivable.
+
+`just test-postgres` is the evidence: upgrade from every earlier schema,
+reopening one already migrated, the previous release's own statements against
+the result, and a row written by each binary read by the other.
+
 ---
 
 ## Installing beside planner

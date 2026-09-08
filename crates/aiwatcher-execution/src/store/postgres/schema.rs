@@ -1,11 +1,11 @@
 //! Applying the schema, once, however many replicas start together.
 //!
-//! Not a migration framework. There is one file, every statement in it is
-//! `IF NOT EXISTS`, and it runs inside one transaction holding a PostgreSQL
-//! advisory lock — so two API pods starting at the same second apply it once
+//! Not a migration framework. Files in order, every statement in them written
+//! to be re-runnable, applied inside one transaction holding a PostgreSQL
+//! advisory lock — so two API pods starting at the same second apply them once
 //! and the second waits rather than racing the first through `CREATE TABLE`.
 //!
-//! What makes a *second* file possible later is
+//! What makes a file after the first one possible is
 //! `execution_schema_migrations`: a version is recorded after its statements
 //! commit, and a version already recorded is skipped. That ordering is
 //! [`aiwatcher_jobs::ORDERING`] again — the work, then the cursor that passes
@@ -15,6 +15,22 @@
 //! wants a live database at compile time. A proc-macro reading `DATABASE_URL`
 //! during `cargo build` is a larger thing to reason about than forty lines that
 //! run `include_str!`.
+//!
+//! **A file here may not remove something a released binary still names.** The
+//! version this build expects is applied at *start-up*, and the chart rolls
+//! workers rather than stopping them, so the old process keeps serving against
+//! the schema the new one just changed — and an image rollback runs it against
+//! that schema again. A removal is therefore two releases: one that stops using
+//! the thing, and a later one that drops it. 0003 dropped two columns the
+//! release before it named, 0005 puts them back, and `docs/INSTALL.md` carries
+//! the procedure. Adding is unconstrained in the same way that removing is not:
+//! a column the old binary has never heard of costs it nothing.
+//!
+//! And a file that has been applied anywhere is never edited. A version is
+//! recorded once and skipped forever after, so a rewrite reaches no database
+//! that already ran it and only makes two installations at one version
+//! disagree about what that version did. What withdraws a migration is another
+//! migration.
 
 use sqlx::{Executor as _, PgPool};
 
@@ -38,6 +54,10 @@ const MIGRATIONS: &[(i64, &str)] = &[
     (
         4,
         include_str!("../../../migrations/0004_retire_finished_attempts.sql"),
+    ),
+    (
+        5,
+        include_str!("../../../migrations/0005_restore_run_timestamps.sql"),
     ),
 ];
 

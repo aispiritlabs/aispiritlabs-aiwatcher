@@ -1,3 +1,12 @@
+-- WITHDRAWN by 0005, which puts both columns back. Read that file first.
+--
+-- The reasoning below is still right about the columns and was wrong about
+-- when to remove them: the previous binary names them, workers roll rather
+-- than stop, and NULL values do not make a running query compatible with a
+-- column's removal (review R4). The statements are unchanged on purpose —
+-- a recorded version is skipped forever after, so editing them would repair
+-- no database that has already run them.
+--
 -- Two columns nothing ever wrote.
 --
 -- Section 43.33. `execution_runs.started_at` and `ended_at` mirrored fields on

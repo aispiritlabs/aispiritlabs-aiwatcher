@@ -1577,15 +1577,16 @@ to build every lower-numbered feature before a higher-numbered one.
 [KICKOFF.md](KICKOFF.md) is the short entry point.
 [PIPELINE_REVIEW_2026-09-08.md](PIPELINE_REVIEW_2026-09-08.md) records the evidence:
 `R1–R7` concern the pending changes, `A1` is a pre-existing file-store defect.
-All six work items below remain **open**. Updating this plan closes none of them.
+Work items 1 and 2 are **closed** (2026-09-08, evidence under each); items 3–6
+remain **open**. Updating this plan closes none of the rest.
 
 ### Current capabilities and unproved exits
 
 | Capability | Implemented | Remaining acceptance gap | Work item |
 |---|---|---|---|
-| Decisions and workflow facts (Phases 0–3) | ADRs, plan/compiler, pure decider, outbox producer and workflow fold | Happy-path contract tests do not prove partial-commit recovery on file | 2 |
-| PostgreSQL and deployment | Adapter, four migrations, retention, combined/split chart | Old/new compatibility and rollback across 0003/0004 | 1 |
-| Local execution | File adapter and single-process exclusion | Partial-write repair, SIGKILL/restart, terminal-row cleanup on upgrade | 2 |
+| Decisions and workflow facts (Phases 0–3) | ADRs, plan/compiler, pure decider, outbox producer and workflow fold | **Closed:** partial-commit recovery journalled and fault-tested | 2 |
+| PostgreSQL and deployment | Adapter, five migrations, retention, combined/split chart | **Closed:** upgrade, reopen, old/new and rollback covered by `tests/postgres_upgrade.rs` | 1 |
+| Local execution | File adapter, OS-held exclusion, intent journal | **Closed:** repair, torn tails, stale locks and the attempts upgrade covered | 2 |
 | Managed Flow and marimo (Phases 5–6) | Executors, artifacts, lookup and publication | Historical notebook source remains mutable at the runtime | 5 |
 | Context (Phase 4) | Artifact metadata/lineage/cache, ContextSnapshot, context-based staging | Source snapshots and editor sessions | 5 |
 | Panel (Phase 7) | Managed run, controls, allowed actions, URL restoration | Error handling and revision-aware canvas mapping | 4, 5 |
@@ -1621,6 +1622,33 @@ migrate the shared database before the other fixes are delivered.
 and do not expose old SQL to an incompatible schema. Migration advisory locking
 alone does not satisfy this exit.
 
+**Closed 2026-09-08.** The first option was taken: this release stops using the
+columns and keeps them, and a later one drops them. Migration 0005 re-adds
+`execution_runs.started_at` and `ended_at` as nullable, so every path converges
+on the shape 0001 declared — a database that never applied 0003 drops and
+re-adds them, and one already at schema 4 gets them back when it is reopened.
+0003 is left applied and unedited but for a comment pointing at 0005, because a
+recorded version is skipped forever after and rewriting it repairs no database
+that already ran it. The general rule — a release may not remove something the
+release before it names — is stated in
+`crates/aiwatcher-execution/src/store/postgres/schema.rs` beside the file list,
+in `CLAUDE.md`'s guardrails, and as a procedure in
+[INSTALL.md](INSTALL.md#upgrading-its-schema). No coordinated stop is required
+and rollback needs no database work.
+
+*Evidence:* `crates/aiwatcher-execution/tests/postgres_upgrade.rs`, seven tests
+run by `just test-postgres` alongside the existing five. The fixture is the
+previous release's own SQL, copied verbatim from `3117259` rather than rebuilt
+from the current adapter's strings. Each test owns a PostgreSQL schema and
+reaches it through `search_path`, so historical DDL does not touch the shared
+one. Covered: upgrade from schema 2, from schema 3, reopening schema 4, a fresh
+database, repeated `apply` after an upgrade, the old binary reading and writing
+a row the new code wrote and the reverse, and 0004 taking the four terminal
+attempt states while `awaiting_input` and `running` survive. Removing 0005 from
+the runner fails six of the seven, each naming the missing column; the 0004 test
+is independent of it and passes either way. `just check` and `just test-postgres`
+both green.
+
 ### Work 2 — local commit and restart recovery (A1)
 
 **Dependency:** work 1 defines a safe release path. Complete this before relying
@@ -1641,6 +1669,49 @@ on new scheduler control state stored through the same port.
 an explicit terminal outcome. No duplicate response may strand an execution
 without its required outbox/attempt. The same relevant contract runs on memory,
 file and PostgreSQL, with adapter-specific fault tests beside it.
+
+**Closed 2026-09-08.** An **intent journal**, not a transactional local adapter.
+The adapter's identity is the write-ahead log's shape — one append-only file per
+execution, no index to keep in sync, honest about being weaker than a
+transaction — and a journal keeps that while removing the failure; a local
+database would have replaced the thing rather than fixed it, for a store whose
+whole purpose is `just dev`. `PendingCommit` holds the five writes one decision
+makes and is `fsync`ed into `commits/` before any of them; that rename is the
+commit point, `apply` is idempotent in each of its five steps, and the record is
+deleted only once it has run. `recover` runs at `open` *and* at the top of every
+`append`, because A1's reproduction never restarted anything — it failed a write
+and retried in the same process, and the repair has to happen before the
+duplicate check to turn that `Duplicate` back into a true answer.
+
+Three defects beside it, each found by writing the tests this item asked for.
+A torn final line was read as end-of-stream and then written *behind*, which
+would have frozen a run's history at the moment of a crash with nothing saying
+so; `read_stream_valid` returns the byte length of the complete records and
+`apply` truncates to it. The single-process lock was a `create_new` file removed
+by `Drop`, which is precisely the code `SIGKILL` does not run — it is now
+`File::try_lock`, released by the kernel however the process ends, and the file
+is never unlinked while held. And an `attempts.json` written before section
+43.34 carries terminal rows this build never writes; `retire_finished_attempts`
+is the file-store half of migration 0004, keyed on `is_terminal` rather than a
+second list, and `awaiting_input` keeps its row.
+
+`WorkflowStore::attempt()` is kept and its purpose is now documented on the
+trait: it is an observation point for the contract suite and has no production
+caller, because the properties worth proving about a claim table are statements
+about a row no operation returns.
+
+*Evidence:* seven tests in `store/file.rs`'s own module, where the private path
+helpers are reachable. Failures are injected through the filesystem — a
+directory standing where `write_atomically` wants its temporary file — which is
+how the review reproduced the original defect; nothing in `file.rs` knows it is
+being tested. One decision writes into all five files, and the interruption test
+runs the projection, outbox, attempts and checkpoint boundaries in turn, each in
+a fresh store, retrying the identical input. Beside them: recovery at reopen, an
+unreadable journal record discarded, the torn line, a lock left by a killed
+process, a held lock still refusing, and the attempts upgrade. Each fix was
+confirmed against its own negative control — disabling recovery fails three,
+removing the truncation or the attempts sweep fails one each, restoring
+`create_new` fails the lock test. `just check` and `just test-postgres` green.
 
 ### Work 3 — scheduler correctness (R1, R2, R3, R5, R7)
 
@@ -2083,8 +2154,10 @@ may leave a silently stuck run.
     projection disabled for reads.
 17. Upgrade from schema 2/3 and reopen schema 4; prove the chosen old/new
     deployment procedure and rollback path, preserving waiting attempts.
+    **Done** — `tests/postgres_upgrade.rs`, work item 1.
 18. Interrupt a local commit after each write, retry and reopen; all accepted
     work is recoverable, and SIGKILL does not require abandoning the run.
+    **Done** — `store/file.rs`'s test module, work item 2.
 19. In split `serve/work`, process two overdue slots on two workers under
     `overlap=skip` with delayed projection; allow at most one active execution.
 20. Recover from a transient slot-start failure without losing that slot or
@@ -3017,11 +3090,19 @@ a requirement to settle every future integration before fixing current defects.
     engine over this data reads the source and re-authors the transforms. That
     is a real cost and it is the one that was chosen.
 
-16. **Upgrade compatibility (work 1).** Prefer staged removal of database
-    columns. Define supported old/new overlap and rollback, including databases
-    already migrated to schema 4, before releasing the pending migration.
-17. **Local commit recovery (work 2).** Choose a recoverable commit journal or
-    a transactional local adapter. The acceptance criterion is A1's partial
+16. **Upgrade compatibility (work 1).** *Settled 2026-09-08:* staged removal.
+    A release may not remove something the release before it names, so a
+    removal is two releases — one that stops using the thing, one that drops
+    it. 0005 re-adds what 0003 took, including for a database already at
+    schema 4, which is reached by a further version rather than by editing an
+    applied one. Rolling upgrade and image rollback are both supported and need
+    no coordinated stop. See work 1's closure note and
+    [INSTALL.md](INSTALL.md#upgrading-its-schema).
+17. **Local commit recovery (work 2).** *Settled 2026-09-08:* a recoverable
+    commit journal, because the adapter's identity is the write-ahead log's
+    shape and a local database would replace it rather than repair it. See
+    work 2's closure note.
+    ~~Choose a recoverable commit journal or a transactional local adapter.~~ The acceptance criterion is A1's partial
     write followed by retry and reopen, plus SIGKILL; the choice must preserve
     the port's observable contract.
 18. **Scheduler authority and semantics (work 3).** Keep admission and pending

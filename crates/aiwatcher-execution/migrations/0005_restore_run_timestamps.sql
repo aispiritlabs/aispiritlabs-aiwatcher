@@ -1,0 +1,33 @@
+-- The columns 0003 dropped, put back for the upgrade window (review R4).
+--
+-- 0003 was right about the columns and wrong about when to remove them. They
+-- are dead: nothing has written `execution_runs.started_at` or `ended_at` since
+-- the table was created, and ADR_0026 answers when a run started and ended from
+-- the log's fold, with `duration_ms` beside them. None of that makes dropping
+-- them a *compatible* change. The binary before this one names both in the
+-- `INSERT … ON CONFLICT` behind `upsert_projection` and in the `SELECT` behind
+-- `projection`; the worker chart rolls pods rather than stopping them
+-- (`deploy/helm/aiwatcher/templates/worker.yaml`); and an image rollback does
+-- not put a column back. A mixed-version window is the ordinary deployment
+-- path, and for the whole of it the old process could neither read a projection
+-- nor write one. NULL in every row makes the *data* safe to lose and says
+-- nothing about the schema the running query names.
+--
+-- So this is the expand half of an expand/contract arriving one release late.
+-- This release stops using the columns and keeps them; a later one drops them,
+-- once no binary that names them can still be running. `docs/INSTALL.md` has
+-- the procedure.
+--
+-- 0003's statements are left exactly as they were rather than edited into a
+-- no-op — it gains a comment pointing here and nothing else. A version is
+-- recorded once and skipped forever after, so rewriting it repairs no
+-- database that already ran it — it would only mean two installations at
+-- "version 3" had run different SQL. Every path converges here instead: a
+-- database that never applied 0003 drops the columns and re-adds them, one
+-- already at 4 gets them back, and both end at the shape 0001 declared.
+--
+-- Nullable, and no backfill: every value was NULL when 0003 ran, and neither
+-- the old code nor the new one writes anything else.
+
+alter table execution_runs add column if not exists started_at timestamptz;
+alter table execution_runs add column if not exists ended_at   timestamptz;

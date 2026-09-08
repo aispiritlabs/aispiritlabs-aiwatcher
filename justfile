@@ -96,12 +96,16 @@ test-rustfs:
     AIWATCHER_PROMPT_S3_ENDPOINT={{rustfs_endpoint}} \
       cargo test -p aiwatcher-prompts --test rustfs -- --ignored --test-threads=1
 
-# `just postgres-up` first. This is what makes the third `WorkflowStore`
-# adapter prove the same properties as the two that need no service — the suite
-# is `aiwatcher_execution::testing`, called by all three.
+# `just postgres-up` first. Two files: `postgres` is what makes the third
+# `WorkflowStore` adapter prove the same properties as the two that need no
+# service — the suite is `aiwatcher_execution::testing`, called by all three —
+# and `postgres_upgrade` proves the schema one release leaves behind is one the
+# release before it can still read and write. A fresh-database test answers
+# neither of those.
 test-postgres:
     AIWATCHER_WORKFLOW_POSTGRES_URL={{workflow_postgres_url}} \
-      cargo test -p aiwatcher-execution --features postgres,testing --test postgres \
+      cargo test -p aiwatcher-execution --features postgres,testing \
+      --test postgres --test postgres_upgrade \
       -- --ignored --test-threads=1
 
 audit:
