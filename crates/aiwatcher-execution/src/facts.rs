@@ -255,8 +255,8 @@ pub fn outbox_rows(envelopes: Vec<EventEnvelope>, execution: &ExecutionId) -> Ve
             Some(OutboxMessage {
                 message_id,
                 event_type,
-                // Section 11.2: one partition per decision scope, so the
-                // ordering that matters is preserved without global ordering.
+                // One partition per decision scope, so the ordering that
+                // matters is preserved without global ordering.
                 partition_key: format!("workflow:{execution}"),
                 payload: serde_json::to_value(envelope).unwrap_or(Value::Null),
                 available_at,
@@ -421,8 +421,8 @@ mod tests {
 
     #[test]
     fn starting_a_run_declares_the_graph_so_every_step_draws_as_pending() {
-        // The Phase 3 exit: a managed execution appears in the workflow tab
-        // before any panel work exists for it.
+        // A managed execution appears in the workflow tab before any panel
+        // work exists for it.
         let envelopes = publish(&WorkflowEvent::ExecutionRequested {
             execution_id: ExecutionId::new("exec-1"),
             plan: Box::new(plan()),

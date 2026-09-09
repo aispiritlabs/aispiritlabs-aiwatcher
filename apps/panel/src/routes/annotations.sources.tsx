@@ -5,7 +5,14 @@ import { z } from 'zod';
 
 import { listSources } from '@/api/generated';
 import type { SourceUsage } from '@/api/generated/types.gen';
-import { Badge, Card, CardContent, CardHeader, CardTitle, Spinner } from '@/components/ui/primitives';
+import {
+  Badge,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  Spinner,
+} from '@/components/ui/primitives';
 
 /**
  * Where the images come from.
@@ -197,8 +204,8 @@ function SourcesPage() {
             </div>
           ))}
           <p className="pt-1 leading-relaxed">
-            Read the licence in the original repository, never on a mirror. A dataset re-uploaded
-            as MIT that is CC BY-NC upstream is common, and the copy is not the one a court reads.
+            Read the licence in the original repository, never on a mirror. A dataset re-uploaded as
+            MIT that is CC BY-NC upstream is common, and the copy is not the one a court reads.
           </p>
         </CardContent>
       </Card>

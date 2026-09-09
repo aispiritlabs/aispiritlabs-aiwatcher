@@ -16,8 +16,7 @@ namespace Aiwatcher\Flow\Dsl;
  * Refused by **type**, never by name:
  *
  * - a parameter accepting a **callable** — where a name from a query would
- *   become code. Any third one Flow adds is refused before anybody here has
- *   heard of it.
+ *   become code. Whatever Flow adds next is refused before anybody hears of it.
  * - a parameter accepting a **Loader, Extractor, Path or Filesystem** — where a
  *   query would open a source or write a sink of its own choosing.
  *   `to_csv('/etc/anything')` here is a file write whose name looks as harmless

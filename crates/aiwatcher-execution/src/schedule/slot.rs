@@ -83,12 +83,12 @@ pub enum SlotOutcome {
 
 /// What a caller says about a slot it holds.
 ///
-/// [`Self::TryAgain`] is. A failure that *may* succeed
-/// next time must not be written down as a decision: it drops the lease and
-/// leaves the slot due. Only a caller that has read the failure can tell the
-/// two apart — a 4xx is about the definition and will say the same thing every
-/// tick, a 5xx is about something being unreachable — which is why this is the
-/// caller's word and not a flag the store infers.
+/// [`Self::TryAgain`] is why. A failure that *may* succeed next time must not
+/// be written down as a decision: it drops the lease and leaves the slot due.
+/// Only a caller that has read the failure can tell the two apart — a 4xx is
+/// about the definition and will say the same thing every tick, a 5xx is about
+/// something being unreachable — which is why this is the caller's word and
+/// not a flag the store infers.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SlotSettlement {
     Started { execution_id: String },

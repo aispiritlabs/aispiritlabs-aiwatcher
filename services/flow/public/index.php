@@ -18,8 +18,8 @@ declare(strict_types=1);
  *                         "execution_id": …} -> a table, saying which window it used
  *   GET  /flow/executions/{id}  did this service already run that key
  *
- * The last two are what managed execution needs and all it needs: one field and one route
- * (section 15.4 of `docs/PIPELINE_ARCHITECTURE.md`). `execution_id` is
+ * The last two are what managed execution needs and all it needs: one field and one
+ * route. `execution_id` is
  * `<execution>/<step>/<attempt>`, and what the service remembers about it is that it ran
  * and what the result hashed to — never the rows. ADR 0014 refused this service an S3
  * client and that refusal stands: the rows go to the artifact the *reactor* uploads.

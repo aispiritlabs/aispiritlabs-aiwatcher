@@ -1,0 +1,40 @@
+{{- if .Values.perses.provisioning.enabled }}
+{{- $traces := include "aiwatcher.tracesBaseUrl" . -}}
+{{- if $traces }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "aiwatcher.fullname" . }}-perses-provisioning
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+    app.kubernetes.io/component: perses-provisioning
+    {{- with .Values.perses.provisioning.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+data:
+  aiwatcher.yaml: |-
+    # VictoriaTraces speaks the Jaeger query API, so Perses' bundled Jaeger
+    # datasource reads it with no plugin to install. This is the historical
+    # view; aiwatcher's own panel draws runs that are still in flight, which a
+    # trace store cannot show.
+    #
+    # A GlobalDatasource rather than a project-scoped one: the Perses this lands
+    # in belongs to whoever runs the cluster, and its projects are theirs. A
+    # global datasource is visible from every one of them without this chart
+    # having to know their names.
+    - kind: GlobalDatasource
+      metadata:
+        name: {{ .Values.perses.provisioning.tracesDatasourceName | quote }}
+      spec:
+        default: false
+        display:
+          name: aiwatcher Traces
+        plugin:
+          kind: JaegerDatasource
+          spec:
+            proxy:
+              kind: HTTPProxy
+              spec:
+                url: {{ printf "%s/select/jaeger" $traces | quote }}
+{{- end }}
+{{- end }}

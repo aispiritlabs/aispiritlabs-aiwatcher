@@ -66,9 +66,9 @@ Point an SDK at it, from inside the cluster:
   live runs — it reads the read model, not the trace store — but a run scrolls
   out of memory once {{ .Values.server.maxRuns }} newer ones have arrived.
 {{- end }}
-{{- if .Values.grafana.datasources.enabled }}
+{{- if .Values.perses.provisioning.enabled }}
 
-The Grafana datasource is in ConfigMap {{ include "aiwatcher.fullname" . }}-grafana-datasources.
-A Grafana running the provisioning sidecar picks it up from its label. One
-provisioned from a fixed ConfigMap does not — see docs/INSTALL.md.
+The Perses datasource is in ConfigMap {{ include "aiwatcher.fullname" . }}-perses-provisioning.
+A Perses running the provisioning sidecar picks it up from its label. One
+provisioned from fixed ConfigMap mounts does not — see docs/INSTALL.md.
 {{- end }}

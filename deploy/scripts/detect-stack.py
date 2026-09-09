@@ -33,14 +33,14 @@ Overrides, because detection is a convenience and never the last word:
     AIWATCHER_VICTORIAMETRICS_URL=http://…   force this, do not look
     AIWATCHER_VICTORIATRACES_URL=http://…
     AIWATCHER_COLLECTOR_URL=http://…
-    AIWATCHER_GRAFANA_URL=http://…
+    AIWATCHER_PERSES_URL=http://…
     AIWATCHER_POSTGRES_URL=http://…
     AIWATCHER_<NAME>_URL=none                force "not present" for one target
     AIWATCHER_DOMAIN=aiwatcher.example.com   publish on this host, do not derive one
     AIWATCHER_DOMAIN=none                    derive nothing
 
 The last two are about the other thing this reads: the domain the cluster
-already publishes under. `planner.example.com` and `grafana.example.com` say
+already publishes under. `planner.example.com` and `perses.example.com` say
 that a sibling belongs at `aiwatcher.example.com`, and a host that has to be
 typed once per install is a host that ends up not typed at all — which installs
 a release with no ingress at all, reachable only by port-forward, and says
@@ -88,7 +88,7 @@ TARGETS: tuple[Target, ...] = (
     ),
     Target(key="victoriatraces", images=("victoria-traces", "vtsingle"), port=10428),
     Target(key="collector", images=("opentelemetry-collector",), port=4318),
-    Target(key="grafana", images=("grafana/grafana",), port=3000),
+    Target(key="perses", images=("persesdev/perses",), port=8080),
     # Reported, never derived — see `as_helm_values`. An object store is found
     # by its image; the credentials that would make it usable are not
     # discoverable from here, and neither is whether aiwatcher may create a
@@ -538,9 +538,9 @@ def as_helm_values(findings: dict[str, Finding], domain: Domain, reachable: bool
         lines.append(f"# A Collector is already running at {findings['collector'].url}, and this")
         lines.append("# release still installs its own. Set collector.mode=external by hand if that")
         lines.append("# one redacts gen_ai.* and exports to VictoriaTraces — see docs/INSTALL.md.")
-    if findings["grafana"].found:
-        lines.append(f"# Grafana found at {findings['grafana'].url}. The datasource ConfigMap is")
-        lines.append("# emitted; wiring it in is a change on Grafana's side — see docs/INSTALL.md.")
+    if findings["perses"].found:
+        lines.append(f"# Perses found at {findings['perses'].url}. The datasource ConfigMap is")
+        lines.append("# emitted; wiring it in is a change on Perses' side — see docs/INSTALL.md.")
 
     # The same rule as the Collector, for a different reason. There, reuse is
     # unsafe; here it is undecidable: nothing in the cluster says which

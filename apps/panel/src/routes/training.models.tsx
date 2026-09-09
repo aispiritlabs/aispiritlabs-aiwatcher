@@ -252,8 +252,8 @@ function ModelsPage() {
               </tbody>
             </table>
             <p className="mt-2 text-[11px] text-muted-foreground">
-              The gap is what to follow across a series. A version that gains on validation and
-              not on held-out gained on the split its own selection ran against.
+              The gap is what to follow across a series. A version that gains on validation and not
+              on held-out gained on the split its own selection ran against.
             </p>
           </CardContent>
         </Card>
@@ -268,10 +268,7 @@ function Metrics({
   metrics?: { validation?: Record<string, number>; test?: Record<string, number> } | null;
 }) {
   const names = [
-    ...new Set([
-      ...Object.keys(metrics?.validation ?? {}),
-      ...Object.keys(metrics?.test ?? {}),
-    ]),
+    ...new Set([...Object.keys(metrics?.validation ?? {}), ...Object.keys(metrics?.test ?? {})]),
   ].sort();
   if (names.length === 0) {
     return (

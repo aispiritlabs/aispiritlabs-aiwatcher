@@ -5,11 +5,11 @@
 
 //! The storage contract, written once so every adapter proves the same thing.
 //!
-//! An adapter that passes a
-//! *different* suite is an adapter that is correct about something else — and
-//! the two that ship here are correct in different ways by construction, since
-//! one holds everything under a mutex and the other under a transaction. That
-//! is exactly why the properties live here and not beside either of them.
+//! An adapter that passes a *different* suite is an adapter that is correct
+//! about something else — and the two that ship here are correct in different
+//! ways by construction, since one holds everything under a mutex and the
+//! other under a transaction. That is exactly why the properties live here and
+//! not beside either of them.
 //!
 //! Each property takes a store and a name, and every one of them mints its own
 //! execution id. That matters for a shared PostgreSQL, where the suite runs
@@ -1511,10 +1511,10 @@ pub async fn a_settled_slot_is_never_admitted_again(name: &str, store: &dyn Work
 
 /// A transient failure leaves the slot due rather than consuming it.
 ///
-/// The release before this one wrote every failure down as
-/// `refused` and then moved the global cursor past the slot, so a store that
-/// was unreachable for ten seconds at 09:00 cost the day's run and left a note
-/// saying it had been refused.
+/// The release before this one wrote every failure down as `refused` and then
+/// moved the global cursor past the slot, so a store that was unreachable for
+/// ten seconds at 09:00 cost the day's run and left a note saying it had been
+/// refused.
 pub async fn a_slot_put_back_after_a_transient_failure_is_due_again(
     name: &str,
     store: &dyn WorkflowStore,
@@ -1604,9 +1604,9 @@ pub async fn a_slot_whose_holder_vanished_is_taken_over_when_the_lease_expires(
 /// `overlap = skip` is answered from this store, in the transaction that takes
 /// the slot.
 ///
-/// Review R1, and the property the previous implementation could not have: it
-/// asked an asynchronous read model that is **empty in the role the tick runs
-/// in**, so skip never skipped there. `allow` is checked in the same property,
+/// The property the previous implementation could not have: it asked an
+/// asynchronous read model that is **empty in the role the tick runs in**, so
+/// skip never skipped there. `allow` is checked in the same property,
 /// because the two answers have to come from one place to be worth anything.
 pub async fn a_definition_with_a_run_that_has_not_finished_blocks_its_next_slot(
     name: &str,

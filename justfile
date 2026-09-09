@@ -764,7 +764,7 @@ stack-up:
     docker compose -f deploy/docker-compose.yml up -d --build
     @printf '\n%s\n' \
       "  aiwatcher   http://localhost:8080" \
-      "  Grafana     http://localhost:3000" \
+      "  Perses      http://localhost:3000" \
       "  traces      http://localhost:10428" \
       "  metrics     http://localhost:8428"
 

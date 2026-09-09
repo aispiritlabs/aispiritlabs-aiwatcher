@@ -5585,7 +5585,7 @@
           "execution"
         ],
         "summary": "Open this step's editor on the rows this step actually read.",
-        "description": "§16.3, resolved server-side and without a token — see\n`aiwatcher_core::ports::EditorHost` for why the token it described would\nhave been ceremony. The gate is here: this route decides who may open which\nrun's rows, reads them from the object store itself, and hands the runtime\na staging request. `Editor`, not `Viewer`, because staging replaces what\nevery other person looking at that notebook's live app is shown.\n\nIt stages and stops. And the live app serves the notebook's *head*, so what\nopens is this run's rows under today's code — `code_revision` in the answer\nis what ran, read beside it through the runtime's revision route.",
+        "description": "Resolved server-side and without a token — see\n`aiwatcher_core::ports::EditorHost` for why one would have been ceremony.\nThe gate is here: this route decides who may open which run's rows, reads\nthem from the object store itself, and hands the runtime a staging request.\n`Editor`, not `Viewer`, because staging replaces what every other person\nlooking at that notebook's live app is shown.\n\nIt stages and stops. And the live app serves the notebook's *head*, so what\nopens is this run's rows under today's code — `code_revision` in the answer\nis what ran, read beside it through the runtime's revision route.",
         "operationId": "open_editor",
         "parameters": [
           {
@@ -10406,7 +10406,7 @@
       },
       "ContextAction": {
         "type": "string",
-        "description": "Something a caller may do with a block, given what it is and where it got to.\n\nDeliberately **no hrefs**, which is where this departs from section 19's\nsketch. An action's address is either this API's own — which the generated\nclient already has — or an optional service's, and a service's address in a\nresponse body is the one thing every route here refuses to carry. What only\nthe server knows is *which* actions apply, and that is what this is.",
+        "description": "Something a caller may do with a block, given what it is and where it got to.\n\nDeliberately **no hrefs**. An action's address is either this API's own — which the generated\nclient already has — or an optional service's, and a service's address in a\nresponse body is the one thing every route here refuses to carry. What only\nthe server knows is *which* actions apply, and that is what this is.",
         "enum": [
           "validate",
           "test",
@@ -18395,7 +18395,7 @@
       },
       "RetryPolicy": {
         "type": "object",
-        "description": "How many times, and how far apart.\n\nThe defaults are section 26's: three attempts, 1 s / 5 s / 30 s. The delays\nare a list rather than a base and a multiplier so that a policy can be read\noff the plan without arithmetic, and so that a runtime whose useful backoff\nis not exponential can say so.\n\n# Two budgets, because there are two kinds of failure\n\n`max_attempts` counts attempts that **produced an answer**: the code ran and\nwas wrong, the query would not parse, the graph does not bind. Three is\nright for those, because the fourth will be just as wrong.\n\n`max_unavailable_attempts` counts attempts where nobody answered — the\nservice was down, the connection reset, the caller stopped waiting. Those\nsay nothing about the work, and spending the work's budget on them means a\nforty-second outage kills a run that would have succeeded a minute later.\nMeasured, not supposed: restarting the process with the query service down\nburned all three attempts and failed a chain whose Flow step was fine.\n\nThe two are counted separately off the attempt records the state already\nkeeps, so a run alternating between the two kinds is bounded by both.",
+        "description": "How many times, and how far apart.\n\nThe defaults are three attempts, 1 s / 5 s / 30 s. The delays\nare a list rather than a base and a multiplier so that a policy can be read\noff the plan without arithmetic, and so that a runtime whose useful backoff\nis not exponential can say so.\n\n# Two budgets, because there are two kinds of failure\n\n`max_attempts` counts attempts that **produced an answer**: the code ran and\nwas wrong, the query would not parse, the graph does not bind. Three is\nright for those, because the fourth will be just as wrong.\n\n`max_unavailable_attempts` counts attempts where nobody answered — the\nservice was down, the connection reset, the caller stopped waiting. Those\nsay nothing about the work, and spending the work's budget on them means a\nforty-second outage kills a run that would have succeeded a minute later.\nMeasured, not supposed: restarting the process with the query service down\nburned all three attempts and failed a chain whose Flow step was fine.\n\nThe two are counted separately off the attempt records the state already\nkeeps, so a run alternating between the two kinds is bounded by both.",
         "required": [
           "max_attempts",
           "delays_seconds"
@@ -19106,7 +19106,7 @@
             "description": "Handed whole to an external engine through `core::engine::WorkflowEngine`.\nThat engine owns its internal retries; this one records the reference."
           }
         ],
-        "description": "Where a step runs, and everything that runtime needs.\n\nSection 35 of `docs/PIPELINE_ARCHITECTURE.md` is the table this enum is the\ncode for: where each executes, who owns its retries, and what it may carry.\nEvery variant names a *binding* and its parameters and never a host — an\nexecutor's address is configuration, for ADR_0012's and ADR_0016's reason,\nunchanged. A plan naming its own endpoint would be a request-forgery\nprimitive posted by anything that can reach the API."
+        "description": "Where a step runs, and everything that runtime needs.\n\nWhere each runtime executes, who owns its retries, and what it may carry.\nEvery variant names a *binding* and its parameters and never a host — an\nexecutor's address is configuration, for ADR_0012's and ADR_0016's reason,\nunchanged. A plan naming its own endpoint would be a request-forgery\nprimitive posted by anything that can reach the API."
       },
       "RuntimeKind": {
         "type": "string",
@@ -19480,7 +19480,7 @@
               "null"
             ],
             "format": "date-time",
-            "description": "When the *current cadence* began to apply.\n\nReview R7: without this every schedule was handed the whole interval a\ncheckpoint had accumulated, so one written while the worker was down for\nthree days ran three days of slots the moment it came back — and\nchanging an hour during an outage re-ran the past under the new rule.\n\nNot `updated_at`, and that is the review's own warning: an edit that\ndoes not change *when* it fires would then quietly drop a slot that was\nalready due. It moves only when [`Schedule::fires_the_same_as`] says the\nrule changed — which makes re-enabling an activation too, so a schedule\nswitched back on starts from now rather than running the days it was\noff.\n\nOptional so a schedule stored before this field existed still reads;\n[`Self::effective_from`] answers for it, and the fallback is\n`updated_at` because that is when such a schedule was last written."
+            "description": "When the *current cadence* began to apply.\n\nWithout it every schedule is handed the whole interval a checkpoint has\naccumulated, so one written while the worker was down for\nthree days ran three days of slots the moment it came back — and\nchanging an hour during an outage re-ran the past under the new rule.\n\nNot `updated_at`, and that is the review's own warning: an edit that\ndoes not change *when* it fires would then quietly drop a slot that was\nalready due. It moves only when [`Schedule::fires_the_same_as`] says the\nrule changed — which makes re-enabling an activation too, so a schedule\nswitched back on starts from now rather than running the days it was\noff.\n\nOptional so a schedule stored before this field existed still reads;\n[`Self::effective_from`] answers for it, and the fallback is\n`updated_at` because that is when such a schedule was last written."
           },
           "schedule": {
             "$ref": "#/components/schemas/Schedule"
@@ -20182,7 +20182,7 @@
       },
       "StartExecutionBody": {
         "type": "object",
-        "description": "What a caller may ask this system to run.\n\nNote what is not here, which is the same absence as `LaunchBody`'s and\n`RerunBody`'s: no endpoint, no script, no host. A plan names a binding and\nits parameters, and every executor's address is configuration.\n`deny_unknown_fields` so an attempt to supply one — or a `backend`, a `mode`\nor a `publish` flag from section 20 that this phase does not implement — is\na 400 naming it rather than a field silently ignored that reads as accepted.",
+        "description": "What a caller may ask this system to run.\n\nNote what is not here, which is the same absence as `LaunchBody`'s and\n`RerunBody`'s: no endpoint, no script, no host. A plan names a binding and\nits parameters, and every executor's address is configuration.\n`deny_unknown_fields` so an attempt to supply one — or a `backend`, a `mode`\nor a `publish` flag that is not implemented — is a 400 naming it rather than\na field silently ignored that reads as accepted.",
         "required": [
           "target"
         ],

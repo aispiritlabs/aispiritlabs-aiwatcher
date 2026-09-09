@@ -34,7 +34,9 @@ use aiwatcher_core::attrs::{aiwatcher as own, genai, messaging};
 use aiwatcher_core::ports::{
     Attr, AttrValue, CompletedSpan, MetricKind, MetricSample, SpanEvent, SpanKind, SpanStatus, attr,
 };
-use aiwatcher_core::{EventType, Phase, RecordedEvent, SpanId, Subject, TraceId, catalog};
+use aiwatcher_core::{
+    EventType, Phase, PromptRef, RecordedEvent, SpanId, Subject, TraceId, catalog,
+};
 
 /// How a span was closed. Emitted as [`own::span::CLOSED_BY`] so a dashboard
 /// can tell a real completion from one this code had to invent.
@@ -121,7 +123,15 @@ impl OpenSpan {
         closed_by: &str,
         extra: Vec<Attr>,
     ) -> CompletedSpan {
-        self.attributes.extend(extra);
+        // First writer wins. The request settings are read off the start event
+        // *and* off the end event, because a producer may send them on either
+        // and the Python SDK sends them on both — without this, the ordinary
+        // case would carry every one of them twice.
+        for (key, value) in extra {
+            if !self.attributes.iter().any(|(known, _)| *known == key) {
+                self.attributes.push((key, value));
+            }
+        }
         self.attributes.push(attr(own::span::CLOSED_BY, closed_by));
         if self.chunk_count > 0 {
             self.attributes
@@ -315,7 +325,7 @@ impl SpanAssembler {
             kind: span_kind(event),
             start: event.metadata.occurred_at,
             last_seen: event.metadata.occurred_at,
-            attributes: base_attributes(event),
+            attributes: [base_attributes(event), request_attributes(event)].concat(),
             events: Vec::new(),
             chunk_count: 0,
             first_token_at: None,
@@ -549,6 +559,66 @@ fn base_attributes(event: &RecordedEvent) -> Vec<Attr> {
     out
 }
 
+/// What the model was *asked*, and on which registered prompt.
+///
+/// Read off whichever event carries it — the request is described by the start
+/// event, and the Python SDK restates it on the end event, so both are tried
+/// and [`OpenSpan::close`] keeps the first.
+///
+/// Two rules decide what belongs here. A setting that changes the answer is a
+/// setting somebody comparing two runs needs, so it is an attribute rather than
+/// a payload field nothing indexes. And the prompt is a **reference**: the
+/// version id and the name that resolves it, never the text — see
+/// [`PromptRef`] and ADR_0021.
+fn request_attributes(event: &RecordedEvent) -> Vec<Attr> {
+    if event.event_type.subject() != Subject::Llm {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for (key, semconv) in [
+        ("temperature", genai::REQUEST_TEMPERATURE),
+        ("top_p", genai::REQUEST_TOP_P),
+        ("frequency_penalty", genai::REQUEST_FREQUENCY_PENALTY),
+        ("presence_penalty", genai::REQUEST_PRESENCE_PENALTY),
+    ] {
+        if let Some(value) = event.data_f64(key) {
+            out.push(attr(semconv, value));
+        }
+    }
+    for (key, semconv) in [
+        ("max_tokens", genai::REQUEST_MAX_TOKENS),
+        ("top_k", genai::REQUEST_TOP_K),
+        ("seed", genai::REQUEST_SEED),
+    ] {
+        if let Some(value) = event.data_i64(key) {
+            out.push(attr(semconv, value));
+        }
+    }
+    // A list, because that is what the convention says and what a provider
+    // takes. A producer that sends one string still gets a list of one.
+    let stop = match event.data.get("stop") {
+        Some(serde_json::Value::String(one)) => vec![one.clone()],
+        Some(serde_json::Value::Array(many)) => many
+            .iter()
+            .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+            .collect(),
+        _ => Vec::new(),
+    };
+    if !stop.is_empty() {
+        out.push((
+            genai::REQUEST_STOP_SEQUENCES.to_owned(),
+            AttrValue::StrList(stop),
+        ));
+    }
+    if let Some(prompt) = PromptRef::from_data(&event.data) {
+        out.push(attr(own::prompt::VERSION_ID, prompt.version_id.to_string()));
+        if let Some(name) = prompt.name {
+            out.push(attr(own::prompt::NAME, name.to_string()));
+        }
+    }
+    out
+}
+
 /// Attributes read off the end event's payload.
 fn payload_attributes(event: &RecordedEvent) -> Vec<Attr> {
     let mut out = Vec::new();
@@ -584,12 +654,7 @@ fn payload_attributes(event: &RecordedEvent) -> Vec<Attr> {
             if let Some(cached) = event.data_i64("cached_tokens") {
                 out.push(attr("gen_ai.usage.cached_tokens", cached));
             }
-            if let Some(temperature) = event.data_f64("temperature") {
-                out.push(attr(genai::REQUEST_TEMPERATURE, temperature));
-            }
-            if let Some(max_tokens) = event.data_i64("max_tokens") {
-                out.push(attr(genai::REQUEST_MAX_TOKENS, max_tokens));
-            }
+            out.extend(request_attributes(event));
         }
         Subject::Tool => {
             push_str(genai::TOOL_NAME, event.data_str("tool_name"));

@@ -69,8 +69,8 @@ pub fn cache_key(step: &PlanStep, inputs: &[ArtifactRef]) -> Option<String> {
     }
     if inputs.iter().any(|artifact| !artifact.has_digest()) {
         // An input nobody can address is an input that may have changed. This
-        // is the `file://` case from section 17: a path on a shared volume is
-        // accepted as a pointer and never as an identity.
+        // is the `file://` case: a path on a shared volume is accepted as a
+        // pointer and never as an identity.
         return None;
     }
     let code = code_digest(&step.runtime)?;
@@ -235,8 +235,8 @@ mod tests {
 
     #[test]
     fn an_input_nobody_can_address_makes_the_step_uncacheable() {
-        // Section 17's `file://` case: a path on a shared volume is accepted as
-        // a pointer and never as an identity.
+        // The `file://` case: a path on a shared volume is accepted as a
+        // pointer and never as an identity.
         let unaddressed = ArtifactRef::new("rows", "file:///data/rows.parquet", "");
         assert!(cache_key(&flow_step(true), &[unaddressed]).is_none());
         let addressed = ArtifactRef::new("rows", "s3://a/rows", "ab".repeat(32));

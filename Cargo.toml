@@ -168,6 +168,42 @@ panic = "warn"
 debug = "line-tables-only"
 split-debuginfo = "packed"
 
+# The native build scripts compile C, C++ and assembly through `cc`, which adds
+# `-g -gdwarf-2` whenever cargo hands it `DEBUG=true`. Nobody here steps through
+# DuckDB's engine or AWS-LC's assembly, and that debug info is most of what
+# those builds cost. DuckDB's amalgamation is the case that decides the clock:
+# it is the critical path of `cargo clippy --all-features`, and no crate above
+# `aiwatcher-execution` can be checked until it finishes. Measured cold, the
+# same check takes 96 s rather than 112 s and leaves 509 MB of object files
+# rather than 3.0 GB.
+#
+# It has to be written per package. `[profile.dev.build-override]` below decides
+# how a build script is *compiled*; it does not decide the `DEBUG` the script is
+# *run* with, and a `package."*"` glob does not reach that unit either — both
+# leave `DEBUG=true`. Release needs none of this: `debug` is already off there,
+# so `cc` already omits `-g` and the image is built from bytes this never
+# touches.
+[profile.dev.package.libduckdb-sys]
+debug = false
+
+[profile.dev.package.aws-lc-sys]
+debug = false
+
+[profile.dev.package.ring]
+debug = false
+
+[profile.dev.package.blake3]
+debug = false
+
+# The other half, and a different job: how a build script or a proc macro is
+# built rather than what it is handed. Both are compiled and *linked*, and
+# `split-debuginfo = "packed"` runs `dsymutil` on each — 48 build scripts and
+# about thirty proc macros in the `--all-features` graph, none of which anybody
+# debugs from here. Worth 34 s rather than 38 s on a cold `cargo check`, and
+# 118 s rather than 125 s on a cold `--all-features` clippy.
+[profile.dev.build-override]
+debug = false
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

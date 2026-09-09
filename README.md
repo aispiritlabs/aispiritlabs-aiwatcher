@@ -137,7 +137,7 @@ wired to it.
 | Flyte as the pipeline engine | `just run-flyte` |
 | Kaggle / Hugging Face search | `just run-hubs` |
 | SSO against authentik | `just authentik-up && just run-sso` |
-| Traces and metrics in Grafana | `just stack-up` |
+| Traces and metrics in Perses | `just stack-up` |
 | Conversation archive | `just run-conversations` |
 
 An unconfigured area answers `501` naming the variable that is unset, never an

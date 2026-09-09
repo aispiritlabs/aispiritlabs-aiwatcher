@@ -765,6 +765,35 @@ def _emit_artifact(
     client.emit("artifact.produced", context, payload)
 
 
+def _prompt_fields(prompt: Any) -> dict[str, str]:
+    """The registry reference a call ran on, as the two fields an event carries.
+
+    Duck-typed on purpose. This half of the SDK depends on nothing and must keep
+    doing so, so it reads ``name`` and ``version_id`` off whatever it is handed
+    rather than importing :class:`~aiwatcher_sdk.prompts.PromptVersion`. A bare
+    string is taken as a version id — it identifies the text, it simply cannot
+    be resolved without a name.
+
+    Never the text. Prompt content stays off the log deliberately; the reference
+    is what makes it findable afterwards.
+    """
+    if prompt is None:
+        return {}
+    if isinstance(prompt, str):
+        return {"prompt_version": prompt}
+    if isinstance(prompt, tuple) and len(prompt) == 2:
+        name, version_id = prompt
+        return {"prompt_name": str(name), "prompt_version": str(version_id)}
+    version_id = getattr(prompt, "version_id", None)
+    if version_id is None:
+        raise TypeError("a prompt reference needs a version_id")
+    fields = {"prompt_version": str(version_id)}
+    name = getattr(prompt, "name", None)
+    if name:
+        fields["prompt_name"] = str(name)
+    return fields
+
+
 def _stringify(params: dict[str, Any]) -> dict[str, str]:
     """Parameters are labels, so they arrive as strings.
 
@@ -971,13 +1000,31 @@ class AgentContext(Scope):
         model: str,
         provider: str | None = None,
         call_id: str | None = None,
+        prompt: Any = None,
         **request: Any,
     ) -> Generator[LlmCall, None, None]:
+        """One model call.
+
+        Pass the settings that decide the answer as keyword arguments —
+        ``temperature``, ``top_p``, ``top_k``, ``max_tokens``, ``seed``,
+        ``stop`` — and they become ``gen_ai.request.*`` attributes on the span,
+        which is what lets two runs be compared rather than merely listed.
+
+        ``prompt`` is the registered version this call ran on: a
+        :class:`~aiwatcher_sdk.prompts.PromptVersion`, a ``(name, version_id)``
+        pair, or a bare version id. It is a *reference* — the text itself never
+        goes on the log, which is the whole reason the registry exists.
+        """
         # `call_id` is what separates two concurrent calls. Generated when
         # omitted, but pass your provider's request id where you have one — it
         # makes the span joinable with the provider's own logs.
         resolved_call_id = call_id or _new_id()
-        base = {"call_id": resolved_call_id, "model": model, **request}
+        base = {
+            "call_id": resolved_call_id,
+            "model": model,
+            **_prompt_fields(prompt),
+            **request,
+        }
         if provider:
             base["provider"] = provider
 

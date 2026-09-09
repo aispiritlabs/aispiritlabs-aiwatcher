@@ -39,7 +39,7 @@ pub use error::{CoreError, Result};
 pub use ids::{CausationId, CorrelationId, MessageId, SpanId, TraceId};
 pub use prompts::{
     ObjectEntry, ObjectStore, OptimizationOutcome, OptimizationRecord, OptimizationSummary,
-    PromptError, PromptHead, PromptName, PromptSummary, PromptVersion, PromptVersionId,
+    PromptError, PromptHead, PromptName, PromptRef, PromptSummary, PromptVersion, PromptVersionId,
     PromptVersionSummary, RejectionReason, Score, Verdict, VersionOrigin,
 };
 pub use stream::{GlobalPosition, StreamName, StreamPosition};

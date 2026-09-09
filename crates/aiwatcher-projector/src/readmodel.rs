@@ -163,7 +163,15 @@ impl RunSummary {
             self.cached_tokens += event.data_i64("cached_tokens").unwrap_or(0);
         }
 
-        if subject == Subject::Run {
+        // A managed execution never emits `run.completed`: the engine owns the
+        // run and says so with `execution.*` (ADR_0026), whose end phases are
+        // already in the catalog. Reading only `Subject::Run` left every such
+        // run `Running` forever while the workflow fold beside it said
+        // `succeeded` — two views of one run disagreeing. The guardrail this
+        // sits under refuses to *infer* an ending from silence; this is not an
+        // inference, it is the producer saying it finished in the vocabulary
+        // its own ADR gave it.
+        if matches!(subject, Subject::Run | Subject::Execution) {
             match phase {
                 Some(Phase::End { ok: true }) => {
                     self.status = RunStatus::Succeeded;
@@ -171,9 +179,12 @@ impl RunSummary {
                 }
                 Some(Phase::End { ok: false }) => {
                     self.status = RunStatus::Failed;
+                    // `reason` is what `execution.failed` calls it — the
+                    // engine's own word, and the only one it writes.
                     self.error = event
                         .data_str("error")
                         .or_else(|| event.data_str("message"))
+                        .or_else(|| event.data_str("reason"))
                         .map(ToOwned::to_owned);
                     self.finish(event.metadata.occurred_at);
                 }

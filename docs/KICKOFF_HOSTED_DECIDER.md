@@ -26,16 +26,19 @@ history at all. That is the gap, and it is the only one worth filling —
 
 ## What already exists, checked in the tree
 
-The vocabulary is there and nothing produces it:
+**Steps 1 and 2 below have since landed, so read this section as history.** The
+append route and the decider lease are built: `hosted.rs` holds `HostedAppend`,
+`DeciderLease` and `LeaseOutcome`, `POST /api/v1/executions/{id}/stream` serves
+the append, and the lease is proved by the storage contract on all three
+adapters rather than by one adapter's test. `ExecutionOwner::Worker` and
+`ExecutionMode::Hosted` now have a producer — `executions.rs` maps a worker
+target onto them.
 
-- `ExecutionOwner::Worker` — `state.rs:180`. Constructed in exactly one place, a
-  unit test at `state.rs:541`.
-- `ExecutionMode::Hosted` — `state.rs:233`. Read by the PostgreSQL serializer at
-  `store/postgres/mod.rs:871,937`. Nothing writes it.
-
-So the enum arms compile, round-trip through the store and mean nothing yet.
-That is the honest starting point: the type says the design was decided, the
-absence of callers says it was not built.
+What is left is steps 3, 4 and 5, plus one thing this document decided and
+nothing enforces: `PayloadPolicy::needs_archive` has no caller, so a definition
+choosing `sealed` without `AIWATCHER_CONVERSATION_ARCHIVE` and
+`AIWATCHER_CONVERSATION_KEYS` is not refused. [Architecture §28's *What is
+left*](PIPELINE_ARCHITECTURE.md#what-is-left) is the current list.
 
 What *is* built and is the foundation: the atomic six-write transaction, the
 inbox keyed by message id, expected-version append, the outbox publishing after

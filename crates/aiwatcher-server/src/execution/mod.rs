@@ -129,8 +129,8 @@ pub fn spawn(
     let artifacts = objects.map(|store| artifacts::Artifacts::new(Arc::clone(store)));
     // The manifest beside the bytes, and the cache index beside both. `None`
     // when this deployment has no object store, which runs everything and
-    // remembers nothing — section 18's "deleting the index loses nothing
-    // authoritative", taken to its limit.
+    // remembers nothing: deleting the index loses nothing authoritative,
+    // taken to its limit.
     let catalog: Option<Arc<dyn ArtifactCatalog>> = objects.map(|store| {
         Arc::new(ObjectArtifactCatalog::new(Arc::clone(store))) as Arc<dyn ArtifactCatalog>
     });

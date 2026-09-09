@@ -1,6 +1,6 @@
 # ADR_0009: Installation decides what to install by reading the cluster, not by flags
 
-- **Status**: accepted
+- **Status**: accepted; what is detected beside planner is Perses, not Grafana, since 2026-09-09 — see [ADR_0005](ADR_0005_TRACE_STORAGE.md#amendment-2026-09-09-the-waterfall-comes-from-perses-not-grafana)
 - **Date**: 2026-08-28
 
 ## Context

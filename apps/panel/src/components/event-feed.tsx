@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { cn, formatTime, shortId } from '@/lib/utils';
 import { IdChip } from '@/components/ui/primitives';
+import { PromptRefLink } from '@/components/prompt-bits';
 import { VirtualList } from '@/components/virtual-list';
 
 /**
@@ -90,29 +91,40 @@ function Payload({ data }: { data: Record<string, unknown> }) {
   const entries = Object.entries(data);
   if (entries.length === 0) return <span className="text-muted-foreground">—</span>;
 
+  // The prompt reference is the one field worth lifting out of the payload:
+  // it is the only one that opens something. It stays in the JSON below too —
+  // this view's whole promise is that nothing is hidden.
+  const prompt = <PromptRefLink name={data['prompt_name']} versionId={data['prompt_version']} />;
+
   if (!open) {
     const preview = entries
       .slice(0, 3)
       .map(([key, value]) => `${key}=${formatValue(value)}`)
       .join('  ');
     return (
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="id text-left text-muted-foreground hover:text-foreground"
-      >
-        {preview}
-        {entries.length > 3 ? ` +${entries.length - 3}` : ''}
-      </button>
+      <span className="flex flex-wrap items-baseline gap-x-2">
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="id text-left text-muted-foreground hover:text-foreground"
+        >
+          {preview}
+          {entries.length > 3 ? ` +${entries.length - 3}` : ''}
+        </button>
+        {prompt}
+      </span>
     );
   }
 
   return (
-    <button type="button" onClick={() => setOpen(false)} className="text-left">
-      <pre className="id whitespace-pre-wrap rounded bg-muted p-2 text-muted-foreground">
-        {JSON.stringify(data, null, 2)}
-      </pre>
-    </button>
+    <span className="block">
+      <button type="button" onClick={() => setOpen(false)} className="block w-full text-left">
+        <pre className="id whitespace-pre-wrap rounded bg-muted p-2 text-muted-foreground">
+          {JSON.stringify(data, null, 2)}
+        </pre>
+      </button>
+      {prompt}
+    </span>
   );
 }
 

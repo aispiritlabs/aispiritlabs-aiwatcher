@@ -118,7 +118,9 @@ export function LearningCurve({
             const point = entry?.points.find(([x]) => x === hover);
             return point ? { def, value: point[1] } : null;
           })
-          .filter((entry): entry is { def: (typeof defs)[number]; value: number } => entry !== null);
+          .filter(
+            (entry): entry is { def: (typeof defs)[number]; value: number } => entry !== null,
+          );
 
   return (
     <div ref={container} className="relative flex flex-col gap-2">
@@ -147,10 +149,12 @@ export function LearningCurve({
           );
         })}
         {!normalise &&
-          ([
-            [1, geometry.shared[1]],
-            [0, geometry.shared[0]],
-          ] as const).map(([fraction, value]) => (
+          (
+            [
+              [1, geometry.shared[1]],
+              [0, geometry.shared[0]],
+            ] as const
+          ).map(([fraction, value]) => (
             <text
               key={fraction}
               x={PADDING.left - 6}

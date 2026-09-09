@@ -73,15 +73,15 @@ collector:
     requests: { cpu: 50m, memory: 96Mi }
     limits: { memory: 256Mi }
 
-grafana:
-  datasources:
+perses:
+  provisioning:
     enabled: true
-    # planner's Grafana provisions from a fixed ConfigMap rather than from a
-    # sidecar, so no label makes it pick this up on its own. The ConfigMap is
-    # still emitted, and docs/INSTALL.md has the one-line change on planner's
-    # side. The uid below is the one planner's own datasource already uses, so
-    # the trace-to-metric links land somewhere real.
-    metricsDatasourceUid: victoria-metrics
+    # planner's Perses provisions from fixed ConfigMap mounts rather than from a
+    # sidecar, so no label makes it pick this up on its own. What planner does
+    # instead is mount a ConfigMap of this exact name into a provisioning folder
+    # of its own, optional so its absence is harmless — see docs/INSTALL.md.
+    # That mount is why the name below is not free to change on this side alone.
+    tracesDatasourceName: aiwatcher-traces
 
 promptStore:
   # planner already runs RustFS in this namespace — `planner-rustfs-svc`, which
@@ -207,7 +207,7 @@ ingress:
   enabled: true
   className: traefik
   # Deliberately absent. detect-stack.py derives the host from what planner
-  # already publishes — planner.<domain>, grafana.<domain>, so
+  # already publishes — planner.<domain>, perses.<domain>, so
   # aiwatcher.<domain> — and passes it in underneath this file, which is why
   # naming it here would break that. AIWATCHER_DOMAIN overrides both.
   #

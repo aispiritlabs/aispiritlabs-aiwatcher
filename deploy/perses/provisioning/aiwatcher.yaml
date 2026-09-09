@@ -1,0 +1,45 @@
+# VictoriaTraces speaks the Jaeger query API, so Perses' bundled Jaeger
+# datasource reads it with no plugin to install — the same reason Grafana's
+# Jaeger datasource could. This is the historical view; aiwatcher's own panel
+# draws runs that are still in flight, which a trace store cannot show.
+#
+# Both go through the Perses server's proxy rather than `directUrl`: the browser
+# has no route to a compose service name. That is what `access: proxy` did on
+# the Grafana side.
+- kind: Project
+  metadata:
+    name: aiwatcher
+  spec:
+    display:
+      name: aiwatcher
+
+- kind: GlobalDatasource
+  metadata:
+    name: victoriatraces
+  spec:
+    default: true
+    display:
+      name: VictoriaTraces
+    plugin:
+      kind: JaegerDatasource
+      spec:
+        proxy:
+          kind: HTTPProxy
+          spec:
+            url: http://victoriatraces:10428/select/jaeger
+
+- kind: GlobalDatasource
+  metadata:
+    name: victoriametrics
+  spec:
+    default: true
+    display:
+      name: VictoriaMetrics
+    plugin:
+      kind: PrometheusDatasource
+      spec:
+        scrapeInterval: 15s
+        proxy:
+          kind: HTTPProxy
+          spec:
+            url: http://victoriametrics:8428

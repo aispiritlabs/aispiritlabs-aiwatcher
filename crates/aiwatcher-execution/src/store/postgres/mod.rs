@@ -575,8 +575,8 @@ impl WorkflowStore for PostgresWorkflowStore {
 
         if request.overlap == crate::OverlapPolicy::Skip {
             // In the same transaction as the claim, and against the projection
-            // this store already holds — never the read model, which is what
-            // review R1 is about.
+            // this store already holds — never the read model, which is
+            // asynchronous and empty in the role the tick runs in.
             let running: Option<String> = sqlx::query_scalar(
                 "select execution_id from execution_runs
                   where definition_name = $1 and state_type <> all($2)

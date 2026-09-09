@@ -226,9 +226,7 @@ function RunPage() {
         </CardHeader>
         <CardContent className="p-0">
           {history.isLoading ? (
-            <p className="p-6 text-center text-sm text-muted-foreground">
-              Loading event history…
-            </p>
+            <p className="p-6 text-center text-sm text-muted-foreground">Loading event history…</p>
           ) : history.isError ? (
             <p className="p-6 text-center text-sm text-danger">
               Event history could not be loaded. New live events will still appear here.
@@ -252,10 +250,7 @@ function toEventFeedEvent(event: RecordedEvent): EventFeedEvent {
   };
 }
 
-function mergeEvents(
-  historical: EventFeedEvent[],
-  live: LiveEventFrame[],
-): EventFeedEvent[] {
+function mergeEvents(historical: EventFeedEvent[], live: LiveEventFrame[]): EventFeedEvent[] {
   const byCheckpoint = new Map<string, EventFeedEvent>();
   for (const event of historical) byCheckpoint.set(event.checkpoint, event);
   for (const event of live) byCheckpoint.set(event.checkpoint, event);

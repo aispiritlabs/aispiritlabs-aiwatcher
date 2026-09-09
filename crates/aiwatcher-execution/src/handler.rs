@@ -1,8 +1,7 @@
 //! The one place `decide` and the store meet.
 //!
-//! Section 10 of the plan, in one function. Every workflow input is handled the
-//! same way, whether it came from the API, from a reactor's completion or from
-//! a worker:
+//! Every workflow input is handled the same way, whether it came from the API,
+//! from a reactor's completion or from a worker:
 //!
 //! ```text
 //! BEGIN

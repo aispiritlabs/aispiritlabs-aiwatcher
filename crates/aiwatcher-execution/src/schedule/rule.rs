@@ -120,11 +120,10 @@ impl Schedule {
     ///
     /// The three fields that decide *when*, and deliberately not `overlap`,
     /// which decides what happens when a slot comes round rather than whether
-    /// one does. The distinction is: a new
-    /// activation moment silently drops a slot that was already due, so it may
-    /// only be taken when the rule for producing slots actually changed.
-    /// Somebody switching `skip` to `allow` at 08:59 must not lose the nine
-    /// o'clock run.
+    /// one does. The distinction matters: a new activation moment silently
+    /// drops a slot that was already due, so it may only be taken when the
+    /// rule for producing slots actually changed. Somebody switching `skip` to
+    /// `allow` at 08:59 must not lose the nine o'clock run.
     #[must_use]
     pub fn fires_the_same_as(&self, other: &Self) -> bool {
         self.cadence == other.cadence
@@ -161,13 +160,13 @@ impl Schedule {
         };
 
         // Enumerated by **local calendar date**, never by stepping from
-        // `previous`. That is: the old walk
-        // sampled the zone at `previous`, `previous + step`, … and around a
-        // fall-back the same local time exists at two instants, so which of
-        // them a sample landed on depended on where the interval had been cut.
-        // Daily 02:30 in Warsaw on 2026-10-25 fired once for one call over
-        // 00:00Z–02:00Z and twice for the same span in twenty-minute ticks —
-        // two instants, two derived ids, two runs of one day's intention.
+        // `previous`. That is the fix: the old walk sampled the zone at
+        // `previous`, `previous + step`, … and around a fall-back the same
+        // local time exists at two instants, so which of them a sample landed
+        // on depended on where the interval had been cut. Daily 02:30 in
+        // Warsaw on 2026-10-25 fired once for one call over 00:00Z–02:00Z and
+        // twice for the same span in twenty-minute ticks — two instants, two
+        // derived ids, two runs of one day's intention.
         //
         // A candidate set that depends only on the local calendar makes the
         // answer a function of the interval and nothing else, which is what
@@ -661,13 +660,13 @@ mod tests {
 
     #[test]
     fn a_daily_slot_in_the_hour_the_clocks_repeat_fires_once_however_the_tick_is_cut() {
-        // Review R5, reproduced exactly. Warsaw goes back an hour at 01:00Z on
-        // 2026-10-25, so local 02:30 is lived through twice — at 00:30Z and at
-        // 01:30Z. The old walk sampled the zone at `previous + n * step`, so
-        // which of the two it found depended on where the interval had been
-        // cut: one call over 00:00Z–02:00Z returned 00:30Z, and the same span
-        // in twenty-minute ticks returned both. Two instants are two derived
-        // ids, so one day's intention ran twice.
+        // Warsaw goes back an hour at 01:00Z on 2026-10-25, so local 02:30 is
+        // lived through twice — at 00:30Z and at 01:30Z. The old walk sampled
+        // the zone at `previous + n * step`, so which of the two it found
+        // depended on where the interval had been cut: one call over
+        // 00:00Z–02:00Z returned 00:30Z, and the same span in twenty-minute
+        // ticks returned both. Two instants are two derived ids, so one day's
+        // intention ran twice.
         let schedule = daily_at(2, 30, "Europe/Warsaw");
         let (from, to) = (
             datetime!(2026-10-25 00:00 UTC),

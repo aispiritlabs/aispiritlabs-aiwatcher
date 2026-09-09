@@ -1,18 +1,17 @@
 # Kick-off — the next work, in delivery order
 
-- **Status:** active backlog after the 2026-09-08 review. Every item below is
-  open until its acceptance evidence is recorded. Items 1–5 are closed; item 6
-  is part-delivered — the protocol, SDK and authoring path are in; Planner parity is not.
-  Every finding in the review is closed; what remains is one integration.
+- **Status:** items 1–6 are closed, Planner parity included. What is left is
+  the hosted decider, and it is half-built — see *Start here next* below.
 - **Audience:** whoever picks this up next, in a session that starts cold.
 - **Last updated:** 2026-09-09
 
-Managed Flow and marimo runs, execution controls, retention, schedules and the
-chart exist. Upgrade compatibility, local recovery, the scheduler, the panel's
-error handling and historical context are closed; item 6 remains. Do not infer
-production readiness from “Phases 0–7 built” or from a green happy-path
-suite. The authoritative delivery order and acceptance gates
-are in [architecture §28](PIPELINE_ARCHITECTURE.md#28-migration-plan).
+Managed Flow and marimo runs, execution controls, retention, schedules, the
+chart and the worker boundary exist. Do not infer production readiness from
+“Phases 0–7, 10 and 11 built” or from a green happy-path suite: the 2026-09-08
+review disproved three acceptance claims that every suite passed. The
+authoritative delivery order and acceptance gates are in
+[architecture §28](PIPELINE_ARCHITECTURE.md#28-migration-plan), whose *What is
+left* is the current list.
 
 ## Read in this order
 

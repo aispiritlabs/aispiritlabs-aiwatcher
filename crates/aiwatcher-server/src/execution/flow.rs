@@ -225,8 +225,7 @@ impl ActivityExecutor for FlowExecutor {
         // A service that does not serve this route at all — an older build —
         // is a service that cannot be asked, which is what `Absent` means. The
         // cost is a retry that may duplicate work, which is exactly the state
-        // section 15.4 exists to leave behind, and it is not a reason to fail
-        // a step.
+        // the lookup exists to leave behind — and not a reason to fail a step.
         if response.status == reqwest::StatusCode::NOT_FOUND {
             return Ok(PriorAttempt::Absent);
         }
@@ -416,9 +415,8 @@ fn yes() -> bool {
 
 /// Whether this result may be remembered under the step's cache key.
 ///
-/// Both halves are the *service's* answer rather than the request's, for the
-/// reason section 43.18 states: whether a key is well defined is `cache_key`'s
-/// question, and whether the run that produced these rows happened under those
+/// Both halves are the *service's* answer rather than the request's: whether a
+/// key is well defined is `cache_key`'s question, and whether the run that produced these rows happened under those
 /// conditions is only knowable where the query resolved.
 fn worth_remembering(pinned_a_span: bool, applied: Option<&str>, deterministic: bool) -> bool {
     deterministic && (!pinned_a_span || applied == Some("span"))

@@ -130,8 +130,8 @@ impl ActivityExecutor for PublishExecutor {
 
 /// The query that produced the rows this step publishes.
 ///
-/// Walks back through the plan's edges to the nearest Flow step. In a Phase 5
-/// chain there is exactly one and it is the step immediately before; the walk
+/// Walks back through the plan's edges to the nearest Flow step. In a
+/// Flow-only chain there is exactly one and it is the step before; the walk
 /// is what keeps that true once a notebook sits between them, where the script
 /// alone no longer describes the execution and `produced_by` is what does.
 fn script_of(plan: &ExecutionPlan, from: &str) -> String {
@@ -236,9 +236,9 @@ mod tests {
 
     #[test]
     fn a_notebook_between_them_does_not_hide_the_query() {
-        // Phase 6's shape, checked here because the walk is what keeps this
-        // true when it arrives. The script alone stops describing the
-        // execution at that point, which is what `produced_by` is for.
+        // Checked here because the walk is what keeps this true once a
+        // notebook arrives. The script alone stops describing the execution at
+        // that point, which is what `produced_by` is for.
         let plan = ExecutionPlan::seal(
             DefinitionKind::CurationPipeline,
             "pii".to_owned(),

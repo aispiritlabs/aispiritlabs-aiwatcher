@@ -504,8 +504,8 @@ impl WorkflowStore for DuckdbWorkflowStore {
                 return Ok(());
             };
             // A caller whose lease was taken over says nothing. A slow tick
-            // overwriting a fresh decision with a stale one is review R3 in a
-            // second place.
+            // overwriting a fresh decision with a stale one is the same bug a
+            // schedule's configuration has, in a second place.
             if record.lease_owner.as_deref() != Some(owner.as_str()) {
                 return Ok(());
             }

@@ -500,7 +500,7 @@ collector:
 # ── VictoriaTraces ───────────────────────────────────────────────────────────
 #
 # Where finished spans go. The only store that takes OTLP natively and answers
-# the Jaeger query API, which is what lets Grafana read it with no plugin
+# the Jaeger query API, which is what lets Perses read it with no plugin
 # (ADR_0005).
 victoriatraces:
   # install | external | none
@@ -676,24 +676,29 @@ promptStore:
     limits:
       memory: 512Mi
 
-# ── Grafana wiring ───────────────────────────────────────────────────────────
+# ── Perses wiring ────────────────────────────────────────────────────────────
 #
-# This chart never installs Grafana — every cluster that wants one already has
+# This chart never installs Perses — every cluster that wants one already has
 # one, and a second would be a second thing to authenticate. It emits the
 # datasource provisioning instead.
-grafana:
-  datasources:
+#
+# Perses has no equivalent of Grafana's datasource-level tracesToMetrics /
+# tracesToLogs correlation, so that link is gone rather than renamed. A span
+# still carries `gen_ai.request.model`; what is missing is the one click from a
+# span to the metric filtered by it.
+perses:
+  provisioning:
     enabled: true
-    # A Grafana whose chart runs the provisioning sidecar picks the ConfigMap up
-    # from this label alone. Grafana provisioned from a fixed ConfigMap (which
-    # is how planner does it) does not — see docs/INSTALL.md for the one-line
-    # change on that side.
+    # A Perses whose chart runs the provisioning sidecar picks the ConfigMap up
+    # from this label alone — the sidecar watches `perses.dev/resource: "true"`.
+    # Perses provisioned from fixed ConfigMap mounts (which is how planner does
+    # it) does not; see docs/INSTALL.md for the one-line change on that side.
     labels:
-      grafana_datasource: "1"
-    # The uid the traces-to-metrics link points at. Must match the uid of the
-    # metrics datasource that Grafana already has, or the link lands nowhere.
-    metricsDatasourceUid: victoriametrics
-    tracesDatasourceUid: victoriatraces
+      perses.dev/resource: "true"
+    # Perses references datasources by name, not by uid. This is the name the
+    # emitted GlobalDatasource takes; it has to be unique among the global
+    # datasources the target Perses already has.
+    tracesDatasourceName: aiwatcher-traces
 
 # ── Ingress ──────────────────────────────────────────────────────────────────
 #

@@ -149,8 +149,8 @@ pub struct AppState {
     /// The same catalog the work role's reactors hold, because a worker's step
     /// is cached and traced like any other. `None` runs everything and
     /// remembers nothing, which is the state a deployment with no object store
-    /// is in — section 18's "deleting the index never loses an authoritative
-    /// result", taken to its limit.
+    /// is in: deleting the index never loses an authoritative result, taken to
+    /// its limit.
     pub catalog: Option<Arc<dyn ArtifactCatalog>>,
     /// `None` when no identity provider is configured, which is the default.
     /// Unlike `prompts` and `runner`, absence here is not a 501 on a few

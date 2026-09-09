@@ -1,7 +1,7 @@
 //! The queued import, over an in-memory store and a fake image source.
 //!
-//! Every test here is named after one of [plan.md]'s acceptance criteria for
-//! scalable Hub ingestion, because that is what they are: a large import
+//! Every test here is named after one of the acceptance criteria for scalable
+//! Hub ingestion, because that is what they are: a large import
 //! resumes after a restart, its progress and its rejected rows are readable
 //! without opening the artifact, the same pinned source reaches the same
 //! version, no address outside the allowlist is fetched, and an interrupted

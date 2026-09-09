@@ -1,7 +1,7 @@
 //! Claim an attempt, run it, report what happened.
 //!
-//! Steps 1, 2, 7 and 8 of section 14 — the four that are the same for every
-//! runtime, so an [`ActivityExecutor`] only has to own 3 to 6.
+//! Steps 1, 2, 7 and 8 of [`crate::activity`]'s eight — the four that are the
+//! same for every runtime, so an [`ActivityExecutor`] only owns 3 to 6.
 //!
 //! ```text
 //!   claim ──► load the plan ──► lookup? ──► execute ──► still holding? ──► report
@@ -105,8 +105,8 @@ pub struct Reactor<S> {
     owner: String,
     /// Where a hit is looked up and a result is recorded. `None` runs
     /// everything and remembers nothing, which is a working state and the one a
-    /// deployment with no object store is in — section 18's "deleting the index
-    /// never loses an authoritative result", taken to its limit.
+    /// deployment with no object store is in: deleting the index never loses
+    /// an authoritative result, taken to its limit.
     catalog: Option<Arc<dyn crate::ArtifactCatalog>>,
 }
 
@@ -443,7 +443,7 @@ impl<S: WorkflowStore> Reactor<S> {
     /// A usable entry for this key, or nothing.
     ///
     /// A catalog that could not be read answers `None` and the work is done
-    /// again, which is the index losing nothing
+    /// again, which is what is meant by the index losing nothing
     /// authoritative. It is logged rather than returned: a cache being down is
     /// not a reason to fail a step.
     async fn cached(

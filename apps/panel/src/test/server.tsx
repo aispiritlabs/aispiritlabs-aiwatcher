@@ -7,8 +7,8 @@ import { vi } from 'vitest';
  *
  * The stub is `fetch`, not the generated SDK, so everything under test is the
  * real path: the generated client's own decision to *resolve* on a 403 rather
- * than throw is what review R6 is about, and mocking the SDK would replace
- * precisely the thing that has to be proved.
+ * than throw is the thing that has to be proved, and mocking the SDK would
+ * replace precisely that.
  */
 
 export type Answer = { status: number; body?: unknown };

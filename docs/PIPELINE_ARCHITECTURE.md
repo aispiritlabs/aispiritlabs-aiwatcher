@@ -1570,651 +1570,153 @@ because both roles are one process.
 
 ## 28. Migration plan
 
-**Current delivery order, 2026-09-08.** The review reopened guarantees that
-happy-path implementation and manual runs had not proved. The numbered work
-items below are the order of remaining delivery. Phase 0–15 labels are kept
-for existing references and describe feature scope; they are not a requirement
-to build every lower-numbered feature before a higher-numbered one.
+**Delivery order as of 2026-09-09.** Works 1–6 are closed. The only item being
+worked toward in this repository is Phase 13, which is half-built; phases 8, 9,
+12, 14 and 15 stay behind their own gates, with nothing building them. Phase 0–15 labels are
+kept because ADRs, kickoff documents and code comments cite them by number —
+they name feature scope, not an order that requires every lower-numbered phase
+before a higher-numbered one.
 
 [KICKOFF.md](KICKOFF.md) is the short entry point.
-[PIPELINE_REVIEW_2026-09-08.md](PIPELINE_REVIEW_2026-09-08.md) records the evidence:
-`R1–R7` concern the pending changes, `A1` is a pre-existing file-store defect.
-Work items 1, 2, 3 and 4 are **closed** (2026-09-08, evidence under each).
-Item 5 is closed as well, editor sessions included — in a shape 16.3 did not
-describe, for the reason recorded under it. Item 6 has not started. Updating
-this plan closes none of the rest.
+[PIPELINE_REVIEW_2026-09-08.md](PIPELINE_REVIEW_2026-09-08.md) holds the findings
+works 1–5 close — `R1–R7` concern the changes that were pending then, `A1`
+predates them — and
+[WORKER_PROTOCOL_REVIEW_2026-09-09.md](WORKER_PROTOCOL_REVIEW_2026-09-09.md)
+holds work 6's.
 
-### Current capabilities and unproved exits
+### Delivered, in one line each
 
-| Capability | Implemented | Remaining acceptance gap | Work item |
+The reasoning that produced these is [§43](#43-what-building-it-changed), which
+keeps one entry per thing the code said back. What follows is the outline and
+where to check it.
+
+| # | Work | What it settled | Evidence |
 |---|---|---|---|
-| Decisions and workflow facts (Phases 0–3) | ADRs, plan/compiler, pure decider, outbox producer and workflow fold | **Closed:** partial-commit recovery journalled and fault-tested | 2 |
-| PostgreSQL and deployment | Adapter, five migrations, retention, combined/split chart | **Closed:** upgrade, reopen, old/new and rollback covered by `tests/postgres_upgrade.rs` | 1 |
-| Local execution | File adapter, OS-held exclusion, intent journal | **Closed:** repair, torn tails, stale locks and the attempts upgrade covered | 2 |
-| Managed Flow and marimo (Phases 5–6) | Executors, artifacts, lookup, publication, and a run that resolves its pinned source | **Closed:** the runtime keeps every revision and a step names its pin | 5 |
-| Context (Phase 4) | Artifact metadata/lineage/cache, ContextSnapshot, context-based staging, the code a step ran, a server-resolved editor session | **Closed:** the gate is the route, not a token the runtime could not check | — |
-| Panel (Phase 7) | Managed run, controls, allowed actions, URL restoration, one reader for every server answer, a canvas that follows a managed run | **Closed:** errors cover 403/409/501/503/404/422/204, and the canvas draws a run's states only at the revision it compiled | — |
-| Scheduler | Cadence, CRUD, transactional admission, per-slot outcomes | **Closed:** admission, retry, concurrent edits, activation and DST | 3 |
-| Worker/Planner (Phases 10–11) | Design and domain vocabulary | Working protocol, SDK task and end-to-end integration | 6 |
-| Human input (Phase 14) | Answer/control path | Authored HumanInput step, timeout/authorization acceptance | Own use-case gate |
-
-The 2026-09-08 review ran the focused Rust suite, PostgreSQL suite, both optional
-service checks and panel typecheck successfully — the panel had no tests of its
-own to run, which is what let a refusal drawn as a success typecheck cleanly;
-work 4 added the runner. It also reproduced a stale
-schedule overwrite, tick-dependent DST results and a file commit that could not
-recover. Those results narrow the earlier manual acceptance claims in section
-43; they do not erase the features that already work.
-
-### Work 1 — upgrade compatibility before release (R4)
-
-**Dependency:** none. This is the first task because starting a new process may
-migrate the shared database before the other fixes are delivered.
-
-- Decide the supported old/new version overlap. Prefer removing SQL references
-  in one release and dropping the columns in a later release after the old
-  processes and supported rollback versions no longer need them.
-- Account for databases already at schema 4. Changing an applied migration
-  file does not repair such a database; use an explicit forward-compatible
-  change or a documented restore/rollback procedure as appropriate.
-- Test upgrade from schema 2 and 3, reopening schema 4, and retention of
-  `awaiting_input` through 0004. Include old/new readers and writers under the
-  selected deployment procedure, not only a fresh schema and repeated `apply`.
-- Document startup migration behaviour, deployment ordering and rollback in
-  `INSTALL.md`. If mixed versions are unsupported for a migration, stop all
-  incompatible processes before it runs and prove that procedure.
-
-**Exit:** the supported upgrade and rollback paths preserve accepted executions
-and do not expose old SQL to an incompatible schema. Migration advisory locking
-alone does not satisfy this exit.
-
-**Closed 2026-09-08.** The first option was taken: this release stops using the
-columns and keeps them, and a later one drops them. Migration 0005 re-adds
-`execution_runs.started_at` and `ended_at` as nullable, so every path converges
-on the shape 0001 declared — a database that never applied 0003 drops and
-re-adds them, and one already at schema 4 gets them back when it is reopened.
-0003 is left applied and unedited but for a comment pointing at 0005, because a
-recorded version is skipped forever after and rewriting it repairs no database
-that already ran it. The general rule — a release may not remove something the
-release before it names — is stated in
-`crates/aiwatcher-execution/src/store/postgres/schema.rs` beside the file list,
-in `CLAUDE.md`'s guardrails, and as a procedure in
-[INSTALL.md](INSTALL.md#upgrading-its-schema). No coordinated stop is required
-and rollback needs no database work.
-
-*Evidence:* `crates/aiwatcher-execution/tests/postgres_upgrade.rs`, seven tests
-run by `just test-postgres` alongside the existing five. The fixture is the
-previous release's own SQL, copied verbatim from `3117259` rather than rebuilt
-from the current adapter's strings. Each test owns a PostgreSQL schema and
-reaches it through `search_path`, so historical DDL does not touch the shared
-one. Covered: upgrade from schema 2, from schema 3, reopening schema 4, a fresh
-database, repeated `apply` after an upgrade, the old binary reading and writing
-a row the new code wrote and the reverse, and 0004 taking the four terminal
-attempt states while `awaiting_input` and `running` survive. Removing 0005 from
-the runner fails six of the seven, each naming the missing column; the 0004 test
-is independent of it and passes either way. `just check` and `just test-postgres`
-both green.
-
-### Work 2 — local commit and restart recovery (A1)
-
-**Dependency:** work 1 defines a safe release path. Complete this before relying
-on new scheduler control state stored through the same port.
-
-- Choose an atomic local commit journal with reconstruction of its derived
-  files, or a transactional local adapter, and record the storage decision.
-- Ensure replay/dedup repairs missing projection, outbox, attempts and checkpoint
-  writes. An input ID present in the stream is not proof that every dependent
-  write completed.
-- Inject failure after each commit boundary, then retry and reopen. Include
-  truncated writes and SIGKILL/restart with stale-lock handling.
-- Upgrade old file-store terminal attempt rows while preserving live and
-  `awaiting_input` rows. Keep `WorkflowStore::attempt()` as an explicit contract
-  observation method; document that reason rather than removing test visibility.
-
-**Exit:** every accepted decision survives restart with its work recoverable or
-an explicit terminal outcome. No duplicate response may strand an execution
-without its required outbox/attempt. The same relevant contract runs on memory,
-file and PostgreSQL, with adapter-specific fault tests beside it.
-
-**Closed 2026-09-08.** An **intent journal**, not a transactional local adapter.
-The adapter's identity is the write-ahead log's shape — one append-only file per
-execution, no index to keep in sync, honest about being weaker than a
-transaction — and a journal keeps that while removing the failure; a local
-database would have replaced the thing rather than fixed it, for a store whose
-whole purpose is `just dev`. `PendingCommit` holds the five writes one decision
-makes and is `fsync`ed into `commits/` before any of them; that rename is the
-commit point, `apply` is idempotent in each of its five steps, and the record is
-deleted only once it has run. `recover` runs at `open` *and* at the top of every
-`append`, because A1's reproduction never restarted anything — it failed a write
-and retried in the same process, and the repair has to happen before the
-duplicate check to turn that `Duplicate` back into a true answer.
-
-Three defects beside it, each found by writing the tests this item asked for.
-A torn final line was read as end-of-stream and then written *behind*, which
-would have frozen a run's history at the moment of a crash with nothing saying
-so; `read_stream_valid` returns the byte length of the complete records and
-`apply` truncates to it. The single-process lock was a `create_new` file removed
-by `Drop`, which is precisely the code `SIGKILL` does not run — it is now
-`File::try_lock`, released by the kernel however the process ends, and the file
-is never unlinked while held. And an `attempts.json` written before section
-43.34 carries terminal rows this build never writes; `retire_finished_attempts`
-is the file-store half of migration 0004, keyed on `is_terminal` rather than a
-second list, and `awaiting_input` keeps its row.
-
-`WorkflowStore::attempt()` is kept and its purpose is now documented on the
-trait: it is an observation point for the contract suite and has no production
-caller, because the properties worth proving about a claim table are statements
-about a row no operation returns.
-
-*Evidence:* seven tests in `store/file.rs`'s own module, where the private path
-helpers are reachable. Failures are injected through the filesystem — a
-directory standing where `write_atomically` wants its temporary file — which is
-how the review reproduced the original defect; nothing in `file.rs` knows it is
-being tested. One decision writes into all five files, and the interruption test
-runs the projection, outbox, attempts and checkpoint boundaries in turn, each in
-a fresh store, retrying the identical input. Beside them: recovery at reopen, an
-unreadable journal record discarded, the torn line, a lock left by a killed
-process, a held lock still refusing, and the attempts upgrade. Each fix was
-confirmed against its own negative control — disabling recovery fails three,
-removing the truncation or the attempts sweep fails one each, restoring
-`create_new` fails the lock test. `just check` and `just test-postgres` green.
-
-### Work 3 — scheduler correctness (R1, R2, R3, R5, R7)
-
-**Closed 2026-09-08.** R5 and R7 went first, being the pure half — a rule about
-when a slot exists, needing no storage decision. R1, R2 and R3 turned out to be
-one design rather than three fixes and were done together; the `run_now`
-identity in the exit came with them.
-
-*R5, the DST policy.* `slots_between` walked from `previous` in strides of the
-cadence and read the zone's offset at each sample, so around a transition the
-answer depended on where the interval had been cut: daily 02:30 in Warsaw on
-2026-10-25 gave `[00:30Z]` for one call over 00:00Z–02:00Z and
-`[00:30Z, 01:30Z]` for the same span in twenty-minute ticks. Candidates are now
-enumerated by **local calendar date**, which depends on nothing but the
-interval, and each wall time is resolved with a policy stated per cadence:
-daily and weekly take the first of an ambiguous pair and, for a time the clocks
-skipped, the instant they reach — found by bisecting on whole Unix seconds,
-because `execution_id_for` names the slot's `unix_timestamp` and a slot carrying
-nanoseconds would derive one id on the tick and another on a replay. Hourly
-lives a repeated hour twice and a skipped one not at all, because "every hour"
-counts hours.
-
-*R7, the activation moment.* `ScheduledDefinition::effective_from`, and
-`slots_due` clips the interval to it. Deliberately not `updated_at`: the review
-warns that taking every edit as a boundary would drop a slot that was already
-due, so it moves only when `Schedule::fires_the_same_as` says cadence, timezone
-or enabled changed. Re-enabling is therefore an activation and switching
-`overlap` is not. The field is optional and falls back to `updated_at`, so a
-schedule stored by the previous release is effective from when it was written
-rather than from the epoch.
-
-*Evidence:* eleven tests — six in `schedule/rule.rs`, five in
-`schedule/store.rs`. Both reproductions from the review are regression tests,
-and `cutting_an_interval_that_crosses_either_change_yields_the_same_slots` is
-the property they are instances of, over three zones, four cadences and both
-transitions. Negative controls: restoring the old walk fails three of the six,
-and ignoring `effective_from` fails all five — including the one that catches
-the naive `updated_at` boundary.
-
-*R1, R2 and R3 — one design.* All three were the question of **where slot
-processing state lives**. Configuration stays in the object store and the tick
-no longer writes it; admission and per-slot outcome moved into the
-`WorkflowStore`, which is transactional by construction and is what ADR_0025
-chose it for. Three port methods — `admit_slot`, `settle_slot`, `recent_slots`
-— across `memory`, `file` and `postgres` (migration 0006, a table nothing
-before it names, so no release pair is owed under 0005's rule).
-
-`admit_slot` does three things in one transaction: create the slot if it is
-new, refuse it if somebody settled it or holds a live lease, and — under
-`OverlapPolicy::Skip` — check the definition for a run that has not finished.
-That last one is R1: the caller it replaced read `state.read_model`, an
-asynchronous fold that is empty in the `work` role, so skip never skipped where
-the tick actually runs. `settle_slot` carries R2: `TryAgain` drops the lease
-and leaves the slot due, and the caller draws the transient/permanent line from
-the status the API gave it rather than from prose. R3 is closed structurally —
-the tick is handed a `ScheduleReader`, which has one method and it is `all`, so
-a future change that wants to write configuration from the tick has to widen
-the trait first.
-
-The lease is the claim table's, for the same reason: a tick that dies holding a
-slot must not keep it. `run_now` gained a caller-supplied `request_id` and
-derives its execution id from that instead of from the second the request
-arrived in — the panel mints one per press, deliberately outside `mutationFn`,
-because that function runs again on every retry.
-
-*Evidence:* five properties added to the storage contract suite, so `memory`,
-`file` and PostgreSQL prove the same things — two replicas admit one, a settled
-slot is never re-admitted, a `TryAgain` slot is due immediately, an expired
-lease is taken over and the previous holder can no longer settle it, and a run
-that has not finished blocks the next slot while `allow` is admitted. Two HTTP
-tests for the `run_now` identity, including a retry a second later. Negative
-controls: removing the transactional overlap check fails the block property,
-treating `TryAgain` as a decision fails the transient one, and dropping the
-request identity starts two runs and writes two firings.
-
-Running the suite against a shared PostgreSQL found a real defect in the tests
-themselves — the overlap property used a fixed slot and picked up the previous
-run's row — which is what that database is there for.
-
-### Work 4 — truthful panel errors and client compatibility (R6)
-
-**Closed 2026-09-08.** One reader rather than a rule people remember. The
-generated client resolves on a refusal — `{ data: undefined, error }`, by
-design, `throwOnError` being opt-in — so *every* call site is one forgotten
-check away from running its success path over a 403, and four call sites had
-already grown four byte-identical private copies of the same `apiError` helper
-to cope. `lib/result.ts` is the one place: `ApiFailure` carrying the status the
-error body does not, and three readers named for what absence means on that
-route — `answerOf` where there is always a body, `answerOrNone` where "no such
-thing" is an ordinary answer, `confirmDone` where success carries no body at
-all. The four copies are gone; their call sites read through it.
-
-*The three refusals that read as something else.* A command's refusal ran
-`onSuccess`, so a 403 or a 409 re-read the run, changed nothing and said
-nothing — `answerOf`, and the message with the server's own words. A run's read
-turned every failure into `missing`, because the route passed `managed.isError`
-where it meant "the server says there is no such run": `answerOrNone` makes 404
-a `null` and everything else an error, and the card draws a failure *without*
-the Forget button, since dropping the only link to a run over an outage is the
-opposite of help. And a refused DELETE cleared the schedule form, because a
-successful 204 has no body and "is there data" therefore answered yes for both
-— `confirmDone` asks HTTP success instead.
-
-One thing the review did not name and the same reading found: a failed schedule
-read left the form holding this component's own defaults *and* a working Save,
-so the next click would have written 09:00 daily over a schedule nobody had
-seen. Save is disabled while the read has failed, with the refusal beside it.
-
-*Compatibility.* The `RunProjection` → `RunView` change is recorded where a
-client reads it rather than in a document they do not have: on the schema and
-on `GET /executions/{id}`, so it rides in `contracts/openapi.json` and into the
-generated client's own JSDoc. The projection is unchanged and moved under
-`execution`; a generated client follows by regenerating, a hand-written one
-reads `execution.state` where it read `state`.
-
-*Evidence:* the panel gained a test runner, because it had none — vitest and
-React Testing Library, wired into `just check` and CI. Ten tests across the two
-components, driving the **real** generated client against a stubbed `fetch`:
-mocking the SDK would replace precisely the behaviour under test. They cover
-403 on a command and on a DELETE, 409 on a command, 501 and 503 on a read, 404
-on both reads, 422 with two problem lines, and the successful 204 — and the
-refused-command test counts requests, because "did not run the success path"
-is observable as the re-read that did not happen. Negative controls: restoring
-the old command mutation fails two, restoring `missing={managed.isError}` fails
-two, restoring the unchecked DELETE fails the form-preservation test, and
-restoring "any failure is no schedule" fails the unread-schedule test. `just
-check` green.
-
-### Work 5 — historical code, editor sessions, then canvas (Phases 4, 6, 7)
-
-**Closed 2026-09-08.** All three: historical code, the canvas, and editor
-sessions — the last in a shape 16.3 did not describe, for a reason written
-below rather than worked around.
-
-*Historical notebook source.* The runtime now keeps every source it has been
-given, at `.revisions/<name>/<sha256>.py`, and a managed step **names its pin**
-in the run request rather than asking the head to still match it. The store is
-in the runtime — the alternative, a seventh object-store prefix, needs the bytes
-to reach aiwatcher, and the only paths for that are a socket from the `serve`
-role to a service the guardrails call a development surface, or the panel, which
-ADR_0025 will not make the durability path.
-
-What it replaced is worth naming: this used to read the head's digest and refuse
-a run whose pin no longer matched, so editing a notebook made every earlier
-execution unrepeatable — provenance protected by removing the retry, which is
-not something anybody can perform on a run that already happened. Two orderings
-carry it, both ADR_0011's: the revision is written before the head that names
-it, and `keep_current` at start-up keeps what a directory holds *now*, because
-what it held yesterday was never written down. A revision the runtime does not
-hold is a 404 and never a fallback to the head — running something else under a
-pinned run's name produces rows that look exactly like a success.
-
-*The canvas.* `GET /executions/{id}/blocks` answers which authored blocks became
-which steps, from the pinned plan, and `RuntimeBinding::blocks` is the one place
-that knows which specs carry one — so the forward lookup and the reverse map
-cannot disagree. The interesting case is the one a browser would get wrong: the
-compiler folds a source and every transform behind it into a single Flow query,
-so three boxes light from one `step.started`. `followsTheRun` decides whether
-they may light at all, and its three answers are not two — no managed run is
-`undefined`, an edited draft is `false` and is the ordinary state of working
-rather than a warning. Reopening a step now shows **the code that ran**, read by
-the pinned digest through the revision route.
-
-*Editor sessions, without the token.* 16.3 asked for a short-lived session
-carrying permissions, expiry and a signature. The service it would be presented
-to has **no authentication at all** — localhost, development surface, by
-design — so a token it cannot validate would be ceremony rather than a boundary,
-and a boundary drawn where nothing enforces it is worse than an honest absence.
-
-So the session is **resolved server-side and carries no token**. `EditorHost` is
-the port; `POST /executions/{id}/steps/{step}/editor` is the gate, and it asks
-for `Editor` rather than `Viewer` because staging replaces what everybody
-looking at that notebook's live app is shown. aiwatcher resolves the pinned
-binding, reads the rows *this attempt* read from its own object store, and posts
-them to the runtime's new `POST /ml-pipeline/staging` — which stages and runs
-nothing, because running a notebook to fill its editor would execute somebody's
-code on a click and overwrite the output being looked at.
-
-Two limits are stated rather than hidden. The live app serves the notebook's
-**head**, since marimo turns the notebook root into apps and the history is kept
-out of that root on purpose; the session therefore names the revision that ran,
-and the code itself is read beside it by digest. And the editor host is built in
-the `serve` role — the first thing in `execution/` that is — because a person is
-waiting on the request, not claiming an attempt. Without an address and an
-object store it registers nothing and the route answers 501 naming both
-variables, which is the claim filter's rule one layer up.
-
-*Evidence:* thirteen tests in the runtime — the revision store, its refusals,
-the name a revision keeps, idempotent writes, the start-up backfill, a pinned
-run after the head moved, an unpinned run getting the head, a lost revision as a
-404, the revision route, staging that runs nothing, and staging for a notebook
-nobody wrote. Five HTTP tests: the block map including the folded Flow step, and
-the editor's context, its 422 for a step that is not a notebook, its 502 for a
-runtime that refused, and its 501 naming both variables. Twelve panel tests —
-the mapping, the drift rule, the pinned source a reopened step shows, and the
-open-editor button and its refusal. Negative controls: ignoring the pin fails
-two, falling back to the head fails three, saving without keeping history fails
-five, keying the map by step id fails the HTTP test, treating drift as a match
-fails the drift test, reading the head in the step panel fails the historical
-one, and dropping the attempt from the context fails the editor one. `just
-check` and `just ml-pipeline-check` green.
-
-**Exit:** change the notebook head, reopen an old execution and see its exact
-source and data; retry executes the pinned source. Reload retains the context.
-Canvas acceptance covers both a matching revision and an edited draft.
-A digest mismatch refusal protects provenance but does not satisfy this exit.
-*Met. "Reload retains the context" is the editor session above: the context is
-addressed by execution, step and attempt in the URL, and reopening it stages
-that attempt's own rows rather than the newest.*
-
-Whole-execution preview/simulation is excluded from the current delivery scope.
-Bounded step previews and explicit ad-hoc editor tests remain. Reintroduce a
-simulation mode only with a named requirement for execution without publication.
-
-### Work 6 — one worker integration, then Planner (Phase 10 → Phase 11 Level 2)
-
-**Done.** The protocol, the SDK, the authoring path, the worker-recovery gate
-and Planner's four stages on that boundary. What this does *not* deliver is one
-pod per stage or the removal of Flyte from Planner's chart; both are Phase 12,
-and the second is what Phase 12 earns. The integration status in
-[KICKOFF](KICKOFF.md) stays the record for the SDK's own moving parts.
-
-**Dependency:** works 1–5's applicable execution and product gates. Phase 9,
-Phase 8 and container jobs are not prerequisites. Planner Level 0 observation
-can be delivered earlier because it leaves execution ownership unchanged.
-
-- ~~Worker scope and identity.~~ **Done.** `AIWATCHER_AUTH_INGEST_TOKENS` reads
-  `name[queue other]=secret`, and the guardrail is amended rather than dropped:
-  the role stays hard-coded to `Editor` and a queue only ever *narrows* what may
-  be claimed. A producer's token names none; so does a person's session and an
-  OIDC identity, because claiming takes a lease a browser cannot renew.
-- ~~Claims, heartbeat, completion and failure.~~ **Done**, and the shape is the
-  point. `Reactor::poll_once` is claim → plan → cache → `step.started` →
-  **perform** → lease → catalog → report, and only `perform` crosses the wire:
-  `take`, `settle` and `resume` split the loop so the worker routes call the
-  same code the in-process reactor does. A worker owns its own function and
-  nothing else — not which cache entry answers, not when a retry is due, and
-  above all not whether it still holds its lease, which is the one thing a
-  claimant cannot check about itself.
-- ~~Artifact access.~~ **Done, proxied rather than presigned.** A worker runs on
-  somebody's laptop, and a presigned URL is a bearer credential for a store that
-  also holds prompts, datasets, annotations, conversations and training; the
-  route it replaces checks the one thing that matters, which is that the caller
-  holds the lease on the attempt whose bytes it wants.
-  `core::ports::AttemptArtifacts` is that port. Every byte through the API
-  process is the cost, stated rather than hidden, and a presigned path for
-  in-cluster workers is an addition behind the same port when it is measured to
-  be the problem.
-- ~~`aiwatcher_sdk.worker`.~~ **Done** — `@task`, `TaskContext`, the poll loop,
-  the background heartbeat, proxied row artifacts, failure classification and
-  `run-attempt`, with `Runtime(workflows, pools, placement)` as the application's
-  entry point. Its own record is [KICKOFF](KICKOFF.md) item 4 and
-  [the runtime guide](RUST_WORKFLOW_RUNTIME.md); this section names it because
-  the boundary is not delivered without a Python side of it.
-- ~~The authoring path.~~ **Done, and it is saved *and scheduled*.**
-  `definition::WorkflowSpec` is the second compiler: it validates every
-  reference, resolves a deterministic topological order, reports every authored
-  problem at once and seals a plan of `RuntimeBinding::PythonTask` steps.
-  `DefinitionRegistry` versions it outside execution retention with ADR_0011's
-  two orderings — the version object before the head that indexes it — so an
-  edit never strands the runs pinned to what it replaced.
-
-  The scheduling half matters as much as the saving half, because a workflow
-  nobody can leave running unattended is a workflow somebody has to press a
-  button for. `/api/v1/workflow-definitions/{name}/schedule` mirrors the
-  pipeline's three routes; the kind comes from the **path** rather than from a
-  field, so a body cannot write a schedule that no page would ever show. The
-  store was already keyed by definition kind, so a pipeline and a workflow may
-  share a name and keep separate hours — a collision whose failure would
-  otherwise be silent, one schedule overwriting the other's on a card that still
-  reads correctly.
-
-  What the two prefixes must *not* become is two answers. The schedule route
-  refuses a definition that does not compile — now, rather than at nine
-  tomorrow — and the tick compiles it again when the slot comes due; both reach
-  a compiler through one `executions::compile_head`, so a schedule the API
-  agreed to save cannot be one the tick then refuses to start. A `match` on each
-  side would be free to disagree the day a third kind arrives.
-- ~~`just dev` runs one worker.~~ **Done**, and proved against a real database
-  rather than an edited claim: kill the worker mid-step, restart Rust on the same
-  database and log, wait out the actual five-minute lease, finish with a
-  replacement. `just test-worker-runtime`; recorded in
-  [KICKOFF](KICKOFF.md) item 6.
-- ~~Planner's four stages on that boundary.~~ **Done, and the comparison is
-  byte for byte.** `acquire → normalize → analyze → persist` is one registered
-  workflow of four `PythonTask` steps and three artifact edges, and the review it
-  writes equals the review the direct path writes.
-
-  What made the comparison worth running is a change on Planner's side: the
-  three orchestrators stopped holding three copies of a stage. `house_stages` is
-  the one chain and `direct`, `flyte` and `aiwatcher` are adapters behind a
-  `PipelineRunner` port — so the gate measures *transport*, not two
-  implementations free to drift apart. The transport's whole contribution is a
-  JSON round trip, which is not nothing: the analysis carries numpy values from
-  OpenCV, so encoding it with the HTTP client's serializer rather than Planner's
-  own would either fail or coerce silently.
-
-  Three things differ by construction, and each is asserted rather than quietly
-  excluded — the data directory (a second run over the first one's directory
-  would hit the extraction cache and execute no stage at all), the moment the
-  review was created, and the `orchestrator` label, which is provenance and is
-  checked for equality on both sides.
-
-  The revision Planner pins is the same one that has `aiwatcher_sdk.worker` in
-  it. It was not, in three places at once, until this landed.
-
-*Evidence so far:* four auth tests (the queue syntax, an unclosed list, a
-producer that publishes and cannot claim, and the two ends of "a person claims
-nothing"); one claim-filter test for the version pin; nine HTTP tests — the
-assignment's shape and that a claim is one attempt, the version pin as a
-negative control with its positive twin, a queue the token does not hold refused
-*by name*, a result reaching the decider and starting the next step, an impostor
-refused on both the result and the heartbeat with the holder accepted beside it,
-a fabricated output reference refused with the attempt left claimable, a failure
-becoming a backoff rather than a dead run, and the artifact path end to end
-across two claims with its 404 and its 409. The contract suite gained a property
-so all three adapters prove the version pin.
-
-The ninth of those was written because the negative controls found it missing.
-Removing the queue-scope check in `worker::held` failed nothing: the impostor
-test names the wrong *worker*, so the lease check refuses it first, and the
-check that stops a token for one queue settling another's attempt under the
-right name had no test at all. It has one now, over the heartbeat, the result
-and the input route, with the correctly-scoped token accepted beside them.
-Removing the postgres `task_ref` predicate fails the contract suite on all
-three adapters. `just check` and `just test-postgres` green.
-
-The authoring path adds three definition tests — the topological order an input
-establishes, every authored problem reported at once, and a registration that is
-idempotent while a new head leaves pinned versions alone — and two schedule
-tests, with a negative control each. Writing the schedule under a hard-coded
-`CurationPipeline` makes the shared-name test read `curation_pipeline` where it
-expects `workflow`; pointing `compile_head`'s workflow arm at the curation
-compiler makes `run_now` answer 404 for a definition that is saved. Both were
-run and both fail as intended.
-
-Planner's parity is proved in Planner's repository, against the pinned SDK, in
-two places because it is two questions. `tests/test_house_orchestrator_parity.py`
-drives the real four `@task` functions through the real encoding and compares the
-records — the hand-off, without a network. `just ml-aiwatcher-import` runs the
-same import against a **running** server, so the queue, the claim, the artifact
-routes and the output check are the real ones, and then waits for the log fold to
-agree: `nodes_total: 4`, `nodes_succeeded: 4`, 65 753 bytes identical, 1.6 s.
-Three negative controls were run and confirmed — a mislabelled orchestrator, a
-lossy artifact hand-off, and a step wired to the wrong parent's artifact. The
-third also showed the failure message is worth reading: `analyze failed:
-'normalized' is not an input of this attempt`.
-
-**Exit:** the laptop worker path survives restart; Planner runs with Flyte off
-and produces byte-identical review artifacts. *Met.* The direct path stays, and
-so does the Flyte one — a fallback for one release is what the port is for, and
-removing either is a Planner decision behind its own gate.
-
-### What follows, by dependency rather than phase number
-
-- **Phase 12:** after work 6, when one pod per stage is needed; keep the
-  byte-identical output gate before removing Flyte from the chart.
-- **Phase 13:** after work 6, when the agent graph needs a durable hosted join.
-  It does not wait for container jobs; one worker is its first acceptance case.
-- **Phase 14:** a curation approval can follow work 5 when there is a real
-  authored gate; it need not wait for hosted mode. Approval inside an agent turn
-  depends on Phase 13. The existing Answer route alone does not meet either exit.
-- **Phase 9:** own consumer gate for unified engine launches; not a prerequisite
-  for the worker. **Phase 8** retains its measurement gate; **Phase 15** retains
-  its evaluation/distributed use-case gate.
-- Schedules for another definition kind wait for a compiler for that kind.
-  Flow `join` waits for a concrete sub-pipeline use case. Schedule window/parameter
-  policies must be explicit before promising “process the previous day”.
-- Measure slot lateness/backlog and artifact/staging growth. Add observability
-  and reference-aware GC where the measurements justify them; workflow retention
-  does not automatically clean every artifact or staged context.
-
-The original phase scopes follow. Interpret their exits against the capability
-table and work items above; a phase with an open exit remains partially complete.
-
-### Phase 0 — record the decisions
-
-- Add an ADR superseding the browser-execution decision in ADR 0024 and,
-  for managed runs, ADR 0014's browser-mediated persistence.
-- Add an ADR for section 34: the engine is a producer on its own log, with
-  `execution.*` in the catalog. This is the question ADR 0016 deferred.
-- Amend the ingest-token guardrail in `CLAUDE.md` for the `worker` scope
-  (section 36.2) and add a note to ADR 0013; the role model stays at three, so
-  no ADR of its own.
-- Keep ADR 0024's block types and validation unless the new compiler exposes a
-  concrete incompatibility.
-- Add terminology from section 4 to `CLAUDE.md` and public architecture docs;
-  fix the three-way SDK pin drift in planner while there (section 33.3).
-
-**Exit:** maintainers agree on storage authority, execution ownership, the
-producer decision and the panel boundary.
-
-### Phase 1 — the WorkflowStore port and three adapters
-
-- Define `WorkflowStore` in `aiwatcher-execution`: append at expected version,
-  load, dedup by message id, inline projection, outbox, checkpoints, claims.
-- Implement `memory` and `file` adapters in the crate; `postgres` in
-  `aiwatcher-execution::store::postgres` behind a feature, with configuration, pool,
-  health, migrations, and ADR 0009's `install | external | none` in the chart.
-- Run the contract suite (29.2) against all three.
-
-**Exit:** a pure test workflow survives process restart and duplicate input on
-every adapter, and a multi-process run refuses to start on `file`.
-**Partially met:** the existing suites pass, but partial-write recovery on file
-is reopened by A1. Works 1–2 add upgrade and failure-boundary acceptance.
-
-### Phase 2 — execution domain
-
-- `ExecutionPlan`, `plan_id`, `ExecutionOwner`, states with `awaiting_input`,
-  attempts, policies, workflow messages.
-- Pure `decide/evolve/initial_state` for a linear plan, then a DAG.
-- Scenario tests: given-events / when-command / then-messages.
-- Canonical plan and cache-key encoders; the compiler from ADR 0024 blocks.
-
-**Exit:** the state machine schedules, completes, fails, retries, cancels,
-waits and resumes without performing I/O.
-
-### Phase 3 — the engine as a producer
-
-- Add `execution.*` and `Subject::Execution` to the catalog with
-  `forms_span = false`; release both SDKs.
-- The outbox publisher writes committed facts to the log through the
-  configured bus — `workflow.declared` for a started plan, `step.*` per
-  attempt with `data.published_by`, `artifact.produced` with a digest.
-- The workflow fold reads engine-published steps and flags a node with two
-  publishers.
-- Reactor consumers claim from the store; processor checkpoints in the store.
-- Preserve the one-partition scalar checkpoint; document the vector gate.
-
-**Exit:** redelivery and restart do not duplicate a workflow decision, and a
-managed execution draws itself in the existing workflow tab with `Pending`
-nodes — before any panel work.
-
-### Phase 4 — artifacts and context
-
-- ~~Promote `aiwatcher_training::package::ArtifactRef` to core.~~ Done.
-- ~~Add artifact metadata, lineage, and cache tables.~~ Done, as
-  `artifact::object` over the same `ObjectStore` — the manifest beside the
-  bytes, the cache index beside both, and a lineage prefix because an object
-  store lists by prefix and nothing else.
-- Store results *(done)* and immutable code snapshots *(open, work 5)* through
-  `ObjectStore`. Digest checking alone does not preserve executable source.
-- ~~Implement `ContextSnapshot`~~ done, with two routes; editor-session APIs
-  remain open in work 5, after code can be resolved by digest.
-- ~~Change marimo staging keys from notebook name to context id (16.4).~~ Done
-  with the marimo executor (43.24); historical session reload remains open.
-
-**Exit:** an old Flow or marimo block opens with its exact historical data and
-code revision. **Partially met:** contexts and pinned digests exist. Work 5 must
-prove that the source can still be opened and executed after the notebook head
-changes; a mismatch refusal does not meet that requirement.
-
-### Phase 5 — Flow-only managed execution
-
-- Move authoritative Flow script compilation from TypeScript to Rust.
-- Add `execution_id` and the lookup route to the query service (15.4).
-- Add a Flow activity executor with idempotency, timeout, and result artifact.
-- Return bounded step previews alongside full result artifacts; keep explicit
-  ad-hoc editor tests. Whole-execution simulation is outside current scope.
-- Implement Flow-only dataset publication as a managed plan: `produced_by`
-  and `execution_id` on the version.
-- Leave Observability Query and explicit editor tests available.
-
-**Exit:** a dataset can be built using only Flow with the browser closed after
-submission.
-
-### Phase 6 — Flow plus marimo
-
-- Add the marimo activity executor.
-- Pin notebook source artifacts on managed save/run.
-- Pass upstream artifact references and context ids.
-- Persist stdout/stderr as bounded diagnostics or artifacts.
-- Add retry from the failed notebook step without rerunning Flow when its input
-  artifact is valid.
-
-**Exit:** the existing PII example runs end to end under Rust orchestration.
-**Functional path built:** the example and context staging work; source
-snapshots remain open in work 5 and are required for historical retry.
-
-### Phase 7 — thin the panel
-
-- Use `POST /executions` for managed runs; retain browser `runPipeline` only
-  for explicit ad-hoc tests.
-- Use server validation and compilation for managed execution; derive canvas
-  mapping and revision compatibility on the server (work 5).
-- Render allowed action links from API state.
-- Follow execution SSE rather than synthesising block outcomes locally.
-- Remove panel-driven publication of managed results.
-
-**Exit:** closing or refreshing the panel cannot affect execution progress,
-and `data-curation.pipeline.tsx` imports none of `orderOf`, `compileFlow`,
-`runQuery`, `runNotebook`, `publishDataset` for a managed run.
-**Partially met:** managed execution survives the tab and command error
-handling closed with work 4 — a refusal is now the server's own sentence, and
-only a 404 draws as absence. Work 5 closes revision-aware block rendering.
-Imports used only by the explicit ad-hoc path are not a failure of this
-boundary.
+| 1 | Upgrade compatibility (R4) | Staged removal: a release may not remove what the release before it names, so 0005 re-adds what 0003 dropped — including for a database already at schema 4 — and neither a rolling upgrade nor an image rollback needs a coordinated stop. | `tests/postgres_upgrade.rs`, `just test-postgres`, [INSTALL.md](INSTALL.md#upgrading-its-schema) |
+| 2 | Local commit and restart recovery (A1) | An intent journal rather than a local database, because the adapter's identity is the write-ahead log's shape: `PendingCommit` is `fsync`ed before the five writes of one decision, and `recover` runs at `open` **and** at the top of every `append`. Three defects came with it — a torn tail read as end-of-stream, a lock `SIGKILL` could not release, and the file half of migration 0004. | seven tests in `store/file.rs`, each with a negative control |
+| 3 | Scheduler correctness (R1, R2, R3, R5, R7) | Slots enumerated by local calendar date with a DST policy stated per cadence; admission taken in the transaction that writes it; a transient failure leaving the slot due rather than recording a refusal; configuration and slot outcomes given different writers; `effective_from` bounding catch-up. | `schedule/rule.rs`, `schedule/slot.rs`, the storage contract |
+| 4 | Truthful panel errors (R6) | One reader for every server answer — `answerOf`, `answerOrNone`, `confirmDone` in `lib/result.ts` — because the generated client resolves on a refusal and four call sites had grown four copies of the same helper. The panel gained its first test runner with it. | ten panel tests against the real client and a stubbed `fetch` |
+| 5 | Historical code, editor sessions, canvas (Phases 4, 6, 7) | The notebook runtime keeps every revision and a step names its pin, so an edit strands no earlier run; `GET /executions/{id}/blocks` maps authored blocks to plan steps from the pinned plan; an editor session is resolved server-side and carries **no token**, because the runtime it would be presented to cannot check one. | `just ml-pipeline-check`; thirteen runtime, five HTTP and twelve panel tests |
+| 6 | The worker protocol, then Planner (Phases 10, 11 L2) | Queue-scoped ingest tokens that only ever narrow; `Reactor::take`/`settle`/`resume`, so only `perform` crosses the wire; proxied artifacts rather than presigned URLs; `aiwatcher_sdk.worker` and `Runtime`; a second compiler for registered workflows, which are also schedulable through one `compile_head`; Planner's four stages byte-identical to the direct path. | `just test-worker-runtime`, `just test-worker-protocol`; Planner's `test_house_orchestrator_parity.py` and `just ml-aiwatcher-import` |
+
+Two things work 6 deliberately does **not** claim: one pod per stage, and the
+removal of Flyte from Planner's chart. The first is Phase 12; the second is what
+Phase 12 earns.
+
+### What exists now
+
+| Capability | State |
+|---|---|
+| Decisions and workflow facts (Phases 0–3) | Plan and compiler, pure decider, the atomic six-write handler, the outbox producer, the workflow fold; partial-commit recovery journalled and fault-tested |
+| Stores | `memory`, `file` and `postgres` under one contract suite; five migrations with an upgrade suite, retention, and the combined and split charts |
+| Managed Flow and marimo (Phases 5–6) | Both executors, artifacts, lookup, publication, and a run that resolves its pinned source |
+| Context (Phase 4) | Artifact metadata, lineage, the cache index, `ContextSnapshot`, context-keyed staging, the code a step ran, a server-resolved editor session |
+| Panel (Phase 7) | Managed run, controls, allowed actions, URL restoration, one reader for every server answer, a canvas that lights only at the revision it compiled |
+| Scheduler | Cadence, CRUD, transactional admission, per-slot outcomes, `next_run` computed on the server |
+| Worker (Phases 10, 11 Level 2) | The protocol, the Python `Runtime`, the authoring path, schedules for registered workflows, Planner on the boundary |
+| Hosted decider (Phase 13) | **Partial** — the append route, the decider lease and a worker target that mints `owner = worker, mode = hosted`. No event store, no timers, and the `sealed` refusal has no reader |
+| Human input (Phase 14) | The `HumanInput` binding and the Answer route exist; nothing authors a step that uses them |
+
+### What is left
+
+**Phase 13 — the hosted decider.** The one item being worked toward here.
+[KICKOFF_HOSTED_DECIDER.md](KICKOFF_HOSTED_DECIDER.md) is the session's entry
+point; it was written before the first two steps landed, so this list is what is
+actually missing.
+
+- ~~The append route.~~ **Done.** `POST /api/v1/executions/{id}/stream` with
+  `expected_version`, an `Idempotency-Key` that is the input's own message id,
+  and a 409 that says where the stream got to; the paged history reads beside it.
+  Section 20's separate read stream stays struck (43.21).
+- ~~One lease on the execution.~~ **Done.** `hosted::DeciderLease` over
+  `aiwatcher_jobs::LEASE_SECONDS`, proved by the contract suite on all three
+  adapters rather than by one adapter's test. It protects the *work* — an agent
+  turn is a model call somebody pays for twice — and never the history, which
+  `expected_version` already protects whether or not anybody holds a lease.
+- **`AiwatcherEventStore`** in `aiwatcher_sdk.integrations.agentic`, satisfying
+  `agentic.workflow.EventStore`, so `DurableWorkflowExecutor` runs unchanged over
+  a shared store. Nothing in the SDK implements it; that module is the tracer.
+  *Exit:* `agentic`'s own executor tests pass against it with no change to
+  `agentic`.
+- **Timers.** `schedule_timeout` becomes a row and the store appends
+  `TimeoutElapsed` when it is due. This is the one *active* thing the engine does
+  for a hosted run, and it is what `agentic`'s sagas are missing: the timers
+  exist and nothing fires them. Neither name appears in the workspace.
+  *Exit:* a saga timeout scheduled before a restart fires after it, once.
+- **The `sealed` refusal has no reader.** The payload policy is decided —
+  `external` by default, `sealed` through the conversation archive's crypt, no
+  `plain` (40.4) — and `PayloadPolicy::needs_archive` is called by nothing
+  outside its own unit tests. A definition choosing `sealed` without
+  `AIWATCHER_CONVERSATION_ARCHIVE` and `AIWATCHER_CONVERSATION_KEYS` must be
+  refused **naming both**, never silently downgraded. This is 43.15's shape
+  exactly: a policy field the code does not keep.
+- **`agentic_graph`'s join buckets as events in the stream**, in
+  `ai_spirit_agent` — `_expected_completion_counts`, `_completion_buckets` and
+  `_last_inputs` are three dictionaries in one process, and a fan-out whose
+  worker restarts loses them.
+
+*Phase 13's own exit:* a searcher → summarizer graph with a fan-out of three
+survives a worker restart between the second and third completion and fires the
+summarizer **once**.
+
+**In Planner's repository, not this one.** `docs/flyte-removal-kickoff.md` takes
+the Flyte estate out of the chart, now that the byte-identical gate that guarded
+it is met and no shipped profile selects Flyte. It starts with a timing defect
+work 6 left behind: the RQ job's 600-second budget against a 900-second step
+timeout. It shares no file with Phase 13, so the two run at the same time.
+
+**Behind their own gates, with nothing building them.**
+
+- **Phase 12** — container jobs, and Flyte out of Planner's chart. It asks for a
+  concrete need for one pod per stage and Planner has none: its Flyte resource
+  declaration was a single value for all four tasks. `ContainerJob` appears
+  nowhere in the workspace. §39.4 records what was accepted instead — four
+  attempts in one worker pod, whose limits already match Flyte's task envelope.
+- **Phase 14** — human input. The binding and the Answer route exist; what is
+  missing is an authored gate, `await` from inside an attempt, `on_timeout`, the
+  first control message on `/api/v1/live` and the panel's first dialog. A
+  curation approval can follow work 5 as soon as there is a real authored gate;
+  approval inside an agent turn depends on Phase 13.
+- **Phase 9** — engine-owned executions. Only for a consumer that needs one
+  launch API for local and engine work; not a prerequisite for the worker.
+- **Phase 8** — read models in PostgreSQL. Gate: a measured replay-on-start over
+  a minute, or history wanted past `AIWATCHER_MAX_RUNS`.
+- **Phase 15** — evaluation and distributed mode. Own use-case gate.
+
+**Measurements and follow-ups.**
+
+- A receipt lookup loads the whole execution stream; paging or indexing that
+  history is an open performance item
+  ([the worker review](WORKER_PROTOCOL_REVIEW_2026-09-09.md)).
+- Measure slot lateness and backlog, and artifact and staging growth, before
+  designing observability or a reference-aware GC. Workflow retention does not
+  clean every artifact or staged context.
+- Schedules for another definition kind wait for a compiler for that kind. Flow
+  `join` waits for a concrete sub-pipeline use case. Schedule window and
+  parameter policy must be explicit before promising "process the previous day".
+- Level 0 in `ai_spirit_agent` is worth more than its size and waits for nothing:
+  `build_compiled_graph_system` builds its runtime with no tracer, the tee in
+  `agentic_runtime/trace.py` is uncommitted, and `declare_graph` is about thirty
+  lines. It is also what makes Phase 13's exit observable when it lands.
+
+The original phase scopes follow, kept because other documents and the ADRs cite
+them by number. The delivered ones are one line each; the rest keep their scope
+and their exit, because they are what is left.
+
+### Phases 0–7, 10 and 11 — delivered
+
+| Phase | Scope, in one line |
+|---|---|
+| 0 | The ADRs: 0025 for managed execution, 0026 for the engine as a producer on its own log |
+| 1 | The `WorkflowStore` port and three adapters under one contract suite |
+| 2 | The execution domain: the compiled plan and its `plan_id`, the states, the attempts, pure `decide`/`evolve`, the atomic command handler |
+| 3 | The engine as producer: `execution.*` and `Subject::Execution`, the outbox publishing after commit, the workflow fold drawing a managed run with no special case |
+| 4 | Artifacts and context: metadata, lineage, the cache index, `ContextSnapshot` and its two routes |
+| 5 | Flow-only managed execution, end to end under the server |
+| 6 | Flow plus marimo: the fourth executor, pinned code revisions, the editor session |
+| 7 | The panel: start, follow, command and restore a managed run, and a canvas that follows one |
+| 10 | The worker protocol: the queue scope, claim/heartbeat/result, proxied artifacts, `aiwatcher_sdk.worker`, and `just dev` running one worker |
+| 11 | Planner Levels 0 and 2: the four stages as `PythonTask` steps, byte-identical to the direct path |
 
 ### Phase 8 — PostgreSQL observability read models — **deferred, own gate**
 
@@ -2241,32 +1743,6 @@ nothing here builds it.
 execution API, and an engine run whose pods published nothing shows the
 disagreement.
 
-### Phase 10 — the worker protocol
-
-- The `worker` scope on `AIWATCHER_AUTH_INGEST_TOKENS`, and the amended
-  guardrail.
-- The claim, heartbeat, complete, fail and await routes; `SKIP LOCKED`
-  claims with `NOTIFY` wake-ups.
-- `aiwatcher_sdk.worker`: `@task`, `Worker`, `TaskContext`, `run-attempt`.
-- `PythonTask` binding; presigned or proxied artifact URLs on the claim.
-- `just dev` runs one worker.
-
-**Exit:** a two-step plan runs on a worker on a laptop; killing the worker
-mid-attempt expires the lease and the next attempt completes.
-
-### Phase 11 — planner, Levels 0 and 2
-
-- Level 0 in planner: `workflow()`, `node()`, `artifact()` around the four
-  stages on both branches and the cache branch; `workflow_run_id = job_id`
-  on the vectorizer's run; the market-research harness traced.
-- Level 2 in the `local` profile: the four functions as `@task`s, the RQ job
-  as the worker, `orchestrator = "aiwatcher"`.
-- `test_house_stage_artifacts.py` asserts the review is byte-identical to
-  `direct`.
-
-**Exit:** planner's house import appears in the workflow tab with pending
-stages, and runs on a worker with Flyte off.
-
 ### Phase 12 — container jobs, and Flyte out of planner's chart
 
 - `aiwatcher-kube` behind the `kube` feature; named pod templates in
@@ -2282,10 +1758,13 @@ component installed, byte-identical, and the chart is smaller by the list in
 
 ### Phase 13 — the hosted decider
 
-- `ExecutionOwner::Worker`, the decider lease, the append route with expected
-  version and `Idempotency-Key`, timers.
+The first two items are delivered; *What is left* above is the current state of
+the other four.
+
+- ~~`ExecutionOwner::Worker`, the decider lease, the append route with expected
+  version and `Idempotency-Key`~~ — done. **Timers** are not.
 - The payload policy, `external | sealed`; `sealed` refused without a key,
-  `external` needing nothing.
+  `external` needing nothing. Decided, and nothing enforces the refusal.
 - `AiwatcherEventStore` in `aiwatcher_sdk.integrations.agentic`, satisfying
   `agentic.workflow.EventStore`.
 - `agentic_graph`'s join buckets as events in the stream; the graph declared
@@ -2563,168 +2042,33 @@ pointed the other way.
 
 ## 33. Reality check: the plan against the code
 
-Revision 1 was written from the ADRs. Revision 2 read the crates, the two
-optional services, the panel, the SDK, planner and `ai_spirit_agent`. This
-section is what that changed, with the file that decided each point, so the
-next reader can check it again rather than trust it.
+Revision 1 was written from the ADRs; revision 2 read the crates, the two
+optional services, the panel, the SDK, planner and `ai_spirit_agent`. Everything
+that check turned up has since been built or decided, so the comparison is kept
+as its findings rather than as its evidence — what a reader needs from it now is
+which assumptions were wrong and which decisions it moved.
 
-### 33.1 What the plan assumed and does not exist
+**What the plan assumed and did not exist.** No PostgreSQL anywhere in the
+workspace, no transactional outbox, no `commands` topic, no `ExecutionBackend`,
+no editor sessions, no idempotency keys, no cache index or lineage tables, and no
+managed execution at all — a run was `runPipeline` in the browser with the rows
+in a JavaScript variable. So Phase 1 was new infrastructure rather than a
+migration, `ExecutionBackend` was dropped for `ExecutionOwner` (§24), the
+`commands` topic stayed deferred (§11.1), and the rest arrived across phases 4–7.
 
-| Assumed | Found | Consequence |
-|---|---|---|
-| PostgreSQL | No database dependency anywhere in the workspace — no `sqlx`, `postgres`, `sea-orm` or `diesel` in any `Cargo.toml` or `.rs`. Every durable store is the WAL (`aiwatcher-bus/src/adapters/wal.rs`) or `Arc<dyn ObjectStore>` (`aiwatcher-core/src/prompts.rs:818`). The only PostgreSQL in the repo is authentik's own. | Phase 1 is new infrastructure, not a migration. It goes behind a port with `memory` and `file` adapters, in the pattern `memory \| wal \| laser` and `none \| memory \| file \| s3` already set. |
-| A transactional outbox | None. The guarantee today is an ordering discipline stated three times: `Checkpointer`'s "never commit before the side effect" (`aiwatcher-bus/src/ports.rs:246`), the projector's six-step loop with the checkpoint last (`aiwatcher-projector/src/pipeline.rs:1-18`), and `aiwatcher_jobs::ORDERING` (`aiwatcher-jobs/src/lib.rs:65`). | The outbox is the fourth statement of the same rule and cites the first three. |
-| A `commands` topic | `LaserConfig` has one topic (`laser.rs:99`). `MessageKind::Command` is on the envelope and constructed nowhere. | Deferred; commands are store rows (section 11.1). The variant becomes used. |
-| `ExecutionBackend` | Absent. `WorkflowEngine` is present (`aiwatcher-core/src/engine.rs:511`) with a Flyte 2 gateway adapter (`aiwatcher-pipeline`, 1 938 lines) that also implements `WorkflowRunner`, a loopback stand-in admin (`tests/admin.rs`), and an end-to-end suite through `wiring::build`. | Dropped for `ExecutionOwner` (section 24). |
-| `ArtifactRef` in core | Exists in `aiwatcher-training/src/package.rs:166` with a required digest. The browser passes *rows* between blocks in memory (`apps/panel/src/lib/pipeline.ts:204-228`). | Promoted, not invented (section 17). |
-| Editor sessions | None. The notebook editor is an `<iframe>` on an unauthenticated marimo app (`block-inspector.tsx:337`; `services/ml_pipeline/ml_pipeline/service.py:15-19` says so). | Phase 4 as planned; until then a `Marimo` step is a development-profile binding (16.4). |
-| Idempotency keys | Zero hits for `idempotency` across crates, services, panel and SDK. `POST /flow/query` and `POST /ml-pipeline/run` are plain request/response. Flyte launches are idempotent only through a derived execution name (`flyte.rs:653`). | One field per runtime (15.4, 16.4); `Idempotency-Key` on every mutating execution route. |
-| Managed execution | A run is `runPipeline` in the browser (`pipeline.ts:161`) with the rows in a JS variable; nothing server-side records that a pipeline ran. | The reason for the plan. Phase 7's acceptance check stands. |
-| Cache index, lineage tables | None. Scale today: 1 000 rows per dataset version (`aiwatcher-datasets/src/lib.rs:29`) and per notebook run (`ml_pipeline/config.py:22`). | Phase 4; the cache is opt-in and the first pipelines will not use it. |
+**What existed and the plan had not used.** `aiwatcher-jobs` already held the
+lease, the retry decision, `version_of` and `ORDERING`, which §9.3, §14 and §36
+now call rather than re-derive. The write-ahead log — not Iggy — is the default
+backend, which is why the topology says "the log". And `WorkflowEngine` with its
+Flyte gateway was already there, so `ExecutionOwner` sits beside it rather than
+replacing it.
 
-### 33.2 What exists and the plan did not use
-
-- **`aiwatcher-jobs`** — `JobState`, `ShardRef`, `lease_expired`,
-  `after_failure`, `version_of`, `progress`, `ORDERING`, `LEASE_SECONDS = 300`,
-  `MAX_ATTEMPTS = 3`, proven by the conversation export and the Hub importer.
-  Revision 1 re-derived every one of them in section 26. Revision 2 calls
-  them (sections 9.3, 14, 36) and keeps the crate's own decision: rules shared
-  as functions, records not shared — `ExecutionRun` and `StepAttempt` are
-  their own records, and there is no `Job<Payload>`.
-- **The WAL is the default backend.** `BackendKind::Wal` is `#[default]`
-  (`aiwatcher-server/src/config.rs:51`), the chart ships `bus: wal`,
-  `docker-compose.yml` runs no broker, and `laser` is a cargo feature a
-  default image refuses to start on. Revision 1's topology said Iggy in every
-  sentence; revision 2 says "the log".
-- **The engine port and its adapter.** Catalog, interface reading, literal
-  binding (`literals.rs`, both `snake_case` and `camelCase` on the wire),
-  version pinning, `workflow_run_id` as a label and as a declared input, an
-  API that mints the id and requires `admin`. All of it stays.
-- **The workflow fold** (`aiwatcher-projector/src/workflows.rs`, 2 166 lines):
-  `workflow.declared` → catalog, `step.*` → node execution with a six-key
-  `node_key` fallback, `Pending` for what has not run, a declared-versus-
-  observed flag, two-tier caps, running executions never evicted. Revision 1
-  gave PostgreSQL a run/step projection for the panel; revision 2 gives it one
-  for *deciding* and lets the fold keep drawing (section 34).
-- **`produced_by`** on a dataset version: provenance, not identity
-  (`dataset_identity` excludes it, `lib.rs:553`). Kept; a managed publish adds
-  `execution_id` beside it rather than changing its format.
-- **`pipeline.rs`** in `aiwatcher-datasets`: `order_of` reports every problem
-  at once as a 422 with `details`; the revision digests the whole request,
-  positions included, and a test asserts it. Revision 2 keeps that and adds
-  `plan_id` (section 9.1).
-- **The scalar `Checkpoint`** and the one-partition rule (`laser.rs:32-45`);
-  `Last-Event-ID` resume depends on the scalar (`api/live.rs:3-5`). Section
-  11.3 stands unchanged.
-- **`forms_span`**: `Subject::Eval | Subject::Workflow` form no span
-  (`catalog.rs:258`). `Subject::Execution` follows them.
-- **The security invariants** the plan must keep, each with a file: the engine
-  and runner endpoints come from configuration and never from an event or a
-  body (`core/ports.rs:291`, `runner/lib.rs:14`, `values.yaml:299`);
-  `EngineRef::valid_part` rejects path traversal (`engine.rs:108`); absence is
-  a 501, never a no-op (`ports.rs:287`, `engine.rs:507`); authentication wraps
-  the whole router and `is_public` is the only exception list
-  (`api/routes.rs:9`, `auth.rs:65`); a role is checked per handler; an ingest
-  token is an editor and no more.
-
-### 33.3 What planner actually runs
-
-- **The four stages are the house import** — `acquire_house_assets`,
-  `normalize_house_assets`, `analyze_house_assets`, `assemble_house_review` in
-  `planner-mlplatform/app/pipelines/house.py`, chained by `house_import_flow`
-  in `app/flyte_pipelines.py`. Not curate → train → evaluate → serve.
-  `app/training/` is an empty package; the design is
-  `docs/floor-plan-model-kickoff.md` (5 320 lines, "do implementacji"), and
-  two runs have already happened against it (`data/training/smoke-1.json`,
-  `wide-1.json`) — including the one whose `validation.score = 0.0` with
-  `best_epoch = 0` was registered anyway, which is the incident behind the
-  "never fit against an empty split" guardrail.
-- **Flyte 2, precisely.** One `TaskEnvironment`, image from
-  `PLANNER_FLYTE_TASK_IMAGE`, a pod template with an emptyDir workdir, the RWX
-  PVC `planner-import-data` at `/data`, a ConfigMap and five `secretKeyRef`s;
-  resources 250 m–4 CPU, 1–6 Gi; `cache="disable"`; **no `retries=`, no launch
-  plans, no schedules, no `workflow_run_id` input**. Tasks take and return JSON
-  strings under `max_inline_io_bytes = 50 MiB`; the PVC is the hand-off. The
-  code bundle is uploaded per run with an `include=` list that exists because
-  the production image has no Ruff. Invocation is
-  `flyte.run(house_import_flow, …).wait()` from inside an RQ job with
-  `job_timeout = 600`. Nothing is registered anywhere.
-- **Consequence for ADR 0016.** `/api/v1/engine/workflows` lists launch plans,
-  and planner has none. The engine tab is empty against planner's cluster
-  today — the "what would make this wrong" case ADR 0016 itself named.
-  `EntityKind::Task` exists and the task path is a change inside
-  `aiwatcher-pipeline`; it is worth making only if Flyte stays (39.5).
-- **Flyte's footprint in the chart:** `flyte-binary` v2 (one pod, 200 m/512 Mi
-  requests), a console on an unpinned `latest`, a bootstrap Job, a
-  `verify-rustfs-flyte` init container, the `planner-flyte` bucket, a
-  PostgreSQL NetworkPolicy rule, three Traefik objects and an Authentik proxy
-  provider with a root-to-`/v2` redirect, a privileged Devbox container in
-  Tilt — and at least eight fix commits with their reasons in code comments.
-  Flyte shares `planner-postgres`, which is why a PostgreSQL already exists in
-  the namespace aiwatcher is installed into.
-- **The in-process path is the default.** `flyte_enabled` is `false` in the
-  `local` profile, every test runs it, and
-  `tests/test_house_stage_artifacts.py:156` asserts the Flyte path produces a
-  byte-identical `ReviewRecord` differing only in
-  `artifact_manifest["orchestrator"]`. The kickoff doc states the rule:
-  "the port makes the inline path and Flyte identical; a separate path is two
-  products."
-- **planner ↔ aiwatcher today:** agent traces for the floor-plan vectorizer
-  only (`trace_aiwatcher_agent`, `conversation_id = job_id`), evaluation
-  reports from the DeepEval catalogue gate, the prompt registry with SIMBA
-  optimisation records. **Zero** `workflow.declared`, `step.*`,
-  `artifact.produced` or `agent.message`. The workflow graph of ADR 0012 has
-  no producer in the codebase that motivated it. The market-research harness
-  (`app/agents/harness.py`) is untraced and keeps its own `AgentStepTrace`.
-  MLflow is gone entirely (commit `ddf6d9d`).
-- **Three SDK pins, two of them stale when checked:** `45f0000` in
-  `pyproject.toml` and `uv.lock`, `14bbe03` in
-  `deploy/scripts/setup-local-aiwatcher.sh`, `14bbe03` quoted in the kickoff
-  doc. Unified on `45f0000` on 2026-09-04, uncommitted in planner; the rule
-  going forward is that the script and the doc quote the pyproject pin and
-  nothing else.
-
-### 33.4 What `ai_spirit_agent` actually runs
-
-- **`agentic.workflow` is already an event-sourced engine** — the README
-  credits Emmett. `SQLiteEventStore` with `append_to_stream(expected_version)`
-  and `ConcurrencyConflictError`; `DurableMessageBus.replay_pending()` on
-  start; `DurableWorkflowExecutor` appending input and outbox in one write,
-  detecting duplicates by causation, and caching a successful decision across
-  OCC retries "so an LLM call is not repeated"; `ProcessorLock` with
-  `lease_seconds = 300`; `Saga` with `schedule_timeout`, `due_timeouts`,
-  `fire_timeout`; `CheckpointStore` and `CompareAndSwapCheckpointStore`. This
-  is sections 5, 9 and 10 of this plan — in Python, per process, on SQLite.
-- **`agentic_graph`** is a 44-line model (`AgentNode`, `Connection`,
-  `AgentGraph`) and an 848-line compiler that lowers it onto that engine.
-  Registration keys are aliases slugified from display names; an edge's
-  `message_type` exists and is never read; join arity is discovered at run
-  time; `dispatch_mode` is `broadcast` or `route_one` with a throwaway
-  `RouterAgent`; a `planner` node fans out dynamically; fan-out is executed
-  *serially* though the diagram draws `par`; the join lives in eight
-  process-memory dicts; the default bus is `InMemoryMessageBus`; **no tracer
-  is wired** (`compiler.py:728` → `NoopLLMTracer`); no checkpoint, no
-  interrupt, no human step. Its own validation is structural and has no cycle
-  or reachability check.
-- **Distributed mode** (`agentic_runtime/distributed/`): Redis Streams,
-  per-agent workers each with a *private* SQLite, `XAUTOCLAIM`, dead-letter
-  streams, `max_delivery_attempts = 3`, a service registry with capabilities
-  and heartbeats. Lab 6 runs three such workers; there is no shared history.
-- **The aiwatcher tee exists and is uncommitted:**
-  `agentic_runtime/src/agentic_runtime/trace.py` tees
-  `aiwatcher_tracer(service="ai-spirit-agent")` onto the MLflow tracer when
-  `AIWATCHER_URL` is set, lazily and fail-soft. `aiwatcher_sdk` is in no
-  `pyproject.toml` and not in `uv.lock`. The contract that call fixes —
-  `aiwatcher_tracer(service)` and `tee(...)` in
-  `aiwatcher_sdk.integrations.agentic`, satisfying the five-hook `LLMTracer`
-  protocol — is what section 40.2 builds on.
-- **`workshops/resumable_research`** is the reference resume implementation:
-  process history in a SQLite event stream, a materialised artifact with
-  `revision` and `content_sha256`, a pending-operation journal reconciled
-  before every step, and `resume()` that never re-runs a completed search.
-- **Evaluation** is DeepEval scenarios and MLflow trace scorers over a
-  Postgres + MinIO + server MLflow; the prompt registry is MLflow's. Nothing
-  here moves; section 40.6 says how a suite becomes a step.
+**What planner and `ai_spirit_agent` actually run** is §38 and §40, both current.
+planner's four stages now run on the worker boundary behind a `PipelineRunner`
+port, so its three orchestrators are adapters over one chain rather than three
+copies of it. `agentic.workflow` already has the worker half of a hosted
+decider — an `EventStore` port, expected-version appends, a cached decision
+across OCC retries — and its in-process join is the gap Phase 13 fills.
 
 ### 33.5 The decisions this plan touches
 
@@ -3390,1256 +2734,338 @@ because this plan moves no content.
 
 ## 42. Open decisions
 
-Each with the recommendation and what would settle it. Decisions 1–15 retain
-their original identifiers, including those already settled. New delivery
-decisions below are resolved in their work item from section 28; they are not
-a requirement to settle every future integration before fixing current defects.
+Identifiers 1–20 are stable and are cited elsewhere, so a settled decision keeps
+its number and loses its argument: what a reader needs from a settled one is the
+answer and where the reasoning lives.
 
-1. **PostgreSQL for execution.** Yes, behind the port, with `file` for
-   development. Settled by the object-store and Iggy findings in 7.1.
+### Settled
+
+| # | Decision | Answer |
+|---|---|---|
+| 1 | PostgreSQL for execution | Yes, behind the port, with `file` for development (7.1) |
+| 4 | The engine as producer | Yes (34, ADR_0026). It cost an SDK release |
+| 5 | Worker identity | An ingest token with a queue scope, no fourth role; the "at most an editor" guardrail amended to name it (36.2) |
+| 8 | Hosted payloads | A per-definition policy, `external` by default and `sealed` as the private option; no `plain` (40.4). The refusal it implies is not built — see §28 |
+| 9 | Layout in the revision | Keep ADR_0024's revision, digesting the whole authored request; `plan_id` digests the executable fields only (9.1) |
+| 10 | Level 1 for planner | Skip (38) |
+| 11 | Where `app/training/run.py` is written | As a worker task from the start (38, Level 3) |
+| 12 | `execution_id` on a dataset version | A separate provenance field beside `produced_by`, never a change to its format |
+| 14 | Absolute bounds on the windowed list routes | One optional `as_of` on the two routes Flow reads with a window, not `from`/`to` replacing the relative window (43.18) |
+| 15 | A second query engine, run locally | A transform stays **Flow DSL text**; a second engine reads `FlowSourceRef` and re-authors the transforms. Structure beside the text was rejected as two authored representations free to drift (43.22, and CLAUDE.md's guardrail) |
+| 16 | Upgrade compatibility (work 1) | Staged removal over two releases; an applied migration is never edited (work 1, [INSTALL.md](INSTALL.md#upgrading-its-schema)) |
+| 17 | Local commit recovery (work 2) | A recoverable commit journal, because the adapter's identity is the write-ahead log's shape (work 2) |
+| 18 | Scheduler authority and semantics (work 3) | Admission and slot state transactional, product history on the log; DST, catch-up, overlap and `run_now` identity all settled in work 3 |
+| 19 | Canvas mapping (work 5) | A server-provided mapping from authored blocks to pinned plan steps; an edited draft displays drift (work 5) |
+| 20 | Scope choices for this delivery | Whole-execution preview excluded until a named simulation use case requires it; `WorkflowStore::attempt()` retained as the contract suite's observation point, with that purpose documented on the trait |
+
+### Still open
+
 2. **Phase 8 read models.** Deferred, own ADR. Settled by a measured
    replay-on-start time or a wish for history past the memory caps.
-3. **A `commands` topic.** Deferred (11.1). Settled by measured claim
+3. **A `commands` topic.** Deferred (11.1); commands are store rows and
+   `MessageKind::Command` stays constructed nowhere. Settled by measured claim
    latency or a consumer that must not hold PostgreSQL credentials.
-4. **The engine as producer.** Yes (34). Costs an SDK release.
-5. **Worker identity.** *Settled by the maintainer:* an ingest token with a
-   `worker` scope, no fourth role, the "at most an editor" guardrail amended
-   to name the scope (36.2).
 6. **Jobs, Kueue, or Flyte for GPU work.** Build `ContainerJob`; add a Kueue
    label when queueing is needed; keep `Engine` for map tasks and dynamic
-   graphs (39.5).
-7. **The hosted decider.** Yes, after the compiled mode runs end to end; the
-   first user is `agentic_graph`'s join.
-8. **Hosted payloads.** *Settled by the maintainer:* a per-definition policy,
-   `external` by default and `sealed` as the private option; no `plain`
-   (40.4).
-9. **Layout in the revision.** Keep ADR 0024's revision; add `plan_id` (9.1).
-10. **Level 1 for planner.** Skip (38).
-11. **Where `app/training/run.py` is written.** As a worker task from the
-    start (38, Level 3).
-12. **`execution_id` on a dataset version.** A separate provenance field
-    beside `produced_by`, not a change to its format.
-13. **Who owns the pod templates.** The aiwatcher chart, as values, because
-    the work role reads them; planner's chart supplies its own under a
-    documented key. Settled by whoever writes the second template.
-14. **Absolute bounds on the windowed list routes.** *Settled by building it,
-    smaller than it was drafted* (43.18). Not `from`/`to` replacing the
-    relative window, which `window::cutoff` argues against and which would
-    have touched every windowed route — one optional `as_of`, on the two
-    routes Flow reads with a window. Absent it is now and every link means
-    what it meant; present the window is a closed span, and a windowed Flow
-    step is cacheable.
-15. **A second query engine, run locally.** *Settled by the maintainer:* a
-    transform stays **Flow DSL text**, and a second engine authors its own.
-    DuckDB from a console over the same corpus remains possible and is not
-    made cheaper by this — `RuntimeBinding` is an enum of bindings and never a
-    host, `ActivityExecutor` assumes no transport, and `FlowSourceRef` keeps
-    the *source* structured beside the generated script (15.3), so a second
-    compiler can read where the rows come from. What it cannot read is
-    `BlockSpec::Transform`, which is a string.
-
-    The alternative was a structured transform, and the reason against it is
-    not effort. Flow ships 239 DSL functions and 43.22 replaced a hand-written
-    list of 37 names with a rule, deliberately, so that what a person may write
-    is bounded by a *signature* rather than by a queue somebody maintains. A
-    structured representation is that queue again, one layer up: every
-    transform a user could express would have to be a case the model has, and
-    the day somebody needs the 240th function they would be waiting on this
-    repository rather than on Flow. Structure *beside* the text was considered
-    and is worse than either — two authored representations of one thing, free
-    to drift, with no rule saying which is the truth.
-
-    The consequence, stated so nobody rediscovers it as a surprise: a SQL
-    engine over this data reads the source and re-authors the transforms. That
-    is a real cost and it is the one that was chosen.
-
-16. **Upgrade compatibility (work 1).** *Settled 2026-09-08:* staged removal.
-    A release may not remove something the release before it names, so a
-    removal is two releases — one that stops using the thing, one that drops
-    it. 0005 re-adds what 0003 took, including for a database already at
-    schema 4, which is reached by a further version rather than by editing an
-    applied one. Rolling upgrade and image rollback are both supported and need
-    no coordinated stop. See work 1's closure note and
-    [INSTALL.md](INSTALL.md#upgrading-its-schema).
-17. **Local commit recovery (work 2).** *Settled 2026-09-08:* a recoverable
-    commit journal, because the adapter's identity is the write-ahead log's
-    shape and a local database would replace it rather than repair it. See
-    work 2's closure note.
-    ~~Choose a recoverable commit journal or a transactional local adapter.~~ The acceptance criterion is A1's partial
-    write followed by retry and reopen, plus SIGKILL; the choice must preserve
-    the port's observable contract.
-18. **Scheduler authority and semantics (work 3).** Keep admission and pending
-    slot state transactional; product history remains on the log. Decide
-    schedule version/effective time, DST ambiguity and gap policies, catch-up,
-    overlap scope and stable `run_now` identity before selecting the storage
-    layout. No new read model project is needed to make admission atomic.
-19. **Canvas mapping (work 5).** Prefer a server-provided mapping from authored
-    blocks to pinned plan steps, with draft/revision compatibility. Historical
-    states may light only a matching draft; a different draft displays drift.
-20. **Scope choices for this delivery.** Whole-execution preview is excluded
-    until a named simulation use case requires it. Retain `WorkflowStore::attempt()`
-    to observe adapter contracts and document that purpose during work 2.
+   graphs (39.5). Nothing builds it until Phase 12 has its use case.
+7. **The hosted decider.** Yes, after the compiled mode runs end to end — which
+   it now does — and the first user is `agentic_graph`'s join. In progress; §28
+   says which half exists.
+13. **Who owns the pod templates.** The aiwatcher chart, as values, because the
+    work role reads them; planner's chart supplies its own under a documented
+    key. Settled by whoever writes the second template, which is Phase 12.
 
 ## 43. What building it changed
 
-Phases 0–3 are written. This section is what the code said back — the places
-where a plan checked against three repositories still turned out to be wrong
-about something, and the things that only appeared once there was something to
-run. Each is stated as what changed, and why the original was wrong rather than
-merely different.
+One entry per place where a plan checked against three repositories still turned
+out to be wrong, or where something only appeared once there was code to run.
+These were long arguments while the work was in flight; now that it is delivered
+they are kept as the finding and its consequence, because that is what a reader
+needs and what the guardrails cite. **The rule each produced lives in
+`CLAUDE.md`, and the numbers below are stable — several are cited from there and
+from the ADRs.**
 
 ### 43.1 The PostgreSQL crate was a crate for a reason that was not true
 
-Revision 2 justified `aiwatcher-execution-postgres` by analogy: "its own crate
-so sqlx is out of every build that does not set the feature, exactly as `laser`
-keeps laser_sdk out". The analogy is backwards. `laser` is a **cargo feature on
-`aiwatcher-bus`**, and `laser_sdk` — a much heavier dependency than sqlx — lives
-in `bus::adapters::laser`, a module beside `memory` and `wal`. There was never a
-crate.
-
-A separate crate would also have been the workspace's first vendor-named one,
-against the rule the layering comment states and `aiwatcher-pipeline`
-(not `aiwatcher-flyte`) already set. So the adapter is `store::postgres` behind
-a `postgres` feature. Section 27 is corrected.
-
-**The lesson is narrower than "prefer features".** An analogy is a claim about
-the code, and this one was never checked against the file it named.
+The justification was an analogy to `laser`, and `laser` is a **cargo feature on
+`aiwatcher-bus`**, not a crate. A separate one would also have been the
+workspace's first vendor-named crate. The adapter is `store::postgres` behind a
+`postgres` feature; §27 is corrected. The lesson is narrower than "prefer
+features": an analogy is a claim about the code, and this one was never checked
+against the file it named.
 
 ### 43.2 The contract suite had to move before the third adapter could exist
 
-Phase 1's exit says "on every adapter". With the properties written as test
-functions in `aiwatcher-execution/tests/`, a second adapter could only have a
-*similar* suite — which is what the exit exists to prevent, since the two
-adapters that ship are correct in structurally different ways (a mutex and a
-transaction).
-
-So the properties are `aiwatcher_execution::testing`, behind a `testing`
-feature, as `async fn`s taking `&dyn WorkflowStore`. That move is what makes
-"one suite, three adapters" a fact rather than an intention, and it is why
-adding a fourth costs one call.
-
-Sharing a store immediately found two bugs **in the suite** that separate test
-functions structurally could not:
-
-* `claim_attempt` takes the *oldest* matching row, so a fixed queue name meant
-  one property claimed another's attempt and the heartbeat after it failed for a
-  reason that had nothing to do with the adapter. Queues are per property now —
-  which is exactly the isolation a shared PostgreSQL forces.
-* Assertions that counted outbox rows (`len() == 1`) had to become assertions
-  about a specific `message_id`.
-
-Both would have appeared for the first time in CI, against the adapter, and been
-read as adapter bugs.
+Written as test functions, a second adapter could only ever have had a *similar*
+suite. The properties are `aiwatcher_execution::testing` behind a `testing`
+feature, as `async fn`s over `&dyn WorkflowStore`, so a fourth adapter costs one
+call. Sharing a store immediately found two bugs **in the suite** — a fixed queue
+name let one property claim another's attempt, and outbox assertions counted rows
+where they had to name a `message_id` — both of which would have appeared first
+in CI and been read as adapter bugs.
 
 ### 43.3 `AppendOutcome::Duplicate` needed a stated meaning
 
-The `memory` and `file` adapters disagreed: one reported the version *after* a
-decision's outputs, the other the version of the input itself. The contract
-suite is what caught it, because nothing else compares two adapters.
-
-Settled on the input's own version — where the previous result is looked up, and
-a number that stays true as the stream grows past it. An append reports the new
-head; a duplicate reports where the input landed. They differ on purpose, and
-the port now says so.
+`memory` and `file` disagreed about which version a duplicate reports, and only
+the contract suite compares two adapters. Settled on the input's own version: an
+append reports the new head, a duplicate reports where the input landed, and they
+differ on purpose.
 
 ### 43.4 A cursor cannot always ride a decision
 
-Section 10 puts "advance the processor checkpoint" inside the transaction, which
-is right — and does not cover the case the inbox answers: an input from the log
-that was *already handled*. There is no decision to be atomic with, and leaving
-the cursor behind re-reads that message forever.
-
-The first attempt was an inert message carrying the checkpoint, which put a
-`ResumeExecution` in the stream that never happened. Replaced by
-`WorkflowStore::advance_checkpoint` — a plain write, done afterwards, which is
-the right way round by `aiwatcher_jobs::ORDERING`: a crash in between re-reads a
-message the inbox already knows.
+An input the inbox has already handled has no decision to be atomic with, and
+leaving the cursor behind re-reads it forever. `advance_checkpoint` is a plain
+write done afterwards — `aiwatcher_jobs::ORDERING`'s right way round, since a
+crash in between re-reads a message the inbox already knows.
 
 ### 43.5 A claimant cannot tell a takeover from a fresh claim
 
-Section 14 says a reactor "queries the runtime by idempotency key" before
-retrying a timeout. Implementing it exposed that the signal is not available:
 `claim_attempt` returns the row it just claimed, so `lease_owner` already names
-the caller.
-
-`AttemptRow::previous_owner` is the fix — set by `claim()` at the one moment the
-row knows it is changing hands, and skipped when a holder renews under its own
-name. A takeover asks; a fresh attempt does not. Without it every attempt would
-have asked, which is a round trip per step against a service that mostly answers
-"absent".
+the caller. `AttemptRow::previous_owner` is set at the one moment the row knows
+it is changing hands and skipped when a holder renews, so a takeover asks the
+runtime what happened and a fresh attempt does not.
 
 ### 43.6 `awaiting_input` had to be excluded from claiming, not only from termination
 
-Section 13.1 argues `awaiting_input` is its own state type because a waiting step
-resumes differently. True — and incomplete. `is_claimable` was written as "not
-terminal, no live lease, past any delay", and `awaiting_input` is not terminal,
-so a step waiting for a person became claimable the moment its lease expired and
-was **run again**. Five minutes after somebody was asked a question.
-
-The rule is that a waiting attempt is not work anybody may pick up: it resumes on
-the answer it asked for, from the role that may give it, and never because time
-passed. Both the Rust predicate and the PostgreSQL partial index carry it now.
+`is_claimable` was "not terminal, no live lease, past any delay", and
+`awaiting_input` is not terminal — so a step waiting for a person was run again
+five minutes after somebody was asked. A waiting attempt resumes on its answer,
+from the role that may give it, and never because time passed. Both the Rust
+predicate and the PostgreSQL partial index carry it.
 
 ### 43.7 A reactor claims by runtime and therefore never sees a worker's row
 
-The `ClaimFilter` split — a reactor claims by runtime, a worker by queue — has a
-consequence the plan does not draw out: a `PythonTask` step is **invisible** to
-a reactor, because it carries a queue and a queued attempt belongs to whoever
-holds that queue. That is right, and it is also why the reactor's
-"no executor for this runtime" branch is defensive rather than reachable: the
-filter is built from the registry, so a process never claims what it cannot run.
-
-The first version of the reactor tests used `PythonTask` steps and failed for
-exactly this reason. The test was wrong; the design was not.
+A `PythonTask` step is invisible to a reactor, because it carries a queue and a
+queued attempt belongs to whoever holds that queue. That is why the reactor's "no
+executor for this runtime" branch is defensive rather than reachable: the filter
+is built from the registry, so a process never claims what it cannot run.
 
 ### 43.8 A worker that stopped to ask needed a decider arm
 
-`ActivityResult::awaiting` lets an executor park an attempt — section 41's
-shape, one phase early. The decider had no input arm for a question raised *from
-inside* a running attempt, only for a `HumanInput` step it parks when it
-schedules one, so the report was silently refused and the step stayed `Running`.
-
-Added, with the honest limit written down: the answer today **completes** the
-step, which is right for a `HumanInput` and is the half of section 41 that is
-missing for a turn that wants to *continue* after the answer.
+`ActivityResult::awaiting` parks an attempt, and the decider had no arm for a
+question raised from *inside* a running one. Added, with the limit written down:
+the answer **completes** the step, which is right for a `HumanInput` and is the
+half of §41 that is still missing for a turn that wants to continue.
 
 ### 43.10 A report's message id has to name the attempt, not the event
 
-The reactor derived a report's `message_id` — which *is* the inbox key — from
-the execution and the event's name: `report/{execution}/step_started/started`.
-For a one-step plan that is unique. For a two-step one it is not: the second
-step's `step_started` is byte-identical to the first's, the inbox answers
-`Duplicate`, and the decider never hears about it. The step then sits `pending`
-behind a lease nothing releases, which reads exactly like a runtime that is
-busy — for five minutes, and then again.
-
-Found by running the Phase 5 chain, not by a test. The two-step reactor test
-that existed asserted what the second step was *handed*, which is right either
-way; what tells the two apart is where the run got to.
-`every_step_of_one_run_reaches_the_decider_and_the_run_finishes` asserts that,
-and fails without the fix. The id is now
-`report/{execution}/{step}/{attempt}/{what}`, and the metadata carries
-`step_id` and `attempt` as well.
-
-**The lesson is about derived ids generally.** Deriving rather than generating
-is right (43.9 records that it held); what this cost is the half of the rule
-nobody stated — a derived id must name everything that distinguishes the thing
-it identifies, and "everything" is easy to under-count when the first plan you
-run has one step.
+A report's id *is* the inbox key, and derived from the execution and the event
+name it collided on the second step of a two-step plan: the decider never heard,
+and the step sat `pending` behind a lease nothing released. It is now
+`report/{execution}/{step}/{attempt}/{what}`. The general half nobody had stated:
+a derived id must name everything that distinguishes what it identifies, and
+"everything" is easy to under-count when the first plan you run has one step.
 
 ### 43.11 Splitting the binary in two makes three backends stop being per-process
 
-Section 27 says `serve` and `work` are two Deployments and names one
-consequence: the store has to be one more than one process can hold. Running it
-found two more, and the third the expensive way.
-
-* **The workflow store.** As stated. `file` takes an exclusive lock and fails
-  on whichever process starts second.
-* **The log.** The work role's outbox publishes execution facts and the serve
-  role's projector folds them. `memory` is one process's channel and `wal` is
-  one process's directory, so a split on either leaves the facts in a log
-  nobody reads: a run that completed, and a workflow tab that never heard.
-* **The object store.** The one that fails loudly and *late*. The work role
-  wrote a step's rows into its own `./.data/prompts` and the serve role's
-  publish executor read a digest that was not there — `Infrastructure`, three
-  attempts, then `crashed`. Correct behaviour, and an hour of diagnosis for a
-  configuration that could have been refused at start-up.
-
-All three are now refused in `Config::validate`, each naming its variable and
-what made it required. The failure direction is the safe one: a single-node
-install needs none of them, because both roles are one process.
+The workflow store (`file` locks and the second process fails), the log (`memory`
+and `wal` are one process's, so the facts land where nobody folds them) and the
+object store (which fails loudly and three attempts late). All three are refused
+in `Config::validate` by name, and a single-node install needs none of them.
 
 ### 43.12 The projector belongs to `serve`, not to `work`
 
-Section 27 gives `work` "the consumers". In this codebase the projector *is*
-the read model the API answers from — in process, under
+The projector *is* the read model the API answers from, in process, under
 `AIWATCHER_MAX_SPANS_TOTAL`'s memory contract — so a `serve` role without it
-would answer every read from an empty fold, and a `work` role with it would
-hold a second copy nobody queries. What runs in `work` is the outbox and the
-reactors.
-
-This is not a disagreement with the plan so much as an ordering: moving the
-folds out of process is Phase 8, deferred behind its own gate, and until it
-happens "the consumers" cannot mean the projector. Section 27 is corrected.
+answers every read from an empty fold. `work` runs the outbox and the reactors.
+Moving the folds out of process is Phase 8, behind its own gate.
 
 ### 43.13 `ResolvedWindow` was a pin the query service could not honour
 
-`FlowSourceRef::window` is resolved at compile time so a retry reads the same
-rows and a cache key can exist. `POST /flow/query` took `window_seconds` — a
-*duration*, applied relative to the service's own now — so what survived a retry
-was the width of the window and not its bounds.
-
-Section 15.4 was implemented as written, one field and one route, and the gap
-was recorded rather than papered over. It stopped being tolerable the moment the
-cache was wired: a key that claims a span, over rows read through a drifting
-width, is a hit that answers the wrong question. Closed in 43.18.
+`POST /flow/query` took a *duration*, so what survived a retry was the window's
+width and not its bounds. Tolerable until the cache was wired, at which point a
+key claiming a span over drifting rows is a hit answering the wrong question.
+Closed in 43.18.
 
 ### 43.14 "It ran" and "here is what it produced" are two questions
 
-Section 15.4 says the query service remembers that it ran and what the result
-hashed to, "never the rows". Following that through, a `done` answer is not
-enough on its own: the reactor needs the rows to produce an artifact, and the
-service is the one party that does not have them.
-
-So the lookup is two reads against two systems, and each answers what only it
-can. The **service** answers whether the query is still executing — nothing
-else knows that, and it is the whole reason the route exists. The **object
-store** answers what the finished attempt produced, through a receipt the
-reactor writes after the data (`aiwatcher_jobs::ORDERING`, in the fifth place
-it applies). `done` with no receipt is the honest gap between them: the query
-finished and its rows never reached the store, so running it again is the only
-way to get them.
-
-The receipt also settles a question that looked like a cross-language contract
-and is not one. The two digests — PHP's of its own JSON, Rust's of the bytes it
-stored — are of different encodings and are never compared to each other. What
-is compared is the service's digest against the one *recorded in the receipt*,
-which answers the only question that matters: whether the note beside the
-stored bytes describes this run of this key.
+The **service** answers whether it is still executing a key — nothing else can
+know that. The object store's **receipt** answers what the finished attempt
+produced. `done` with no receipt is the honest gap between them. The two digests
+are of different encodings by different languages and are never compared to each
+other; what is compared is the service's answer against the one recorded in the
+receipt.
 
 ### 43.15 Wiring the cache made a latent unsoundness reachable
 
-The compiler set `CachePolicy::ByContent` on every Flow and notebook step from
-the day it was written, and nothing ever computed a key: `cache_key` was called
-only by its own tests, `StepScheduled.cache_key` was always `None`, and
-`ArtifactCatalog` had one adapter that nobody constructed. The plan *declared* a
-cache the system did not have, which is worse than not having one — somebody
-reads `ByContent` and believes the second identical run is free.
-
-Wiring it turned a dormant bug into a reachable one. `code_digest` gated a Flow
-key on `window.is_some() || resolved_revision.is_some()`, and the window itself
-was **not in the material** — so one script over two different pinned spans
-produced one key. A pipeline run at 10:00 over the last hour and the same
-pipeline run at 14:00 over the last hour would have shared a key, and the second
-would have been answered with the first's rows.
-
-Two changes, and the second is the one worth remembering:
-
-* The resolved window is in the key material now. One script over two spans is
-  two questions.
-* A Flow step needs a **pinned source**, not merely a pinned window. `POST
-  /flow/query` takes a duration and applies it from its own now, so a plan that
-  pinned 09:00–10:00 and a retry five minutes later read different rows — and
-  the retry would store them under the original key. That is exactly the
-  "probably the same" that `cache_key` exists to refuse, so it refuses it.
-
-**The lesson is about declaring a capability before wiring it.** The gate that
-was wrong had been wrong for as long as it had existed, and no test caught it
-because no caller existed. A policy field with no reader is not half a feature;
-it is a claim the code does not keep.
+`CachePolicy::ByContent` sat on every Flow and notebook step from the day the
+compiler was written while `cache_key` was called only by its own tests. A
+declared cache the system does not have is worse than no cache, because somebody
+reads the policy and believes the second identical run is free. Wiring it is what
+found the bug — and it is the reason a policy field with no reader is now a
+guardrail of its own.
 
 ### 43.16 The outbox was a queue that never forgot
 
-`mark_published` set `published_at` and `pending_outbox` filtered on it, so
-every fact this engine ever published stayed in the store forever. Nothing read
-those rows: once the sink has taken a message it is on the event log, which is
-the durable copy and the one every fold reads.
-
-They are deleted now, in all three adapters, and the contract suite has a
-sixteenth property that says so. The sharpest case is the `file` adapter, which
-rewrites the whole outbox on every publish — a kept row is paid for on every
-pass afterwards, so the cost of remembering was quadratic in the number of facts
-a deployment had ever produced.
-
-**What this does not fix** is the rest of the store. Streams, attempt rows and
-the projection are still never pruned, and the `file` adapter rewrites its whole
-attempt table on every claim. A retention policy for finished executions is its
-own decision — the stream is the *explanation* of a run, which is the one thing
-the log does not carry.
+`mark_published` set a timestamp and the filter skipped it, so every fact this
+engine ever published stayed in the store. Nothing reads those rows: the fact is
+on the event log. They are deleted now in all three adapters, and the `file`
+adapter — which rewrites the whole outbox on every publish — was paying for the
+memory quadratically.
 
 ### 43.17 One retry budget was sized for a job shard
 
-`RetryPolicy::max_attempts` defaulted to `aiwatcher_jobs::MAX_ATTEMPTS` — three,
-sized in that crate for "a failure worth retrying is transient by definition".
-Applied to a step that depends on an external service, three attempts over
-1 s/5 s/30 s tolerates thirty-six seconds of outage. Restarting the process with
-the query service down burned all three and failed a chain whose Flow step was
-fine.
-
-Every class `is_retryable` answers true for means *nobody answered*, so the one
-budget only ever bounded that case. It is two budgets now, split by whether the
-runtime may have done the work:
-
-* `Transient` is the runtime **declining** — a refused connection, a 503, no
-  worker. Nothing ran and nothing has a side effect, so running it again costs
-  one call: ten attempts over 5/15/30/60 s, about ten minutes of outage.
-* `Timeout` and `Infrastructure` may have run something — the caller stopped
-  waiting, a pod died holding work. Repeating those is not free, so they keep
-  the three.
-
-They are counted by kind off the attempt records the state already holds, so a
-step that waited out a restart and then timed out has spent one of its three,
-not seven.
-
-**The lesson generalises past retries.** `aiwatcher-jobs` is called rather than
-copied, which is right — and a *constant* is not a rule. `MAX_ATTEMPTS` is a
-number chosen for one shape of work, and importing it into another shape was a
-decision that looked like reuse.
+Three attempts over 1 s/5 s/30 s tolerates thirty-six seconds of outage, which is
+right for a job shard and wrong for a step that depends on a service. The budget
+is per failure kind: `Transient` means nothing ran, so it gets ten attempts over
+ten minutes, while `Timeout` and `Infrastructure` keep three.
 
 ### 43.18 A window keeps its shape and gains an end
 
-Making `ResolvedWindow` mean something took one optional parameter, not the
-absolute-bounds rewrite open decision 14 was drafted for. `window::cutoff`'s own
-docstring argued against *replacing* the relative window — "a link someone
-pastes into a chat should mean the last hour when it is opened" — and that
-argument is untouched by letting a caller say where the window *ends*.
-
-So `as_of` is the whole change: absent, it is now and every link means what it
-meant; present, the window is a closed span and two reads of it agree. It
-reaches four places and stops:
-
-* `window::bounds` returns both ends, and `cutoff` is the one-ended call
-  everything else still makes.
-* `RunFilter` and `SpanFilter` carry it — the two datasets Flow declares as
-  windowed, and the only two routes that needed it.
-* `POST /flow/query` takes `window_from`/`window_to`; the catalog forwards
-  `as_of` to the routes that accept one.
-* `cache::code_digest` opens back up for a pinned window.
-
-**Two things this changed about how the cache is trusted.** The key being *well
-defined* is `cache_key`'s question, and whether the run that produced a result
-actually happened under those conditions is the executor's — because only the
-runtime knows what it managed to do. `ActivityResult::cacheable` is that answer,
-and the query service's `window_applied` is what the Flow executor reads to give
-it. An older service that never learnt `as_of` says so by omission and its
-results are produced, reported and not remembered.
-
-And `ActivityResult` lost its derived `Default`. `cacheable` defaults to `true`,
-which a derive would have made `false` — silently turning the cache off for
-every executor that built a result the short way. A boolean whose safe value is
-not `Default::default()` is a boolean that needs an impl.
+One optional `as_of`, not the absolute-bounds rewrite decision 14 was drafted
+for. Absent, the window is relative and a pasted link still means "the last hour"
+when it is opened; present, it is a closed span two reads agree on, which is what
+makes a windowed Flow step cacheable. Whether the run *happened* under those
+conditions stays the executor's answer, on `ActivityResult::cacheable`.
 
 ### 43.19 Phase 4 was three bullets and two of them had no reader
 
-The phase reads as one unit — "artifacts and context" — and building it split
-cleanly into what somebody can use today and what would be a writer nobody
-reads. The split is worth recording because it is the same judgement 43.15 was
-about, made *before* the code rather than after.
-
-**Built: `ContextSnapshot` and its two routes.** This is the exit, and it has
-readers: a person reopening an old block, and the panel that must not
-reconstruct one. `of_step` is exact because a run pins an immutable plan;
-`of_block` reports what a saved revision would run and says "nothing has
-happened" with empty fields rather than borrowing the newest run's rows.
-
-The type carries the plan's own `RuntimeBinding` rather than re-describing it.
-A binding already *is* the resolved context — the compiled script beside its
-structured source, the notebook beside the digest the revision pinned — and a
-second description of it would be a second place to change when a runtime gains
-a field.
-
-**Not built: a content-addressed source snapshot (16.1, step 2).** It is a
-writer with no reader until Phase 6's marimo executor exists, and it argues with
-a guardrail ADR_0024 states plainly: a copy of a notebook's source in a registry
-is a second source of truth for a file that has to stay runnable on its own. The
-two are reconcilable — an archive that is only ever read is not a second source
-of truth — but reconciling them costs a decision, and the decision buys nothing
-until something loads a pinned revision. So the context reports what was
-**pinned**, and whether the file still hashes to it stays the notebook runtime's
-answer: the one part of a context the process holding the plan cannot know.
-
-**Not built: staging by context id (16.4).** Same reason and a sharper one. The
-staging module's own docstring argues *for* one file per notebook — "open a
-block's editor after a preview and the notebook is showing the rows the chain
-actually produced" — and 16.4 wants a key per context so two pipelines stop
-overwriting each other. Both are right, and reconciling them means a context
-directory plus a per-notebook pointer to the latest. Nothing passes a context id
-until the panel does, which is Phase 7.
-
-**One departure from section 19.** Its sketch gives each action an `href`. This
-returns action *names* and no addresses: an action's address is either this
-API's own, which the generated client already has, or an optional service's —
-and a service's address in a response body is what every other route here
-refuses to carry. What only the server knows is which actions apply, and that is
-what `allowed` is.
-
-That last part was true for one phase and is not any more. With the command
-routes built (43.20), `allowed` gained `Retry` and `Answer`, each listed
-exactly where `decide` would accept it — `Failed` or `Crashed` and not
-cancelling for the first, a step actually holding a question for the second.
-Cancel, pause and resume stayed out on a different ground than "no route":
-they are done to a **run**, and this is a block's context.
+`ContextSnapshot` and its two routes have readers — a person reopening an old
+block, and a panel that must not reconstruct one — and were built. The other two
+would have been writers nobody read, and were deferred to Phase 6. The same
+judgement 43.15 was about, made *before* the code rather than after.
 
 ### 43.20 Five commands the state machine had and nobody could send
 
-`decide` implemented `CancelExecution`, `PauseExecution`, `ResumeExecution`,
-`RetryStep` and `ProvideInput` from the phase that introduced it, with the
-scenario tests to match. The API exposed none of them, so a managed run that
-went wrong could only be waited out. This is the cheapest kind of gap to miss:
-both halves are correct, the tests are green, and the capability is real and
-unreachable.
-
-Building the routes cost almost nothing and settled three things worth
-recording.
-
-**A command's message id names the run's version.** The inbox deduplicates by
-message id, so a derivation of "execution plus command name" makes a
-double-click idempotent — and makes a Pause after a Resume a *redelivery of the
-first Pause*, silently leaving the run going. `RunProjection::last_message_version`
-is the discriminator: two clicks read one version and meet the inbox, while a
-second intention reads a version the first moved. This is 43.10's rule reaching
-a second place, and `a_pause_after_a_resume_is_a_command_and_not_a_redelivery_of_the_first_pause`
-fails without it.
-
-**"No such run" and "that run will not accept this" are different answers.**
-The route reads the projection first and 404s, because a 409 invites somebody
-to try again later and there is no later for an id that does not exist.
-Everything else is `decide`'s, arriving as `HandleError::Decision` → 409 with
-the state named. The API restates none of those rules — the same split as the
-annotation canvas and the shape validator.
-
-**`answered_by` is the session, never a field.** `ProvideInputBody` is
-`deny_unknown_fields`, so a body trying to set it is a 422 rather than the one
-record of a human decision saying whatever the caller preferred.
-
-And the consequence for section 19: `ContextSnapshot::allowed` stopped being
-almost a function of the runtime. It now carries `Retry` and `Answer` exactly
-where `decide` would accept them, because an action offered where the command
-would be refused is a button that returns a 409.
+Cancel, pause, resume, retry and provide-input were implemented in `decide` with
+scenario tests, and the API exposed none of them: both halves correct, the tests
+green, the capability unreachable. Building the routes settled the command id
+rule — `execution + command name` makes a Pause *after* a Resume read as a
+redelivery of the first Pause, so the run's version is the discriminator.
 
 ### 43.21 The execution stream was already there
 
-Section 20 lists `GET /api/v1/executions/{execution_id}/stream`. It was written
-before ADR_0026, and ADR_0026 is what makes it unnecessary: a managed run's
-facts go on the event log, every one of them carrying the execution as its
-`workflow_run_id`, and `/api/v1/workflow-executions/{workflow_run_id}/stream`
-scopes by exactly that field. A managed execution has been streamable since the
-first one ran.
-
-Building the second route would have been a second image of one run, which is
-the thing ADR_0026 refuses in the same sentence it refuses a second read path
-for the list. It is struck from section 20 rather than implemented, and
-`every_fact_a_managed_run_publishes_is_reachable_by_the_execution_id` is the
-test that keeps the reason true — if a fact ever ships without that field, the
-argument for having no second route stops holding, and that test is where it
-says so.
-
-`GET /api/v1/executions/{execution_id}/events` stays: paging a stored stream
-and following a live one are different questions.
+§20's `GET /executions/{id}/stream` was written before ADR_0026, and ADR_0026 is
+what makes it unnecessary: a managed run's facts carry the execution as their
+`workflow_run_id`, and `/workflow-executions/{id}/stream` scopes by that field. It
+is struck rather than built, and a test keeps the reason true.
 
 ### 43.22 The query vocabulary was a queue, not a boundary
 
-ADR_0008's rule is that a name from a query never becomes a callable. What grew
-around that rule was a hand-written whitelist of 37 names and, in
-`PipelineBuilder`, a `match` arm per name with its own argument marshalling.
-Those are two different things, and only the first is the boundary: the second
-is an enumeration, and an enumeration is a queue. Flow ships 239 functions.
-
-The rule is about **dispatch**. A string that selects a key in a map built from
-reflection is exactly as safe as one that selects a `match` arm, so
-`Dsl\Registry` builds that map and admission is decided by three things, none
-of which is a name:
-
-- **the return type's namespace.** A query composes values; the catalog decides
-  what may be read and `write()` decides where rows go. `Flow\ETL\Loader`,
-  `Extractor` and `Filesystem` are absent, which is what keeps `to_csv()` and
-  `from_parquet()` out — 32 functions that would otherwise have been a file
-  write in a service with no authentication.
-- **any parameter that accepts a callable.** Flow has two, `call()` and
-  `to_callable()`, and `call(ScalarFunction|callable $callable, …)` is
-  precisely the remote code execution this service exists to refuse. Refused by
-  *signature*, so a function Flow adds later is refused before anybody here has
-  heard of it.
-- **`Whitelist::DECLINED`**, which is about correctness rather than safety and
-  keeps its reasons: `equals` still matches null against anything.
-
-108 names, from 37, including window functions and the whole `regex_*`,
-`array_*` and date family. The existing `match` arms were left exactly as they
-were and the registry is the `default` branch, so nothing that worked before
-takes a new path.
-
-Two findings came out of running it rather than reading it.
-
-**Categorisation reads the return type as a string and never loads the class.**
-`class_exists()` autoloads, and `Flow\ETL\Function\Uuid` throws at load when
-neither `ramsey/uuid` nor `symfony/uid` is installed. Deciding admission by
-loading would take the service down at start-up over an optional dependency of
-a function nobody called.
-
-**A refusal test passed for the wrong reason.** `call('system', [])` is refused
-by the lexer, for the `[`. With the signature rule disabled, `call('system')`
-parsed. The case is now written without the array, and it fails when the rule
-is removed — which is the only version of that test worth having.
-
-The one thing admission could not decide is **determinism**. `now()`,
-`uuid_v4()` and `random_string()` are honest work in the Query tab and a wrong
-cache entry in a managed step, so the answer carries `deterministic` beside
-`window_applied` and for the same reason as 43.18: only the service knows what
-its query resolved to. The reactor reads it as `ActivityResult::cacheable`, and
-an older service that never learnt the field is believed, because those builds
-have no function that could make it false.
-
-`join` did not come free. It takes a second `DataFrame`, which needs a
-sub-pipeline in the parser rather than a dispatch change, so it stays ahead
-rather than arriving with this.
+ADR_0008's rule is about **dispatch**, and what had grown around it was a
+hand-written list of 37 names plus a `match` arm each. Flow ships 239 functions,
+so the list was a queue. `Dsl\Registry` derives the vocabulary from return-type
+namespace and refuses any parameter that takes a callable; adding a name by hand
+now means the rule did not cover it. The list of things this language "could not
+do" — arithmetic, joins, window functions — turned out to be the list's, not
+Flow's.
 
 ### 43.23 Phase 7, at the size that was actually missing
 
-The plan's Phase 7 is "thin the panel": remove `orderOf`, `compileFlow` and
-`runPipeline` from the managed path. What was actually missing was smaller and
-came first — **nothing in the panel called `POST /api/v1/executions` at all**,
-so every managed run so far had been started with curl.
-
-Three decisions, and the first is the one worth keeping.
-
-**The stream is the signal; the projection is the truth.** A frame says
-something happened and `GET /executions/{id}` says what the state now is,
-because that projection was written in the same transaction as the decision
-(ADR_0026). So `useManagedRun` subscribes to `openWorkflowStream` and does
-nothing with the frame but invalidate a query. No frame parsing, no polling
-interval, and the per-step state a canvas would need is the store's rather than
-a fold's.
-
-**The waterfall is a link, not a second drawing.** The Workflows view is fed by
-the same events and already renders a managed run (43.21). Drawing one here too
-would be two pictures of one run that disagree whenever one is a frame behind.
-
-**The ad-hoc path stays, and the two empty states now say which nothing they
-mean.** With a server run on the page, "Nothing run yet" sits directly under a
-card reading `completed`; it says "nothing run in this tab" instead, and where
-the rows went. ADR_0025 keeps the browser-driven chain deliberately — a
-preview, a block at a time, an answer in the tab you are looking at — so the
-two will coexist and the wording is the whole cost of that.
-
-Proven by running it: the button saved, started, and the card reached
-`completed` with both steps, live. Two things came out of the same session that
-no test states. A managed run whose Flow service could not reach the API failed
-three times as `Transient`, kept its wider budget and **recovered on its own**
-at attempt four once the dependency came back — 43.17 doing exactly its job,
-51 s of wall clock and no human. And the second run of the same pinned span
-finished in 1.03 s having sent the query service **no query at all**: the
-cache, in the panel-driven path.
-
-What is still Phase 7 and deliberately not done: the canvas does not light its
-blocks from a managed run's step states, and `compileFlow` still exists on the
-ad-hoc path. Both are real work and neither is what made the feature
-unreachable.
+The plan said "thin the panel". What was actually missing was that **nothing in
+the panel called `POST /api/v1/executions` at all** — every managed run so far had
+been started with curl. The decision worth keeping from it: the stream is the
+signal and the projection is the truth, so every frame re-reads the execution
+rather than parsing a payload.
 
 ### 43.24 Phase 6, and the two Phase 4 items it was holding
 
 The notebook executor is the fourth `ActivityExecutor` and the last runtime a
-curation chain needs, so ADR_0024's `source → transform → notebook → view` now
-runs whole under the server. It also unblocked the two things 43.19 recorded as
-"writers with no reader", and both turned out to be more than plumbing.
-
-**The pinned revision is checked twice, and both are the same rule.** The
-compiler already refuses a notebook block with no revision, so a plan always
-pins one. The executor asks the runtime what source it holds *before* anything
-executes, and compares what actually ran *after*. The first makes drift a
-refusal that cost nothing; the second makes it impossible for a notebook saved
-between those two moments to be recorded as the pinned one. `UserCode`, so it
-is not retried, and the message carries both revisions and the fix — proven by
-running it: a notebook edited after its pipeline was saved refused before the
-subprocess started.
-
-**Staging by context needed a `latest` to stay useful.** 16.4 reads as "key the
-staged rows by context id instead of by notebook name", and doing only that
-breaks the thing staging exists for: the live app knows a notebook's name and
-nothing else, so it would stop finding the rows. So a run stages under its
-context *and then* points `latest` at it, in that order — a `latest` naming
-rows that were never written is a broken editor, while an unreferenced staged
-file is a few kilobytes nobody reads. The editor follows the pointer. Two
-pipelines sharing one notebook no longer overwrite each other, and opening
-either still shows the rows its last run produced.
-
-The context is **hashed** into a directory name rather than sanitised, because
-`<execution>/<step>/<attempt>` holds separators and a path built by replacing
-them is one somebody could aim outside the staging root.
-
-**And a hole that only appeared once something ran.** The compiler marks a
-notebook step `CachePolicy::ByContent`, which had no consequence while no
-notebook step ever executed. With an executor it does: a chain caches the step
-by the rows it read, the parameters it was given and the revision it pinned —
-right for a transform, wrong for a notebook that samples, reads the clock or
-asks a model. Nothing outside the notebook can tell those apart.
-
-So a notebook declares it, beside its `output`:
-
-```python
-deterministic = False
-```
-
-Absent means true, because a curation block normally is one and a default that
-turned caching off would make every chain pay for the exceptions. This is
-exactly the seam 43.22 built for the query service, arriving at the same answer
-from the other side: the runtime reports what it knows, and
-`ActivityResult::cacheable` is where both land.
-
-A cache hit, incidentally, does **not** re-check the pin, and that is correct
-rather than a gap: the key contains the pinned revision, and the cached rows
-were produced by a run that verified it. The file on disk having changed since
-says nothing about bytes that were produced by the revision the plan names.
-
-**What `lookup` could not do here**, at the time: the query service remembers
-that it ran a key (15.4) and the notebook runtime remembered nothing, so
-`lookup` asked the object store's receipt and nothing else — which answers
-honestly whether a *previous attempt got all the way through* and not whether
-one is still going. Such a step could run twice. Closed in 43.30, which turned
-out to have a prerequisite nobody had noticed.
+curation chain needs. With it, the pinned revision is checked twice — before
+anything runs and against what the subprocess imported — and a staged file is
+keyed by the run's context rather than by the notebook, so two pipelines sharing
+a notebook stop overwriting each other's rows.
 
 ### 43.25 The store grew and the chart could not hold it
 
-Two halves of one gap, and both are about the first real deployment rather than
-about a design that was wrong.
-
-**Nothing forgot anything.** 43.16 deleted published outbox rows and said what
-it did not fix: streams, attempt rows and the projection are never pruned, and
-the `file` adapter rewrites its whole attempt table on every claim. So
-`WorkflowStore` gained `prune(before, limit)`, every adapter implements it, and
-the contract suite has a seventeenth and eighteenth property. (The attempt table
-turned out not to need bounding at all — a finished attempt should never have
-been a row. Section 43.34.) The rules are
-`store::prunable` and the outbox check, in one place because an adapter that
-decided them itself would keep a *different* retention policy:
-
-* **Terminal only.** A run with no end is `Running`, and nothing in this system
-  decides one has died — the projector's rule for agent runs, arriving in a
-  second store. A sweep that deleted by age alone would delete the run somebody
-  is watching.
-* **Nothing the outbox still holds.** A pending row is a fact that has not
-  reached the log. Deleting the decision behind it leaves the publisher a
-  message with no explanation and the log a gap nothing records —
-  `aiwatcher_jobs::ORDERING` in a sixth place.
-* **All of one execution together**: stream, inbox, projection, attempts. A
-  kept projection whose stream is gone is a run the panel lists and cannot
-  open.
-
-**The clock is not `ended_at`.** Following the sweep through found that field to
-be the mirror image of 43.15's `CachePolicy::ByContent`: `RunProjection::ended_at`
-and `started_at` have **no writer**. `evolve` reads no clock and the terminal
-events carry no timestamp, so nothing ever sets them, and nothing reads them
-either. Rather than widen `replay` across twenty call sites for a field that is
-not the right clock anyway, retention uses *when the store last wrote anything
-about this execution* — which cannot be absent, which resets on a retry, and
-which is what a person means by a retention window. Each adapter reads it from
-what it already holds: the last recorded message (`memory`), the stream file's
-own modification time (`file`), a column written by the projection upsert
-(`postgres`, migration 0002 — the first use of the second-migration machinery
-`schema.rs` was built for, verified by rolling a database back to version 1 and
-applying it again). `ended_at` having no writer stands, unfixed and now written
-down.
-
-The PostgreSQL sweep is one transaction with `for update skip locked`, so two
-work replicas take disjoint sets. Its candidate query carries **no** `order by`:
-oldest-first reads well, and over a composite index led by `state_type` it is a
-sort of every prunable row in the table to take five hundred of them. Measured
-on 50 000 rows — without it the plan is an index scan whose condition covers
-both columns and touches exactly the hundred rows past the cutoff; with it, a
-Sort sits above that scan. The sweep loops until it drains, so *which* five
-hundred has no consequence, and neither of the other two adapters orders either.
-
-The window has a floor nothing in the crate can check: the inbox goes with the
-stream, so a message redelivered after its execution was pruned is decided again
-rather than recognised. Delivery is at-least-once and the log is what
-redelivers, so the window must be longer than the log's retention.
-`AIWATCHER_WORKFLOW_RETENTION_DAYS` is unset by default and `0` means keep, not
-delete: the stream is the *explanation* of a run and the one thing the event log
-does not carry, so a release that started deleting it on an upgrade would be
-deleting the only copy.
-
-**And `deploy/` knew nothing about any of it.** The chart had no database, no
-detection for one, no workflow-store variables, no address for the runtimes a
-step needs, and no policy for either. It has all of them now: `execution`
-(`store`, `retentionDays`, `flowUrl`, `mlPipelineUrl`, `splitRoles`, `workers`)
-and `postgresql` as the fifth `install | external | none` backend, with
-`detect-stack.py` reporting a database it finds and **never** deriving one —
-the object store's rule with a sharper reason, because what this release would
-do with a database it found is create tables in it.
-
-Four refusals at render time rather than at rollout, each naming what
-`Config::validate` would refuse later: `store: postgres` with no database,
-`store: file` on an emptyDir, and the three shared backends the role split
-needs. And one bug that a policy would have surfaced only as a timeout: the Flow
-service's NetworkPolicy admitted the **panel** and nothing else, which was right
-while the only client proxied a person's query — a managed `flow_php` step is
-aiwatcher reaching that service directly, and every attempt would have been a
-refused connection the retry budget read as a transient outage and spent ten
-attempts on. It admits the panel, the server and, when the roles are split, the
-worker.
-
-Section 27's split is a `splitRoles` flag over one shared environment: the two
-Deployments are the same binary reading the same configuration, so the
-environment is a template rendered twice and the two things that differ —
-`AIWATCHER_ROLE`, and the listen address a role with no socket has no use for —
-are written beside each call. Two copies of that list would be one release where
-a variable reached the API and not the worker, whose every symptom appears three
-attempts later as "holds no object". The extraction was verified by diffing the
-rendered chart before and after: identical but for the generated secrets, which
-are random per render by design.
+Nothing forgot anything: streams, attempt rows and projections were never pruned.
+`prune(before, limit)` is on every adapter with `store::prunable` as the rule,
+terminal executions only, the whole execution together, and a pending outbox row
+keeping its execution alive. Retention stays off by default, because the stream
+is the only copy of a run's explanation.
 
 ### 43.26 A dead guard that was not inert
 
-`evolve`'s `StepStarted` arm carried
-
-```rust
-if execution.started_at.is_none() {
-    execution.state = RunState::of(StateType::Running);
-}
-```
-
-meaning "the first step to start moves the run from scheduled to running". Two
-things are wrong with it and they compound. `RunProjection::started_at` and
-`ended_at` have **no writer** — `evolve` reads no clock and the terminal events
-carry no timestamp — so the condition is always true; and the transition it
-guards is already made unconditionally by `ExecutionStarted`, which the start
-emits before any step can report. So the branch could only ever overwrite a
-state the run had moved to *since*: `Cancelling` or `Paused`.
-
-Both are reachable and neither is exotic. Two steps with no edge are dispatched
-together; one reports started, somebody cancels, and the reactor that had
-already claimed the other reports honestly a moment later — the run reads
-`running` again. The pause case is worse, because a pause is a thing somebody
-does and then watches for, and a run that reads `running` a second later reads
-as a pause that did not take. Nothing *behaved* wrongly: `cancelling` is a
-separate flag and it is what `decide` and `ContextSnapshot::allowed` read. Only
-the word a person sees was wrong, which is the whole job of that field.
-
-The assignment is deleted rather than repaired, because the transition has an
-owner. `started_at` and `ended_at` having no writer stands — fixing them needs
-a timestamp in the fold, which is a change to `replay` and its twenty call
-sites, and neither field has a reader either.
+An `evolve` arm that could not fire, describing a rule that was not true. Dead
+code that states something false is worse than dead code, because the next reader
+believes it.
 
 ### 43.27 What is served and what is reachable are two lists
 
-The gap between them is invisible from either side: every route was tested,
-every button that existed worked, and the two lists had drifted anyway.
-
-**Seven routes with no caller.** 43.20 added cancel, pause, resume, retry and
-provide-input; 43.19 added the two context routes. Each was served, tested and
-reachable by `curl`, and nothing in the panel sent one. The guardrail about not
-listing an action whose command would be refused was kept the trivial way — by
-rendering no actions at all.
-
-They have callers now, and the shape of the fix is the guardrail rather than
-the buttons. `ContextAction::allowed` already answered "which of these apply to
-this block", so its sibling `allowed_run_actions` answers it for the run, and
-`GET /executions/{id}` returns a `RunView` — the projection *and* what may be
-done to it — as do all five command routes, so a caller that has just paused
-knows Resume is the one that applies without asking again. Three lines of
-`state.is_terminal()` in TypeScript would have worked and would have been a
-second copy of `decide`'s preconditions in another language; the day they
-disagree is the day somebody trusts the wrong one.
-
-Verified in a browser against a real run: a paused run offers Resume and Cancel
-and never Pause; a terminal run offers nothing; a failed step offers "Take this
-step again" and a pending one says no command applies. The ad-hoc actions —
-validate, test, open the editor — are deliberately *not* rendered here: they
-belong to the block inspector, where somebody is editing, and this card follows
-a run.
-
-**A managed run that did not outlive its tab.** The Pipeline view held the
-execution id in `React.useState`, against this repository's own rule that a
-view's state lives in the URL — load-bearing here rather than a convenience,
-since ADR_0025's whole claim is that the browser may close. The card even said
-so in as many words, which made it a lie in the UI.
-
-The id is a search param now. What is **not** built is the
-`GET /api/v1/executions` this was first written down as needing: a list over
-the inline projection is precisely the second read path ADR_0026 forbids, and
-`GET /api/v1/workflow-executions` already lists managed runs from the log, by
-the same id. The inventory was half wrong and the half that was wrong would
-have been a guardrail violation.
-
-Fixing it exposed the same defect one field over: `name` was written to the URL
-and never read back, so a reload restored the run and left the canvas empty —
-the chain gone, the run it was running still going. Hydrated once, and only
-onto a draft nobody has touched, so it can never overwrite unsaved edits.
-
-**No trigger that is not a person.** ADR_0025 named three things that would
-make ADR_0024's browser-driven chain wrong, and one was "unattended, on a
-schedule". The other two arrived and are handled; this one is not built.
-Nothing forecloses it — a scheduler posts the same body to the same route — and
-nothing provides it, so a nightly curation is a cron job somebody writes
-outside this system.
-
-**`Answer` has a caller and no producer.** The form renders the question's own
-`prompt` and its `choices` as buttons, because `decide` refuses anything that
-is not one of them by name. Nothing reaches it yet: `compile_curation` emits no
-`HumanInput` step, so a plan holding a question is one somebody builds by hand.
-The path is wired for the definition kind that will have one.
+Seven routes had no caller — every one served, tested and reachable by `curl`,
+and nothing in the panel sent one. The fix that keeps them from drifting again is
+`RunView`: every command route and `GET /executions/{id}` return the projection
+**and** what may be done to it, so the browser never re-implements `decide`'s
+preconditions.
 
 ### 43.28 An error from aiwatcher arrived as a missing array path
 
-Found by running the shipped PII example against a default install, which is
-the configuration everybody has on their first day.
-
-The Flow service reads aiwatcher over HTTP and pulls rows out of the body with
-`array_get(__body, 'rows')`. Nothing checked the status first. So a 501 saying
-*this instance searches no dataset hubs (AIWATCHER_HUGGINGFACE_ENABLED, …)*
-reached a person as:
-
-```
-Path "rows" does not exists in array
-array('code'=>'hubs_disabled','message'=>'thisinstancesearchesnodatasethubs(…)')
-```
-
-— the sentence that would have fixed it, spelled without its spaces, inside one
-about an array path. And the service answered **502**, which
-`execution::flow`'s classifier reads as `Transient`: nobody answered, worth ten
-attempts over ten minutes. The run had reached attempt 8 of a configuration
-flag that was never going to turn itself on.
-
-The check goes at the seam where the answer arrives, because that is the only
-place that has both the status and the body — by the time the pipeline reaches
-for `rows` there is no status left to branch on. `CheckedClient` is a PSR-18
-decorator that throws `UpstreamFailed` carrying aiwatcher's own message, the
-status and the route; `index.php` relays a permanent one (4xx, and 501) as a
-422 so a managed step classifies it `UserCode` and stops. Everything else stays
-502, which is the honest reading of a store that may come back.
-
-Confirmed end to end: the step went from `AwaitingRetry` at attempt 8 straight
-to `failed`, carrying the sentence that names the variable, instead of
-spending attempts 9 and 10 on it.
+Flow's pipeline is lazy, so by the time it pulled `rows` out of the body there
+was no status left to branch on, and a 501 naming an unset variable reached a
+person as `Path "rows" does not exists`. `CheckedClient` throws at the seam with
+aiwatcher's own message, and relays a permanent answer as a 4xx so a managed step
+reads it as `UserCode` rather than retrying a flag that is still off.
 
 ### 43.29 CI proved nothing about the store a deployment uses
 
-Found while checking the panel worked, which is the sort of place these turn up.
-
-`.github/workflows/ci.yml` had seven jobs and none of them ran the PostgreSQL
-adapter, `services/flow` or `services/ml_pipeline`. The word "postgres" did not
-appear in the file.
-
-The database one is the sharpest. `postgres` is behind a cargo feature so
-`sqlx` stays out of every build that does not ask for it (the shape `laser` has
-in `aiwatcher-bus`), which means `cargo test --workspace` runs the eighteen
-storage properties against `memory` and `file` **only** — and those are the two
-adapters nothing deploys. 43.25 had just added a migration and a retention
-sweep to the third. `just test-postgres` existed and nothing called it, so the
-first cluster to upgrade would have been the first machine other than a
-developer's laptop to apply `0002_retention.sql`.
-
-The other two are one argument: `just check` covers neither optional service
-deliberately, because PHP and a Python toolchain may not be on a machine that
-only touches the Rust crates. That was always a statement about a *developer's*
-laptop and never one about CI — and it stopped being defensible the moment a
-managed step began running through both. 43.28's fix is in code no CI job
-compiled.
-
-Three jobs now: a `postgres:17-alpine` service container on 5433 — the port
-`just postgres-up` chose so a suite never lands in a database somebody already
-has on 5432, kept here so a CI failure reproduces locally verbatim — plus
-`just flow-check` on PHP 8.3, the floor `composer.json` declares rather than
-the newest, and `just ml-pipeline-check` behind the same pinned `setup-uv` the
-SDK job records a reason for. That recipe gained `--locked`: it is what CI
-runs, so a lock that no longer matches `pyproject.toml` should be a red build
-rather than a quiet re-resolve testing a dependency set nobody committed.
+Seven jobs, and none ran the PostgreSQL adapter, `services/flow` or
+`services/ml_pipeline`. The word "postgres" did not appear in the workflow file,
+while `postgres` is behind a cargo feature precisely so it is not built by
+accident — which also means it is not tested by accident.
 
 ### 43.30 The runtime could not answer while it was working
 
-43.24 recorded that a notebook step may run twice: the query service remembers
-that it ran a key and the notebook runtime remembered nothing, so `lookup` asked
-the object store's receipt alone — which says whether a *previous* attempt
-finished and nothing about one still going.
-
-Building the memory found the reason it would not have worked. `run_notebook` is
-a blocking `subprocess.run`, and `service.py` called it straight from an `async`
-handler, so the event loop was held for the length of every run. Measured on a
-notebook that finishes in under a second: a 704 ms run held `/healthz` for
-**657 ms**. A `running` answer would have been unreachable by construction —
-the one question the route exists for is asked precisely while the loop is
-blocked.
-
-That is also, on its own, worse than the thing it was hiding. marimo's live app
-is served by this same process for the panel's iframe, so one managed step made
-the editor unresponsive for as long as it ran. The run goes to a worker thread
-now (`anyio.to_thread.run_sync`). Same script, after: a 438 ms run, slowest
-probe **13 ms**.
-
-The memory itself is the query service's, in the shape this runtime allows. Same
-three answers — `running`, `done`, `absent` — and the same reason for each. Two
-differences, both from the host rather than from the design:
-
-* **A dict, not files.** The query service writes files because `php -S` forks
-  workers, so a static array would answer `absent` to whichever worker took the
-  lookup. This is one uvicorn process, so the equivalent of that reasoning is a
-  dict — and every write happens on the event loop, before the run is handed to
-  a thread and after it comes back, so there is no lock and nothing to get wrong
-  about one. It expires on write, which is the one way an in-process store is
-  worse than a file the operating system eventually clears.
-* **`done` carries the notebook's revision**, not a digest of rows. That is what
-  the receipt records for this runtime, so the two can be compared — the
-  guardrail against comparing a runtime's digest with an artifact's still
-  holds, because this is the runtime's answer against the digest *in the
-  receipt*.
-
-The key needs no new field: `context_id` and `idempotency_key` are the same
-string, `<execution>/<step>/<attempt>`, so a run already carries it and the
-route takes it whole (`{key:path}`) rather than encoded — a person reading a log
-sees the key they would grep for.
-
-And `lookup` asks the runtime **best effort**, which is where it departs from
-the query service's. A runtime that is unreachable, or an older build with no
-such route, must not stop the caller reading the receipt: that one is durable
-and the memory is a fifteen-minute window, so failing to reach the volatile
-source would hide the answer that outlives it.
+`run_notebook` is a blocking `subprocess.run` and was called straight from an
+`async` handler, so the event loop was held for the length of every run —
+measured at 657 ms of a 704 ms run. The one route that exists to be answered
+*while* a notebook runs could not be, and marimo's live app is served by the same
+process.
 
 ### 43.31 The scheduler that decides nothing
 
-ADR_0025 named three things that would make ADR_0024's browser-driven chain
-wrong. Two arrived and were handled; the third was "unattended, on a schedule",
-and the shape it took came from a reference the maintainer supplied — Oskar
-Dudycz's `PassageOfTimeJob`.
-
-What that job does is publish a **fact**: `DayHasPassed(now, previousFireTime)`
-— a closed *interval* — and let whoever cares work out what is due. The first
-design drafted here did the opposite: a loop that read schedules, consulted a
-clock and decided what to start. Three properties came free from the inversion,
-each of which the drafted version would have had to build:
-
-* **Catch-up.** A process down from 08:59 to 10:05 ticks once with
-  `previous = 08:59`, and the 09:00 slot is in that interval. The draft had a
-  "grace window" to tune; there is nothing to tune.
-* **The tick rate stops being a correctness question.**
-  `how_often_the_clock_ticks_changes_nothing_about_which_slots_fire` cuts a
-  three-day span into 37-minute pieces and asserts the same slots as one call
-  over the whole of it. What the interval decides is how *late* a nine o'clock
-  run may be, and nothing else.
-* **A replay is a replay.** The same interval always yields the same slots, so
-  re-processing a tick after a crash cannot invent a run.
-
-**What was not taken.** The reference publishes onto the event bus so anything
-may subscribe. Here the only subscriber would be the scheduler, and the event
-log is the durable one every projector folds — a minute-tick on it is five
-hundred thousand records a year that mean nothing to any of them, which is the
-flooding ADR_0026's guardrail is about. The tick stays in process and what is
-durable is its *cursor*: a Unix second in `processor_checkpoints`, the table the
-projector already uses, because this processor's axis **is** time and "how far
-have I read" is the same question. Quartz was not taken either — it is a library
-for the case where schedules are the product, and the work role already runs
-three interval loops.
-
-**Two workers, and no lease at all.** An execution is named after its slot, so
-two workers that both notice 09:00 is due derive one id and
-`ExpectedVersion::NoStream` makes the second a conflict — ADR_0001's "ids are
-derived, not generated" one layer up, and the mechanism that already makes two
-API replicas racing a start safe. Derived from the *definition and the slot*
-rather than from a compiled plan, because two workers reading the head a moment
-apart could compile different `plan_id`s and an id built on one of those would
-let both runs through.
-
-**The cursor moves last.** `aiwatcher_jobs::ORDERING` in a seventh place: the
-starts commit, then the checkpoint advances. A crash between them re-derives the
-same ids next tick and the inbox recognises them, so the failure is a repeat
-that costs nothing — while the other order skips a slot with nothing anywhere to
-say it had.
-
-**`run_now` is not a special case.** "Run it once, and from tomorrow every day
-at nine" is one intention, so it is one request: a flag on the schedule, and a
-run *now* is the slot at this instant going through the same derived id. A
-double-clicked button within one second is a redelivery.
-
-Two things this forced, both improvements. `executions::start` and
-`compile_curation_named` came out of the HTTP handler, because a scheduler with
-its own copy would have been a second way to start a run, free to disagree about
-the owner, the mode or the derived message id — the route decides *who is
-asking* and *which id*, the function decides what starting means. And `Schedule`
-stopped being `#[serde(flatten)]`: serde's `flatten` and `deny_unknown_fields`
-do not compose, and the bodies here deny unknown fields so a `cron` somebody
-hoped would work is named rather than ignored. Nesting the cadence is what kept
-that guardrail.
-
-**The panel computes no hour of its own.** `next_run` comes back on the
-schedule, from `Schedule::next_after` — which is `slots_between` over eight
-days rather than a second walk, so the hour a card shows and the hour the tick
-fires at cannot differ. A card that worked it out in TypeScript would have its
-own idea of when the clocks change, and the first hour it disagreed on would be
-one somebody planned a morning around. Which hours are *legal* is the server's
-too: the form sends what was typed and renders the refusal.
-
-The one thing the panel does decide is the default zone, from
-`Intl.DateTimeFormat().resolvedOptions().timeZone` — better than UTC, and
-better than a list of six hundred names, because an hour typed into a form
-almost always means an hour where the typist is sitting. It is still checked:
-a name the database does not know is a refusal naming it.
-
-Verified against the running stack: `run_now` completed the four-engine chain;
-the tick fired a slot due two minutes later and completed it again; across the
-ticks in between it fired **once**, with the cursor sitting where the last one
-left it; and the card showed `next 9/9/2026, 9:00:00 AM` for a nine-o'clock
-Warsaw schedule set after nine — tomorrow's, today's having gone.
+The tick supplies an *interval* and `Schedule::slots_between` answers what fell in
+it, purely. Catch-up falls out of that inversion — a slot missed during an outage
+is simply inside the next interval — and the tick rate becomes an operational
+choice rather than a correctness one. A loop asking "is it 09:00?" answers no at
+10:05 and loses the day's run with nothing to say so.
 
 ### 43.32 A schedule with no history is a schedule nobody can check
 
-The question that started this was an orphan: what happens to a schedule whose
-definition is deleted. The answer turned out to be that **no registry in this
-system offers deletion** — prompts, datasets, pipelines, annotations, training,
-none — and the only `DELETE` route in the API is the one 43.31 added for
-schedules themselves. So the orphan is unreachable, and building deletion to
-close it would be building the problem in order to solve it.
-
-Its reachable sibling is the real gap, and it is worse. A schedule had no
-history at all. The tick logged a warning when it could not start something and
-an info line when it skipped a slot, and nothing else recorded either — so a
-schedule that had been refused every morning for a week looked, from the panel,
-exactly like one that had been working. 43.28's Hugging Face 501 is precisely
-that shape: fires at nine, fails, silence.
-
-The schedule head now carries `last`: the slot, the outcome (`started`,
-`skipped`, `refused`), the execution it started or the one that was in the way,
-and the refusal in the words the caller would have read. Two rules keep it
-honest:
-
-* **It is the scheduler's own decision and never the run's outcome.** Whether
-  the run then succeeded is on the event log, which the Workflows view folds,
-  one click away by the id beside it. A second copy here would be a second
-  answer free to disagree with the fold (ADR_0026).
-* **It is written after the run, never before.** A stored `started` always has
-  one behind it. The other order costs a note the next tick rewrites; this one
-  cannot claim a run that did not happen.
-
-It survives an edit, because it is a fact about the *definition* — a run was
-started for it at that slot — and changing the hour does not make it untrue.
-Clearing it would make every edit look like a schedule that has never fired.
-`run_now` records one too, for the same reason in the other direction: a card
-reading "never fired" straight after somebody watched a run start is a card
-nobody believes again.
-
-Verified against the running stack in all three outcomes: `run_now` wrote
-`started` with its execution id; the tick overwrote it with its own slot; and a
-schedule planted for a definition that is not there came back
-**`refused — pipeline curation/deleted-yesterday not found`**, rendered in the
-card in red beside the next run, with `Forget` next to it. That last one is
-also the mitigation for the orphan on the day deletion arrives: it is visible,
-and it can be cleared from the panel.
+A schedule refused every morning for a week looked, from the panel, exactly like
+one that had been working. The tick records the slot, the outcome and the reason
+on the schedule head — the *scheduler's* decision, never the run's outcome, which
+is the log's answer one click away and would be free to disagree if copied.
 
 ### 43.33 Four dead timestamps, and the reason they stayed dead
 
-`RunProjection::started_at` and `ended_at` had no writer — `evolve` reads no
-clock and the terminal events carry no timestamp, so both had been `None` since
-they were added — and no reader either. Removing them turned up a second pair
-in the same state on `AttemptRecord`, and two columns in PostgreSQL that had
-been NULL in every row the table ever held.
-
-The interesting part is not the deletion, which is mechanical. It is that
-**writing them would have been wrong**, and the cost was never the argument.
-ADR_0026 puts every managed run's facts on the event log under the execution's
-id, so the workflow fold already answers when a run started and ended — with
-`duration_ms` beside them — and an attempt's `step.*` events form a span
-(ADR_0003), so the waterfall already times it from the trace store, in the
-shape a duration is actually read in. Filling these in would have been a second
-answer to a question something else answers better, in the projection whose own
-docstring says it is not for that.
-
-So this is 43.15's shape a third time, and the resolution differs from both
-earlier ones. `CachePolicy::ByContent` was a policy with no reader and was
-wired up. `started_at` is a field with no writer and is deleted. What decides
-between them is whether anything else already answers it.
-
-The columns go with a third migration, and the machinery `schema.rs` was built
-for earns its keep again: verified by running the upgrade against a database
-that had reached version 2 with both columns present, which came out at version
-3 with neither and the whole eighteen-property contract still passing against
-it. Every value was NULL, so nothing was lost.
+`RunProjection` and `AttemptRecord` carried four timestamps with no writer and no
+reader. The interesting part is not the deletion: **writing them would have been
+wrong**, because when a run started and ended is the log fold's answer and an
+attempt's is the span assembler's. The projection is for accepting the next
+command and for the run's own page.
 
 ### 43.34 A finished attempt is not a row
 
-The file adapter's own docstring said the claim table was "small by
-construction — one live row per running step". It was not. A completion wrote
-`AttemptRow::settled(...)` under the same key, so the table held one row per
-attempt of every execution the store still had, and the file adapter re-read,
-re-parsed, re-serialised and `fsync`ed all of it on **every claim and every
-heartbeat**.
-
-Measured on the real `FileWorkflowStore`: 14 ms at a thousand rows, 94 ms at ten
-thousand, 458 ms at fifty thousand, 1.8 s at two hundred thousand — linear, about
-9 µs a row, and the heartbeat paid it again every half-lease. The note on the
-open-items list said retention bounded it. It did not:
-`AIWATCHER_WORKFLOW_RETENTION_DAYS` is unset by default and `0` means *keep*,
-which is a guardrail this document argues for elsewhere. Nothing pruned.
-
-PostgreSQL was checked on the suspicion it had the same fault, because
-`step_attempts_claimable` is `(queue, runtime, updated_at)` and does not carry
-`state`. It does not: the index is **partial**, over exactly the non-terminal
-states. At 200 028 rows in the table the index was 16 kB and the claim ran in
-0.06 ms. So the sentence in the file adapter was true of the *design*, and the
-thing implementing it was an index in a different adapter.
-
-The fix is not a bound on the growth. It is that the row should never have been
-written. `AttemptRow::settled` had to blank `command_id` — to the empty string —
-along with `queue`, `task_ref`, `lease_owner` and `not_before`, overwriting the
-real values that were there, in order to store a record that described nothing.
-Every field that gives an attempt row its meaning had to be destroyed to write
-one. That is a tombstone wearing a record's type, and the type now says so:
-
-```rust
-pub enum AttemptWrite {
-    Dispatch(AttemptRow),
-    Retire(AttemptKey),
-}
-```
-
-A settlement is the row **ceasing to exist**, in all three adapters — a
-`remove` in memory and in the file, a `delete` in PostgreSQL. Nothing read a
-finished attempt back: `attempt()` has no production caller, a redelivered
-dispatch is recognised by the stream's inbox key and never by this table, and a
-takeover reads `previous_owner` on a row that is still live. `awaiting_input`
-keeps its row, because it is not an ending — it resumes on the answer it asked
-for, which is why it is a state of its own (section 41).
-
-`0004_retire_finished_attempts.sql` deletes what the old shape left behind. Run
-against a database at version 3 holding 5 000 terminal rows and one
-`awaiting_input`, it came out at version 4 with the 5 000 gone and the
-`awaiting_input` row kept — the distinction a careless `delete` would have lost.
-
-The property is in the contract suite, so it is proved about all three adapters
-rather than about the one that was slow:
-`a_finished_attempt_leaves_no_row_behind`. Its second assertion is the one that
-costs something to break, because a terminal row is invisible to a claimant
-either way and keeping one looks correct right up until the table is the size of
-the history. End to end on the file store, a thousand dispatched-and-finished
-steps now leave `attempts.json` at **2 bytes**.
-
-This is the third time the same question has been asked and the second answer it
-has had. `CachePolicy::ByContent` was a policy with no reader and was wired up
-(43.15); the four timestamps were fields with no writer and were deleted
-(43.33); a settled attempt is a row with no reader and is now not written at
-all. What decides is never the cost — it is whether something else already
-answers the question better. The event log answers a run's timings; the claim
-filter answers what may be taken. Neither needed a second copy.
+A completion wrote a terminal row under the same key, so the claim table held one
+row per attempt of every execution the store still had — and the `file` adapter
+re-read, re-parsed, re-serialised and `fsync`ed all of it on every claim and
+every heartbeat, measured at 458 ms over fifty thousand rows. A settlement is now
+the row ceasing to exist; `awaiting_input` keeps its row, because it is not an
+ending.
 
 ### 43.35 The review reopened guarantees, not the implemented feature set
 
-The 2026-09-08 [review](PIPELINE_REVIEW_2026-09-08.md) checked the pending
-changes and the plan's acceptance claims. Existing Rust, PostgreSQL, Flow,
-Python and panel type checks passed; additional reproductions demonstrated
-three cases those suites did not cover: a deleted schedule restored by a stale
-writer, different DST slots for one interval versus many ticks, and a file-store
-commit whose retry/reopen left no outbox or attempt to execute.
-
-That changes how the preceding implementation notes must be read:
-
-- **43.31:** derived IDs deduplicate one slot. They do not make overlap checks
-  against a delayed or absent fold authoritative, protect schedule edits, or
-  retain a slot whose transient start error was followed by checkpoint advance.
-- **43.32:** `last` records only the latest firing outcome. A failed note write
-  is not repaired merely because the tick runs again, and writing a whole stale
-  schedule can undo an edit or deletion. Durable slot processing and versioned
-  configuration need separate write semantics.
-- **43.33:** removing NULL columns loses no values, but the old binary's SQL
-  still names them. Upgrade compatibility and rollback require work 1.
-- **43.34:** retiring new finished attempts stops new terminal rows accumulating;
-  upgrading an existing `attempts.json` still needs cleanup in work 2.
-- **43.19/43.24:** detecting notebook drift is useful, but a digest is not the
-  historical source. Phase 4's full exit remains open until work 5 preserves
-  and reopens that source after the head changes.
-
-Section 28 now starts with upgrade compatibility, local recovery and scheduler
-correctness, followed by panel error handling, historical context and one worker
-integration. Phase numbers remain stable for references; their order no longer
-stands in for a dependency graph. This is a correction to the plan and its
-reported status. None of the review findings is marked fixed by this revision.
+The 2026-09-08 [review](PIPELINE_REVIEW_2026-09-08.md) ran the suites green and
+then reproduced three cases they did not cover: a deleted schedule restored by a
+stale writer, different DST slots for one interval versus many ticks, and a file
+commit whose retry and reopen left no outbox row and no attempt. That narrowed
+the acceptance claims the notes above had made; it erased none of the features
+that worked. Works 1–5 close all of it, and the
+[worker review](WORKER_PROTOCOL_REVIEW_2026-09-09.md) did the same for work 6 —
+a committed report whose reply was lost, an attempt nobody could target, a
+declared output nobody checked, and a workflow fold inferring success from one
+completed child.
 
 ### 43.9 What did not need changing
 
 Worth recording, because a plan is only useful if its right parts are visible
-too. The decider's shape held: `decide` performing no I/O made the optimistic
-retry loop cheap enough to be obviously correct, and made twenty scenario tests
-run with no store at all. Deriving ids instead of generating them (`derive_uuid`,
-`TraceId::derive`'s rule one layer up) meant redelivery needed no special case
-anywhere. The plan being a graph from the start, with a chain as the first
-authoring model, cost nothing and already carries fan-out and join. And ADR_0026
-held under the sharpest test available: the workflow fold draws a managed
-execution with **no** special case for it.
+too. `decide` performing no I/O made the optimistic retry loop obviously correct
+and let twenty scenario tests run with no store at all. Deriving ids instead of
+generating them meant redelivery needed no special case anywhere. The plan being
+a graph from the start, with a chain as the first authoring model, cost nothing
+and already carries fan-out and join. And ADR_0026 held under the sharpest test
+available: the workflow fold draws a managed execution with **no** special case
+for it.
 
 ## 44. Revision history
 
@@ -4668,6 +3094,16 @@ execution with **no** special case for it.
   preview scope and current versus planned API behaviour. Extended section 29's
   failure/acceptance cases, added decisions 16–20 and the qualifications in
   43.35. Documentation update only; implementation fixes remain open.
+- **Revision 4** (2026-09-09): works 1–6 delivered, and this document trimmed to
+  match. What is built is now an outline — section 28 keeps one line per work
+  item and one table of the delivered phases, section 33 keeps its findings
+  rather than its evidence, section 42 keeps a settled decision's answer without
+  its argument, and section 43 keeps one entry per finding, with every number
+  intact because `CLAUDE.md` and the ADRs cite them. What is *open* is stated in
+  full: Phase 13, whose append route and decider lease exist and whose event
+  store, timers, `sealed` refusal and graph join do not; Flyte's removal from
+  planner's chart, in planner's repository; and phases 8, 9, 12, 14 and 15
+  behind their own gates.
 
 ## 45. References
 

@@ -104,7 +104,10 @@ export function diffStat(lines: DiffLine[]): DiffStat {
  * A prompt is mostly unchanged between versions; without this the diff is a
  * wall of grey with two coloured lines somewhere in it.
  */
-export function collapseUnchanged(lines: DiffLine[], context = 2): (DiffLine | { skipped: number })[] {
+export function collapseUnchanged(
+  lines: DiffLine[],
+  context = 2,
+): (DiffLine | { skipped: number })[] {
   const changedNear = new Set<number>();
   lines.forEach((line, index) => {
     if (line.kind === 'same') return;

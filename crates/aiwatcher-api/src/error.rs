@@ -227,9 +227,8 @@ impl ApiError {
     /// Public because the scheduler has to tell a refusal it will get again
     /// from one it may not: a definition that stopped compiling is a 4xx and
     /// says the same thing every tick, while an unreachable store is a 5xx and
-    /// may not. That is review R2's line, and reading it off the status is
-    /// reading the classification this module already made — the alternative
-    /// was matching on prose.
+    /// may not. Reading that off the status is reading the classification this
+    /// module already made — the alternative was matching on prose.
     #[must_use]
     pub fn status(&self) -> StatusCode {
         self.parts().0

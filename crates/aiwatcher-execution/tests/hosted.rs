@@ -138,10 +138,10 @@ fn conflict(error: &HostedError) -> Option<(u64, u64)> {
 
 #[tokio::test]
 async fn two_workers_appending_at_one_version_produce_one_append_and_one_conflict() {
-    // Phase 13, step 1's exit. Two deciders reach the same expected version —
-    // a lease that expired, a pod that came back — and exactly one of them
-    // writes. The loser is told the version it actually lost to, which is what
-    // it needs in order to reload rather than guess.
+    // Two deciders reach the same expected version — a lease that expired, a
+    // pod that came back — and exactly one of them writes. The loser is told
+    // the version it actually lost to, which is what it needs in order to
+    // reload rather than guess.
     let handler = started(ExecutionMode::Hosted).await;
     let version = handler
         .store()
@@ -231,10 +231,10 @@ async fn a_hosted_run_schedules_none_of_its_plan_s_steps() {
 
 #[tokio::test]
 async fn a_second_decider_waits_takes_over_when_the_lease_runs_out_and_the_first_gets_a_409() {
-    // Phase 13, step 2's exit, in the order it is written: refused while the
-    // first holds; a takeover once it has run out; and then the first worker's
-    // next append is a 409 — because the replacement moved the version, which
-    // is the guarantee the lease never was.
+    // In the order it is written: refused while the first holds; a takeover
+    // once it has run out; and then the first worker's next append is a 409 —
+    // because the replacement moved the version, which is the guarantee the
+    // lease never was.
     let handler = started(ExecutionMode::Hosted).await;
     let start = at(0);
     let after = at(aiwatcher_jobs::LEASE_SECONDS + 1);
@@ -440,9 +440,9 @@ async fn a_worker_may_not_append_to_a_run_this_engine_decides() {
 
 #[tokio::test]
 async fn a_hosted_message_never_reaches_the_fold() {
-    // Section 40.3's "what the engine does not do", checked through a real
-    // append rather than only on the type: the run's state after two turns is
-    // the state it had before them.
+    // "What the engine does not do", checked through a real append rather than
+    // only on the type: the run's state after two turns is the state it had
+    // before them.
     let handler = started(ExecutionMode::Hosted).await;
     let before = handler
         .store()
@@ -503,9 +503,8 @@ async fn an_append_carries_between_one_message_and_the_batch_limit() {
 
 #[tokio::test]
 async fn a_batch_and_its_messages_are_named_by_everything_that_identifies_them() {
-    // The kickoff's first trap, section 43.10 under different names: an id
-    // derived from less than what it identifies makes the second message of a
-    // batch read as a redelivery of the first.
+    // An id derived from less than what it identifies makes the second message
+    // of a batch read as a redelivery of the first.
     let one = batch("k", 0, Vec::new());
     let other = ExecutionId::new("graph-2");
 

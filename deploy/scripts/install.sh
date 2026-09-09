@@ -310,16 +310,18 @@ else
   "${helmfile[@]}" ${sets[@]+"${sets[@]}"} sync
 fi
 
-# Planner's Grafana init container copies the optional datasource ConfigMap at
-# pod startup. On a first install that ConfigMap appears after the existing pod
-# started, so restart it once to run provisioning with the new source. This
-# touches only the selected planner environment and only when it exists.
+# Planner mounts this ConfigMap into one of its Perses provisioning folders. A
+# ConfigMap mount updates in place, but only after the kubelet's sync period,
+# and on a first install the mount was empty when the pod started — so restart
+# it once rather than wait an unspecified amount of time for the first
+# provisioning cycle to see anything. This touches only the selected planner
+# environment and only when it exists.
 if [[ $environment == planner ]] \
-  && kubectl --context "$context" -n "$namespace" get deployment/planner-grafana >/dev/null 2>&1 \
-  && kubectl --context "$context" -n "$namespace" get configmap/aiwatcher-grafana-datasources >/dev/null 2>&1; then
-  printf '\n%s▶ reloading planner Grafana datasource provisioning%s\n' "$B" "$NC"
-  kubectl --context "$context" -n "$namespace" rollout restart deployment/planner-grafana
-  kubectl --context "$context" -n "$namespace" rollout status deployment/planner-grafana --timeout=10m
+  && kubectl --context "$context" -n "$namespace" get deployment/planner-perses >/dev/null 2>&1 \
+  && kubectl --context "$context" -n "$namespace" get configmap/aiwatcher-perses-provisioning >/dev/null 2>&1; then
+  printf '\n%s▶ reloading planner Perses datasource provisioning%s\n' "$B" "$NC"
+  kubectl --context "$context" -n "$namespace" rollout restart deployment/planner-perses
+  kubectl --context "$context" -n "$namespace" rollout status deployment/planner-perses --timeout=10m
 fi
 
 printf '\n%s✓ aiwatcher is installed%s\n' "$GRN" "$NC"

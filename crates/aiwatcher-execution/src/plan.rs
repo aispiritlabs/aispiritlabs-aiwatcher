@@ -83,8 +83,7 @@ impl DefinitionKind {
 
 /// Where a step runs, and everything that runtime needs.
 ///
-/// Section 35 of `docs/PIPELINE_ARCHITECTURE.md` is the table this enum is the
-/// code for: where each executes, who owns its retries, and what it may carry.
+/// Where each runtime executes, who owns its retries, and what it may carry.
 /// Every variant names a *binding* and its parameters and never a host — an
 /// executor's address is configuration, for ADR_0012's and ADR_0016's reason,
 /// unchanged. A plan naming its own endpoint would be a request-forgery
@@ -327,7 +326,7 @@ pub struct OutputDeclaration {
 
 /// How many times, and how far apart.
 ///
-/// The defaults are section 26's: three attempts, 1 s / 5 s / 30 s. The delays
+/// The defaults are three attempts, 1 s / 5 s / 30 s. The delays
 /// are a list rather than a base and a multiplier so that a policy can be read
 /// off the plan without arithmetic, and so that a runtime whose useful backoff
 /// is not exponential can say so.
@@ -560,10 +559,10 @@ impl ExecutionPlan {
     /// are what they are looking at. Three source blocks folded into one Flow
     /// query light together, which is the truth about how they ran.
     ///
-    /// Derived from the pinned plan and never from a draft
-    /// for a step's context, at the grain of a whole run. A browser working
-    /// this out would work it out from the canvas on screen, which is the one
-    /// thing that is certainly not what the run compiled.
+    /// Derived from the pinned plan and never from a draft for a step's
+    /// context, at the grain of a whole run. A browser working this out would
+    /// work it out from the canvas on screen, which is the one thing that is
+    /// certainly not what the run compiled.
     #[must_use]
     pub fn blocks_by_step(&self) -> Vec<StepBlocks> {
         self.steps

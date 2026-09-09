@@ -1,0 +1,27 @@
+# Perses for the local docker compose stack.
+#
+# This stack has no dashboards, and did not have any under Grafana either: what
+# it is for is looking at traces and metrics that have just been written. So the
+# explorer is the feature that matters here, and the provisioning below exists
+# only to give it two datasources to explore.
+#
+# Anonymous and writable, matching the Grafana it replaces (which ran with
+# GF_AUTH_ANONYMOUS_ORG_ROLE=Admin). This is a throwaway local stack; never
+# carry this config into anything reachable from outside a laptop.
+database:
+  file:
+    folder: /perses
+    extension: json
+
+security:
+  enable_auth: false
+  readonly: false
+
+frontend:
+  explorer:
+    enable: true
+
+provisioning:
+  interval: 10m
+  folders:
+    - /etc/perses/provisioning

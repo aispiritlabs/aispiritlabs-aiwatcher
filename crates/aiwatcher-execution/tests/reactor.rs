@@ -322,10 +322,10 @@ async fn every_step_of_one_run_reaches_the_decider_and_the_run_finishes() {
     );
 }
 
-/// The Phase 5 plan's step is `CachePolicy::Never`; this is the same step
-/// opted in **and** with its window pinned, which are the two conditions a key
-/// needs. Opting in alone is not enough: a moving window shares a script and
-/// not a question.
+/// The plain plan's step is `CachePolicy::Never`; this is the same step opted
+/// in **and** with its window pinned, which are the two conditions a key needs.
+/// Opting in alone is not enough: a moving window shares a script and not a
+/// question.
 fn cacheable_plan() -> ExecutionPlan {
     let mut steps = vec![step("extract", Vec::new())];
     steps[0].cache = CachePolicy::ByContent;
@@ -568,8 +568,7 @@ async fn a_result_the_runtime_could_not_pin_is_produced_and_not_remembered() {
 #[tokio::test]
 async fn a_reactor_with_no_catalog_runs_everything_and_remembers_nothing() {
     // A working state, not a degraded one: a deployment with no object store
-    // has no index, and section 18 is explicit that dropping the index costs a
-    // rerun and never a result.
+    // has no index, and dropping the index costs a rerun and never a result.
     let store = MemoryWorkflowStore::new();
     started_with(&store, cacheable_plan()).await;
     let fake = Fake::new(Answer::Rows("ab".repeat(32)));

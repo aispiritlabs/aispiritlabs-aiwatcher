@@ -11,7 +11,7 @@ use Aiwatcher\Flow\Tests\Fake\FakeApi;
 use PHPUnit\Framework\TestCase;
 
 /**
- * The lookup half of section 15.4: what this service remembers, and what it refuses to.
+ * The lookup half: what this service remembers, and what it refuses to.
  */
 final class ExecutionMemoryTest extends TestCase
 {

@@ -156,6 +156,35 @@ baseline.** Would let two concurrent optimisations each claim the other's
 output as their starting point. `baseline` is required, and must already be in
 the registry.
 
+## Amendment: a run names the version it ran on
+
+The decision above says the registry exists so that the version a run used
+stays readable after that run has been evicted. For four builds nothing on the
+log said *which* version. A trace could name a model, a temperature and a token
+count, and the one thing that decided what the model was actually asked was the
+thing you had to go and find by hand — which made the promise true of the
+registry and useless from the place people ask the question.
+
+`aiwatcher_core::PromptRef` is the reference an `llm.*` event carries:
+`prompt_name` and `prompt_version`, in the payload, exported as
+`aiwatcher.prompt.name` and `aiwatcher.prompt.version_id`. Three rules carry
+it, and each is the smaller sibling of one already in this document.
+
+* **It is a reference, never the text.** The registry stores prompt text
+  because storing it is the point; a span does not, for ADR_0021's reason and
+  the Collector's. This amendment adds no content to the log.
+* **Both halves, and neither is enough.** The id is `sha256(text)`, so it
+  identifies; the registry is keyed by name, so only the name resolves. An id
+  with no name is kept and shown — a digest still tells two runs apart — but it
+  is a chip rather than a link, because a link that 404s is worse than a fact
+  you have to look up.
+* **A malformed id is absence.** `PromptRef::from_data` returns `None` rather
+  than failing, because the log accepts what a producer sends and refusing an
+  event over a typo in an optional field would lose the run it was describing.
+
+Not `gen_ai.*`: there is no convention for this, and what is being named is
+*this* registry's content address rather than a provider's id.
+
 ## Consequences
 
 **Listing is one `GET` per prompt.** An object store has no query, and a global

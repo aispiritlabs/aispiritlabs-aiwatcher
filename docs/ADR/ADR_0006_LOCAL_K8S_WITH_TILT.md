@@ -1,6 +1,6 @@
 # ADR_0006: The test environment is Tilt on a local Kubernetes, guarded against remote clusters
 
-- **Status**: accepted
+- **Status**: accepted; the local stack runs Perses in place of Grafana since 2026-09-09 — see [ADR_0005](ADR_0005_TRACE_STORAGE.md#amendment-2026-09-09-the-waterfall-comes-from-perses-not-grafana)
 - **Date**: 2026-08-27
 
 ## Context

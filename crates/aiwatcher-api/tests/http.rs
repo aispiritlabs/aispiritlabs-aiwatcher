@@ -3749,8 +3749,8 @@ async fn reading_content_that_was_erased_is_a_410_rather_than_a_404() {
 // as many processes as it likes; what a `file` store refuses is asserted in
 // `aiwatcher-execution`'s own suite, against the rule rather than through HTTP.
 
-/// A pipeline of a source, a transform and a view — the Phase 5 shape, and the
-/// one that reaches a dataset version with Flow alone.
+/// A pipeline of a source, a transform and a view — the shape that reaches a
+/// dataset version with Flow alone.
 fn flow_only_pipeline(name: &str) -> Value {
     json!({
         "name": name,
@@ -3781,9 +3781,9 @@ fn flow_only_pipeline(name: &str) -> Value {
 
 #[tokio::test]
 async fn a_saved_pipeline_compiles_and_starts_and_the_caller_may_leave() {
-    // The Phase 5 exit, as far as one process and no Flow service can show it:
-    // the command is durable and the answer is 202, so nothing about what
-    // happens next depends on this connection staying open.
+    // What one process with no Flow service can show: the command is durable
+    // and the answer is 202, so nothing about what happens next depends on this
+    // connection staying open.
     let fixture = Fixture::new(false);
     let (status, _) = fixture
         .post("/api/v1/curation-pipelines", flow_only_pipeline("pii"))
@@ -3881,9 +3881,9 @@ fn hosted_messages(count: usize) -> Value {
 
 #[tokio::test]
 async fn a_worker_appends_to_its_own_history_and_the_loser_of_a_race_is_told_where_it_got_to() {
-    // Phase 13, step 1's exit over HTTP. Two deciders at one expected version:
-    // one 200, one 409 — and not a 503, because the store worked and the caller
-    // has something to do about it. The loser reloads and succeeds.
+    // Two deciders at one expected version: one 200, one 409 — and not a 503,
+    // because the store worked and the caller has something to do about it. The
+    // loser reloads and succeeds.
     let fixture = Fixture::new(false);
     let (execution, version) = hosted_run(&fixture, "graph").await;
     let uri = format!("/api/v1/executions/{execution}/stream");
@@ -4111,9 +4111,9 @@ async fn a_history_page_walks_a_stream_rather_than_loading_it_whole() {
 
 #[tokio::test]
 async fn one_decider_holds_a_hosted_run_and_its_replacement_takes_over_when_it_stops() {
-    // Phase 13, step 2's exit over HTTP. Asking for a lease answers 200 either
-    // way — being told who has it is an answer to that question — and it is the
-    // *append* that 409s while somebody else decides.
+    // Asking for a lease answers 200 either way — being told who has it is an
+    // answer to that question — and it is the *append* that 409s while somebody
+    // else decides.
     let fixture = Fixture::new(false);
     let (execution, version) = hosted_run(&fixture, "leased").await;
     let lease_uri = format!("/api/v1/executions/{execution}/decider-lease");
@@ -4234,7 +4234,7 @@ async fn one_decider_holds_a_hosted_run_and_its_replacement_takes_over_when_it_s
 
 #[tokio::test]
 async fn one_idempotency_key_repeated_starts_one_execution() {
-    // Section 20: repeating the same key returns the original command result.
+    // Repeating the same key returns the original command result.
     // The mechanism is the derived execution id and the store's own inbox, so
     // the second request decides nothing rather than deciding again.
     let fixture = Fixture::new(false);
@@ -4358,8 +4358,7 @@ async fn an_instance_with_no_workflow_store_answers_501_rather_than_404() {
 
 // ── Context ──────────────────────────────────────────────────────────────────
 //
-// Phase 4's exit: an old block opens with its exact historical data and code
-// revision. The two routes answer different questions and the difference is the
+// An old block opens with its exact historical data and code revision. The two routes answer different questions and the difference is the
 // point — one is what a run *did* read, the other what a revision *would*.
 
 #[tokio::test]
@@ -4595,7 +4594,7 @@ fn notebook_pipeline(name: &str) -> Value {
 
 #[tokio::test]
 async fn opening_a_steps_editor_stages_that_attempts_own_context_and_pinned_revision() {
-    // §16.3, resolved server-side. What the route is responsible for is
+    // Resolved server-side. What the route is responsible for is
     // *which* context and *which* revision — the rows themselves are the
     // adapter's job, against the object store.
     let editor = Arc::new(RecordingEditor::new());
@@ -5010,8 +5009,8 @@ async fn setting_a_schedule_with_run_now_starts_one_run_and_says_which() {
     // Written down as a firing, so a card does not read "never fired" straight
     // after somebody watched one start. In the workflow store beside the
     // tick's own firings, never on the schedule object — that field is
-    // configuration, and a writer that is not the person setting it is what
-    // review R3 is about.
+    // configuration, and a writer that is not the person setting it is the bug
+    // this prevents.
     assert_eq!(set["firings"][0]["outcome"], "started", "{set}");
     assert_eq!(set["firings"][0]["execution_id"], started, "{set}");
     let (status, run) = fixture.get(&format!("/api/v1/executions/{started}")).await;
@@ -5260,7 +5259,7 @@ impl Fixture {
                     // `local`, not `worker`: the Rust decider schedules this
                     // static plan and workers only *perform* its steps.
                     // `worker`/`hosted` is a decider living in the worker,
-                    // which is Phase 13 and not this.
+                    // which is the hosted mode and not this.
                     owner: ExecutionOwner::Local,
                     mode: ExecutionMode::Compiled,
                     requested_by: "mk".to_owned(),

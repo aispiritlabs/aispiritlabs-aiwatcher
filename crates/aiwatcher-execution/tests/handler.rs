@@ -642,8 +642,8 @@ async fn a_redelivery_returns_the_state_it_produced_and_publishes_nothing() {
 
 #[tokio::test]
 async fn a_dispatch_becomes_a_row_the_reactor_that_holds_that_client_can_claim() {
-    // The loop Phase 3 closes: the decider dispatches, the store holds the
-    // claim, and the process with the runtime's client takes it. No second
+    // The whole loop: the decider dispatches, the store holds the claim, and
+    // the process with the runtime's client takes it. No second
     // topic, no consumer group — the store is transactional, so a command is a
     // row.
     let store = MemoryWorkflowStore::new();

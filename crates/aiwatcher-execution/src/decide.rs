@@ -508,8 +508,8 @@ fn decide_active(
         // running, and what it is asking for arrived from the executor.
         //
         // What resumes it is the answer, which today completes the step —
-        // right for a `HumanInput`, and the half of section 41 that is missing
-        // for a turn that wants to *continue* after the answer.
+        // right for a `HumanInput`, and not yet right for a turn that wants to
+        // *continue* after the answer.
         WorkflowMessage::Event(WorkflowEvent::InputRequested {
             step_id,
             attempt,
@@ -714,8 +714,8 @@ fn dispatch_ready(execution: &Execution, emit: &mut Emitter, now: Now) {
     // because an agent graph's conditions are decided by a model and its join
     // arity is discovered. Scheduling from the shape would put a claimable
     // attempt in front of every reactor for work the worker is also doing —
-    // two parties executing one step, which is what section 40.3 splits the
-    // decider from the history to prevent. Guarded here rather than at the
+    // two parties executing one step, which is what splitting the decider from
+    // the history exists to prevent. Guarded here rather than at the
     // start, because a resume and a completion reach this too.
     if execution.mode == ExecutionMode::Hosted {
         return;

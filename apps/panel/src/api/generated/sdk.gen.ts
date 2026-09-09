@@ -874,12 +874,12 @@ export const stepContext = <ThrowOnError extends boolean = false>(options: Optio
 /**
  * Open this step's editor on the rows this step actually read.
  *
- * §16.3, resolved server-side and without a token — see
- * `aiwatcher_core::ports::EditorHost` for why the token it described would
- * have been ceremony. The gate is here: this route decides who may open which
- * run's rows, reads them from the object store itself, and hands the runtime
- * a staging request. `Editor`, not `Viewer`, because staging replaces what
- * every other person looking at that notebook's live app is shown.
+ * Resolved server-side and without a token — see
+ * `aiwatcher_core::ports::EditorHost` for why one would have been ceremony.
+ * The gate is here: this route decides who may open which run's rows, reads
+ * them from the object store itself, and hands the runtime a staging request.
+ * `Editor`, not `Viewer`, because staging replaces what every other person
+ * looking at that notebook's live app is shown.
  *
  * It stages and stops. And the live app serves the notebook's *head*, so what
  * opens is this run's rows under today's code — `code_revision` in the answer

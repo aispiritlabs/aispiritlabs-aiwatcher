@@ -35,8 +35,7 @@ use crate::state::{Execution, StateType, StepState};
 
 /// Something a caller may do with a block, given what it is and where it got to.
 ///
-/// Deliberately **no hrefs**, which is where this departs from section 19's
-/// sketch. An action's address is either this API's own — which the generated
+/// Deliberately **no hrefs**. An action's address is either this API's own — which the generated
 /// client already has — or an optional service's, and a service's address in a
 /// response body is the one thing every route here refuses to carry. What only
 /// the server knows is *which* actions apply, and that is what this is.
@@ -389,8 +388,7 @@ mod tests {
 
     #[test]
     fn a_steps_context_is_keyed_by_the_attempt_its_staging_is_named_after() {
-        // Section 16.2: staging is keyed by context and never by the notebook's
-        // name, so two pipelines editing one notebook stop overwriting each
+        // Staging is keyed by context and never by the notebook's name, so two pipelines editing one notebook stop overwriting each
         // other's rows and an old execution's editor shows that execution's
         // input.
         let execution = running(plan());

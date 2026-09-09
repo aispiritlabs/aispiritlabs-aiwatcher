@@ -83,8 +83,9 @@ limit, because they carry structure rather than argument.
 the next time the document is edited. Say the rule, and cite an ADR if one
 decided it.
 
-`scripts/lint-comments.py` runs in `just check` and enforces both: no comment
-block over 25 lines of prose, and no new stale references.
+`scripts/lint-comments.py` runs in `just check` and enforces both, for Rust,
+PHP and the panel: no comment block over 25 lines of prose, and no stale
+references at all.
 
 ```rust
 //! One time window, shared by every list.

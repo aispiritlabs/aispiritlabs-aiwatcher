@@ -8,9 +8,9 @@ import { IdChip } from '@/components/ui/primitives';
  * Spans arrive flat with `parent_span_id` pointing up. This builds the tree,
  * lays it out against the run's wall-clock window, and draws one row per span.
  *
- * Rendered here rather than fetched from Grafana on purpose: for a run that is
- * still going, the spans that exist are the ones the projector has closed, and
- * this view updates as they close. A trace store cannot show a run in progress.
+ * Rendered here rather than read back from the trace store on purpose: for a run
+ * that is still going, the spans that exist are the ones the projector has closed,
+ * and this view updates as they close. A trace store cannot show a run in progress.
  */
 
 export interface Span {

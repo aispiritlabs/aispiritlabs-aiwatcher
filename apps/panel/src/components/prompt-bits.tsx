@@ -31,6 +31,38 @@ export const REJECTION_TEXT: Record<RejectionReason, string> = {
   no_change: 'the candidate is identical to the baseline',
 };
 
+/** A version id is `sha256(text)`: 64 lowercase hex, and nothing else. */
+const VERSION_ID = /^[0-9a-f]{64}$/;
+
+/**
+ * What a run says it ran on, as a link into the registry.
+ *
+ * The pair is deliberate and neither half is enough. The id identifies the
+ * text; the registry is keyed by name, so only the name resolves. An id with no
+ * name still tells two runs apart, so it is shown — as a chip rather than a
+ * link, because a link that 404s is worse than a fact you have to look up.
+ *
+ * Never the prompt's text: that is off the log on purpose (ADR_0021).
+ */
+export function PromptRefLink({ name, versionId }: { name: unknown; versionId: unknown }) {
+  if (typeof versionId !== 'string' || !VERSION_ID.test(versionId)) return null;
+  const short = versionId.slice(0, 12);
+  if (typeof name !== 'string' || name.length === 0) {
+    return <IdChip value={short} full={versionId} label="prompt version" />;
+  }
+  return (
+    <Link
+      to="/prompts/$name"
+      params={{ name }}
+      search={{ version: versionId }}
+      className="id text-primary hover:underline"
+      title={`${name} @ ${versionId}`}
+    >
+      {name}@{short}
+    </Link>
+  );
+}
+
 export function OutcomeBadge({ record }: { record: OptimizationSummary }) {
   if (record.outcome === 'admitted') {
     return (
@@ -50,8 +82,15 @@ export function OutcomeBadge({ record }: { record: OptimizationSummary }) {
 }
 
 /** A signed delta, coloured by direction. `null` renders as an em dash. */
-export function Delta({ value, digits = 3 }: { value: number | null | undefined; digits?: number }) {
-  if (value === null || value === undefined) return <span className="text-muted-foreground">—</span>;
+export function Delta({
+  value,
+  digits = 3,
+}: {
+  value: number | null | undefined;
+  digits?: number;
+}) {
+  if (value === null || value === undefined)
+    return <span className="text-muted-foreground">—</span>;
   const tone =
     value > 1e-12 ? 'text-success' : value < -1e-12 ? 'text-danger' : 'text-muted-foreground';
   return (

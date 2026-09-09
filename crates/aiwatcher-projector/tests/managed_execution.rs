@@ -1,6 +1,6 @@
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
-//! The Phase 3 exit: a managed execution draws itself in the existing workflow
-//! tab, with `Pending` nodes, before any panel work exists for it.
+//! A managed execution draws itself in the existing workflow tab, with
+//! `Pending` nodes, before any panel work exists for it.
 //!
 //! This is the whole argument of ADR_0026 in one test. The decider produces
 //! facts, the outbox turns them into envelopes, and the workflow fold that has
@@ -23,6 +23,7 @@ use aiwatcher_execution::{
     ExecutionHandler, ExecutionId, ExecutionMode, ExecutionOwner, ExecutionPlan, FailureClass, Now,
     StepError, WorkflowCommand, WorkflowEvent, WorkflowMessage,
 };
+use aiwatcher_projector::readmodel::{ReadModel, RunStatus};
 use aiwatcher_projector::workflows::{ExecutionFilter, NodeStatus, WorkflowConfig, WorkflowState};
 use time::OffsetDateTime;
 
@@ -110,6 +111,14 @@ async fn published(store: &MemoryWorkflowStore) -> Vec<RecordedEvent> {
             )
         })
         .collect()
+}
+
+async fn runs(events: &[RecordedEvent]) -> ReadModel {
+    let model = ReadModel::default();
+    for event in events {
+        model.apply(event).await;
+    }
+    model
 }
 
 fn fold(events: &[RecordedEvent]) -> WorkflowState {
@@ -328,6 +337,73 @@ async fn a_whole_run_completes_and_the_execution_lists_as_finished() {
     );
 }
 
+/// The runs list and the workflow fold must agree about one managed run.
+///
+/// A managed execution never emits `run.completed` — the engine owns the run
+/// and ends it with `execution.completed` (ADR_0026). The runs fold used to
+/// read `Subject::Run` only, so the Workflows tab said `succeeded` while
+/// Explore span beside it forever.
+#[tokio::test]
+async fn a_managed_execution_that_finished_is_not_still_running_in_the_runs_list() {
+    let store = run(vec![
+        ("start", 0, start()),
+        ("a", 10, completed("acquire")),
+        ("b", 20, completed("normalize")),
+        ("c", 30, completed("analyze")),
+        ("d", 40, completed("persist")),
+    ])
+    .await;
+    let events = published(&store).await;
+
+    let detail = fold(&events).execution(EXECUTION).expect("the execution");
+    assert_eq!(detail.summary.nodes_pending, 0);
+
+    let listed = runs(&events).await.run(EXECUTION).await.expect("the run");
+    assert_eq!(listed.summary.status, RunStatus::Succeeded);
+    assert!(
+        listed.summary.ended_at.is_some(),
+        "a finished run has an end, and a duration to draw"
+    );
+}
+
+/// And the reason survives the crossing: `execution.failed` calls it `reason`,
+/// which is a word the runs fold did not know.
+#[tokio::test]
+async fn a_managed_execution_that_failed_carries_the_engine_s_own_reason() {
+    let store = run(vec![
+        ("start", 0, start()),
+        (
+            "a",
+            10,
+            WorkflowMessage::Event(WorkflowEvent::StepFailed {
+                step_id: "acquire".to_owned(),
+                attempt: 1,
+                error: StepError {
+                    message: "the source url answered 404".to_owned(),
+                    class: FailureClass::UserCode,
+                },
+            }),
+        ),
+    ])
+    .await;
+
+    let listed = runs(&published(&store).await)
+        .await
+        .run(EXECUTION)
+        .await
+        .expect("the run");
+    assert_eq!(listed.summary.status, RunStatus::Failed);
+    assert!(
+        listed
+            .summary
+            .error
+            .as_deref()
+            .is_some_and(|reason| reason.contains("acquire")),
+        "the run says which step ended it, got {:?}",
+        listed.summary.error
+    );
+}
+
 #[tokio::test]
 async fn a_failed_run_names_the_step_and_leaves_the_rest_pending() {
     let store = run(vec![
@@ -412,8 +488,8 @@ async fn a_retry_is_two_attempts_of_one_node_rather_than_two_nodes() {
 
 #[tokio::test]
 async fn a_redelivered_command_publishes_nothing_a_second_time() {
-    // The Phase 3 exit's other half: redelivery and restart do not duplicate a
-    // workflow decision.
+    // The other half: redelivery and restart do not duplicate a workflow
+    // decision.
     let store = MemoryWorkflowStore::new();
     let handler = ExecutionHandler::new(store.clone());
     let execution = ExecutionId::new(EXECUTION);

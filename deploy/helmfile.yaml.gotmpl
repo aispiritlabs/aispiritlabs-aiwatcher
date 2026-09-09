@@ -54,7 +54,7 @@ environments:
       - detectedValues:
 {{ exec "./scripts/detect-stack.py" (append $detect "--format=helm-values") | indent 10 }}
 
-  # Beside planner on its k3s, where VictoriaMetrics and Grafana already exist.
+  # Beside planner on its k3s, where VictoriaMetrics and Perses already exist.
   planner:
     values:
       - environments/planner.yaml

@@ -619,7 +619,7 @@ mod tests {
 
     #[test]
     fn a_hosted_message_is_neither_folded_nor_refused_by_this_engine() {
-        // The whole.3's "what the engine does not do", enforced
+        // The whole of "what the engine does not do", enforced
         // by the type rather than by a rule somebody keeps: `decide`'s replay
         // reads `event()` and its refusals read `command()`, and a hosted
         // message answers `None` to both. An engine that read these would be a

@@ -9,9 +9,9 @@ Two rules, both about the same thing: a comment explains the code beside it.
      essay about a decision belongs in docs/ADR/.
 
   2. No references to plan.md sections, phases or review ids. They point at
-     moving documents a reader of the code cannot open, and they rot silently.
-     Enforced as a ratchet against BASELINE_REFS so existing ones can be
-     cleared gradually and no new ones appear.
+     moving documents a reader of the code cannot open, and they rot silently
+     — the document is edited, the comment is not, and nobody finds out. Say
+     the rule the section decided, and cite an ADR when one decided it.
 
 Usage: scripts/lint-comments.py [--list]
 """
@@ -24,7 +24,6 @@ import sys
 from pathlib import Path
 
 MAX_LINES = 25
-BASELINE_REFS = 72
 
 # Per language: the comment markers, and whether a doc block has a terminator
 # that is not itself prose.
@@ -114,16 +113,16 @@ def main() -> int:
             file=sys.stderr,
         )
 
-    if len(refs) > BASELINE_REFS:
+    if refs:
         failed = True
         print(
-            f"references to plan.md sections, phases or reviews: {len(refs)}, "
-            f"baseline {BASELINE_REFS}",
+            f"{len(refs)} reference(s) to plan.md sections, phases or reviews:",
             file=sys.stderr,
         )
         print(
-            "  They point at moving documents a reader of the code cannot open."
-            "\n  Say the rule instead, and cite an ADR if one decided it.\n",
+            "  They point at moving documents a reader of the code cannot open,"
+            "\n  and they rot without anyone finding out. Say the rule instead,"
+            "\n  and cite an ADR if one decided it.\n",
             file=sys.stderr,
         )
         listing = True
@@ -133,10 +132,7 @@ def main() -> int:
             print(f"  {path}:{number}  {text}", file=sys.stderr)
 
     if not failed:
-        print(
-            f"comments ok: no block over {MAX_LINES} lines, "
-            f"{len(refs)}/{BASELINE_REFS} stale references"
-        )
+        print(f"comments ok: no block over {MAX_LINES} lines, no stale references")
     return 1 if failed else 0
 
 

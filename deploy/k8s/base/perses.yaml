@@ -1,0 +1,133 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: perses-config
+data:
+  config.yaml: |
+    # Anonymous and writable: this is a throwaway local cluster. Never carry
+    # this block into anything reachable from outside a laptop.
+    database:
+      file:
+        folder: /perses
+        extension: json
+    security:
+      enable_auth: false
+      readonly: false
+    frontend:
+      explorer:
+        enable: true
+    provisioning:
+      interval: 10m
+      folders:
+        - /etc/perses/provisioning
+  aiwatcher.yaml: |
+    # VictoriaTraces speaks the Jaeger query API, so Perses reads it with the
+    # bundled Jaeger datasource and no plugin to install. This is the historical
+    # view; aiwatcher's own panel draws runs that are still in flight, which a
+    # trace store cannot show.
+    - kind: Project
+      metadata: { name: aiwatcher }
+      spec:
+        display: { name: aiwatcher }
+    - kind: GlobalDatasource
+      metadata: { name: victoriatraces }
+      spec:
+        default: true
+        display: { name: VictoriaTraces }
+        plugin:
+          kind: JaegerDatasource
+          spec:
+            proxy:
+              kind: HTTPProxy
+              spec: { url: http://victoriatraces:10428/select/jaeger }
+    - kind: GlobalDatasource
+      metadata: { name: victoriametrics }
+      spec:
+        default: true
+        display: { name: VictoriaMetrics }
+        plugin:
+          kind: PrometheusDatasource
+          spec:
+            scrapeInterval: 15s
+            proxy:
+              kind: HTTPProxy
+              spec: { url: http://victoriametrics:8428 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: perses
+spec:
+  selector:
+    app: perses
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: perses
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: perses
+  template:
+    metadata:
+      labels:
+        app: perses
+    spec:
+      containers:
+        - name: perses
+          image: persesdev/perses:v0.54.0
+          args:
+            - --config=/etc/perses/config/config.yaml
+            - --web.listen-address=:8080
+            - --log.level=info
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          volumeMounts:
+            # The same ConfigMap twice: config.yaml is read from the path in the
+            # argument above, aiwatcher.yaml by scanning the provisioning
+            # directory. One shared directory would make provisioning try to
+            # parse config.yaml as a resource and log an error every cycle.
+            - name: config
+              mountPath: /etc/perses/config
+            - name: provisioning
+              mountPath: /etc/perses/provisioning
+            # Perses unpacks its bundled plugins out of /etc/perses/plugins-archive
+            # at start-up, so the target has to be writable.
+            - name: plugins
+              mountPath: /etc/perses/plugins
+            - name: data
+              mountPath: /perses
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+      volumes:
+        - name: config
+          configMap:
+            name: perses-config
+            items:
+              - { key: config.yaml, path: config.yaml }
+        - name: provisioning
+          configMap:
+            name: perses-config
+            items:
+              - { key: aiwatcher.yaml, path: aiwatcher.yaml }
+        - name: plugins
+          emptyDir: {}
+        - name: data
+          emptyDir: {}

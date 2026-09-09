@@ -164,8 +164,7 @@ mod tests {
 
     #[tokio::test]
     async fn invalidating_an_entry_leaves_what_it_named_alone() {
-        // Section 18: invalidation marks an entry, it does not mutate old
-        // executions. An execution that used those artifacts is a record of
+        // Invalidation marks an entry, it does not mutate old executions. An execution that used those artifacts is a record of
         // what happened.
         let catalog = MemoryArtifactCatalog::new();
         catalog.record(cataloged("ab")).await.expect("a record");

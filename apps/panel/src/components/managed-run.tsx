@@ -78,7 +78,7 @@ export function useManagedRun(executionId: string | undefined) {
  * The mapping is the server's and is never worked out here: three source and
  * transform boxes fold into one Flow query, and a browser deciding which is
  * which would decide it from the draft on screen rather than from what the run
- * compiled (section 19).
+ * compiled.
  */
 export function useManagedBlocks(executionId: string | undefined) {
   return useQuery({
@@ -532,9 +532,8 @@ function PinnedNotebook({ notebook, revision }: { notebook: string; revision: st
 /**
  * Open the notebook's live app on the rows this step read.
  *
- * The server resolves it — §16.3, without the token that section asked for,
- * because the runtime it would be presented to has no authentication to check
- * it against. What exists instead is the gate on the route: aiwatcher decides
+ * The server resolves it, and without a token: the runtime it would be
+ * presented to has no authentication to check one against. What exists instead is the gate on the route: aiwatcher decides
  * who may open which run's rows, reads them from its own object store and
  * stages them.
  *

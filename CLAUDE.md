@@ -62,7 +62,7 @@ just serve-model      # verify the promoted package's digests, load it, serve it
 just onnx-version     # re-express that model as an ONNX graph, check it agrees, move the label
 just ml-pipeline-serve # the marimo notebook runtime on :8082, for notebook blocks
 just ml-pipeline-check # ruff, mypy --strict and pytest for that service
-just stack-up      # docker compose: VictoriaTraces, VictoriaMetrics, Collector, Grafana
+just stack-up      # docker compose: VictoriaTraces, VictoriaMetrics, Collector, Perses
 just tilt-up       # the same stack on a local Kubernetes, rebuilt on save
 ```
 
@@ -1687,6 +1687,34 @@ what runs a real graph.
   `gen_ai.completion` from spans; the registry stores prompt text verbatim,
   because storing it is the point. A producer that puts a secret in a prompt is
   putting it in an object store nothing evicts.
+- **Never put a prompt on a span, and never leave a call unable to name one.**
+  Both halves are the same rule. The text stays off the log (ADR_0021, and the
+  Collector's redaction); what a call carries is a *reference* —
+  `prompt_name` and `prompt_version`, read by `PromptRef::from_data` and
+  written as `aiwatcher.prompt.*`. Without it a trace could name a model, a
+  temperature and a token count while the one thing that decided what the model
+  was asked was the thing you had to go and find by hand, which made ADR_0011's
+  promise — that the version a run used stays readable after the run is evicted
+  — true of the registry and useless from a trace. A malformed version id is
+  *absence*, never a rejection: the log takes what a producer sends, and the
+  panel links only what resolves.
+- **Never let a request setting have nowhere to go.** `gen_ai.request.*` covers
+  temperature, top-p, top-k, max tokens, seed and stop sequences, and
+  `request_attributes` reads every one off whichever of the start and end
+  events carries it — `OpenSpan::close` keeps the first, because the Python SDK
+  restates the request on both and twice is an exporter writing one fact into
+  two rows. A setting that changes the answer belongs in an attribute rather
+  than in a payload field nothing indexes: comparing two runs is the question,
+  and a payload cannot be grouped by.
+- **Never let a managed run go on looking alive because the engine used its own
+  vocabulary.** A managed execution emits no `run.completed` — the engine owns
+  the run and ends it with `execution.completed` (ADR_0026). The runs fold read
+  `Subject::Run` only, so the Workflows tab said `succeeded` while Explore span
+  beside it forever, and after fifteen minutes the same run was drawn as
+  stalled. The guardrail above refuses to *infer* an ending from silence; this
+  is not silence, it is the producer saying it finished. `execution.failed`
+  says why in `reason`, which is a third word for it and one the fold now
+  knows.
 - **Never remove the `data.workflow` fallback in `EventEnvelope::workflow`.**
   The `agentic` integration sent the workflow name in the payload before
   `workflow_id` existed. Dropping the fallback empties the workflow dimension

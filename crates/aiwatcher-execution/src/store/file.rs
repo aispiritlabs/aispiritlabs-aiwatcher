@@ -250,11 +250,11 @@ impl FileWorkflowStore {
         Ok((messages, valid))
     }
 
-    /// Every attempt row, keyed. One file rather than one per row, and that
-    /// is affordable because the table really is one row per *unfinished*
-    /// step: a settled attempt is retired rather than stored, so this file is
-    /// bounded by concurrency and not by history. A
-    /// single-process store also has no reader racing the writer.
+    /// Every attempt row, keyed. One file rather than one per row, and that is
+    /// affordable because the table really is one row per *unfinished* step: a
+    /// settled attempt is retired rather than stored, so this file is bounded
+    /// by concurrency and not by history. A single-process store also has no
+    /// reader racing the writer.
     ///
     /// It was not always: while a completion wrote a terminal row, every claim
     /// and every heartbeat read, parsed, re-serialised and `fsync`ed the whole
@@ -521,8 +521,8 @@ impl FileWorkflowStore {
 
     /// Bring a claim table written by an older build up to this one's shape.
     ///
-    /// The file-store half of migration 0004. Until section 43.34 a completion
-    /// overwrote its attempt with a terminal row; a finished attempt is now
+    /// The file-store half of migration 0004. A completion used to overwrite
+    /// its attempt with a terminal row; a finished attempt is now
     /// retired instead, so a store that has been open under an older build
     /// carries rows this one never writes and nothing ever reads. They are
     /// excluded from every claim by `is_claimable`, so this is bounded growth
@@ -916,7 +916,7 @@ impl WorkflowStore for FileWorkflowStore {
     /// It is not what bounds the claim table. That was true while a completion
     /// wrote a terminal row; a finished attempt is now retired rather than
     /// stored, so the table is the size of what is unfinished whether this ever
-    /// runs or not (section 43.34). What a sweep still reclaims is streams and
+    /// runs or not. What a sweep still reclaims is streams and
     /// projections, which are the history and are meant to be kept until a
     /// deployment says otherwise.
     async fn prune(&self, before: OffsetDateTime, limit: usize) -> Result<Pruned> {

@@ -1,6 +1,6 @@
 # ADR_0004: The live channel is the projector's own fan-out, and a reconnect closes its own gap
 
-- **Status**: accepted
+- **Status**: accepted; the trace viewer it names is Perses since 2026-09-09 — see [ADR_0005](ADR_0005_TRACE_STORAGE.md#amendment-2026-09-09-the-waterfall-comes-from-perses-not-grafana)
 - **Date**: 2026-08-27
 
 ## Context

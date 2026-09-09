@@ -102,8 +102,8 @@ k8s_resource(
     labels = ['storage'],
 )
 k8s_resource(
-    'grafana',
-    port_forwards = ['3000:3000'],
+    'perses',
+    port_forwards = ['3000:8080'],
     resource_deps = ['victoriatraces', 'victoriametrics'],
     labels = ['ui'],
 )

@@ -5,12 +5,7 @@ import {
   type InfiniteData,
   type UseInfiniteQueryResult,
 } from '@tanstack/react-query';
-import {
-  flexRender,
-  getCoreRowModel,
-  useReactTable,
-  type ColumnDef,
-} from '@tanstack/react-table';
+import { flexRender, getCoreRowModel, useReactTable, type ColumnDef } from '@tanstack/react-table';
 import { Beaker, GitBranch, Rows3, Search } from 'lucide-react';
 
 import { getDatasetRows, listEvaluations } from '@/api/generated/sdk.gen';
@@ -91,7 +86,9 @@ export function DatasetExplorer({
     ]) {
       byId.set(report.evaluation_id, report);
     }
-    return [...byId.values()].sort((left, right) => right.started_at.localeCompare(left.started_at));
+    return [...byId.values()].sort((left, right) =>
+      right.started_at.localeCompare(left.started_at),
+    );
   }, [legacyEvaluations.data, versionedEvaluations.data]);
   const evaluationTotal =
     (versionedEvaluations.data?.pages[0]?.total_known ?? 0) +
@@ -129,7 +126,8 @@ export function DatasetExplorer({
             >
               {dataset.versions.map((candidate) => (
                 <option key={candidate.version} value={candidate.version}>
-                  {candidate.version.slice(0, 12)} · {new Date(candidate.created_at).toLocaleString()}
+                  {candidate.version.slice(0, 12)} ·{' '}
+                  {new Date(candidate.created_at).toLocaleString()}
                 </option>
               ))}
             </select>
@@ -140,10 +138,18 @@ export function DatasetExplorer({
             <ViewButton active={view === 'rows'} onClick={() => onViewChange('rows')} icon={Rows3}>
               Rows
             </ViewButton>
-            <ViewButton active={view === 'evaluations'} onClick={() => onViewChange('evaluations')} icon={Beaker}>
+            <ViewButton
+              active={view === 'evaluations'}
+              onClick={() => onViewChange('evaluations')}
+              icon={Beaker}
+            >
               Evaluations {evaluationTotal > 0 ? `(${evaluationTotal})` : ''}
             </ViewButton>
-            <ViewButton active={view === 'lineage'} onClick={() => onViewChange('lineage')} icon={GitBranch}>
+            <ViewButton
+              active={view === 'lineage'}
+              onClick={() => onViewChange('lineage')}
+              icon={GitBranch}
+            >
               Lineage
             </ViewButton>
           </div>
@@ -154,12 +160,7 @@ export function DatasetExplorer({
       </Card>
 
       {view === 'rows' ? (
-        <RowsViewer
-          query={rows}
-          columns={version.columns}
-          draft={draft}
-          onDraftChange={setDraft}
-        />
+        <RowsViewer query={rows} columns={version.columns} draft={draft} onDraftChange={setDraft} />
       ) : null}
       {view === 'evaluations' ? (
         <EvaluationsViewer
@@ -217,21 +218,19 @@ function RowsViewer({
           <span className="id text-muted-foreground">{row.original.row_index}</span>
         ),
       },
-      ...columns.map(
-        (column): ColumnDef<DatasetRow> => ({
-          id: column,
-          accessorFn: (row) => row.row[column],
-          header: () => (
-            <div className="flex flex-col">
-              <span>{column}</span>
-              <span className="font-normal text-muted-foreground">
-                {inferColumnType(data, column)}
-              </span>
-            </div>
-          ),
-          cell: ({ getValue }) => <DatasetCell value={getValue()} />,
-        }),
-      ),
+      ...columns.map((column): ColumnDef<DatasetRow> => ({
+        id: column,
+        accessorFn: (row) => row.row[column],
+        header: () => (
+          <div className="flex flex-col">
+            <span>{column}</span>
+            <span className="font-normal text-muted-foreground">
+              {inferColumnType(data, column)}
+            </span>
+          </div>
+        ),
+        cell: ({ getValue }) => <DatasetCell value={getValue()} />,
+      })),
     ],
     [columns, data],
   );
@@ -379,7 +378,8 @@ function EvaluationsViewer({
         <div>
           <h3 className="text-sm font-semibold">Evaluation tests</h3>
           <p className="text-xs text-muted-foreground">
-            {total} report{total === 1 ? '' : 's'} linked by exact version or legacy collection name.
+            {total} report{total === 1 ? '' : 's'} linked by exact version or legacy collection
+            name.
           </p>
         </div>
         <Link
@@ -412,7 +412,10 @@ function EvaluationsViewer({
           </thead>
           <tbody>
             {evaluations.map((evaluation) => (
-              <tr key={evaluation.evaluation_id} className="border-t border-border/50 hover:bg-accent/30">
+              <tr
+                key={evaluation.evaluation_id}
+                className="border-t border-border/50 hover:bg-accent/30"
+              >
                 <td className="px-3 py-2">
                   <Link
                     to="/evaluation"
@@ -428,10 +431,14 @@ function EvaluationsViewer({
                   </Link>
                 </td>
                 <td className="px-3 py-2 text-muted-foreground">{evaluation.variant ?? '—'}</td>
-                <td className="px-3 py-2"><StatusBadge status={evaluation.status} /></td>
+                <td className="px-3 py-2">
+                  <StatusBadge status={evaluation.status} />
+                </td>
                 <td className="px-3 py-2 tabular-nums">{formatRate(evaluation.pass_rate)}</td>
                 <td className="px-3 py-2 tabular-nums">{evaluation.cases_total}</td>
-                <td className="px-3 py-2 text-xs text-muted-foreground">{formatTime(evaluation.started_at)}</td>
+                <td className="px-3 py-2 text-xs text-muted-foreground">
+                  {formatTime(evaluation.started_at)}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -464,18 +471,26 @@ function Lineage({
   versionId: string;
 }) {
   const version = dataset.versions.find((item) => item.version === versionId) ?? dataset.latest;
-  const variants = [...new Set(evaluations.flatMap((item) => (item.variant ? [item.variant] : [])))];
+  const variants = [
+    ...new Set(evaluations.flatMap((item) => (item.variant ? [item.variant] : []))),
+  ];
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_20rem]">
       <Card className="overflow-hidden">
         <div className="border-b border-border p-3">
           <h3 className="text-sm font-semibold">Flow PHP provenance</h3>
-          <p className="text-xs text-muted-foreground">The exact transformation stored with this immutable output.</p>
+          <p className="text-xs text-muted-foreground">
+            The exact transformation stored with this immutable output.
+          </p>
         </div>
         {pipeline ? (
-          <pre className="id max-h-[34rem] overflow-auto whitespace-pre-wrap p-4 text-muted-foreground">{pipeline}</pre>
+          <pre className="id max-h-[34rem] overflow-auto whitespace-pre-wrap p-4 text-muted-foreground">
+            {pipeline}
+          </pre>
         ) : (
-          <p className="p-4 text-sm text-muted-foreground">Open Rows once to load the artifact metadata.</p>
+          <p className="p-4 text-sm text-muted-foreground">
+            Open Rows once to load the artifact metadata.
+          </p>
         )}
       </Card>
       <div className="flex flex-col gap-4">
@@ -493,10 +508,14 @@ function Lineage({
                 >
                   {version.recipe}
                 </Link>
-              ) : 'ad hoc'}
+              ) : (
+                'ad hoc'
+              )}
             </dd>
-            <dt>Source</dt><dd className="break-all">{source ?? 'loading…'}</dd>
-            <dt>Period</dt><dd>{windowSeconds ? `${windowSeconds}s` : 'all retained'}</dd>
+            <dt>Source</dt>
+            <dd className="break-all">{source ?? 'loading…'}</dd>
+            <dt>Period</dt>
+            <dd>{windowSeconds ? `${windowSeconds}s` : 'all retained'}</dd>
           </dl>
         </Card>
         <Card className="p-4 text-xs">
@@ -504,11 +523,7 @@ function Lineage({
           {variants.length ? (
             <div className="mt-2 flex flex-wrap gap-1">
               {variants.map((variant) => (
-                <Link
-                  key={variant}
-                  to="/experiments"
-                  search={{ dataset: reference, variant }}
-                >
+                <Link key={variant} to="/experiments" search={{ dataset: reference, variant }}>
                   <Badge tone="warning">{variant}</Badge>
                 </Link>
               ))}
@@ -563,17 +578,31 @@ function flattenEvaluations(
 }
 
 function DatasetCell({ value }: { value: unknown }) {
-  if (value === null || value === undefined) return <span className="text-muted-foreground">—</span>;
+  if (value === null || value === undefined)
+    return <span className="text-muted-foreground">—</span>;
   if (typeof value === 'object') {
     const text = JSON.stringify(value);
-    return <span className="id block max-w-[30rem] truncate" title={text}>{text}</span>;
+    return (
+      <span className="id block max-w-[30rem] truncate" title={text}>
+        {text}
+      </span>
+    );
   }
   const text = String(value);
-  return <span className={cn('block max-w-[30rem] truncate', typeof value === 'number' && 'tabular-nums')} title={text}>{text}</span>;
+  return (
+    <span
+      className={cn('block max-w-[30rem] truncate', typeof value === 'number' && 'tabular-nums')}
+      title={text}
+    >
+      {text}
+    </span>
+  );
 }
 
 function inferColumnType(rows: DatasetRow[], column: string): string {
-  const value = rows.find((row) => row.row[column] !== null && row.row[column] !== undefined)?.row[column];
+  const value = rows.find((row) => row.row[column] !== null && row.row[column] !== undefined)?.row[
+    column
+  ];
   if (Array.isArray(value)) return 'array';
   if (value === null || value === undefined) return 'unknown';
   return typeof value;

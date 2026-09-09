@@ -269,9 +269,7 @@ export function ShapeInspector({
           <span className="font-medium text-muted-foreground">text</span>
           <input
             value={annotation.text ?? ''}
-            onChange={(event) =>
-              onChange({ ...annotation, text: event.target.value || null })
-            }
+            onChange={(event) => onChange({ ...annotation, text: event.target.value || null })}
             placeholder="what it says"
             className="rounded-md border border-border bg-background px-2 py-1"
           />

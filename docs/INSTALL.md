@@ -28,7 +28,7 @@ already run:
 | VictoriaMetrics | installed | yes → `mode: external` |
 | RustFS (the prompt registry's store) | installed | detected, but **never** reused automatically |
 | PostgreSQL (the workflow store) | **off** | detected, but **never** reused automatically |
-| Grafana | never installed | yes → the datasource ConfigMap is emitted |
+| Perses | never installed | yes → the datasource ConfigMap is emitted |
 
 Detection is `deploy/scripts/detect-stack.py`. Run it on its own to see what a
 cluster would give you, without installing anything:
@@ -43,7 +43,7 @@ cluster: vps
                              fenced by NetworkPolicy planner-observability-ingress
   victoriatraces   absent    no pod runs a matching image
   collector        absent    no pod runs a matching image
-  grafana          present   http://planner-grafana.planner.svc.cluster.local:3000
+  perses           present   http://planner-perses.planner.svc.cluster.local:8080
   postgres         present   http://planner-postgres.planner.svc.cluster.local:5432
   objectstore      present   http://planner-rustfs-svc.planner.svc.cluster.local:9000
 ```
@@ -67,7 +67,7 @@ may point at nothing. What is matched:
 | VictoriaMetrics | `victoria-metrics`, `vmsingle` | 8428 |
 | VictoriaTraces | `victoria-traces`, `vtsingle` | 10428 |
 | Collector | `opentelemetry-collector` | 4318 |
-| Grafana | `grafana/grafana` | 3000 |
+| Perses | `persesdev/perses` | 8080 |
 
 Cluster-mode VictoriaMetrics (`vminsert`/`vmselect`/`vmstorage`) is deliberately
 not matched: its write path is a different port and a tenant-scoped URL. Point
@@ -284,7 +284,7 @@ the result, and a row written by each binary read by the other.
 
 ## Installing beside planner
 
-planner runs VictoriaMetrics, VictoriaLogs, Grafana and a RustFS on its k3s,
+planner runs VictoriaMetrics, VictoriaLogs, Perses and a RustFS on its k3s,
 behind authentik, with a NetworkPolicy per component. aiwatcher goes into the
 same namespace as a guest.
 
@@ -317,8 +317,8 @@ What that install decides, on the cluster as it stands today:
   nothing changes on planner's side for the write path to work.
 * **VictoriaTraces** — installed. planner has no trace store, and this is the
   one backend aiwatcher genuinely adds.
-* **Grafana** — planner's. The datasource ConfigMap is emitted; wiring it in is
-  a change on planner's side (below).
+* **Perses** — planner's. The datasource ConfigMap is emitted; planner already
+  mounts it (below).
 * **NetworkPolicy** — planner's `planner-observability-ingress` restricts port
   8428 to its own observability components, so aiwatcher's Collector would be
   refused. The install adds one ingress rule to those pods for the Collector.
@@ -345,30 +345,39 @@ namespace: a NetworkPolicy only applies in its own, so that rule has to be added
 by whoever owns that namespace. The chart fails with that message rather than
 rendering a policy that would do nothing.
 
-### Wiring the datasource into planner's Grafana
+### Wiring the datasource into planner's Perses
 
-planner's Grafana provisions from a fixed ConfigMap mounted by `subPath`, not
-from the discovery sidecar, so it does not pick up a new ConfigMap on its own.
-One volume and one mount in `deploy/helm/planner/templates/observability.yaml`:
+planner's Perses provisions from fixed ConfigMap mounts, not from the discovery
+sidecar, so the `perses.dev/resource` label alone does not make it pick this up.
+What planner does instead is keep a provisioning folder for exactly this, and
+mount the ConfigMap there — `optional: true`, so a planner without aiwatcher
+installed comes up unchanged. In
+`deploy/helm/planner/templates/observability.yaml`:
 
 ```yaml
-            - name: aiwatcher-datasources
-              mountPath: /etc/grafana/provisioning/datasources/aiwatcher.yaml
-              subPath: aiwatcher-datasources.yaml
-              readOnly: true
+            - { name: aiwatcher-provisioning, mountPath: /etc/perses/provisioning-aiwatcher, readOnly: true }
 ```
 
 ```yaml
-        - name: aiwatcher-datasources
-          configMap: { name: aiwatcher-grafana-datasources }
+        - name: aiwatcher-provisioning
+          configMap:
+            name: aiwatcher-perses-provisioning
+            optional: true
 ```
+
+with `/etc/perses/provisioning-aiwatcher` listed in `provisioning.folders` in
+planner's Perses config. The ConfigMap name is the contract between the two
+repos: changing `perses.provisioning.tracesDatasourceName` here is free, but
+changing the ConfigMap's own name means changing planner's mount in the same
+breath.
 
 The datasource is a Jaeger one: VictoriaTraces answers the Jaeger query API, so
-Grafana reads it with no plugin. Its trace-to-metrics link points at uid
-`victoria-metrics`, which is what planner's own VictoriaMetrics datasource
-already uses. The planner environment installer restarts `planner-grafana`
-after the ConfigMap appears, so its init container can copy the newly available
-datasource into Grafana's provisioning directory.
+Perses reads it with the plugin already in its image. Grafana's trace-to-metrics
+link has no Perses equivalent and is gone — a span still carries
+`gen_ai.request.model`, but the one click from a span to the metric filtered by
+it does not exist. The planner environment installer restarts `planner-perses`
+after the ConfigMap appears, so provisioning sees it without waiting out a
+kubelet sync period.
 
 ### Publishing the panel
 
@@ -383,7 +392,7 @@ environment leaves the ingress off, and a cluster with no such middleware to
 attach should keep it off and reach the panel by port-forward.
 
 The host is not in that file. Detection reads it off the cluster: planner
-already publishes `planner.<domain>` and `grafana.<domain>`, so aiwatcher goes
+already publishes `planner.<domain>` and `perses.<domain>`, so aiwatcher goes
 to `aiwatcher.<domain>`, and installing needs no host at all.
 
 ```bash

@@ -1,8 +1,8 @@
 //! The row a reactor or a worker takes before it does any work.
 //!
-//! Section 9.3's `step_attempts`, as a type. One row per attempt, and it is the
-//! only place in this system where a store is used as a queue — bounded on
-//! purpose: one row per claim, one heartbeat per half-lease, and no fan-out.
+//! One row per attempt, and the only place in this system where a store is
+//! used as a queue — bounded on purpose: one row per claim, one heartbeat per
+//! half-lease, and no fan-out.
 //!
 //! ## Why both a reactor and a worker claim from here
 //!

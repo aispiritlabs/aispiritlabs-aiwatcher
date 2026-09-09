@@ -109,8 +109,7 @@ async fn tick(
     for definition in &scheduled {
         // `slots_due`, not `slots_between`: the interval is clipped to the
         // schedule's own activation moment, so a schedule written while this
-        // worker was down does not run the days before somebody asked for it
-        // (review R7).
+        // worker was down does not run the days before somebody asked for it.
         for slot in definition.slots_due(previous, now) {
             // One slot that could not start does not stop the others: a
             // definition that stopped compiling must not hold up every other
@@ -138,11 +137,11 @@ async fn tick(
 
 /// Take one slot, start what it asks for, and write down what happened.
 ///
-/// The order is the whole of review R1, R2 and R3. The slot is taken in the
-/// workflow store — where the overlap check happens in the same transaction —
-/// the run is started, and only then is the slot settled. Nothing here writes
-/// the schedule object, which is what stops a tick undoing an edit or bringing
-/// a deleted schedule back.
+/// The order is the whole point. The slot is taken in the workflow store —
+/// where the overlap check happens in the same transaction — the run is
+/// started, and only then is the slot settled. Nothing here writes the
+/// schedule object, which is what stops a tick undoing an edit or bringing a
+/// deleted schedule back.
 async fn process(
     state: &AppState,
     store: &dyn WorkflowStore,
@@ -216,8 +215,8 @@ async fn process(
             SlotSettlement::Started { execution_id }
         }
         Err(failure) => {
-            // The distinction review R2 is about, and the only place that can
-            // draw it: a definition that stopped compiling will not compile on
+            // This is the only place that can draw the distinction: a
+            // definition that stopped compiling will not compile on
             // the next tick either, and a store that was unreachable for ten
             // seconds will. The first is a decision; the second must leave the
             // slot due, which is what `TryAgain` does.

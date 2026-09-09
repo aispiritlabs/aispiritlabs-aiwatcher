@@ -22,7 +22,7 @@ name: aiwatcher
 services:
   victoriatraces:
     # Young, but the only one of these that takes OTLP spans natively and
-    # exposes a Jaeger-compatible API for Grafana to read.
+    # exposes a Jaeger-compatible API for Perses to read.
     image: victoriametrics/victoria-traces:v0.11.0
     command:
       - -storageDataPath=/vtdata
@@ -144,18 +144,24 @@ services:
       timeout: 3s
       retries: 6
 
-  grafana:
-    image: grafana/grafana:11.6.0
-    environment:
-      GF_AUTH_ANONYMOUS_ENABLED: 'true'
-      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
-      GF_SECURITY_ALLOW_EMBEDDING: 'true'
-      GF_INSTALL_PLUGINS: ''
+  perses:
+    # Anonymous and writable — see deploy/perses/config.yaml. The Jaeger and
+    # Prometheus datasource plugins ship inside this image, so unlike the
+    # Grafana this replaces there is nothing to install at start-up.
+    #
+    # No healthcheck: the image is distroless, with no shell and no wget to run
+    # one with. `just stack-up` prints the URL; /api/v1/health answers on it.
+    image: persesdev/perses:v0.54.0
+    command:
+      - --config=/etc/perses/config.yaml
+      - --web.listen-address=:8080
+      - --log.level=info
     volumes:
-      - ./grafana/provisioning:/etc/grafana/provisioning:ro
-      - grafana-data:/var/lib/grafana
+      - ./perses/config.yaml:/etc/perses/config.yaml:ro
+      - ./perses/provisioning:/etc/perses/provisioning:ro
+      - perses-data:/perses
     ports:
-      - '3000:3000'
+      - '3000:8080'
     depends_on:
       - victoriatraces
       - victoriametrics
@@ -165,4 +171,4 @@ volumes:
   victoriatraces-data:
   victoriametrics-data:
   aiwatcher-data:
-  grafana-data:
+  perses-data:

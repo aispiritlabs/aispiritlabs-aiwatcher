@@ -1,6 +1,6 @@
 # ADR_0005: VictoriaTraces stores spans; QuestDB is a projection to add later, if ever
 
-- **Status**: accepted
+- **Status**: accepted, amended 2026-09-09 (see [Amendment](#amendment-2026-09-09-the-waterfall-comes-from-perses-not-grafana))
 - **Date**: 2026-08-27
 
 ## Context
@@ -84,3 +84,44 @@ justifies at its current size.
 to be SQL-shaped — cost attribution, prompt A/B comparisons, cohort analysis —
 rather than "show me this trace", QuestDB should become the primary store and
 VictoriaTraces the secondary. Watch which of the two UIs people actually open.
+
+---
+
+## Amendment, 2026-09-09: the waterfall comes from Perses, not Grafana
+
+### What prompted it
+
+Nothing about the storage decision. Both stacks that run this — aiwatcher's own,
+and planner's, which aiwatcher installs into as a guest — moved their dashboard
+tier off Grafana onto [Perses](https://github.com/perses/perses). The sentences
+above that name Grafana were describing the client, not the store.
+
+### What still holds
+
+The comparison turned on one thing: a trace store answers the Jaeger query API,
+so the waterfall is free, while QuestDB would have meant building span-hierarchy
+reconstruction and waterfall rendering by hand. That is unchanged. Perses ships
+a Jaeger datasource plugin inside its image, and its client appends
+`/api/traces`, `/api/services` and `/api/operations` to the same
+`/select/jaeger` base URL Grafana's did — VictoriaTraces cannot tell the two
+apart. "Build it yourself" lost for the same reason it lost then.
+
+So read every "Grafana" above as "the trace viewer". The table row means
+*Waterfall UI | any Jaeger-API client | build it yourself*, which is what it was
+always standing for.
+
+### What it cost
+
+Grafana correlated at the datasource level: `tracesToMetrics` put a link on
+every span that opened the metric filtered by `gen_ai.request.model`. Perses has
+no equivalent, so that link is gone rather than renamed. The attribute is still
+on the span; what is missing is the one click from it to the metric.
+
+The consequence above — the waterfall coming "from Grafana, from Jaeger UI, or
+from aiwatcher's own panel" — is otherwise intact, Jaeger UI included. It reads
+the same API, and nothing in this amendment forecloses it.
+
+**What this adds to "what would make this wrong."** The viewer is now a young
+project as well as the store. If Perses' trace panels turn out thinner than the
+waterfall people actually need, the answer is to point Jaeger UI or another
+Jaeger-API client at the same endpoint — not to move the spans.

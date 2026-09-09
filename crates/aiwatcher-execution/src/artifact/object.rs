@@ -1,8 +1,7 @@
 //! The catalog over an object store: the manifest beside the bytes, and the
 //! cache index beside both.
 //!
-//! Section 17.1's layout, completed. `aiwatcher-server`'s reactor writes the
-//! `data`; this writes the `manifest.json` that says who made it and what it
+//! `aiwatcher-server`'s reactor writes the `data`; this writes the `manifest.json` that says who made it and what it
 //! was made from, and the `cache/` entries that let an identical step be
 //! answered without running it.
 //!
@@ -23,8 +22,8 @@
 //! ## Why an unreadable entry is a miss
 //!
 //! Every read here answers `None` rather than an error when the stored JSON is
-//! from a build this one cannot read. The cache is an *index* (section 18): a
-//! rerun is the cost of dropping it, and a note about a previous run must never
+//! from a build this one cannot read. The cache is an *index*: a rerun is the
+//! cost of dropping it, and a note about a previous run must never
 //! be the thing that stops the next one.
 
 use async_trait::async_trait;

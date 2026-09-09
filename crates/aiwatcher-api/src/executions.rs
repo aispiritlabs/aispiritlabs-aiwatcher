@@ -51,7 +51,7 @@ use crate::state::AppState;
 
 /// The header a caller repeats to reach the same execution twice.
 ///
-/// every mutating command endpoint for one. Here it does its
+/// Every mutating command endpoint takes one. Here it does its
 /// work by *deriving the execution id* rather than by a table of keys: the same
 /// key produces the same id, the same id produces the same stream, and the
 /// store's own inbox answers the second request with what the first decided.
@@ -113,10 +113,9 @@ pub fn router() -> Router<AppState> {
             "/api/v1/executions/{execution_id}/decider-lease/release",
             post(release_decider_lease),
         )
-        // Section 20's command routes. Grouped under `commands/` for the run
-        // and under the step for the two that name one, which is the shape the
-        // plan asked for and reads correctly: pausing is done to a run, and
-        // retrying is done to a step of one.
+        // The command routes. Grouped under `commands/` for the run and under
+        // the step for the two that name one, which reads correctly: pausing is
+        // done to a run, and retrying is done to a step of one.
         .route(
             "/api/v1/executions/{execution_id}/commands/cancel",
             post(cancel_execution),
@@ -204,8 +203,8 @@ impl Decider {
 /// `RerunBody`'s: no endpoint, no script, no host. A plan names a binding and
 /// its parameters, and every executor's address is configuration.
 /// `deny_unknown_fields` so an attempt to supply one — or a `backend`, a `mode`
-/// or a `publish` flag from section 20 that this phase does not implement — is
-/// a 400 naming it rather than a field silently ignored that reads as accepted.
+/// or a `publish` flag that is not implemented — is a 400 naming it rather than
+/// a field silently ignored that reads as accepted.
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StartExecutionBody {
@@ -1026,10 +1025,9 @@ pub struct ProvideInputBody {
 
 /// What a command's message id names, beyond the execution and its version.
 ///
-/// Section 43.10 one layer up: a message id derived from less than what it
-/// identifies collides with a different intention, and the second is swallowed
-/// as a redelivery of the first. A retry of `read` and a retry of `publish` are
-/// two commands.
+/// A message id derived from less than what it identifies collides with a
+/// different intention, and the second is swallowed as a redelivery of the
+/// first. A retry of `read` and a retry of `publish` are two commands.
 fn intent(command: &WorkflowCommand) -> String {
     match command {
         WorkflowCommand::RetryStep { step_id } => format!("retry_step/{step_id}"),

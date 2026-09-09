@@ -195,9 +195,9 @@ impl Artifacts {
     async fn get(&self, artifact: &ArtifactRef) -> Result<Option<Vec<u8>>, ActivityError> {
         let key = artifact.uri.strip_prefix(SCHEME).ok_or_else(|| {
             // A `file://` or an `s3://` from somewhere else is a pointer this
-            // process cannot verify. Section 17.1 accepts one as a *uri* and
-            // never as the only reference; reading one here would be reading
-            // bytes nobody in this deployment addressed.
+            // process cannot verify. One is accepted as a *uri* and never as
+            // the only reference; reading one here would be reading bytes
+            // nobody in this deployment addressed.
             ActivityError::user_code(format!(
                 "{} is not an artifact in this deployment's object store",
                 artifact.uri
@@ -494,8 +494,8 @@ mod tests {
 
     #[tokio::test]
     async fn an_artifact_from_somebody_elses_store_is_refused_rather_than_fetched() {
-        // Section 17.1: a `file://` on a shared volume is a pointer nothing
-        // outside that node can verify, and reading one here would be reading
+        // A `file://` on a shared volume is a pointer nothing outside that
+        // node can verify, and reading one here would be reading
         // bytes nobody in this deployment addressed.
         let error = artifacts()
             .read_rows(&ArtifactRef::new("rows", "file:///tmp/rows.json", "ab"))

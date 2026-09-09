@@ -719,8 +719,7 @@ export type ContentPolicy = {
 /**
  * Something a caller may do with a block, given what it is and where it got to.
  *
- * Deliberately **no hrefs**, which is where this departs from section 19's
- * sketch. An action's address is either this API's own — which the generated
+ * Deliberately **no hrefs**. An action's address is either this API's own — which the generated
  * client already has — or an optional service's, and a service's address in a
  * response body is the one thing every route here refuses to carry. What only
  * the server knows is *which* actions apply, and that is what this is.
@@ -736,8 +735,7 @@ export const ContextAction = {
 /**
  * Something a caller may do with a block, given what it is and where it got to.
  *
- * Deliberately **no hrefs**, which is where this departs from section 19's
- * sketch. An action's address is either this API's own — which the generated
+ * Deliberately **no hrefs**. An action's address is either this API's own — which the generated
  * client already has — or an optional service's, and a service's address in a
  * response body is the one thing every route here refuses to carry. What only
  * the server knows is *which* actions apply, and that is what this is.
@@ -5095,7 +5093,7 @@ export type RetentionPolicy = {
 /**
  * How many times, and how far apart.
  *
- * The defaults are section 26's: three attempts, 1 s / 5 s / 30 s. The delays
+ * The defaults are three attempts, 1 s / 5 s / 30 s. The delays
  * are a list rather than a base and a multiplier so that a policy can be read
  * off the plan without arithmetic, and so that a runtime whose useful backoff
  * is not exponential can say so.
@@ -5530,8 +5528,7 @@ export type Runtime = typeof Runtime[keyof typeof Runtime];
 /**
  * Where a step runs, and everything that runtime needs.
  *
- * Section 35 of `docs/PIPELINE_ARCHITECTURE.md` is the table this enum is the
- * code for: where each executes, who owns its retries, and what it may carry.
+ * Where each runtime executes, who owns its retries, and what it may carry.
  * Every variant names a *binding* and its parameters and never a host — an
  * executor's address is configuration, for ADR_0012's and ADR_0016's reason,
  * unchanged. A plan naming its own endpoint would be a request-forgery
@@ -5748,8 +5745,8 @@ export type ScheduledDefinition = {
     /**
      * When the *current cadence* began to apply.
      *
-     * Review R7: without this every schedule was handed the whole interval a
-     * checkpoint had accumulated, so one written while the worker was down for
+     * Without it every schedule is handed the whole interval a checkpoint has
+     * accumulated, so one written while the worker was down for
      * three days ran three days of slots the moment it came back — and
      * changing an hour during an outage re-ran the past under the new rule.
      *
@@ -6172,8 +6169,8 @@ export type StagedBatch = {
  * `RerunBody`'s: no endpoint, no script, no host. A plan names a binding and
  * its parameters, and every executor's address is configuration.
  * `deny_unknown_fields` so an attempt to supply one — or a `backend`, a `mode`
- * or a `publish` flag from section 20 that this phase does not implement — is
- * a 400 naming it rather than a field silently ignored that reads as accepted.
+ * or a `publish` flag that is not implemented — is a 400 naming it rather than
+ * a field silently ignored that reads as accepted.
  */
 export type StartExecutionBody = {
     /**

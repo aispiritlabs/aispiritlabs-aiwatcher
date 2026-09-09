@@ -254,6 +254,160 @@ fn usage_lands_on_the_span_as_genai_semconv_attributes() {
     );
 }
 
+fn float_attr(span: &CompletedSpan, key: &str) -> Option<f64> {
+    span.attributes
+        .iter()
+        .find_map(|(name, value)| match value {
+            AttrValue::Double(inner) if name == key => Some(*inner),
+            _ => None,
+        })
+}
+
+/// A call whose request says everything about it that is not its text.
+///
+/// The settings are on the start event and the prompt reference on both, which
+/// is what a producer that fills in `**request` produces — and is the case that
+/// used to write half of them nowhere and one of them twice.
+fn described_call() -> Vec<RecordedEvent> {
+    let mut run = Run::new("run-described");
+    let request = json!({
+        "call_id": "call-1",
+        "provider": "openrouter",
+        "model": "claude-opus-5",
+        "temperature": 0.2,
+        "top_p": 0.95,
+        "top_k": 40,
+        "max_tokens": 4096,
+        "seed": 7,
+        "stop": ["</plan>"],
+        "prompt_name": "planner.floor-plan.system",
+        "prompt_version": "b".repeat(64),
+    });
+    vec![
+        run.emit(EventType::RunStarted, None, json!({})),
+        run.after(5)
+            .emit(EventType::AgentStarted, Some("floor-plan"), json!({})),
+        run.after(5)
+            .emit(EventType::LlmStarted, Some("floor-plan"), request.clone()),
+        run.after(900).emit(
+            EventType::LlmCompleted,
+            Some("floor-plan"),
+            json!({
+                "call_id": "call-1",
+                "model": "claude-opus-5",
+                "prompt_name": "planner.floor-plan.system",
+                "prompt_version": "b".repeat(64),
+                "prompt_tokens": 4210,
+                "completion_tokens": 880,
+            }),
+        ),
+        run.after(5)
+            .emit(EventType::AgentCompleted, Some("floor-plan"), json!({})),
+        run.after(5).emit(EventType::RunCompleted, None, json!({})),
+    ]
+}
+
+/// Everything that decides the answer, except the answer and the question.
+#[test]
+fn the_settings_a_call_ran_on_land_on_the_span_as_genai_semconv_attributes() {
+    let mut assembler = SpanAssembler::default();
+    let assembled = collect(&mut assembler, &described_call());
+    let llm = find(&assembled.spans, "chat claude-opus-5");
+
+    assert_eq!(float_attr(llm, "gen_ai.request.temperature"), Some(0.2));
+    assert_eq!(float_attr(llm, "gen_ai.request.top_p"), Some(0.95));
+    assert_eq!(int_attr(llm, "gen_ai.request.top_k"), Some(40));
+    assert_eq!(int_attr(llm, "gen_ai.request.max_tokens"), Some(4096));
+    assert_eq!(int_attr(llm, "gen_ai.request.seed"), Some(7));
+    assert_eq!(
+        llm.attributes
+            .iter()
+            .find(|(key, _)| key == "gen_ai.request.stop_sequences")
+            .map(|(_, value)| value.clone()),
+        Some(AttrValue::StrList(vec!["</plan>".to_owned()]))
+    );
+}
+
+/// The version a run used, so the registry can be opened at what it ran on.
+#[test]
+fn a_call_names_the_prompt_version_it_ran_on_and_never_its_text() {
+    let mut assembler = SpanAssembler::default();
+    let assembled = collect(&mut assembler, &described_call());
+    let llm = find(&assembled.spans, "chat claude-opus-5");
+
+    assert_eq!(
+        string_attr(llm, "aiwatcher.prompt.version_id"),
+        Some("b".repeat(64).as_str())
+    );
+    assert_eq!(
+        string_attr(llm, "aiwatcher.prompt.name"),
+        Some("planner.floor-plan.system")
+    );
+    for (key, value) in &llm.attributes {
+        assert!(
+            !key.contains("prompt.text")
+                && !matches!(value, AttrValue::Str(text) if text.contains("You are")),
+            "prompt content reached a span: {key}"
+        );
+    }
+}
+
+/// The Python SDK restates the request on the end event. Once is a description;
+/// twice is an exporter writing the same fact into two rows.
+#[test]
+fn a_setting_sent_on_both_the_start_and_the_end_is_one_attribute() {
+    let mut assembler = SpanAssembler::default();
+    let assembled = collect(&mut assembler, &described_call());
+    let llm = find(&assembled.spans, "chat claude-opus-5");
+
+    for key in [
+        "aiwatcher.prompt.version_id",
+        "aiwatcher.prompt.name",
+        "gen_ai.request.model",
+    ] {
+        assert_eq!(
+            llm.attributes
+                .iter()
+                .filter(|(name, _)| name == key)
+                .count(),
+            1,
+            "{key} is on the span more than once"
+        );
+    }
+}
+
+/// A version id that is not one is absence, not a rejection: the run still has
+/// to be recorded, and the panel must not offer a link that 404s.
+#[test]
+fn a_malformed_prompt_version_is_left_off_rather_than_dropping_the_call() {
+    let mut run = Run::new("run-typo");
+    let events = vec![
+        run.emit(EventType::RunStarted, None, json!({})),
+        run.after(5)
+            .emit(EventType::AgentStarted, Some("floor-plan"), json!({})),
+        run.after(5).emit(
+            EventType::LlmStarted,
+            Some("floor-plan"),
+            json!({ "model": "claude-opus-5", "prompt_version": "v3" }),
+        ),
+        run.after(50).emit(
+            EventType::LlmCompleted,
+            Some("floor-plan"),
+            json!({ "model": "claude-opus-5", "prompt_version": "v3" }),
+        ),
+    ];
+
+    let mut assembler = SpanAssembler::default();
+    let assembled = collect(&mut assembler, &events);
+    let llm = find(&assembled.spans, "chat claude-opus-5");
+
+    assert_eq!(string_attr(llm, "aiwatcher.prompt.version_id"), None);
+    assert_eq!(
+        string_attr(llm, "gen_ai.request.model"),
+        Some("claude-opus-5")
+    );
+}
+
 #[test]
 fn correlation_and_causation_ride_along_on_every_span() {
     let mut assembler = SpanAssembler::default();

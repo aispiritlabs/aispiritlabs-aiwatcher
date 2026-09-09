@@ -25,6 +25,12 @@ pub mod genai {
     pub const REQUEST_MODEL: &str = "gen_ai.request.model";
     pub const REQUEST_TEMPERATURE: &str = "gen_ai.request.temperature";
     pub const REQUEST_MAX_TOKENS: &str = "gen_ai.request.max_tokens";
+    pub const REQUEST_TOP_P: &str = "gen_ai.request.top_p";
+    pub const REQUEST_TOP_K: &str = "gen_ai.request.top_k";
+    pub const REQUEST_SEED: &str = "gen_ai.request.seed";
+    pub const REQUEST_STOP_SEQUENCES: &str = "gen_ai.request.stop_sequences";
+    pub const REQUEST_FREQUENCY_PENALTY: &str = "gen_ai.request.frequency_penalty";
+    pub const REQUEST_PRESENCE_PENALTY: &str = "gen_ai.request.presence_penalty";
     pub const RESPONSE_MODEL: &str = "gen_ai.response.model";
     pub const RESPONSE_ID: &str = "gen_ai.response.id";
     pub const RESPONSE_FINISH_REASONS: &str = "gen_ai.response.finish_reasons";
@@ -122,6 +128,16 @@ pub mod aiwatcher {
         pub const TOP_K: &str = "aiwatcher.step.top_k";
         pub const CANDIDATE_COUNT: &str = "aiwatcher.step.candidate_count";
         pub const SCORE: &str = "aiwatcher.step.score";
+    }
+
+    /// Which registered prompt a call ran on. Not `gen_ai.*`: there is no
+    /// convention for it, and the thing being named is *this* registry's
+    /// content address rather than a provider's id.
+    ///
+    /// A reference, never the text — see `PromptRef`, ADR_0011 and ADR_0021.
+    pub mod prompt {
+        pub const NAME: &str = "aiwatcher.prompt.name";
+        pub const VERSION_ID: &str = "aiwatcher.prompt.version_id";
     }
 
     pub mod processor {

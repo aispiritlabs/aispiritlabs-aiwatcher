@@ -48,8 +48,8 @@ pub struct ScheduledDefinition {
     pub updated_at: OffsetDateTime,
     /// When the *current cadence* began to apply.
     ///
-    /// Review R7: without this every schedule was handed the whole interval a
-    /// checkpoint had accumulated, so one written while the worker was down for
+    /// Without it every schedule is handed the whole interval a checkpoint has
+    /// accumulated, so one written while the worker was down for
     /// three days ran three days of slots the moment it came back — and
     /// changing an hour during an outage re-ran the past under the new rule.
     ///
@@ -73,11 +73,11 @@ pub struct ScheduledDefinition {
 
 /// A schedule's firings live in the workflow store, not here.
 ///
-/// They were a field on the struct above until review R3. The tick read every
-/// schedule, did its work and wrote the whole object back, so an edit or a
-/// DELETE that landed in between was overwritten by a snapshot taken before
-/// it — a deleted schedule came back enabled, and a `get`-before-`put` does
-/// not close that, because the object store offers no compare-and-set.
+/// They were a field on the struct above. The tick read every schedule, did
+/// its work and wrote the whole object back, so an edit or a DELETE that
+/// landed in between was overwritten by a snapshot taken before it — a deleted
+/// schedule came back enabled, and a `get`-before-`put` does not close that,
+/// because the object store offers no compare-and-set.
 ///
 /// Configuration and slot outcomes have different writers and different
 /// lifetimes, so they now live in different places: this object is written
@@ -165,8 +165,8 @@ impl ScheduledDefinition {
 
 /// What the tick may do with schedules: read them.
 ///
-/// **Review R3, enforced by the signature rather than by remembering.** The
-/// loop used to hold a whole [`ScheduleStore`], and it wrote back to it — the
+/// **Enforced by the signature rather than by remembering.** The loop used to
+/// hold a whole [`ScheduleStore`], and it wrote back to it — the
 /// snapshot it had taken before doing its work, which overwrote any edit or
 /// DELETE that landed in between. A deleted schedule came back enabled, and no
 /// amount of re-reading before the write closes that, because an object store

@@ -335,8 +335,7 @@ export function followsTheRun(
  * The mapping is the **server's** — `GET /executions/{id}/blocks`, from the
  * pinned plan — and never worked out here: three source and transform boxes
  * fold into one Flow query, and a browser deciding which is which would decide
- * it from the draft on screen rather than from what the run compiled
- * (section 19).
+ * it from the draft on screen rather than from what the run compiled.
  *
  * What this does is presentation and only presentation: a state type becomes
  * one of four ways a box can look. It decides nothing about the run.

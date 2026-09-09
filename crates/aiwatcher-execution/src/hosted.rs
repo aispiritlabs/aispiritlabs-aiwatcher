@@ -172,8 +172,8 @@ pub struct HostedAppend {
     /// start it was answered with.
     pub expected_version: u64,
     /// The caller's `Idempotency-Key`, scoped to this execution before it
-    /// becomes an id — a key that named less than what it identifies is
-    /// section 43.10, and it bites here under different names.
+    /// becomes an id. A key naming less than what it identifies collides with
+    /// a different intention, and it bites here under several names.
     pub idempotency_key: String,
     /// Which decider is appending.
     ///

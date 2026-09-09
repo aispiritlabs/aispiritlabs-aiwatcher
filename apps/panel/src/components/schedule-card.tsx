@@ -96,8 +96,7 @@ export function ScheduleCard({ name, saved }: { name?: string; saved: boolean })
     // A pipeline with no schedule is a 404 and is not a failure — it is the
     // ordinary state of most of them. Anything else is, and used to arrive
     // here as `null` too: a 501 from an instance with no workflow store read
-    // as "no schedule", loaded an empty form over it, and offered Save
-    // (review R6).
+    // as "no schedule", loaded an empty form over it, and offered Save.
     queryFn: async () =>
       answerOrNone(
         await getSchedule({ path: { name: name ?? '' } }),
@@ -374,8 +373,7 @@ export function ScheduleCard({ name, saved }: { name?: string; saved: boolean })
  *
  * Read from `firings`, which the server answers from the workflow store, and
  * no longer from a field on the schedule itself — the tick used to write that
- * field back and could undo an edit or resurrect a deleted schedule with it
- * (review R3).
+ * field back and could undo an edit or resurrect a deleted schedule with it.
  */
 function LastFiringLine({ last }: { last: SlotRecord }) {
   const when = new Date(last.slot).toLocaleString();

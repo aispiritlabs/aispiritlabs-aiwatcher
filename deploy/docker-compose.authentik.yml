@@ -4,7 +4,7 @@
 #   just run-sso           the server as a relying party against it
 #
 # Separate from docker-compose.yml on purpose. That file is the observability
-# stack — the Collector, VictoriaTraces, VictoriaMetrics, Grafana — and every
+# stack — the Collector, VictoriaTraces, VictoriaMetrics, Perses — and every
 # service in it is one aiwatcher talks to about data. This is four containers,
 # two of them databases, for a thing aiwatcher talks to about people, and
 # nobody working on span assembly should have to run a PostgreSQL to do it.

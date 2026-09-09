@@ -107,7 +107,7 @@ export function Stat({
  * A copyable id.
  *
  * Trace and correlation ids are the whole point of this system, and the thing
- * people do with them is paste them somewhere else — into Grafana, into a
+ * people do with them is paste them somewhere else — into Perses, into a
  * ticket. Showing a truncated id that cannot be copied in full would make that
  * the one annoying step.
  */

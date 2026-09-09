@@ -187,6 +187,57 @@ impl<'de> Deserialize<'de> for PromptVersionId {
     }
 }
 
+/// The prompt version a run says it used, as an `llm.*` event carries it.
+///
+/// The registry exists so that the version a run used stays readable after
+/// that run has been evicted (ADR_0011) — and until this, nothing on the log
+/// said *which* version. A trace could name a model, a temperature and a token
+/// count, and the one thing that decides what the model was actually asked was
+/// the thing you had to go and find by hand.
+///
+/// Both halves are needed and neither is enough. The id is a content address,
+/// so it identifies the text; the registry is keyed by name, so it is the name
+/// that resolves. A reference with only an id is kept and shown, because a
+/// digest still tells two runs apart — it simply cannot be opened.
+///
+/// This is a *reference*, never the text. Prompt content stays out of the log
+/// deliberately: see ADR_0021 and the Collector's redaction.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PromptRef {
+    /// Absent when the producer sent an id and no name. Then the reference
+    /// identifies, and does not resolve.
+    pub name: Option<PromptName>,
+    pub version_id: PromptVersionId,
+}
+
+impl PromptRef {
+    /// The `data` keys an `llm.*` event carries a reference in.
+    ///
+    /// Written once here rather than at each reader, for the reason the
+    /// attribute names are: two readers spelling one field differently is a
+    /// field that works in the waterfall and not in the feed.
+    pub const NAME_KEY: &'static str = "prompt_name";
+    pub const VERSION_KEY: &'static str = "prompt_version";
+
+    /// Read a reference off an event payload, or `None` when there is none.
+    ///
+    /// Total on purpose. A malformed version id is *absence*, not a rejection:
+    /// the log accepts what a producer sends, and refusing an event over a
+    /// typo in an optional field would lose the run it was describing.
+    #[must_use]
+    pub fn from_data(data: &serde_json::Value) -> Option<Self> {
+        let version_id = data
+            .get(Self::VERSION_KEY)
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| PromptVersionId::parse(value).ok())?;
+        let name = data
+            .get(Self::NAME_KEY)
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| PromptName::parse(value).ok());
+        Some(Self { name, version_id })
+    }
+}
+
 /// Where a version came from.
 ///
 /// The distinction the panel needs to answer "did a person write this, or did
