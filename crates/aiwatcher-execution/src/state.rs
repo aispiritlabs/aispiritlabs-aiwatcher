@@ -18,6 +18,7 @@
 use std::collections::BTreeMap;
 
 use aiwatcher_core::ArtifactRef;
+use aiwatcher_core::human_input::OnTimeout;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::OffsetDateTime;
@@ -335,6 +336,49 @@ pub struct InputRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(with = "time::serde::rfc3339::option")]
     pub deadline: Option<OffsetDateTime>,
+    /// What happens to this step if nobody answers in time.
+    ///
+    /// On the question rather than only on the plan, because a question has two
+    /// authors and only one of them is the plan. A `HumanInput` step's policy is
+    /// [`HumanInputSpec::on_timeout`](crate::plan::HumanInputSpec::on_timeout)
+    /// and is copied here when the step is scheduled; a running attempt that
+    /// stopped to ask supplies its own, and the plan that pinned its code has
+    /// nothing to say about a question it did not author.
+    ///
+    /// `None` is a question written before this field existed. Those are all
+    /// `HumanInput` steps, so the plan is read for them instead — the fallback
+    /// exists so a replay of an old stream reaches the policy it was decided
+    /// under rather than this field's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_timeout: Option<OnTimeout>,
+}
+
+/// One answer somebody gave a step, and which attempt asked for it.
+///
+/// Kept on the *step* rather than only on the attempt that asked, because the
+/// answer's reader is the attempt that comes *after*. A parked attempt stays
+/// immutable and the answer schedules attempt `n+1`, which re-runs the work
+/// from the beginning — so the question it asks first is the one already
+/// answered here, and without this it would ask it again and park again.
+///
+/// A list rather than one, because a task may ask twice. Attempt 1 asks, the
+/// answer schedules attempt 2, which replays to the first question, reads this
+/// answer instead of parking, goes on and asks a *second*. Attempt 3 then needs
+/// both: given only the last it would park on the first question for ever. They
+/// are consumed in the order they were given, which is the same order a replay
+/// asks them in.
+///
+/// Each `response` is bounded — the answer route takes a control value, not
+/// rows — and the list is as long as the number of questions the task asks.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, ToSchema)]
+pub struct InputAnswer {
+    /// The attempt that asked. Not the attempt that reads it, which is a later
+    /// one — this says whose question was answered.
+    pub attempt: u32,
+    /// From the session that answered, never from a request body.
+    pub answered_by: String,
+    #[schema(value_type = Value)]
+    pub response: Value,
 }
 
 /// One physical attempt to perform a step. Immutable once terminal.
@@ -369,6 +413,12 @@ pub struct StepState {
     pub outputs: Vec<ArtifactRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub awaiting: Option<InputRequest>,
+    /// Every answer this step has been given, oldest first.
+    ///
+    /// What a resumed attempt reads. See [`InputAnswer`] for why it is a list
+    /// and why it lives on the step rather than on the attempt that asked.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub answers: Vec<InputAnswer>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_key: Option<String>,
 }
@@ -384,6 +434,7 @@ impl StepState {
             attempts: Vec::new(),
             outputs: Vec::new(),
             awaiting: None,
+            answers: Vec::new(),
             cache_key: None,
         }
     }

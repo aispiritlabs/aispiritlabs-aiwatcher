@@ -228,7 +228,13 @@ export function WorkflowGraph({
   // depending on them would recompute — and therefore re-place — the graph on
   // every status change, which is the reshuffle this keying exists to prevent.
   const positions = React.useMemo(
-    () => new Map(layoutGraph(nodesRef.current, edgesRef.current).map((n) => [n.id, n.position])),
+    () =>
+      new Map(
+        layoutGraph(
+          nodesRef.current.map((node) => node.node_id),
+          edgesRef.current,
+        ).map((n) => [n.id, n.position]),
+      ),
     [shape, edgeShape],
   );
 

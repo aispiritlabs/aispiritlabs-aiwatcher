@@ -1,7 +1,16 @@
 import * as React from 'react';
 import { createFileRoute } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Download, Play, Save, ServerCog, ShieldCheck, Sparkles, Upload } from 'lucide-react';
+import {
+  Download,
+  LayoutGrid,
+  Play,
+  Save,
+  ServerCog,
+  ShieldCheck,
+  Sparkles,
+  Upload,
+} from 'lucide-react';
 import { z } from 'zod';
 
 import {
@@ -21,6 +30,8 @@ import { ManagedRunCard, useManagedBlocks, useManagedRun } from '@/components/ma
 import { ScheduleCard } from '@/components/schedule-card';
 import { FlowResultView } from '@/components/flow-preview';
 import { PipelineNotebook } from '@/components/pipeline-notebook';
+import { PhaseStrip } from '@/components/phase-strip';
+
 import { PipelineCanvas } from '@/components/pipeline-canvas';
 import { DEFAULT_WINDOW_SECONDS, TimeRange, windowParam } from '@/components/time-range';
 import { Badge, Button, Card, EmptyState, Spinner } from '@/components/ui/primitives';
@@ -40,6 +51,8 @@ import {
   type PipelineOutcomes,
   type PipelineResult,
 } from '@/lib/pipeline';
+import { phasesOf, type PhaseId } from '@/lib/phases';
+import { layoutGraph } from '@/lib/workflow-layout';
 
 /**
  * A curation, assembled out of blocks and run one engine at a time.
@@ -70,6 +83,14 @@ const searchSchema = z.object({
   // URL with the rest of the selection: a link to a traced view is the whole
   // reason to trace one, and it is meaningless without the `block` beside it.
   reach: z.enum(['upstream', 'downstream', 'both']).optional(),
+  // The stretch of the chain being isolated. Derived from the blocks, so it
+  // is never saved — but it is in the URL, because "look at the ML half of
+  // this" is a thing somebody sends to somebody else.
+  phase: z.enum(['ingest', 'engineering', 'ml', 'gate', 'output']).optional(),
+  // Phases drawn as one box. A comma-joined list, in the URL with the rest of
+  // the view: "here it is with the six transform steps folded away" is the
+  // form of this canvas most worth sending to somebody.
+  fold: z.string().optional(),
   view: z.enum(['canvas', 'notebook']).optional(),
   window: z.number().int().nonnegative().optional(),
   // The managed run this page is following. In the URL rather than in state
@@ -202,6 +223,62 @@ function PipelinePage() {
 
   const chain = React.useMemo(() => orderOf(draft.blocks, draft.edges), [draft]);
   const selected = draft.blocks.find((block) => block.id === search.block);
+  // Derived every render rather than held: a phase is a fact about the blocks,
+  // and a copy of it in state is a copy that goes stale on the next edit.
+  const phases = React.useMemo(
+    () => phasesOf(draft.blocks, draft.edges),
+    [draft.blocks, draft.edges],
+  );
+
+  /*
+   * The same draft with the blocks laid out along the chain.
+   *
+   * Positions are authored — they ride in the definition revision — so this is
+   * an *edit*, not a view setting: it lands in the draft and is only kept if
+   * somebody saves. That is also why it is a button rather than something the
+   * canvas does on load; a layout that rearranged itself would throw away an
+   * arrangement somebody made on purpose.
+   *
+   * `layoutGraph` is the workflow graph's own layering, which puts a chain on
+   * one line and stacks siblings. A ten-block chain therefore stops wrapping
+   * into two rows joined by a diagonal across the canvas.
+   */
+  const [fitSignal, setFitSignal] = React.useState(0);
+
+  const collapsed = React.useMemo(
+    () => new Set((search.fold ?? '').split(',').filter(Boolean) as PhaseId[]),
+    [search.fold],
+  );
+  const toggleCollapsed = React.useCallback(
+    (phase: PhaseId) => {
+      const next = new Set(collapsed);
+      if (!next.delete(phase)) next.add(phase);
+      void navigate({
+        search: (previous) => ({
+          ...previous,
+          fold: next.size > 0 ? [...next].join(',') : undefined,
+        }),
+        replace: true,
+      });
+    },
+    [collapsed, navigate],
+  );
+
+  const tidied = React.useMemo(() => {
+    const placed = new Map(
+      layoutGraph(
+        draft.blocks.map((block) => block.id),
+        draft.edges,
+      ).map((node) => [node.id, node.position]),
+    );
+    return {
+      ...draft,
+      blocks: draft.blocks.map((block) => ({
+        ...block,
+        position: placed.get(block.id) ?? block.position,
+      })),
+    };
+  }, [draft]);
   const view = chain?.find((block) => block.spec.kind === 'view');
   const publishTo = view?.spec.kind === 'view' ? view.spec.dataset : undefined;
 
@@ -696,51 +773,83 @@ function PipelinePage() {
           hint="Add a source from the public solutions library, import a flow, or open a saved pipeline."
         />
       ) : notebookMode ? null : (
-        <PipelineCanvas
-          blocks={draft.blocks}
-          edges={draft.edges}
-          outcomes={canvasOutcomes}
-          selected={search.block}
-          reach={search.reach}
-          onReach={(mode) =>
-            void navigate({ search: (previous) => ({ ...previous, reach: mode }), replace: true })
-          }
-          onSelect={(block) => {
-            if (!locked)
-              void navigate({ search: (previous) => ({ ...previous, block }), replace: true });
-          }}
-          onMove={(id, position) =>
-            setDraft((previous) => ({
-              ...previous,
-              blocks: previous.blocks.map((block) =>
-                block.id === id ? { ...block, position } : block,
-              ),
-            }))
-          }
-          onConnect={(edge) =>
-            setDraft((previous) => ({
-              ...previous,
-              // A chain has one edge out of a block and one into it, so
-              // connecting replaces rather than adds. Not a rule — the registry
-              // owns those — but the editing gesture people expect.
-              edges: [
-                ...previous.edges.filter(
-                  (candidate) => candidate.from !== edge.from && candidate.to !== edge.to,
+        <>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <PhaseStrip
+              phases={phases}
+              collapsed={collapsed}
+              onToggleCollapsed={toggleCollapsed}
+              selected={search.phase}
+              onSelect={(phase) =>
+                void navigate({
+                  search: (previous) => ({ ...previous, phase }),
+                  replace: true,
+                })
+              }
+            />
+            <Button
+              variant="outline"
+              disabled={locked}
+              title="Lay the blocks out along the chain. This edits positions, so it is only kept if you save."
+              onClick={() => {
+                setDraft(tidied);
+                setFitSignal((previous) => previous + 1);
+              }}
+            >
+              <LayoutGrid className="h-3.5 w-3.5" />
+              Tidy layout
+            </Button>
+          </div>
+          <PipelineCanvas
+            fitSignal={fitSignal}
+            collapsed={collapsed}
+            onExpand={toggleCollapsed}
+            blocks={draft.blocks}
+            edges={draft.edges}
+            outcomes={canvasOutcomes}
+            selected={search.block}
+            phase={search.phase}
+            reach={search.reach}
+            onReach={(mode) =>
+              void navigate({ search: (previous) => ({ ...previous, reach: mode }), replace: true })
+            }
+            onSelect={(block) => {
+              if (!locked)
+                void navigate({ search: (previous) => ({ ...previous, block }), replace: true });
+            }}
+            onMove={(id, position) =>
+              setDraft((previous) => ({
+                ...previous,
+                blocks: previous.blocks.map((block) =>
+                  block.id === id ? { ...block, position } : block,
                 ),
-                edge,
-              ],
-            }))
-          }
-          onDisconnect={(edge) =>
-            setDraft((previous) => ({
-              ...previous,
-              edges: previous.edges.filter(
-                (candidate) => candidate.from !== edge.from || candidate.to !== edge.to,
-              ),
-            }))
-          }
-          onDelete={(id) => setDraft((previous) => withoutBlock(previous, id))}
-        />
+              }))
+            }
+            onConnect={(edge) =>
+              setDraft((previous) => ({
+                ...previous,
+                // A chain has one edge out of a block and one into it, so
+                // connecting replaces rather than adds. Not a rule — the registry
+                // owns those — but the editing gesture people expect.
+                edges: [
+                  ...previous.edges.filter(
+                    (candidate) => candidate.from !== edge.from && candidate.to !== edge.to,
+                  ),
+                  edge,
+                ],
+              }))
+            }
+            onDisconnect={(edge) =>
+              setDraft((previous) => ({
+                ...previous,
+                edges: previous.edges.filter(
+                  (candidate) => candidate.from !== edge.from || candidate.to !== edge.to,
+                ),
+              }))
+            }
+            onDelete={(id) => setDraft((previous) => withoutBlock(previous, id))}
+          />
+        </>
       )}
 
       <div className="flex flex-wrap items-center gap-2">

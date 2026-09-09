@@ -54,6 +54,17 @@ pub struct ActivityCommand {
     pub inputs: Vec<ArtifactRef>,
     /// Values bound when the execution was requested.
     pub parameters: BTreeMap<String, Value>,
+    /// Every answer this step has already been given, oldest first.
+    ///
+    /// Empty for almost every attempt, and the exception is what it is here
+    /// for: an attempt scheduled because somebody answered the question the
+    /// *previous* one stopped to ask. That attempt re-runs the work from the
+    /// beginning, so it reaches the same question again and has to read the
+    /// answer rather than park a second time.
+    ///
+    /// Consumed in order. See [`crate::state::InputAnswer`] for why there can
+    /// be more than one.
+    pub answers: Vec<crate::state::InputAnswer>,
 }
 
 impl ActivityCommand {
@@ -385,6 +396,7 @@ mod tests {
             },
             inputs: Vec::new(),
             parameters: BTreeMap::new(),
+            answers: Vec::new(),
         }
     }
 

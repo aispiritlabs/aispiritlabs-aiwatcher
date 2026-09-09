@@ -53,6 +53,7 @@ __all__ = [
     "AiwatcherEventStore",
     "AppendResult",
     "ConcurrencyConflictError",
+    "JoinTimers",
     "MessageCodec",
     "MessageRecord",
     "ReadStreamResult",
@@ -175,6 +176,62 @@ class SagaTimers:
             # time to a saga that has already moved on.
             return TimerRequest(timer_id=timeout_id, cancel=True)
         return None
+
+
+class JoinTimers:
+    """A graph fan-in's deadline, recognised by its own event types.
+
+    The second policy, and it is here rather than in the graph package for the
+    reason the first one is: the vocabulary is the *worker's*. A join writes
+    `graph.join_deadline_scheduled` when its fan-in is reserved and
+    `graph.summary_completed` when the summarizer returns, and both are
+    `agentic_graph.join`'s words — restated here as strings, because this
+    package imports nothing from the agent's.
+
+    What it buys is the thing a join could not do for itself: a node that never
+    completes leaves the fan-in waiting for ever, and noticing that needs
+    something that wakes up and looks. The engine holds the scheduling message
+    and hands it back at the time, which is the wake-up.
+
+    The cancel is on *completion* rather than on the claim. A claim is somebody
+    saying they are running the summarizer, and a worker that says that and then
+    dies is precisely the case the deadline is for; only a summary that finished
+    makes the deadline moot.
+    """
+
+    #: What a join appends when its fan-in is reserved.
+    SCHEDULED = "graph.join_deadline_scheduled"
+    #: What it appends when the summarizer returned.
+    COMPLETED = "graph.summary_completed"
+
+    def timer_for(self, record: MessageRecord) -> TimerRequest | None:
+        if not isinstance(record.data, dict):
+            return None
+        timer_id = _join_timer_id(record.data)
+        if timer_id is None:
+            return None
+        if record.type == self.SCHEDULED:
+            due_at = record.data.get("due_at")
+            if not isinstance(due_at, (int, float)) or isinstance(due_at, bool):
+                return None
+            return TimerRequest(timer_id=timer_id, due_at=float(due_at))
+        if record.type == self.COMPLETED:
+            return TimerRequest(timer_id=timer_id, cancel=True)
+        return None
+
+
+def _join_timer_id(data: dict[str, Any]) -> str | None:
+    """The turn and the summarizer, which is what the deadline is about.
+
+    Derived rather than generated, so the append that schedules it and the one
+    that withdraws it name the same row without either having to remember an id
+    the other minted.
+    """
+    turn_id = data.get("turn_id")
+    summarizer_node_id = data.get("summarizer_node_id")
+    if not isinstance(turn_id, str) or not isinstance(summarizer_node_id, str):
+        return None
+    return f"join:{turn_id}:{summarizer_node_id}"
 
 
 @dataclass(frozen=True, slots=True)

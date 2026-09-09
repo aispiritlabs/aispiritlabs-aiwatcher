@@ -38,6 +38,7 @@ use serde_json::Value;
 use utoipa::{OpenApi, ToSchema};
 
 use aiwatcher_core::ArtifactRef;
+use aiwatcher_core::human_input::OnTimeout;
 use aiwatcher_core::ports::AttemptArtifacts;
 use aiwatcher_execution::claim::{AttemptKey, ClaimFilter};
 use aiwatcher_execution::message::WorkflowEvent;
@@ -162,6 +163,15 @@ pub struct WorkAssignment {
     /// instead: a task with a side effect must be idempotent by `context_id`,
     /// and this is when that matters.
     pub is_retake: bool,
+    /// Every answer this step has already been given, oldest first.
+    ///
+    /// Empty for almost every assignment. It is not empty when this attempt
+    /// exists *because* somebody answered the question the previous one stopped
+    /// to ask: the work re-runs from the beginning, so it reaches that question
+    /// again and reads the answer instead of parking a second time.
+    ///
+    /// Consumed in order, which is the order a replay asks them in.
+    pub answers: Vec<aiwatcher_execution::state::InputAnswer>,
 }
 
 /// A worker saying which attempt it is talking about.
@@ -202,10 +212,64 @@ pub enum WorkReport {
         #[serde(default)]
         diagnostics: Option<String>,
     },
+    /// It stopped in the middle of its own work to ask somebody something.
+    ///
+    /// The third shape, and the whole of the protocol change. A `HumanInput`
+    /// step is the question and nothing else; this one was already running — a
+    /// tool call a capability hook wants approved — so the attempt parks rather
+    /// than ends: the lease is released, the row stays, and the answer
+    /// schedules attempt *n+1* with the response in its inputs.
+    ///
+    /// It is a **report** and not a decision. A worker that worked out for
+    /// itself what its own park meant would be the drift the seam exists to
+    /// prevent: this goes through [`Reactor::settle`] like the other two, and
+    /// everything after it — the lease re-check, the fact, the timer row — is
+    /// the engine's.
+    Parked {
+        /// What is being asked, in the words the person reads.
+        prompt: String,
+        /// The role that may answer. A gate only ever raises the editor floor
+        /// the answer route already holds.
+        #[serde(default = "answerable")]
+        role: String,
+        /// Answers are buttons. Empty means free-form.
+        #[serde(default)]
+        choices: Vec<String>,
+        /// How long the run waits before `on_timeout` decides for it. `None`
+        /// waits as long as it takes, which is the default.
+        #[serde(default)]
+        timeout_seconds: Option<u64>,
+        /// What happens if nobody answers in time. Refused without a deadline,
+        /// because a policy with no clock behind it is a rule nothing fires.
+        #[serde(default)]
+        on_timeout: OnTimeout,
+        #[serde(default)]
+        diagnostics: Option<String>,
+    },
+}
+
+fn answerable() -> String {
+    aiwatcher_core::human_input::ANSWERABLE_ROLE.to_owned()
 }
 
 const fn yes() -> bool {
     true
+}
+
+/// Which of the three things a report turned out to be.
+///
+/// Named rather than inferred from [`Settled::succeeded`], which answers a
+/// narrower question and answers it `false` for a failure and a park alike. A
+/// client that checked only the boolean would agree with the server about a
+/// park by coincidence rather than by name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Settlement {
+    Completed,
+    Failed,
+    /// The attempt is waiting for an answer. Not an ending: the row is still
+    /// there, and this worker no longer holds it.
+    Parked,
 }
 
 /// What the decider did with a report.
@@ -213,7 +277,27 @@ const fn yes() -> bool {
 pub struct Settled {
     pub step_id: String,
     pub attempt: u32,
+    /// Whether the attempt finished its work successfully.
+    ///
+    /// Kept beside [`Self::outcome`], which subsumes it, because an SDK rolls
+    /// separately from this server and every released one reads this field —
+    /// removing it in the release that adds the wider answer would break a
+    /// worker whose only fault was being the version it was pinned at. The same
+    /// staged-removal discipline the schema keeps. `outcome` is the one a new
+    /// client asks; this is derived from it and never set independently.
     pub succeeded: bool,
+    pub outcome: Settlement,
+}
+
+impl Settled {
+    fn of(key: &AttemptKey, outcome: Settlement) -> Self {
+        Self {
+            step_id: key.step_id.clone(),
+            attempt: key.attempt,
+            succeeded: outcome == Settlement::Completed,
+            outcome,
+        }
+    }
 }
 
 /// Rows, on their way to or from a worker.
@@ -439,6 +523,7 @@ fn assignment(claimed: &Claimed) -> WorkAssignment {
         parameters: claimed.command.parameters.clone(),
         inputs: claimed.command.inputs.clone(),
         is_retake: claimed.row.previous_owner.is_some(),
+        answers: claimed.command.answers.clone(),
     }
 }
 
@@ -526,6 +611,11 @@ async fn report(
     Json(body): Json<WorkerReport>,
 ) -> ApiResult<Json<Settled>> {
     let key = key_of(&execution_id, &step_id, attempt);
+    // One instant for the whole settlement, rather than one per call. A park's
+    // deadline is resolved from it and the lease re-check is made against it,
+    // so a question whose clock started before the lease was checked is not a
+    // thing this route can produce.
+    let now = time::OffsetDateTime::now_utc();
     if let Some(receipt) = recorded_result(&state, &caller, &key, &body.report).await? {
         return Ok(Json(receipt));
     }
@@ -603,10 +693,64 @@ async fn report(
             }
             Err(StepError::new(class, message))
         }
+        WorkReport::Parked {
+            prompt,
+            role,
+            choices,
+            timeout_seconds,
+            on_timeout,
+            diagnostics,
+        } => {
+            // The third authored surface for one question, so it is refused by
+            // the one rule set rather than by a third: `aiwatcher_core::
+            // human_input` owns what a valid question is, and a canvas block, a
+            // workflow step and this all supply only the word each calls the
+            // thing being refused. Every problem at once, as a 422 — somebody
+            // fixing one per round trip learns to press the button again
+            // instead of reading it.
+            let problems = aiwatcher_core::human_input::question_problems(
+                &format!("the question {step_id} stopped to ask"),
+                &prompt,
+                &role,
+                &choices,
+                timeout_seconds,
+                &on_timeout,
+            );
+            if !problems.is_empty() {
+                return Err(ApiError::QuestionRefused { problems });
+            }
+            if let Some(diagnostics) = diagnostics {
+                tracing::debug!(attempt = %key, diagnostics, "a worker's attempt stopped to ask");
+            }
+            Ok(ActivityResult {
+                outputs: Vec::new(),
+                result: None,
+                diagnostics: None,
+                // Resolved here, from the same instant the settlement runs
+                // under, because what goes on the log is the *moment* rather
+                // than the duration — `decide` gains no vocabulary for a timer
+                // and derives its row from this fact.
+                awaiting: Some(aiwatcher_execution::state::InputRequest {
+                    prompt,
+                    role,
+                    choices,
+                    deadline: timeout_seconds
+                        .map(|seconds| now + time::Duration::seconds(seconds as i64)),
+                    // On the question, because this question has no plan step
+                    // to read a policy from: the plan pinned this step's *code*
+                    // and says nothing about what a worker chose to ask.
+                    on_timeout: Some(on_timeout),
+                }),
+                // Nothing ran to completion, so there is nothing to remember.
+                // `settle` skips the catalog for a parked result anyway; saying
+                // it here as well would be a second answer to one question.
+                cacheable: false,
+            })
+        }
     };
 
     let performed = reactor
-        .settle(claimed, outcome, time::OffsetDateTime::now_utc())
+        .settle(claimed, outcome, now)
         .await
         .map_err(ApiError::Execution)?;
 
@@ -671,7 +815,15 @@ async fn recorded_result(
             held: caller.identity().role(),
         });
     }
+    // A park is asked of the projection instead, and it has to be: `settles`
+    // is about a *terminal* outcome and a question is not one, so a parked
+    // attempt records no outcome for `recorded_outcome` to find. The projection
+    // is written in the same transaction as the decision that parked it, so it
+    // is as authoritative and one indexed read rather than a scan.
     let expected = match report {
+        WorkReport::Parked { prompt, .. } => {
+            return parked_already(state, key, prompt).await;
+        }
         WorkReport::Completed {
             outputs, result, ..
         } => WorkflowEvent::StepCompleted {
@@ -702,11 +854,54 @@ async fn recorded_result(
     if event != expected {
         return Err(ApiError::WorkerReportConflict(key.idempotency_key()));
     }
-    Ok(Some(Settled {
-        step_id: key.step_id.clone(),
-        attempt: key.attempt,
-        succeeded: matches!(event, WorkflowEvent::StepCompleted { .. }),
-    }))
+    Ok(Some(Settled::of(
+        key,
+        if matches!(event, WorkflowEvent::StepCompleted { .. }) {
+            Settlement::Completed
+        } else {
+            Settlement::Failed
+        },
+    )))
+}
+
+/// Whether this attempt is already parked on the question being reported.
+///
+/// The park's half of the idempotency the other two get from
+/// `recorded_outcome`. A redelivered park is ordinary: the first one released
+/// the lease, so `held` answers `None` for the retry and the 409 it would
+/// otherwise raise says the attempt was taken over when it was doing exactly
+/// what it was told to.
+///
+/// It compares the *prompt*, not the whole question. A worker that asked the
+/// same thing twice is a redelivery; one that asks something different on the
+/// same attempt is a conflict, and reporting that as an acknowledgement would
+/// leave the person answering a question nobody is listening for.
+async fn parked_already(
+    state: &AppState,
+    key: &AttemptKey,
+    prompt: &str,
+) -> ApiResult<Option<Settled>> {
+    let Some(run) = handler(state)?
+        .store()
+        .projection(&key.execution_id)
+        .await
+        .map_err(aiwatcher_execution::HandleError::from)
+        .map_err(ApiError::Execution)?
+    else {
+        return Ok(None);
+    };
+    let Some(asked) = run
+        .steps
+        .iter()
+        .find(|step| step.step_id == key.step_id && step.current_attempt == key.attempt)
+        .and_then(|step| step.awaiting.as_ref())
+    else {
+        return Ok(None);
+    };
+    if asked.prompt != prompt {
+        return Err(ApiError::WorkerReportConflict(key.idempotency_key()));
+    }
+    Ok(Some(Settled::of(key, Settlement::Parked)))
 }
 
 /// A report, with the worker that is making it.

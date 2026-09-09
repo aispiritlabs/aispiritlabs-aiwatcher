@@ -8,6 +8,7 @@ from urllib.parse import quote
 
 from aiwatcher_sdk.worker.contract import (
     ArtifactRef,
+    InputAnswer,
     JsonObject,
     artifact_ref,
     boolean,
@@ -36,6 +37,9 @@ class Assignment:
     parent_span_id: str = ""
     outputs: tuple[str, ...] = ()
     report_idempotent: bool = False
+    #: Answers previous attempts of this step asked for, oldest first. Not empty
+    #: when this attempt exists because somebody answered one of them.
+    answers: tuple[InputAnswer, ...] = ()
 
     @classmethod
     def from_dict(cls, value: object) -> Assignment:
@@ -72,6 +76,9 @@ class Assignment:
         names = tuple(string(name, "output name") for name in outputs)
         if len(set(names)) != len(names):
             raise ValueError("output names must be unique")
+        given = body.get("answers", [])
+        if not isinstance(given, list):
+            raise ValueError("answers must be an array")
         return cls(
             execution_id=string(body["execution_id"], "execution_id"),
             step_id=string(body["step_id"], "step_id"),
@@ -90,6 +97,7 @@ class Assignment:
             parent_span_id=string(body.get("parent_span_id", ""), "parent_span_id"),
             outputs=names,
             report_idempotent=boolean(body.get("report_idempotent", False), "report_idempotent"),
+            answers=tuple(InputAnswer.from_dict(answer) for answer in given),
         )
 
     @property

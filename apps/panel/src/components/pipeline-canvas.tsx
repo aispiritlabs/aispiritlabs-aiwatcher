@@ -7,6 +7,7 @@ import {
   Panel,
   Position,
   ReactFlow,
+  useReactFlow,
   type Connection,
   type Edge,
   type Node,
@@ -14,7 +15,16 @@ import {
   type NodeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { AlertCircle, Code2, Database, NotebookPen, ShieldCheck, Table2 } from 'lucide-react';
+import {
+  AlertCircle,
+  Code2,
+  Database,
+  Layers,
+  Maximize2,
+  NotebookPen,
+  ShieldCheck,
+  Table2,
+} from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 import type { BlockSpec, PipelineBlock, PipelineEdge } from '@/api/generated/types.gen';
@@ -26,9 +36,11 @@ import {
   type FlowRole,
   type FlowState,
 } from '@/components/flow-visuals';
-import type { BlockOutcome, PipelineOutcomes } from '@/lib/pipeline';
+import { describeOutcome, type BlockOutcome, type PipelineOutcomes } from '@/lib/pipeline';
+import { foldPhases, phaseOf, type CanvasItem, type Phase, type PhaseId } from '@/lib/phases';
 import { edgeInReach, nodeInReach, reachFrom, type ReachMode } from '@/lib/reach';
 import { formatCount } from '@/lib/utils';
+import { layoutGraph } from '@/lib/workflow-layout';
 
 /**
  * A curation as boxes and arrows: the thing that gets edited.
@@ -158,27 +170,120 @@ function BlockNode({ data }: NodeProps<Node<BlockData, 'block'>>) {
   );
 }
 
+type PhaseData = {
+  phase: Phase;
+  blocks: PipelineBlock[];
+  outcome: BlockOutcome;
+  away: boolean;
+};
+
 /**
- * The line under a block, from whichever of the two ran it.
+ * A phase, folded shut.
  *
- * The ad-hoc path counted rows and milliseconds; a managed run reports the word
- * the server used and nothing else, because a step's timings are the log's
- * answer rather than the workflow store's. So the counts are printed when they
- * exist and the note carries the rest — never `0 rows · 0 ms`, which would be a
- * measurement nobody took.
+ * It reports the worst thing inside it rather than a total, because that is
+ * the question somebody folding six steps away still needs answered: a box
+ * that says "6 blocks" over a failed step would be hiding the one thing worth
+ * seeing.
  */
-function describeOutcome(outcome: BlockOutcome): string {
-  if (outcome.status === 'failed') return outcome.message;
-  if (outcome.status === 'running') return outcome.note ?? 'running…';
-  if (outcome.status === 'idle') return outcome.note ?? 'not run';
-  const measured =
-    outcome.rows === undefined
-      ? undefined
-      : `${formatCount(outcome.rows)} rows · ${outcome.tookMs ?? 0} ms`;
-  return [measured, outcome.note].filter(Boolean).join(' · ') || 'done';
+function PhaseNode({ data }: NodeProps<Node<PhaseData, 'phase'>>) {
+  const { phase, blocks, outcome, away } = data;
+  return (
+    <FlowCard
+      role={PHASE_ROLE[phase.id]}
+      state={stateOf(outcome)}
+      away={away}
+      mark={Layers}
+      title={phase.label}
+      sublabel={`${formatCount(blocks.length)} blocks · folded`}
+      footer={
+        <>
+          <span className="truncate">{describeOutcome(outcome)}</span>
+          <Maximize2 className="ml-auto h-3 w-3 shrink-0" />
+        </>
+      }
+      className="cursor-pointer border-dashed"
+    >
+      <Handle
+        type="target"
+        position={Position.Left}
+        className="!h-2.5 !w-2.5 !border-border !bg-muted"
+      />
+      <Handle
+        type="source"
+        position={Position.Right}
+        className="!h-2.5 !w-2.5 !border-border !bg-muted"
+      />
+    </FlowCard>
+  );
 }
 
-const NODE_TYPES = { block: BlockNode };
+const PHASE_ROLE: Record<PhaseId, FlowRole> = {
+  ingest: 'data',
+  engineering: 'compute',
+  ml: 'runtime',
+  gate: 'gate',
+  output: 'publish',
+};
+
+/**
+ * What a folded phase reports: the worst state inside it.
+ *
+ * Failure outranks running outranks done, and idle is what is left. A box that
+ * averaged them, or counted them, would answer a question nobody asked while
+ * hiding the one they did.
+ */
+function worstOf(blocks: PipelineBlock[], outcomes: PipelineOutcomes): BlockOutcome {
+  const inside = blocks.map((block) => outcomes[block.id] ?? { status: 'idle' as const });
+  const failed = inside.find((outcome) => outcome.status === 'failed');
+  if (failed) return failed;
+  if (inside.some((outcome) => outcome.status === 'running')) {
+    return { status: 'running', note: 'a step is running' };
+  }
+  if (inside.length > 0 && inside.every((outcome) => outcome.status === 'done')) {
+    return { status: 'done', note: 'all done' };
+  }
+  return { status: 'idle', note: 'not run' };
+}
+
+/*
+ * `phase`, not `group`: React Flow ships a built-in node type called `group`
+ * and styles `.react-flow__node-group` with its own 150px width and padding,
+ * which painted a grey box behind and beside every folded phase. A custom type
+ * whose name collides with a built-in silently inherits that built-in's CSS.
+ */
+const NODE_TYPES = { block: BlockNode, phase: PhaseNode };
+
+/**
+ * Re-fit the view when something moved every block at once.
+ *
+ * `fitView` on `<ReactFlow>` only runs at mount, so a tidy that lays a
+ * ten-block chain along one line left most of it off the right-hand edge —
+ * the layout was right and the canvas looked broken. It has to be a child of
+ * `<ReactFlow>` because that is where the store lives, and it renders nothing.
+ */
+function FitOnSignal({ signal }: { signal: number }) {
+  const flow = useReactFlow();
+  React.useEffect(() => {
+    if (signal === 0) return;
+    // A frame later, or it fits the positions of the render that is being
+    // replaced: the layout was right and the view was framed on the old one.
+    const at = requestAnimationFrame(() => flow.fitView({ padding: 0.14, duration: 320 }));
+    return () => cancelAnimationFrame(at);
+  }, [signal, flow]);
+  return null;
+}
+
+function bothInPhase(blocks: PipelineBlock[], edge: PipelineEdge, phase: PhaseId): boolean {
+  const at = (id: string) => blocks.find((block) => block.id === id);
+  const from = at(edge.from);
+  const to = at(edge.to);
+  return (
+    from !== undefined &&
+    to !== undefined &&
+    phaseOf(from.spec) === phase &&
+    phaseOf(to.spec) === phase
+  );
+}
 
 export function PipelineCanvas({
   blocks,
@@ -187,6 +292,10 @@ export function PipelineCanvas({
   selected,
   reach,
   onReach,
+  phase,
+  collapsed,
+  onExpand,
+  fitSignal = 0,
   onSelect,
   onMove,
   onConnect,
@@ -199,6 +308,13 @@ export function PipelineCanvas({
   selected?: string;
   reach?: ReachMode;
   onReach: (mode: ReachMode | undefined) => void;
+  /** The stretch of the chain somebody is isolating from the phase strip. */
+  phase?: PhaseId | undefined;
+  /** Phases drawn as one box instead of their blocks. A view, never an edit. */
+  collapsed?: ReadonlySet<PhaseId>;
+  onExpand?: (phase: PhaseId) => void;
+  /** Bumped when every block has moved at once, so the view re-fits. */
+  fitSignal?: number;
   onSelect: (id: string) => void;
   onMove: (id: string, position: { x: number; y: number }) => void;
   onConnect: (edge: PipelineEdge) => void;
@@ -215,47 +331,117 @@ export function PipelineCanvas({
     [edges, selected, reach],
   );
 
-  const nodes: Node<BlockData, 'block'>[] = React.useMemo(
-    () =>
-      blocks.map((block) => ({
-        id: block.id,
-        type: 'block' as const,
-        // `x` and `y` are optional in the contract because they default in
-        // the registry; a block that has never been dragged sits at the origin.
-        position: { x: block.position?.x ?? 0, y: block.position?.y ?? 0 },
-        data: {
-          block,
-          outcome: outcomes[block.id] ?? { status: 'idle' },
-          active: block.id === selected,
-          away:
-            traced !== undefined && reach !== undefined && !nodeInReach(traced, reach, block.id),
-        },
-      })),
-    [blocks, outcomes, selected, traced, reach],
+  /*
+   * Two controls recede the same blocks, so they answer through one predicate.
+   * A phase is a *slice by kind* and a trace is a *walk along the edges*; with
+   * both on, a block has to survive both, which is the honest reading of
+   * having asked two questions at once.
+   */
+  const isAway = React.useCallback(
+    (block: PipelineBlock) => {
+      if (phase !== undefined && phaseOf(block.spec) !== phase) return true;
+      if (traced !== undefined && reach !== undefined && !nodeInReach(traced, reach, block.id)) {
+        return true;
+      }
+      return false;
+    },
+    [phase, traced, reach],
   );
 
+  const shut = collapsed ?? new Set<PhaseId>();
+  const folded = React.useMemo(() => foldPhases(blocks, edges, shut), [blocks, edges, shut]);
+
   /*
-   * An edge is drawn from the state of the block it *feeds*, which is the one
-   * fact it carries: rows arriving somewhere. React Flow's own `animated`
-   * marches a dash forever whatever is happening, so a chain that finished an
-   * hour ago and one running right now looked identical; these say which.
+   * Where the boxes sit while a phase is folded.
+   *
+   * Stored positions describe the *blocks*, and a folded phase is not one — so
+   * a box standing in for six steps would sit at the first of them and leave
+   * the gap the other five used to fill. While anything is folded this is a
+   * derived picture, so it is laid out like one, through the same `layoutGraph`
+   * the tidy button uses. Nothing is written: expand it again and the
+   * arrangement somebody made comes back untouched.
    */
+  const drawn = React.useMemo(() => {
+    if (shut.size === 0) return undefined;
+    return new Map(
+      layoutGraph(
+        folded.items.map((item) => item.id),
+        folded.edges,
+      ).map((node) => [node.id, node.position]),
+    );
+  }, [shut, folded]);
+
+  const nodes: Node[] = React.useMemo(
+    () =>
+      folded.items.map((item: CanvasItem) => {
+        if (item.kind === 'group') {
+          // The box takes the position of the first block in the run, so a
+          // fold changes what is drawn and never where anything sits.
+          const head = item.blocks[0];
+          return {
+            id: item.id,
+            type: 'phase' as const,
+            position: drawn?.get(item.id) ?? {
+              x: head?.position?.x ?? 0,
+              y: head?.position?.y ?? 0,
+            },
+            data: {
+              phase: item.phase,
+              blocks: item.blocks,
+              outcome: worstOf(item.blocks, outcomes),
+              away: phase !== undefined && item.phase.id !== phase,
+            } satisfies PhaseData,
+            // A box is a rendering of several blocks, not a block. Dragging it
+            // would have to mean moving all of them, and deleting it would
+            // have to mean deleting all of them — neither is what somebody
+            // folding a phase away is asking for.
+            draggable: false,
+            deletable: false,
+          };
+        }
+        return {
+          id: item.id,
+          type: 'block' as const,
+          // `x` and `y` are optional in the contract because they default in
+          // the registry; a block that has never been dragged sits at the origin.
+          position: drawn?.get(item.id) ?? {
+            x: item.block.position?.x ?? 0,
+            y: item.block.position?.y ?? 0,
+          },
+          // Folded is a reading view: a drag would write a position the
+          // derived layout immediately overrides, and the block would snap
+          // back. Expand to arrange.
+          draggable: drawn === undefined,
+          data: {
+            block: item.block,
+            outcome: outcomes[item.id] ?? { status: 'idle' },
+            active: item.id === selected,
+            away: isAway(item.block),
+          } satisfies BlockData,
+        };
+      }),
+    [folded, outcomes, selected, isAway, phase, drawn],
+  );
+
   const selectedBlock = blocks.find((block) => block.id === selected);
 
   const flowEdges: Edge[] = React.useMemo(
     () =>
-      edges.map((edge) => ({
+      folded.edges.map((edge) => ({
         id: `${edge.from}-${edge.to}`,
         source: edge.from,
         target: edge.to,
         className: flowEdgeClass(
           stateOf(outcomes[edge.to] ?? { status: 'idle' }),
-          traced !== undefined &&
-            reach !== undefined &&
-            !edgeInReach(traced, reach, edge.from, edge.to),
+          // An edge belongs to a phase only when both of its ends do — the
+          // arrow *into* a phase is the boundary, not part of the slice.
+          (phase !== undefined && !bothInPhase(blocks, edge, phase)) ||
+            (traced !== undefined &&
+              reach !== undefined &&
+              !edgeInReach(traced, reach, edge.from, edge.to)),
         ),
       })),
-    [edges, outcomes, traced, reach],
+    [blocks, folded, outcomes, traced, reach, phase],
   );
 
   /* Only the kinds actually on the canvas: a legend for boxes nobody drew is
@@ -278,9 +464,19 @@ export function PipelineCanvas({
           nodeTypes={NODE_TYPES}
           fitView
           proOptions={{ hideAttribution: true }}
-          onNodeClick={(_, node) => onSelect(node.id)}
-          onNodesChange={(changes: NodeChange<Node<BlockData, 'block'>>[]) => {
+          onNodeClick={(_, node) => {
+            if (node.type === 'phase') {
+              const phaseId = node.id.slice('phase:'.length) as PhaseId;
+              onExpand?.(phaseId);
+              return;
+            }
+            onSelect(node.id);
+          }}
+          onNodesChange={(changes: NodeChange[]) => {
             for (const change of changes) {
+              // A folded phase is not in the draft, so nothing it reports
+              // belongs there either.
+              if ('id' in change && change.id.startsWith('phase:')) continue;
               // Every position event, not only the last one: a block's position
               // is held in the page's state because it is part of what gets
               // saved, and dropping the intermediate ones makes a drag jump.
@@ -305,6 +501,7 @@ export function PipelineCanvas({
             }
           }}
         >
+          <FitOnSignal signal={fitSignal} />
           <Background
             variant={BackgroundVariant.Dots}
             gap={16}

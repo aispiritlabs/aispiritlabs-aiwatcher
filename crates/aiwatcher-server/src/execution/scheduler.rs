@@ -59,6 +59,7 @@ pub fn spawn(
     state: &AppState,
     schedules: Arc<ScheduleStore>,
     store: Arc<dyn WorkflowStore>,
+    metrics: Arc<dyn aiwatcher_core::ports::MetricSink>,
     shutdown: CancellationToken,
 ) -> JoinHandle<()> {
     let state = state.clone();
@@ -75,7 +76,9 @@ pub fn spawn(
                 }
                 () = tokio::time::sleep(TICK) => {}
             }
-            if let Err(error) = tick(&state, schedules.as_ref(), store.as_ref()).await {
+            if let Err(error) =
+                tick(&state, schedules.as_ref(), store.as_ref(), metrics.as_ref()).await
+            {
                 // The cursor did not move, so the next tick covers this
                 // interval as well. A store that is down costs latency and
                 // never a slot.
@@ -90,6 +93,7 @@ async fn tick(
     state: &AppState,
     schedules: &dyn ScheduleReader,
     store: &dyn WorkflowStore,
+    metrics: &dyn aiwatcher_core::ports::MetricSink,
 ) -> anyhow::Result<()> {
     let now = OffsetDateTime::now_utc();
     // A `Checkpoint` is a zero-padded position, so the cursor is a Unix second
@@ -106,23 +110,54 @@ async fn tick(
         .unwrap_or(now - FIRST_TICK_REACHES_BACK);
 
     let scheduled = schedules.all().await?;
-    for definition in &scheduled {
-        // `slots_due`, not `slots_between`: the interval is clipped to the
-        // schedule's own activation moment, so a schedule written while this
-        // worker was down does not run the days before somebody asked for it.
-        for slot in definition.slots_due(previous, now) {
-            // One slot that could not start does not stop the others: a
-            // definition that stopped compiling must not hold up every other
-            // schedule in the instance.
-            if let Err(error) = process(state, store, definition, slot, now).await {
-                tracing::warn!(
-                    definition = %definition.definition_name,
-                    slot = %slot,
-                    %error,
-                    "a scheduled slot could not be processed"
-                );
-            }
+    // Every slot this tick found, before any of them is started. How late one
+    // slot was and how many were due together are one reading: a single slot
+    // four minutes behind is a busy tick, and forty is an instance that has
+    // fallen behind, and the lateness alone cannot tell those apart.
+    let due: Vec<_> = scheduled
+        .iter()
+        .flat_map(|definition| {
+            // `slots_due`, not `slots_between`: the interval is clipped to the
+            // schedule's own activation moment, so a schedule written while
+            // this worker was down does not run the days before somebody asked
+            // for it.
+            definition
+                .slots_due(previous, now)
+                .into_iter()
+                .map(move |slot| (definition, slot))
+        })
+        .collect();
+    let backlog = due.len();
+
+    let mut measured = Vec::new();
+    for (definition, slot) in due {
+        measured.extend(super::measure::slot_samples(
+            &definition.definition_name,
+            definition.definition_kind.as_str(),
+            slot,
+            now,
+            backlog,
+        ));
+        // One slot that could not start does not stop the others: a definition
+        // that stopped compiling must not hold up every other schedule in the
+        // instance.
+        if let Err(error) = process(state, store, definition, slot, now).await {
+            tracing::warn!(
+                definition = %definition.definition_name,
+                slot = %slot,
+                %error,
+                "a scheduled slot could not be processed"
+            );
         }
+    }
+    // After the slots, and never in place of starting one: a sink that is down
+    // costs a graph and must not cost a run. The cursor still moves below,
+    // because whether the measurement was reported says nothing about whether
+    // the interval was read.
+    if !measured.is_empty()
+        && let Err(error) = metrics.record(measured).await
+    {
+        tracing::warn!(%error, "the scheduler's own timing could not be reported");
     }
 
     // Last, and that is the whole ordering. See the module docs.

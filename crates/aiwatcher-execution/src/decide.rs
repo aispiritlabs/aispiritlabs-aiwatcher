@@ -33,8 +33,8 @@ use aiwatcher_core::human_input::OnTimeout;
 
 use crate::plan::RuntimeBinding;
 use crate::state::{
-    AttemptRecord, Execution, ExecutionMode, ExecutionState, FailureClass, InputRequest, RunState,
-    StateType, StepError, StepState,
+    AttemptRecord, Execution, ExecutionMode, ExecutionState, FailureClass, InputAnswer,
+    InputRequest, RunState, StateType, StepError, StepState,
 };
 
 /// Everything a decision needs that is not the state or the command.
@@ -233,9 +233,23 @@ fn apply(execution: &mut Execution, event: &WorkflowEvent) {
                 }
             }
         }
-        WorkflowEvent::InputProvided { step_id, .. } => {
+        WorkflowEvent::InputProvided {
+            step_id,
+            attempt,
+            answered_by,
+            response,
+        } => {
             if let Some(step) = execution.step_mut(step_id) {
                 step.awaiting = None;
+                // Kept, because the attempt that reads it is the one that comes
+                // *after*: a resumed attempt re-runs from the beginning and
+                // would otherwise ask the same question again. Appended rather
+                // than replaced — see `InputAnswer`.
+                step.answers.push(InputAnswer {
+                    attempt: *attempt,
+                    answered_by: answered_by.clone(),
+                    response: response.clone(),
+                });
             }
         }
         WorkflowEvent::ExecutionPaused => {
@@ -475,21 +489,15 @@ fn decide_active(
                 });
             }
             emit.about_step(step_id, *attempt);
-            emit.event(WorkflowEvent::InputProvided {
-                step_id: step_id.clone(),
-                attempt: *attempt,
-                answered_by: answered_by.clone(),
-                response: response.clone(),
-            });
-            // Answering is what completes a `HumanInput` step; there is nothing
-            // else for it to do.
-            emit.event(WorkflowEvent::StepCompleted {
-                step_id: step_id.clone(),
-                attempt: *attempt,
-                outputs: Vec::new(),
-                result: Some(response.clone()),
-            });
-            continue_after(execution, step_id, &mut emit, now);
+            answer_lands(
+                execution,
+                step_id,
+                *attempt,
+                answered_by,
+                response,
+                &mut emit,
+                now,
+            );
             Ok(emit.into_messages())
         }
 
@@ -512,18 +520,32 @@ fn decide_active(
                     current: step.current_attempt,
                 });
             }
-            let Some(RuntimeBinding::HumanInput(spec)) = execution
-                .plan
-                .step(step_id)
-                .map(|plan_step| &plan_step.runtime)
-            else {
+            // The question's own policy, because a question has two authors.
+            // A `HumanInput` step's was copied here from the plan when the step
+            // was scheduled; a running attempt that stopped to ask supplied its
+            // own, and no plan step describes it.
+            //
+            // The fallback is for a stream written before `on_timeout` was on
+            // the request. Every such question is a `HumanInput`, so the plan
+            // that authored it still answers — and reading it is what makes a
+            // replay of an old stream reach the policy it was decided under
+            // rather than this field's default.
+            let policy = step.awaiting.as_ref().and_then(|request| {
+                request.on_timeout.clone().or_else(|| {
+                    match execution.plan.step(step_id).map(|plan| &plan.runtime) {
+                        Some(RuntimeBinding::HumanInput(spec)) => Some(spec.on_timeout.clone()),
+                        _ => None,
+                    }
+                })
+            });
+            let Some(policy) = policy else {
                 return Err(DecisionError::NoSuchStep {
                     step: step_id.clone(),
                 });
             };
 
             emit.about_step(step_id, *attempt);
-            match &spec.on_timeout {
+            match &policy {
                 // The safe reading of "nobody said yes". `Policy` rather than
                 // `Timeout`: a rule decided this, and nothing about a runtime
                 // is in question — which is also what keeps it out of the
@@ -555,26 +577,37 @@ fn decide_active(
                         outputs: Vec::new(),
                         result: None,
                     });
+                    // The only arm that ends the step here and has to say what
+                    // follows. `Fail` settles and returns above; `Answer` may
+                    // resume the step instead of ending it, so what comes next
+                    // is `answer_lands`' to decide — a `continue_after` shared
+                    // by both would have declared the run finished over a step
+                    // it had just re-scheduled.
+                    continue_after(execution, step_id, &mut emit, now);
                 }
                 // An answer, recorded as one — and attributed to the policy
                 // rather than to a person, because the one record of a human
                 // decision must not say a human made it.
                 OnTimeout::Answer { response } => {
-                    emit.event(WorkflowEvent::InputProvided {
-                        step_id: step_id.clone(),
-                        attempt: *attempt,
-                        answered_by: ANSWERED_BY_TIMEOUT.to_owned(),
-                        response: response.clone(),
-                    });
-                    emit.event(WorkflowEvent::StepCompleted {
-                        step_id: step_id.clone(),
-                        attempt: *attempt,
-                        outputs: Vec::new(),
-                        result: Some(response.clone()),
-                    });
+                    // Through the same door a person's answer goes through. An
+                    // answer nobody gave is still an answer, so what it *does*
+                    // is the same question — and deciding it twice is how the
+                    // two came to disagree: this arm completed the step, which
+                    // is right for the gate that is only a question and silently
+                    // wrong for an attempt that stopped in the middle of its own
+                    // work. That one was left `Completed` with no outputs, at
+                    // the attempt that never finished.
+                    answer_lands(
+                        execution,
+                        step_id,
+                        *attempt,
+                        ANSWERED_BY_TIMEOUT,
+                        response,
+                        &mut emit,
+                        now,
+                    );
                 }
             }
-            continue_after(execution, step_id, &mut emit, now);
             Ok(emit.into_messages())
         }
 
@@ -871,7 +904,17 @@ fn schedule_attempt(
         // `cache_key` refuses a key for anything whose inputs are not all
         // digest-addressed. What consults the index is the reactor, because
         // that is a read and `decide` performs none.
-        cache_key: crate::cache_key(plan_step, &execution.resolved_inputs(step_id)),
+        //
+        // A step somebody has answered is one of those. The answer is an input
+        // to the rest of its work and nothing addresses it: two runs of one
+        // step that were answered differently would share a key, and the second
+        // would be served the first one's rows without ever seeing its own
+        // answer. `None` rather than a key that means "probably the same".
+        cache_key: execution
+            .step(step_id)
+            .is_none_or(|state| state.answers.is_empty())
+            .then(|| crate::cache_key(plan_step, &execution.resolved_inputs(step_id)))
+            .flatten(),
     });
 
     // A wait is not dispatched anywhere: the question goes in front of
@@ -891,6 +934,13 @@ fn schedule_attempt(
                 deadline: spec
                     .timeout_seconds
                     .map(|seconds| now.at + time::Duration::seconds(seconds as i64)),
+                // Copied onto the question rather than left on the plan, so
+                // `TimeoutInput` has one place to read it for both authors of
+                // a question. The plan is still where this one was written;
+                // what changes is that a running attempt that asks can supply
+                // its own, and the plan that pinned its code has nothing to
+                // say about a question it did not author.
+                on_timeout: Some(spec.on_timeout.clone()),
             },
         });
         emit.command(WorkflowCommand::RequestInput {
@@ -906,6 +956,66 @@ fn schedule_attempt(
         runtime: plan_step.runtime.kind(),
         idempotency_key: idempotency_key(execution.execution_id.as_str(), step_id, attempt),
     });
+}
+
+/// Record an answer, and do whatever that step's kind says an answer does.
+///
+/// One place, because there are two doors into it — a person through
+/// `ProvideInput` and a lapsed deadline through `OnTimeout::Answer` — and what
+/// an answer *does* is one question. Written twice, the two disagreed: the
+/// timeout completed the step unconditionally, which is right for a gate that is
+/// only a question and silently wrong for an attempt that stopped in the middle
+/// of its own work. That one was left `Completed` at the attempt that never
+/// finished, with no outputs — so anything bound to its rows read nothing, which
+/// is the failure that looks like a success.
+///
+/// A `HumanInput` step *is* the question, so answering completes it. Anything
+/// else was already running: the answer is one input to the rest of its work, so
+/// a new attempt carries it and the attempt that asked stays immutable.
+fn answer_lands(
+    execution: &Execution,
+    step_id: &str,
+    attempt: u32,
+    answered_by: &str,
+    response: &serde_json::Value,
+    emit: &mut Emitter,
+    now: Now,
+) {
+    emit.event(WorkflowEvent::InputProvided {
+        step_id: step_id.to_owned(),
+        attempt,
+        answered_by: answered_by.to_owned(),
+        response: response.clone(),
+    });
+    if matches!(
+        execution.plan.step(step_id).map(|plan| &plan.runtime),
+        Some(RuntimeBinding::HumanInput(_))
+    ) {
+        emit.event(WorkflowEvent::StepCompleted {
+            step_id: step_id.to_owned(),
+            attempt,
+            outputs: Vec::new(),
+            result: Some(response.clone()),
+        });
+        continue_after(execution, step_id, emit, now);
+        return;
+    }
+    // Scheduled from the state the answer *reaches*, not the one it arrived at,
+    // so the answer the new attempt will read is already in it. It re-runs the
+    // work from the beginning and reads it out of the step's `answers` — the
+    // rule every retry already lives under, not a special case: a worker that
+    // wants to keep what it did before the question hands it back as an artifact
+    // and reads it again.
+    let mut resumed = execution.clone();
+    if let Some(step) = resumed.step_mut(step_id) {
+        step.awaiting = None;
+        step.answers.push(InputAnswer {
+            attempt,
+            answered_by: answered_by.to_owned(),
+            response: response.clone(),
+        });
+    }
+    schedule_attempt(&resumed, step_id, attempt + 1, emit, now);
 }
 
 /// What follows a step completing: its children, or the end of the run.

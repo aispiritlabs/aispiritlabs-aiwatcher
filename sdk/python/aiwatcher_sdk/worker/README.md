@@ -88,6 +88,17 @@ managed context; pure tasks therefore need no running server in local tests.
   failure. Classifications match the server: `validation`, `user_code`,
   `transient`, `timeout`, `infrastructure`, `policy`. Ordinary exceptions become
   `user_code`; process interrupts are propagated. The server decides the retry.
+- `ctx.ask(prompt, choices=..., timeout_seconds=..., on_timeout=...)` puts a
+  question in front of a person and **parks** the attempt: it raises
+  `InputRequired`, the worker reports `Parked`, the lease is released and the
+  row is kept. The answer schedules a *new* attempt of the same step, which runs
+  this task again from the beginning — so `ask` returns the answer at the point
+  it raised, and the work before the question happens twice. That is the rule
+  every retry already lives under: hand back what you want to keep with
+  `write_artifact` and read it again. Answers are consumed in the order they
+  were given, so a task that asks two questions gets them back in the same two
+  places. `on_timeout` is `Fail()`, `Skip()` or `Answer(response)`, and the
+  server refuses one without a deadline.
 - `ctx.context_id` is the server's `execution/step/attempt` idempotency key.
   Retaking the same attempt preserves it; a new attempt increments the last
   component. Tasks must deduplicate their own side effects, including across
@@ -116,7 +127,11 @@ imports remain supported. `TaskError` also lives in the transport-independent
 
 Assignments are validated before user code runs. `ArtifactRef` requires `name`,
 `uri` and `digest`; optional fields and JSON object rows are checked at the HTTP
-boundary. Completion and failure reports have separate typed models. Invalid
+boundary. Completion, failure and park reports have separate typed models, and
+the settlement reply names which of the three the server recorded — checked by
+name rather than through `succeeded`, which answers `False` for a failure and a
+park alike. A server older than that field is tolerated by falling back to
+`succeeded`; it never accepts a park at all. Invalid
 server data raises `WorkerError`, including a malformed settlement reply; the
 worker does not retry a malformed settlement or reclassify it as a task failure.
 Assignments also list required output names. Omitting one becomes a validation

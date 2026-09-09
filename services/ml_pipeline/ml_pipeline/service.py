@@ -1,4 +1,4 @@
-"""The service: five control routes, and marimo's own app host under them.
+"""The service: six control routes, and marimo's own app host under them.
 
 Shaped after `services/flow`, deliberately. Both are optional, both are talked
 to by the panel directly rather than through the Rust API, and neither is known
@@ -12,6 +12,7 @@ from one screen and nothing else (ADR_0008, ADR_0024).
     GET  .../notebooks/{name}/revisions/{revision}   one exact source, forever
     POST /ml-pipeline/run                 run one notebook over rows, return its rows
     POST /ml-pipeline/staging             put rows under a context, run nothing
+    GET  /ml-pipeline/staging             how much scratch is here, and how old
     GET  /ml-pipeline/executions/{key}    did this key run here, and is it still going
     ANY  /ml-pipeline/app/{name}/         the notebook itself, live, for an iframe
 
@@ -204,6 +205,39 @@ def create_app(config: Config | None = None) -> Starlette:
             }
         )
 
+    async def staged(_: Request) -> JSONResponse:
+        """How much scratch this service is holding, and how old the oldest is.
+
+        Asked for rather than polled. Nothing here cleans up: a stage overwrites
+        its own context and leaves every other one where it is, so this
+        directory only grows — one context per attempt of every managed step
+        that reached a notebook. Workflow retention runs in another process,
+        prunes executions rather than disks, and could not reach this one if it
+        wanted to.
+
+        This service is the only process that can see it, which is why the
+        number lives here and not beside the Rust binary's own storage figures.
+        Together they are the two halves of "what is piling up that nothing will
+        delete", which is the question a reference-aware collector is the answer
+        to — and whether that is worth building is a question about a curve
+        nobody had.
+
+        A walk rather than a running total, because a total kept in memory is
+        wrong the moment this process restarts and this directory does not.
+        """
+        totals = await anyio.to_thread.run_sync(staging.measure)
+        return JSONResponse(
+            {
+                "contexts": totals.contexts,
+                "files": totals.files,
+                "bytes": totals.bytes,
+                # Absent rather than zero when nothing is staged: "empty" and
+                # "everything here is from today" are different states.
+                "oldest_days": totals.oldest_days,
+                "directory": str(settings.data),
+            }
+        )
+
     async def stage(request: Request) -> JSONResponse:
         """Put rows where a notebook's live app will read them, and run nothing.
 
@@ -284,6 +318,7 @@ def create_app(config: Config | None = None) -> Starlette:
             ),
             Route("/ml-pipeline/run", run, methods=["POST"]),
             Route("/ml-pipeline/staging", stage, methods=["POST"]),
+            Route("/ml-pipeline/staging", staged, methods=["GET"]),
             # `:path` because the key is `<execution>/<step>/<attempt>` and
             # carries its own separators. Sent as it is rather than encoded, so
             # a person reading a log sees the key they would grep for.

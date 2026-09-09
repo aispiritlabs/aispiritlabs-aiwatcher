@@ -418,6 +418,11 @@ impl WorkflowStore for PostgresWorkflowStore {
                 AttemptWrite::Dispatch(row) => {
                     upsert_attempt(&mut transaction, &row).await?;
                 }
+                // A question is not an ending: the row stays and the lease
+                // goes. See `AttemptWrite`.
+                AttemptWrite::Park(key) => {
+                    park_attempt(&mut transaction, &key).await?;
+                }
                 // A finished attempt is not a row. See `AttemptWrite`.
                 AttemptWrite::Retire(key) => {
                     retire_attempt(&mut transaction, &key).await?;
@@ -983,6 +988,37 @@ async fn upsert_projection(
 async fn retire_attempt(transaction: &mut Transaction<'_>, key: &AttemptKey) -> Result<()> {
     sqlx::query(
         "delete from step_attempts
+          where execution_id = $1 and step_id = $2 and attempt = $3",
+    )
+    .bind(key.execution_id.as_str())
+    .bind(&key.step_id)
+    .bind(i32::try_from(key.attempt).unwrap_or(i32::MAX))
+    .execute(&mut **transaction)
+    .await
+    .map_err(|error| StoreError::Backend(error.to_string()))?;
+    Ok(())
+}
+
+/// Release the lease on an attempt that stopped to ask, keeping its row.
+///
+/// An `update` rather than a read and an upsert, for the reason the whole
+/// adapter exists: the row is columns here, so the four fields a park clears
+/// are the four the statement names, and nothing has to be read back to change
+/// them. A row that is not there matches nothing and writes nothing, which is
+/// the same no-op the other three adapters make explicit — a step the decider
+/// parks when it schedules it was never dispatched here.
+///
+/// `updated_at` moves with it because the record was touched;
+/// [`write_attempt`](super::duckdb) and `upsert_attempt` keep the same rule,
+/// and `claim_attempt` orders by that column.
+async fn park_attempt(transaction: &mut Transaction<'_>, key: &AttemptKey) -> Result<()> {
+    sqlx::query(
+        "update step_attempts
+            set state = 'awaiting_input',
+                lease_owner = null,
+                previous_owner = null,
+                claimed_at = null,
+                updated_at = now()
           where execution_id = $1 and step_id = $2 and attempt = $3",
     )
     .bind(key.execution_id.as_str())

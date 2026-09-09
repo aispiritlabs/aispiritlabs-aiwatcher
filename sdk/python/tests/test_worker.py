@@ -18,7 +18,16 @@ import pytest
 from jsonschema import Draft202012Validator
 
 from aiwatcher_sdk import AiwatcherClient, NullTransport
-from aiwatcher_sdk.worker import TaskContext, TaskError, Worker, WorkerError, get_task_context, task
+from aiwatcher_sdk.worker import (
+    Fail,
+    InputRequired,
+    TaskContext,
+    TaskError,
+    Worker,
+    WorkerError,
+    get_task_context,
+    task,
+)
 
 CONTRACT = json.loads((Path(__file__).parents[3] / "contracts/openapi.json").read_text())
 
@@ -59,6 +68,7 @@ def assignment(**changes: Any) -> dict[str, Any]:
         "inputs": [reference("source", [{"house": 1}])],
         "is_retake": False,
         "outputs": [],
+        "answers": [],
         "report_idempotent": False,
         **changes,
     }
@@ -100,6 +110,7 @@ class WorkerApi:
                 "step_id": path.split("/")[-3],
                 "attempt": int(path.split("/")[-2]),
                 "succeeded": report["outcome"] == "completed",
+                "outcome": report["outcome"],
             }
             validate_contract("Settled", settled)
             return httpx.Response(200, json=settled)
@@ -621,8 +632,11 @@ def test_invalid_artifact_response_is_not_reported_as_a_user_failure(reply: dict
     "reply",
     [
         {},
-        {"step_id": "wrong", "attempt": 1, "succeeded": True},
-        {"step_id": "acquire", "attempt": True, "succeeded": True},
+        {"step_id": "wrong", "attempt": 1, "succeeded": True, "outcome": "completed"},
+        {"step_id": "acquire", "attempt": True, "succeeded": True, "outcome": "completed"},
+        # A settlement that says the attempt parked, answering a report that
+        # said it finished. `succeeded` alone could not tell these apart.
+        {"step_id": "acquire", "attempt": 1, "succeeded": False, "outcome": "parked"},
     ],
 )
 def test_invalid_settlement_never_repeats_or_contradicts_a_report(reply: dict[str, Any]) -> None:
@@ -652,3 +666,140 @@ def test_invalid_settlement_never_repeats_or_contradicts_a_report(reply: dict[st
         process.run_once()
     assert len(api.reports) == 1
     assert api.reports[0]["outcome"] == "completed"
+
+
+# ── Stopping to ask, mid-attempt ─────────────────────────────────────────────
+
+
+def test_a_task_that_asks_parks_the_attempt_instead_of_failing_it() -> None:
+    """The whole of §41's protocol change, from the worker's end.
+
+    A capability hook that wants a tool call approved raises out of the task.
+    That is neither a result nor a failure, and reporting it as either would be
+    wrong in a way nothing downstream could see: a failure spends the retry
+    budget on a question, and a completion publishes rows nobody approved.
+    """
+    api = WorkerApi(assignment())
+
+    def execute(inputs: dict[str, Any], ctx: TaskContext) -> None:
+        ctx.ask(
+            "Send this email?",
+            choices=["approve", "reject"],
+            timeout_seconds=3600,
+            on_timeout=Fail(),
+        )
+        raise AssertionError("the task carried on past a question nobody answered")
+
+    with worker(api, execute) as instance:
+        assert instance.run_once()
+
+    assert api.reports[0]["outcome"] == "parked"
+    assert api.reports[0]["prompt"] == "Send this email?"
+    assert api.reports[0]["choices"] == ["approve", "reject"]
+    assert api.reports[0]["on_timeout"] == {"on": "fail"}
+    # A gate only ever raises the editor floor; nobody named a role here.
+    assert api.reports[0]["role"] == "editor"
+
+
+def test_the_resumed_attempt_reads_the_answer_where_it_stopped() -> None:
+    """The other half: attempt two runs the same task from the beginning.
+
+    So the work before the question happens twice — the rule every retry already
+    lives under. What must not happen twice is the *question*: an ``ask`` that
+    parked again with the answer already in hand would be a run that never moves.
+    """
+    api = WorkerApi(
+        assignment(
+            attempt=2,
+            context_id="import-1/acquire/2",
+            answers=[{"attempt": 1, "answered_by": "mkubasz@gmail.com", "response": "approve"}],
+        )
+    )
+    seen: list[Any] = []
+
+    def execute(inputs: dict[str, Any], ctx: TaskContext) -> dict[str, Any]:
+        seen.append(ctx.ask("Send this email?", choices=["approve", "reject"]))
+        return {"sent": True}
+
+    with worker(api, execute) as instance:
+        assert instance.run_once()
+
+    assert seen == ["approve"]
+    assert api.reports[0]["outcome"] == "completed"
+    assert api.reports[0]["result"] == {"sent": True}
+
+
+def test_a_task_that_asks_twice_consumes_its_answers_in_order() -> None:
+    """Why the assignment carries a list rather than the last answer.
+
+    Attempt three replays past *both* earlier questions. Given only the most
+    recent, the first ``ask`` would park again and the run would never reach the
+    second — which is the failure that looks like a worker doing its job.
+    """
+    api = WorkerApi(
+        assignment(
+            attempt=3,
+            context_id="import-1/acquire/3",
+            answers=[
+                {"attempt": 1, "answered_by": "a@example.com", "response": "approve"},
+                {"attempt": 2, "answered_by": "b@example.com", "response": "second"},
+            ],
+        )
+    )
+    seen: list[Any] = []
+
+    def execute(inputs: dict[str, Any], ctx: TaskContext) -> None:
+        seen.append(ctx.ask("First?"))
+        seen.append(ctx.ask("Second?"))
+
+    with worker(api, execute) as instance:
+        assert instance.run_once()
+
+    assert seen == ["approve", "second"]
+    assert api.reports[0]["outcome"] == "completed"
+
+
+def test_a_third_question_parks_again_rather_than_running_out_of_answers() -> None:
+    """The answers run out exactly where the work has not been approved yet."""
+    api = WorkerApi(
+        assignment(
+            attempt=2,
+            context_id="import-1/acquire/2",
+            answers=[{"attempt": 1, "answered_by": "a@example.com", "response": "approve"}],
+        )
+    )
+
+    def execute(inputs: dict[str, Any], ctx: TaskContext) -> None:
+        ctx.ask("First?")
+        ctx.ask("Second?")
+
+    with worker(api, execute) as instance:
+        assert instance.run_once()
+
+    assert api.reports[0]["outcome"] == "parked"
+    assert api.reports[0]["prompt"] == "Second?"
+
+
+def test_asking_is_raised_rather_than_returned_so_a_task_cannot_carry_on() -> None:
+    """The telemetry client's rule, the other way round.
+
+    Telemetry swallows because it must never take an agent down. This must: a
+    task that carried on past an unapproved tool call would perform exactly the
+    side effect the question exists to hold back, and a returned sentinel is
+    something a caller can ignore by accident.
+    """
+    api = WorkerApi(assignment())
+    reached: list[str] = []
+
+    def execute(inputs: dict[str, Any], ctx: TaskContext) -> None:
+        try:
+            ctx.ask("May I?")
+        except InputRequired:
+            reached.append("unwound")
+            raise
+
+    with worker(api, execute) as instance:
+        assert instance.run_once()
+
+    assert reached == ["unwound"]
+    assert api.reports[0]["outcome"] == "parked"

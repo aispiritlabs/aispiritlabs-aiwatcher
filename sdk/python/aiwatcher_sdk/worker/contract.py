@@ -118,4 +118,80 @@ class Failed:
         return {"outcome": "failed", "class": self.classification, "message": self.message}
 
 
-Report: TypeAlias = Completed | Failed
+OnTimeout: TypeAlias = "Fail | Skip | Answer"
+
+
+@dataclass(frozen=True)
+class Fail:
+    """Nobody said yes, read the safe way: the step failed."""
+
+    def to_dict(self) -> JsonObject:
+        return {"on": "fail"}
+
+
+@dataclass(frozen=True)
+class Skip:
+    """The step is passed over and the chain goes on without it."""
+
+    def to_dict(self) -> JsonObject:
+        return {"on": "skip"}
+
+
+@dataclass(frozen=True)
+class Answer:
+    """Answer it with this, and record that nobody did."""
+
+    response: JsonValue
+
+    def to_dict(self) -> JsonObject:
+        return {"on": "answer", "response": self.response}
+
+
+@dataclass(frozen=True)
+class Parked:
+    """The task stopped in the middle of its own work to ask somebody something.
+
+    Neither of the other two. The attempt keeps its row and loses its lease, and
+    the answer schedules a *new* attempt of the same step — so this task will run
+    again from the beginning with the answer in ``ctx.answers``.
+    """
+
+    prompt: str
+    role: str = "editor"
+    choices: tuple[str, ...] = ()
+    timeout_seconds: int | None = None
+    on_timeout: OnTimeout | None = None
+
+    def to_dict(self) -> JsonObject:
+        body: JsonObject = {
+            "outcome": "parked",
+            "prompt": self.prompt,
+            "role": self.role,
+            "choices": list(self.choices),
+        }
+        if self.timeout_seconds is not None:
+            body["timeout_seconds"] = self.timeout_seconds
+        if self.on_timeout is not None:
+            body["on_timeout"] = self.on_timeout.to_dict()
+        return body
+
+
+@dataclass(frozen=True)
+class InputAnswer:
+    """One answer a previous attempt of this step asked for and was given."""
+
+    attempt: int
+    answered_by: str
+    response: JsonValue
+
+    @classmethod
+    def from_dict(cls, value: object) -> InputAnswer:
+        body = json_object(value)
+        return cls(
+            attempt=unsigned(body.get("attempt"), "attempt", bits=32),
+            answered_by=string(body.get("answered_by"), "answered_by"),
+            response=json_value(body.get("response")),
+        )
+
+
+Report: TypeAlias = Completed | Failed | Parked

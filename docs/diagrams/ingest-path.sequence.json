@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "One event, end to end",
+    "subtitle": "What an agent publishes, and how it reaches a browser",
+    "viewBox": [1080, 560],
+    "column_fit": "spread",
+    "visual_preset": "signal-flow",
+    "animation": "trace",
+    "quality_profile": "showcase",
+    "views": [
+      { "id": "publish", "label": "Publishing", "focus": ["agent", "api", "bus"], "note": "The agent is answered before anything is folded — telemetry never takes it down." },
+      { "id": "fold", "label": "Folding", "focus": ["bus", "pipeline", "traces"], "note": "Hundreds of events become a handful of spans, written before the checkpoint moves." },
+      { "id": "resume", "label": "Closing a gap", "focus": ["pipeline", "panel", "api"], "note": "Every frame carries its checkpoint, so a reconnect closes its own gap." }
+    ]
+  },
+  "participants": [
+    { "id": "agent", "type": "external", "label": "Agent", "sublabel": "Python or TypeScript" },
+    { "id": "api", "type": "backend", "label": "Axum API", "sublabel": "POST /api/v1/events" },
+    { "id": "bus", "type": "messagebus", "label": "Durable log", "sublabel": "WAL or Laser" },
+    { "id": "pipeline", "type": "backend", "label": "Projector", "sublabel": "dedup + fold" },
+    { "id": "traces", "type": "database", "label": "VictoriaTraces", "sublabel": "finished spans" },
+    { "id": "panel", "type": "frontend", "label": "Panel", "sublabel": "SSE reader" }
+  ],
+  "segments": [
+    { "from": 150, "to": 245, "label": "Publish" },
+    { "from": 255, "to": 380, "label": "Fold" },
+    { "from": 390, "to": 490, "label": "Serve" }
+  ],
+  "messages": [
+    { "id": "emit", "from": "agent", "to": "api", "y": 165, "label": "run.started · llm.*", "variant": "emphasis" },
+    { "id": "accepted", "from": "api", "to": "agent", "y": 195, "label": "accepted, always", "variant": "return" },
+    { "id": "append", "from": "api", "to": "bus", "y": 225, "label": "append", "variant": "emphasis" },
+    { "id": "read", "from": "bus", "to": "pipeline", "y": 268, "label": "at-least-once", "variant": "emphasis" },
+    { "id": "spans", "from": "pipeline", "to": "traces", "y": 305, "label": "closed spans, OTLP", "variant": "default" },
+    { "id": "stored", "from": "traces", "to": "pipeline", "y": 333, "label": "durable", "variant": "return" },
+    { "id": "commit", "from": "pipeline", "to": "bus", "y": 365, "label": "commit the checkpoint, after", "variant": "security" },
+    { "id": "frame", "from": "pipeline", "to": "panel", "y": 405, "label": "SSE frame, id = checkpoint", "variant": "emphasis" },
+    { "id": "resume", "from": "panel", "to": "api", "y": 440, "label": "Last-Event-ID on reconnect", "variant": "dashed" }
+  ],
+  "activations": [
+    { "participant": "api", "from": 160, "to": 232, "type": "backend" },
+    { "participant": "bus", "from": 220, "to": 372, "type": "messagebus" },
+    { "participant": "pipeline", "from": 263, "to": 412, "type": "backend" },
+    { "participant": "traces", "from": 300, "to": 339, "type": "database" },
+    { "participant": "panel", "from": 400, "to": 446, "type": "frontend" }
+  ],
+  "cards": [
+    { "dot": "emerald", "title": "The agent is never the casualty", "items": ["The transport swallows and counts; a failure is a metric", "The answer comes before any folding happens", "Registry clients are the opposite and raise — that is the work"] },
+    { "dot": "rose", "title": "One ordering carries the contract", "items": ["The span is written, then the checkpoint moves", "Reverse it and a crash is silent data loss", "That single line is the at-least-once guarantee"] },
+    { "dot": "cyan", "title": "A redelivery is not a duplicate", "items": ["TraceId::derive is a pure function of run and span key", "So the same event twice lands on the same span", "Never replace a derivation with a UUID"] }
+  ]
+}

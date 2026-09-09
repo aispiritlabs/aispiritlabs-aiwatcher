@@ -49,6 +49,7 @@ pub async fn run(config: Config) -> Result<()> {
         workflow_store,
         artifacts,
         sink,
+        metrics,
         projector,
     } = runtime;
 
@@ -65,6 +66,7 @@ pub async fn run(config: Config) -> Result<()> {
         &workflow_store,
         &sink,
         artifacts.as_ref(),
+        &metrics,
         &shutdown,
     );
 

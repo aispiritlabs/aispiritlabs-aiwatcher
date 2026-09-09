@@ -551,6 +551,11 @@ pub struct Runtime {
     /// commit. Held whether or not HTTP ingest is enabled: the outbox is not a
     /// second write path for producers, it is this system's own.
     pub sink: Arc<dyn MessageSink>,
+    /// Where this process reports what it is doing, as numbers. The same sink
+    /// the projector flushes run metrics through — one exporter, because a
+    /// second would be a second answer to "is this deployment configured to
+    /// export metrics".
+    pub metrics: Arc<dyn aiwatcher_core::ports::MetricSink>,
     pub projector: Box<dyn ProjectorTask>,
 }
 
@@ -656,7 +661,7 @@ pub async fn build(config: Config) -> Result<Runtime> {
     let outputs = Outputs {
         live: Arc::clone(&live) as _,
         traces,
-        metrics,
+        metrics: Arc::clone(&metrics),
         dead_letters,
         read_model: Arc::clone(&read_model),
     };
@@ -839,6 +844,7 @@ pub async fn build(config: Config) -> Result<Runtime> {
         workflow_store,
         artifacts: registries.objects,
         sink,
+        metrics,
         projector,
     })
 }

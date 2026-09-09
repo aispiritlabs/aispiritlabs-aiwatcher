@@ -5859,6 +5859,163 @@ async fn a_workers_result_reaches_the_decider_and_starts_what_comes_next() {
 }
 
 #[tokio::test]
+async fn a_worker_that_stopped_to_ask_parks_its_attempt_and_nobody_else_may_take_it() {
+    // The other kind of gate, end to end over the protocol. An authored
+    // `HumanInput` step waits from the start and never reaches the claim table;
+    // this one was already running and holds a lease something has to release.
+    let fixture = Fixture::behind_a_proxy(false).await;
+    fixture.seed_worker_run("exec-w20").await;
+    let (_, claimed) = fixture
+        .claim_as(
+            WORKER_SECRET,
+            json!({ "worker": "laptop-1", "tasks": ["stage@1", "review@1"] }),
+        )
+        .await;
+    assert_eq!(claimed["step_id"], "stage");
+
+    let (status, settled) = fixture
+        .send_with_token(
+            "POST",
+            "/api/v1/worker/claims/exec-w20/stage/1/result",
+            WORKER_SECRET,
+            Some(json!({
+                "worker": "laptop-1",
+                "outcome": "parked",
+                "prompt": "Send this to the council?",
+                "choices": ["approve", "reject"],
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{settled}");
+    assert_eq!(settled["outcome"], "parked", "{settled}");
+    assert!(
+        !settled["succeeded"].as_bool().expect("a flag"),
+        "a question is not a success, and the older field still says so: {settled}"
+    );
+
+    // The question reached the run's own page, which is where somebody answers
+    // it. Read through the same route the panel reads.
+    let (status, run) = fixture
+        .get_as("/api/v1/executions/exec-w20", "alice", "aiwatcher-editors")
+        .await;
+    assert_eq!(status, StatusCode::OK, "{run}");
+    let step = run["execution"]["steps"]
+        .as_array()
+        .expect("steps")
+        .iter()
+        .find(|step| step["step_id"] == "stage")
+        .expect("the parked step");
+    assert_eq!(step["state"]["state_type"], "awaiting_input", "{step}");
+    assert_eq!(step["awaiting"]["prompt"], "Send this to the council?");
+
+    // And nobody may pick it up. The row is kept for exactly this: a released
+    // lease is not an invitation, because the work is not waiting for a worker
+    // — it is waiting for a person.
+    let (status, next) = fixture
+        .claim_as(
+            WORKER_SECRET,
+            json!({ "worker": "laptop-2", "tasks": ["stage@1", "review@1"] }),
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::NO_CONTENT,
+        "a question a worker is waiting on was handed to another worker: {next}"
+    );
+}
+
+#[tokio::test]
+async fn an_answer_hands_the_same_step_back_to_a_worker_as_a_new_attempt() {
+    // The resumed attempt is a *new* one, so the attempt that asked stays
+    // immutable — and it carries the answer, because it re-runs the work from
+    // the beginning and would otherwise ask the same question again.
+    let fixture = Fixture::behind_a_proxy(false).await;
+    fixture.seed_worker_run("exec-w21").await;
+    fixture
+        .claim_as(
+            WORKER_SECRET,
+            json!({ "worker": "laptop-1", "tasks": ["stage@1", "review@1"] }),
+        )
+        .await;
+    let (status, settled) = fixture
+        .send_with_token(
+            "POST",
+            "/api/v1/worker/claims/exec-w21/stage/1/result",
+            WORKER_SECRET,
+            Some(json!({
+                "worker": "laptop-1",
+                "outcome": "parked",
+                "prompt": "Send this to the council?",
+                "choices": ["approve", "reject"],
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{settled}");
+
+    let (status, answered) = fixture
+        .post_as(
+            "/api/v1/executions/exec-w21/steps/stage/input",
+            "alice",
+            "aiwatcher-editors",
+            json!({ "attempt": 1, "response": "approve" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{answered}");
+
+    let (status, next) = fixture
+        .claim_as(
+            WORKER_SECRET,
+            json!({ "worker": "laptop-1", "tasks": ["stage@1", "review@1"] }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{next}");
+    assert_eq!(next["step_id"], "stage", "the same step, not the next one");
+    assert_eq!(next["attempt"], 2, "{next}");
+    assert_eq!(
+        next["answers"],
+        json!([{ "attempt": 1, "answered_by": "alice", "response": "approve" }]),
+        "the resumed attempt is handed what the previous one asked for: {next}"
+    );
+}
+
+#[tokio::test]
+async fn a_question_nobody_could_answer_as_asked_is_refused_by_the_one_rule_set() {
+    // A worker's park is a third authored surface for one question, so it is
+    // refused by `aiwatcher_core::human_input` rather than by a third rule set
+    // — with every problem at once, as a canvas block and a workflow step are.
+    let fixture = Fixture::behind_a_proxy(false).await;
+    fixture.seed_worker_run("exec-w22").await;
+    fixture
+        .claim_as(
+            WORKER_SECRET,
+            json!({ "worker": "laptop-1", "tasks": ["stage@1", "review@1"] }),
+        )
+        .await;
+
+    let (status, refused) = fixture
+        .send_with_token(
+            "POST",
+            "/api/v1/worker/claims/exec-w22/stage/1/result",
+            WORKER_SECRET,
+            Some(json!({
+                "worker": "laptop-1",
+                "outcome": "parked",
+                // Blank, and asking for a role a gate may not name. A gate only
+                // ever raises the editor floor.
+                "prompt": "   ",
+                "role": "viewer",
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    assert_eq!(refused["code"], "question_refused");
+    assert_eq!(
+        refused["details"].as_array().expect("details").len(),
+        2,
+        "one problem per round trip teaches somebody to press the button again: {refused}"
+    );
+}
+#[tokio::test]
 async fn a_worker_may_not_settle_an_attempt_it_does_not_hold() {
     // Worker names are not secret, so this is the check that stops one from
     // reporting over somebody else's work by guessing the name it was claimed

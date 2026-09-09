@@ -2761,17 +2761,30 @@ because this plan moves no content.
 
 ## 41. Human input and the control path
 
-- A `HumanInput` step waits from the start. A worker may also `await` from
+- A `HumanInput` step waits from the start. A worker may also stop to ask from
   inside an attempt — a tool call an `AbstractCapability.before_tool_execute`
-  hook wants approved — and the attempt parks: its lease is released, its
-  state is `awaiting_input`, and nothing holds a pod for the answer.
+  hook wants approved — and the attempt parks: its lease is released, its row
+  stays as `AttemptWrite::Park`, its state is `awaiting_input`, and nothing
+  holds a pod for the answer. **Compiled runs only.** A hosted run's worker
+  owns its own decisions and appends a park to its own stream; building
+  anything here for it would be a second decider (43.40).
+- The worker says so with `WorkReport::Parked`, the third report shape. It is a
+  report and not a decision: it goes through `Reactor::settle` like the other
+  two, and the question is validated by `aiwatcher_core::human_input` — the
+  same rule set a canvas block and a workflow step are refused by, because a
+  worker's park is a third surface authoring one thing.
 - It resumes on `POST /api/v1/executions/{id}/steps/{step}/input {response}`
   from the role the step declared — `editor` by default, `admin` for a
-  promotion — and the resumed attempt is a *new* attempt of the same step with
-  the response in its inputs, so the attempt that asked stays immutable.
-- A timeout is a policy on the step: `on_timeout: fail | skip |
+  promotion. For a `HumanInput` step that *completes* it; for an attempt that
+  stopped mid-work it schedules a **new** attempt of the same step, so the one
+  that asked stays immutable. The answers accumulate on the step and the
+  assignment carries them, because the resumed attempt re-runs from the
+  beginning and would otherwise ask the same question again.
+- A timeout is a policy on the *question*: `on_timeout: fail | skip |
   default(response)`, fired by the store's timer, once, and refused as an
-  answer after the deadline.
+  answer after the deadline. On the question rather than only on the plan
+  because a question has two authors, and the plan that pinned a task's code
+  says nothing about what that task chose to ask (43.40).
 - Delivery to a person is the WebSocket that was always going to carry it:
   `/api/v1/live` gets its first control message, `awaiting_input`, and the
   panel gets its first dialog — the trigger `CLAUDE.md` names for Radix and
@@ -3220,6 +3233,104 @@ history says the question was asked and never answered, and a run that recorded
 an answer there would be claiming somebody made a decision. `answer` does record
 one, attributed to `aiwatcher/timeout`, because the one record of a human
 decision has to say when there was not one.
+
+### 43.40 A worker's question has no plan step to read a policy from
+
+The mid-attempt park was described as one feature and was two, and the split is
+the same one `dispatch_ready` already makes: for a **hosted** run the worker owns
+the decision and appends a park to its own stream, so nothing in the protocol
+changes; for a **compiled** run's `PythonTask` attempt the worker holds a lease
+it has to renew and the engine decides. Only the second needed building, and
+what it needed was a third `WorkReport`.
+
+**The claim table had the shape and no writer.** 43.34 kept `awaiting_input`'s
+row on the argument that a question is not an ending, and
+`AttemptRow::is_claimable` has excluded that state ever since — but nothing ever
+wrote one, because the only thing that parked was a `HumanInput` step and those
+reach the claim table never. `AttemptWrite::Park` is the third shape: the row
+stays, the lease goes. Left running instead, the lease would simply expire and
+the next claimant would run the work again, having been told nothing about the
+question.
+
+**The deadline was said to follow for free, and half of it did.** The timer row
+is derived from `InputRequested` carrying one, and a worker's park emits the same
+fact, so scheduling worked untouched. Cancelling did not: `has_deadline` asked
+the *plan* whether the step was an authored gate with a clock, which is true of
+nothing a worker parks. The row would have been left behind, still coming for a
+question that was over. It is read from the decision's own facts now, because
+`evolve` clears `awaiting` on the very events a cancel follows — by then the
+question that had the clock is already gone.
+
+**And `on_timeout` moved onto the question.** `TimeoutInput` resolved the policy
+by matching `RuntimeBinding::HumanInput` on the pinned plan; a `PythonTask` spec
+has none, so a lapsed deadline on a parked attempt was refused as `NoSuchStep`
+and the run stayed parked for ever behind a clock that had already passed. A
+question has two authors — the plan for a gate it declared, the worker for one it
+chose to ask — so the policy rides on the request, copied from the spec when the
+decider schedules a gate. The plan stays as the fallback, for streams written
+before the field existed.
+
+**An answer is not always a result.** `ProvideInput` completed the step, which is
+right for a `HumanInput` — that step *is* the question — and wrong for one that
+stopped in the middle of its own work, where the answer is an input to the rest
+of it. That schedules attempt *n+1*, so the attempt that asked stays immutable
+and re-running from the beginning is the rule every retry already lives under.
+The answers are kept on the **step** and accumulate: attempt two replays to the
+first question and has to read it rather than ask again, and a task that asks
+twice needs both by attempt three. It also makes the step uncacheable — a human
+decision is addressed by nothing, so two runs answered differently would
+otherwise share a key.
+
+**And the resume walked past the rule that retires a finished attempt.** A park
+keeps its row deliberately, so the resume dispatched attempt *n+1* and left the
+parked one where it was — one row per park, for ever, which is the claim table
+growing with the history. `InputProvided` retires it in the same decision: the
+attempt that asked is read back from the stream and the projection, which is the
+same reasoning that says nothing reads a finished attempt out of that table.
+
+**And an answer nobody gave is still an answer.** Writing that rule in
+`ProvideInput` left `OnTimeout::Answer` with its own copy, and the two disagreed
+the moment the first was corrected: the timeout completed the step outright, so a
+parked worker attempt was left `Completed` at the attempt that never finished,
+with no outputs — anything bound to its rows read nothing, which is the failure
+that looks like a success. Both doors go through one `answer_lands` now. The
+composition around it was the second half of the same mistake: a `continue_after`
+shared by all three policies declared the run finished over a step `Answer` had
+just re-scheduled, so it belongs to `Skip` alone.
+
+### 43.41 Two numbers that decided nothing because nobody had them
+
+The plan called observability and a reference-aware collector "designs waiting on
+a measurement", and the measurement was never taken — so both stayed open on an
+argument nobody could settle. Four figures now exist, and where each lives was
+decided by which process can see it.
+
+**Lateness is measured to the tick that found the slot**, not to the moment the
+run started: the second folds the store's latency and the compiler's into a
+number that is supposed to be about the clock. It rides with the *backlog* from
+the same tick, because reading either alone misleads — one slot four minutes
+behind is a busy tick, forty is an instance that has fallen behind, and the
+lateness is identical in both. Reporting comes after the slots are started and a
+sink that is down costs a graph, never a run.
+
+**Artifact growth is a walk, hourly, and a count rather than an opinion.**
+Whether an object is still *reachable* is a question about every execution's
+stream, and retention has been deleting those — so what can honestly be reported
+is what is there, and the shape of the curve over weeks is what says whether a
+collector is worth building.
+
+**Staging is measured by the notebook runtime, because nothing else can see
+it.** `services/ml_pipeline` keys staged rows by a hash of the context in its own
+scratch directory; the Rust binary cannot list that disk and a zero reported from
+there would be worse than no number at all. `GET /ml-pipeline/staging` answers
+it, on demand rather than on a health poll — it is a `stat` per staged file and
+the figure moves over days. That directory only grows: a stage overwrites its own
+context and leaves every other one, one per attempt of every managed step that
+reached a notebook.
+
+Both halves report an age as **absent** rather than zero when there is nothing to
+date. "Empty" and "everything here is from today" are different states, and a
+zero says the second.
 
 ### 43.9 What did not need changing
 

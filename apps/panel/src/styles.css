@@ -183,19 +183,17 @@
 
 @layer components {
   /*
-   * The ground a graph is drawn on. A flat panel makes every box float at the
-   * same depth; one soft pool of light behind the canvas puts the boxes on
-   * something, and is the whole of the effect — a gradient anybody can name is
-   * a gradient that is competing with the diagram.
+   * The ground a graph is drawn on.
+   *
+   * This was a 7% radial glow, and it read as decoration — the canvas is a
+   * working surface somebody has open for an hour, not a slide.
+   *
+   * It is now the darkest tone on the page, deliberately: the blocks carry
+   * `bg-card`, so putting the ground *under* that is what makes them read as
+   * cards on a surface rather than as tinted patches of it.
    */
   .flow-surface {
-    background:
-      radial-gradient(
-        120% 90% at 50% 0%,
-        color-mix(in oklch, var(--color-primary) 7%, transparent),
-        transparent 62%
-      ),
-      var(--color-background);
+    background: var(--color-background);
   }
 
   /* Remounted on a status change — a key, not a transition — so the glow

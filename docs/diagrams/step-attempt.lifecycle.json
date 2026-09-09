@@ -1,0 +1,259 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "What a step can be",
+    "subtitle": "Nine states, four terminal, three ways to not be running",
+    "visual_preset": "signal-flow",
+    "animation": "trace",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "happy",
+        "label": "Claimed and done",
+        "focus": [
+          "pending",
+          "running",
+          "completed"
+        ],
+        "note": "The path a step takes when nothing interrupts it."
+      },
+      {
+        "id": "not-running",
+        "label": "Three ways to wait",
+        "focus": [
+          "pending",
+          "awaiting_input",
+          "awaiting_retry"
+        ],
+        "note": "Waiting on this system, on a person, and on a delay this system set."
+      },
+      {
+        "id": "endings",
+        "label": "Failed is not crashed",
+        "focus": [
+          "running",
+          "failed",
+          "crashed"
+        ],
+        "note": "Answered wrongly, or lost entirely — the retry budgets differ."
+      }
+    ]
+  },
+  "lanes": [
+    {
+      "id": "main",
+      "label": "The step's own path"
+    },
+    {
+      "id": "side",
+      "label": "Not running, or not succeeded"
+    }
+  ],
+  "states": [
+    {
+      "id": "pending",
+      "type": "start",
+      "label": "Pending",
+      "sublabel": "a parent, or a worker",
+      "lane": "main",
+      "col": 2,
+      "step": "01",
+      "width": 120,
+      "height": 74
+    },
+    {
+      "id": "running",
+      "type": "active",
+      "label": "Running",
+      "sublabel": "claimed, performing",
+      "lane": "main",
+      "col": 3,
+      "step": "02",
+      "width": 120,
+      "height": 74
+    },
+    {
+      "id": "completed",
+      "type": "success",
+      "label": "Completed",
+      "sublabel": "outputs stored first",
+      "lane": "main",
+      "col": 4,
+      "step": "03",
+      "width": 120,
+      "height": 74,
+      "yOffset": -7
+    },
+    {
+      "id": "awaiting_retry",
+      "type": "waiting",
+      "label": "AwaitingRetry",
+      "sublabel": "still Pending",
+      "lane": "side",
+      "col": 0,
+      "width": 120,
+      "height": 74,
+      "yOffset": 96
+    },
+    {
+      "id": "awaiting_input",
+      "type": "waiting",
+      "label": "AwaitingInput",
+      "sublabel": "a person holds it",
+      "lane": "side",
+      "col": 1,
+      "width": 120,
+      "height": 74,
+      "yOffset": 0
+    },
+    {
+      "id": "failed",
+      "type": "failure",
+      "label": "Failed",
+      "sublabel": "ran, answered wrongly",
+      "lane": "side",
+      "col": 2,
+      "yOffset": 0,
+      "width": 120,
+      "height": 74
+    },
+    {
+      "id": "crashed",
+      "type": "failure",
+      "label": "Crashed",
+      "sublabel": "lost, not answered",
+      "lane": "side",
+      "col": 2,
+      "yOffset": 96,
+      "width": 120,
+      "height": 74
+    }
+  ],
+  "transitions": [
+    {
+      "id": "claim",
+      "from": "pending",
+      "to": "running",
+      "variant": "emphasis"
+    },
+    {
+      "id": "done",
+      "from": "running",
+      "to": "completed",
+      "variant": "emphasis"
+    },
+    {
+      "id": "ask",
+      "from": "running",
+      "to": "awaiting_input",
+      "label": "a question",
+      "variant": "security",
+      "labelDx": -52,
+      "labelDy": 22
+    },
+    {
+      "id": "answered",
+      "from": "awaiting_input",
+      "to": "running",
+      "label": "answered",
+      "variant": "emphasis",
+      "labelDx": 52
+    },
+    {
+      "id": "fail",
+      "from": "running",
+      "to": "failed",
+      "variant": "security"
+    },
+    {
+      "id": "crash",
+      "from": "running",
+      "to": "crashed",
+      "variant": "security",
+      "fromSide": "right",
+      "toSide": "right",
+      "via": [
+        [
+          633,
+          163
+        ],
+        [
+          633,
+          232
+        ],
+        [
+          812,
+          232
+        ],
+        [
+          812,
+          411
+        ]
+      ]
+    },
+    {
+      "id": "retry",
+      "from": "failed",
+      "to": "awaiting_retry",
+      "label": "budget left",
+      "variant": "dashed",
+      "fromSide": "left",
+      "toSide": "bottom",
+      "via": [
+        [
+          636,
+          315
+        ],
+        [
+          636,
+          502
+        ],
+        [
+          402,
+          502
+        ]
+      ],
+      "labelAt": [
+        519,
+        492
+      ]
+    },
+    {
+      "id": "requeue",
+      "from": "awaiting_retry",
+      "to": "pending",
+      "label": "the delay elapses",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Three ways to not be running",
+      "items": [
+        "Pending waits on this system: a parent, a worker, a delay",
+        "AwaitingInput waits on a person, and keeps its claim row",
+        "Paused is the run's state, never a step's"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Failed is not Crashed",
+      "items": [
+        "Failed: the work ran and gave a wrong answer",
+        "Crashed: a node was drained, a lease expired",
+        "Both retry; Transient keeps ten attempts, these three"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "What may be pressed",
+      "items": [
+        "Retry, only from Failed or Crashed",
+        "and never while the run is cancelling",
+        "Cancelled is reachable from all four non-terminal states"
+      ]
+    }
+  ]
+}

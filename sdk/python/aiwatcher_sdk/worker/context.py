@@ -13,8 +13,8 @@ from aiwatcher_sdk import AiwatcherClient, Correlation, RunContext
 from aiwatcher_sdk.integrations.agentic import AiwatcherTracer
 from aiwatcher_sdk.worker.assignment import Assignment
 from aiwatcher_sdk.worker.attempt import AttemptAPI
-from aiwatcher_sdk.worker.contract import ArtifactRef, JsonObject
-from aiwatcher_sdk.worker.errors import LeaseLostError, TaskError, WorkerError
+from aiwatcher_sdk.worker.contract import ArtifactRef, JsonObject, JsonValue, OnTimeout
+from aiwatcher_sdk.worker.errors import InputRequired, LeaseLostError, TaskError, WorkerError
 
 current_context: ContextVar[TaskContext | None] = ContextVar("aiwatcher_task_context", default=None)
 
@@ -63,6 +63,7 @@ class TaskContext:
         self._monotonic = monotonic
         self._api = api
         self._outputs: dict[str, ArtifactRef] = {}
+        self._answers = iter(assignment.answers)
         self._stopped = threading.Event()
         self._error: WorkerError | None = None
         self._heartbeat_lock = threading.Lock()
@@ -115,6 +116,44 @@ class TaskContext:
                     else error
                 )
                 raise self._error from error
+
+    def ask(
+        self,
+        prompt: str,
+        *,
+        role: str = "editor",
+        choices: Sequence[str] = (),
+        timeout_seconds: int | None = None,
+        on_timeout: OnTimeout | None = None,
+    ) -> JsonValue:
+        """Put a question in front of somebody, and park this attempt until it is answered.
+
+        What a capability hook calls when a tool call wants approving. It
+        returns the answer — but not on this attempt: the first time it is
+        reached it raises :class:`InputRequired`, the attempt parks, and the
+        answer schedules a new attempt of the same step. That attempt runs this
+        task again from the beginning and this call returns.
+
+        So the work before the question happens twice. That is the rule every
+        retry already lives under and not a special case: a task that wants to
+        keep what it did hands it back with ``write_artifact`` and reads it
+        again.
+
+        Answers are consumed in the order they were given, which is the order a
+        replay asks for them — so a task that asks two questions gets them back
+        in the same two places.
+        """
+        self.raise_if_cancelled()
+        answered = next(self._answers, None)
+        if answered is not None:
+            return answered.response
+        raise InputRequired(
+            prompt,
+            role=role,
+            choices=choices,
+            timeout_seconds=timeout_seconds,
+            on_timeout=on_timeout,
+        )
 
     def read_artifact(self, name: str) -> list[JsonObject]:
         self.raise_if_cancelled()

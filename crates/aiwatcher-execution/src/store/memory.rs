@@ -274,6 +274,15 @@ impl WorkflowStore for MemoryWorkflowStore {
                 AttemptWrite::Dispatch(row) => {
                     inner.attempts.insert(row.key.clone(), row);
                 }
+                // A question is not an ending: the row stays and the lease
+                // goes. Absent is a no-op rather than an insert — a step the
+                // decider parks when it schedules it was never dispatched
+                // here, so there is nothing of its to release.
+                AttemptWrite::Park(key) => {
+                    if let Some(row) = inner.attempts.get_mut(&key) {
+                        row.park();
+                    }
+                }
                 // A finished attempt is not a row. See `AttemptWrite`.
                 AttemptWrite::Retire(key) => {
                     inner.attempts.remove(&key);

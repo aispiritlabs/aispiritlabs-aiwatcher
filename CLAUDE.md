@@ -796,6 +796,76 @@ what runs a real graph.
   redelivery is recognised by the stream's inbox key, and a takeover reads
   `previous_owner` on a row that is still live. `awaiting_input` keeps its row,
   because it is not an ending. Section 43.34.
+- **Never leave a parked attempt holding its lease.** `AttemptWrite::Park` is
+  the third shape and the one that changes a row rather than adding or removing
+  one: the row stays, because a question is not an ending and the attempt that
+  asked has to stay readable, and the lease goes, because a worker that stopped
+  to ask does not hold a pod for the answer. Left running, the lease expires
+  and the next claimant runs the work again having been told nothing about the
+  question — 43.34 reserved `awaiting_input`'s row for exactly this and nothing
+  wrote one until now. Only a step the plan *dispatched* gets one: a
+  `HumanInput` step is parked by the decider when it schedules it and reaches
+  the claim table never. Section 43.40.
+- **Never let an answer leave the row it parked.** A park keeps its row because
+  a question is not an ending; an answer *is* one, so `InputProvided` retires it
+  in the same decision that dispatches attempt *n+1* under its own key. The
+  attempt that asked is read back from the stream and the projection, never from
+  the claim table — the rule that retires a finished attempt, which the resume
+  walked straight past. Left behind, the table gains a row per park for ever,
+  which is the claim table growing with the history that rule exists to prevent,
+  and the `file` adapter pays for it on every claim and every heartbeat.
+  Section 43.40.
+- **Never ask the plan what only the question knows.** A gate has two authors —
+  the plan for one it declared, a running attempt for one it chose to ask — and
+  a `PythonTask` spec has no `on_timeout` to read. So the policy rides on
+  `InputRequest`, copied from the spec when a gate is scheduled, with the plan
+  kept only as the fallback for streams written before the field. Resolved from
+  the plan alone, a lapsed deadline on a parked attempt was refused as
+  `NoSuchStep` and the run stayed parked for ever behind a clock that had
+  already passed. The cancel side is the same mistake from the other end: it
+  is read from the decision's own facts, because `evolve` clears `awaiting` on
+  the very events a cancel follows. Section 43.40.
+- **Never let an answer be a step's result unless the step was the question.**
+  `ProvideInput` completes a `HumanInput` step, because that step *is* the
+  question and there is nothing else for it to do. An attempt that stopped in
+  the middle of its own work is the other case: the answer is one input to the
+  rest of it, so it schedules attempt *n+1* and the attempt that asked stays
+  immutable. The resumed attempt re-runs from the beginning — the rule every
+  retry already lives under — so the answers are kept on the **step** and
+  accumulate: attempt two replays to the first question and must read it rather
+  than ask again, and a task that asks twice needs both by attempt three.
+  Section 43.40.
+- **Never decide what an answer does in two places.** A person answers through
+  `ProvideInput` and a lapsed deadline answers through `OnTimeout::Answer`, and
+  what an answer *does* is one question — so both go through `answer_lands`.
+  Written twice, the two disagreed as soon as the first was corrected: the
+  timeout completed the step, leaving a parked worker attempt `Completed` at the
+  attempt that never finished and with no outputs, so anything bound to its rows
+  read nothing. What follows is part of the same rule: `continue_after` belongs
+  to the arm that actually ended the step, because a shared one declares the run
+  finished over a step `Answer` has just re-scheduled. Section 43.40.
+- **Never cache a step somebody answered.** A human decision is addressed by
+  nothing, so a step that has one no longer has all its inputs addressed —
+  `cache_key`'s own rule. Two runs of one step answered differently would share
+  a key, and the second would be served the first one's rows without ever
+  seeing its own answer. `None`, rather than a key that means "probably the
+  same". Section 43.40.
+- **Never let a measurement cost a run.** The scheduler reports its lateness and
+  its backlog *after* it has started the slots, and a sink that is down is a
+  warning rather than a failed tick — the cursor still moves, because whether a
+  graph was written says nothing about whether the interval was read. Lateness
+  is measured to the tick that *found* the slot and never to the moment the run
+  started, which would fold the store's latency and the compiler's into a number
+  about the clock; and it is reported beside the backlog from the same tick,
+  because one slot four minutes behind and forty of them are the same lateness
+  and very different news. Section 43.41.
+- **Never report a number for a disk this process cannot see.** A notebook's
+  staged rows live in `services/ml_pipeline`, keyed by a hash of the context in
+  that process's own scratch directory, and nothing here can list them — so the
+  staging figure is `GET /ml-pipeline/staging` and not a zero reported beside
+  the artifact totals. The artifact half is this binary's, hourly, and a count
+  rather than an opinion: whether an object is still reachable is a question
+  about streams retention has already been deleting. Section 43.41.
 - **Never put a run's timings in the workflow store.** When an execution
   started and ended is the log fold's answer — with `duration_ms` — and an
   attempt's is the span assembler's, from `step.*`. `RunProjection` and

@@ -248,6 +248,13 @@ impl<S: WorkflowStore> Reactor<S> {
             step,
             inputs: run.resolved_inputs(&row.key.step_id),
             parameters: run.input.clone(),
+            // Read from the step rather than from this attempt: the answers
+            // were given to the attempts *before* this one, which is the whole
+            // point of them being here.
+            answers: run
+                .step(&row.key.step_id)
+                .map(|state| state.answers.clone())
+                .unwrap_or_default(),
         };
         let context = ActivityContext {
             owner: self.owner.clone(),
@@ -344,6 +351,10 @@ impl<S: WorkflowStore> Reactor<S> {
             step,
             inputs: run.resolved_inputs(&key.step_id),
             parameters: run.input.clone(),
+            answers: run
+                .step(&key.step_id)
+                .map(|state| state.answers.clone())
+                .unwrap_or_default(),
         };
         let context = ActivityContext {
             owner: self.owner.clone(),

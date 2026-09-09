@@ -178,6 +178,7 @@ impl Fake {
                     role: "admin".to_owned(),
                     choices: vec!["yes".to_owned()],
                     deadline: None,
+                    on_timeout: None,
                 }),
                 ..ActivityResult::default()
             }),

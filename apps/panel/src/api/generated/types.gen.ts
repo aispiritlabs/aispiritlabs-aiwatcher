@@ -3342,6 +3342,38 @@ export type IngestResponse = {
 };
 
 /**
+ * One answer somebody gave a step, and which attempt asked for it.
+ *
+ * Kept on the *step* rather than only on the attempt that asked, because the
+ * answer's reader is the attempt that comes *after*. A parked attempt stays
+ * immutable and the answer schedules attempt `n+1`, which re-runs the work
+ * from the beginning — so the question it asks first is the one already
+ * answered here, and without this it would ask it again and park again.
+ *
+ * A list rather than one, because a task may ask twice. Attempt 1 asks, the
+ * answer schedules attempt 2, which replays to the first question, reads this
+ * answer instead of parking, goes on and asks a *second*. Attempt 3 then needs
+ * both: given only the last it would park on the first question for ever. They
+ * are consumed in the order they were given, which is the same order a replay
+ * asks them in.
+ *
+ * Each `response` is bounded — the answer route takes a control value, not
+ * rows — and the list is as long as the number of questions the task asks.
+ */
+export type InputAnswer = {
+    /**
+     * From the session that answered, never from a request body.
+     */
+    answered_by: string;
+    /**
+     * The attempt that asked. Not the attempt that reads it, which is a later
+     * one — this says whose question was answered.
+     */
+    attempt: number;
+    response: unknown;
+};
+
+/**
  * Where one of a step's inputs comes from.
  */
 export type InputBinding = {
@@ -3359,6 +3391,7 @@ export type InputBinding = {
 export type InputRequest = {
     choices?: Array<string>;
     deadline?: string | null;
+    on_timeout?: null | OnTimeout;
     prompt: string;
     /**
      * The role that may answer. Checked when the answer arrives.
@@ -5981,9 +6014,44 @@ export type SetScheduleBody = {
  */
 export type Settled = {
     attempt: number;
+    outcome: Settlement;
     step_id: string;
+    /**
+     * Whether the attempt finished its work successfully.
+     *
+     * Kept beside [`Self::outcome`], which subsumes it, because an SDK rolls
+     * separately from this server and every released one reads this field —
+     * removing it in the release that adds the wider answer would break a
+     * worker whose only fault was being the version it was pinned at. The same
+     * staged-removal discipline the schema keeps. `outcome` is the one a new
+     * client asks; this is derived from it and never set independently.
+     */
     succeeded: boolean;
 };
+
+/**
+ * Which of the three things a report turned out to be.
+ *
+ * Named rather than inferred from [`Settled::succeeded`], which answers a
+ * narrower question and answers it `false` for a failure and a park alike. A
+ * client that checked only the boolean would agree with the server about a
+ * park by coincidence rather than by name.
+ */
+export const Settlement = {
+    COMPLETED: 'completed',
+    FAILED: 'failed',
+    PARKED: 'parked'
+} as const;
+
+/**
+ * Which of the three things a report turned out to be.
+ *
+ * Named rather than inferred from [`Settled::succeeded`], which answers a
+ * narrower question and answers it `false` for a failure and a park alike. A
+ * client that checked only the boolean would agree with the server about a
+ * park by coincidence rather than by name.
+ */
+export type Settlement = typeof Settlement[keyof typeof Settlement];
 
 /**
  * One written shard of a staged artifact.
@@ -6435,6 +6503,13 @@ export type StepError = {
  * The logical state of one plan step, across every attempt it took.
  */
 export type StepState = {
+    /**
+     * Every answer this step has been given, oldest first.
+     *
+     * What a resumed attempt reads. See [`InputAnswer`] for why it is a list
+     * and why it lives on the step rather than on the attempt that asked.
+     */
+    answers?: Array<InputAnswer>;
     attempts?: Array<AttemptRecord>;
     awaiting?: null | InputRequest;
     cache_key?: string | null;
@@ -6958,6 +7033,17 @@ export type Withdrawal = {
  * One attempt, and everything performing it needs.
  */
 export type WorkAssignment = {
+    /**
+     * Every answer this step has already been given, oldest first.
+     *
+     * Empty for almost every assignment. It is not empty when this attempt
+     * exists *because* somebody answered the question the previous one stopped
+     * to ask: the work re-runs from the beginning, so it reaches that question
+     * again and reads the answer instead of parking a second time.
+     *
+     * Consumed in order, which is the order a replay asks them in.
+     */
+    answers: Array<InputAnswer>;
     attempt: number;
     /**
      * `<execution>/<step>/<attempt>` — what the work is idempotent by, and
@@ -7062,6 +7148,32 @@ export type WorkReport = {
     diagnostics?: string | null;
     message: string;
     outcome: 'failed';
+} | {
+    /**
+     * Answers are buttons. Empty means free-form.
+     */
+    choices?: Array<string>;
+    diagnostics?: string | null;
+    /**
+     * What happens if nobody answers in time. Refused without a deadline,
+     * because a policy with no clock behind it is a rule nothing fires.
+     */
+    on_timeout?: OnTimeout;
+    outcome: 'parked';
+    /**
+     * What is being asked, in the words the person reads.
+     */
+    prompt: string;
+    /**
+     * The role that may answer. A gate only ever raises the editor floor
+     * the answer route already holds.
+     */
+    role?: string;
+    /**
+     * How long the run waits before `on_timeout` decides for it. `None`
+     * waits as long as it takes, which is the default.
+     */
+    timeout_seconds?: number | null;
 };
 
 /**

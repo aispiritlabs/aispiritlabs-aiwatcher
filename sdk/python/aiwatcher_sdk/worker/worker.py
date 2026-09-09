@@ -19,7 +19,7 @@ from aiwatcher_sdk.api import Transport
 from aiwatcher_sdk.worker.assignment import Assignment
 from aiwatcher_sdk.worker.context import TaskContext
 from aiwatcher_sdk.worker.contract import Completed, Failed, Report, json_value
-from aiwatcher_sdk.worker.errors import LeaseLostError, TaskError, WorkerError
+from aiwatcher_sdk.worker.errors import InputRequired, LeaseLostError, TaskError, WorkerError
 from aiwatcher_sdk.worker.http import HttpAttemptAPI, claim
 from aiwatcher_sdk.worker.reference import AttemptRef
 from aiwatcher_sdk.worker.task import Task
@@ -154,6 +154,11 @@ class Worker:
                     "result exceeds 64 KiB; write an artifact instead", classification="validation"
                 )
             return Completed(json_value(json.loads(encoded)), ctx.outputs)
+        except InputRequired as asked:
+            # Not a failure and not a result. The attempt parks: this worker
+            # stops holding it, and the answer schedules a new attempt that runs
+            # this task again with the answer in front of it.
+            return asked.as_report()
         except WorkerError:
             # A lost response is not evidence the task failed. Let the caller see
             # the transport failure and let the server recover the expired lease.

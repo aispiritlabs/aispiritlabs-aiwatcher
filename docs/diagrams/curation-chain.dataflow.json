@@ -1,0 +1,262 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "A curation, from catalog to version",
+    "subtitle": "Three engines, one chain — ADR_0024",
+    "viewBox": [
+      1080,
+      520
+    ],
+    "visual_preset": "signal-flow",
+    "animation": "trace",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "one-query",
+        "label": "Source and transforms are one query",
+        "focus": [
+          "blocks",
+          "dataset",
+          "flow"
+        ],
+        "note": "The compiler folds a source and every transform behind it into a single Flow query."
+      },
+      {
+        "id": "code",
+        "label": "Where code runs",
+        "focus": [
+          "flow",
+          "store",
+          "notebook"
+        ],
+        "note": "A notebook is for what the query language has no vocabulary for — a model, or a scanner."
+      },
+      {
+        "id": "binding",
+        "label": "A gate produces nothing",
+        "focus": [
+          "gate",
+          "store",
+          "version"
+        ],
+        "note": "Answering is its completion, so the block after it binds by step id rather than by adjacency."
+      }
+    ]
+  },
+  "stages": [
+    {
+      "label": "Catalog"
+    },
+    {
+      "label": "One query"
+    },
+    {
+      "label": "Code"
+    },
+    {
+      "label": "Gate"
+    },
+    {
+      "label": "Publish"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "blocks",
+      "type": "frontend",
+      "label": "Authored blocks",
+      "sublabel": "content-addressed",
+      "stage": 0,
+      "row": 0,
+      "tag": "a revision"
+    },
+    {
+      "id": "dataset",
+      "type": "database",
+      "label": "Named dataset",
+      "sublabel": "the query catalog",
+      "stage": 0,
+      "row": 2,
+      "tag": "windowed"
+    },
+    {
+      "id": "flow",
+      "type": "backend",
+      "label": "Flow PHP",
+      "sublabel": "parsed, never eval'd",
+      "stage": 1,
+      "row": 1,
+      "tag": "one query"
+    },
+    {
+      "id": "store",
+      "type": "cloud",
+      "label": "Object store",
+      "sublabel": "rows, digested",
+      "stage": 2,
+      "row": 0,
+      "tag": "outputs"
+    },
+    {
+      "id": "notebook",
+      "type": "cloud",
+      "label": "marimo",
+      "sublabel": "pinned revision",
+      "stage": 2,
+      "row": 2,
+      "tag": "App.run"
+    },
+    {
+      "id": "gate",
+      "type": "security",
+      "label": "Approval",
+      "sublabel": "a person answers",
+      "stage": 3,
+      "row": 1,
+      "tag": "produces nothing"
+    },
+    {
+      "id": "version",
+      "type": "database",
+      "label": "Dataset version",
+      "sublabel": "produced_by",
+      "stage": 4,
+      "row": 1,
+      "tag": "immutable"
+    }
+  ],
+  "flows": [
+    {
+      "id": "compile",
+      "from": "blocks",
+      "to": "flow",
+      "label": "compiles to",
+      "classification": "in Rust, not the browser",
+      "variant": "emphasis"
+    },
+    {
+      "id": "read",
+      "from": "dataset",
+      "to": "flow",
+      "label": "reads",
+      "classification": "as_of pins the window"
+    },
+    {
+      "id": "rows",
+      "from": "flow",
+      "to": "store",
+      "label": "rows",
+      "classification": "digested",
+      "variant": "emphasis",
+      "labelAt": [
+        485,
+        212
+      ]
+    },
+    {
+      "id": "inject",
+      "from": "store",
+      "to": "notebook",
+      "label": "injected as rows",
+      "classification": "one cell replaced",
+      "labelAt": [
+        560,
+        280
+      ]
+    },
+    {
+      "id": "output",
+      "from": "notebook",
+      "to": "store",
+      "label": "output",
+      "classification": "reports determinism",
+      "variant": "dashed",
+      "labelAt": [
+        412,
+        314
+      ],
+      "fromSide": "left",
+      "toSide": "left",
+      "via": [
+        [
+          440,
+          385
+        ],
+        [
+          440,
+          157
+        ]
+      ]
+    },
+    {
+      "id": "before",
+      "from": "store",
+      "to": "gate",
+      "label": "the rows before it",
+      "classification": "read, not consumed"
+    },
+    {
+      "id": "answered",
+      "from": "gate",
+      "to": "version",
+      "label": "answered",
+      "classification": "the edge",
+      "variant": "emphasis",
+      "route": "straight"
+    },
+    {
+      "id": "bound",
+      "from": "store",
+      "to": "version",
+      "label": "bound by step id",
+      "classification": "not by adjacency",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "top",
+      "via": [
+        [
+          530,
+          100
+        ],
+        [
+          960,
+          100
+        ]
+      ],
+      "labelAt": [
+        745,
+        88
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "One query, three boxes",
+      "items": [
+        "A source and every transform behind it compile to one Flow query",
+        "So three blocks light up together from one step.started",
+        "A transform behind a notebook or a gate is refused by name"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Why a notebook exists at all",
+      "items": [
+        "A query composes values and never reaches arbitrary code",
+        "Detecting personal data needs something that reads the text",
+        "The notebook is one file doing two jobs: a step, and a live app"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "The gate is in the chain, not the data",
+      "items": [
+        "It reads the rows before it and produces nothing",
+        "Answering is its completion",
+        "So the next block binds to a step that is not its parent"
+      ]
+    }
+  ]
+}

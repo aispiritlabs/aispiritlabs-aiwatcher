@@ -15451,6 +15451,28 @@
           }
         }
       },
+      "InputAnswer": {
+        "type": "object",
+        "description": "One answer somebody gave a step, and which attempt asked for it.\n\nKept on the *step* rather than only on the attempt that asked, because the\nanswer's reader is the attempt that comes *after*. A parked attempt stays\nimmutable and the answer schedules attempt `n+1`, which re-runs the work\nfrom the beginning — so the question it asks first is the one already\nanswered here, and without this it would ask it again and park again.\n\nA list rather than one, because a task may ask twice. Attempt 1 asks, the\nanswer schedules attempt 2, which replays to the first question, reads this\nanswer instead of parking, goes on and asks a *second*. Attempt 3 then needs\nboth: given only the last it would park on the first question for ever. They\nare consumed in the order they were given, which is the same order a replay\nasks them in.\n\nEach `response` is bounded — the answer route takes a control value, not\nrows — and the list is as long as the number of questions the task asks.",
+        "required": [
+          "attempt",
+          "answered_by",
+          "response"
+        ],
+        "properties": {
+          "answered_by": {
+            "type": "string",
+            "description": "From the session that answered, never from a request body."
+          },
+          "attempt": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The attempt that asked. Not the attempt that reads it, which is a later\none — this says whose question was answered.",
+            "minimum": 0
+          },
+          "response": {}
+        }
+      },
       "InputBinding": {
         "oneOf": [
           {
@@ -15518,6 +15540,17 @@
               "null"
             ],
             "format": "date-time"
+          },
+          "on_timeout": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/OnTimeout",
+                "description": "What happens to this step if nobody answers in time.\n\nOn the question rather than only on the plan, because a question has two\nauthors and only one of them is the plan. A `HumanInput` step's policy is\n[`HumanInputSpec::on_timeout`](crate::plan::HumanInputSpec::on_timeout)\nand is copied here when the step is scheduled; a running attempt that\nstopped to ask supplies its own, and the plan that pinned its code has\nnothing to say about a question it did not author.\n\n`None` is a question written before this field existed. Those are all\n`HumanInput` steps, so the plan is read for them instead — the fallback\nexists so a replay of an old stream reaches the policy it was decided\nunder rather than this field's default."
+              }
+            ]
           },
           "prompt": {
             "type": "string"
@@ -20046,7 +20079,8 @@
         "required": [
           "step_id",
           "attempt",
-          "succeeded"
+          "succeeded",
+          "outcome"
         ],
         "properties": {
           "attempt": {
@@ -20054,13 +20088,26 @@
             "format": "int32",
             "minimum": 0
           },
+          "outcome": {
+            "$ref": "#/components/schemas/Settlement"
+          },
           "step_id": {
             "type": "string"
           },
           "succeeded": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "Whether the attempt finished its work successfully.\n\nKept beside [`Self::outcome`], which subsumes it, because an SDK rolls\nseparately from this server and every released one reads this field —\nremoving it in the release that adds the wider answer would break a\nworker whose only fault was being the version it was pinned at. The same\nstaged-removal discipline the schema keeps. `outcome` is the one a new\nclient asks; this is derived from it and never set independently."
           }
         }
+      },
+      "Settlement": {
+        "type": "string",
+        "description": "Which of the three things a report turned out to be.\n\nNamed rather than inferred from [`Settled::succeeded`], which answers a\nnarrower question and answers it `false` for a failure and a park alike. A\nclient that checked only the boolean would agree with the server about a\npark by coincidence rather than by name.",
+        "enum": [
+          "completed",
+          "failed",
+          "parked"
+        ]
       },
       "ShardRef": {
         "type": "object",
@@ -20825,6 +20872,13 @@
           "current_attempt"
         ],
         "properties": {
+          "answers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InputAnswer"
+            },
+            "description": "Every answer this step has been given, oldest first.\n\nWhat a resumed attempt reads. See [`InputAnswer`] for why it is a list\nand why it lives on the step rather than on the attempt that asked."
+          },
           "attempts": {
             "type": "array",
             "items": {
@@ -21826,9 +21880,17 @@
           "params",
           "parameters",
           "inputs",
-          "is_retake"
+          "is_retake",
+          "answers"
         ],
         "properties": {
+          "answers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InputAnswer"
+            },
+            "description": "Every answer this step has already been given, oldest first.\n\nEmpty for almost every assignment. It is not empty when this attempt\nexists *because* somebody answered the question the previous one stopped\nto ask: the work re-runs from the beginning, so it reaches that question\nagain and reads the answer instead of parking a second time.\n\nConsumed in order, which is the order a replay asks them in."
+          },
           "attempt": {
             "type": "integer",
             "format": "int32",
@@ -21968,6 +22030,56 @@
                 "enum": [
                   "failed"
                 ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "It stopped in the middle of its own work to ask somebody something.\n\nThe third shape, and the whole of the protocol change. A `HumanInput`\nstep is the question and nothing else; this one was already running — a\ntool call a capability hook wants approved — so the attempt parks rather\nthan ends: the lease is released, the row stays, and the answer\nschedules attempt *n+1* with the response in its inputs.\n\nIt is a **report** and not a decision. A worker that worked out for\nitself what its own park meant would be the drift the seam exists to\nprevent: this goes through [`Reactor::settle`] like the other two, and\neverything after it — the lease re-check, the fact, the timer row — is\nthe engine's.",
+            "required": [
+              "prompt",
+              "outcome"
+            ],
+            "properties": {
+              "choices": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Answers are buttons. Empty means free-form."
+              },
+              "diagnostics": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "on_timeout": {
+                "$ref": "#/components/schemas/OnTimeout",
+                "description": "What happens if nobody answers in time. Refused without a deadline,\nbecause a policy with no clock behind it is a rule nothing fires."
+              },
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "parked"
+                ]
+              },
+              "prompt": {
+                "type": "string",
+                "description": "What is being asked, in the words the person reads."
+              },
+              "role": {
+                "type": "string",
+                "description": "The role that may answer. A gate only ever raises the editor floor\nthe answer route already holds."
+              },
+              "timeout_seconds": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "How long the run waits before `on_timeout` decides for it. `None`\nwaits as long as it takes, which is the default.",
+                "minimum": 0
               }
             }
           }

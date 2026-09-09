@@ -23,6 +23,7 @@ from aiwatcher_sdk.integrations.agentic import (
     AiwatcherEventStore,
     ConcurrencyConflictError,
     FilePayloadStore,
+    JoinTimers,
     MemoryPayloadStore,
     SagaTimers,
     dataclass_codec,
@@ -445,3 +446,82 @@ def test_the_codec_takes_a_message_apart_without_naming_its_class() -> None:
     assert record.kind == "event"
     assert record.metadata["message_id"] == "m-1"
     assert dataclasses.is_dataclass(codec.build_message(record))
+
+
+def join_event(type_: str, turn_id: str, due_at: float | None = None) -> Message:
+    data: dict[str, Any] = {"turn_id": turn_id, "summarizer_node_id": "summarizer-1"}
+    if due_at is not None:
+        data["due_at"] = due_at
+    return Message(
+        kind="event",
+        type=type_,
+        data=data,
+        metadata=Metadata(message_id=f"{type_}:{turn_id}"),
+    )
+
+
+def test_a_graph_join_s_deadline_becomes_a_row_the_engine_can_wake_up_for() -> None:
+    # The silence a fan-in could not break for itself: a node that never
+    # completes leaves the join waiting for ever, and noticing that needs
+    # something that wakes up and looks.
+    server = Server()
+    subject = store(server, timers=JoinTimers())
+    subject.append_to_stream(
+        EXECUTION,
+        (join_event(JoinTimers.SCHEDULED, "turn-1", due_at=1_700_000_000.0),),
+        expected_version=0,
+    )
+
+    body = json.loads(server.requests[-1].content)
+    assert len(body["messages"]) == 1, "the event is appended as it always was"
+    schedule = body["timers"][0]["schedule"]
+    # Derived from the turn and the summarizer, so the append that schedules it
+    # and the one that withdraws it name the same row without either having to
+    # remember an id the other minted.
+    assert schedule["timer_id"] == "join:turn-1:summarizer-1"
+    assert schedule["due_at"] == "2023-11-14T22:13:20Z"
+    assert schedule["message"] == body["messages"][0]
+
+
+def test_a_summary_that_returned_withdraws_its_deadline() -> None:
+    server = Server()
+    subject = store(server, timers=JoinTimers())
+    subject.append_to_stream(
+        EXECUTION,
+        (join_event(JoinTimers.COMPLETED, "turn-1"),),
+        expected_version=0,
+    )
+    body = json.loads(server.requests[-1].content)
+    assert body["timers"] == [{"cancel": {"timer_id": "join:turn-1:summarizer-1"}}]
+
+
+def test_a_claim_does_not_withdraw_a_join_s_deadline() -> None:
+    # A claim is somebody saying they are running the summarizer, and a worker
+    # that says that and then dies is precisely the case the deadline is for.
+    # Only a summary that finished makes it moot.
+    server = Server()
+    subject = store(server, timers=JoinTimers())
+    subject.append_to_stream(
+        EXECUTION,
+        (join_event("graph.summary_claimed", "turn-1"),),
+        expected_version=0,
+    )
+    assert "timers" not in json.loads(server.requests[-1].content)
+
+
+def test_a_deadline_with_no_turn_asks_for_no_row_rather_than_a_guessed_one() -> None:
+    server = Server()
+    subject = store(server, timers=JoinTimers())
+    subject.append_to_stream(
+        EXECUTION,
+        (
+            Message(
+                kind="event",
+                type=JoinTimers.SCHEDULED,
+                data={"due_at": 1_700_000_000.0},
+                metadata=Metadata(message_id="no-turn"),
+            ),
+        ),
+        expected_version=0,
+    )
+    assert "timers" not in json.loads(server.requests[-1].content)

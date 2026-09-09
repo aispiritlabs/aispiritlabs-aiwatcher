@@ -498,15 +498,37 @@ pub fn deadline_rows(
     let Some(run) = after.active() else {
         return Vec::new();
     };
-    // Only a step the plan gave a clock to can have a row, so only those are
-    // retired. Cancelling for every step that ends would be a write per step
-    // per transaction — a no-op the `file` adapter still pays for by rewriting
-    // its table.
+    // Only a step that can have a row is retired. Cancelling for every step
+    // that ends would be a write per step per transaction — a no-op the `file`
+    // adapter still pays for by rewriting its table.
+    //
+    // Two ways a step comes to have one, and asking only the plan was wrong for
+    // the second. A `HumanInput` step's clock is authored, so the plan answers.
+    // A running attempt that stopped to ask brought its own, and the plan that
+    // pinned its code says nothing about it — which is why a *dispatched* step
+    // is included whenever this decision saw it asking or being asked about.
+    // Left to the plan alone, a parked worker attempt that completed would have
+    // left its deadline behind, still coming for a question that was over.
+    // Read from this decision's own facts rather than from `after`, which is
+    // the state the decision *reached*: `evolve` clears `awaiting` on the very
+    // events a cancel follows, so by then the question that had the clock is
+    // already gone. A step this decision saw asking or being answered was
+    // waiting a moment ago, whatever authored the question.
+    let waiting_here: std::collections::BTreeSet<&str> = outputs
+        .iter()
+        .filter_map(|message| message.message.event())
+        .filter_map(|event| match event {
+            WorkflowEvent::InputRequested { step_id, .. }
+            | WorkflowEvent::InputProvided { step_id, .. } => Some(step_id.as_str()),
+            _ => None,
+        })
+        .collect();
     let has_deadline = |step_id: &str| {
-        matches!(
-            run.plan.step(step_id).map(|step| &step.runtime),
-            Some(RuntimeBinding::HumanInput(spec)) if spec.timeout_seconds.is_some()
-        )
+        waiting_here.contains(step_id)
+            || matches!(
+                run.plan.step(step_id).map(|step| &step.runtime),
+                Some(RuntimeBinding::HumanInput(spec)) if spec.timeout_seconds.is_some()
+            )
     };
     let mut rows = Vec::new();
     for message in outputs {
@@ -598,6 +620,46 @@ pub fn attempt_rows(
                 }
                 rows.push(AttemptWrite::Dispatch(row));
             }
+            // A runtime that stopped to ask. The row stays — a question is not
+            // an ending — and the lease goes, which is what stops the next
+            // claimant running the work again five minutes later having been
+            // told nothing about the question.
+            //
+            // Only for a step that *has* a row. A `HumanInput` step is parked
+            // by the decider when it schedules it and reaches the claim table
+            // never: `schedule_attempt` emits `RequestInput`, not
+            // `ExecuteStep`, and only `ExecuteStep` dispatches one. Emitting a
+            // park for it would be a write per gate per transaction that the
+            // `file` adapter pays for by rewriting its table — `deadline_rows`
+            // narrows for the same reason.
+            WorkflowMessage::Event(WorkflowEvent::InputRequested {
+                step_id, attempt, ..
+            }) if dispatched(run, step_id) => {
+                rows.push(AttemptWrite::Park(AttemptKey::new(
+                    execution.clone(),
+                    step_id,
+                    *attempt,
+                )));
+            }
+            // The question is over, so the row it parked is too. A park keeps
+            // its row because a question is not an ending; an *answer* is one,
+            // and the attempt that asked is read back from the stream and the
+            // projection rather than from here — 43.34's rule, which the resume
+            // would otherwise walk straight past. Left behind, the claim table
+            // grows by one row per park for ever, which is the table growing
+            // with the history that rule exists to prevent.
+            //
+            // The row the answer dispatches is attempt *n+1* under its own key,
+            // so this retires the old one without touching the new.
+            WorkflowMessage::Event(WorkflowEvent::InputProvided {
+                step_id, attempt, ..
+            }) if dispatched(run, step_id) => {
+                rows.push(AttemptWrite::Retire(AttemptKey::new(
+                    execution.clone(),
+                    step_id,
+                    *attempt,
+                )));
+            }
             WorkflowMessage::Event(event) => {
                 if let Some((step_id, attempt)) = settled(event) {
                     rows.push(AttemptWrite::Retire(AttemptKey::new(
@@ -638,6 +700,21 @@ fn retry_delay_of(
             } if id == step_id && *number == attempt => Some(*not_before),
             _ => None,
         })
+}
+
+/// Whether this step's attempts reach the claim table at all.
+///
+/// The discriminator between the two ways a step comes to be waiting for a
+/// person, and it is a fact about the plan rather than about the question. A
+/// `HumanInput` step was never dispatched — `schedule_attempt` emits
+/// `RequestInput` for it and `ExecuteStep` for everything else, and only the
+/// second writes a row. Anything else that asks was already running, holding a
+/// lease something has to release.
+fn dispatched(run: &crate::state::Execution, step_id: &str) -> bool {
+    !matches!(
+        run.plan.step(step_id).map(|step| &step.runtime),
+        Some(RuntimeBinding::HumanInput(_)) | None
+    )
 }
 
 /// Which attempt this fact ends.

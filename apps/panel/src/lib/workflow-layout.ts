@@ -1,4 +1,4 @@
-import type { NodeState, WorkflowEdge } from '@/api/generated/types.gen';
+import type { ReachEdge } from '@/lib/reach';
 
 /**
  * Where each node of a graph sits on the canvas.
@@ -20,6 +20,12 @@ import type { NodeState, WorkflowEdge } from '@/api/generated/types.gen';
  *   that call each other — has no topological order at all, so ranking ignores
  *   any edge that would push a node behind a node it already sits after. The
  *   edge is still drawn; it just does not get a say in where things go.
+ *
+ * It takes ids and edges and nothing else, because that is all it ever looked
+ * at. Two canvases use it for opposite purposes — the workflow graph *derives*
+ * positions it never stores, and the curation canvas writes them into a draft
+ * somebody then saves — and a second implementation for the second caller
+ * would be two answers to "where does this go".
  */
 
 /** Node box size, in canvas units. Must agree with `StageNode`'s CSS. */
@@ -40,12 +46,12 @@ export interface PositionedNode {
  * the deepest thing that feeds it, which is what puts a fan-in stage *after*
  * both of its inputs rather than beside the earlier one.
  */
-export function layoutGraph(nodes: NodeState[], edges: WorkflowEdge[]): PositionedNode[] {
-  const order = new Map(nodes.map((node, index) => [node.node_id, index]));
+export function layoutGraph(ids: string[], edges: readonly ReachEdge[]): PositionedNode[] {
+  const order = new Map(ids.map((id, index) => [id, index]));
   const known = (id: string) => order.has(id);
   const real = edges.filter((edge) => known(edge.from) && known(edge.to) && edge.from !== edge.to);
 
-  const rank = new Map<string, number>(nodes.map((node) => [node.node_id, 0]));
+  const rank = new Map<string, number>(ids.map((id) => [id, 0]));
   const incoming = new Map<string, string[]>();
   for (const edge of real) {
     incoming.set(edge.to, [...(incoming.get(edge.to) ?? []), edge.from]);
@@ -54,15 +60,15 @@ export function layoutGraph(nodes: NodeState[], edges: WorkflowEdge[]): Position
   // Relax ranks until they stop moving. Bounded by the node count, which is
   // what makes a cycle terminate instead of spinning: on the pass where a back
   // edge would push a node past that bound, it is simply not applied.
-  for (let pass = 0; pass < nodes.length; pass += 1) {
+  for (let pass = 0; pass < ids.length; pass += 1) {
     let moved = false;
-    for (const node of nodes) {
-      const parents = incoming.get(node.node_id) ?? [];
+    for (const id of ids) {
+      const parents = incoming.get(id) ?? [];
       if (parents.length === 0) continue;
       const deepest = Math.max(...parents.map((parent) => rank.get(parent) ?? 0));
       const next = deepest + 1;
-      if (next > (rank.get(node.node_id) ?? 0) && next < nodes.length) {
-        rank.set(node.node_id, next);
+      if (next > (rank.get(id) ?? 0) && next < ids.length) {
+        rank.set(id, next);
         moved = true;
       }
     }
@@ -70,9 +76,9 @@ export function layoutGraph(nodes: NodeState[], edges: WorkflowEdge[]): Position
   }
 
   const rows = new Map<number, string[]>();
-  for (const node of nodes) {
-    const at = rank.get(node.node_id) ?? 0;
-    rows.set(at, [...(rows.get(at) ?? []), node.node_id]);
+  for (const id of ids) {
+    const at = rank.get(id) ?? 0;
+    rows.set(at, [...(rows.get(at) ?? []), id]);
   }
 
   const tallest = Math.max(...[...rows.values()].map((row) => row.length), 1);

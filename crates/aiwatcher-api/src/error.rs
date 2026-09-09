@@ -128,6 +128,17 @@ pub enum ApiError {
         problems: Vec<String>,
     },
 
+    /// A question a worker stopped to ask that nobody could answer as asked:
+    /// a blank prompt, a role a gate may not name, a policy with no deadline
+    /// behind it.
+    ///
+    /// The same 422 with the same `details`, because it is the same rule set —
+    /// `aiwatcher_core::human_input` owns what a valid question is, and a
+    /// canvas block, a workflow step and a worker's park are three surfaces
+    /// authoring one.
+    #[error("this attempt's question was refused")]
+    QuestionRefused { problems: Vec<String> },
+
     /// A command the execution's own state would not accept.
     #[error(transparent)]
     Execution(#[from] aiwatcher_execution::HandleError),
@@ -295,6 +306,8 @@ impl ApiError {
             // request was well formed and the thing it describes cannot be
             // run. Every problem with it rides in `details`.
             Self::PlanRefused { .. } => (StatusCode::UNPROCESSABLE_ENTITY, "plan_refused"),
+            // And once more, for the third surface that authors a question.
+            Self::QuestionRefused { .. } => (StatusCode::UNPROCESSABLE_ENTITY, "question_refused"),
             Self::Execution(error) => execution_parts(error),
             Self::HostedAppend(error) => hosted_parts(error),
             // Same shape again, and the same reason: the sign-in routes exist
@@ -562,6 +575,9 @@ impl IntoResponse for ApiError {
             // And once more for a plan: the compiler reports everything wrong
             // with a definition in one pass, so the canvas can draw all of it.
             Self::PlanRefused { problems, .. } => problems.clone(),
+            // A worker's question, refused by the rule every gate is refused
+            // by. Every problem at once, as everywhere else.
+            Self::QuestionRefused { problems } => problems.clone(),
             _ => Vec::new(),
         };
         let mut response = (

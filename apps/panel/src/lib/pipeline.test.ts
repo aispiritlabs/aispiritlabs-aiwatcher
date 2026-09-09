@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { StepBlocks, StepState } from '@/api/generated/types.gen';
 
-import { followsTheRun, managedOutcomes } from './pipeline';
+import { describeOutcome, followsTheRun, managedOutcomes } from './pipeline';
 
 function step(
   step_id: string,
@@ -79,5 +79,37 @@ describe('deciding whether the canvas may draw a run at all', () => {
     // that does not exist.
     expect(followsTheRun('abc', undefined)).toBeUndefined();
     expect(followsTheRun('abc', null)).toBeUndefined();
+  });
+});
+
+describe('what a block says about itself', () => {
+  it('says a gate is waiting rather than that it never ran', () => {
+    // The two views had drifted here. The canvas printed the note; the notebook
+    // read only `running` and a result, so a gate — `idle` with a note — was
+    // drawn as "not run" beside blocks that had finished, which is a box
+    // somebody goes looking for the failure of.
+    expect(describeOutcome({ status: 'idle', note: 'asked on a managed run' })).toBe(
+      'asked on a managed run',
+    );
+  });
+
+  it('says a failure failed', () => {
+    expect(describeOutcome({ status: 'failed', message: 'no such dataset' })).toBe(
+      'no such dataset',
+    );
+  });
+
+  it('prints counts only where somebody took them', () => {
+    // A managed run reports the word the server used and no timings, because a
+    // step's duration is the log's answer. `0 rows · 0 ms` would be a
+    // measurement nobody took.
+    expect(describeOutcome({ status: 'done', note: 'run as one Flow query' })).toBe(
+      'run as one Flow query',
+    );
+    expect(describeOutcome({ status: 'done', rows: 12, tookMs: 34 })).toBe('12 rows · 34 ms');
+  });
+
+  it('calls a block neither path reached not run', () => {
+    expect(describeOutcome(undefined)).toBe('not run');
   });
 });

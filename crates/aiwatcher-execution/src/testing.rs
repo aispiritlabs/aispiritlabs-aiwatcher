@@ -328,6 +328,7 @@ pub async fn assert_contract(name: &str, store: &dyn WorkflowStore) {
     a_lost_claim_expires_and_the_next_claimant_takes_it_over(name, store).await;
     a_heartbeat_keeps_a_long_step_from_being_taken_over(name, store).await;
     a_finished_attempt_leaves_no_row_behind(name, store).await;
+    a_parked_attempt_keeps_its_row_and_loses_its_lease(name, store).await;
     a_retry_is_not_claimable_before_its_delay(name, store).await;
     a_cursor_advances_on_its_own_for_a_message_the_inbox_knew(name, store).await;
     a_finished_execution_is_forgotten_and_a_running_one_is_not(name, store).await;
@@ -1479,6 +1480,74 @@ pub async fn a_finished_attempt_leaves_no_row_behind(name: &str, store: &dyn Wor
         )
         .is_none(),
         "{name}: a finished attempt was kept as a row, so the claim table grows with the history"
+    );
+}
+
+pub async fn a_parked_attempt_keeps_its_row_and_loses_its_lease(
+    name: &str,
+    store: &dyn WorkflowStore,
+) {
+    // The third shape, and the only one that changes a row instead of adding or
+    // removing one. Both halves matter and each fails differently: kept but
+    // still leased, the answer's new attempt would be racing a lease nobody is
+    // renewing; released but retired, the attempt that asked would be gone and
+    // with it the question and who answered it.
+    let execution = fresh("claim-parked");
+    let key = AttemptKey::new(execution.clone(), "extract", 1);
+    ok!(
+        name,
+        store.append(
+            &execution,
+            dispatch(
+                &execution,
+                "m-1",
+                vec![AttemptWrite::Dispatch(claimable(&execution))]
+            )
+        ),
+        "a dispatch"
+    );
+    let claimed = ok!(
+        name,
+        store.claim_attempt(&mine(&execution), "worker", OffsetDateTime::UNIX_EPOCH),
+        "a claim"
+    );
+    assert!(claimed.is_some(), "{name}: nothing was claimable to park");
+
+    ok!(
+        name,
+        store.append(
+            &execution,
+            dispatch(&execution, "m-2", vec![AttemptWrite::Park(key.clone())]),
+        ),
+        "a park"
+    );
+
+    let row = ok!(name, store.attempt(&key), "reading the parked attempt").unwrap_or_else(|| {
+        panic!("{name}: a parked attempt lost its row, so the question went with it")
+    });
+    assert_eq!(
+        row.state,
+        StateType::AwaitingInput,
+        "{name}: a parked attempt is not in the state that says so"
+    );
+    assert!(
+        row.lease_owner.is_none() && row.claimed_at.is_none(),
+        "{name}: a worker that stopped to ask is still holding a pod for the answer"
+    );
+
+    // Not claimable at any hour. A released lease is not an invitation: this
+    // one resumes on the answer it asked for, and the answer dispatches attempt
+    // two under its own key.
+    let long_after =
+        OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(aiwatcher_jobs::LEASE_SECONDS * 4);
+    assert!(
+        ok!(
+            name,
+            store.claim_attempt(&mine(&execution), "somebody-else", long_after),
+            "a later claim"
+        )
+        .is_none(),
+        "{name}: a question a worker is waiting on was picked up because time passed"
     );
 }
 

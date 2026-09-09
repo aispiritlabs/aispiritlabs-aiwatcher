@@ -83,10 +83,68 @@ class StagedInput:
 
 
 @dataclass(frozen=True)
+class StagedTotals:
+    """What the staging root is holding, right now.
+
+    Nothing here cleans up. A stage overwrites its own context and leaves every
+    other one where it is, so this directory only grows — one context per
+    attempt of every managed step that reached a notebook, for as long as the
+    volume lasts. Workflow retention is in another process and prunes
+    executions, not this disk, and it could not reach here if it wanted to.
+
+    So the question "does that matter yet" is a question about a number nobody
+    had. This is the number: a reference-aware collector is worth building when
+    the curve says so and not before.
+    """
+
+    contexts: int
+    files: int
+    bytes: int
+    #: Whole days since the least recently written staged file. `None` when
+    #: there is nothing staged — which is different from "everything here is
+    #: from today", and a zero would say the second.
+    oldest_days: int | None
+
+
+@dataclass(frozen=True)
 class Staging:
     """One directory holding every block's scratch rows."""
 
     root: Path
+
+    def measure(self, now: datetime | None = None) -> StagedTotals:
+        """Walk what is staged and say how much of it there is.
+
+        On demand rather than on a health poll: this is a `stat` per staged
+        file, and the number it answers moves over days. Somebody graphing it
+        asks for it; nothing should pay for it by accident.
+        """
+        at = now or datetime.now(UTC)
+        blocks = self.root / "blocks"
+        contexts = 0
+        files = 0
+        total = 0
+        oldest: float | None = None
+        # `latest` pointers sit beside the context directories and are counted
+        # as neither: they are one small file per notebook and they are the one
+        # thing here that is rewritten rather than accumulated.
+        for notebook in sorted(blocks.glob("*")) if blocks.is_dir() else []:
+            if not notebook.is_dir():
+                continue
+            for context in sorted(notebook.glob("*")):
+                if not context.is_dir() or not SLUG.match(context.name):
+                    continue
+                contexts += 1
+                for staged in context.glob("*.json"):
+                    stat = staged.stat()
+                    files += 1
+                    total += stat.st_size
+                    oldest = stat.st_mtime if oldest is None else min(oldest, stat.st_mtime)
+        age = None
+        if oldest is not None:
+            since = at - datetime.fromtimestamp(oldest, UTC)
+            age = max(0, int(since.total_seconds() // 86400))
+        return StagedTotals(contexts=contexts, files=files, bytes=total, oldest_days=age)
 
     def input_path(self, notebook: str, context: str | None = None) -> Path:
         return self._directory(notebook, context) / "input.json"

@@ -260,12 +260,19 @@ def test_runtime_scales_local_capacity_and_drains_work_before_releasing_resource
                         ).isoformat(),
                         "inputs": [],
                         "is_retake": False,
+                        "answers": [],
                     },
                 )
             if request.url.path.endswith("/result"):
                 reports.append(json.loads(request.content))
                 return httpx.Response(
-                    200, json={"step_id": "stage", "attempt": 1, "succeeded": True}
+                    200,
+                    json={
+                        "step_id": "stage",
+                        "attempt": 1,
+                        "succeeded": True,
+                        "outcome": "completed",
+                    },
                 )
             raise AssertionError(f"unexpected request: {request.url}")
 

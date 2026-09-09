@@ -7,6 +7,7 @@ import type {
 } from '@/api/generated/types.gen';
 import { runQuery, simulateQuery, type FlowResult } from '@/lib/flow';
 import { getNotebook, runNotebook, type NotebookRun } from '@/lib/ml-pipeline';
+import { formatCount } from '@/lib/utils';
 
 /**
  * A curation as a chain of blocks: what compiles, what runs, and in what order.
@@ -149,6 +150,34 @@ export type BlockOutcome =
   | { status: 'running'; note?: string }
   | { status: 'done'; rows?: number; columns?: string[]; tookMs?: number; note?: string }
   | { status: 'failed'; message: string; stderr?: string };
+
+/**
+ * The one line a block says about itself, wherever it is drawn.
+ *
+ * Beside the type rather than in either view, because the two had drifted: the
+ * canvas printed the note and the notebook read only `running` and a result, so
+ * a gate — which is `idle` with the note "asked on a managed run" — was drawn
+ * there as "not run", and so was a block that had failed. A box reading "not
+ * run" beside three that finished is a box somebody goes looking for the
+ * failure of.
+ *
+ * The ad-hoc path counted rows and milliseconds; a managed run reports the word
+ * the server used and nothing else, because a step's timings are the log's
+ * answer rather than the workflow store's. So the counts are printed when they
+ * exist and the note carries the rest — never `0 rows · 0 ms`, which would be a
+ * measurement nobody took. `undefined` is a block neither path has reached.
+ */
+export function describeOutcome(outcome: BlockOutcome | undefined): string {
+  if (!outcome) return 'not run';
+  if (outcome.status === 'failed') return outcome.message;
+  if (outcome.status === 'running') return outcome.note ?? 'running…';
+  if (outcome.status === 'idle') return outcome.note ?? 'not run';
+  const measured =
+    outcome.rows === undefined
+      ? undefined
+      : `${formatCount(outcome.rows)} rows · ${outcome.tookMs ?? 0} ms`;
+  return [measured, outcome.note].filter(Boolean).join(' · ') || 'done';
+}
 
 export type PipelineOutcomes = Record<string, BlockOutcome>;
 

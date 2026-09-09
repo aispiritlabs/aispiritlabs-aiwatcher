@@ -17,6 +17,13 @@ would make it the second one.
 |---|---|
 | `aiwatcher-runtime.architecture.json` | What folds the event log, what executes work, and what is authored outside retention |
 | `managed-execution.workflow.json` | How a canvas somebody edited becomes facts on the log — ADR_0025 and ADR_0026 |
+| `step-attempt.lifecycle.json` | The nine `StateType` variants a step lives through, and which four are terminal |
+| `ingest-path.sequence.json` | One event from an agent's SDK to a browser, and the ordering that makes it at-least-once |
+| `curation-chain.dataflow.json` | A curation across three engines: catalog → one Flow query → notebook → gate → dataset version |
+
+All five archify types are in use here, one per question. A sixth diagram
+should replace one of these or answer something none of them does — not add a
+second drawing of the same thing.
 
 ## Editing one
 
@@ -54,7 +61,16 @@ node ~/.claude/skills/archify/bin/archify.mjs visual-check docs/diagrams/out/<na
 ```
 
 It writes a receipt and a contact sheet beside the artifact and takes a minute
-or two each. Both diagrams pass.
+or two each. Four of the five pass clean: architecture, workflow, sequence and
+dataflow.
+
+**`step-attempt.lifecycle` does not, and cannot.** It reports 1287px against a
+900px viewport. That is not a trim: containment there wants a viewBox of at
+least 1400 units, and readability — its sublabels fit at 7px, so the 6px
+projected floor caps the scale — wants at most 1085. No width satisfies both,
+and the levers that would (dropping `Crashed`, or the retry state) are the two
+distinctions the diagram exists to draw. So it scrolls by about 390px at
+1440×900, deliberately, and passes every other check.
 
 Containment is the check that bites, and the lever is rarely the diagram. A
 page is header + chapters + drawing + cards, the drawing flexes to fill, and a

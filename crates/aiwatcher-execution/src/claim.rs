@@ -80,6 +80,21 @@ impl std::fmt::Display for AttemptKey {
 pub enum AttemptWrite {
     /// An attempt somebody may claim.
     Dispatch(AttemptRow),
+    /// An attempt that stopped to ask, so its row stays and its lease goes.
+    ///
+    /// The third shape, and the asymmetry above is why it is not one of the
+    /// other two. A park is not a dispatch — nobody may take this row, and
+    /// [`AttemptRow::is_claimable`] has excluded `awaiting_input` since 43.34
+    /// decided it. It is not a retirement either, because a question is not an
+    /// ending: the attempt that asked stays readable, and the answer schedules
+    /// attempt *n+1* beside it rather than reviving this one.
+    ///
+    /// What it does is release the lease. A worker that stopped to ask does not
+    /// hold a pod for the answer, and a person is not a five-minute lease —
+    /// which is the whole difference between this and simply leaving the row
+    /// running. Left running, the lease would expire and the *next* claimant
+    /// would run the work again, having been told nothing about the question.
+    Park(AttemptKey),
     /// An attempt that has reached a terminal state, so there is no row.
     ///
     /// Nothing reads a finished attempt back. A redelivered dispatch is
@@ -198,6 +213,25 @@ impl AttemptRow {
         self.lease_owner = Some(owner.to_owned());
         self.claimed_at = Some(now);
         self.state = StateType::Running;
+    }
+
+    /// Stop holding this row, without ending it.
+    ///
+    /// The inverse of [`claim`](Self::claim) for everything except the state it
+    /// leaves behind. `awaiting_input` is not claimable at any hour, so the
+    /// released lease is not an invitation — it is the pod going back to the
+    /// pool while somebody reads the question.
+    ///
+    /// `previous_owner` is cleared with it. It exists so a claimant can ask its
+    /// runtime whether a *previous* holder's call finished before running the
+    /// work again, and there is no next holder of this row: the answer
+    /// dispatches attempt *n+1* under its own key. Left set, it would be the
+    /// one thing on the row that still described a lease.
+    pub fn park(&mut self) {
+        self.state = StateType::AwaitingInput;
+        self.lease_owner = None;
+        self.previous_owner = None;
+        self.claimed_at = None;
     }
 
     /// When this claim stops being trusted.

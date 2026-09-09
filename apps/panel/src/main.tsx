@@ -26,6 +26,24 @@ const router = createRouter({
   context: { queryClient },
   defaultPreload: 'intent',
   defaultPreloadStaleTime: 0,
+  /*
+   * Keep the reader where they were when the URL changes but the page does not.
+   *
+   * This panel puts filters, selections and view state in the URL on purpose —
+   * a link to a filtered view has to land somebody on that view. The cost was
+   * that every one of those is a *navigation*, and the router scrolls to the
+   * top of a navigation: picking a phase, tracing a node, opening a block or
+   * changing a time window all threw the reader back to the page header, on
+   * every route in the application.
+   *
+   * Restoration is keyed by `pathname` rather than the default `href`, which
+   * is the whole fix: every search-param variant of one page then shares a
+   * scroll position, so changing what you are looking at keeps where you are
+   * looking. Moving to a different page still starts at the top, or at
+   * wherever that page was left.
+   */
+  scrollRestoration: true,
+  getScrollRestorationKey: (location) => location.pathname,
 });
 
 declare module '@tanstack/react-router' {

@@ -1,7 +1,7 @@
 import type { PipelineBlock } from '@/api/generated/types.gen';
 import { BlockInspector } from '@/components/block-inspector';
 import { Badge, Button } from '@/components/ui/primitives';
-import type { BlockResult, PipelineOutcomes } from '@/lib/pipeline';
+import { describeOutcome, type BlockResult, type PipelineOutcomes } from '@/lib/pipeline';
 
 /** One editor for the same graph, with actual prefix results below each cell. */
 export function PipelineNotebook({
@@ -48,13 +48,7 @@ export function PipelineNotebook({
             <div className="flex flex-wrap items-center gap-2">
               <Badge>{index + 1}</Badge>
               <h2 className="font-semibold">{block.title}</h2>
-              <span className="text-xs text-muted-foreground">
-                {outcome?.status === 'running'
-                  ? 'Running…'
-                  : result
-                    ? `${result.rowCount} rows`
-                    : 'Not run'}
-              </span>
+              <span className="text-xs text-muted-foreground">{describeOutcome(outcome)}</span>
               <Button
                 className="ml-auto"
                 size="sm"

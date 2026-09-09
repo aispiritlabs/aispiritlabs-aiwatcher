@@ -25,6 +25,7 @@ pub mod artifacts;
 pub mod editor;
 pub mod flow;
 pub mod marimo;
+pub mod measure;
 pub mod publish;
 pub mod scheduler;
 pub mod timers;
@@ -60,6 +61,9 @@ pub struct Tasks {
     pub outbox: Option<JoinHandle<()>>,
     pub retention: Option<JoinHandle<()>>,
     pub scheduler: Option<JoinHandle<()>>,
+    /// The hourly walk of the artifact prefix. A measurement, so it is the one
+    /// task here whose loss on shutdown costs nothing.
+    pub storage: Option<JoinHandle<()>>,
     pub timers: Option<JoinHandle<()>>,
     pub reactors: Vec<(&'static str, JoinHandle<()>)>,
 }
@@ -97,6 +101,13 @@ impl Tasks {
                 Err(_) => tracing::warn!("the scheduler did not stop within the grace"),
             }
         }
+        if let Some(task) = self.storage {
+            // Aborted rather than waited for. It is a `list` over a whole
+            // prefix and it holds nothing: a measurement interrupted is one
+            // reading missed, and making a shutdown wait an hour for a graph is
+            // the wrong trade.
+            task.abort();
+        }
         if let Some(task) = self.retention {
             match tokio::time::timeout(grace, task).await {
                 Ok(Ok(())) => tracing::info!("the retention sweep stopped"),
@@ -132,6 +143,7 @@ pub fn spawn(
     store: &Arc<dyn WorkflowStore>,
     sink: &Arc<dyn MessageSink>,
     objects: Option<&Arc<dyn aiwatcher_core::prompts::ObjectStore>>,
+    metrics: &Arc<dyn aiwatcher_core::ports::MetricSink>,
     shutdown: &CancellationToken,
 ) -> Tasks {
     let Some(notify) = state.execution_worker.as_ref().map(Arc::clone) else {
@@ -192,8 +204,17 @@ pub fn spawn(
                 state,
                 Arc::new(aiwatcher_execution::ScheduleStore::new(Arc::clone(objects))),
                 Arc::clone(store),
+                Arc::clone(metrics),
                 shutdown.clone(),
             )
+        });
+
+        // Beside the scheduler because it answers the other half of one
+        // question — how far behind is this, and how much is piling up — and
+        // because both are the gate for a design rather than a feature. Only
+        // where there is an object store to walk.
+        tasks.storage = objects.map(|objects| {
+            measure::spawn_storage_sweep(Arc::clone(objects), Arc::clone(metrics), shutdown.clone())
         });
 
         // Beside the scheduler and for the same reason it is in this role: a

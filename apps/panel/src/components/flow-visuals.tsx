@@ -46,44 +46,44 @@ export type FlowState = 'idle' | 'live' | 'done' | 'failed';
  */
 const ROLE: Record<FlowRole, { line: string; tint: string; ink: string; swatch: string }> = {
   data: {
-    line: 'border-flow-data/70',
-    tint: 'bg-flow-data/8',
+    line: 'border-flow-data/85',
+    tint: 'bg-flow-data/14',
     ink: 'text-flow-data',
     swatch: 'bg-flow-data',
   },
   compute: {
-    line: 'border-flow-compute/70',
-    tint: 'bg-flow-compute/8',
+    line: 'border-flow-compute/85',
+    tint: 'bg-flow-compute/14',
     ink: 'text-flow-compute',
     swatch: 'bg-flow-compute',
   },
   runtime: {
-    line: 'border-flow-runtime/70',
-    tint: 'bg-flow-runtime/8',
+    line: 'border-flow-runtime/85',
+    tint: 'bg-flow-runtime/14',
     ink: 'text-flow-runtime',
     swatch: 'bg-flow-runtime',
   },
   gate: {
-    line: 'border-flow-gate/70',
-    tint: 'bg-flow-gate/8',
+    line: 'border-flow-gate/85',
+    tint: 'bg-flow-gate/14',
     ink: 'text-flow-gate',
     swatch: 'bg-flow-gate',
   },
   publish: {
-    line: 'border-flow-publish/70',
-    tint: 'bg-flow-publish/8',
+    line: 'border-flow-publish/85',
+    tint: 'bg-flow-publish/14',
     ink: 'text-flow-publish',
     swatch: 'bg-flow-publish',
   },
   agent: {
-    line: 'border-flow-agent/70',
-    tint: 'bg-flow-agent/8',
+    line: 'border-flow-agent/85',
+    tint: 'bg-flow-agent/14',
     ink: 'text-flow-agent',
     swatch: 'bg-flow-agent',
   },
   neutral: {
-    line: 'border-flow-neutral/50',
-    tint: 'bg-flow-neutral/5',
+    line: 'border-flow-neutral/60',
+    tint: 'bg-flow-neutral/10',
     ink: 'text-flow-neutral',
     swatch: 'bg-flow-neutral',
   },
@@ -152,9 +152,11 @@ export function FlowCard({
   return (
     <div
       className={cn(
-        'relative w-[13rem] rounded-lg border-2 px-3 py-2 shadow-sm backdrop-blur-[1px] transition-colors',
+        // A solid card *under* the role wash, not the wash alone. At 8% over a
+        // near-black canvas a block read as a ghost of itself — the role has
+        // to tint something before it can tint anything.
+        'relative w-[13rem] rounded-lg border-2 bg-card px-3 py-2.5 shadow-sm transition-colors',
         tone.line,
-        tone.tint,
         provisional && 'border-dashed',
         // One opacity, chosen here rather than composed from two classes.
         // `away` outranks `dim`: they are both true of a never-run block that
@@ -176,6 +178,10 @@ export function FlowCard({
         Flow would lose the edges attached to them mid-render.
       */}
       <span
+        aria-hidden
+        className={cn('pointer-events-none absolute inset-0 rounded-md', tone.tint)}
+      />
+      <span
         key={state}
         aria-hidden
         className={cn(
@@ -184,8 +190,18 @@ export function FlowCard({
           state === 'failed' ? 'text-danger' : tone.ink,
         )}
       />
-      <div className="flex items-center gap-1.5">
-        <Mark className={cn('h-3.5 w-3.5 shrink-0', tone.ink)} />
+      <div className="relative flex items-center gap-2">
+        {/* The mark in a chip rather than loose beside the title: it is what
+            makes a row of cards scannable by kind at a glance. */}
+        <span
+          className={cn(
+            'flex h-5 w-5 shrink-0 items-center justify-center rounded-[5px] border',
+            tone.line,
+            tone.tint,
+          )}
+        >
+          <Mark className={cn('h-3 w-3', tone.ink)} />
+        </span>
         <span className="truncate text-sm font-medium text-foreground">{title}</span>
         {state === 'live' ? (
           <span
@@ -195,10 +211,12 @@ export function FlowCard({
         ) : null}
       </div>
       {sublabel === undefined ? null : (
-        <p className="mt-0.5 truncate text-[0.7rem] text-muted-foreground">{sublabel}</p>
+        <p className="relative mt-1 truncate pl-7 text-[0.7rem] text-muted-foreground">
+          {sublabel}
+        </p>
       )}
       {footer === undefined ? null : (
-        <div className="mt-1 flex items-center gap-2.5 text-[0.7rem] text-muted-foreground">
+        <div className="relative mt-1 flex items-center gap-2.5 pl-7 text-[0.7rem] text-muted-foreground">
           {footer}
         </div>
       )}
