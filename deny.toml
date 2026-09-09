@@ -45,6 +45,18 @@ allow = ["CDLA-Permissive-2.0"]
 name = "webpki-root-certs"
 allow = ["CDLA-Permissive-2.0"]
 
+# A Keccak implementation dedicated to the public domain, reached only at build
+# time: `duckdb` → `arrow` → `ahash` → `const-random` → `const-random-macro`,
+# which is a proc-macro. CC0-1.0 is granted here by name rather than added to
+# the list above for the reason the entries before it record — and with a
+# sharper one of its own. CC0 explicitly withholds a patent licence, which is
+# why it is not OSI-approved for software; that is a decision worth making per
+# crate, over one whose output is a compile-time constant, rather than once for
+# every dependency this workspace ever gains.
+[[licenses.exceptions]]
+name = "tiny-keccak"
+allow = ["CC0-1.0"]
+
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"

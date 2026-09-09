@@ -1,5 +1,14 @@
 include = ["**/*.toml"]
 
+# What `include` sweeps up that nobody here wrote. A `.venv` holds a vendored
+# `pandas/pyproject.toml` formatted by whoever published pandas, and a
+# `vendor/` holds somebody's PHP package — neither is this repository's to
+# reformat, and both are ignored by git already. taplo does not read
+# `.gitignore` when `include` is set, so the exclusion is stated here or the
+# check passes in CI (a fresh checkout, no virtualenvs) and fails on every
+# machine that has run `just sdk-install`.
+exclude = ["**/.venv/**", "**/node_modules/**", "**/target/**", "**/vendor/**"]
+
 # Two settings carry this file, and both exist to agree with how the repository
 # is already written rather than with taplo's defaults:
 #
