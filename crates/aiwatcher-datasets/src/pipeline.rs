@@ -30,6 +30,8 @@ use serde_json::Value;
 use time::OffsetDateTime;
 use utoipa::ToSchema;
 
+use aiwatcher_core::human_input::OnTimeout;
+
 use crate::{
     MAX_DESCRIPTION_BYTES, MAX_PIPELINE_BYTES, Registry, RegistryError, Result, digest,
     validate_name,
@@ -102,6 +104,15 @@ pub enum BlockSpec {
         /// the whole set, and an answer outside it is refused.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         choices: Vec<String>,
+        /// How long the run waits. Absent is the default and means *as long as
+        /// it takes*, which is the honest thing for a decision somebody has to
+        /// think about.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timeout_seconds: Option<u64>,
+        /// What happens when it runs out. Authored with the deadline and
+        /// refused without one.
+        #[serde(default)]
+        on_timeout: OnTimeout,
     },
     /// The end of the chain: the rows, and the dataset a version of them is
     /// published to.
@@ -551,13 +562,20 @@ pub(crate) fn block_problems(block: &PipelineBlock) -> Vec<String> {
             prompt,
             role,
             choices,
+            timeout_seconds,
+            on_timeout,
         } => {
             // Not this file's rules: a workflow step authors the same question
             // and is answered through the same route, so one of the two
             // accepting what the other refuses would be two ideas of what a
             // gate is.
             problems.extend(aiwatcher_core::human_input::question_problems(
-                &block.id, prompt, role, choices,
+                &block.id,
+                prompt,
+                role,
+                choices,
+                *timeout_seconds,
+                on_timeout,
             ));
         }
         BlockSpec::View { dataset } => {
@@ -657,6 +675,8 @@ mod tests {
                 prompt: "Publish these rows?".to_owned(),
                 role: "editor".to_owned(),
                 choices: vec!["approve".to_owned(), "reject".to_owned()],
+                timeout_seconds: None,
+                on_timeout: OnTimeout::Fail,
             },
         )
     }
@@ -880,8 +900,10 @@ mod tests {
                     "sign-off",
                     BlockSpec::Approval {
                         prompt: "  ".to_owned(),
-                        role: "admin".to_owned(),
+                        role: "supervisor".to_owned(),
                         choices: vec!["yes".to_owned(), "yes".to_owned()],
+                        timeout_seconds: None,
+                        on_timeout: OnTimeout::Fail,
                     },
                 ),
             ],
@@ -900,7 +922,7 @@ mod tests {
         assert!(
             refusals
                 .iter()
-                .any(|problem| problem.contains("asks for the 'admin' role")),
+                .any(|problem| problem.contains("asks for the 'supervisor' role")),
             "{refusals:?}"
         );
         assert!(

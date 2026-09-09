@@ -13,7 +13,13 @@ import pytest
 from aiwatcher_sdk import AiwatcherClient, NullTransport
 from aiwatcher_sdk.runtime import ExecutionPool, Runtime, RuntimeServices
 from aiwatcher_sdk.worker import get_task_context, task
-from aiwatcher_sdk.workflow import ApprovalStep, Workflow, WorkflowInput, WorkflowStep
+from aiwatcher_sdk.workflow import (
+    ApprovalStep,
+    OnTimeout,
+    Workflow,
+    WorkflowInput,
+    WorkflowStep,
+)
 
 
 def test_runtime_runs_one_attempt_from_its_factory_without_starting_pool_capacity() -> None:
@@ -104,11 +110,52 @@ def test_an_approval_step_registers_no_task_and_sends_no_placement() -> None:
     gate = steps[1]
     assert gate == {
         "id": "sign-off",
-        "approval": {"prompt": "Import these houses?", "choices": ["approve", "reject"]},
+        "approval": {
+            "prompt": "Import these houses?",
+            "role": "editor",
+            "choices": ["approve", "reject"],
+        },
         "after": ["acquire"],
         "inputs": [],
     }
     assert steps[0]["queue"] == "local"
+
+
+def test_a_gate_sends_its_deadline_only_when_it_has_one() -> None:
+    # The pair is authored together and the server refuses them apart, so a gate
+    # that waits as long as it takes sends neither half rather than a policy
+    # nothing can reach.
+    @task("stage", version="1")
+    def stage() -> None:
+        pass
+
+    workflow = Workflow(
+        "house",
+        "1",
+        (
+            ApprovalStep("patient", "Go on?"),
+            ApprovalStep(
+                "impatient",
+                "Go on?",
+                choices=("approve", "reject"),
+                timeout_seconds=3600,
+                on_timeout=OnTimeout("answer", "reject"),
+                after=("patient",),
+            ),
+            WorkflowStep("persist", stage, after=("impatient",)),
+        ),
+    )
+
+    steps = workflow.to_definition("local")["steps"]
+    assert isinstance(steps, list)
+    assert steps[0]["approval"] == {"prompt": "Go on?", "role": "editor", "choices": []}
+    assert steps[1]["approval"] == {
+        "prompt": "Go on?",
+        "role": "editor",
+        "choices": ["approve", "reject"],
+        "timeout_seconds": 3600,
+        "on_timeout": {"on": "answer", "response": "reject"},
+    }
 
 
 def test_an_approval_step_is_ordered_and_depended_on_like_any_other() -> None:

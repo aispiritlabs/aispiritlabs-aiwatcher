@@ -35,6 +35,7 @@ use crate::claim::{AttemptKey, AttemptRow, AttemptWrite};
 use crate::decide::{Now, decide, replay};
 use crate::error::{DecisionError, StoreError};
 use crate::facts::{FactContext, envelopes_for, outbox_rows};
+use crate::hosted::{DEADLINE_TIMER, Timer, TimerWrite};
 use crate::message::WorkflowCommand;
 use crate::message::{
     MessageMetadata, OutboxMessage, PendingMessage, RunProjection, WorkflowEvent, WorkflowMessage,
@@ -166,6 +167,28 @@ impl<S: WorkflowStore> ExecutionHandler<S> {
         Ok(handled)
     }
 
+    /// One message this engine produced for itself, decided like any other.
+    ///
+    /// The only door past the effect-command guard, and it is deliberately
+    /// narrow: the guard is about a *caller* posting work behind the state
+    /// machine's back, and there is exactly one thing on this side of it — a
+    /// deadline the timer table found. Everything about the decision that
+    /// follows is the same, including the transaction and the derived rows.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::handle`].
+    pub(crate) async fn deliver(
+        &self,
+        execution: &ExecutionId,
+        input: WorkflowMessage,
+        metadata: MessageMetadata,
+        now: Now,
+    ) -> Result<Handled, HandleError> {
+        self.decide_and_append(execution, input, metadata, now, None)
+            .await
+    }
+
     async fn handle_with_checkpoint(
         &self,
         execution: &ExecutionId,
@@ -176,7 +199,9 @@ impl<S: WorkflowStore> ExecutionHandler<S> {
     ) -> Result<Handled, HandleError> {
         // An effect command is what the decider emits for a reactor to run. A
         // caller that could post one would be scheduling work behind the state
-        // machine's back.
+        // machine's back. The rule is about *who is asking*: this engine's own
+        // deliveries — a deadline that ran out — go through
+        // [`Self::deliver`], which is not reachable from a route.
         if let Some(command) = input.command()
             && command.is_effect()
         {
@@ -190,7 +215,19 @@ impl<S: WorkflowStore> ExecutionHandler<S> {
         if let Some(WorkflowCommand::StartExecution { plan, mode, .. }) = input.command() {
             self.check_capacity(plan, *mode)?;
         }
+        self.decide_and_append(execution, input, metadata, now, checkpoint)
+            .await
+    }
 
+    /// Decide, and write the whole of it once, retrying only a lost race.
+    async fn decide_and_append(
+        &self,
+        execution: &ExecutionId,
+        input: WorkflowMessage,
+        metadata: MessageMetadata,
+        now: Now,
+        checkpoint: Option<(String, Checkpoint)>,
+    ) -> Result<Handled, HandleError> {
         for attempt in 0..=MAX_CONFLICT_RETRIES {
             let slice = self.store.load(execution).await?;
 
@@ -225,6 +262,7 @@ impl<S: WorkflowStore> ExecutionHandler<S> {
 
             let outbox = self.facts(execution, &after, &outputs, &metadata);
             let attempts = attempt_rows(execution, &after, &outputs);
+            let timers = deadline_rows(execution, &after, &outputs);
             let projection =
                 projection_of(execution, &after, slice.version + 1 + outputs.len() as u64);
 
@@ -243,9 +281,7 @@ impl<S: WorkflowStore> ExecutionHandler<S> {
                 projection: projection.clone(),
                 outbox: outbox.clone(),
                 checkpoint: checkpoint.clone(),
-                // A compiled run schedules no timers: they are a hosted
-                // decider's, and `decide` has no vocabulary for one.
-                timers: Vec::new(),
+                timers: timers.clone(),
                 attempts,
             };
 
@@ -429,6 +465,97 @@ pub fn facts_of(
         ));
     }
     outbox_rows(envelopes, execution)
+}
+
+/// The timer id a question's deadline is kept under.
+///
+/// Names the step *and* the attempt, because a retry asks the question again
+/// and the row the first attempt left must not fire on the second. The
+/// execution is the other half of the key and the store supplies it.
+#[must_use]
+pub fn deadline_timer_id(step_id: &str, attempt: u32) -> String {
+    format!("input/{step_id}/{attempt}")
+}
+
+/// The timer table's share of one decision, derived from the facts it emitted.
+///
+/// `decide` gains no vocabulary for a timer, which is the point: a deadline is
+/// a *consequence* of a question having been asked, so the row follows the
+/// fact. `InputRequested` with a deadline schedules one; anything that ends
+/// that step retires it, and `Cancel` is a no-op where there was none — so a
+/// question nobody put a clock on costs an empty vector.
+///
+/// Written in the same transaction as the decision, for [`AttemptWrite`]'s
+/// reason: a timer scheduled outside it is work nobody decided on, and one left
+/// behind by a step that has ended is a deadline still coming for a question
+/// that is over.
+#[must_use]
+pub fn deadline_rows(
+    execution: &ExecutionId,
+    after: &ExecutionState,
+    outputs: &[PendingMessage],
+) -> Vec<TimerWrite> {
+    let Some(run) = after.active() else {
+        return Vec::new();
+    };
+    // Only a step the plan gave a clock to can have a row, so only those are
+    // retired. Cancelling for every step that ends would be a write per step
+    // per transaction — a no-op the `file` adapter still pays for by rewriting
+    // its table.
+    let has_deadline = |step_id: &str| {
+        matches!(
+            run.plan.step(step_id).map(|step| &step.runtime),
+            Some(RuntimeBinding::HumanInput(spec)) if spec.timeout_seconds.is_some()
+        )
+    };
+    let mut rows = Vec::new();
+    for message in outputs {
+        let Some(event) = message.message.event() else {
+            continue;
+        };
+        match event {
+            WorkflowEvent::InputRequested {
+                step_id,
+                attempt,
+                request,
+            } => {
+                let Some(due_at) = request.deadline else {
+                    continue;
+                };
+                rows.push(TimerWrite::Schedule(Timer {
+                    execution: execution.clone(),
+                    timer_id: deadline_timer_id(step_id, *attempt),
+                    due_at,
+                    // Nothing stored to hand back: what this timer means is
+                    // read from the plan when it fires, because the plan is
+                    // what pinned the policy. A hosted timer carries a
+                    // worker's message because the engine composes none for
+                    // it; here the engine is the decider.
+                    message: crate::message::HostedMessage {
+                        message_type: DEADLINE_TIMER.to_owned(),
+                        metadata: serde_json::json!({
+                            "step_id": step_id,
+                            "attempt": attempt,
+                        }),
+                        payload: None,
+                    },
+                }));
+            }
+            WorkflowEvent::InputProvided {
+                step_id, attempt, ..
+            }
+            | WorkflowEvent::StepCompleted {
+                step_id, attempt, ..
+            }
+            | WorkflowEvent::StepFailed {
+                step_id, attempt, ..
+            } if has_deadline(step_id) => {
+                rows.push(TimerWrite::Cancel(deadline_timer_id(step_id, *attempt)));
+            }
+            _ => {}
+        }
+    }
+    rows
 }
 
 /// The claim table's side of one decision.

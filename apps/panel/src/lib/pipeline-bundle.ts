@@ -16,6 +16,19 @@ const pipelineName = limitedText(160).refine(
   'Invalid pipeline or dataset name',
 );
 
+/**
+ * Whatever a timeout writes as its answer. Not `unknown`: that includes
+ * `undefined`, and a key that may be absent is a policy with no answer in it.
+ */
+const jsonValue = z.union([
+  z.string(),
+  z.number(),
+  z.boolean(),
+  z.null(),
+  z.array(z.unknown()),
+  z.record(z.unknown()),
+]);
+
 const spec = z.discriminatedUnion('kind', [
   z
     .object({
@@ -39,6 +52,17 @@ const spec = z.discriminatedUnion('kind', [
       prompt: limitedText(4 * 1024).optional(),
       role: z.string().optional(),
       choices: z.array(limitedText(80)).max(8).optional(),
+      timeout_seconds: z.number().int().positive().optional(),
+      on_timeout: z
+        .discriminatedUnion('on', [
+          z.object({ on: z.literal('fail') }).strict(),
+          z.object({ on: z.literal('skip') }).strict(),
+          // A JSON value rather than `unknown`, and the difference is the one
+          // that matters: `unknown` includes `undefined`, which would make the
+          // key optional — an `answer` policy that writes nothing.
+          z.object({ on: z.literal('answer'), response: jsonValue }).strict(),
+        ])
+        .optional(),
     })
     .strict(),
   z.object({ kind: z.literal('view'), dataset: pipelineName.nullish() }).strict(),

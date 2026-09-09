@@ -66,6 +66,10 @@ import {
 const searchSchema = z.object({
   name: z.string().optional(),
   block: z.string().optional(),
+  // What the canvas is tracing from the selected block, if anything. In the
+  // URL with the rest of the selection: a link to a traced view is the whole
+  // reason to trace one, and it is meaningless without the `block` beside it.
+  reach: z.enum(['upstream', 'downstream', 'both']).optional(),
   view: z.enum(['canvas', 'notebook']).optional(),
   window: z.number().int().nonnegative().optional(),
   // The managed run this page is following. In the URL rather than in state
@@ -465,7 +469,7 @@ function PipelinePage() {
   // installation published, and a gate has nothing to share — no code, no
   // parameters, and a question that belongs to the chain it stops. So it is
   // the page's own affordance, put beside the library because that is where a
-  // block gets added.
+  // block gets added. It starts at the floor; the inspector raises it.
   const approvalTemplate = (): SaveBlockTemplateRequest => ({
     id: 'approval',
     title: 'Approval',
@@ -697,6 +701,10 @@ function PipelinePage() {
           edges={draft.edges}
           outcomes={canvasOutcomes}
           selected={search.block}
+          reach={search.reach}
+          onReach={(mode) =>
+            void navigate({ search: (previous) => ({ ...previous, reach: mode }), replace: true })
+          }
           onSelect={(block) => {
             if (!locked)
               void navigate({ search: (previous) => ({ ...previous, block }), replace: true });

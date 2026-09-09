@@ -1,0 +1,318 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "A managed execution",
+    "subtitle": "From a canvas somebody edited to facts on the log",
+    "visual_preset": "signal-flow",
+    "animation": "trace",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "one-command",
+        "label": "One command, six writes",
+        "focus": [
+          "plan",
+          "commit",
+          "stream",
+          "outbox"
+        ],
+        "note": "Deduplicate, check the version, append, project, enqueue, checkpoint — or the dual-write gap."
+      },
+      {
+        "id": "claiming",
+        "label": "A worker claims",
+        "focus": [
+          "commit",
+          "claim",
+          "run"
+        ],
+        "note": "A process claims only the runtimes it registered an executor for."
+      },
+      {
+        "id": "facts",
+        "label": "Facts reach the log",
+        "focus": [
+          "outbox",
+          "log",
+          "run"
+        ],
+        "note": "The outbox publishes after the decision commits; decisions stay in the store."
+      }
+    ],
+    "legend": {
+      "mode": "auto",
+      "entries": {
+        "frontend": {
+          "label": "Panel"
+        },
+        "database": {
+          "label": "Workflow store"
+        },
+        "backend": {
+          "label": "Rust service"
+        },
+        "security": {
+          "label": "Decision or gate"
+        },
+        "messagebus": {
+          "label": "Event log"
+        },
+        "cloud": {
+          "label": "Runtime"
+        }
+      }
+    }
+  },
+  "lanes": [
+    {
+      "id": "author",
+      "label": "Panel · authoring"
+    },
+    {
+      "id": "decide",
+      "label": "Decider · serve role"
+    },
+    {
+      "id": "perform",
+      "label": "Reactor · work role"
+    },
+    {
+      "id": "durable",
+      "label": "Workflow store + event log"
+    }
+  ],
+  "phases": [
+    {
+      "id": "authoring",
+      "label": "Author",
+      "fromCol": 0,
+      "toCol": 1
+    },
+    {
+      "id": "compiling",
+      "label": "Compile + commit",
+      "fromCol": 2,
+      "toCol": 3,
+      "variant": "emphasis"
+    },
+    {
+      "id": "executing",
+      "label": "Claim + perform",
+      "fromCol": 4,
+      "toCol": 5,
+      "variant": "dashed"
+    }
+  ],
+  "mainPath": [
+    "blocks",
+    "revision",
+    "plan",
+    "commit",
+    "claim",
+    "run"
+  ],
+  "nodes": [
+    {
+      "id": "blocks",
+      "lane": "author",
+      "col": 0,
+      "type": "frontend",
+      "label": "Curation blocks",
+      "sublabel": "the authored chain",
+      "width": 126
+    },
+    {
+      "id": "revision",
+      "lane": "author",
+      "col": 1,
+      "type": "database",
+      "label": "Definition revision",
+      "sublabel": "content-addressed",
+      "width": 126
+    },
+    {
+      "id": "plan",
+      "lane": "decide",
+      "col": 2,
+      "type": "backend",
+      "label": "ExecutionPlan",
+      "sublabel": "plan_id",
+      "tag": "runtime-neutral",
+      "width": 126
+    },
+    {
+      "id": "commit",
+      "lane": "decide",
+      "col": 3,
+      "type": "security",
+      "label": "decide → evolve",
+      "sublabel": "pure, no clock",
+      "tag": "one transaction",
+      "width": 126
+    },
+    {
+      "id": "gate",
+      "lane": "decide",
+      "col": 5,
+      "type": "security",
+      "label": "Human gate",
+      "sublabel": "the role it named",
+      "width": 126
+    },
+    {
+      "id": "stream",
+      "lane": "durable",
+      "col": 3,
+      "type": "database",
+      "label": "Workflow stream",
+      "sublabel": "inbox · projection",
+      "width": 126
+    },
+    {
+      "id": "outbox",
+      "lane": "durable",
+      "col": 4,
+      "type": "messagebus",
+      "label": "Outbox",
+      "sublabel": "after commit",
+      "width": 126
+    },
+    {
+      "id": "log",
+      "lane": "durable",
+      "col": 5,
+      "type": "messagebus",
+      "label": "Event log",
+      "sublabel": "step.* · artifact.*",
+      "width": 126
+    },
+    {
+      "id": "claim",
+      "lane": "perform",
+      "col": 4,
+      "type": "backend",
+      "label": "Claim an attempt",
+      "sublabel": "lease + queue scope",
+      "width": 126
+    },
+    {
+      "id": "run",
+      "lane": "perform",
+      "col": 5,
+      "type": "cloud",
+      "label": "Perform",
+      "sublabel": "Flow PHP · marimo",
+      "width": 126
+    }
+  ],
+  "edges": [
+    {
+      "id": "save",
+      "from": "blocks",
+      "to": "revision",
+      "label": "save",
+      "variant": "default"
+    },
+    {
+      "id": "compile",
+      "from": "revision",
+      "to": "plan",
+      "label": "compile",
+      "variant": "emphasis"
+    },
+    {
+      "id": "start",
+      "from": "plan",
+      "to": "commit",
+      "label": "POST /executions",
+      "variant": "emphasis"
+    },
+    {
+      "id": "writes",
+      "from": "commit",
+      "to": "stream",
+      "label": "six writes",
+      "variant": "security"
+    },
+    {
+      "id": "enqueue",
+      "from": "stream",
+      "to": "outbox",
+      "variant": "default"
+    },
+    {
+      "id": "publish",
+      "from": "outbox",
+      "to": "log",
+      "label": "publish",
+      "variant": "dashed"
+    },
+    {
+      "id": "schedule",
+      "from": "commit",
+      "to": "claim",
+      "label": "an attempt is due",
+      "variant": "emphasis"
+    },
+    {
+      "id": "perform",
+      "from": "claim",
+      "to": "run",
+      "label": "the only HTTP seam",
+      "variant": "emphasis"
+    },
+    {
+      "id": "report",
+      "from": "run",
+      "to": "log",
+      "label": "step.* · artifact.produced",
+      "variant": "dashed"
+    },
+    {
+      "id": "ask",
+      "from": "run",
+      "to": "gate",
+      "label": "awaiting input",
+      "variant": "security",
+      "role": "branch"
+    },
+    {
+      "id": "answer",
+      "from": "gate",
+      "to": "commit",
+      "label": "answer",
+      "variant": "dashed",
+      "role": "return"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "What the browser does not do",
+      "items": [
+        "It authors, commands, links, renders",
+        "It does not compile, sequence, retry, resume or publish",
+        "The tab may close: the run is the server's"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Orderings that are not style",
+      "items": [
+        "Journal the decision before its derived files",
+        "Publish the fact only after the decision commits",
+        "Store the shard before the cursor"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Facts, never decisions",
+      "items": [
+        "step.*, artifact.produced and execution.* ride the log",
+        "Commands, leases, retries: the store",
+        "The why is the store's; the what is the log's"
+      ]
+    }
+  ]
+}

@@ -177,19 +177,25 @@ describe('portable curation flows', () => {
       spec: {
         kind: 'approval',
         prompt: 'Publish these rows?',
-        role: 'editor',
+        role: 'admin',
         choices: ['approve', 'reject'],
+        timeout_seconds: 3600,
+        on_timeout: { on: 'answer', response: 'reject' },
       },
     });
     bundle.pipeline.edges.push({ from: 'missing', to: 'sign-off' });
 
     const parsed = await parseBundle(JSON.stringify(bundle));
 
+    // Every field, because `.strict()` means one the schema does not know is a
+    // flow that exports and refuses to come back.
     expect(parsed.pipeline.blocks.at(-1)?.spec).toEqual({
       kind: 'approval',
       prompt: 'Publish these rows?',
-      role: 'editor',
+      role: 'admin',
       choices: ['approve', 'reject'],
+      timeout_seconds: 3600,
+      on_timeout: { on: 'answer', response: 'reject' },
     });
   });
 

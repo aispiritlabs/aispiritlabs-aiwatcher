@@ -62,6 +62,34 @@
      a new step type needs no new token. */
   --color-span-step: oklch(0.7 0.12 320);
 
+  /*
+   * Graph roles. Two canvases draw boxes and arrows — the curation pipeline
+   * and the workflow graph — and until now each invented its own colours from
+   * the status palette, so a box's colour said how it was *going* and never
+   * what it *was*. These say what it is, and status is drawn on top of them.
+   *
+   * A closed set of six, deliberately. Seven roles is enough to describe a
+   * system; one per node kind is how a legend becomes a colour chart nobody
+   * reads, so a new kind picks the role it belongs to rather than a new hue.
+   *
+   * Each is used twice: at full strength as a 1.5px stroke, and at 8-12% as a
+   * fill. The fill groups a canvas at a glance; the stroke does the work of
+   * separating one box from the next, and survives the fill being almost
+   * invisible.
+   */
+  --color-flow-data: oklch(0.75 0.13 285);
+  --color-flow-compute: oklch(0.74 0.14 155);
+  --color-flow-runtime: oklch(0.8 0.14 85);
+  --color-flow-gate: oklch(0.7 0.17 25);
+  --color-flow-publish: oklch(0.78 0.12 190);
+  --color-flow-agent: oklch(0.72 0.15 250);
+  --color-flow-neutral: oklch(0.68 0.02 285);
+
+  /* Edges. One muted default and one accent: an emphasis colour on more than
+     about a fifth of the edges has stopped meaning anything. */
+  --color-flow-edge: oklch(0.44 0.015 285);
+  --color-flow-live: oklch(0.76 0.15 165);
+
   --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
 }
 
@@ -101,5 +129,134 @@
     font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
     font-size: 0.75rem;
+  }
+}
+
+/*
+ * Graph motion. Finite, and it means something happened.
+ *
+ * The rule that separates an animated canvas from one people switch off is
+ * that nothing loops except what is happening *right now*. An arrival glows
+ * once and is gone; a completed edge is traced once, when it completes; only a
+ * step that is actually running keeps a ring going, and there are one or two
+ * of those, never a canvas of them.
+ */
+@keyframes flow-arrive {
+  0%,
+  72%,
+  100% {
+    box-shadow: none;
+  }
+  18%,
+  36% {
+    box-shadow: 0 0 10px -1px currentColor;
+  }
+}
+
+@keyframes flow-live-ring {
+  0% {
+    box-shadow: 0 0 0 0 currentColor;
+  }
+  55%,
+  100% {
+    box-shadow: 0 0 0 0.34rem transparent;
+  }
+}
+
+@keyframes flow-trace {
+  0% {
+    stroke-dashoffset: 54;
+    opacity: 0.35;
+  }
+  88%,
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+}
+
+@keyframes flow-march {
+  to {
+    stroke-dashoffset: -36;
+  }
+}
+
+@layer components {
+  /*
+   * The ground a graph is drawn on. A flat panel makes every box float at the
+   * same depth; one soft pool of light behind the canvas puts the boxes on
+   * something, and is the whole of the effect — a gradient anybody can name is
+   * a gradient that is competing with the diagram.
+   */
+  .flow-surface {
+    background:
+      radial-gradient(
+        120% 90% at 50% 0%,
+        color-mix(in oklch, var(--color-primary) 7%, transparent),
+        transparent 62%
+      ),
+      var(--color-background);
+  }
+
+  /* Remounted on a status change — a key, not a transition — so the glow
+     replays for the change rather than once for the lifetime of the node. */
+  .flow-arrive {
+    animation: flow-arrive 1.6s cubic-bezier(0.22, 1, 0.36, 1) 1 both;
+  }
+
+  .flow-live-ring {
+    animation: flow-live-ring 2.4s ease-out infinite;
+  }
+}
+
+/*
+ * Edges, and why these four rules are not in a layer.
+ *
+ * React Flow ships `dist/style.css` unlayered, and an unlayered declaration
+ * beats every layered one however specific the layered selector is — so
+ * `@layer components` here set the dash and the animation (which React Flow
+ * does not declare) and silently lost `stroke` and `stroke-width` to
+ * `.react-flow__edge-path`. A live edge marched in the default grey, which
+ * looks exactly like a working feature.
+ */
+.react-flow__edge.flow-edge-live .react-flow__edge-path {
+  stroke: var(--color-flow-live);
+  stroke-width: 1.8;
+  stroke-dasharray: 10 8;
+  animation: flow-march 1.1s linear infinite;
+}
+
+.react-flow__edge.flow-edge-done .react-flow__edge-path {
+  stroke: var(--color-flow-live);
+  stroke-width: 1.6;
+  stroke-dasharray: 10 8;
+  animation: flow-trace 1.4s linear 1 both;
+}
+
+.react-flow__edge.flow-edge-failed .react-flow__edge-path {
+  stroke: var(--color-danger);
+  stroke-width: 1.8;
+}
+
+.react-flow__edge.flow-edge-idle .react-flow__edge-path {
+  stroke: var(--color-flow-edge);
+  stroke-width: 1.4;
+}
+
+/*
+ * Outside the traced reach. Applied on top of the state class, so a live edge
+ * that is off the path still marches — it is still happening — it just stops
+ * competing with the part somebody asked to look at.
+ */
+.react-flow__edge.flow-edge-away .react-flow__edge-path {
+  opacity: 0.14;
+}
+
+/* Somebody who has asked for less motion has asked for all of it. */
+@media (prefers-reduced-motion: reduce) {
+  .flow-arrive,
+  .flow-live-ring,
+  .react-flow__edge .react-flow__edge-path {
+    animation: none !important;
   }
 }

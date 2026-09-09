@@ -1608,14 +1608,14 @@ Phase 12 earns.
 | Capability | State |
 |---|---|
 | Decisions and workflow facts (Phases 0–3) | Plan and compiler, pure decider, the atomic six-write handler, the outbox producer, the workflow fold; partial-commit recovery journalled and fault-tested |
-| Stores | `memory`, `file` and `postgres` under one contract suite; five migrations with an upgrade suite, retention, and the combined and split charts |
+| Stores | `memory`, `file`, `postgres` and `duckdb` under one contract suite; ten migrations with an upgrade suite, retention, and the combined and split charts |
 | Managed Flow and marimo (Phases 5–6) | Both executors, artifacts, lookup, publication, and a run that resolves its pinned source |
 | Context (Phase 4) | Artifact metadata, lineage, the cache index, `ContextSnapshot`, context-keyed staging, the code a step ran, a server-resolved editor session |
 | Panel (Phase 7) | Managed run, controls, allowed actions, URL restoration, one reader for every server answer, a canvas that lights only at the revision it compiled |
 | Scheduler | Cadence, CRUD, transactional admission, per-slot outcomes, `next_run` computed on the server |
 | Worker (Phases 10, 11 Level 2) | The protocol, the Python `Runtime`, the authoring path, schedules for registered workflows, Planner on the boundary |
 | Hosted decider (Phase 13) | **Partial** — the append route, the decider lease and a worker target that mints `owner = worker, mode = hosted`. No event store, no timers, and the `sealed` refusal has no reader |
-| Human input (Phase 14) | **Partial** — both authored surfaces have a gate: a curation's `approval` block and a workflow step's `approval`, compiling to one `HumanInput` binding, answered through one route and one panel control. No deadline and no `await` from inside an attempt |
+| Human input (Phase 14) | **Partial** — both authored surfaces have a gate: a curation's `approval` block and a workflow step's `approval`, compiling to one `HumanInput` binding, answered through one route and one panel control, with the role each question names required on top of the editor floor, and a deadline the timer table delivers. No `await` from inside an attempt |
 
 ### What is left
 
@@ -1633,27 +1633,22 @@ actually missing.
   adapters rather than by one adapter's test. It protects the *work* — an agent
   turn is a model call somebody pays for twice — and never the history, which
   `expected_version` already protects whether or not anybody holds a lease.
-- **`AiwatcherEventStore`** in `aiwatcher_sdk.integrations.agentic`, satisfying
-  `agentic.workflow.EventStore`, so `DurableWorkflowExecutor` runs unchanged over
-  a shared store. Nothing in the SDK implements it; that module is the tracer.
-  *Exit:* `agentic`'s own executor tests pass against it with no change to
-  `agentic`.
-- **Timers.** `schedule_timeout` becomes a row and the store appends
-  `TimeoutElapsed` when it is due. This is the one *active* thing the engine does
-  for a hosted run, and it is what `agentic`'s sagas are missing: the timers
-  exist and nothing fires them. Neither name appears in the workspace.
-  *Exit:* a saga timeout scheduled before a restart fires after it, once.
-- **The `sealed` refusal has no reader.** The payload policy is decided —
-  `external` by default, `sealed` through the conversation archive's crypt, no
-  `plain` (40.4) — and `PayloadPolicy::needs_archive` is called by nothing
-  outside its own unit tests. A definition choosing `sealed` without
-  `AIWATCHER_CONVERSATION_ARCHIVE` and `AIWATCHER_CONVERSATION_KEYS` must be
-  refused **naming both**, never silently downgraded. This is 43.15's shape
-  exactly: a policy field the code does not keep.
+- ~~`AiwatcherEventStore`.~~ **Done.** `aiwatcher_sdk.integrations.agentic`
+  satisfies `agentic.workflow.EventStore`, so `DurableWorkflowExecutor` runs
+  over a shared store.
+- ~~Timers.~~ **Done.** `execution_timers` (migration 0009), `TimerWrite`,
+  `fire_due_timers` and a ten-second tick that fires each row **once** — under
+  an id derived from the execution and the timer, retired in the transaction
+  that delivered it, so two replicas produce one delivery with no lease. Phase
+  14's deadline is the second thing that rides it (43.39).
+- ~~The `sealed` refusal has no reader.~~ **Done.** `PayloadPolicy::needs_archive`
+  is read where a run is started and again at start-up, so a definition choosing
+  `sealed` without the archive is refused rather than silently downgraded.
 - **`agentic_graph`'s join buckets as events in the stream**, in
   `ai_spirit_agent` — `_expected_completion_counts`, `_completion_buckets` and
   `_last_inputs` are three dictionaries in one process, and a fan-out whose
-  worker restarts loses them.
+  worker restarts loses them. **The only thing left on this list**, and the one
+  that Phase 13's exit is a test of.
 
 *Phase 13's own exit:* a searcher → summarizer graph with a fan-out of three
 survives a worker restart between the second and third completion and fires the
@@ -1671,6 +1666,43 @@ reports five pre-existing errors in its test suite, and nothing validates
 `deploy/config.json` against `config.schema.json` — which is how `flyteEnabled`
 outlived its own removal in the schema.
 
+**Phase 14 — human input.** Delivered except for one thing, which is why it is
+no longer behind a gate.
+[KICKOFF_MID_ATTEMPT_INPUT.md](KICKOFF_MID_ATTEMPT_INPUT.md) is the next
+session's entry point.
+
+Both authored surfaces have one. A curation's `approval` block compiles to the
+`HumanInput` binding and `order_of` refuses it where a Flow step would then have
+nothing to read; a registered workflow's step carries an `approval` and is
+ordered by the `after` its author already writes. One binding, one answer route,
+one panel control — the pipeline's run card and the Workflows view share it,
+because a run that parked with no way to answer had every control except the one
+that mattered. What a valid question is lives once, in
+`aiwatcher_core::human_input`, so the two surfaces cannot come to disagree. A
+gate raises the answer route's editor floor and never lowers it — `editor` or
+`admin`, required where the question is (43.38). And it may carry a deadline
+with an `on_timeout` of `fail | skip | answer`: `decide` resolves the instant
+from the clock in its input, the handler derives the timer row from the fact,
+and the tick delivers it (43.39).
+
+- **`await` from inside an attempt.** Today a step either *is* a gate or is not.
+  §41 also wants a worker to park **mid-attempt** — the tool call an
+  `AbstractCapability.before_tool_execute` hook wants approved — releasing its
+  lease and leaving the attempt `awaiting_input`. Nothing of this exists, and it
+  is a worker-protocol change rather than a gate one. *Exit:* a claimed attempt
+  parks, its lease is released, the answer resumes it as a new attempt of the
+  same step.
+- **The first control message on `/api/v1/live`** — and this one deserves its
+  gate re-argued before anybody builds it. It was specified when the panel had
+  no other way to hear about a question; the run card now re-reads on every
+  stream frame, so the question appears on its own, and the answer goes by a
+  REST route that is tested. An inbound control channel would be a *second* way
+  to send one command. Build it when something needs to answer without a request
+  — not because §41 named it.
+
+*What Phase 14 does not need:* approval inside an agent turn, which is Phase 13's
+`agentic_graph` work rather than this.
+
 **Behind their own gates, with nothing building them.**
 
 - **Phase 12** — container jobs, and Flyte out of Planner's chart. It asks for a
@@ -1678,19 +1710,6 @@ outlived its own removal in the schema.
   declaration was a single value for all four tasks. `ContainerJob` appears
   nowhere in the workspace. §39.4 records what was accepted instead — four
   attempts in one worker pod, whose limits already match Flyte's task envelope.
-- **Phase 14** — human input. Both authored surfaces have a gate. A curation's
-  `approval` block compiles to the `HumanInput` binding and `order_of` refuses
-  it where a Flow step would then have nothing to read; a registered workflow's
-  step carries an `approval` and is ordered by the `after` its author already
-  writes. One binding, one answer route, one panel control — the pipeline's run
-  card and the Workflows view share it, because a run that parked with no way
-  to answer had every control except the one that mattered. What a valid
-  question is lives once, in `aiwatcher_core::human_input`, so the two surfaces
-  cannot come to disagree. What is missing is `on_timeout` and the deadline
-  behind it — `InputRequest::deadline` stays `None`, so a gate waits
-  indefinitely — `await` from inside an attempt, and the first control message
-  on `/api/v1/live`. Approval inside an agent turn still depends on Phase 13.
-  The role a gate may name is `editor` and nothing else, and 43.38 says why.
 - **Phase 9** — engine-owned executions. Only for a consumer that needs one
   launch API for local and engine work; not a prerequisite for the worker.
 - **Phase 8** — read models in PostgreSQL. Gate: a measured replay-on-start over
@@ -1699,15 +1718,20 @@ outlived its own removal in the schema.
 
 **Measurements and follow-ups.**
 
-- A receipt lookup loads the whole execution stream; paging or indexing that
-  history is an open performance item
-  ([the worker review](WORKER_PROTOCOL_REVIEW_2026-09-09.md)).
-- Measure slot lateness and backlog, and artifact and staging growth, before
-  designing observability or a reference-aware GC. Workflow retention does not
-  clean every artifact or staged context.
-- Schedules for another definition kind wait for a compiler for that kind. Flow
-  `join` waits for a concrete sub-pipeline use case. Schedule window and
-  parameter policy must be explicit before promising "process the previous day".
+- ~~A receipt lookup loads the whole execution stream.~~ **Closed.** It reads a
+  bounded prefix for the plan — every stream opens with `ExecutionRequested`, so
+  a handful of rows folds a run that has one — and asks the store for the
+  outcome, which `postgres` and `duckdb` answer from migration 0009's index.
+- ~~Schedules wait for a compiler for another definition kind.~~ **Closed.** The
+  second kind arrived: `compile_head` covers `CurationPipeline` and `Workflow`,
+  and both are schedulable through it.
+- **Still open:** measure slot lateness and backlog, and artifact and staging
+  growth, before designing observability or a reference-aware GC. Workflow
+  retention does not clean every artifact or staged context, and nothing in the
+  workspace measures any of it.
+- **Still open:** Flow `join` waits for a concrete sub-pipeline use case, and
+  schedule window and parameter policy must be explicit before promising
+  "process the previous day".
 - Level 0 in `ai_spirit_agent` is worth more than its size:
   `build_compiled_graph_system` builds its runtime with no tracer, the tee in
   `agentic_runtime/trace.py` is uncommitted, and `declare_graph` is about thirty
@@ -3125,17 +3149,31 @@ And the placement problem did not recur. A curation chain needed two cursors
 because the edge and the data binding are the same drawn line; a workflow states
 `after` and `inputs` separately, so a gate needs no special case at all.
 
-### 43.38 The role a gate names had a reader and not a check
+### 43.38 The role a gate names had a reader and not a check, until it did
 
-`HumanInputSpec::role` reaches `execution.awaiting_input` on the log and the
+`HumanInputSpec::role` reached `execution.awaiting_input` on the log and the
 step's context, and no authorization decision anywhere: the answer route
-requires the editor role and reads nothing stricter, so a gate saying `admin`
-would have read as a check nobody makes. So the authored block admits `editor`
-and refuses any other role **by name**, and the panel asks whether this caller
-holds the role the question declared — a viewer reads whose decision it is
-instead of pressing a button that comes back a 403. Both halves widen in a line
-each on the day the answer route reads the request's own role; until then the
-refusal is the field's reader.
+required the editor role and read nothing stricter, so a gate saying `admin`
+would have read as a check nobody makes. The gate shipped admitting `editor`
+only, refusing anything else **by name**, which made the refusal the field's
+reader — and then the route grew the check the field had been describing.
+
+`apply` holds the editor floor for every command; `provide_input` adds the role
+the question named, read from the projection it has already loaded. That is why
+the rule could not live on the route: which role may answer is a fact about the
+*step*, out of the pinned plan, and the route cannot know it in advance. An
+authored gate now admits `editor` and `admin` and refuses anything weaker,
+because a gate only ever raises the floor — the shape a worker queue already
+has. The test that keeps it honest is a workflow whose **first** step is a gate,
+which is the one way to park a run at a question with no service running: a
+curation cannot be shaped that way, because its chain starts where the rows come
+from.
+
+The panel keeps the same rule from the other end, and found a defect of its own
+in doing it: `useCan` collapses "nobody has answered yet" into `false`, which is
+right for hiding a button and wrong for telling somebody they may not do
+something. `useRoleDecision` keeps the two apart, and the controls stay up while
+the session is being read.
 
 Two things the plan expected to be missing were already there. The run card
 renders a question's `prompt` and turns its `choices` into buttons, and
@@ -3143,6 +3181,45 @@ renders a question's `prompt` and turns its `choices` into buttons, and
 question — so what this delivery added on that side is the role gate and a test
 asserting the buttons are *exactly* the declared answers rather than merely
 including them.
+
+### 43.39 A deadline was called wiring and was a design
+
+The note this delivery started from said a gate with a timeout would be
+"plumbing, not a design, once the timers land". The timers had landed, and
+[`handler.rs`] said so in its own words — *a compiled run schedules no timers:
+they are a hosted decider's, and `decide` has no vocabulary for one* — while
+`fire` delivered only to `ExecutionMode::Hosted`. A gate is a compiled run's
+step. Three things were missing rather than one, and each turned out to be a
+decision.
+
+**`decide` still gains no vocabulary for a timer.** A deadline is a
+*consequence* of a question having been asked, so the row follows the fact:
+`InputRequested` carrying a deadline schedules one and anything ending that step
+retires it, both derived in the handler, in the transaction that already holds
+the decision. The instant itself is resolved in `decide` from the clock that
+arrives in its input, which is what makes a replay reach the same moment —
+`TraceId::derive`'s rule, for a moment rather than an id.
+
+**The timer id names the attempt.** A retry asks the question again, and the row
+the first attempt left must not fire on the second. The other guardrail in the
+same place: only a step the plan gave a clock to is cancelled, because a
+`Cancel` for every step that ends is a write per step per transaction that the
+`file` adapter pays for by rewriting its table.
+
+**The effect-command guard was about who is asking, and read as if it were about
+what is being sent.** `TimeoutInput` is an effect — no caller may post one — and
+the engine delivering its own timer went through the same door and was refused
+by it. `ExecutionHandler::deliver` is that door, and it is deliberately the only
+one: one crate-private method, one caller, and everything after it identical.
+
+`skip` also turned out not to be `StepSkipped`. That event marks what will *not*
+run because a parent failed, and a run whose steps are not all `Completed` never
+completes — so a skipped gate would have left the run open for ever. It emits
+`StepCompleted` with no result and, deliberately, **no** `InputProvided`: the
+history says the question was asked and never answered, and a run that recorded
+an answer there would be claiming somebody made a decision. `answer` does record
+one, attributed to `aiwatcher/timeout`, because the one record of a human
+decision has to say when there was not one.
 
 ### 43.9 What did not need changing
 

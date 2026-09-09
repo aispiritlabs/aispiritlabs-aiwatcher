@@ -280,6 +280,8 @@ mod tests {
             role: "admin".to_owned(),
             choices: vec!["yes".to_owned(), "no".to_owned()],
             block: None,
+            timeout_seconds: None,
+            on_timeout: Default::default(),
         });
         assert!(cache_key(&step, &[]).is_none());
     }

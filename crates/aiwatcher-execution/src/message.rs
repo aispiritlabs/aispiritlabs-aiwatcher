@@ -159,6 +159,13 @@ pub enum WorkflowCommand {
         step_id: String,
         attempt: u32,
     },
+    /// The deadline on a question ran out. The engine's, never a caller's: it
+    /// is the timer table saying a wall-clock moment has passed, and what it
+    /// then means is the step's own `on_timeout`.
+    TimeoutInput {
+        step_id: String,
+        attempt: u32,
+    },
 }
 
 impl WorkflowCommand {
@@ -173,6 +180,7 @@ impl WorkflowCommand {
             Self::ProvideInput { .. } => "provide_input",
             Self::ExecuteStep { .. } => "execute_step",
             Self::RequestInput { .. } => "request_input",
+            Self::TimeoutInput { .. } => "timeout_input",
         }
     }
 
@@ -180,7 +188,10 @@ impl WorkflowCommand {
     /// intention from a caller. The API refuses to accept one of these.
     #[must_use]
     pub const fn is_effect(&self) -> bool {
-        matches!(self, Self::ExecuteStep { .. } | Self::RequestInput { .. })
+        matches!(
+            self,
+            Self::ExecuteStep { .. } | Self::RequestInput { .. } | Self::TimeoutInput { .. }
+        )
     }
 }
 

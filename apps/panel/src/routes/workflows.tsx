@@ -44,6 +44,7 @@ import {
   Stat,
 } from '@/components/ui/primitives';
 import { openWorkflowStream, type LiveEventFrame, type StreamPhase } from '@/lib/live';
+import type { ReachMode } from '@/lib/reach';
 import { cn, formatCount, formatDuration, formatTime, pinchId, shortId } from '@/lib/utils';
 
 /**
@@ -86,6 +87,10 @@ const searchSchema = z.object({
   workflow: z.string().optional(),
   execution: z.string().optional(),
   node: z.string().optional(),
+  // What the graph is tracing from the selected node. Beside `node` in the
+  // URL because it is meaningless without one, and because a traced view is
+  // exactly the kind of thing somebody pastes into a channel.
+  reach: z.enum(['upstream', 'downstream', 'both']).optional(),
   find: z.string().optional(),
 });
 
@@ -303,6 +308,8 @@ function WorkflowsPage() {
             workflowId={selectedWorkflow}
             executionId={selectedExecution}
             selectedNode={search.node}
+            reach={search.reach}
+            onReach={(mode) => merge({ reach: mode })}
             onSelectNode={(node) => merge({ node })}
           />
         ) : (
@@ -383,11 +390,15 @@ function ExecutionPane({
   executionId,
   selectedNode,
   onSelectNode,
+  reach,
+  onReach,
 }: {
   workflowId: string | undefined;
   executionId: string;
   selectedNode: string | undefined;
   onSelectNode: (node: string | undefined) => void;
+  reach: ReachMode | undefined;
+  onReach: (mode: ReachMode | undefined) => void;
 }) {
   const queryClient = useQueryClient();
   const [phase, setPhase] = React.useState<StreamPhase>('catching-up');
@@ -510,6 +521,8 @@ function ExecutionPane({
           agents={summary.agents}
           selectedNode={selectedNode}
           onSelectNode={onSelectNode}
+          reach={reach}
+          onReach={onReach}
         />
       </Card>
 

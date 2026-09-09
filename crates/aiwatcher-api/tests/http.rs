@@ -5199,6 +5199,129 @@ async fn a_step_nobody_is_asking_a_question_of_refuses_an_answer() {
     assert_eq!(status, StatusCode::CONFLICT, "{refused}");
 }
 
+/// A workflow whose first step is a gate asking for `role`.
+///
+/// A gate first, so starting the execution parks it immediately and no service
+/// this fixture does not run has to answer for the run to reach the question.
+/// A curation cannot be shaped this way — its chain starts where the rows come
+/// from — which is the other half of why the second authored surface exists.
+fn gated_workflow(name: &str, role: &str) -> Value {
+    json!({
+        "name": name,
+        "version": "1",
+        "steps": [
+            {
+                "id": "sign-off",
+                "approval": {
+                    "prompt": "Publish these rows?",
+                    "role": role,
+                    "choices": ["approve", "reject"]
+                }
+            }
+        ]
+    })
+}
+
+#[tokio::test]
+async fn a_gate_is_answered_by_the_role_its_own_question_asked_for() {
+    // The role is a fact about the *step*, from the pinned plan, so the route
+    // cannot know it in advance and the editor floor alone is not the answer.
+    // An editor holds every other command on this run and is refused this one.
+    let fixture = Fixture::behind_a_proxy(false).await;
+    let (status, saved) = fixture
+        .post_as(
+            "/api/v1/workflow-definitions",
+            "alice",
+            "aiwatcher-editors",
+            gated_workflow("promotion", "admin"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+
+    let (_, accepted) = fixture
+        .post_as(
+            "/api/v1/executions",
+            "alice",
+            "aiwatcher-editors",
+            json!({ "target": { "kind": "workflow", "name": "promotion" } }),
+        )
+        .await;
+    let id = accepted["execution"]["execution_id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+
+    // An editor may pause this very run — the floor is held and nothing else
+    // moved — and may not answer its gate.
+    let (status, _) = fixture
+        .post_as(
+            &format!("/api/v1/executions/{id}/commands/pause"),
+            "alice",
+            "aiwatcher-editors",
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = fixture
+        .post_as(
+            &format!("/api/v1/executions/{id}/commands/resume"),
+            "alice",
+            "aiwatcher-editors",
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, refused) = fixture
+        .post_as(
+            &format!("/api/v1/executions/{id}/steps/sign-off/input"),
+            "alice",
+            "aiwatcher-editors",
+            json!({ "attempt": 1, "response": "approve" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+}
+
+#[tokio::test]
+async fn a_gate_that_asks_for_an_editor_is_answered_by_one() {
+    // The other half, and the reason the floor is not simply raised for every
+    // gate: a question that named nothing stricter is answered by whoever may
+    // write here, which is what every curation gate does.
+    let fixture = Fixture::behind_a_proxy(false).await;
+    fixture
+        .post_as(
+            "/api/v1/workflow-definitions",
+            "alice",
+            "aiwatcher-editors",
+            gated_workflow("release", "editor"),
+        )
+        .await;
+    let (_, accepted) = fixture
+        .post_as(
+            "/api/v1/executions",
+            "alice",
+            "aiwatcher-editors",
+            json!({ "target": { "kind": "workflow", "name": "release" } }),
+        )
+        .await;
+    let id = accepted["execution"]["execution_id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+
+    let (status, answered) = fixture
+        .post_as(
+            &format!("/api/v1/executions/{id}/steps/sign-off/input"),
+            "alice",
+            "aiwatcher-editors",
+            json!({ "attempt": 1, "response": "approve" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{answered}");
+    assert_eq!(answered["execution"]["state"]["state_type"], "completed");
+}
+
 #[tokio::test]
 async fn an_answer_may_not_say_who_gave_it() {
     // `answered_by` comes from the session and is not a field. A body that

@@ -1,0 +1,369 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "aiwatcher runtime",
+    "subtitle": "What folds the log, and what is authored beside it",
+    "visual_preset": "signal-flow",
+    "animation": "trace",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "observe",
+        "label": "Observing a run",
+        "focus": [
+          "agents",
+          "log",
+          "projector",
+          "api",
+          "panel"
+        ],
+        "note": "An agent's events fold into spans, a read model and a live stream."
+      },
+      {
+        "id": "execute",
+        "label": "Executing a plan",
+        "focus": [
+          "api",
+          "postgres",
+          "reactor",
+          "flow",
+          "notebooks"
+        ],
+        "note": "One decision is six writes in one transaction; a reactor claims what it can perform."
+      },
+      {
+        "id": "authored",
+        "label": "Authored, off the log",
+        "focus": [
+          "store",
+          "api",
+          "panel"
+        ],
+        "note": "Prompts, annotations, conversations and training outlive the log's retention."
+      }
+    ],
+    "legend": {
+      "mode": "auto",
+      "entries": {
+        "external": {
+          "label": "Outside the binary"
+        },
+        "messagebus": {
+          "label": "Durable log"
+        },
+        "backend": {
+          "label": "Rust service"
+        },
+        "frontend": {
+          "label": "Panel"
+        },
+        "database": {
+          "label": "Store"
+        },
+        "cloud": {
+          "label": "Object store"
+        }
+      }
+    }
+  },
+  "components": [
+    {
+      "id": "agents",
+      "type": "external",
+      "label": "Instrumented agents",
+      "sublabel": "Python + TypeScript",
+      "pos": [
+        40,
+        250
+      ],
+      "size": [
+        150,
+        62
+      ]
+    },
+    {
+      "id": "log",
+      "type": "messagebus",
+      "label": "Durable log",
+      "sublabel": "Laser or write-ahead",
+      "pos": [
+        270,
+        250
+      ],
+      "size": [
+        150,
+        62
+      ],
+      "tag": "aiwatcher-bus"
+    },
+    {
+      "id": "projector",
+      "type": "backend",
+      "label": "Projector",
+      "sublabel": "spans · read model",
+      "pos": [
+        500,
+        250
+      ],
+      "size": [
+        150,
+        62
+      ],
+      "tag": "serve"
+    },
+    {
+      "id": "api",
+      "type": "backend",
+      "label": "Axum API",
+      "sublabel": "REST · SSE · socket",
+      "pos": [
+        730,
+        250
+      ],
+      "size": [
+        150,
+        62
+      ],
+      "tag": "serve"
+    },
+    {
+      "id": "panel",
+      "type": "frontend",
+      "label": "Panel",
+      "sublabel": "React console",
+      "pos": [
+        960,
+        250
+      ],
+      "size": [
+        150,
+        62
+      ]
+    },
+    {
+      "id": "traces",
+      "type": "database",
+      "label": "VictoriaTraces",
+      "sublabel": "finished spans",
+      "pos": [
+        500,
+        80
+      ],
+      "size": [
+        150,
+        62
+      ]
+    },
+    {
+      "id": "metrics",
+      "type": "database",
+      "label": "VictoriaMetrics",
+      "sublabel": "aggregates",
+      "pos": [
+        500,
+        430
+      ],
+      "size": [
+        150,
+        62
+      ]
+    },
+    {
+      "id": "postgres",
+      "type": "database",
+      "label": "PostgreSQL",
+      "sublabel": "decisions · outbox",
+      "pos": [
+        730,
+        430
+      ],
+      "size": [
+        150,
+        62
+      ],
+      "tag": "workflow store"
+    },
+    {
+      "id": "reactor",
+      "type": "backend",
+      "label": "Reactors",
+      "sublabel": "the work role",
+      "pos": [
+        960,
+        430
+      ],
+      "size": [
+        150,
+        62
+      ],
+      "tag": "work"
+    },
+    {
+      "id": "flow",
+      "type": "external",
+      "label": "Flow PHP",
+      "sublabel": "query surface",
+      "pos": [
+        1180,
+        350
+      ],
+      "size": [
+        150,
+        62
+      ]
+    },
+    {
+      "id": "notebooks",
+      "type": "external",
+      "label": "ml_pipeline",
+      "sublabel": "marimo notebooks",
+      "pos": [
+        1180,
+        510
+      ],
+      "size": [
+        150,
+        62
+      ]
+    },
+    {
+      "id": "store",
+      "type": "cloud",
+      "label": "RustFS (S3)",
+      "sublabel": "object store",
+      "pos": [
+        960,
+        600
+      ],
+      "size": [
+        160,
+        62
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "agents",
+      "to": "log",
+      "label": "events",
+      "variant": "emphasis"
+    },
+    {
+      "from": "log",
+      "to": "projector",
+      "label": "at-least-once",
+      "variant": "emphasis"
+    },
+    {
+      "from": "projector",
+      "to": "traces",
+      "route": "straight"
+    },
+    {
+      "from": "projector",
+      "to": "metrics",
+      "route": "straight"
+    },
+    {
+      "from": "projector",
+      "to": "api",
+      "label": "read model",
+      "variant": "emphasis"
+    },
+    {
+      "from": "api",
+      "to": "panel",
+      "label": "SSE · WebSocket",
+      "variant": "emphasis"
+    },
+    {
+      "from": "api",
+      "to": "postgres",
+      "label": "one transaction",
+      "variant": "security",
+      "route": "straight",
+      "labelAt": [
+        805,
+        375
+      ]
+    },
+    {
+      "from": "postgres",
+      "to": "reactor",
+      "label": "claim an attempt",
+      "labelAt": [
+        920,
+        400
+      ]
+    },
+    {
+      "from": "reactor",
+      "to": "flow",
+      "label": "flow_php"
+    },
+    {
+      "from": "reactor",
+      "to": "notebooks",
+      "label": "notebook"
+    },
+    {
+      "from": "reactor",
+      "to": "store",
+      "label": "outputs",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "from": "postgres",
+      "to": "log",
+      "label": "outbox, after commit",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "bottom",
+      "via": [
+        [
+          805,
+          672
+        ],
+        [
+          345,
+          672
+        ]
+      ],
+      "labelAt": [
+        575,
+        662
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "One log, many folds",
+      "items": [
+        "Ids are derived, so a redelivery lands on the same span",
+        "An event is not a span: hundreds fold into a handful",
+        "eval.*, workflow.* and execution.* form no span at all"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Owned execution",
+      "items": [
+        "decide is pure; time arrives in Now and ids are derived",
+        "The outbox publishes facts after the decision commits",
+        "A process claims only the runtimes it registered an executor for"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Authored, not observed",
+      "items": [
+        "A prompt version stays readable after its run is evicted",
+        "Conversation content is sealed and separately retained",
+        "A promotion is refused without a held-out score"
+      ]
+    }
+  ]
+}

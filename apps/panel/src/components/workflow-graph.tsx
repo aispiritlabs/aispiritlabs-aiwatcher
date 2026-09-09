@@ -4,6 +4,7 @@ import {
   BackgroundVariant,
   Controls,
   Handle,
+  Panel,
   Position,
   ReactFlow,
   type Edge,
@@ -11,9 +12,18 @@ import {
   type NodeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { AlertCircle, Bot, CircleDashed, FileBox, Repeat } from 'lucide-react';
+import { AlertCircle, Bot, CircleDashed, FileBox, Repeat, Workflow } from 'lucide-react';
 
 import type { AgentMessage, NodeState, WorkflowEdge } from '@/api/generated/types.gen';
+import {
+  FlowCard,
+  FlowLegend,
+  ReachControl,
+  flowEdgeClass,
+  roleInk,
+  type FlowState,
+} from '@/components/flow-visuals';
+import { edgeInReach, nodeInReach, reachFrom, type ReachMode } from '@/lib/reach';
 import { graphWidth, layoutAgents, layoutGraph } from '@/lib/workflow-layout';
 import { cn, formatDuration } from '@/lib/utils';
 
@@ -32,92 +42,104 @@ import { cn, formatDuration } from '@/lib/utils';
  *
  * A stage nothing has started is drawn dim rather than omitted. That is the
  * whole reason the topology rides the log — see ADR_0012.
+ *
+ * Both are drawn with `flow-visuals`, the same vocabulary the curation canvas
+ * uses, which is what keeps the two views from meaning different things by the
+ * same colour. Here a role is a *lane* rather than a kind — a stage is compute
+ * and an agent is an agent — because that is the distinction this view exists
+ * to hold apart.
  */
 
-const STATUS_RING: Record<string, string> = {
-  pending: 'border-border/60 bg-card/40 text-muted-foreground',
-  running: 'border-running bg-running/10 text-foreground',
-  succeeded: 'border-success/60 bg-card text-foreground',
-  failed: 'border-danger bg-danger/10 text-foreground',
-};
-
-const STATUS_DOT: Record<string, string> = {
-  pending: 'bg-muted-foreground/40',
-  running: 'bg-running animate-pulse',
-  succeeded: 'bg-success',
-  failed: 'bg-danger',
-};
+/**
+ * A producer's four status words, in the four this canvas draws with. The
+ * mapping is the whole translation: `pending` is `idle` and not a fifth state,
+ * because a stage nothing has started and a stage nobody has run yet are the
+ * same fact seen from two sides.
+ */
+function stateOf(status: string): FlowState {
+  switch (status) {
+    case 'running':
+      return 'live';
+    case 'succeeded':
+      return 'done';
+    case 'failed':
+      return 'failed';
+    default:
+      return 'idle';
+  }
+}
 
 type StageData = {
   node: NodeState;
   selected: boolean;
+  away: boolean;
 };
 
 type AgentData = {
   agent: string;
   active: boolean;
+  away: boolean;
 };
 
 function StageNode({ data }: NodeProps<Node<StageData, 'stage'>>) {
-  const { node, selected } = data;
+  const { node, selected, away } = data;
   return (
-    <div
-      className={cn(
-        'flex w-[13rem] flex-col gap-1.5 rounded-lg border-2 px-3 py-2 shadow-sm transition-colors',
-        STATUS_RING[node.status] ?? STATUS_RING.pending,
-        selected && 'ring-2 ring-primary ring-offset-2 ring-offset-background',
-        // A node nothing declared is drawn dashed: the graph has drifted from
-        // the code running it, and that is worth seeing rather than hiding.
-        !node.declared && 'border-dashed',
-      )}
+    <FlowCard
+      role="compute"
+      state={stateOf(node.status)}
+      selected={selected}
+      provisional={!node.declared}
+      // A selected stage is never recessive, whatever its status: it is the
+      // thing being asked about, and the subject of a trace has to be the
+      // most legible box on the canvas rather than the dimmest.
+      dim={node.status === 'pending' && !selected}
+      away={away}
+      mark={Workflow}
+      title={node.name}
+      footer={
+        <>
+          {node.kind ? <span className="truncate">{node.kind}</span> : null}
+          {node.status === 'pending' ? (
+            <span className="flex items-center gap-1">
+              <CircleDashed className="h-3 w-3" /> not run
+            </span>
+          ) : (
+            <span className="tabular-nums">{formatDuration(node.duration_ms)}</span>
+          )}
+          {node.artifacts.length > 0 ? (
+            <span className="flex items-center gap-1" title="artifacts produced">
+              <FileBox className="h-3 w-3" />
+              {node.artifacts.length}
+            </span>
+          ) : null}
+          {node.attempts > 1 ? (
+            <span className="flex items-center gap-1 text-warning" title="attempts">
+              <Repeat className="h-3 w-3" />
+              {node.attempts}
+            </span>
+          ) : null}
+          {node.agents.length > 0 ? (
+            <span className="flex items-center gap-1 truncate" title={node.agents.join(', ')}>
+              <Bot className="h-3 w-3" />
+              {node.agents[0]}
+              {node.agents.length > 1 ? ` +${node.agents.length - 1}` : ''}
+            </span>
+          ) : null}
+          {node.error ? <AlertCircle className="h-3 w-3 shrink-0 text-danger" /> : null}
+        </>
+      }
     >
       <Handle
         type="target"
         position={Position.Left}
         className="!h-2 !w-2 !border-border !bg-muted"
       />
-      <div className="flex items-center gap-1.5">
-        <span className={cn('h-2 w-2 shrink-0 rounded-full', STATUS_DOT[node.status])} />
-        <span className="truncate text-sm font-medium">{node.name}</span>
-      </div>
-      <div className="flex items-center gap-2 text-[0.7rem] text-muted-foreground">
-        {node.kind ? <span className="truncate">{node.kind}</span> : null}
-        {node.status === 'pending' ? (
-          <span className="flex items-center gap-1">
-            <CircleDashed className="h-3 w-3" /> not run
-          </span>
-        ) : (
-          <span className="tabular-nums">{formatDuration(node.duration_ms)}</span>
-        )}
-      </div>
-      <div className="flex items-center gap-2.5 text-[0.7rem] text-muted-foreground">
-        {node.artifacts.length > 0 ? (
-          <span className="flex items-center gap-1" title="artifacts produced">
-            <FileBox className="h-3 w-3" />
-            {node.artifacts.length}
-          </span>
-        ) : null}
-        {node.attempts > 1 ? (
-          <span className="flex items-center gap-1 text-warning" title="attempts">
-            <Repeat className="h-3 w-3" />
-            {node.attempts}
-          </span>
-        ) : null}
-        {node.agents.length > 0 ? (
-          <span className="flex items-center gap-1 truncate" title={node.agents.join(', ')}>
-            <Bot className="h-3 w-3" />
-            {node.agents[0]}
-            {node.agents.length > 1 ? ` +${node.agents.length - 1}` : ''}
-          </span>
-        ) : null}
-        {node.error ? <AlertCircle className="h-3 w-3 shrink-0 text-danger" /> : null}
-      </div>
       <Handle
         type="source"
         position={Position.Right}
         className="!h-2 !w-2 !border-border !bg-muted"
       />
-    </div>
+    </FlowCard>
   );
 }
 
@@ -126,8 +148,13 @@ function AgentNode({ data }: NodeProps<Node<AgentData, 'agent'>>) {
     <div
       className={cn(
         'flex w-[13rem] items-center gap-2 rounded-full border px-3 py-1.5 text-sm',
+        // Not "out of reach" — an agent is not on the declared graph at all,
+        // so it has no place in a stage's reach either way. It recedes because
+        // a trace is a question about the pipeline row, and the conversation
+        // above it is not part of the answer.
+        data.away && 'opacity-15 saturate-50',
         data.active
-          ? 'border-primary/60 bg-primary/10 text-foreground'
+          ? cn('border-flow-agent/70 bg-flow-agent/10 text-foreground', roleInk('agent'))
           : 'border-border bg-card text-muted-foreground',
       )}
     >
@@ -147,8 +174,8 @@ function AgentNode({ data }: NodeProps<Node<AgentData, 'agent'>>) {
         position={Position.Top}
         className="!h-2 !w-2 !border-border !bg-muted"
       />
-      <Bot className="h-3.5 w-3.5 shrink-0" />
-      <span className="truncate">{data.agent}</span>
+      <Bot className={cn('h-3.5 w-3.5 shrink-0', data.active ? undefined : 'text-flow-agent')} />
+      <span className="truncate text-foreground">{data.agent}</span>
       <Handle
         id="out"
         type="source"
@@ -174,6 +201,8 @@ export function WorkflowGraph({
   agents,
   selectedNode,
   onSelectNode,
+  reach,
+  onReach,
 }: {
   nodes: NodeState[];
   edges: WorkflowEdge[];
@@ -181,6 +210,8 @@ export function WorkflowGraph({
   agents: string[];
   selectedNode?: string | undefined;
   onSelectNode: (nodeId: string | undefined) => void;
+  reach?: ReachMode | undefined;
+  onReach: (mode: ReachMode | undefined) => void;
 }) {
   // Keyed on the graph's *shape*, not on its contents. A status change must
   // not move a box; only a node appearing or disappearing may.
@@ -211,13 +242,33 @@ export function WorkflowGraph({
     return seen;
   }, [messages]);
 
+  /*
+   * The traced reach, over the *declared* edges only. Agent messages are not
+   * part of it on purpose: this view exists to keep "the shape somebody
+   * promised" apart from "what was actually said", and letting a message pull
+   * a stage into a stage's reach would be the exact conflation the two edge
+   * styles are here to prevent.
+   */
+  const traced = React.useMemo(
+    () => (selectedNode && reach ? reachFrom(edges, selectedNode) : undefined),
+    [edges, selectedNode, reach],
+  );
+  const away = React.useCallback(
+    (id: string) => traced !== undefined && reach !== undefined && !nodeInReach(traced, reach, id),
+    [traced, reach],
+  );
+
   const flowNodes = React.useMemo<Node[]>(() => {
     const width = graphWidth([...positions].map(([id, position]) => ({ id, position })));
     const stages: Node[] = nodes.map((node) => ({
       id: node.node_id,
       type: 'stage',
       position: positions.get(node.node_id) ?? { x: 0, y: 0 },
-      data: { node, selected: node.node_id === selectedNode } satisfies StageData,
+      data: {
+        node,
+        selected: node.node_id === selectedNode,
+        away: away(node.node_id),
+      } satisfies StageData,
       draggable: false,
     }));
     const agentRow: Node[] = layoutAgents(messagingAgents, width).map((placed) => {
@@ -226,12 +277,16 @@ export function WorkflowGraph({
         id: placed.id,
         type: 'agent',
         position: placed.position,
-        data: { agent, active: agents.includes(agent) } satisfies AgentData,
+        data: {
+          agent,
+          active: agents.includes(agent),
+          away: traced !== undefined && reach !== undefined,
+        } satisfies AgentData,
         draggable: false,
       };
     });
     return [...agentRow, ...stages];
-  }, [nodes, positions, selectedNode, messagingAgents, agents]);
+  }, [nodes, positions, selectedNode, messagingAgents, agents, away]);
 
   const flowEdges = React.useMemo<Edge[]>(() => {
     const known = new Set(nodes.map((node) => node.node_id));
@@ -242,10 +297,16 @@ export function WorkflowGraph({
         source: edge.from,
         target: edge.to,
         label: edge.label ?? undefined,
-        style: { stroke: 'var(--color-border)', strokeWidth: 1.5 },
-        // Animated only while the downstream stage is actually running, so
-        // motion on this canvas always means something is happening.
-        animated: nodes.some((node) => node.node_id === edge.to && node.status === 'running'),
+        // Drawn from the state of the stage it leads *into*, so a declared
+        // edge that has already carried something is visibly spent rather
+        // than identical to one nothing has reached. Motion on this canvas
+        // still only ever means something is happening now.
+        className: flowEdgeClass(
+          stateOf(nodes.find((node) => node.node_id === edge.to)?.status ?? 'pending'),
+          traced !== undefined &&
+            reach !== undefined &&
+            !edgeInReach(traced, reach, edge.from, edge.to),
+        ),
       }));
 
     // One edge per distinct pair, however many messages went over it: a
@@ -274,14 +335,21 @@ export function WorkflowGraph({
         labelBgStyle: { fill: 'var(--color-card)' },
         // Dashed and coloured, never solid: a declared edge is a shape somebody
         // promised, an observed one is something that was said. The picture
-        // must not blur the two.
-        style: { stroke: 'var(--color-primary)', strokeWidth: 1.5, strokeDasharray: '4 3' },
-        animated: true,
+        // must not blur the two — and the agent's own role colour is what says
+        // which, rather than a second meaning for the accent the live edges use.
+        style: {
+          stroke: 'var(--color-flow-agent)',
+          strokeWidth: 1.5,
+          strokeDasharray: '4 3',
+          ...(traced !== undefined && reach !== undefined ? { opacity: 0.14 } : {}),
+        },
       };
     });
 
     return [...declared, ...observed];
-  }, [nodes, edges, messages, messagingAgents]);
+  }, [nodes, edges, messages, messagingAgents, traced, reach]);
+
+  const selectedStage = nodes.find((node) => node.node_id === selectedNode);
 
   if (nodes.length === 0) {
     return (
@@ -296,37 +364,53 @@ export function WorkflowGraph({
   }
 
   return (
-    <div className="h-[32rem] w-full">
-      <ReactFlow
-        nodes={flowNodes}
-        edges={flowEdges}
-        nodeTypes={NODE_TYPES}
-        onNodeClick={(_, node) => {
-          if (node.type !== 'stage') return;
-          onSelectNode(node.id === selectedNode ? undefined : node.id);
-        }}
-        onPaneClick={() => onSelectNode(undefined)}
-        fitView
-        fitViewOptions={{ padding: 0.15, minZoom: 0.35, maxZoom: 1.1 }}
-        nodesDraggable={false}
-        nodesConnectable={false}
-        // React Flow ships light defaults; this console is dark-only, so the
-        // furniture is mapped onto the panel's own tokens rather than themed
-        // with a stylesheet override that would drift from `styles.css`.
-        colorMode="dark"
-        style={{ background: 'transparent' }}
-      >
-        <Background
-          variant={BackgroundVariant.Dots}
-          gap={18}
-          size={1}
-          color="var(--color-gridline)"
-        />
-        <Controls
-          showInteractive={false}
-          className="!border !border-border !bg-card [&_button]:!border-border [&_button]:!bg-card [&_button]:!fill-muted-foreground hover:[&_button]:!bg-accent"
-        />
-      </ReactFlow>
+    <div className="space-y-2">
+      <div className="flow-surface h-[32rem] w-full rounded-lg">
+        <ReactFlow
+          nodes={flowNodes}
+          edges={flowEdges}
+          nodeTypes={NODE_TYPES}
+          onNodeClick={(_, node) => {
+            if (node.type !== 'stage') return;
+            onSelectNode(node.id === selectedNode ? undefined : node.id);
+          }}
+          onPaneClick={() => onSelectNode(undefined)}
+          fitView
+          fitViewOptions={{ padding: 0.15, minZoom: 0.35, maxZoom: 1.1 }}
+          nodesDraggable={false}
+          nodesConnectable={false}
+          // React Flow ships light defaults; this console is dark-only, so the
+          // furniture is mapped onto the panel's own tokens rather than themed
+          // with a stylesheet override that would drift from `styles.css`.
+          colorMode="dark"
+          style={{ background: 'transparent' }}
+        >
+          <Background
+            variant={BackgroundVariant.Dots}
+            gap={18}
+            size={1}
+            color="var(--color-gridline)"
+          />
+          <Controls
+            showInteractive={false}
+            className="!border !border-border !bg-card [&_button]:!border-border [&_button]:!bg-card [&_button]:!fill-muted-foreground hover:[&_button]:!bg-accent"
+          />
+          {selectedStage ? (
+            <Panel position="top-right">
+              <ReachControl mode={reach} onChange={onReach} subject={selectedStage.name} />
+            </Panel>
+          ) : null}
+        </ReactFlow>
+      </div>
+      <FlowLegend
+        entries={[
+          { role: 'compute', label: 'Declared stage' },
+          ...(messagingAgents.length > 0
+            ? ([{ role: 'agent', label: 'Agent, and what it said' }] as const)
+            : []),
+        ]}
+        className="px-1"
+      />
     </div>
   );
 }

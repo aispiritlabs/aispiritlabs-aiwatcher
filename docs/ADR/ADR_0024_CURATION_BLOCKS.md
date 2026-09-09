@@ -190,14 +190,13 @@ cursors for them; one cursor bound the publisher to an output no step declares,
 which is a dataset version over no rows — the one failure that looks like a
 success.
 
-**The role a gate may name is `editor` and nothing else, for now.** The route
-that carries an answer requires the editor role and reads nothing stricter, so
-a gate saying `admin` would describe a check nobody makes. It is refused by
-name rather than accepted and quietly ignored, and the panel asks whether the
-caller holds the role the question declared, so somebody who cannot answer
-reads whose decision it is instead of pressing a button that returns a 403.
-Widening it is one line on each side once the answer route reads the request's
-own role.
+**A gate raises the answer route's floor and never lowers it.** Every write
+here needs an editor, and `provide_input` requires, on top of that, the role the
+*question* named — read from the pinned plan through the step's own `awaiting`,
+because which role may answer is a fact about the step and not about the route.
+So a gate names `editor` or `admin`; anything weaker is refused by name, since
+promising that a viewer may answer would offer buttons to somebody the floor is
+about to refuse. The panel asks the same question before drawing them.
 
 **A registered workflow authors the same gate.** A `WorkflowTask` carries an
 optional `approval` and compiles to the same binding; what a valid question is
@@ -211,7 +210,11 @@ definition is content-addressed and stored: an internally tagged enum has no
 default tag, so every revision saved before gates existed would have stopped
 parsing.
 
-**What this does not add.** No deadline: `InputRequest::deadline` stays `None`
-and a gate waits as long as it takes. A timer for one belongs to the workflow
-store, beside every other deferred append, and not to the block — two timers
-for one wait is the same mistake as two parties retrying one attempt.
+**A gate may carry a deadline, and the pair is authored together.**
+`timeout_seconds` with an `on_timeout` of `fail | skip | answer`; absent is the
+default and means *as long as it takes*, which is the honest thing for a
+decision somebody has to think about. Either half alone is refused by name — a
+clock with nothing behind it, or a rule nothing can reach. The row lives in the
+workflow store beside every other deferred append and is delivered by the tick
+that already existed, because two timers for one wait is the same mistake as
+two parties retrying one attempt.

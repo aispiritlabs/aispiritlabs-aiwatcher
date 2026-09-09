@@ -28,6 +28,7 @@ from .event_store import (
     TimerRequest,
     dataclass_codec,
 )
+from .graph import as_topology, declare_graph
 from .payloads import (
     FilePayloadStore,
     MemoryPayloadStore,
@@ -57,7 +58,9 @@ __all__ = [
     "TimerPolicy",
     "TimerRequest",
     "aiwatcher_tracer",
+    "as_topology",
     "dataclass_codec",
+    "declare_graph",
     "digest_of",
     "encode_payload",
     "tee",

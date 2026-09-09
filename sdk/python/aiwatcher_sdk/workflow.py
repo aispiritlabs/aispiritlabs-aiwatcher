@@ -43,6 +43,24 @@ class WorkflowStep:
 
 
 @dataclass(frozen=True)
+class OnTimeout:
+    """What happens to a gate whose deadline ran out.
+
+    ``fail`` stops the run, ``skip`` passes the step over, and ``answer``
+    writes ``response`` and records that a policy did, never a person. Authored
+    with a deadline and refused without one.
+    """
+
+    on: str = "fail"
+    response: object | None = None
+
+    def as_definition(self) -> dict[str, object]:
+        if self.on == "answer":
+            return {"on": "answer", "response": self.response}
+        return {"on": self.on}
+
+
+@dataclass(frozen=True)
 class ApprovalStep:
     """A step that waits for a person instead of running code.
 
@@ -52,8 +70,8 @@ class ApprovalStep:
     give it ``inputs`` when the person deciding should see what they are
     deciding about.
 
-    What a valid question is — the length of the prompt, the answers, who may
-    answer — is the server's rule and is not repeated here. It refuses a bad one
+    What a valid question is — the length of the prompt, the answers, which
+    roles may be named — is the server's rule and is not repeated here. It refuses a bad one
     with every problem at once, which a check in this file could only turn into
     the first of them.
     """
@@ -61,6 +79,14 @@ class ApprovalStep:
     name: str
     prompt: str
     choices: tuple[str, ...] = ()
+    #: Who may answer. A gate only ever raises the floor — every write already
+    #: needs an editor — so this is `editor` or `admin`, and the server refuses
+    #: anything weaker.
+    role: str = "editor"
+    #: How long the graph waits here. `None` waits as long as it takes, which is
+    #: the default and the honest thing for a decision somebody thinks about.
+    timeout_seconds: int | None = None
+    on_timeout: OnTimeout = field(default_factory=OnTimeout)
     after: tuple[str, ...] = ()
     inputs: tuple[WorkflowInput, ...] = ()
 
@@ -147,9 +173,19 @@ def as_definition_step(step: Step, queue: str) -> dict[str, object]:
     read, to whoever opens it next, as things this system does.
     """
     if isinstance(step, ApprovalStep):
+        approval: dict[str, object] = {
+            "prompt": step.prompt,
+            "role": step.role,
+            "choices": list(step.choices),
+        }
+        # Sent only when there is one: the pair is authored together, and a
+        # policy with no deadline is refused rather than stored.
+        if step.timeout_seconds is not None:
+            approval["timeout_seconds"] = step.timeout_seconds
+            approval["on_timeout"] = step.on_timeout.as_definition()
         return {
             "id": step.name,
-            "approval": {"prompt": step.prompt, "choices": list(step.choices)},
+            "approval": approval,
             "after": list(step.after),
             "inputs": [asdict(item) for item in step.inputs],
         }

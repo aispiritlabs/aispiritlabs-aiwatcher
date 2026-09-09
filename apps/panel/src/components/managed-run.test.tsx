@@ -267,7 +267,7 @@ describe('answering a step that is waiting on a person', () => {
   };
 
   /** The context of a gate the run is stopped on, as the server answers it. */
-  function gate(choices: string[]) {
+  function gate(choices: string[], deadline?: string) {
     return {
       context_id: 'e-1/sign-off/1',
       definition_kind: 'curation_pipeline',
@@ -288,7 +288,7 @@ describe('answering a step that is waiting on a person', () => {
         step_id: 'sign-off',
         current_attempt: 1,
         state: { state_type: 'awaiting_input' },
-        awaiting: { prompt: 'Publish these 4,120 rows?', role: 'editor', choices },
+        awaiting: { prompt: 'Publish these 4,120 rows?', role: 'editor', choices, deadline },
       },
     };
   }
@@ -343,6 +343,40 @@ describe('answering a step that is waiting on a person', () => {
     await userEvent.click(screen.getByRole('button', { name: 'approve' }));
 
     await waitFor(() => expect(server.countOf('POST', ANSWER)).toBe(1));
+  });
+
+  it('says when a question stops being answerable, and only when it does', async () => {
+    // A deadline is shown rather than counted down: the moment is the fact, and
+    // a clock in the browser that a reload resets would be a second answer to
+    // "when", free to disagree with the one the server is holding.
+    serve([
+      ...signedInAs('editor'),
+      { method: 'GET', path: EXECUTION, answer: { status: 200, body: WAITING } },
+      {
+        method: 'GET',
+        path: CONTEXT,
+        answer: { status: 200, body: gate(['approve'], '2026-09-10T09:00:00Z') },
+      },
+    ]);
+
+    render(withQueries(<Harness />));
+    await userEvent.click(await screen.findByRole('button', { name: /sign-off/ }));
+
+    await screen.findByText(/Answerable until/);
+  });
+
+  it('says nothing about a deadline on a gate that waits as long as it takes', async () => {
+    serve([
+      ...signedInAs('editor'),
+      { method: 'GET', path: EXECUTION, answer: { status: 200, body: WAITING } },
+      { method: 'GET', path: CONTEXT, answer: { status: 200, body: gate(['approve']) } },
+    ]);
+
+    render(withQueries(<Harness />));
+    await userEvent.click(await screen.findByRole('button', { name: /sign-off/ }));
+
+    await screen.findByRole('button', { name: 'approve' });
+    expect(screen.queryByText(/Answerable until/)).toBeNull();
   });
 
   it('types the answer to a question that offered none', async () => {

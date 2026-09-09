@@ -29,10 +29,12 @@ use crate::error::DecisionError;
 use crate::message::{
     Direction, MessageMetadata, PendingMessage, WorkflowCommand, WorkflowEvent, WorkflowMessage,
 };
+use aiwatcher_core::human_input::OnTimeout;
+
 use crate::plan::RuntimeBinding;
 use crate::state::{
     AttemptRecord, Execution, ExecutionMode, ExecutionState, FailureClass, InputRequest, RunState,
-    StateType, StepState,
+    StateType, StepError, StepState,
 };
 
 /// Everything a decision needs that is not the state or the command.
@@ -491,6 +493,91 @@ fn decide_active(
             Ok(emit.into_messages())
         }
 
+        WorkflowMessage::Command(WorkflowCommand::TimeoutInput { step_id, attempt }) => {
+            let step = step_of(execution, step_id)?;
+            // Both refusals are the timer arriving on a question that is no
+            // longer there: somebody answered in the meantime, or a retry
+            // replaced the attempt that asked. The caller retires the row on
+            // either, because a timer that outlived its question is not due —
+            // it is over.
+            if step.awaiting.is_none() {
+                return Err(DecisionError::NotWaiting {
+                    step: step_id.clone(),
+                });
+            }
+            if step.current_attempt != *attempt {
+                return Err(DecisionError::StaleAttempt {
+                    step: step_id.clone(),
+                    attempt: *attempt,
+                    current: step.current_attempt,
+                });
+            }
+            let Some(RuntimeBinding::HumanInput(spec)) = execution
+                .plan
+                .step(step_id)
+                .map(|plan_step| &plan_step.runtime)
+            else {
+                return Err(DecisionError::NoSuchStep {
+                    step: step_id.clone(),
+                });
+            };
+
+            emit.about_step(step_id, *attempt);
+            match &spec.on_timeout {
+                // The safe reading of "nobody said yes". `Policy` rather than
+                // `Timeout`: a rule decided this, and nothing about a runtime
+                // is in question — which is also what keeps it out of the
+                // retryable classes, since asking the same person again after
+                // they did not answer is not a retry.
+                OnTimeout::Fail => {
+                    let error = StepError::new(
+                        FailureClass::Policy,
+                        format!("nobody answered {step_id} before its deadline"),
+                    );
+                    emit.event(WorkflowEvent::StepFailed {
+                        step_id: step_id.clone(),
+                        attempt: *attempt,
+                        error: error.clone(),
+                    });
+                    // Straight to the settlement rather than through the retry
+                    // budget: asking the same person again after they did not
+                    // answer is not a retry, and `RetryPolicy::once()` on a
+                    // gate says the same thing from the plan.
+                    settle_failure(execution, step_id, *attempt, &error, &mut emit);
+                    return Ok(emit.into_messages());
+                }
+                // Passed over, and the history says so: the question was asked
+                // and never answered, and no `InputProvided` claims otherwise.
+                OnTimeout::Skip => {
+                    emit.event(WorkflowEvent::StepCompleted {
+                        step_id: step_id.clone(),
+                        attempt: *attempt,
+                        outputs: Vec::new(),
+                        result: None,
+                    });
+                }
+                // An answer, recorded as one — and attributed to the policy
+                // rather than to a person, because the one record of a human
+                // decision must not say a human made it.
+                OnTimeout::Answer { response } => {
+                    emit.event(WorkflowEvent::InputProvided {
+                        step_id: step_id.clone(),
+                        attempt: *attempt,
+                        answered_by: ANSWERED_BY_TIMEOUT.to_owned(),
+                        response: response.clone(),
+                    });
+                    emit.event(WorkflowEvent::StepCompleted {
+                        step_id: step_id.clone(),
+                        attempt: *attempt,
+                        outputs: Vec::new(),
+                        result: Some(response.clone()),
+                    });
+                }
+            }
+            continue_after(execution, step_id, &mut emit, now);
+            Ok(emit.into_messages())
+        }
+
         WorkflowMessage::Event(WorkflowEvent::StepStarted { step_id, attempt }) => {
             let step = step_of(execution, step_id)?;
             if step.current_attempt != *attempt {
@@ -679,19 +766,7 @@ fn decide_active(
             // No retry left. Everything downstream of this step will not run,
             // and the execution has failed — unless a cancel is already what is
             // stopping it, in which case that is the answer being given.
-            let mut settled = execution.clone();
-            settled.set_attempt_state(step_id, *attempt, RunState::of(error.class.attempt_state()));
-            if let Some(step) = settled.step_mut(step_id) {
-                step.state = RunState::of(error.class.attempt_state());
-            }
-            skip_downstream(&settled, step_id, &mut emit);
-            if execution.cancelling {
-                emit.event(WorkflowEvent::ExecutionCancelled);
-            } else {
-                emit.event(WorkflowEvent::ExecutionFailed {
-                    reason: format!("{step_id} failed: {}", error.message),
-                });
-            }
+            settle_failure(execution, step_id, *attempt, error, &mut emit);
             Ok(emit.into_messages())
         }
 
@@ -700,6 +775,34 @@ fn decide_active(
         other => Err(DecisionError::Unhandled {
             message: other.name().to_owned(),
         }),
+    }
+}
+
+/// A step that has failed for the last time, and everything that follows from
+/// it: the downstream skips and the run's own ending.
+///
+/// One place, because two arms reach it — a runtime reporting a failure, and a
+/// deadline that ran out on a question. A second copy would be a second idea of
+/// what a failed step does to the rest of a run.
+fn settle_failure(
+    execution: &Execution,
+    step_id: &str,
+    attempt: u32,
+    error: &StepError,
+    emit: &mut Emitter,
+) {
+    let mut settled = execution.clone();
+    settled.set_attempt_state(step_id, attempt, RunState::of(error.class.attempt_state()));
+    if let Some(step) = settled.step_mut(step_id) {
+        step.state = RunState::of(error.class.attempt_state());
+    }
+    skip_downstream(&settled, step_id, emit);
+    if execution.cancelling {
+        emit.event(WorkflowEvent::ExecutionCancelled);
+    } else {
+        emit.event(WorkflowEvent::ExecutionFailed {
+            reason: format!("{step_id} failed: {}", error.message),
+        });
     }
 }
 
@@ -752,7 +855,7 @@ fn schedule_attempt(
     step_id: &str,
     attempt: u32,
     emit: &mut Emitter,
-    _now: Now,
+    now: Now,
 ) {
     let Some(plan_step) = execution.plan.step(step_id) else {
         return;
@@ -781,7 +884,13 @@ fn schedule_attempt(
                 prompt: spec.prompt.clone(),
                 role: spec.role.clone(),
                 choices: spec.choices.clone(),
-                deadline: None,
+                // Resolved here, where the clock arrives in the input rather
+                // than being read: that is what makes a replay reach the same
+                // deadline, and what lets the handler derive a timer row from
+                // the fact alone.
+                deadline: spec
+                    .timeout_seconds
+                    .map(|seconds| now.at + time::Duration::seconds(seconds as i64)),
             },
         });
         emit.command(WorkflowCommand::RequestInput {
@@ -848,6 +957,12 @@ fn skip_downstream(execution: &Execution, step_id: &str, emit: &mut Emitter) {
         }
     }
 }
+
+/// Who a lapsed deadline records as the answerer.
+///
+/// Not a person and deliberately not a name one could have: the one record of a
+/// human decision has to say when there was not one.
+pub const ANSWERED_BY_TIMEOUT: &str = "aiwatcher/timeout";
 
 /// `<execution>/<step>/<attempt>`: the stable key a reactor asks a runtime by
 /// before it retries a timeout, and the one a worker's completion carries.

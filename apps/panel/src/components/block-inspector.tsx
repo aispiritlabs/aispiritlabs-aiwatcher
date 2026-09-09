@@ -423,10 +423,11 @@ function NotebookEditor({
  * that is going to come back a 409. Leave the list empty and the answer *is*
  * free text, which is the same rule read the other way.
  *
- * Who may answer is not a control. The route that carries an answer requires
- * the editor role and reads no other, so a gate is answered by an editor and
- * the registry refuses one that claims otherwise — a selector here would be
- * offering a promise nothing keeps.
+ * Who may answer *is* a control, and only ever raises the floor. The answer
+ * route reads the question's own role and requires it; every write here already
+ * needs an editor, so those are the two a gate may name and the registry
+ * refuses anything weaker — a gate promising that a viewer answers it would be
+ * offering buttons to somebody about to be refused.
  */
 function ApprovalSettings({
   spec,
@@ -469,9 +470,106 @@ function ApprovalSettings({
           className="w-full resize-y rounded-md border border-border bg-transparent p-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-primary"
         />
       </Field>
+      <Field
+        label="Answered by"
+        hint="A gate raises the floor and never lowers it: every write here already needs an editor."
+      >
+        <select
+          aria-label="Answered by"
+          value={spec.role ?? 'editor'}
+          onChange={(event) => onChange({ ...spec, role: event.target.value })}
+          className={INPUT}
+        >
+          <option value="editor">an editor</option>
+          <option value="admin">an admin</option>
+        </select>
+      </Field>
+      <Field
+        label="Wait for"
+        hint="Empty waits as long as it takes, which is the honest thing for a decision somebody has to think about."
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            aria-label="Wait for"
+            type="number"
+            min={1}
+            value={spec.timeout_seconds ?? ''}
+            placeholder="no deadline"
+            onChange={(event) => {
+              const seconds = Number(event.target.value);
+              const timeout = event.target.value === '' || !seconds ? undefined : seconds;
+              // The two are authored together and the registry refuses them
+              // apart, so dropping the deadline drops the policy with it
+              // rather than leaving a rule nothing can reach.
+              onChange({
+                ...spec,
+                timeout_seconds: timeout,
+                on_timeout: timeout ? (spec.on_timeout ?? { on: 'fail' }) : { on: 'fail' },
+              });
+            }}
+            className={cn(INPUT, 'w-36')}
+          />
+          <span className="text-xs text-muted-foreground">seconds</span>
+        </div>
+      </Field>
+      {spec.timeout_seconds ? (
+        <Field label="And then" hint="What happens when nobody has answered by the deadline.">
+          <select
+            aria-label="And then"
+            value={spec.on_timeout?.on ?? 'fail'}
+            onChange={(event) => {
+              const on = event.target.value;
+              onChange({
+                ...spec,
+                on_timeout:
+                  on === 'answer'
+                    ? { on: 'answer', response: spec.choices?.[0] ?? '' }
+                    : { on: on as 'fail' | 'skip' },
+              });
+            }}
+            className={INPUT}
+          >
+            <option value="fail">stop the run</option>
+            <option value="skip">go on without it</option>
+            <option value="answer">answer it for them</option>
+          </select>
+        </Field>
+      ) : null}
+      {spec.timeout_seconds && spec.on_timeout?.on === 'answer' ? (
+        <Field
+          label="With"
+          hint="An answer this question offers. Recorded as the timeout's, never as a person's."
+        >
+          {spec.choices?.length ? (
+            <select
+              aria-label="With"
+              value={String(spec.on_timeout.response ?? '')}
+              onChange={(event) =>
+                onChange({ ...spec, on_timeout: { on: 'answer', response: event.target.value } })
+              }
+              className={INPUT}
+            >
+              {spec.choices.map((choice) => (
+                <option key={choice} value={choice}>
+                  {choice}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              aria-label="With"
+              value={String(spec.on_timeout.response ?? '')}
+              onChange={(event) =>
+                onChange({ ...spec, on_timeout: { on: 'answer', response: event.target.value } })
+              }
+              className={INPUT}
+            />
+          )}
+        </Field>
+      ) : null}
       <p className="text-xs text-muted-foreground">
-        Answered by anyone with the <code className="id">editor</code> role. A run waiting here is
-        on its own card, where the question and these answers are what a person sees.
+        A run waiting here is on its own card, where the question and these answers are what a
+        person sees.
       </p>
     </>
   );

@@ -148,7 +148,7 @@ Crates, in dependency order. A crate may only depend on ones above it.
 | `aiwatcher-conversations` | Governed conversation training data: the `turn` contract, consent and retention, the **encrypted** archive, the human review gate, and the resumable export job that freezes a corpus. The one authored store that is off by default, whose content is sealed, and whose deletions delete. Sliced by noun: `turn`, `policy`, `redaction`, `review`, `archive/` (the store and its retention clock, `crypt` beneath it), `export/` (the job, `format` beneath it). `registry` is the facade and the only public door; `store` is the private key layout. |
 | `aiwatcher-training` | Training runs and the model versions they produce. The one registry here whose contents never came from the event log: a run is a record that grows in place, and a promotion is refused without a held-out score. `package` is what a serving runtime is handed — the runtime, the entry point, the shapes, and every artifact with its digest (ADR_0023). |
 | `aiwatcher-datasets` | Curation recipes, the dataset versions they produce, and the **block pipelines** of ADR_0024 — a chain of source, transform, notebook, approval and view, refused as a whole with every problem at once. Nothing here executes anything; the panel drives the chain because the engines are three different systems. |
-| `aiwatcher-execution` | Owned execution (ADR_0025, ADR_0026): the compiled `ExecutionPlan` and its `plan_id`, the states, the attempts, the pure `decide`/`evolve`, the cache key, the compiler from ADR_0024's blocks, the atomic command handler, the claim table, the `ContextSnapshot` that reopens a block, the fact encoder and the outbox publisher. Three ports: `WorkflowStore` (`memory | file | postgres`, the last behind a feature so `sqlx` is out of every build that does not ask for it — the shape `laser` has in `aiwatcher-bus`), `ActivityExecutor` (what a reactor does with a claimed attempt) and `ArtifactCatalog` (metadata, lineage, the cache index). Executes nothing itself, and holds no second copy of `aiwatcher-jobs`' rules — it calls them. |
+| `aiwatcher-execution` | Owned execution (ADR_0025, ADR_0026): the compiled `ExecutionPlan` and its `plan_id`, the states, the attempts, the pure `decide`/`evolve`, the cache key, the compiler from ADR_0024's blocks, the atomic command handler, the claim table, the `ContextSnapshot` that reopens a block, the fact encoder and the outbox publisher. Three ports: `WorkflowStore` (`memory | file | postgres | duckdb`, the last two behind features so `sqlx` and DuckDB's C++ amalgamation are out of every build that does not ask for them — the shape `laser` has in `aiwatcher-bus`), `ActivityExecutor` (what a reactor does with a claimed attempt) and `ArtifactCatalog` (metadata, lineage, the cache index). Executes nothing itself, and holds no second copy of `aiwatcher-jobs`' rules — it calls them. |
 | `aiwatcher-runner` | The workflow rerun dispatcher: one HTTP POST to one configured endpoint, behind `core::ports::WorkflowRunner`. |
 | `aiwatcher-pipeline` | Pipeline engines behind `core::engine::WorkflowEngine`: the orchestrator's launchable catalog, the inputs each entry declares, and starting one. Flyte 2 over its `/api/v1/` gateway, plus the literal encoder that binds a form's JSON to Flyte's declared types. With the runner, the second and last thing here that asks another system to do work. |
 | `aiwatcher-auth` | Single sign-on: OIDC discovery, a JWKS cache, the authorization-code flow with PKCE, HMAC-signed session cookies, authentik's forward-auth headers, and the group-to-role mapping. Knows nothing about axum. |
@@ -1125,16 +1125,43 @@ what runs a real graph.
   panel keeps the same rule from the other end: one `AnswerGate`, used by the
   pipeline's run card and by the Workflows view, because "which answers may be
   pressed and by whom" is one question.
+- **Never give `decide` a vocabulary for a timer.** A deadline is a consequence
+  of a question having been asked, not a decision of its own: `InputRequested`
+  carrying one schedules the row and anything ending that step retires it, both
+  derived in the handler and written in the transaction that already holds the
+  decision. What `decide` does is resolve the *instant*, from the clock that
+  arrives in its input — so a replay reaches the same moment, which is
+  `TraceId::derive`'s rule for a moment rather than an id. The row's id names
+  the step **and the attempt**, because a retry asks the question again and the
+  first attempt's row must not fire on the second; and only a step the plan gave
+  a clock to is cancelled, because a `Cancel` per ending step is a write per
+  step per transaction that the `file` adapter pays for by rewriting its table.
+- **Never let the engine's own delivery go through the caller's door.** The
+  effect-command guard in `handle` is about *who is asking*: no caller may post
+  an `ExecuteStep`, a `RequestInput` or a `TimeoutInput`. The engine firing a
+  deadline it scheduled is not a caller, and it uses
+  `ExecutionHandler::deliver` — crate-private, one call site, and everything
+  after it identical. Widening the guard instead would have made a timeout
+  postable over HTTP.
+- **Never record a timeout as an answer somebody gave.** `on_timeout: skip`
+  completes the step with **no** `InputProvided`, so the history says the
+  question was asked and never answered; `answer` records one attributed to
+  `aiwatcher/timeout`. And `skip` is not `StepSkipped` — that event marks what
+  will not run because a parent failed, and a run whose steps are not all
+  `Completed` never completes, so a gate skipped that way would leave the run
+  open for ever.
 - **Never let an authored gate name a role the answer route does not check.**
-  `HumanInputSpec::role` reaches `execution.awaiting_input` on the log and the
-  step's context and no authorization decision anywhere: `provide_input`
-  requires `Editor` and reads nothing stricter. So `BlockSpec::Approval` admits
-  `editor` and refuses any other role **by name**, and the panel asks whether
-  this caller holds the role the question declared — a viewer reads whose
-  decision it is instead of pressing a button that returns a 403. A gate saying
-  `admin` would read as a stricter check and be none, which is a policy field
-  with no reader wearing a security badge. Widening it is one line on each side,
-  on the day the route reads the request's own role.
+  A gate only ever *raises* the floor, and `provide_input` is the one command
+  route with a rule of its own: the editor floor is held for every command, and
+  then the role the **question** named — from the pinned plan, through the
+  step's own `awaiting` — is required on top. That check cannot live on the
+  route, because which role answers is a fact about the step. So an authored
+  gate admits `editor` and `admin` and refuses anything weaker **by name**: a
+  gate promising a viewer may answer would offer buttons to somebody the floor
+  is about to refuse. The panel asks the same question from the other end and
+  keeps "nobody has answered yet" apart from "no" — `useRoleDecision`, because
+  a refusal rendered while the session is still being read is a refusal nobody
+  issued.
 - **Never let a step's edge and its data binding be one cursor.** An approval is
   in the chain without being in the data: it reads the rows before it, produces
   nothing — answering *is* its completion — and the block after it reads those

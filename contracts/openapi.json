@@ -9543,6 +9543,10 @@
             },
             "description": "The answers offered. Empty is a free-text answer; anything else is the\nwhole set, and an answer outside it is refused."
           },
+          "on_timeout": {
+            "$ref": "#/components/schemas/OnTimeout",
+            "description": "What happens when it runs out. Authored with the deadline and refused\nwithout one."
+          },
           "prompt": {
             "type": "string",
             "description": "What is being asked, in the words the person reads."
@@ -9550,6 +9554,15 @@
           "role": {
             "type": "string",
             "description": "The role that may answer."
+          },
+          "timeout_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "How long the graph waits here. Absent waits as long as it takes.",
+            "minimum": 0
           }
         },
         "additionalProperties": false
@@ -10076,6 +10089,10 @@
                   "approval"
                 ]
               },
+              "on_timeout": {
+                "$ref": "#/components/schemas/OnTimeout",
+                "description": "What happens when it runs out. Authored with the deadline and\nrefused without one."
+              },
               "prompt": {
                 "type": "string",
                 "description": "What is being asked, in the words the person reads."
@@ -10083,6 +10100,15 @@
               "role": {
                 "type": "string",
                 "description": "The role that may answer."
+              },
+              "timeout_seconds": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "description": "How long the run waits. Absent is the default and means *as long as\nit takes*, which is the honest thing for a decision somebody has to\nthink about.",
+                "minimum": 0
               }
             }
           },
@@ -14612,6 +14638,9 @@
               "type": "string"
             }
           },
+          "on_timeout": {
+            "$ref": "#/components/schemas/OnTimeout"
+          },
           "prompt": {
             "type": "string",
             "description": "What is being asked, in the words the person reads."
@@ -14619,6 +14648,15 @@
           "role": {
             "type": "string",
             "description": "The role that may answer. Checked when the answer arrives, never here."
+          },
+          "timeout_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "How long the run waits before [`Self::on_timeout`] decides for it.\n`None` waits as long as it takes, which is the default.",
+            "minimum": 0
           }
         }
       },
@@ -16618,6 +16656,58 @@
           "succeeded",
           "failed"
         ]
+      },
+      "OnTimeout": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "The step failed. Everything after it is skipped, as for any failure —\nthe safe reading of \"nobody said yes\".",
+            "required": [
+              "on"
+            ],
+            "properties": {
+              "on": {
+                "type": "string",
+                "enum": [
+                  "fail"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The step is passed over and the chain goes on without it.",
+            "required": [
+              "on"
+            ],
+            "properties": {
+              "on": {
+                "type": "string",
+                "enum": [
+                  "skip"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Answer it with this, and record that nobody did.",
+            "required": [
+              "response",
+              "on"
+            ],
+            "properties": {
+              "on": {
+                "type": "string",
+                "enum": [
+                  "answer"
+                ]
+              },
+              "response": {}
+            }
+          }
+        ],
+        "description": "What happens to a step whose question nobody answered in time.\n\nA deadline without one of these would be a clock with nothing behind it, so\nthe two are authored together and refused apart. Which of the three is right\nis the author's judgement and not this crate's: a gate on a publication\nfails closed, a gate on an optional enrichment is skipped, and a gate whose\nanswer has an obvious default says so."
       },
       "OptimizationOutcome": {
         "type": "string",
@@ -22108,6 +22198,31 @@
                 "type": "string",
                 "enum": [
                   "request_input"
+                ]
+              },
+              "step_id": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The deadline on a question ran out. The engine's, never a caller's: it\nis the timer table saying a wall-clock moment has passed, and what it\nthen means is the step's own `on_timeout`.",
+            "required": [
+              "step_id",
+              "attempt",
+              "command"
+            ],
+            "properties": {
+              "attempt": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "command": {
+                "type": "string",
+                "enum": [
+                  "timeout_input"
                 ]
               },
               "step_id": {

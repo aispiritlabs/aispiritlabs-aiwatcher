@@ -22,6 +22,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use aiwatcher_core::ArtifactKind;
+use aiwatcher_core::human_input::OnTimeout;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::ToSchema;
@@ -304,6 +305,12 @@ pub struct HumanInputSpec {
     /// up while it waits.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub block: Option<String>,
+    /// How long the run waits before [`Self::on_timeout`] decides for it.
+    /// `None` waits as long as it takes, which is the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<u64>,
+    #[serde(default)]
+    pub on_timeout: OnTimeout,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, ToSchema)]

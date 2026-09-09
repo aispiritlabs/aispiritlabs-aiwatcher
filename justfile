@@ -936,3 +936,24 @@ load-test runs="5000":
 # Writes the numbers in docs/mlflow-comparison.md.
 bench-mlflow runs="14000":
     ./scripts/bench-mlflow.sh {{runs}}
+
+# Render docs/diagrams/*.json into docs/diagrams/out/ with the archify skill.
+#
+# Not part of `just check`. The renderer is an agent skill rather than a
+# workspace dependency, and a stale diagram is a documentation problem — wiring
+# it into CI would make it a build failure instead, on a machine that has no
+# reason to have the skill installed.
+diagrams:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    archify="$HOME/.claude/skills/archify/bin/archify.mjs"
+    if [ ! -f "$archify" ]; then
+        echo "archify is not installed at $archify" >&2
+        echo "  npx skills add tt-a1i/archify -g" >&2
+        exit 1
+    fi
+    mkdir -p docs/diagrams/out
+    for source in docs/diagrams/*.json; do
+        name="$(basename "$source" .json)"
+        node "$archify" deliver "${name##*.}" "$source" "docs/diagrams/out/$name.html" --quality showcase
+    done

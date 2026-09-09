@@ -6,6 +6,7 @@ pub use registry::{DefinitionRegistry, SavedWorkflow};
 use std::collections::{BTreeMap, BTreeSet};
 
 use aiwatcher_core::ArtifactKind;
+use aiwatcher_core::human_input::OnTimeout;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::ToSchema;
@@ -87,6 +88,13 @@ pub struct ApprovalGate {
     /// whole set, and an answer outside it is refused.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub choices: Vec<String>,
+    /// How long the graph waits here. Absent waits as long as it takes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<u64>,
+    /// What happens when it runs out. Authored with the deadline and refused
+    /// without one.
+    #[serde(default)]
+    pub on_timeout: OnTimeout,
 }
 
 fn answerable_role() -> String {
@@ -144,6 +152,8 @@ impl WorkflowSpec {
                     &gate.prompt,
                     &gate.role,
                     &gate.choices,
+                    gate.timeout_seconds,
+                    &gate.on_timeout,
                 ));
                 // Everything a step that *runs* needs, refused here by name.
                 // Silently ignoring them would leave a queue nobody claims on,
@@ -275,6 +285,8 @@ impl WorkflowSpec {
                         // by their own id, which is what `blocks()` answering
                         // `None` means.
                         block: None,
+                        timeout_seconds: gate.timeout_seconds,
+                        on_timeout: gate.on_timeout.clone(),
                     }),
                     None => RuntimeBinding::PythonTask(PythonTaskSpec {
                         task_ref: step.task_ref.clone(),
@@ -440,8 +452,10 @@ mod tests {
         let mut spec = gated();
         spec.steps[1].approval = Some(ApprovalGate {
             prompt: "  ".to_owned(),
-            role: "admin".to_owned(),
+            role: "supervisor".to_owned(),
             choices: vec!["yes".to_owned(), "yes".to_owned()],
+            timeout_seconds: None,
+            on_timeout: OnTimeout::Fail,
         });
 
         let problems = spec.compile().expect_err("refused").problems().to_vec();
@@ -455,7 +469,7 @@ mod tests {
         assert!(
             problems
                 .iter()
-                .any(|problem| problem.contains("asks for the 'admin' role")),
+                .any(|problem| problem.contains("asks for the 'supervisor' role")),
             "{problems:?}"
         );
         assert!(

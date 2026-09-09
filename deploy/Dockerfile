@@ -38,6 +38,7 @@ COPY crates/aiwatcher-auth/Cargo.toml crates/aiwatcher-auth/
 COPY crates/aiwatcher-projector/Cargo.toml crates/aiwatcher-projector/
 COPY crates/aiwatcher-api/Cargo.toml crates/aiwatcher-api/
 COPY crates/aiwatcher-server/Cargo.toml crates/aiwatcher-server/
+COPY crates/aiwatcher-cli/Cargo.toml crates/aiwatcher-cli/
 # Derived from the manifests that were actually copied rather than named again.
 # Two lists that have to agree is one that can disagree, and the way it fails
 # is a build that gets as far as pulling 285 MB of base image first.
@@ -45,9 +46,9 @@ RUN for manifest in crates/*/Cargo.toml; do \
       mkdir -p "$(dirname "$manifest")/src" && \
       echo "" > "$(dirname "$manifest")/src/lib.rs"; \
     done \
-  && mkdir -p crates/aiwatcher-server/src/bin \
-  && echo "fn main() {}" > crates/aiwatcher-server/src/bin/aiwatcher.rs \
+  && mkdir -p crates/aiwatcher-server/src/bin crates/aiwatcher-cli/src/bin \
   && echo "fn main() {}" > crates/aiwatcher-server/src/bin/aiwatcher-openapi.rs \
+  && echo "fn main() {}" > crates/aiwatcher-cli/src/bin/aiwatcher.rs \
   && cargo build --release --bin aiwatcher ${FEATURES:+--features $FEATURES} \
   && rm -rf crates/*/src
 

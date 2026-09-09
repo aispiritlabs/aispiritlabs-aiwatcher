@@ -4,6 +4,7 @@ import {
   BackgroundVariant,
   Controls,
   Handle,
+  Panel,
   Position,
   ReactFlow,
   type Connection,
@@ -17,8 +18,17 @@ import { AlertCircle, Code2, Database, NotebookPen, ShieldCheck, Table2 } from '
 import type { LucideIcon } from 'lucide-react';
 
 import type { BlockSpec, PipelineBlock, PipelineEdge } from '@/api/generated/types.gen';
+import {
+  FlowCard,
+  FlowLegend,
+  ReachControl,
+  flowEdgeClass,
+  type FlowRole,
+  type FlowState,
+} from '@/components/flow-visuals';
 import type { BlockOutcome, PipelineOutcomes } from '@/lib/pipeline';
-import { cn, formatCount } from '@/lib/utils';
+import { edgeInReach, nodeInReach, reachFrom, type ReachMode } from '@/lib/reach';
+import { formatCount } from '@/lib/utils';
 
 /**
  * A curation as boxes and arrows: the thing that gets edited.
@@ -35,17 +45,40 @@ import { cn, formatCount } from '@/lib/utils';
  * annotation canvas keeps with the shape validator, and for the same reason: a
  * second rule set in TypeScript drifts from the first, and the day it does
  * somebody trusts the wrong one.
+ *
+ * What it draws with is `flow-visuals`, shared with the workflow graph: a
+ * block's colour is its **kind**, which never changes, and its state is drawn
+ * as motion on top. Those are two different questions and a reader normally
+ * arrives already knowing the first.
  */
 
 type BlockKind = BlockSpec['kind'];
 
-const KIND: Record<BlockKind, { label: string; icon: LucideIcon; tone: string }> = {
-  source: { label: 'Source', icon: Database, tone: 'text-primary' },
-  transform: { label: 'Data transformation', icon: Code2, tone: 'text-warning' },
-  notebook: { label: 'Python', icon: NotebookPen, tone: 'text-success' },
-  approval: { label: 'Approval', icon: ShieldCheck, tone: 'text-warning' },
-  view: { label: 'Publish dataset', icon: Table2, tone: 'text-muted-foreground' },
+const KIND: Record<BlockKind, { label: string; icon: LucideIcon; role: FlowRole }> = {
+  source: { label: 'Source', icon: Database, role: 'data' },
+  transform: { label: 'Data transformation', icon: Code2, role: 'compute' },
+  notebook: { label: 'Python', icon: NotebookPen, role: 'runtime' },
+  approval: { label: 'Approval', icon: ShieldCheck, role: 'gate' },
+  view: { label: 'Publish dataset', icon: Table2, role: 'publish' },
 };
+
+/**
+ * The four words a block's state is drawn with. The outcome already speaks
+ * them; this exists so the canvas and the workflow graph agree on the spelling
+ * rather than each mapping its own status vocabulary onto the same animations.
+ */
+function stateOf(outcome: BlockOutcome): FlowState {
+  switch (outcome.status) {
+    case 'running':
+      return 'live';
+    case 'failed':
+      return 'failed';
+    case 'done':
+      return 'done';
+    case 'idle':
+      return 'idle';
+  }
+}
 
 /** What a block is showing, under its name. */
 function describeBlock(spec: BlockSpec): string {
@@ -78,19 +111,34 @@ type BlockData = {
   block: PipelineBlock;
   outcome: BlockOutcome;
   active: boolean;
+  away: boolean;
 };
 
 function BlockNode({ data }: NodeProps<Node<BlockData, 'block'>>) {
-  const { block, outcome, active } = data;
-  const { icon: Icon, label, tone } = KIND[block.spec.kind];
+  const { block, outcome, active, away } = data;
+  const { icon, label, role } = KIND[block.spec.kind];
   return (
-    <div
-      className={cn(
-        'w-[13rem] cursor-pointer rounded-lg border-2 bg-card px-3 py-2 shadow-sm transition-colors',
-        active ? 'border-primary' : 'border-border',
-        outcome.status === 'failed' && 'border-danger bg-danger/5',
-        outcome.status === 'running' && 'border-running',
-      )}
+    <FlowCard
+      role={role}
+      state={stateOf(outcome)}
+      selected={active}
+      away={away}
+      mark={icon}
+      title={block.title || label}
+      sublabel={
+        <span title={describeBlock(block.spec)}>
+          {label} · {describeBlock(block.spec)}
+        </span>
+      }
+      footer={
+        <>
+          {outcome.status === 'failed' ? (
+            <AlertCircle className="h-3 w-3 shrink-0 text-danger" />
+          ) : null}
+          <span className="truncate tabular-nums">{describeOutcome(outcome)}</span>
+        </>
+      }
+      className="cursor-pointer"
     >
       {block.spec.kind !== 'source' ? (
         <Handle
@@ -99,25 +147,6 @@ function BlockNode({ data }: NodeProps<Node<BlockData, 'block'>>) {
           className="!h-2.5 !w-2.5 !border-border !bg-muted"
         />
       ) : null}
-      <div className="flex items-center gap-1.5">
-        <Icon className={cn('h-3.5 w-3.5 shrink-0', tone)} />
-        <span className="truncate text-sm font-medium">{block.title || label}</span>
-        {outcome.status === 'running' ? (
-          <span className="ml-auto h-2 w-2 shrink-0 animate-pulse rounded-full bg-running" />
-        ) : null}
-        {outcome.status === 'failed' ? (
-          <AlertCircle className="ml-auto h-3.5 w-3.5 shrink-0 text-danger" />
-        ) : null}
-      </div>
-      <p
-        className="mt-0.5 truncate text-[0.7rem] text-muted-foreground"
-        title={describeBlock(block.spec)}
-      >
-        {label} · {describeBlock(block.spec)}
-      </p>
-      <p className="mt-1 truncate text-[0.7rem] tabular-nums text-muted-foreground">
-        {describeOutcome(outcome)}
-      </p>
       {block.spec.kind !== 'view' ? (
         <Handle
           type="source"
@@ -125,7 +154,7 @@ function BlockNode({ data }: NodeProps<Node<BlockData, 'block'>>) {
           className="!h-2.5 !w-2.5 !border-border !bg-muted"
         />
       ) : null}
-    </div>
+    </FlowCard>
   );
 }
 
@@ -156,6 +185,8 @@ export function PipelineCanvas({
   edges,
   outcomes,
   selected,
+  reach,
+  onReach,
   onSelect,
   onMove,
   onConnect,
@@ -166,12 +197,24 @@ export function PipelineCanvas({
   edges: PipelineEdge[];
   outcomes: PipelineOutcomes;
   selected?: string;
+  reach?: ReachMode;
+  onReach: (mode: ReachMode | undefined) => void;
   onSelect: (id: string) => void;
   onMove: (id: string, position: { x: number; y: number }) => void;
   onConnect: (edge: PipelineEdge) => void;
   onDisconnect: (edge: PipelineEdge) => void;
   onDelete: (id: string) => void;
 }) {
+  /*
+   * The traced reach, or nothing. A trace needs a subject, so it is derived
+   * from the selection rather than held beside it — which is also what stops
+   * the canvas keeping a filter after the block it was about has gone.
+   */
+  const traced = React.useMemo(
+    () => (selected && reach ? reachFrom(edges, selected) : undefined),
+    [edges, selected, reach],
+  );
+
   const nodes: Node<BlockData, 'block'>[] = React.useMemo(
     () =>
       blocks.map((block) => ({
@@ -184,10 +227,20 @@ export function PipelineCanvas({
           block,
           outcome: outcomes[block.id] ?? { status: 'idle' },
           active: block.id === selected,
+          away:
+            traced !== undefined && reach !== undefined && !nodeInReach(traced, reach, block.id),
         },
       })),
-    [blocks, outcomes, selected],
+    [blocks, outcomes, selected, traced, reach],
   );
+
+  /*
+   * An edge is drawn from the state of the block it *feeds*, which is the one
+   * fact it carries: rows arriving somewhere. React Flow's own `animated`
+   * marches a dash forever whatever is happening, so a chain that finished an
+   * hour ago and one running right now looked identical; these say which.
+   */
+  const selectedBlock = blocks.find((block) => block.id === selected);
 
   const flowEdges: Edge[] = React.useMemo(
     () =>
@@ -195,49 +248,85 @@ export function PipelineCanvas({
         id: `${edge.from}-${edge.to}`,
         source: edge.from,
         target: edge.to,
-        animated: outcomes[edge.to]?.status === 'running',
+        className: flowEdgeClass(
+          stateOf(outcomes[edge.to] ?? { status: 'idle' }),
+          traced !== undefined &&
+            reach !== undefined &&
+            !edgeInReach(traced, reach, edge.from, edge.to),
+        ),
       })),
-    [edges, outcomes],
+    [edges, outcomes, traced, reach],
   );
 
+  /* Only the kinds actually on the canvas: a legend for boxes nobody drew is
+     a key to a picture that is not there. */
+  const legend = React.useMemo(() => {
+    const seen = new Map<FlowRole, string>();
+    for (const block of blocks) {
+      const { role, label } = KIND[block.spec.kind];
+      if (!seen.has(role)) seen.set(role, label);
+    }
+    return [...seen].map(([role, label]) => ({ role, label }));
+  }, [blocks]);
+
   return (
-    <div className="h-[26rem] w-full overflow-hidden rounded-lg border border-border bg-muted/10">
-      <ReactFlow
-        nodes={nodes}
-        edges={flowEdges}
-        nodeTypes={NODE_TYPES}
-        fitView
-        proOptions={{ hideAttribution: true }}
-        onNodeClick={(_, node) => onSelect(node.id)}
-        onNodesChange={(changes: NodeChange<Node<BlockData, 'block'>>[]) => {
-          for (const change of changes) {
-            // Every position event, not only the last one: a block's position
-            // is held in the page's state because it is part of what gets
-            // saved, and dropping the intermediate ones makes a drag jump.
-            if (change.type === 'position' && change.position) {
-              onMove(change.id, change.position);
+    <div className="space-y-2">
+      <div className="flow-surface h-[26rem] w-full overflow-hidden rounded-lg border border-border">
+        <ReactFlow
+          nodes={nodes}
+          edges={flowEdges}
+          nodeTypes={NODE_TYPES}
+          fitView
+          proOptions={{ hideAttribution: true }}
+          onNodeClick={(_, node) => onSelect(node.id)}
+          onNodesChange={(changes: NodeChange<Node<BlockData, 'block'>>[]) => {
+            for (const change of changes) {
+              // Every position event, not only the last one: a block's position
+              // is held in the page's state because it is part of what gets
+              // saved, and dropping the intermediate ones makes a drag jump.
+              if (change.type === 'position' && change.position) {
+                onMove(change.id, change.position);
+              }
+              if (change.type === 'remove') onDelete(change.id);
             }
-            if (change.type === 'remove') onDelete(change.id);
-          }
-        }}
-        onEdgesChange={(changes) => {
-          for (const change of changes) {
-            if (change.type !== 'remove') continue;
-            const edge = edges.find(
-              (candidate) => `${candidate.from}-${candidate.to}` === change.id,
-            );
-            if (edge) onDisconnect(edge);
-          }
-        }}
-        onConnect={(connection: Connection) => {
-          if (connection.source && connection.target) {
-            onConnect({ from: connection.source, to: connection.target });
-          }
-        }}
-      >
-        <Background variant={BackgroundVariant.Dots} gap={16} size={1} />
-        <Controls showInteractive={false} />
-      </ReactFlow>
+          }}
+          onEdgesChange={(changes) => {
+            for (const change of changes) {
+              if (change.type !== 'remove') continue;
+              const edge = edges.find(
+                (candidate) => `${candidate.from}-${candidate.to}` === change.id,
+              );
+              if (edge) onDisconnect(edge);
+            }
+          }}
+          onConnect={(connection: Connection) => {
+            if (connection.source && connection.target) {
+              onConnect({ from: connection.source, to: connection.target });
+            }
+          }}
+        >
+          <Background
+            variant={BackgroundVariant.Dots}
+            gap={16}
+            size={1}
+            color="var(--color-gridline)"
+          />
+          <Controls
+            showInteractive={false}
+            className="!border !border-border !bg-card [&_button]:!border-border [&_button]:!bg-card [&_button]:!fill-muted-foreground hover:[&_button]:!bg-accent"
+          />
+          {selectedBlock ? (
+            <Panel position="top-right">
+              <ReachControl
+                mode={reach}
+                onChange={onReach}
+                subject={selectedBlock.title || blockLabel(selectedBlock.spec.kind)}
+              />
+            </Panel>
+          ) : null}
+        </ReactFlow>
+      </div>
+      <FlowLegend entries={legend} className="px-1" />
     </div>
   );
 }

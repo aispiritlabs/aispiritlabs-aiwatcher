@@ -589,6 +589,8 @@ fn a_human_step_waits_rather_than_being_dispatched_anywhere() {
                 role: "admin".to_owned(),
                 choices: vec!["yes".to_owned(), "no".to_owned()],
                 block: None,
+                timeout_seconds: None,
+                on_timeout: Default::default(),
             }),
             retry: RetryPolicy::once(),
             ..task("approve")
@@ -627,6 +629,8 @@ fn an_answer_the_step_did_not_offer_is_refused_and_the_right_one_completes_it() 
                 role: "admin".to_owned(),
                 choices: vec!["yes".to_owned(), "no".to_owned()],
                 block: None,
+                timeout_seconds: None,
+                on_timeout: Default::default(),
             }),
             retry: RetryPolicy::once(),
             ..task("approve")

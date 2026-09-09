@@ -1316,8 +1316,12 @@ async fn apply<F>(
     build: F,
 ) -> ApiResult<Json<RunView>>
 where
-    F: FnOnce(&str) -> WorkflowCommand,
+    F: FnOnce(&Caller, &str, &RunProjection) -> ApiResult<WorkflowCommand>,
 {
+    // The floor, which every command shares. A route whose rule is stricter
+    // than this applies it in `build`, where the run has already been read —
+    // `provide_input` is the one, because which role may answer is a fact
+    // about the step's own question and not about the route.
     let who = caller
         .require(aiwatcher_auth::Role::Editor)?
         .log_subject()
@@ -1336,7 +1340,7 @@ where
         .map_err(aiwatcher_execution::HandleError::Store)?
         .ok_or_else(|| ApiError::NotFound(format!("execution {execution_id}")))?;
 
-    let command = build(&who);
+    let command = build(caller, &who, &current)?;
     debug_assert!(
         !command.is_effect(),
         "a caller may only send an intention; ExecuteStep and RequestInput are the decider's"
@@ -1403,8 +1407,8 @@ async fn cancel_execution(
 ) -> ApiResult<Json<RunView>> {
     let reason = body.map(|Json(body)| body.reason).unwrap_or_default();
 
-    apply(&state, &execution_id, &caller, |_| {
-        WorkflowCommand::CancelExecution { reason }
+    apply(&state, &execution_id, &caller, |_, _, _| {
+        Ok(WorkflowCommand::CancelExecution { reason })
     })
     .await
 }
@@ -1432,8 +1436,8 @@ async fn pause_execution(
     caller: Caller,
     Path(execution_id): Path<String>,
 ) -> ApiResult<Json<RunView>> {
-    apply(&state, &execution_id, &caller, |_| {
-        WorkflowCommand::PauseExecution
+    apply(&state, &execution_id, &caller, |_, _, _| {
+        Ok(WorkflowCommand::PauseExecution)
     })
     .await
 }
@@ -1457,8 +1461,8 @@ async fn resume_execution(
     caller: Caller,
     Path(execution_id): Path<String>,
 ) -> ApiResult<Json<RunView>> {
-    apply(&state, &execution_id, &caller, |_| {
-        WorkflowCommand::ResumeExecution
+    apply(&state, &execution_id, &caller, |_, _, _| {
+        Ok(WorkflowCommand::ResumeExecution)
     })
     .await
 }
@@ -1489,8 +1493,8 @@ async fn retry_step(
     caller: Caller,
     Path((execution_id, step_id)): Path<(String, String)>,
 ) -> ApiResult<Json<RunView>> {
-    apply(&state, &execution_id, &caller, |_| {
-        WorkflowCommand::RetryStep { step_id }
+    apply(&state, &execution_id, &caller, |_, _, _| {
+        Ok(WorkflowCommand::RetryStep { step_id })
     })
     .await
 }
@@ -1519,16 +1523,32 @@ async fn provide_input(
     Path((execution_id, step_id)): Path<(String, String)>,
     Json(body): Json<ProvideInputBody>,
 ) -> ApiResult<Json<RunView>> {
-    apply(&state, &execution_id, &caller, |who| {
+    apply(&state, &execution_id, &caller, |caller, who, run| {
+        // The role the *question* named, checked here because this is the one
+        // place that knows it: it comes from the pinned plan, through the
+        // step's own `awaiting`, and a route cannot know it in advance. The
+        // editor floor is already held above; a gate only ever raises it, so a
+        // step nobody is waiting on and a step asking for an editor both fall
+        // through unchanged. A gate that asked for nothing readable is a gate
+        // an editor answers.
+        if let Some(asked) = run
+            .steps
+            .iter()
+            .find(|step| step.step_id == step_id)
+            .and_then(|step| step.awaiting.as_ref())
+            && let Ok(needed) = asked.role.parse::<aiwatcher_auth::Role>()
+        {
+            caller.require(needed)?;
+        }
         // Who answered comes from the session, never from the body. A field a
         // caller could set would make the one record of a human decision say
         // whatever the caller preferred it to say.
-        WorkflowCommand::ProvideInput {
+        Ok(WorkflowCommand::ProvideInput {
             step_id,
             attempt: body.attempt,
             answered_by: who.to_owned(),
             response: body.response,
-        }
+        })
     })
     .await
 }

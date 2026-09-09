@@ -69,6 +69,7 @@ export function AnswerGate({
     return (
       <div className="flex flex-col gap-1 text-xs">
         <p>{question.prompt}</p>
+        <Deadline at={question.deadline} />
         <span className="text-muted-foreground">{needsRole(roleOf(question))}</span>
       </div>
     );
@@ -77,6 +78,7 @@ export function AnswerGate({
   return (
     <div className="flex flex-col gap-2 text-xs">
       <p>{question.prompt}</p>
+      <Deadline at={question.deadline} />
       {question.choices?.length ? (
         // Named as a group because what is in it is the whole answer: every
         // button here is one the step declared, and there is no other way to
@@ -117,6 +119,24 @@ export function AnswerGate({
         <Refusal error={answerIt.error} fallback="That answer was refused." />
       ) : null}
     </div>
+  );
+}
+
+/**
+ * When this question stops being answerable, when it does.
+ *
+ * Absent for most gates, and that absence is the honest default: a decision
+ * somebody has to think about waits as long as it takes. Where there is a
+ * deadline it is shown rather than counted down — the moment is the fact, and a
+ * ticking clock in a browser that a reload resets is a second answer to
+ * "when", free to disagree with the one the server is holding.
+ */
+function Deadline({ at }: { at?: string | null }) {
+  if (!at) return null;
+  return (
+    <span className="text-muted-foreground">
+      Answerable until {new Date(at).toLocaleString()}. After that the step decides for itself.
+    </span>
   );
 }
 

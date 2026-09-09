@@ -203,6 +203,11 @@ export type ApprovalGate = {
      */
     choices?: Array<string>;
     /**
+     * What happens when it runs out. Authored with the deadline and refused
+     * without one.
+     */
+    on_timeout?: OnTimeout;
+    /**
      * What is being asked, in the words the person reads.
      */
     prompt: string;
@@ -210,6 +215,10 @@ export type ApprovalGate = {
      * The role that may answer.
      */
     role?: string;
+    /**
+     * How long the graph waits here. Absent waits as long as it takes.
+     */
+    timeout_seconds?: number | null;
 };
 
 /**
@@ -529,6 +538,11 @@ export type BlockSpec = {
     choices?: Array<string>;
     kind: 'approval';
     /**
+     * What happens when it runs out. Authored with the deadline and
+     * refused without one.
+     */
+    on_timeout?: OnTimeout;
+    /**
      * What is being asked, in the words the person reads.
      */
     prompt?: string;
@@ -536,6 +550,12 @@ export type BlockSpec = {
      * The role that may answer.
      */
     role?: string;
+    /**
+     * How long the run waits. Absent is the default and means *as long as
+     * it takes*, which is the honest thing for a decision somebody has to
+     * think about.
+     */
+    timeout_seconds?: number | null;
 } | {
     dataset?: string | null;
     kind: 'view';
@@ -2858,6 +2878,7 @@ export type HumanInputSpec = {
      */
     block?: string | null;
     choices?: Array<string>;
+    on_timeout?: OnTimeout;
     /**
      * What is being asked, in the words the person reads.
      */
@@ -2866,6 +2887,11 @@ export type HumanInputSpec = {
      * The role that may answer. Checked when the answer arrives, never here.
      */
     role: string;
+    /**
+     * How long the run waits before [`Self::on_timeout`] decides for it.
+     * `None` waits as long as it takes, which is the default.
+     */
+    timeout_seconds?: number | null;
 };
 
 /**
@@ -3955,6 +3981,24 @@ export const NodeStatus = {
  * a node the graph declares and nothing has started.
  */
 export type NodeStatus = typeof NodeStatus[keyof typeof NodeStatus];
+
+/**
+ * What happens to a step whose question nobody answered in time.
+ *
+ * A deadline without one of these would be a clock with nothing behind it, so
+ * the two are authored together and refused apart. Which of the three is right
+ * is the author's judgement and not this crate's: a gate on a publication
+ * fails closed, a gate on an optional enrichment is skipped, and a gate whose
+ * answer has an obvious default says so.
+ */
+export type OnTimeout = {
+    on: 'fail';
+} | {
+    on: 'skip';
+} | {
+    on: 'answer';
+    response: unknown;
+};
 
 /**
  * What the registry decided about an optimisation.
@@ -7094,6 +7138,10 @@ export type WorkflowCommand = {
 } | {
     attempt: number;
     command: 'request_input';
+    step_id: string;
+} | {
+    attempt: number;
+    command: 'timeout_input';
     step_id: string;
 };
 

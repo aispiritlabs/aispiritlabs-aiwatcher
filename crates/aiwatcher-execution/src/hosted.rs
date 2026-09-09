@@ -25,14 +25,15 @@
 
 use aiwatcher_core::MessageId;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use time::OffsetDateTime;
 use utoipa::ToSchema;
 
-use crate::decide::replay;
+use crate::decide::{Now, replay};
 use crate::error::DecisionError;
 use crate::handler::{ExecutionHandler, HandleError, Handled, projection_of};
 use crate::message::{
-    HostedMessage, MessageMetadata, PayloadPolicy, PendingMessage, WorkflowMessage,
+    HostedMessage, MessageMetadata, PayloadPolicy, PendingMessage, WorkflowCommand, WorkflowMessage,
 };
 use crate::state::{ExecutionId, ExecutionMode};
 use crate::store::{AppendOutcome, AppendRequest, ExpectedVersion, WorkflowStore};
@@ -234,6 +235,14 @@ impl TimerWrite {
 /// this an operational choice rather than a correctness one — the scheduler
 /// tick's rule, in a second loop.
 pub const TIMERS_PER_TICK: usize = 100;
+
+/// The message type a gate's deadline is stored under.
+///
+/// A hosted timer carries the message a worker composed and this one carries
+/// nothing to hand back: what a lapsed deadline *means* is on the plan, which
+/// is what pinned the policy. The type is here so a row read out of the table
+/// says which of the two it is without anybody guessing from its id.
+pub const DEADLINE_TIMER: &str = "input_deadline";
 
 /// The type name of the row that records one append.
 ///
@@ -454,6 +463,15 @@ impl<S: WorkflowStore> ExecutionHandler<S> {
     }
 
     async fn fire(&self, timer: &Timer, now: OffsetDateTime) -> Result<Fired, HostedError> {
+        // A gate's deadline is the engine's own, and the engine decides what it
+        // means: the command goes through `decide` like every other, so the
+        // step's `on_timeout` is read from the plan that pinned it. Retiring
+        // the row is that decision's own consequence — the handler derives a
+        // `Cancel` from the step ending — so there is no second write to keep
+        // in step with it.
+        if timer.message.message_type == DEADLINE_TIMER {
+            return self.fire_deadline(timer, now).await;
+        }
         let slice = self
             .store()
             .load(&timer.execution)
@@ -517,6 +535,116 @@ impl<S: WorkflowStore> ExecutionHandler<S> {
             timer_id: timer.timer_id.clone(),
             delivered: deliverable,
         })
+    }
+
+    /// A question whose deadline ran out, handed to the decider.
+    ///
+    /// The refusals are the two ways a timer outlives its question — somebody
+    /// answered, or a retry replaced the attempt that asked — and both retire
+    /// the row rather than leaving it due for ever. Neither is an error worth
+    /// reporting: a timer racing an answer is the ordinary thing, and the
+    /// answer won.
+    async fn fire_deadline(
+        &self,
+        timer: &Timer,
+        now: OffsetDateTime,
+    ) -> Result<Fired, HostedError> {
+        let (Some(step_id), Some(attempt)) = (
+            timer
+                .message
+                .metadata
+                .get("step_id")
+                .and_then(Value::as_str),
+            timer
+                .message
+                .metadata
+                .get("attempt")
+                .and_then(Value::as_u64),
+        ) else {
+            self.retire(timer, now).await?;
+            return Ok(Fired {
+                execution: timer.execution.clone(),
+                timer_id: timer.timer_id.clone(),
+                delivered: false,
+            });
+        };
+
+        let input = WorkflowMessage::Command(WorkflowCommand::TimeoutInput {
+            step_id: step_id.to_owned(),
+            attempt: attempt as u32,
+        });
+        let input_id = timer.fired_id();
+        let handled = self
+            .deliver(
+                &timer.execution,
+                input,
+                MessageMetadata::caused_by(&timer.execution, &input_id, input_id.clone(), now),
+                Now::at(now),
+            )
+            .await;
+
+        match handled {
+            Ok(_) => Ok(Fired {
+                execution: timer.execution.clone(),
+                timer_id: timer.timer_id.clone(),
+                delivered: true,
+            }),
+            Err(HandleError::Decision(_)) => {
+                self.retire(timer, now).await?;
+                Ok(Fired {
+                    execution: timer.execution.clone(),
+                    timer_id: timer.timer_id.clone(),
+                    delivered: false,
+                })
+            }
+            Err(error) => Err(HostedError::Handle(error)),
+        }
+    }
+
+    /// Retire a timer whose question is over, and say so in the stream.
+    ///
+    /// Recorded rather than quietly deleted, for the reason the hosted path
+    /// records a lapse: a row that fires on every tick for ever is worse than
+    /// one forgotten, and *why* it was forgotten is a fact about this run. No
+    /// outputs, because nothing follows from it — whatever ended the question
+    /// already did what there was to do.
+    async fn retire(&self, timer: &Timer, now: OffsetDateTime) -> Result<(), HostedError> {
+        let slice = self
+            .store()
+            .load(&timer.execution)
+            .await
+            .map_err(HandleError::from)?;
+        let state = replay(slice.events());
+        let input_id = MessageId::new(crate::derive_uuid(&format!(
+            "input-deadline-lapsed/{}/{}",
+            timer.execution.as_str(),
+            timer.timer_id
+        )));
+        let request = AppendRequest {
+            expected_version: ExpectedVersion::Exact(slice.version),
+            input: PendingMessage::input(
+                WorkflowMessage::Hosted(HostedMessage {
+                    message_type: DEADLINE_TIMER.to_owned(),
+                    metadata: serde_json::json!({
+                        "timer_id": timer.timer_id,
+                        "delivered": false,
+                    }),
+                    payload: None,
+                }),
+                MessageMetadata::caused_by(&timer.execution, &input_id, input_id.clone(), now),
+            ),
+            outputs: Vec::new(),
+            projection: projection_of(&timer.execution, &state, slice.version + 1),
+            outbox: Vec::new(),
+            checkpoint: None,
+            timers: vec![TimerWrite::Fire(timer.timer_id.clone())],
+            attempts: Vec::new(),
+        };
+        self.store()
+            .append(&timer.execution, request)
+            .await
+            .map_err(HandleError::from)?;
+        Ok(())
     }
 
     /// Take, or renew, the right to decide one hosted run.

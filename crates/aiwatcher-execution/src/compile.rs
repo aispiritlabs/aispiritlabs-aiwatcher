@@ -184,6 +184,8 @@ pub fn compile_curation(
                 prompt,
                 role,
                 choices,
+                timeout_seconds,
+                on_timeout,
             } => {
                 steps.push(PlanStep {
                     id: step_id.clone(),
@@ -192,6 +194,8 @@ pub fn compile_curation(
                         role: role.clone(),
                         choices: choices.clone(),
                         block: Some(block.id.clone()),
+                        timeout_seconds: *timeout_seconds,
+                        on_timeout: on_timeout.clone(),
                     }),
                     // What is being approved, named: the artifact the person is
                     // deciding about is the one the step before produced, and a
@@ -557,6 +561,8 @@ mod tests {
                         prompt: "Publish these rows?".to_owned(),
                         role: "editor".to_owned(),
                         choices: vec!["approve".to_owned(), "reject".to_owned()],
+                        timeout_seconds: None,
+                        on_timeout: Default::default(),
                     },
                 ),
                 block(
@@ -612,6 +618,8 @@ mod tests {
                         prompt: "Publish these rows?".to_owned(),
                         role: "editor".to_owned(),
                         choices: Vec::new(),
+                        timeout_seconds: None,
+                        on_timeout: Default::default(),
                     },
                 ),
                 block(
@@ -659,6 +667,8 @@ mod tests {
                         prompt: "Publish these rows?".to_owned(),
                         role: "editor".to_owned(),
                         choices: Vec::new(),
+                        timeout_seconds: None,
+                        on_timeout: Default::default(),
                     },
                 ),
             ]),
