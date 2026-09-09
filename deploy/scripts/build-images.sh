@@ -21,7 +21,11 @@ REGISTRY="${REGISTRY:-}"
 TAG="${TAG:-dev}"
 # Empty for a default build; "aiwatcher-server/laser" to compile the Laser
 # backend in. A default image will refuse to start with AIWATCHER_BUS=laser.
-FEATURES="${FEATURES:-}"
+# Domyślnie to, co dopuszcza `values.schema.json` chartu — `server.bus: laser`
+# i `execution.store: postgres` siedzą za cargo feature'ami wyłączonymi
+# domyślnie, a obraz bez nich odmawia startu na wartości, którą chart
+# renderuje. Ta sama decyzja, co w `.github/workflows/release-images.yml`.
+FEATURES="${FEATURES:-aiwatcher-server/postgres,aiwatcher-server/laser}"
 push=false
 flow=true
 platform="${PLATFORM:-}"

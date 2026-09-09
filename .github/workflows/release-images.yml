@@ -49,6 +49,19 @@ jobs:
         with:
           context: .
           file: deploy/Dockerfile
+          # A released image has to be able to do everything the chart's schema
+          # admits. `values.schema.json` accepts `server.bus: laser` and
+          # `execution.store: postgres`, and both are behind cargo features that
+          # are off by default — deliberately, so a plain `cargo build` needs
+          # neither a broker nor sqlx. That default is right for a build and
+          # wrong for this one: without them the chart renders a value the
+          # binary refuses at start-up, and the pod crash-loops naming the
+          # feature. Which is exactly what a planner install did.
+          #
+          # The rule, not the instance: when the schema gains a backend behind a
+          # feature, it goes here in the same change.
+          build-args: |
+            FEATURES=aiwatcher-server/postgres,aiwatcher-server/laser
           platforms: ${{ env.PLATFORM }}
           push: true
           tags: ${{ steps.meta.outputs.server }}:${{ steps.meta.outputs.tag }}

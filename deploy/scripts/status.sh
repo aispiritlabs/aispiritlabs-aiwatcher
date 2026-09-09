@@ -60,11 +60,16 @@ printf '\n%s▶ what this release actually answers%s\n' "$B" "$NC"
 # `_probe` is a name nothing can have, so the enabled answer is 404 and the
 # disabled one is 501. Read-only either way.
 status_of() {
+  # No `-q` on wget: it suppresses the response headers `-S` exists to print,
+  # and those are the whole answer. The comment lives here rather than inside
+  # the command, because a comment after a line-continuation backslash ends the
+  # command — `exec ... --` is then left with nothing to run.
   "${kube[@]}" -n "$namespace" exec "deploy/$release-server" -- \
-    # No `-q`: it suppresses the response headers `-S` exists to print, and
-    # those are the whole answer. Verified against the runtime image's wget.
     wget -S -O /dev/null "http://127.0.0.1:8080$1" 2>&1 |
-    grep -oE 'HTTP/[0-9.]+ [0-9]{3}' | tail -1 | awk '{ print $2 }'
+    grep -oE 'HTTP/[0-9.]+ [0-9]{3}' | tail -1 | awk '{ print $2 }' || true
+  # `|| true`, bo o to właśnie pytamy: wget kończy się niezerowo na każdym
+  # 4xx i 5xx, a pod `set -e` z `pipefail` 501 — czyli odpowiedź, dla której
+  # ta sekcja istnieje — przerywałby cały skrypt zamiast wypisać wiersz.
 }
 
 for surface in \
