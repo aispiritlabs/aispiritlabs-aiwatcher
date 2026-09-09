@@ -470,7 +470,7 @@ area.
 ### Rust
 
 - MSRV 1.98, edition 2024, pinned in `rust-toolchain.toml`. The floor comes from
-  the `laser` feature: `laser_sdk` 0.3 requires rustc 1.97.1.
+  the `laser` feature: `laser_sdk` 0.3.1 requires rustc 1.98.0.
 - `cargo clippy --workspace --all-targets --all-features -- -Dwarnings` must pass
   clean. `unwrap`, `expect` and `panic` are warned against in production code and
   allowed in tests (`clippy.toml`).

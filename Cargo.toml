@@ -74,7 +74,14 @@ jsonwebtoken = "9.3.1"
 # what `use laser_sdk::prelude::*` names. Optional, and with default features
 # off: the agent/memory/graph layers are a different product surface from the
 # streaming primitives this adapter needs, and they are most of the ~360 crates.
-laser-sdk = { version = "0.3.0", default-features = false, features = ["streaming"] }
+# 0.3.1 rather than 0.3.0 because 0.3.0 no longer builds: it depends on
+# `iggy = "^0.11.0-edge.4"`, cargo reads an `-edge.N` prerelease as compatible
+# with every later one, and `iggy_common` 0.11.0-edge.7 turned
+# `heartbeat_interval` into a `NonZeroIggyDuration`. The committed `Cargo.lock`
+# is what keeps that from happening again on a machine that has not run
+# `cargo update`; the floor being honest is what keeps a machine that has from
+# resolving back onto the version that cannot compile.
+laser-sdk = { version = "0.3.1", default-features = false, features = ["streaming"] }
 # reqwest 0.13 renamed the TLS features: `rustls-tls` became `rustls`.
 reqwest = { version = "0.13", default-features = false, features = ["json", "http2", "rustls"] }
 # HMAC-SHA256 for the session cookie's signature and a CSPRNG for the state,

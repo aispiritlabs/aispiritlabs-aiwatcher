@@ -1,6 +1,6 @@
 # Pin the toolchain so local development and CI agree on rustfmt/clippy output.
 # 1.98.0 is the workspace MSRV (see the `rust-version` key in Cargo.toml).
-# The floor is set by the `laser` feature: `laser_sdk` 0.3 requires 1.97.1 and
+# The floor is set by the `laser` feature: `laser_sdk` 0.3.1 requires 1.98.0 and
 # `iggy` beneath it requires 1.95. rustup reads this file automatically and
 # installs the components on demand.
 [toolchain]
