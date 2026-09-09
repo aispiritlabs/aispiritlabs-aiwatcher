@@ -13,7 +13,7 @@ import {
 } from '@/api/generated/sdk.gen';
 import type { RecordedMessage } from '@/api/generated/types.gen';
 import { useCan } from '@/lib/auth';
-import { AnswerGate } from '@/components/answer-gate';
+import { AnswerGate, askedBy } from '@/components/answer-gate';
 import { Button, Card, CardContent } from '@/components/ui/primitives';
 
 /** Registration is authored state; execution lists and graphs remain log projections. */
@@ -245,6 +245,7 @@ export function ManagedExecutionControls({
             stepId={node}
             attempt={context.data.state.current_attempt}
             question={context.data.state.awaiting}
+            authored={askedBy(context.data.runtime)}
             onAnswered={() => {
               void queryClient.invalidateQueries({ queryKey: ['managed-execution', executionId] });
               void queryClient.invalidateQueries({ queryKey: ['managed-step', executionId] });

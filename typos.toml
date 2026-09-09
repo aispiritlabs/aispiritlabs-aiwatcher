@@ -9,6 +9,11 @@ extend-exclude = [
   "dist/",
   "apps/panel/src/api/generated/",
   ".data/",
+  # Rendered diagrams. Each one inlines the Google Fonts stylesheet, whose
+  # `unicode-range: U+0100-02BA` reads as a misspelling of `BY`. There is
+  # nothing to correct: the renderer writes these files, so a fix here is
+  # reverted by the next `just diagrams`.
+  "docs/diagrams/out/",
   # Composer dependencies for services/flow, same reasoning as node_modules.
   "vendor/",
   # A base64url modulus and a PEM key. Base64 of anything eventually contains

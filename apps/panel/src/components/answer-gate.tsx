@@ -2,7 +2,7 @@ import * as React from 'react';
 import { useMutation } from '@tanstack/react-query';
 
 import { provideInput } from '@/api/generated/sdk.gen';
-import type { InputRequest, Role } from '@/api/generated/types.gen';
+import type { InputRequest, Role, RuntimeBinding } from '@/api/generated/types.gen';
 import { needsRole, useRoleDecision } from '@/lib/auth';
 import { answerOf } from '@/lib/result';
 
@@ -20,12 +20,22 @@ import { Button, Refusal } from './ui/primitives';
  * did not offer, by name, so a free-text box beside a declared list would be a
  * way to type a 409. An empty list is the other half of the same rule: the
  * answer is then whatever somebody writes.
+ *
+ * **Who asked is shown, because the two are different news.** An authored gate
+ * is a box somebody drew: a person decided at authoring time that this needs a
+ * signature, and answering it is the process working. A step that stopped in
+ * the middle of its own work is the running code deciding to ask — nobody
+ * planned it, and it is the case where somebody should look harder before
+ * pressing approve. The questions render identically otherwise, so without a
+ * line saying which, the reader cannot tell an expected sign-off from an agent
+ * doing something nobody anticipated.
  */
 export function AnswerGate({
   executionId,
   stepId,
   attempt,
   question,
+  authored,
   onAnswered,
 }: {
   executionId: string;
@@ -37,6 +47,22 @@ export function AnswerGate({
    */
   attempt: number;
   question: InputRequest;
+  /**
+   * Whether the plan declared this question, rather than the running code
+   * choosing to ask it.
+   *
+   * Read from the pinned plan's binding by the caller, which is the only place
+   * that knows: a `human_input` step *is* the question, and anything else that
+   * is waiting parked in the middle of its own work.
+   *
+   * `undefined` is a third state and not a default — a context that has not
+   * been read yet, or one from a build that did not send its binding. Nothing
+   * is said then, because the wrong sentence here is worse than none: telling
+   * somebody the code decided to ask when the plan declared it would put a
+   * warning on a routine sign-off, and the other way round hides the case this
+   * exists for.
+   */
+  authored?: boolean;
   onAnswered: () => void;
 }) {
   const [answer, setAnswer] = React.useState('');
@@ -69,6 +95,7 @@ export function AnswerGate({
     return (
       <div className="flex flex-col gap-1 text-xs">
         <p>{question.prompt}</p>
+        <Asker authored={authored} />
         <Deadline at={question.deadline} />
         <span className="text-muted-foreground">{needsRole(roleOf(question))}</span>
       </div>
@@ -78,6 +105,7 @@ export function AnswerGate({
   return (
     <div className="flex flex-col gap-2 text-xs">
       <p>{question.prompt}</p>
+      <Asker authored={authored} />
       <Deadline at={question.deadline} />
       {question.choices?.length ? (
         // Named as a group because what is in it is the whole answer: every
@@ -123,6 +151,29 @@ export function AnswerGate({
 }
 
 /**
+ * Where this question came from.
+ *
+ * Two sentences that read very differently on purpose. An authored gate is
+ * routine — somebody drew the box, and the run stopping here is the process
+ * working. A step that asked from inside its own work is not: nothing planned
+ * this, and it is exactly the moment to read the question twice before
+ * approving it.
+ *
+ * Said in words rather than as a badge, because a badge is a thing you learn to
+ * stop seeing and this is the sentence that changes what somebody does next.
+ */
+function Asker({ authored }: { authored?: boolean }) {
+  if (authored === undefined) return null;
+  return (
+    <span className="text-muted-foreground">
+      {authored
+        ? 'This gate is part of the definition.'
+        : 'This step stopped in the middle of its own work to ask.'}
+    </span>
+  );
+}
+
+/**
  * When this question stops being answerable, when it does.
  *
  * Absent for most gates, and that absence is the honest default: a decision
@@ -150,4 +201,15 @@ function Deadline({ at }: { at?: string | null }) {
  */
 function roleOf(question: InputRequest): Role {
   return question.role === 'admin' ? 'admin' : 'editor';
+}
+
+/**
+ * Whether the plan declared this question, from the binding it pinned.
+ *
+ * One reader, exported, because both views ask it and a second `=== 'human_input'`
+ * in the other file is the drift this component exists to prevent. `undefined`
+ * for a binding that is not there — see [`AnswerGate`]'s `authored`.
+ */
+export function askedBy(binding: RuntimeBinding | undefined): boolean | undefined {
+  return binding === undefined ? undefined : binding.runtime === 'human_input';
 }

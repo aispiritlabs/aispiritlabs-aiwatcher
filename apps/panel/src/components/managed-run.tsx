@@ -18,7 +18,7 @@ import { openWorkflowStream } from '@/lib/live';
 import { getNotebookRevision } from '@/lib/ml-pipeline';
 import { answerOf, answerOrNone } from '@/lib/result';
 
-import { AnswerGate } from './answer-gate';
+import { AnswerGate, askedBy } from './answer-gate';
 import { Badge, Button, Card, IdChip, Refusal, Spinner } from './ui/primitives';
 
 /**
@@ -412,6 +412,10 @@ function StepActions({
           stepId={stepId}
           attempt={attempt}
           question={waiting}
+          // From the pinned plan rather than from the draft on screen: a
+          // `human_input` step is the question, and anything else that is
+          // waiting stopped in the middle of its own work.
+          authored={askedBy(context.data?.runtime)}
           onAnswered={onDone}
         />
       ) : null}

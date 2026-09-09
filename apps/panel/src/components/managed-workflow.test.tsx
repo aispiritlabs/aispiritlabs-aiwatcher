@@ -130,6 +130,7 @@ describe('managed commands', () => {
           status: 200,
           body: {
             allowed: ['answer'],
+            runtime: { runtime: 'human_input', prompt: 'Import these houses?', role: 'editor' },
             state: {
               current_attempt: 1,
               awaiting: {
@@ -153,5 +154,94 @@ describe('managed commands', () => {
     await userEvent.click(screen.getByRole('button', { name: 'approve' }));
 
     await waitFor(() => expect(server.countOf('POST', '/steps/sign-off/input')).toBe(1));
+    // A box somebody drew. Answering it is the process working, which is very
+    // different news from the next case.
+    expect(screen.getByText('This gate is part of the definition.')).toBeTruthy();
+  });
+
+  it('says when the running code asked rather than the plan', async () => {
+    // The two render identically otherwise, and they are not the same news. An
+    // authored gate is a routine sign-off; a `python_task` that is waiting
+    // stopped in the middle of its own work because it hit something nobody
+    // planned — which is exactly when somebody should read the question twice
+    // before pressing approve.
+    serve([
+      {
+        method: 'GET',
+        path: '/executions/run-1',
+        answer: {
+          status: 200,
+          body: {
+            execution: { state: { state_type: 'awaiting_input' } },
+            allowed: ['cancel'],
+          },
+        },
+      },
+      {
+        method: 'GET',
+        path: '/steps/stage/context',
+        answer: {
+          status: 200,
+          body: {
+            allowed: ['answer'],
+            runtime: { runtime: 'python_task', task_ref: 'agent@1', queue: 'default' },
+            state: {
+              current_attempt: 2,
+              awaiting: {
+                prompt: 'May I send this email to jan@example.com?',
+                role: 'editor',
+                choices: ['approve', 'reject'],
+              },
+            },
+          },
+        },
+      },
+    ]);
+
+    render(withQueries(<ManagedExecutionControls executionId="run-1" node="stage" />));
+
+    await screen.findByText('May I send this email to jan@example.com?');
+    expect(
+      screen.getByText('This step stopped in the middle of its own work to ask.'),
+    ).toBeTruthy();
+  });
+
+  it('says nothing about who asked when the binding is not there', async () => {
+    // A wrong sentence is worse than none. An older build that sends no
+    // binding, or a context still being read, must not have "the code decided
+    // to ask" put under a gate somebody authored.
+    serve([
+      {
+        method: 'GET',
+        path: '/executions/run-1',
+        answer: {
+          status: 200,
+          body: {
+            execution: { state: { state_type: 'awaiting_input' } },
+            allowed: ['cancel'],
+          },
+        },
+      },
+      {
+        method: 'GET',
+        path: '/steps/sign-off/context',
+        answer: {
+          status: 200,
+          body: {
+            allowed: ['answer'],
+            state: {
+              current_attempt: 1,
+              awaiting: { prompt: 'Publish?', role: 'editor', choices: ['approve'] },
+            },
+          },
+        },
+      },
+    ]);
+
+    render(withQueries(<ManagedExecutionControls executionId="run-1" node="sign-off" />));
+
+    await screen.findByText('Publish?');
+    expect(screen.queryByText(/stopped in the middle/)).toBeNull();
+    expect(screen.queryByText(/part of the definition/)).toBeNull();
   });
 });
