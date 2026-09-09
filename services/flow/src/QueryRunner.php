@@ -63,9 +63,16 @@ final readonly class QueryRunner
         // The span's end, when a managed plan pinned one. Its *width* still
         // comes from `window_seconds` or from the script's own `period:`, so a
         // query that pins both keeps the narrower of the two.
-        $plan = (new PipelineBuilder($this->catalog, $windowSeconds, $windowSpan[1] ?? null))->build(Parser::parse(
-            $query,
-        ));
+        // Hub pagination must not turn a 25-row preview into a full corpus
+        // download, including when a transform aggregates the input. Keep one
+        // extra row so the output cap can still report truncation.
+        $inputLimit = $maxRows === self::SIMULATION_ROWS ? self::SIMULATION_ROWS + 1 : null;
+        $plan = (new PipelineBuilder(
+            $this->catalog,
+            $windowSeconds,
+            $windowSpan[1] ?? null,
+            $inputLimit,
+        ))->build(Parser::parse($query));
         $maxRows = \max(1, \min(self::MAX_ROWS, $maxRows));
 
         \set_time_limit(self::TIMEOUT_SECONDS);

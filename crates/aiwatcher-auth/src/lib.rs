@@ -44,6 +44,7 @@
 pub mod cookie;
 pub mod error;
 pub mod identity;
+pub mod local;
 pub mod oidc;
 pub mod proxy;
 pub mod signing;
@@ -75,6 +76,11 @@ pub enum AuthMode {
     /// An authenticating reverse proxy in front of this process asserts the
     /// identity in headers. See [`proxy`] for what makes that sound.
     Proxy,
+    /// One token, generated on this machine by `aiwatcher token create`, held
+    /// in a file only its owner can read. What a single-user install runs. See
+    /// [`local`] for why it is a mode of its own rather than a wider ingest
+    /// token.
+    Local,
 }
 
 impl std::str::FromStr for AuthMode {
@@ -87,8 +93,9 @@ impl std::str::FromStr for AuthMode {
             // this up is thinking about; it is an OIDC provider either way.
             "oidc" | "openid" | "authentik" | "sso" => Ok(Self::Oidc),
             "proxy" | "forward-auth" | "forwardauth" | "header" => Ok(Self::Proxy),
+            "local" | "single-user" | "cli" => Ok(Self::Local),
             other => Err(AuthError::Configuration(format!(
-                "AIWATCHER_AUTH_MODE is {other:?}; expected one of none, oidc, proxy"
+                "AIWATCHER_AUTH_MODE is {other:?}; expected one of none, oidc, proxy, local"
             ))),
         }
     }
@@ -101,6 +108,7 @@ impl AuthMode {
             Self::None => "none",
             Self::Oidc => "oidc",
             Self::Proxy => "proxy",
+            Self::Local => "local",
         }
     }
 }
@@ -159,6 +167,9 @@ pub struct AuthConfig {
     /// symptom — everybody is a viewer — looks nothing like its cause.
     pub userinfo_fallback: bool,
     pub proxy_headers: ProxyHeaders,
+    /// The single-user credential, when [`AuthMode::Local`] is the mode. See
+    /// [`local::LocalAuth`].
+    pub local: Option<local::LocalAuth>,
     /// What to call the provider on the sign-in button.
     pub provider_name: String,
     pub http_timeout: Duration,
@@ -194,6 +205,7 @@ impl Default for AuthConfig {
             ingest_tokens: Vec::new(),
             userinfo_fallback: true,
             proxy_headers: ProxyHeaders::default(),
+            local: None,
             provider_name: "authentik".to_owned(),
             http_timeout: Duration::from_secs(10),
             discovery_attempts: 5,
@@ -230,6 +242,17 @@ impl AuthConfig {
     pub fn validate(&self) -> AuthResult<()> {
         match self.mode {
             AuthMode::None | AuthMode::Proxy => Ok(()),
+            // There is no `local` mode without a token: a mode that
+            // authenticated nobody would be `none` under a name that reads like
+            // protection, and this crate already has one of those with an
+            // honest name. See `local`.
+            AuthMode::Local => self.local.as_ref().map(|_| ()).ok_or_else(|| {
+                AuthError::Configuration(
+                    "AIWATCHER_AUTH_MODE=local needs a token; run `aiwatcher token create`, \
+                     or set AIWATCHER_AUTH_LOCAL_TOKEN_FILE to the file holding one"
+                        .to_owned(),
+                )
+            }),
             AuthMode::Oidc => {
                 for (name, value) in [
                     ("AIWATCHER_AUTH_ISSUER", &self.issuer),
@@ -394,7 +417,7 @@ fn split_queues(label: &str) -> Result<(&str, Vec<String>), AuthError> {
 }
 
 /// Short enough to guess is short enough to refuse.
-const MIN_TOKEN_LENGTH: usize = 24;
+pub(crate) const MIN_TOKEN_LENGTH: usize = 24;
 
 /// Under the ~4 KB every browser enforces, with room for the attributes and
 /// for whatever else is set on this origin.
@@ -527,7 +550,10 @@ impl Authenticator {
         };
 
         let (provider, verifier) = match config.mode {
-            AuthMode::Proxy | AuthMode::None => (None, None),
+            // `local` joins these two rather than `oidc`: the credential is
+            // checked against a file on this machine, so there is no discovery
+            // document to read and nothing to wait for at start-up.
+            AuthMode::Proxy | AuthMode::None | AuthMode::Local => (None, None),
             AuthMode::Oidc => {
                 let provider =
                     ProviderMetadata::discover(&http, &config.issuer, config.discovery_attempts)
@@ -630,6 +656,21 @@ impl Authenticator {
             return self
                 .identity_from_ingest_token(authorization)
                 .ok_or(missing);
+        }
+
+        // Before the cookie, because in this mode there is no login that could
+        // have set one: the credential is the token, and the only other thing
+        // a caller could present is somebody else's.
+        if self.config.mode == AuthMode::Local {
+            let local = self.config.local.as_ref().ok_or_else(|| {
+                AuthError::Configuration(
+                    "AIWATCHER_AUTH_MODE=local with no token; run `aiwatcher token create`".into(),
+                )
+            })?;
+            return authorization
+                .and_then(bearer_token)
+                .and_then(|presented| local.authenticate(presented))
+                .ok_or(AuthError::Unauthenticated);
         }
 
         if let Some(session) =

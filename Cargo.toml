@@ -17,7 +17,8 @@
 #   aiwatcher-auth       OIDC relying party: discovery, JWKS, sessions, roles
 #   aiwatcher-projector  the consumer pipeline + live hub + read model
 #   aiwatcher-api        axum router (REST + SSE + WS) + OpenAPI
-#   aiwatcher-server     the deployable binary: config, wiring, shutdown
+#   aiwatcher-server     wiring: config, the runtime, shutdown
+#   aiwatcher-cli        the binary: the command line, and the local stack
 #
 # Nothing below `core` knows about Laser, VictoriaTraces or HTTP. Storage and
 # transport are adapters behind the ports declared in `aiwatcher-core::ports`.
@@ -48,6 +49,7 @@ aiwatcher-pipeline = { path = "crates/aiwatcher-pipeline", version = "0.1.0" }
 aiwatcher-auth = { path = "crates/aiwatcher-auth", version = "0.1.0" }
 aiwatcher-projector = { path = "crates/aiwatcher-projector", version = "0.1.0" }
 aiwatcher-api = { path = "crates/aiwatcher-api", version = "0.1.0" }
+aiwatcher-server = { path = "crates/aiwatcher-server", version = "0.1.0" }
 
 anyhow = "1.0.104"
 async-trait = "0.1.92"
@@ -100,6 +102,14 @@ sqlx = { version = "0.8", default-features = false, features = [
 # requirement is only that every aiwatcher agrees with every other one.
 sha2 = "0.11.0"
 thiserror = "2.0.20"
+# The CLI's profile file. TOML rather than JSON because that file is meant to be
+# opened and edited by the person whose profiles they are, and a trailing comma
+# in JSON is a syntax error over an address somebody typed by hand.
+toml = "1.1"
+# The local database, behind the `duckdb` feature everywhere it appears.
+# `bundled` compiles DuckDB's amalgamation, which is minutes of build time and a
+# C++ toolchain — off by default for the reason `laser` and `postgres` are.
+duckdb = { version = "1.10505", features = ["bundled"] }
 time = { version = "0.3", features = ["formatting", "parsing", "serde-well-known", "macros"] }
 tokio = { version = "1.53", features = ["full"] }
 tokio-stream = { version = "0.1.19", features = ["sync"] }

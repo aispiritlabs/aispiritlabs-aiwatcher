@@ -1,0 +1,77 @@
+{
+  "name": "curation/pii-detection",
+  "description": "Read a public PII corpus, keep the English rows, mask what a shape detector finds, publish what is left.",
+  "blocks": [
+    {
+      "id": "corpus",
+      "title": "Hugging Face",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "spec": {
+        "kind": "source",
+        "dataset": "hub_rows",
+        "arguments": {
+          "dataset": "ai4privacy/pii-masking-200k",
+          "split": "train",
+          "limit": "50"
+        }
+      }
+    },
+    {
+      "id": "shape",
+      "title": "Feature engineering",
+      "position": {
+        "x": 300,
+        "y": 0
+      },
+      "spec": {
+        "kind": "transform",
+        "steps": "->withEntry('text', array_get(ref('row'), 'source_text'))\n->withEntry('language', array_get(ref('row'), 'language'))\n->filter(ref('language')->same(lit('en')))\n->select(ref('row_index'), ref('language'), ref('text'))"
+      }
+    },
+    {
+      "id": "detect",
+      "title": "Python processing",
+      "position": {
+        "x": 600,
+        "y": 0
+      },
+      "spec": {
+        "kind": "notebook",
+        "notebook": "pii_detection",
+        "params": {
+          "text_column": "text",
+          "only_matches": false
+        }
+      }
+    },
+    {
+      "id": "result",
+      "title": "View",
+      "position": {
+        "x": 900,
+        "y": 0
+      },
+      "spec": {
+        "kind": "view",
+        "dataset": "curation/pii-masked-sample"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "corpus",
+      "to": "shape"
+    },
+    {
+      "from": "shape",
+      "to": "detect"
+    },
+    {
+      "from": "detect",
+      "to": "result"
+    }
+  ]
+}

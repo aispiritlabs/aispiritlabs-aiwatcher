@@ -445,6 +445,10 @@ async fn write(
             plan,
             std::collections::BTreeMap::new(),
             &format!("schedule:{who}"),
+            // A schedule runs a definition this system compiled, so this system
+            // decides it. A hosted run's decider is a worker that has to be
+            // there to receive it, which is not something a tick can arrange.
+            crate::executions::Decider::Local,
         )
         .await?;
         // Recorded like any other firing, and in the same place the tick

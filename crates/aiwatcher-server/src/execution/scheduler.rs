@@ -295,6 +295,10 @@ async fn start_run(
         plan,
         std::collections::BTreeMap::new(),
         &format!("schedule:{}", definition.set_by),
+        // The tick compiles a definition and this system runs it. A hosted run
+        // needs a worker present to decide it, which a slot coming due cannot
+        // arrange.
+        aiwatcher_api::executions::Decider::Local,
     )
     .await
     .map_err(failure_of)?;

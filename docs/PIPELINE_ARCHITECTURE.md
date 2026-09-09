@@ -1934,9 +1934,11 @@ simulation mode only with a named requirement for execution without publication.
 
 ### Work 6 — one worker integration, then Planner (Phase 10 → Phase 11 Level 2)
 
-**In progress. The protocol and the authoring path are delivered; Planner is
-not.** The SDK and the worker-recovery gate move faster than this section — the
-integration status in [KICKOFF](KICKOFF.md) is where those two are recorded.
+**Done.** The protocol, the SDK, the authoring path, the worker-recovery gate
+and Planner's four stages on that boundary. What this does *not* deliver is one
+pod per stage or the removal of Flyte from Planner's chart; both are Phase 12,
+and the second is what Phase 12 earns. The integration status in
+[KICKOFF](KICKOFF.md) stays the record for the SDK's own moving parts.
 
 **Dependency:** works 1–5's applicable execution and product gates. Phase 9,
 Phase 8 and container jobs are not prerequisites. Planner Level 0 observation
@@ -1964,8 +1966,12 @@ can be delivered earlier because it leaves execution ownership unchanged.
   process is the cost, stated rather than hidden, and a presigned path for
   in-cluster workers is an addition behind the same port when it is measured to
   be the problem.
-- **Open:** `aiwatcher_sdk.worker` — `@task`, `Worker`, `TaskContext`, the poll
-  loop, the heartbeat and `run-attempt`.
+- ~~`aiwatcher_sdk.worker`.~~ **Done** — `@task`, `TaskContext`, the poll loop,
+  the background heartbeat, proxied row artifacts, failure classification and
+  `run-attempt`, with `Runtime(workflows, pools, placement)` as the application's
+  entry point. Its own record is [KICKOFF](KICKOFF.md) item 4 and
+  [the runtime guide](RUST_WORKFLOW_RUNTIME.md); this section names it because
+  the boundary is not delivered without a Python side of it.
 - ~~The authoring path.~~ **Done, and it is saved *and scheduled*.**
   `definition::WorkflowSpec` is the second compiler: it validates every
   reference, resolves a deterministic topological order, reports every authored
@@ -1990,12 +1996,33 @@ can be delivered earlier because it leaves execution ownership unchanged.
   a compiler through one `executions::compile_head`, so a schedule the API
   agreed to save cannot be one the tick then refuses to start. A `match` on each
   side would be free to disagree the day a third kind arrives.
-- **Open:** `just dev` runs one worker; a two-step plan surviving worker death
-  end to end, and late-result rejection through the SDK rather than through a
-  request written by hand.
-- **Open:** move Planner's four stages to that boundary and compare artifacts
-  with the direct path in Planner's own suite using a pinned SDK revision
-  (29.5).
+- ~~`just dev` runs one worker.~~ **Done**, and proved against a real database
+  rather than an edited claim: kill the worker mid-step, restart Rust on the same
+  database and log, wait out the actual five-minute lease, finish with a
+  replacement. `just test-worker-runtime`; recorded in
+  [KICKOFF](KICKOFF.md) item 6.
+- ~~Planner's four stages on that boundary.~~ **Done, and the comparison is
+  byte for byte.** `acquire → normalize → analyze → persist` is one registered
+  workflow of four `PythonTask` steps and three artifact edges, and the review it
+  writes equals the review the direct path writes.
+
+  What made the comparison worth running is a change on Planner's side: the
+  three orchestrators stopped holding three copies of a stage. `house_stages` is
+  the one chain and `direct`, `flyte` and `aiwatcher` are adapters behind a
+  `PipelineRunner` port — so the gate measures *transport*, not two
+  implementations free to drift apart. The transport's whole contribution is a
+  JSON round trip, which is not nothing: the analysis carries numpy values from
+  OpenCV, so encoding it with the HTTP client's serializer rather than Planner's
+  own would either fail or coerce silently.
+
+  Three things differ by construction, and each is asserted rather than quietly
+  excluded — the data directory (a second run over the first one's directory
+  would hit the extraction cache and execute no stage at all), the moment the
+  review was created, and the `orchestrator` label, which is provenance and is
+  checked for equality on both sides.
+
+  The revision Planner pins is the same one that has `aiwatcher_sdk.worker` in
+  it. It was not, in three places at once, until this landed.
 
 *Evidence so far:* four auth tests (the queue syntax, an unclosed list, a
 producer that publishes and cannot claim, and the two ends of "a person claims
@@ -2027,10 +2054,22 @@ expects `workflow`; pointing `compile_head`'s workflow arm at the curation
 compiler makes `run_now` answer 404 for a definition that is saved. Both were
 run and both fail as intended.
 
+Planner's parity is proved in Planner's repository, against the pinned SDK, in
+two places because it is two questions. `tests/test_house_orchestrator_parity.py`
+drives the real four `@task` functions through the real encoding and compares the
+records — the hand-off, without a network. `just ml-aiwatcher-import` runs the
+same import against a **running** server, so the queue, the claim, the artifact
+routes and the output check are the real ones, and then waits for the log fold to
+agree: `nodes_total: 4`, `nodes_succeeded: 4`, 65 753 bytes identical, 1.6 s.
+Three negative controls were run and confirmed — a mislabelled orchestrator, a
+lossy artifact hand-off, and a step wired to the wrong parent's artifact. The
+third also showed the failure message is worth reading: `analyze failed:
+'normalized' is not an input of this attempt`.
+
 **Exit:** the laptop worker path survives restart; Planner runs with Flyte off
-and produces byte-identical review artifacts. Keep the existing direct path
-available until that comparison passes. *Planner parity not yet met — it is what
-stands between the authoring path and this.*
+and produces byte-identical review artifacts. *Met.* The direct path stays, and
+so does the Flyte one — a fallback for one release is what the port is for, and
+removing either is a Planner decision behind its own gate.
 
 ### What follows, by dependency rather than phase number
 
@@ -2966,7 +3005,14 @@ resources, and a pod template with a PVC, a ConfigMap and five secrets. A
 
 Each level is independent of the ones after it and useful on its own.
 
-**Level 0 — observe.** Missing today (33.3). Two SDK calls in
+**Level 0 — observe.** *Half of it arrived with Level 2 and the other half did
+not.* An import run through the `aiwatcher` orchestrator publishes
+`workflow.declared`, `step.*` and `artifact.produced` on its own, because the
+engine is a producer (ADR 0026) — the workflow tab draws it with no planner code
+at all. The `direct` and `cache` branches still publish nothing, and they are
+the branches a laptop and a repeated project take. What is below is therefore
+still worth doing, and is now smaller: it applies to two branches, not three.
+Two SDK calls in
 `run_house_import_flow`: `client.workflow("house-import", nodes=[acquire,
 normalize, analyze, persist], edges=[…], execution_id=job_id)` and `with
 flow.node(stage, attempt=…)` around each stage — on the Flyte branch, the
@@ -2986,8 +3032,14 @@ Needs nothing from this plan.
 `workflow_run_id` input, or `aiwatcher-pipeline` adds the task path
 ADR 0016 foresaw. Worth doing only if Flyte stays. **Recommendation: skip.**
 
-**Level 2 — the stages as worker tasks.** The path this plan builds. Two
-shapes, and the second is better:
+**Level 2 — the stages as worker tasks.** ~~The path this plan builds.~~
+**Delivered 2026-09-09**, as a hybrid of the two shapes below: the RQ worker
+*is* the aiwatcher worker — `AiwatcherRunner` serves the pool in the process
+that started the execution — while the FastAPI handler still enqueues to RQ
+rather than starting an execution itself. Keeping RQ in front costs one hop and
+buys the `JobRecord` lifecycle the Go API and the SPA already poll; moving the
+start into the handler is a separate change with its own reason. Two shapes,
+and what was built takes the worker half of the second:
 
 - planner's RQ job stops calling `flyte.run` and does
   `POST /api/v1/executions {target: {kind: "workflow", name:
@@ -3001,9 +3053,16 @@ shapes, and the second is better:
 
 In the `local` profile each stage is a `PythonTask`; in `kubernetes`, a
 `ContainerJob`. That choice is a *profile* on the definition, configuration
-on the aiwatcher side — the `flyte_enabled` branch, replaced. Both
-orchestrator strings survive: `artifact_manifest["orchestrator"]` becomes
-`"aiwatcher" | "direct" | "cache"`. planner's own `_progress(20/45/70/90)` and
+on the aiwatcher side — the `flyte_enabled` branch, replaced. **What shipped
+replaced that branch with `importOrchestrator: direct | flyte | aiwatcher` on
+the runtime profile, defaulting to `aiwatcher`; `ContainerJob` does not exist
+yet, so `kubernetes` currently runs four `PythonTask` attempts inside the one
+import-worker pod rather than four pods.** That pod already carries Flyte's own
+task envelope — `cpu 250m–4`, `memory 1Gi–6Gi`, one replica — and the stages run
+one at a time, so the sizing holds; what is gone is the isolation, and section
+37 is where it comes back. Both orchestrator strings survive:
+`artifact_manifest["orchestrator"]` is `"aiwatcher" | "flyte" | "direct" |
+"cache"`. planner's own `_progress(20/45/70/90)` and
 `JobRecord.progress` stay, because the SPA polls the Go API for them; the step
 events are in addition, not instead. Needs Phases 1–3 and 10–12.
 
@@ -3059,15 +3118,82 @@ orchestrated path are one product is what this plan is built to keep.
 
 ### 39.4 The migration, in the order that keeps the test green
 
-1. Level 0 instrumentation. No engine involved.
-2. `PythonTask` workers in the `local` profile beside `direct`;
-   `test_house_stage_artifacts.py` asserts an identical `ReviewRecord`.
+1. Level 0 instrumentation. No engine involved. **Open for `direct` and
+   `cache`; the `aiwatcher` branch publishes its own facts.**
+2. ~~`PythonTask` workers in the `local` profile beside `direct`~~ **done.** The
+   assertion landed in `tests/test_house_orchestrator_parity.py` rather than in
+   `test_house_stage_artifacts.py`, because it needed a fixture of its own: two
+   storage roots, since a second run over the first one's directory hits the
+   extraction cache and executes no stage at all.
 3. `ContainerJob` in Tilt against real k3s, no Devbox;
-   `orchestrator = "aiwatcher"`; the same assertion.
-4. Flip the `kubernetes` profile. Keep `flyteEnabled` readable for one
-   release as the fallback switch.
-5. Remove 39.2's list. Delete `app/flyte_pipelines.py`'s Flyte half; the
-   `run_house_import_flow` branch reads a profile instead.
+   `orchestrator = "aiwatcher"`; the same assertion. **Deferred, and step 4
+   went ahead of it — see the decision below.**
+4. ~~Flip the `kubernetes` profile.~~ **Done, and out of order.** Every shipped
+   profile except `local` now names `aiwatcher`, with `ContainerJob` still
+   unwritten — so `kubernetes` runs the four stages in the import worker rather
+   than in four pods. The fallback switch is **not** `flyteEnabled`, which was
+   removed rather than kept: two fields describing one choice are two answers
+   that may disagree, and a boolean could not say "aiwatcher" anyway. Flyte is
+   reachable by naming it — `PLANNER_IMPORT_ORCHESTRATOR=flyte` — which is what
+   a fallback for one release should look like.
+5. ~~Remove 39.2's list.~~ **Done.** `app/flyte_pipelines.py` is gone whole
+   rather than halved — everything in it was the adapter or a re-export shim,
+   and the three test files that imported `run_house_import_flow` through the
+   shim now import `app.pipelines.house_import`. `ORCHESTRATORS` is
+   `(direct, aiwatcher)`, so `flyte` is an unknown value and therefore a
+   refusal, which is a stronger guarantee than "no profile selects it" and is
+   what `test_zaden_orkiestrator_poza_tymi_dwoma_nie_istnieje` now asserts.
+   `helm template` and `uv.lock` render no Flyte.
+
+**One pod, not four — decided rather than defaulted.** Step 4 landed before
+step 3, so every shipped profile except `local` names `aiwatcher` while
+`ContainerJob` is unwritten: the four stages run in sequence inside the import
+worker's own pod. That is a change from Flyte, it is what planner ships, and it
+stays.
+
+Four things were checked in planner's tree before deciding, and all four say
+the same:
+
+- the import worker's pod already carries the Flyte task's envelope — `cpu`
+  250m–4, `memory` 1Gi–6Gi, one replica — so the ceiling is the one that was
+  already provisioned;
+- the stages are sequential, so peak usage is what one pod per stage would have
+  peaked at anyway;
+- Flyte's resource declaration was **a single value for all four** tasks, so
+  nobody ever differentiated a stage and no per-step `cpu`/`memory` override is
+  being given up;
+- cache, retries, timeouts, GPU and fan-out were unset in every one of them.
+
+What *is* given up is isolation, and only isolation: a stage that exhausts
+memory now kills the process the other three run in, where Flyte would have
+killed one pod of four. That is the trigger for reversing this, and it is the
+only one — an OOM kill traced to one stage, or a stage that comes to need
+resources the other three do not. When it fires, the order returns to plan and
+§37 goes in *before* 39.2's removals: `ContainerJob`, `AttemptTemplate`, and
+the `kube` feature. That is Rust work and a phase of its own.
+
+Deciding the other way today would mean writing §37 to buy an isolation nothing
+has asked for yet, against a workload whose peak is one OpenCV pass.
+
+**What the Tilt run found, which the laptop could not.** Step 1's gate — the
+same import in the `tilt` profile rather than in a `tmp_path` — failed on the
+first attempt, and it failed correctly: `just run` leaves
+`AIWATCHER_WORKFLOW_STORE` at `file`, whose `multi_process` is `false`, and the
+four steps are claimed by a worker in another process. `check_capacity` refused
+the plan and named the variable, so the import ended `failed` rather than
+running half of itself. The laptop gate never saw it because it sets `memory`,
+which claims `multi_process` — one process holds the whole store. planner's Tilt
+now points that server at the PostgreSQL already in its stack, and at the RustFS
+already in its stack: without the second, a step's artifacts were content
+addresses in a directory on somebody's laptop rather than objects in the object
+store the deployment has. Both are one-line configuration; neither was
+discoverable without running it.
+
+A cold `tilt ci` then found the consequence of the fix: a server that needs
+those two at start-up is one that races them, and the loser is a `serve_cmd`
+that does not come back by itself. The resource declares them now, and the
+whole stack — smoke test included — comes up green from nothing.
+
 
 ### 39.5 The gate
 
@@ -3139,9 +3265,12 @@ history lives here.**
   {expected_version, messages, Idempotency-Key}` and whose `read_stream` and
   `read_all` page `GET …/stream`. `ConcurrencyConflictError` is the 409.
   `DurableWorkflowExecutor` then works unchanged over a shared store, and
-  `CompiledGraphSystem`'s eight in-memory dicts — the join buckets above all —
-  become events in that stream, which is the first change `agentic_graph`
-  needs and one it needs anyway.
+  `CompiledGraphSystem`'s in-memory dicts — the join above all:
+  `_expected_completion_counts`, `_completion_buckets` and `_last_inputs`,
+  `compiler.py:188-194` — become events in that stream, which is the first
+  change `agentic_graph` needs and one it needs anyway. (An earlier revision of
+  this section said "eight dicts"; the class holds six and three of them are the
+  join.)
 - What the engine does for a hosted execution: expected-version append (the
   inbox); dedup by message id; **one lease on the execution** — one decider at
   a time, `ProcessorLock`'s semantics, in `execution_runs.lease_*`; the facts

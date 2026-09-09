@@ -61,6 +61,7 @@ use aiwatcher_core::{Checkpoint, MessageId};
 
 use crate::claim::{AttemptKey, AttemptRow, AttemptWrite, ClaimFilter};
 use crate::error::{Result, StoreError};
+use crate::hosted::{DeciderLease, LeaseOutcome};
 use crate::message::{OutboxMessage, RecordedMessage, RunProjection};
 use crate::plan::DefinitionKind;
 use crate::schedule::slot::{
@@ -79,6 +80,10 @@ const PROJECTIONS_DIR: &str = "projections";
 const OUTBOX_FILE: &str = "outbox.jsonl";
 const CHECKPOINTS_DIR: &str = "checkpoints";
 const ATTEMPTS_FILE: &str = "attempts.json";
+/// One decider lease per hosted execution. One file, like the attempts, and
+/// for the same reason: this adapter holds one process, so the map is small
+/// and reading it whole is what the process would do anyway.
+const LEASES_FILE: &str = "decider-leases.json";
 /// One record per decision that has been accepted and not yet fully applied.
 const COMMITS_DIR: &str = "commits";
 /// One definition's slots. Keyed like a stream, so a schedule with a name full
@@ -288,6 +293,22 @@ impl FileWorkflowStore {
             .into_iter()
             .map(|row| (row.key.clone(), row))
             .collect())
+    }
+
+    async fn read_leases(&self) -> Result<BTreeMap<String, DeciderLease>> {
+        let Ok(body) = fs::read(self.root.join(LEASES_FILE)).await else {
+            return Ok(BTreeMap::new());
+        };
+        Ok(serde_json::from_slice::<Vec<DeciderLease>>(&body)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|lease| (lease.execution.as_str().to_owned(), lease))
+            .collect())
+    }
+
+    async fn write_leases(&self, leases: &BTreeMap<String, DeciderLease>) -> Result<()> {
+        let rows: Vec<&DeciderLease> = leases.values().collect();
+        write_atomically(&self.root.join(LEASES_FILE), &serde_json::to_vec(&rows)?).await
     }
 
     async fn write_attempts(&self, rows: &BTreeMap<AttemptKey, AttemptRow>) -> Result<()> {
@@ -565,6 +586,84 @@ impl WorkflowStore for FileWorkflowStore {
             version: messages.len() as u64,
             messages,
         })
+    }
+
+    async fn load_page(
+        &self,
+        execution: &ExecutionId,
+        after: u64,
+        limit: usize,
+    ) -> Result<StreamSlice> {
+        // A file is read whole whatever the page asks for, and saying so is
+        // better than a signature that implies otherwise: this adapter holds
+        // one process and a development store, and the day a stream is large
+        // enough for the difference to matter is the day `AIWATCHER_WORKFLOW_STORE`
+        // is already `postgres`.
+        let messages = self.read_stream(execution).await?;
+        let version = messages.len() as u64;
+        Ok(StreamSlice {
+            version,
+            messages: messages
+                .into_iter()
+                .filter(|recorded| recorded.stream_version > after)
+                .take(limit)
+                .collect(),
+        })
+    }
+
+    async fn take_decider_lease(
+        &self,
+        execution: &ExecutionId,
+        holder: &str,
+        now: OffsetDateTime,
+    ) -> Result<LeaseOutcome> {
+        // The same gate one decision takes: two tasks in this process racing
+        // for one lease would otherwise both read "free" and both write.
+        let _gate = self.gate.lock().await;
+        let mut leases = self.read_leases().await?;
+        let key = execution.as_str().to_owned();
+        let taken = match leases.get_mut(&key) {
+            Some(lease) if lease.held_by(holder, now) || lease.expired(now) => {
+                lease.take(holder, now);
+                lease.clone()
+            }
+            Some(lease) => {
+                return Ok(LeaseOutcome::Held {
+                    holder: lease.holder.clone(),
+                    expires_at: lease.expires_at(),
+                });
+            }
+            None => {
+                let lease = DeciderLease::taken_by(execution, holder, now);
+                leases.insert(key, lease.clone());
+                lease
+            }
+        };
+        self.write_leases(&leases).await?;
+        Ok(LeaseOutcome::Taken(taken))
+    }
+
+    async fn release_decider_lease(
+        &self,
+        execution: &ExecutionId,
+        holder: &str,
+        now: OffsetDateTime,
+    ) -> Result<bool> {
+        let _gate = self.gate.lock().await;
+        let mut leases = self.read_leases().await?;
+        if !leases
+            .get(execution.as_str())
+            .is_some_and(|lease| lease.held_by(holder, now))
+        {
+            return Ok(false);
+        }
+        leases.remove(execution.as_str());
+        self.write_leases(&leases).await?;
+        Ok(true)
+    }
+
+    async fn decider_lease(&self, execution: &ExecutionId) -> Result<Option<DeciderLease>> {
+        Ok(self.read_leases().await?.remove(execution.as_str()))
     }
 
     async fn append(

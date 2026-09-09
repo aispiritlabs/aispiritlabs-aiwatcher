@@ -85,7 +85,7 @@ view). It stays as a worked example of the block contract — and as the reminde
 that "the query cannot do this" is worth checking before a chain grows a second
 engine.
 
-Both are loadable from the panel: `Data Curation → Pipeline → Load an example`.
+Both are imported by the service seed and loadable from `Data Curation → Pipeline → Saved pipelines`. Public block solutions are searchable in **Public solutions library**; its catalogue is served by the API.
 
 ## The head moves; a revision does not
 
@@ -122,3 +122,14 @@ expose it on a public interface.
 | `notebooks/` | the notebooks themselves: `pii_detection.py` and `titanic_features.py` |
 | `.revisions/` | one exact source per digest, kept forever — **the one directory here that must survive** |
 | `.data/` | staged rows and outputs; scratch, safe to delete |
+
+## FlowAI and portable examples
+
+The runtime also ships the `flowai` Python package: row-oriented OneHotEncoder
+and LabelEncoder adapters with fit/transform separation and JSON fitted state.
+The panel exposes thematic templates such as Missing values and Visualization.
+See [Titanic from scratch](../../examples/titanic/README.md) for the full chain,
+local CSV runner, dependency requirements, and `.flow.json` import/export.
+
+`uv sync --locked` installs the numeric and plotting dependencies used by these
+blocks. FlowAI is included in this service's wheel alongside `ml_pipeline`.

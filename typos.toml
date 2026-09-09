@@ -24,6 +24,11 @@ extend-exclude = [
   # The same decision, made again rather than inherited: the SDK review is also
   # written in Polish, and `proces` is the word it means.
   "docs/PYTHON_SDK_REVIEW_2026-09-08.md",
+  # And again, for the walkthrough a reader follows in Polish while clicking
+  # through the example. `blok`, `nowe` and `serwer` are the words it means;
+  # the dictionary reads each as a near-miss for an English one. By directory
+  # rather than by file, because a walkthrough is written as a set.
+  "examples/titanic/",
 ]
 
 [default.extend-words]

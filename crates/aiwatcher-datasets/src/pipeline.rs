@@ -161,6 +161,21 @@ pub struct SavePipelineRequest {
     pub edges: Vec<PipelineEdge>,
 }
 
+impl SavePipelineRequest {
+    /// The same validation for an authored save and an import preflight.
+    pub fn validate(&self) -> Result<()> {
+        validate_name(&self.name, "pipeline")?;
+        if self.description.len() > MAX_DESCRIPTION_BYTES {
+            return Err(RegistryError::TooLarge {
+                what: "the description",
+                size: self.description.len(),
+                limit: MAX_DESCRIPTION_BYTES,
+            });
+        }
+        check(&self.blocks, &self.edges)
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct SavedPipeline {
     pub pipeline: CurationPipeline,
@@ -179,15 +194,7 @@ impl Registry {
     /// Same two orderings as everything else in this crate: the version object
     /// is written before the head that indexes it, and the head is derived.
     pub async fn save_pipeline(&self, request: SavePipelineRequest) -> Result<SavedPipeline> {
-        validate_name(&request.name, "pipeline")?;
-        if request.description.len() > MAX_DESCRIPTION_BYTES {
-            return Err(RegistryError::TooLarge {
-                what: "the description",
-                size: request.description.len(),
-                limit: MAX_DESCRIPTION_BYTES,
-            });
-        }
-        check(&request.blocks, &request.edges)?;
+        request.validate()?;
 
         let revision = digest(
             &serde_json::to_vec(&request)
@@ -436,7 +443,7 @@ fn chain_problems(chain: &[&PipelineBlock]) -> Vec<String> {
 }
 
 /// What is wrong with one block, whatever it is connected to.
-fn block_problems(block: &PipelineBlock) -> Vec<String> {
+pub(crate) fn block_problems(block: &PipelineBlock) -> Vec<String> {
     let mut problems = Vec::new();
     if block.title.len() > MAX_TITLE_BYTES {
         problems.push(format!(

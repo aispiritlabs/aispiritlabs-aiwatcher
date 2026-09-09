@@ -1,0 +1,202 @@
+{
+  "format": "aiwatcher.curation",
+  "version": 1,
+  "requirements": {
+    "python": ">=3.14",
+    "packages": [
+      "aiwatcher-ml-pipeline==0.1.0 (includes FlowAI)",
+      "marimo>=0.24,<0.25",
+      "scikit-learn>=1.8,<1.9",
+      "matplotlib>=3.10,<4",
+      "pandas>=2.2,<4"
+    ]
+  },
+  "pipeline": {
+    "name": "curation/titanic-flowphp",
+    "description": "Titanic: native PHP FlowAI preparation, Python visualization and Random Forest evaluation.",
+    "blocks": [
+      {
+        "id": "passengers",
+        "title": "Titanic \u00b7 raw passengers",
+        "position": {
+          "x": 0,
+          "y": 0
+        },
+        "spec": {
+          "kind": "source",
+          "dataset": "hub_rows",
+          "arguments": {
+            "dataset": "phihung/titanic",
+            "split": "train",
+            "limit": "891"
+          }
+        }
+      },
+      {
+        "id": "columns",
+        "title": "Select raw columns",
+        "position": {
+          "x": 270,
+          "y": 0
+        },
+        "spec": {
+          "kind": "transform",
+          "steps": "->withEntry('PassengerId', array_get(ref('row'), 'PassengerId'))\n->withEntry('Survived', array_get(ref('row'), 'Survived'))\n->withEntry('Pclass', array_get(ref('row'), 'Pclass'))\n->withEntry('Name', array_get(ref('row'), 'Name'))\n->withEntry('Sex', array_get(ref('row'), 'Sex'))\n->withEntry('Age', array_get(ref('row'), 'Age'))\n->withEntry('SibSp', array_get(ref('row'), 'SibSp'))\n->withEntry('Parch', array_get(ref('row'), 'Parch'))\n->withEntry('Ticket', array_get(ref('row'), 'Ticket'))\n->withEntry('Fare', array_get(ref('row'), 'Fare'))\n->withEntry('Cabin', array_get(ref('row'), 'Cabin'))\n->withEntry('Embarked', array_get(ref('row'), 'Embarked'))\n->select(ref('PassengerId'), ref('Survived'), ref('Pclass'), ref('Name'), ref('Sex'), ref('Age'), ref('SibSp'), ref('Parch'), ref('Ticket'), ref('Fare'), ref('Cabin'), ref('Embarked'))"
+        }
+      },
+      {
+        "id": "split",
+        "title": "Train / validation split",
+        "position": {
+          "x": 540,
+          "y": 0
+        },
+        "spec": {
+          "kind": "transform",
+          "steps": "->trainTestSplit('PassengerId', target: 'Survived', fraction: 0.2, seed: 42)"
+        }
+      },
+      {
+        "id": "missing-values",
+        "title": "Missing values",
+        "position": {
+          "x": 810,
+          "y": 0
+        },
+        "spec": {
+          "kind": "transform",
+          "steps": "->imputeMissing('Age', output: 'AgeFilled', groupBy: 'Sex,Pclass', fitOn: '_split', missingIndicator: 'AgeMissing')\n->imputeMissing('Fare', output: 'FareFilled', groupBy: 'Pclass', fitOn: '_split', missingIndicator: 'FareMissing')\n->imputeMissing('Embarked', output: 'EmbarkedFilled', strategy: 'most_frequent', fitOn: '_split')\n->withEntry('CabinMissing', when(ref('Cabin')->isNull(), lit(1), lit(0)))"
+        }
+      },
+      {
+        "id": "features",
+        "title": "Feature engineering",
+        "position": {
+          "x": 1080,
+          "y": 0
+        },
+        "spec": {
+          "kind": "transform",
+          "steps": "->withEntry('Title', regex_replace(lit('/^[^,]*,\\s*([^.]+)\\..*$/'), lit('$1'), ref('Name')))\n->withEntry('Deck', when(ref('Cabin')->isNull(), lit('U'), regex_replace(lit('/^(.).*$/'), lit('$1'), ref('Cabin'))))\n->withEntry('FamilySize', ref('SibSp')->plus(ref('Parch'))->plus(lit(1)))\n->withEntry('IsAlone', when(ref('FamilySize')->same(lit(1)), lit(1), lit(0)))\n->withEntry('FarePerPerson', ref('FareFilled')->divide(ref('FamilySize'), 4, 'half_up'))\n->withEntry('_ticket_train', when(ref('_split')->same(lit('train')), lit(1), lit(0)))\n->withEntry('_ticket_key', hash(ref('Ticket')))\n->withEntry('TicketFrequency', sum(ref('_ticket_train'))->over(window()->partitionBy(ref('_ticket_key'))))\n->withEntry('TicketFrequency', when(ref('TicketFrequency')->same(lit(0)), lit(1), ref('TicketFrequency')))\n->drop(ref('_ticket_train'), ref('_ticket_key'))"
+        }
+      },
+      {
+        "id": "one-hot",
+        "title": "OneHotEncoder",
+        "position": {
+          "x": 0,
+          "y": 180
+        },
+        "spec": {
+          "kind": "transform",
+          "steps": "->oneHotEncode('Sex', 'Pclass', 'EmbarkedFilled', 'Title', 'Deck', fitOn: '_split', output: 'model_features', stateOutput: 'feature_encoder')"
+        }
+      },
+      {
+        "id": "label",
+        "title": "LabelEncoder",
+        "position": {
+          "x": 270,
+          "y": 180
+        },
+        "spec": {
+          "kind": "transform",
+          "steps": "->labelEncode('Survived', fitOn: '_split', output: 'target_encoded', stateOutput: 'label_encoder')"
+        }
+      },
+      {
+        "id": "visualization",
+        "title": "Visualization",
+        "position": {
+          "x": 540,
+          "y": 180
+        },
+        "spec": {
+          "kind": "notebook",
+          "notebook": "flowai_visualization",
+          "params": {},
+          "revision": "7d8eb176d4cf34f56330b2df345ae98b482f1bf5756aa210eb996726a5eff7e5"
+        }
+      },
+      {
+        "id": "model",
+        "title": "Model training & evaluation",
+        "position": {
+          "x": 810,
+          "y": 180
+        },
+        "spec": {
+          "kind": "notebook",
+          "notebook": "flowai_random_forest",
+          "params": {
+            "seed": 42,
+            "n_estimators": 120
+          },
+          "revision": "f02e07921f23e68edfabf3a4d189585fbcdc655d4e805e9fd6cecad3800f4f50"
+        }
+      },
+      {
+        "id": "publish",
+        "title": "Publish predictions",
+        "position": {
+          "x": 1080,
+          "y": 180
+        },
+        "spec": {
+          "kind": "view",
+          "dataset": "curation/titanic-flowphp"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "from": "passengers",
+        "to": "columns"
+      },
+      {
+        "from": "columns",
+        "to": "split"
+      },
+      {
+        "from": "split",
+        "to": "missing-values"
+      },
+      {
+        "from": "missing-values",
+        "to": "features"
+      },
+      {
+        "from": "features",
+        "to": "one-hot"
+      },
+      {
+        "from": "one-hot",
+        "to": "label"
+      },
+      {
+        "from": "label",
+        "to": "visualization"
+      },
+      {
+        "from": "visualization",
+        "to": "model"
+      },
+      {
+        "from": "model",
+        "to": "publish"
+      }
+    ]
+  },
+  "notebooks": [
+    {
+      "name": "flowai_visualization",
+      "revision": "7d8eb176d4cf34f56330b2df345ae98b482f1bf5756aa210eb996726a5eff7e5",
+      "source": "\"\"\"Visualization \u2014 an editable FlowAI block. See examples/titanic/README.md.\"\"\"\n\nimport marimo\n\napp = marimo.App(width=\"medium\")\n\n\n@app.cell\ndef _():\n    from ml_pipeline import Block\n\n    return (Block,)\n\n\n@app.cell\ndef _(Block):\n    _block = Block.for_notebook(__file__)\n    rows = _block.get_rows()\n    params = _block.get_params()\n    return params, rows\n\n\n@app.cell\ndef _(params, rows):\n    import matplotlib.pyplot as plt\n    import marimo as mo\n    from flowai.frame import frame_of\n\n    _frame = frame_of(rows)\n    _train = _frame.loc[_frame[\"_split\"].eq(\"train\")]\n    _columns = params.get(\"columns\", [\"Age\", \"Fare\", \"Cabin\", \"Embarked\"])\n    _missing = (_train[_columns].isna() | _train[_columns].eq(\"\")).sum()\n    figure, _axes = plt.subplots(1, 2, figsize=(11, 4), layout=\"constrained\")\n    _axes[0].bar(_columns, _missing, color=\"#d97706\")\n    _axes[0].set_title(\"Missing measurements \u00b7 training rows\")\n    _axes[0].set_ylabel(\"Passengers\")\n    _rates = (\n        _train.assign(Survived=_train[\"Survived\"].astype(float)).groupby(\"Sex\")[\"Survived\"].mean()\n    )\n    _axes[1].bar(_rates.index, _rates, color=\"#0891b2\")\n    _axes[1].set_ylim(0, 1)\n    _axes[1].set_title(\"Survival rate \u00b7 training rows\")\n    output = rows\n    mo.vstack(\n        [\n            mo.md(\n                \"## Visualization\\nTraining data only; the validation labels do not guide feature selection.\"\n            ),\n            figure,\n        ]\n    )\n    return figure, output\n\n\nif __name__ == \"__main__\":\n    app.run()\n"
+    },
+    {
+      "name": "flowai_random_forest",
+      "revision": "f02e07921f23e68edfabf3a4d189585fbcdc655d4e805e9fd6cecad3800f4f50",
+      "source": "\"\"\"Model training & evaluation \u2014 an editable FlowAI block. See examples/titanic/README.md.\"\"\"\n\nimport marimo\n\napp = marimo.App(width=\"medium\")\n\n\n@app.cell\ndef _():\n    from ml_pipeline import Block\n\n    return (Block,)\n\n\n@app.cell\ndef _(Block):\n    _block = Block.for_notebook(__file__)\n    rows = _block.get_rows()\n    params = _block.get_params()\n    return params, rows\n\n\n@app.cell\ndef _(params, rows):\n    import json\n    import pandas as pd\n    import marimo as mo\n    from sklearn.ensemble import RandomForestClassifier\n    from sklearn.metrics import accuracy_score, roc_auc_score\n    from flowai.frame import frame_of, records_of\n\n    _frame = frame_of(rows)\n    _numeric = params.get(\n        \"numeric_columns\",\n        [\n            \"AgeFilled\",\n            \"FareFilled\",\n            \"FamilySize\",\n            \"IsAlone\",\n            \"FarePerPerson\",\n            \"TicketFrequency\",\n            \"AgeMissing\",\n            \"FareMissing\",\n            \"CabinMissing\",\n        ],\n    )\n    if set(_numeric) & {\"PassengerId\", \"Survived\", \"target_encoded\", \"_split\"}:\n        raise ValueError(\"IDs, split and target columns are not model features.\")\n    _train = _frame[\"_split\"].eq(\"train\")\n    _validation = _frame[\"_split\"].eq(\"validation\")\n    if not _train.any() or not _validation.any():\n        raise ValueError(\"Training and validation rows are required.\")\n    # Unpack the nested wire field once at the model input boundary.\n    _features = pd.DataFrame(_frame[\"model_features\"].tolist(), index=_frame.index)\n    _categorical = sorted(_frame.loc[_train, \"model_features\"].iloc[0])\n    _matrix = pd.concat([_frame[_numeric].astype(float), _features[_categorical]], axis=1)\n    _target = _frame[\"target_encoded\"].astype(int)\n    model = RandomForestClassifier(\n        n_estimators=int(params.get(\"n_estimators\", 120)),\n        max_depth=6,\n        min_samples_leaf=2,\n        random_state=int(params.get(\"seed\", 42)),\n        n_jobs=1,\n    )\n    model.fit(_matrix.loc[_train], _target.loc[_train])\n    if list(model.classes_) != [0, 1]:\n        raise ValueError(\"This Titanic baseline requires both target classes 0 and 1.\")\n    _predicted = model.predict(_matrix.loc[_validation])\n    _probability = model.predict_proba(_matrix.loc[_validation])[:, 1]\n    _truth = _target.loc[_validation]\n    metrics = {\n        \"train_rows\": int(_train.sum()),\n        \"validation_rows\": int(_validation.sum()),\n        \"accuracy\": float(accuracy_score(_truth, _predicted)),\n        \"roc_auc\": float(roc_auc_score(_truth, _probability)) if _truth.nunique() > 1 else None,\n        \"seed\": int(params.get(\"seed\", 42)),\n    }\n    print(json.dumps(metrics, sort_keys=True))\n    output = records_of(\n        _frame.assign(\n            prediction=model.predict(_matrix),\n            survival_probability=model.predict_proba(_matrix)[:, 1],\n        )\n    )\n    mo.md(\n        f\"## Model evaluation\\nHeld-out validation accuracy: **{metrics['accuracy']:.3f}** \u00b7 {metrics['validation_rows']} passengers.\\n\\nA 25-row preview is a wiring check, not an estimate of model quality.\"\n    )\n    return metrics, model, output\n\n\nif __name__ == \"__main__\":\n    app.run()\n"
+    }
+  ]
+}

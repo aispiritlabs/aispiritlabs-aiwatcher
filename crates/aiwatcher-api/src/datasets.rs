@@ -35,6 +35,8 @@ use utoipa::OpenApi;
     save_recipe,
     list_pipelines,
     save_pipeline,
+    search_block_library,
+    save_block_template,
 ))]
 struct Api;
 
@@ -49,6 +51,10 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/datasets", get(list_datasets).post(publish_dataset))
         .route("/api/v1/dataset-rows", get(get_dataset_rows))
         .route("/api/v1/curations", get(list_recipes).post(save_recipe))
+        .route(
+            "/api/v1/curation-library",
+            get(search_block_library).post(save_block_template),
+        )
         .route(
             "/api/v1/curation-pipelines",
             get(list_pipelines).post(save_pipeline),
@@ -74,6 +80,59 @@ fn registry(state: &AppState) -> ApiResult<&Arc<Registry>> {
 
 fn may_author(caller: &Caller) -> ApiResult<()> {
     caller.require(aiwatcher_auth::Role::Editor).map(|_| ())
+}
+
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+#[serde(deny_unknown_fields)]
+pub struct LibraryQuery {
+    pub search: Option<String>,
+    pub offset: Option<usize>,
+    pub limit: Option<usize>,
+}
+
+/// Search solutions shared with all readers of this installation.
+#[utoipa::path(
+    get, path = "/api/v1/curation-library", params(LibraryQuery),
+    responses(
+        (status = 200, body = aiwatcher_datasets::BlockTemplatePage),
+        (status = 400, body = crate::error::ErrorBody),
+        (status = 501, body = crate::error::ErrorBody),
+    ), tag = "datasets",
+)]
+async fn search_block_library(
+    State(state): State<AppState>,
+    Query(query): Query<LibraryQuery>,
+) -> ApiResult<Json<aiwatcher_datasets::BlockTemplatePage>> {
+    Ok(Json(
+        registry(&state)?
+            .block_templates(
+                query.search.as_deref().unwrap_or_default(),
+                query.offset.unwrap_or(0),
+                query.limit.unwrap_or(24),
+            )
+            .await?,
+    ))
+}
+
+/// Publish a reusable solution through the same registry operation as the seed.
+#[utoipa::path(
+    post, path = "/api/v1/curation-library",
+    request_body = aiwatcher_datasets::SaveBlockTemplateRequest,
+    responses(
+        (status = 200, body = aiwatcher_datasets::BlockTemplate),
+        (status = 400, body = crate::error::ErrorBody),
+        (status = 422, body = crate::error::ErrorBody),
+        (status = 403, body = crate::error::ErrorBody),
+        (status = 501, body = crate::error::ErrorBody),
+    ), tag = "datasets",
+)]
+async fn save_block_template(
+    State(state): State<AppState>,
+    caller: Caller,
+    Json(request): Json<aiwatcher_datasets::SaveBlockTemplateRequest>,
+) -> ApiResult<Json<aiwatcher_datasets::BlockTemplate>> {
+    may_author(&caller)?;
+    Ok(Json(registry(&state)?.save_block_template(request).await?))
 }
 
 /// Every saved dataset, newest execution first.

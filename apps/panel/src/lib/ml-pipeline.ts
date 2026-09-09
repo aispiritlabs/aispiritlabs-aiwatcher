@@ -72,6 +72,7 @@ export class NotebookError extends Error {
     message: string,
     readonly stderr = '',
     readonly stdout = '',
+    readonly status?: number,
   ) {
     super(message);
     this.name = 'NotebookError';
@@ -103,6 +104,7 @@ async function call(path: string, init?: RequestInit): Promise<unknown> {
       parsed.success ? parsed.data.error.message : `The service answered ${response.status}.`,
       parsed.success ? (parsed.data.error.stderr ?? '') : '',
       parsed.success ? (parsed.data.error.stdout ?? '') : '',
+      response.status,
     );
   }
 
@@ -152,6 +154,41 @@ export async function saveNotebook(name: string, source: string): Promise<Notebo
   );
 }
 
+export const EMPTY_NOTEBOOK_SOURCE = `"""My data preparation block."""
+import marimo
+
+app = marimo.App(width="medium")
+
+@app.cell
+def _():
+    from ml_pipeline import Block
+    return (Block,)
+
+@app.cell
+def _(Block):
+    _block = Block.for_notebook(__file__)
+    rows = _block.get_rows()
+    params = _block.get_params()
+    return rows, params
+
+@app.cell
+def _(rows, params):
+    import marimo as mo
+    # Replace this transformation with your own code.
+    output = [dict(row) for row in rows]
+    mo.ui.table(output[:25])
+    return (output,)
+
+if __name__ == "__main__":
+    app.run()
+`;
+
+/** Unique files let a new block evolve independently of an existing example. */
+export async function createNotebook(source = EMPTY_NOTEBOOK_SOURCE): Promise<NotebookSource> {
+  const name = `custom_${crypto.randomUUID().replaceAll('-', '')}`;
+  return saveNotebook(name, source);
+}
+
 /**
  * Run one notebook over rows and return what it handed on.
  *
@@ -163,12 +200,13 @@ export async function runNotebook(
   notebook: string,
   rows: Array<Record<string, unknown>>,
   params: Record<string, unknown> = {},
+  revision?: string,
 ): Promise<NotebookRun> {
   return runSchema.parse(
     await call('/run', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ notebook, rows, params }),
+      body: JSON.stringify({ notebook, rows, params, code_revision: revision }),
     }),
   );
 }

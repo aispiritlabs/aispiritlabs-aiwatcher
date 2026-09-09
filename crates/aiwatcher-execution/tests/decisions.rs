@@ -88,7 +88,7 @@ fn cause(name: &str) -> MessageId {
     MessageId::new(name)
 }
 
-fn names(outputs: &[aiwatcher_execution::PendingMessage]) -> Vec<&'static str> {
+fn names(outputs: &[aiwatcher_execution::PendingMessage]) -> Vec<&str> {
     outputs
         .iter()
         .map(|message| message.message.name())
@@ -350,7 +350,9 @@ fn the_retry_budget_runs_out_rather_than_looping() {
 
     // A timeout, because that is the class that spends the *work* budget: the
     // runtime may have done something, so repeating it is not free.
-    let mut last = Vec::new();
+    // Owned, because a message name borrows the message it is on and the
+    // outputs of each attempt die at the end of the iteration.
+    let mut last: Vec<String> = Vec::new();
     for attempt in 1..=RetryPolicy::default().max_attempts {
         let outputs = decide(
             &state,
@@ -364,10 +366,10 @@ fn the_retry_budget_runs_out_rather_than_looping() {
         )
         .expect("a timeout");
         state = apply(state, &outputs);
-        last = names(&outputs);
+        last = names(&outputs).into_iter().map(str::to_owned).collect();
     }
     assert_eq!(
-        last,
+        last.iter().map(String::as_str).collect::<Vec<_>>(),
         vec!["step_failed", "step_skipped", "execution_failed"],
         "the third failure spends the budget rather than scheduling a fourth"
     );

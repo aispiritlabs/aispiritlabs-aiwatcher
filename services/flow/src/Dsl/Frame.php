@@ -69,7 +69,16 @@ final class Frame
      * written for the CLI pastes in unchanged. They are here so that "is this
      * a step" has one answer.
      */
-    public const array OWN = ['read', 'write', 'run', 'fetch'];
+    public const array OWN = [
+        'read',
+        'write',
+        'run',
+        'fetch',
+        'trainTestSplit',
+        'imputeMissing',
+        'oneHotEncode',
+        'labelEncode',
+    ];
 
     /** @var array<string, \ReflectionMethod>|null */
     private static ?array $methods = null;

@@ -1,5 +1,7 @@
 # aiwatcher
 
+Executable examples: [Titanic from scratch with data curation and FlowAI](examples/titanic/README.md).
+
 Observability for AI agent runs. Python and TypeScript agents publish events to
 a durable log; a Rust backend consumes them, assembles OpenTelemetry traces,
 exports to VictoriaTraces and VictoriaMetrics, and serves a live view over

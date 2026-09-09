@@ -1,0 +1,151 @@
+[
+  {
+    "id": "source",
+    "title": "Source",
+    "description": "Choose a dataset.",
+    "spec": {
+      "kind": "source",
+      "dataset": "runs",
+      "arguments": {}
+    },
+    "tags": [
+      "data",
+      "source"
+    ]
+  },
+  {
+    "id": "transform",
+    "title": "Data transformation",
+    "description": "Edit a data query.",
+    "spec": {
+      "kind": "transform",
+      "steps": "->limit(100)"
+    },
+    "tags": [
+      "php",
+      "transform"
+    ]
+  },
+  {
+    "id": "split",
+    "title": "Train / validation split",
+    "description": "FlowAI in PHP: deterministic stratified split before fitting preprocessing.",
+    "spec": {
+      "kind": "transform",
+      "steps": "->trainTestSplit('PassengerId', target: 'Survived', fraction: 0.2, seed: 42)"
+    },
+    "tags": [
+      "php",
+      "split"
+    ]
+  },
+  {
+    "id": "missing-values",
+    "title": "Missing values",
+    "description": "FlowAI in PHP: grouped training medians and mode; retain missingness flags.",
+    "spec": {
+      "kind": "transform",
+      "steps": "->imputeMissing('Age', output: 'AgeFilled', groupBy: 'Sex,Pclass', fitOn: '_split', missingIndicator: 'AgeMissing')\n->imputeMissing('Fare', output: 'FareFilled', groupBy: 'Pclass', fitOn: '_split', missingIndicator: 'FareMissing')\n->imputeMissing('Embarked', output: 'EmbarkedFilled', strategy: 'most_frequent', fitOn: '_split')\n->withEntry('CabinMissing', when(ref('Cabin')->isNull(), lit(1), lit(0)))"
+    },
+    "tags": [
+      "php",
+      "missing-values"
+    ]
+  },
+  {
+    "id": "features",
+    "title": "Feature engineering",
+    "description": "FlowPHP: titles, decks, families and training ticket frequency.",
+    "spec": {
+      "kind": "transform",
+      "steps": "->withEntry('Title', regex_replace(lit('/^[^,]*,\\s*([^.]+)\\..*$/'), lit('$1'), ref('Name')))\n->withEntry('Deck', when(ref('Cabin')->isNull(), lit('U'), regex_replace(lit('/^(.).*$/'), lit('$1'), ref('Cabin'))))\n->withEntry('FamilySize', ref('SibSp')->plus(ref('Parch'))->plus(lit(1)))\n->withEntry('IsAlone', when(ref('FamilySize')->same(lit(1)), lit(1), lit(0)))\n->withEntry('FarePerPerson', ref('FareFilled')->divide(ref('FamilySize'), 4, 'half_up'))\n->withEntry('_ticket_train', when(ref('_split')->same(lit('train')), lit(1), lit(0)))\n->withEntry('_ticket_key', hash(ref('Ticket')))\n->withEntry('TicketFrequency', sum(ref('_ticket_train'))->over(window()->partitionBy(ref('_ticket_key'))))\n->withEntry('TicketFrequency', when(ref('TicketFrequency')->same(lit(0)), lit(1), ref('TicketFrequency')))\n->drop(ref('_ticket_train'), ref('_ticket_key'))"
+    },
+    "tags": [
+      "php",
+      "features"
+    ]
+  },
+  {
+    "id": "visualization",
+    "title": "Visualization",
+    "description": "Missing values and survival plots over training passengers; passes rows through.",
+    "spec": {
+      "kind": "notebook",
+      "notebook": "flowai_visualization",
+      "params": {}
+    },
+    "tags": [
+      "python",
+      "visualization"
+    ]
+  },
+  {
+    "id": "one-hot",
+    "title": "OneHotEncoder",
+    "description": "FlowAI: fit categorical features on training rows, transform every split.",
+    "spec": {
+      "kind": "transform",
+      "steps": "->oneHotEncode('Sex', 'Pclass', 'EmbarkedFilled', 'Title', 'Deck', fitOn: '_split', output: 'model_features', stateOutput: 'feature_encoder')"
+    },
+    "tags": [
+      "php",
+      "one-hot"
+    ]
+  },
+  {
+    "id": "label",
+    "title": "LabelEncoder",
+    "description": "FlowAI: encode target labels using the training vocabulary.",
+    "spec": {
+      "kind": "transform",
+      "steps": "->labelEncode('Survived', fitOn: '_split', output: 'target_encoded', stateOutput: 'label_encoder')"
+    },
+    "tags": [
+      "php",
+      "label"
+    ]
+  },
+  {
+    "id": "model",
+    "title": "Model training & evaluation",
+    "description": "Titanic Random Forest baseline and held-out metrics.",
+    "spec": {
+      "kind": "notebook",
+      "notebook": "flowai_random_forest",
+      "params": {
+        "seed": 42,
+        "n_estimators": 120
+      }
+    },
+    "tags": [
+      "python",
+      "model"
+    ]
+  },
+  {
+    "id": "python",
+    "title": "Python code",
+    "description": "Choose or edit a custom Python notebook.",
+    "spec": {
+      "kind": "notebook",
+      "notebook": "python_code",
+      "params": {}
+    },
+    "tags": [
+      "python",
+      "python"
+    ]
+  },
+  {
+    "id": "view",
+    "title": "Publish dataset",
+    "description": "Inspect and publish the resulting rows.",
+    "spec": {
+      "kind": "view"
+    },
+    "tags": [
+      "data",
+      "view"
+    ]
+  }
+]

@@ -182,7 +182,7 @@ impl<S: WorkflowStore> ExecutionHandler<S> {
             && command.is_effect()
         {
             return Err(HandleError::Decision(DecisionError::Unhandled {
-                message: input.name(),
+                message: input.name().to_owned(),
             }));
         }
         // Before the run, not after. Here rather than in the API, so that
@@ -463,7 +463,11 @@ pub fn attempt_rows(
                     )));
                 }
             }
-            WorkflowMessage::Command(_) => {}
+            // A hosted decider's message authorises nothing here: the worker
+            // schedules its own next node, and this engine keeps the history.
+            // A claim row derived from one would be work nobody in this process
+            // decided on.
+            WorkflowMessage::Command(_) | WorkflowMessage::Hosted(_) => {}
         }
     }
     rows

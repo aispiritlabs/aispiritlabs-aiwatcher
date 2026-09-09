@@ -15,7 +15,7 @@ pub enum DecisionError {
         "no execution has been started on this stream, so `{message}` addresses nothing. \
          Start one first"
     )]
-    NotStarted { message: &'static str },
+    NotStarted { message: String },
 
     #[error(
         "this execution has already been started; starting it again would give it a second plan"
@@ -67,7 +67,7 @@ pub enum DecisionError {
     CyclicPlan,
 
     #[error("`{message}` is not something an execution decides on")]
-    Unhandled { message: &'static str },
+    Unhandled { message: String },
 }
 
 /// Every reason a definition does not compile to a runnable plan, at once.

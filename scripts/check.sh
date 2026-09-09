@@ -44,6 +44,8 @@ skip() { # skip "<label>" "<hint>"
 have() { command -v "$1" >/dev/null 2>&1; }
 
 # ── Rust ─────────────────────────────────────────────────────────────────────
+run "curation seed" python3 examples/build_seed.py --check
+run "portable examples" python3 examples/titanic/build_bundle.py --check
 run "cargo fmt"    cargo fmt --all --check
 run "cargo clippy" cargo clippy --workspace --all-targets --all-features -- -Dwarnings
 run "cargo test"   cargo test --workspace --all-targets

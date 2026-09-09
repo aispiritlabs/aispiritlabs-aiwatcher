@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import { QUERY_EXAMPLES } from './flow';
-import { CURATION_EXAMPLES, compileFlow, orderOf } from './pipeline';
+import { compileFlow, orderOf } from './pipeline';
+import { readFileSync } from 'node:fs';
+import type { SavePipelineRequest } from '@/api/generated/types.gen';
+const examples: SavePipelineRequest[] = JSON.parse(
+  readFileSync('../../examples/seed.json', 'utf8'),
+).pipelines;
 
 /**
  * The examples are shipped code, so they are held to what a chain has to be.
@@ -13,10 +18,10 @@ import { CURATION_EXAMPLES, compileFlow, orderOf } from './pipeline';
  * canvas and then refuses to run, discovered by whoever clicked it.
  */
 describe('the shipped curation examples', () => {
-  it.each(CURATION_EXAMPLES.map((example) => [example.title, example] as const))(
+  it.each(examples.map((example) => [example.name, example] as const))(
     '%s is one chain, from a source to a view',
     (_title, example) => {
-      const chain = orderOf(example.blocks, example.edges);
+      const chain = orderOf(example.blocks, example.edges ?? []);
 
       expect(chain).not.toBeNull();
       expect(chain?.[0]?.spec.kind).toBe('source');
@@ -24,17 +29,8 @@ describe('the shipped curation examples', () => {
     },
   );
 
-  it.each(CURATION_EXAMPLES.map((example) => [example.title, example] as const))(
-    '%s says whether it needs the notebook runtime',
-    (_title, example) => {
-      const notebooks = example.blocks.filter((block) => block.spec.kind === 'notebook');
-
-      expect(example.needsNotebooks).toBe(notebooks.length > 0);
-    },
-  );
-
   it('compiles a Titanic chain into one query the Flow service is given whole', () => {
-    const example = CURATION_EXAMPLES.find((candidate) => candidate.name.includes('titanic'));
+    const example = examples.find((candidate) => candidate.name === 'curation/titanic-features');
     const chain = orderOf(example?.blocks ?? [], example?.edges ?? []);
     const script = compileFlow(chain ?? []);
 
@@ -49,11 +45,13 @@ describe('the shipped curation examples', () => {
     // `'\s'` in TypeScript is the letter s, so a pattern written without the
     // second backslash reaches Flow as `/^[^,]*,s*([^.]+)../` — which still
     // matches things, quietly and wrongly.
-    const steps = CURATION_EXAMPLES.flatMap((example) =>
-      example.blocks.flatMap((block) =>
-        block.spec.kind === 'transform' ? [block.spec.steps] : [],
-      ),
-    ).join('\n');
+    const steps = examples
+      .flatMap((example) =>
+        example.blocks.flatMap((block) =>
+          block.spec.kind === 'transform' ? [block.spec.steps] : [],
+        ),
+      )
+      .join('\n');
 
     expect(steps).toContain("regex_replace(lit('/^[^,]*,\\s*([^.]+)\\..*$/')");
   });
@@ -70,7 +68,7 @@ describe('the shipped curation examples', () => {
  * `\s` is the letter s.
  */
 describe('the shipped query examples', () => {
-  it.each(QUERY_EXAMPLES.map((example) => [example.title, example] as const))(
+  it.each(QUERY_EXAMPLES.map((example) => [example.name, example] as const))(
     '%s is a complete script with a name and a dataset to save it under',
     (_title, example) => {
       expect(example.query.startsWith('data_frame()')).toBe(true);

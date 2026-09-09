@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use aiwatcher_core::{CausationId, Checkpoint, CorrelationId, MessageId};
+use aiwatcher_execution::hosted::{DeciderLease, LeaseOutcome};
 use aiwatcher_execution::message::{MessageMetadata, OutboxMessage, RunProjection, SCHEMA_VERSION};
 use aiwatcher_execution::plan::{
     CachePolicy, DefinitionKind, DefinitionRevision, PlanStep, PythonTaskSpec, RetryPolicy,
@@ -174,6 +175,40 @@ impl WorkflowStore for OneProcess {
         self.0.load(execution).await
     }
 
+    async fn load_page(
+        &self,
+        execution: &ExecutionId,
+        after: u64,
+        limit: usize,
+    ) -> aiwatcher_execution::Result<StreamSlice> {
+        self.0.load_page(execution, after, limit).await
+    }
+
+    async fn take_decider_lease(
+        &self,
+        execution: &ExecutionId,
+        holder: &str,
+        now: OffsetDateTime,
+    ) -> aiwatcher_execution::Result<LeaseOutcome> {
+        self.0.take_decider_lease(execution, holder, now).await
+    }
+
+    async fn release_decider_lease(
+        &self,
+        execution: &ExecutionId,
+        holder: &str,
+        now: OffsetDateTime,
+    ) -> aiwatcher_execution::Result<bool> {
+        self.0.release_decider_lease(execution, holder, now).await
+    }
+
+    async fn decider_lease(
+        &self,
+        execution: &ExecutionId,
+    ) -> aiwatcher_execution::Result<Option<DeciderLease>> {
+        self.0.decider_lease(execution).await
+    }
+
     async fn append(
         &self,
         execution: &ExecutionId,
@@ -320,6 +355,42 @@ impl WorkflowStore for Contends {
 
     async fn load(&self, execution: &ExecutionId) -> aiwatcher_execution::Result<StreamSlice> {
         self.inner.load(execution).await
+    }
+
+    async fn load_page(
+        &self,
+        execution: &ExecutionId,
+        after: u64,
+        limit: usize,
+    ) -> aiwatcher_execution::Result<StreamSlice> {
+        self.inner.load_page(execution, after, limit).await
+    }
+
+    async fn take_decider_lease(
+        &self,
+        execution: &ExecutionId,
+        holder: &str,
+        now: OffsetDateTime,
+    ) -> aiwatcher_execution::Result<LeaseOutcome> {
+        self.inner.take_decider_lease(execution, holder, now).await
+    }
+
+    async fn release_decider_lease(
+        &self,
+        execution: &ExecutionId,
+        holder: &str,
+        now: OffsetDateTime,
+    ) -> aiwatcher_execution::Result<bool> {
+        self.inner
+            .release_decider_lease(execution, holder, now)
+            .await
+    }
+
+    async fn decider_lease(
+        &self,
+        execution: &ExecutionId,
+    ) -> aiwatcher_execution::Result<Option<DeciderLease>> {
+        self.inner.decider_lease(execution).await
     }
 
     async fn append(

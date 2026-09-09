@@ -113,6 +113,8 @@ final class PipelineBuilder
          * *back from where*. The two compose.
          */
         private readonly ?int $asOf = null,
+        /** Bound hub input during simulation, including nested reads. */
+        private readonly ?int $inputLimit = null,
     ) {
         $this->effectiveWindowSeconds = $windowSeconds;
     }
@@ -238,6 +240,7 @@ final class PipelineBuilder
             $this->effectiveWindowSeconds,
             $arguments,
             $this->asOf,
+            $this->inputLimit,
         );
     }
 
@@ -376,6 +379,7 @@ final class PipelineBuilder
         \assert($frame instanceof DataFrame, 'aggregate is the only step that takes a grouped frame');
 
         return match ($step->name) {
+            'trainTestSplit', 'imputeMissing', 'oneHotEncode', 'labelEncode' => $this->flowAI($frame, $step),
             'select' => $frame->select(...$this->references($step)),
             'drop' => $frame->drop(...$this->references($step)),
             'dropDuplicates' => $frame->dropDuplicates(...$this->references($step)),
@@ -459,6 +463,95 @@ final class PipelineBuilder
         $this->joined = [];
 
         return $result;
+    }
+
+    private function flowAI(DataFrame $frame, Step $step): DataFrame
+    {
+        $allowed = match ($step->name) {
+            'trainTestSplit' => ['target', 'output', 'fraction', 'seed'],
+            'imputeMissing' => ['output', 'strategy', 'groupBy', 'fitOn', 'fitValue', 'missingIndicator'],
+            'oneHotEncode' => ['output', 'fitOn', 'fitValue', 'handleUnknown', 'state', 'stateOutput'],
+            'labelEncode' => ['output', 'fitOn', 'fitValue', 'state', 'stateOutput'],
+        };
+        $columns = [];
+        $options = [];
+        foreach ($step->args as $argument) {
+            $value = $this->scalar($argument->value, $step->name);
+            if ($argument->name === null) {
+                if ($options !== [] || !\is_string($value) || $value === '') {
+                    throw new ParseError('FlowAI expects column names before named options.', $step->column);
+                }
+                $columns[] = $value;
+            } else {
+                if (!\in_array($argument->name, $allowed, true) || \array_key_exists($argument->name, $options)) {
+                    throw new ParseError('Unknown or duplicate FlowAI option: ' . $argument->name, $step->column);
+                }
+                if ($argument->name === 'fraction') {
+                    if (!\is_int($value) && !\is_float($value) || $value <= 0 || $value >= 1) {
+                        throw new ParseError('fraction must be a number between 0 and 1.', $step->column);
+                    }
+                } elseif ($argument->name === 'seed') {
+                    if (!\is_int($value)) {
+                        throw new ParseError('seed must be an integer.', $step->column);
+                    }
+                } elseif ($argument->name !== 'fitValue' && (!\is_string($value) || $value === '')) {
+                    throw new ParseError($argument->name . ' must be a nonempty string.', $step->column);
+                }
+                $options[$argument->name] = $value;
+            }
+        }
+        if (
+            $columns === []
+            || \count(\array_unique($columns)) !== \count($columns)
+            || $step->name !== 'oneHotEncode' && \count($columns) !== 1
+        ) {
+            throw new ParseError('FlowAI requires unique input columns (one except for oneHotEncode).', $step->column);
+        }
+        if ($step->name === 'trainTestSplit' && !isset($options['target'])) {
+            throw new ParseError('trainTestSplit requires target.', $step->column);
+        }
+        if (isset($options['strategy']) && !\in_array($options['strategy'], ['median', 'most_frequent'], true)) {
+            throw new ParseError('strategy must be median or most_frequent.', $step->column);
+        }
+        if (isset($options['handleUnknown']) && !\in_array($options['handleUnknown'], ['ignore', 'error'], true)) {
+            throw new ParseError('handleUnknown must be ignore or error.', $step->column);
+        }
+        $references = [...$columns];
+        foreach (['fitOn', 'target'] as $option) {
+            if (isset($options[$option]) && !($option === 'fitOn' && isset($options['state']))) {
+                $references[] = $options[$option];
+            }
+        }
+        if (isset($options['groupBy'])) {
+            $references = [...$references, ...\array_map('trim', \explode(',', $options['groupBy']))];
+        }
+        foreach ($references as $column) {
+            if (!isset($this->known[$column])) {
+                throw new ParseError('Unknown FlowAI input column: ' . $column, $step->column);
+            }
+        }
+        $options['output'] ??= match ($step->name) {
+            'trainTestSplit' => '_split',
+            'oneHotEncode' => 'model_features',
+            'labelEncode' => 'target_encoded',
+            'imputeMissing' => $columns[0] . 'Filled',
+        };
+        $outputs = [$options['output']];
+        foreach (['stateOutput', 'missingIndicator'] as $option) {
+            if (isset($options[$option])) {
+                if (\in_array($options[$option], $references, true)) {
+                    throw new ParseError($option . ' must not overwrite an input column.', $step->column);
+                }
+                $outputs[] = $options[$option];
+            }
+        }
+        if (\count(\array_unique($outputs)) !== \count($outputs)) {
+            throw new ParseError('FlowAI output columns must be distinct.', $step->column);
+        }
+        foreach ($outputs as $column) {
+            $this->known[$column] = true;
+        }
+        return (new \Aiwatcher\Flow\FlowAI\Preparation($step->name, $columns, $options))->apply($frame);
     }
 
     /**
@@ -616,7 +709,7 @@ final class PipelineBuilder
      */
     private function nested(Nested $node): DataFrame
     {
-        $builder = new self($this->catalog, $this->effectiveWindowSeconds, $this->asOf);
+        $builder = new self($this->catalog, $this->effectiveWindowSeconds, $this->asOf, $this->inputLimit);
         $plan = $builder->build($node->query);
 
         // What the right side brings, for the column check after the join.

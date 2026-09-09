@@ -25,6 +25,9 @@ testing = []
 # No `macros` and no `migrate` either: both live in `sqlx-macros`, which wants
 # a live database at *compile* time.
 postgres = ["dep:sqlx"]
+# The DuckDB workflow store: what `postgres` is for a deployment, for one
+# machine. Off by default because `bundled` compiles DuckDB's C++ amalgamation.
+duckdb = ["dep:duckdb"]
 
 [dependencies]
 aiwatcher-bus.workspace = true
@@ -36,6 +39,7 @@ hex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+duckdb = { workspace = true, optional = true }
 sqlx = { workspace = true, optional = true }
 thiserror.workspace = true
 time.workspace = true

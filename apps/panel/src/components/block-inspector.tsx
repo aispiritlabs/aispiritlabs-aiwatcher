@@ -6,7 +6,13 @@ import type { BlockSpec, PipelineBlock } from '@/api/generated/types.gen';
 import { Badge, Button, Card, Spinner } from '@/components/ui/primitives';
 import { blockLabel } from '@/components/pipeline-canvas';
 import { fetchDatasets, type FlowDataset } from '@/lib/flow';
-import { getNotebook, getNotebooks, saveNotebook } from '@/lib/ml-pipeline';
+import {
+  createNotebook,
+  getNotebook,
+  getNotebookRevision,
+  getNotebooks,
+  saveNotebook,
+} from '@/lib/ml-pipeline';
 import { readCall } from '@/lib/pipeline';
 import { cn } from '@/lib/utils';
 
@@ -29,44 +35,58 @@ export function BlockInspector({
   onChange,
   onDelete,
   children,
+  disabled = false,
+  onDirtyChange,
 }: {
   block: PipelineBlock;
   onChange: (block: PipelineBlock) => void;
   onDelete: () => void;
   /** The kind-specific action the page owns, e.g. publishing a view. */
   children?: React.ReactNode;
+  disabled?: boolean;
+  onDirtyChange?: (id: string, dirty: boolean) => void;
 }) {
   const setSpec = (spec: BlockSpec) => onChange({ ...block, spec });
 
   return (
-    <Card className="flex min-w-0 flex-col">
-      <div className="flex items-center gap-2 border-b border-border p-3">
-        <Badge>{blockLabel(block.spec.kind)}</Badge>
-        <input
-          value={block.title}
-          onChange={(event) => onChange({ ...block, title: event.target.value })}
-          placeholder="Untitled block"
-          className="h-8 min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-2 text-sm font-medium outline-none hover:border-border focus-visible:border-border"
-        />
-        <Button variant="ghost" size="sm" onClick={onDelete} title="Remove this block">
-          <Trash2 className="h-3.5 w-3.5" />
-        </Button>
-      </div>
+    <fieldset disabled={disabled} className="min-w-0">
+      <Card className="flex h-fit min-w-0 flex-col">
+        <div className="flex items-center gap-2 border-b border-border p-3">
+          <Badge>{blockLabel(block.spec.kind)}</Badge>
+          <input
+            value={block.title}
+            onChange={(event) => onChange({ ...block, title: event.target.value })}
+            placeholder="Untitled block"
+            className="h-8 min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-2 text-sm font-medium outline-none hover:border-border focus-visible:border-border"
+          />
+          <Button variant="ghost" size="sm" onClick={onDelete} title="Remove this block">
+            <Trash2 className="h-3.5 w-3.5" />
+          </Button>
+        </div>
 
-      <div className="flex flex-col gap-3 p-3">
-        {block.spec.kind === 'source' ? (
-          <SourceSettings spec={block.spec} onChange={setSpec} />
-        ) : null}
-        {block.spec.kind === 'transform' ? (
-          <TransformCode spec={block.spec} onChange={setSpec} />
-        ) : null}
-        {block.spec.kind === 'notebook' ? (
-          <NotebookEditor spec={block.spec} onChange={setSpec} />
-        ) : null}
-        {block.spec.kind === 'view' ? <ViewSettings spec={block.spec} onChange={setSpec} /> : null}
-        {children}
-      </div>
-    </Card>
+        <div className="flex flex-col gap-3 p-3">
+          {block.spec.kind === 'source' ? (
+            <SourceSettings spec={block.spec} onChange={setSpec} />
+          ) : null}
+          {block.spec.kind === 'transform' ? (
+            <TransformCode spec={block.spec} onChange={setSpec} />
+          ) : null}
+          {block.spec.kind === 'notebook' ? (
+            <NotebookEditor
+              key={block.id}
+              blockId={block.id}
+              spec={block.spec}
+              onChange={setSpec}
+              onDirtyChange={onDirtyChange}
+            />
+          ) : null}
+          {block.spec.kind === 'view' ? (
+            <ViewSettings spec={block.spec} onChange={setSpec} />
+          ) : null}
+          {children}
+        </div>
+      </Card>
+    </fieldset>
   );
 }
 
@@ -167,10 +187,11 @@ function TransformCode({
         contributes those, and every Flow block before the first notebook runs as one query.
       </p>
       <textarea
+        aria-label="Flow transformation code"
         value={spec.steps ?? ''}
         onChange={(event) => onChange({ ...spec, steps: event.target.value })}
         spellCheck={false}
-        rows={10}
+        rows={20}
         className="id w-full resize-y rounded-md border border-border bg-transparent p-2 outline-none focus-visible:ring-2 focus-visible:ring-primary"
       />
     </>
@@ -183,27 +204,36 @@ function TransformCode({
  * The source is read from and written to the notebook runtime rather than held
  * in the block, because that file is what marimo serves, what a run imports and
  * what a test reads. The block *pins* the revision it was saved against, and
- * this says so when the two have drifted — which is the honest state, not an
- * error: somebody edited the notebook, and this pipeline was saved before that.
+ * the editor reads that exact revision. A copy gets its own file and can evolve
+ * independently of the original.
  */
 function NotebookEditor({
   spec,
   onChange,
+  blockId,
+  onDirtyChange,
 }: {
   spec: Extract<BlockSpec, { kind: 'notebook' }>;
   onChange: (spec: BlockSpec) => void;
+  blockId: string;
+  onDirtyChange?: (id: string, dirty: boolean) => void;
 }) {
   const queryClient = useQueryClient();
   const notebooks = useQuery({ queryKey: ['ml-pipeline', 'notebooks'], queryFn: getNotebooks });
   const notebook = useQuery({
-    queryKey: ['ml-pipeline', 'notebook', spec.notebook],
-    queryFn: () => getNotebook(spec.notebook),
+    queryKey: ['ml-pipeline', 'notebook', spec.notebook, spec.revision ?? 'head'],
+    queryFn: () =>
+      spec.revision
+        ? getNotebookRevision(spec.notebook, spec.revision)
+        : getNotebook(spec.notebook),
     retry: false,
   });
 
   const [draft, setDraft] = React.useState<string | null>(null);
   const [params, setParams] = React.useState(() => JSON.stringify(spec.params ?? {}, null, 2));
   const [paramsError, setParamsError] = React.useState<string | null>(null);
+
+  const dirty = draft !== null || paramsError !== null;
 
   // The editor follows the selection: a different notebook is a different file,
   // and carrying an unsaved draft across would be offering to overwrite one
@@ -224,13 +254,24 @@ function NotebookEditor({
   });
 
   const source = draft ?? notebook.data?.source ?? '';
-  const drifted =
-    spec.revision && notebook.data?.revision && spec.revision !== notebook.data.revision;
+  const copy = useMutation({
+    mutationFn: (empty: boolean) => (empty ? createNotebook() : createNotebook(source)),
+    onSuccess: (created) => {
+      setDraft(null);
+      onChange({ ...spec, notebook: created.name, revision: created.revision });
+      void queryClient.invalidateQueries({ queryKey: ['ml-pipeline'] });
+    },
+  });
+  React.useEffect(() => {
+    onDirtyChange?.(blockId, dirty || copy.isPending || save.isPending);
+    return () => onDirtyChange?.(blockId, false);
+  }, [blockId, dirty, copy.isPending, save.isPending, onDirtyChange]);
 
   return (
     <>
       <Field label="Notebook">
         <select
+          disabled={dirty || save.isPending || copy.isPending}
           value={spec.notebook}
           onChange={(event) =>
             onChange({ ...spec, notebook: event.target.value, revision: undefined })
@@ -245,21 +286,32 @@ function NotebookEditor({
         </select>
       </Field>
 
-      {notebook.isError ? (
-        <p className="text-xs text-warning">
-          The notebook runtime is not answering. Start it with{' '}
-          <code className="id">just ml-pipeline-serve</code>; the rest of the chain still runs.
-        </p>
-      ) : null}
+      <div className="flex flex-wrap gap-2">
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={dirty || copy.isPending}
+          onClick={() => copy.mutate(true)}
+        >
+          New notebook
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!source || copy.isPending || save.isPending}
+          onClick={() => copy.mutate(false)}
+        >
+          Save as copy
+        </Button>
+      </div>
+      {copy.error ? <p className="text-xs text-danger">{copy.error.message}</p> : null}
 
-      {drifted ? (
-        <p className="rounded-md border border-warning/40 bg-warning/5 p-2 text-xs">
-          This pipeline was saved against revision{' '}
-          <code className="id">{spec.revision?.slice(0, 12)}</code> and the notebook is now{' '}
-          <code className="id">{notebook.data?.revision.slice(0, 12)}</code>. A managed run still
-          executes the revision it pinned — the runtime keeps every source it has been given — so
-          this is what runs next rather than something that is broken. Saving the pipeline pins the
-          new one.
+      {notebook.isError ? <p className="text-xs text-warning">{notebook.error.message}</p> : null}
+
+      {spec.revision ? (
+        <p className="text-xs text-muted-foreground">
+          Editing pinned revision {spec.revision.slice(0, 12)}. Save notebook updates this block;
+          Save as copy creates an independent file.
         </p>
       ) : null}
 
@@ -306,11 +358,16 @@ function NotebookEditor({
         <Button size="sm" onClick={() => save.mutate()} disabled={draft === null || save.isPending}>
           {save.isPending ? <Spinner /> : <Save className="h-3.5 w-3.5" />} Save notebook
         </Button>
+        {draft !== null ? (
+          <Button size="sm" variant="ghost" onClick={() => setDraft(null)}>
+            Discard code edits
+          </Button>
+        ) : null}
         <Button
           variant="outline"
           size="sm"
           onClick={() => void notebook.refetch()}
-          disabled={notebook.isFetching}
+          disabled={notebook.isFetching || dirty}
         >
           <RefreshCw className="h-3.5 w-3.5" /> Reload
         </Button>
@@ -336,12 +393,18 @@ function NotebookEditor({
           {/* Keyed by revision so a save reloads the frame: marimo has already
               executed the old code, and nothing in the iframe knows the file
               underneath it changed. */}
-          <iframe
-            key={notebook.data.revision}
-            src={notebook.data.app_url}
-            title={`${spec.notebook} — live`}
-            className="h-[30rem] w-full rounded-md border border-border bg-background"
-          />
+          <details>
+            <summary className="cursor-pointer text-xs text-primary">
+              Open live output (current notebook head)
+            </summary>
+            <iframe
+              key={notebook.data.revision}
+              src={notebook.data.app_url}
+              title={`${spec.notebook} — live`}
+              className="h-[30rem] w-full rounded-md border border-border bg-background"
+              loading="lazy"
+            />
+          </details>
         </div>
       ) : null}
     </>

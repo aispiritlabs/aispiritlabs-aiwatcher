@@ -1,0 +1,756 @@
+{
+  "version": 1,
+  "pipelines": [
+    {
+      "name": "curation/pii-detection",
+      "description": "Read a public PII corpus, keep the English rows, mask what a shape detector finds, publish what is left.",
+      "blocks": [
+        {
+          "id": "corpus",
+          "title": "Hugging Face",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "spec": {
+            "kind": "source",
+            "dataset": "hub_rows",
+            "arguments": {
+              "dataset": "ai4privacy/pii-masking-200k",
+              "split": "train",
+              "limit": "50"
+            }
+          }
+        },
+        {
+          "id": "shape",
+          "title": "Feature engineering",
+          "position": {
+            "x": 300,
+            "y": 0
+          },
+          "spec": {
+            "kind": "transform",
+            "steps": "->withEntry('text', array_get(ref('row'), 'source_text'))\n->withEntry('language', array_get(ref('row'), 'language'))\n->filter(ref('language')->same(lit('en')))\n->select(ref('row_index'), ref('language'), ref('text'))"
+          }
+        },
+        {
+          "id": "detect",
+          "title": "Python processing",
+          "position": {
+            "x": 600,
+            "y": 0
+          },
+          "spec": {
+            "kind": "notebook",
+            "notebook": "pii_detection",
+            "params": {
+              "text_column": "text",
+              "only_matches": false
+            },
+            "revision": "036794f0fa040d3b75f91051938995aa29113a10d5cf2435dc9f357f78ac13d5"
+          }
+        },
+        {
+          "id": "result",
+          "title": "View",
+          "position": {
+            "x": 900,
+            "y": 0
+          },
+          "spec": {
+            "kind": "view",
+            "dataset": "curation/pii-masked-sample"
+          }
+        }
+      ],
+      "edges": [
+        {
+          "from": "corpus",
+          "to": "shape"
+        },
+        {
+          "from": "shape",
+          "to": "detect"
+        },
+        {
+          "from": "detect",
+          "to": "result"
+        }
+      ]
+    },
+    {
+      "name": "curation/titanic-flowphp",
+      "description": "Titanic: native PHP FlowAI preparation, Python visualization and Random Forest evaluation.",
+      "blocks": [
+        {
+          "id": "passengers",
+          "title": "Titanic \u00b7 raw passengers",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "spec": {
+            "kind": "source",
+            "dataset": "hub_rows",
+            "arguments": {
+              "dataset": "phihung/titanic",
+              "split": "train",
+              "limit": "891"
+            }
+          }
+        },
+        {
+          "id": "columns",
+          "title": "Select raw columns",
+          "position": {
+            "x": 270,
+            "y": 0
+          },
+          "spec": {
+            "kind": "transform",
+            "steps": "->withEntry('PassengerId', array_get(ref('row'), 'PassengerId'))\n->withEntry('Survived', array_get(ref('row'), 'Survived'))\n->withEntry('Pclass', array_get(ref('row'), 'Pclass'))\n->withEntry('Name', array_get(ref('row'), 'Name'))\n->withEntry('Sex', array_get(ref('row'), 'Sex'))\n->withEntry('Age', array_get(ref('row'), 'Age'))\n->withEntry('SibSp', array_get(ref('row'), 'SibSp'))\n->withEntry('Parch', array_get(ref('row'), 'Parch'))\n->withEntry('Ticket', array_get(ref('row'), 'Ticket'))\n->withEntry('Fare', array_get(ref('row'), 'Fare'))\n->withEntry('Cabin', array_get(ref('row'), 'Cabin'))\n->withEntry('Embarked', array_get(ref('row'), 'Embarked'))\n->select(ref('PassengerId'), ref('Survived'), ref('Pclass'), ref('Name'), ref('Sex'), ref('Age'), ref('SibSp'), ref('Parch'), ref('Ticket'), ref('Fare'), ref('Cabin'), ref('Embarked'))"
+          }
+        },
+        {
+          "id": "split",
+          "title": "Train / validation split",
+          "position": {
+            "x": 540,
+            "y": 0
+          },
+          "spec": {
+            "kind": "transform",
+            "steps": "->trainTestSplit('PassengerId', target: 'Survived', fraction: 0.2, seed: 42)"
+          }
+        },
+        {
+          "id": "missing-values",
+          "title": "Missing values",
+          "position": {
+            "x": 810,
+            "y": 0
+          },
+          "spec": {
+            "kind": "transform",
+            "steps": "->imputeMissing('Age', output: 'AgeFilled', groupBy: 'Sex,Pclass', fitOn: '_split', missingIndicator: 'AgeMissing')\n->imputeMissing('Fare', output: 'FareFilled', groupBy: 'Pclass', fitOn: '_split', missingIndicator: 'FareMissing')\n->imputeMissing('Embarked', output: 'EmbarkedFilled', strategy: 'most_frequent', fitOn: '_split')\n->withEntry('CabinMissing', when(ref('Cabin')->isNull(), lit(1), lit(0)))"
+          }
+        },
+        {
+          "id": "features",
+          "title": "Feature engineering",
+          "position": {
+            "x": 1080,
+            "y": 0
+          },
+          "spec": {
+            "kind": "transform",
+            "steps": "->withEntry('Title', regex_replace(lit('/^[^,]*,\\s*([^.]+)\\..*$/'), lit('$1'), ref('Name')))\n->withEntry('Deck', when(ref('Cabin')->isNull(), lit('U'), regex_replace(lit('/^(.).*$/'), lit('$1'), ref('Cabin'))))\n->withEntry('FamilySize', ref('SibSp')->plus(ref('Parch'))->plus(lit(1)))\n->withEntry('IsAlone', when(ref('FamilySize')->same(lit(1)), lit(1), lit(0)))\n->withEntry('FarePerPerson', ref('FareFilled')->divide(ref('FamilySize'), 4, 'half_up'))\n->withEntry('_ticket_train', when(ref('_split')->same(lit('train')), lit(1), lit(0)))\n->withEntry('_ticket_key', hash(ref('Ticket')))\n->withEntry('TicketFrequency', sum(ref('_ticket_train'))->over(window()->partitionBy(ref('_ticket_key'))))\n->withEntry('TicketFrequency', when(ref('TicketFrequency')->same(lit(0)), lit(1), ref('TicketFrequency')))\n->drop(ref('_ticket_train'), ref('_ticket_key'))"
+          }
+        },
+        {
+          "id": "one-hot",
+          "title": "OneHotEncoder",
+          "position": {
+            "x": 0,
+            "y": 180
+          },
+          "spec": {
+            "kind": "transform",
+            "steps": "->oneHotEncode('Sex', 'Pclass', 'EmbarkedFilled', 'Title', 'Deck', fitOn: '_split', output: 'model_features', stateOutput: 'feature_encoder')"
+          }
+        },
+        {
+          "id": "label",
+          "title": "LabelEncoder",
+          "position": {
+            "x": 270,
+            "y": 180
+          },
+          "spec": {
+            "kind": "transform",
+            "steps": "->labelEncode('Survived', fitOn: '_split', output: 'target_encoded', stateOutput: 'label_encoder')"
+          }
+        },
+        {
+          "id": "visualization",
+          "title": "Visualization",
+          "position": {
+            "x": 540,
+            "y": 180
+          },
+          "spec": {
+            "kind": "notebook",
+            "notebook": "flowai_visualization",
+            "params": {},
+            "revision": "7d8eb176d4cf34f56330b2df345ae98b482f1bf5756aa210eb996726a5eff7e5"
+          }
+        },
+        {
+          "id": "model",
+          "title": "Model training & evaluation",
+          "position": {
+            "x": 810,
+            "y": 180
+          },
+          "spec": {
+            "kind": "notebook",
+            "notebook": "flowai_random_forest",
+            "params": {
+              "seed": 42,
+              "n_estimators": 120
+            },
+            "revision": "f02e07921f23e68edfabf3a4d189585fbcdc655d4e805e9fd6cecad3800f4f50"
+          }
+        },
+        {
+          "id": "publish",
+          "title": "Publish predictions",
+          "position": {
+            "x": 1080,
+            "y": 180
+          },
+          "spec": {
+            "kind": "view",
+            "dataset": "curation/titanic-flowphp"
+          }
+        }
+      ],
+      "edges": [
+        {
+          "from": "passengers",
+          "to": "columns"
+        },
+        {
+          "from": "columns",
+          "to": "split"
+        },
+        {
+          "from": "split",
+          "to": "missing-values"
+        },
+        {
+          "from": "missing-values",
+          "to": "features"
+        },
+        {
+          "from": "features",
+          "to": "one-hot"
+        },
+        {
+          "from": "one-hot",
+          "to": "label"
+        },
+        {
+          "from": "label",
+          "to": "visualization"
+        },
+        {
+          "from": "visualization",
+          "to": "model"
+        },
+        {
+          "from": "model",
+          "to": "publish"
+        }
+      ]
+    },
+    {
+      "name": "curation/titanic-from-scratch",
+      "description": "Titanic from raw passengers to a held-out Random Forest baseline, with thematic data curation blocks and FlowAI encoders.",
+      "blocks": [
+        {
+          "id": "passengers",
+          "title": "Titanic \u00b7 raw passengers",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "spec": {
+            "kind": "source",
+            "dataset": "hub_rows",
+            "arguments": {
+              "dataset": "phihung/titanic",
+              "split": "train",
+              "limit": "891"
+            }
+          }
+        },
+        {
+          "id": "columns",
+          "title": "Select raw columns",
+          "position": {
+            "x": 270,
+            "y": 0
+          },
+          "spec": {
+            "kind": "transform",
+            "steps": "->withEntry('PassengerId', array_get(ref('row'), 'PassengerId'))\n->withEntry('Survived', array_get(ref('row'), 'Survived'))\n->withEntry('Pclass', array_get(ref('row'), 'Pclass'))\n->withEntry('Name', array_get(ref('row'), 'Name'))\n->withEntry('Sex', array_get(ref('row'), 'Sex'))\n->withEntry('Age', array_get(ref('row'), 'Age'))\n->withEntry('SibSp', array_get(ref('row'), 'SibSp'))\n->withEntry('Parch', array_get(ref('row'), 'Parch'))\n->withEntry('Ticket', array_get(ref('row'), 'Ticket'))\n->withEntry('Fare', array_get(ref('row'), 'Fare'))\n->withEntry('Cabin', array_get(ref('row'), 'Cabin'))\n->withEntry('Embarked', array_get(ref('row'), 'Embarked'))\n->select(ref('PassengerId'), ref('Survived'), ref('Pclass'), ref('Name'), ref('Sex'), ref('Age'), ref('SibSp'), ref('Parch'), ref('Ticket'), ref('Fare'), ref('Cabin'), ref('Embarked'))"
+          }
+        },
+        {
+          "id": "split",
+          "title": "Train / validation split",
+          "position": {
+            "x": 540,
+            "y": 0
+          },
+          "spec": {
+            "kind": "notebook",
+            "notebook": "flowai_split",
+            "params": {
+              "seed": 42,
+              "validation_fraction": 0.2
+            },
+            "revision": "7168755cc33a64cbc3e239dfc166e8124a8c7ccf2d38c13fdde65fbe245bdd59"
+          }
+        },
+        {
+          "id": "missing-values",
+          "title": "Missing values",
+          "position": {
+            "x": 810,
+            "y": 0
+          },
+          "spec": {
+            "kind": "notebook",
+            "notebook": "flowai_missing_values",
+            "params": {},
+            "revision": "edc06d130debe1ad5d71a2a46a2de0a45a8ba9a4bba5cf7769bdf1d61bb0aaae"
+          }
+        },
+        {
+          "id": "features",
+          "title": "Feature engineering",
+          "position": {
+            "x": 1080,
+            "y": 0
+          },
+          "spec": {
+            "kind": "notebook",
+            "notebook": "flowai_titanic_features",
+            "params": {},
+            "revision": "8eff4d19afd298518bdf5833ed90757fd9ba3b905f1e648805ad59cf632fedd3"
+          }
+        },
+        {
+          "id": "visualization",
+          "title": "Visualization",
+          "position": {
+            "x": 0,
+            "y": 180
+          },
+          "spec": {
+            "kind": "notebook",
+            "notebook": "flowai_visualization",
+            "params": {},
+            "revision": "7d8eb176d4cf34f56330b2df345ae98b482f1bf5756aa210eb996726a5eff7e5"
+          }
+        },
+        {
+          "id": "one-hot",
+          "title": "OneHotEncoder",
+          "position": {
+            "x": 270,
+            "y": 180
+          },
+          "spec": {
+            "kind": "notebook",
+            "notebook": "flowai_one_hot_encoder",
+            "params": {
+              "columns": [
+                "Sex",
+                "Pclass",
+                "EmbarkedFilled",
+                "Title",
+                "Deck",
+                "AgeBand",
+                "FareBand"
+              ],
+              "handle_unknown": "ignore"
+            },
+            "revision": "973fd064fa8214f708aeef68c083394942164b79bee3414917e1ced8a059b2d2"
+          }
+        },
+        {
+          "id": "label",
+          "title": "LabelEncoder",
+          "position": {
+            "x": 540,
+            "y": 180
+          },
+          "spec": {
+            "kind": "notebook",
+            "notebook": "flowai_label_encoder",
+            "params": {
+              "target": "Survived"
+            },
+            "revision": "63919d306b495df1f0cc3388d45844a5e87ab74fca1d683bbf56a51adb118ec3"
+          }
+        },
+        {
+          "id": "model",
+          "title": "Model training & evaluation",
+          "position": {
+            "x": 810,
+            "y": 180
+          },
+          "spec": {
+            "kind": "notebook",
+            "notebook": "flowai_random_forest",
+            "params": {
+              "seed": 42,
+              "n_estimators": 120
+            },
+            "revision": "f02e07921f23e68edfabf3a4d189585fbcdc655d4e805e9fd6cecad3800f4f50"
+          }
+        },
+        {
+          "id": "publish",
+          "title": "Publish predictions",
+          "position": {
+            "x": 1080,
+            "y": 180
+          },
+          "spec": {
+            "kind": "view",
+            "dataset": "curation/titanic-from-scratch"
+          }
+        }
+      ],
+      "edges": [
+        {
+          "from": "passengers",
+          "to": "columns"
+        },
+        {
+          "from": "columns",
+          "to": "split"
+        },
+        {
+          "from": "split",
+          "to": "missing-values"
+        },
+        {
+          "from": "missing-values",
+          "to": "features"
+        },
+        {
+          "from": "features",
+          "to": "visualization"
+        },
+        {
+          "from": "visualization",
+          "to": "one-hot"
+        },
+        {
+          "from": "one-hot",
+          "to": "label"
+        },
+        {
+          "from": "label",
+          "to": "model"
+        },
+        {
+          "from": "model",
+          "to": "publish"
+        }
+      ]
+    },
+    {
+      "name": "curation/titanic-features",
+      "description": "Read the Titanic training split, recode sex and the title in the name, then let a notebook fill a missing age from its status group and size the family.",
+      "blocks": [
+        {
+          "id": "corpus",
+          "title": "Hugging Face",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "spec": {
+            "kind": "source",
+            "dataset": "hub_rows",
+            "arguments": {
+              "dataset": "phihung/titanic",
+              "split": "train",
+              "limit": "100"
+            }
+          }
+        },
+        {
+          "id": "shape",
+          "title": "Feature engineering",
+          "position": {
+            "x": 300,
+            "y": 0
+          },
+          "spec": {
+            "kind": "transform",
+            "steps": "->withEntry('passenger_id', array_get(ref('row'), 'PassengerId'))\n->withEntry('name', array_get(ref('row'), 'Name'))\n->withEntry('sex', array_get(ref('row'), 'Sex'))\n->withEntry('age', array_get(ref('row'), 'Age'))\n->withEntry('pclass', array_get(ref('row'), 'Pclass'))\n->withEntry('sib_sp', array_get(ref('row'), 'SibSp'))\n->withEntry('parch', array_get(ref('row'), 'Parch'))\n->withEntry('fare', array_get(ref('row'), 'Fare'))\n->withEntry('cabin', array_get(ref('row'), 'Cabin'))\n->withEntry('survived', array_get(ref('row'), 'Survived'))\n->withEntry('sex_code', when(ref('sex')->same(lit('female')), lit(1), lit(0)))\n->withEntry('title', regex_replace(lit('/^[^,]*,\\s*([^.]+)\\..*$/'), lit('$1'), ref('name')))\n->withEntry('status', lit('rare'))\n->withEntry('status', when(ref('title')->same(lit('Mr')), lit('mr'), ref('status')))\n->withEntry('status', when(ref('title')->same(lit('Master')), lit('master'), ref('status')))\n->withEntry('status', when(any(ref('title')->same(lit('Mrs')), ref('title')->same(lit('Mme'))), lit('mrs'), ref('status')))\n->withEntry('status', when(any(ref('title')->same(lit('Miss')), ref('title')->same(lit('Mlle')), ref('title')->same(lit('Ms'))), lit('miss'), ref('status')))\n->withEntry('outcome', when(ref('survived')->same(lit(1)), lit('survived'), lit('died')))\n->withEntry('deck', when(ref('cabin')->isNull(), lit('unknown'), regex_replace(lit('/^(.).*$/'), lit('$1'), ref('cabin'))))\n->select(ref('passenger_id'), ref('name'), ref('sex'), ref('sex_code'), ref('title'), ref('status'), ref('age'), ref('pclass'), ref('sib_sp'), ref('parch'), ref('fare'), ref('deck'), ref('survived'), ref('outcome'))"
+          }
+        },
+        {
+          "id": "features",
+          "title": "Python processing",
+          "position": {
+            "x": 600,
+            "y": 0
+          },
+          "spec": {
+            "kind": "notebook",
+            "notebook": "titanic_features",
+            "params": {
+              "age_column": "age",
+              "status_column": "status",
+              "siblings_column": "sib_sp",
+              "parents_column": "parch",
+              "fare_column": "fare",
+              "age_strategy": "status_median",
+              "child_max": 12,
+              "senior_min": 60
+            },
+            "revision": "dd3e0c9abd06d05db5e5c27384773353a2c034d7aebac7e8c5649c68ac343133"
+          }
+        },
+        {
+          "id": "result",
+          "title": "View",
+          "position": {
+            "x": 900,
+            "y": 0
+          },
+          "spec": {
+            "kind": "view",
+            "dataset": "curation/titanic-features"
+          }
+        }
+      ],
+      "edges": [
+        {
+          "from": "corpus",
+          "to": "shape"
+        },
+        {
+          "from": "shape",
+          "to": "features"
+        },
+        {
+          "from": "features",
+          "to": "result"
+        }
+      ]
+    },
+    {
+      "name": "curation/titanic-survival",
+      "description": "Survival rate, headcount and median age by status and class over the Titanic training split, as one Flow PHP query.",
+      "blocks": [
+        {
+          "id": "corpus",
+          "title": "Hugging Face",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "spec": {
+            "kind": "source",
+            "dataset": "hub_rows",
+            "arguments": {
+              "dataset": "phihung/titanic",
+              "split": "train",
+              "limit": "100"
+            }
+          }
+        },
+        {
+          "id": "rates",
+          "title": "Feature engineering",
+          "position": {
+            "x": 300,
+            "y": 0
+          },
+          "spec": {
+            "kind": "transform",
+            "steps": "->withEntry('name', array_get(ref('row'), 'Name'))\n->withEntry('sex', array_get(ref('row'), 'Sex'))\n->withEntry('pclass', array_get(ref('row'), 'Pclass'))\n->withEntry('age', array_get(ref('row'), 'Age'))\n->withEntry('survived', array_get(ref('row'), 'Survived'))\n->withEntry('title', regex_replace(lit('/^[^,]*,\\s*([^.]+)\\..*$/'), lit('$1'), ref('name')))\n->withEntry('status', lit('rare'))\n->withEntry('status', when(ref('title')->same(lit('Mr')), lit('mr'), ref('status')))\n->withEntry('status', when(ref('title')->same(lit('Master')), lit('master'), ref('status')))\n->withEntry('status', when(any(ref('title')->same(lit('Mrs')), ref('title')->same(lit('Mme'))), lit('mrs'), ref('status')))\n->withEntry('status', when(any(ref('title')->same(lit('Miss')), ref('title')->same(lit('Mlle')), ref('title')->same(lit('Ms'))), lit('miss'), ref('status')))\n->groupBy(ref('status'), ref('sex'), ref('pclass'))\n->aggregate(count(ref('survived')->as('passengers')), average(ref('survived')->as('survival_rate')), median(ref('age')))\n->sortBy(ref('survival_rate')->desc())"
+          }
+        },
+        {
+          "id": "result",
+          "title": "View",
+          "position": {
+            "x": 600,
+            "y": 0
+          },
+          "spec": {
+            "kind": "view",
+            "dataset": "curation/titanic-survival"
+          }
+        }
+      ],
+      "edges": [
+        {
+          "from": "corpus",
+          "to": "rates"
+        },
+        {
+          "from": "rates",
+          "to": "result"
+        }
+      ]
+    }
+  ],
+  "templates": [
+    {
+      "id": "source",
+      "title": "Source",
+      "description": "Choose a dataset.",
+      "spec": {
+        "kind": "source",
+        "dataset": "runs",
+        "arguments": {}
+      },
+      "tags": [
+        "data",
+        "source"
+      ]
+    },
+    {
+      "id": "transform",
+      "title": "Data transformation",
+      "description": "Edit a data query.",
+      "spec": {
+        "kind": "transform",
+        "steps": "->limit(100)"
+      },
+      "tags": [
+        "php",
+        "transform"
+      ]
+    },
+    {
+      "id": "split",
+      "title": "Train / validation split",
+      "description": "FlowAI in PHP: deterministic stratified split before fitting preprocessing.",
+      "spec": {
+        "kind": "transform",
+        "steps": "->trainTestSplit('PassengerId', target: 'Survived', fraction: 0.2, seed: 42)"
+      },
+      "tags": [
+        "php",
+        "split"
+      ]
+    },
+    {
+      "id": "missing-values",
+      "title": "Missing values",
+      "description": "FlowAI in PHP: grouped training medians and mode; retain missingness flags.",
+      "spec": {
+        "kind": "transform",
+        "steps": "->imputeMissing('Age', output: 'AgeFilled', groupBy: 'Sex,Pclass', fitOn: '_split', missingIndicator: 'AgeMissing')\n->imputeMissing('Fare', output: 'FareFilled', groupBy: 'Pclass', fitOn: '_split', missingIndicator: 'FareMissing')\n->imputeMissing('Embarked', output: 'EmbarkedFilled', strategy: 'most_frequent', fitOn: '_split')\n->withEntry('CabinMissing', when(ref('Cabin')->isNull(), lit(1), lit(0)))"
+      },
+      "tags": [
+        "php",
+        "missing-values"
+      ]
+    },
+    {
+      "id": "features",
+      "title": "Feature engineering",
+      "description": "FlowPHP: titles, decks, families and training ticket frequency.",
+      "spec": {
+        "kind": "transform",
+        "steps": "->withEntry('Title', regex_replace(lit('/^[^,]*,\\s*([^.]+)\\..*$/'), lit('$1'), ref('Name')))\n->withEntry('Deck', when(ref('Cabin')->isNull(), lit('U'), regex_replace(lit('/^(.).*$/'), lit('$1'), ref('Cabin'))))\n->withEntry('FamilySize', ref('SibSp')->plus(ref('Parch'))->plus(lit(1)))\n->withEntry('IsAlone', when(ref('FamilySize')->same(lit(1)), lit(1), lit(0)))\n->withEntry('FarePerPerson', ref('FareFilled')->divide(ref('FamilySize'), 4, 'half_up'))\n->withEntry('_ticket_train', when(ref('_split')->same(lit('train')), lit(1), lit(0)))\n->withEntry('_ticket_key', hash(ref('Ticket')))\n->withEntry('TicketFrequency', sum(ref('_ticket_train'))->over(window()->partitionBy(ref('_ticket_key'))))\n->withEntry('TicketFrequency', when(ref('TicketFrequency')->same(lit(0)), lit(1), ref('TicketFrequency')))\n->drop(ref('_ticket_train'), ref('_ticket_key'))"
+      },
+      "tags": [
+        "php",
+        "features"
+      ]
+    },
+    {
+      "id": "visualization",
+      "title": "Visualization",
+      "description": "Missing values and survival plots over training passengers; passes rows through.",
+      "spec": {
+        "kind": "notebook",
+        "notebook": "flowai_visualization",
+        "params": {},
+        "revision": "7d8eb176d4cf34f56330b2df345ae98b482f1bf5756aa210eb996726a5eff7e5"
+      },
+      "tags": [
+        "python",
+        "visualization"
+      ]
+    },
+    {
+      "id": "one-hot",
+      "title": "OneHotEncoder",
+      "description": "FlowAI: fit categorical features on training rows, transform every split.",
+      "spec": {
+        "kind": "transform",
+        "steps": "->oneHotEncode('Sex', 'Pclass', 'EmbarkedFilled', 'Title', 'Deck', fitOn: '_split', output: 'model_features', stateOutput: 'feature_encoder')"
+      },
+      "tags": [
+        "php",
+        "one-hot"
+      ]
+    },
+    {
+      "id": "label",
+      "title": "LabelEncoder",
+      "description": "FlowAI: encode target labels using the training vocabulary.",
+      "spec": {
+        "kind": "transform",
+        "steps": "->labelEncode('Survived', fitOn: '_split', output: 'target_encoded', stateOutput: 'label_encoder')"
+      },
+      "tags": [
+        "php",
+        "label"
+      ]
+    },
+    {
+      "id": "model",
+      "title": "Model training & evaluation",
+      "description": "Titanic Random Forest baseline and held-out metrics.",
+      "spec": {
+        "kind": "notebook",
+        "notebook": "flowai_random_forest",
+        "params": {
+          "seed": 42,
+          "n_estimators": 120
+        },
+        "revision": "f02e07921f23e68edfabf3a4d189585fbcdc655d4e805e9fd6cecad3800f4f50"
+      },
+      "tags": [
+        "python",
+        "model"
+      ]
+    },
+    {
+      "id": "python",
+      "title": "Python code",
+      "description": "Choose or edit a custom Python notebook.",
+      "spec": {
+        "kind": "notebook",
+        "notebook": "python_code",
+        "params": {},
+        "revision": "acca8d8036a65db19b96d54be02bf01f1695dd436ca4f03bf8ce5989963d4d0e"
+      },
+      "tags": [
+        "python",
+        "python"
+      ]
+    },
+    {
+      "id": "view",
+      "title": "Publish dataset",
+      "description": "Inspect and publish the resulting rows.",
+      "spec": {
+        "kind": "view"
+      },
+      "tags": [
+        "data",
+        "view"
+      ]
+    }
+  ]
+}

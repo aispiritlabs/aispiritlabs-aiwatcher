@@ -51,6 +51,7 @@ pub mod definition;
 pub mod error;
 pub mod facts;
 pub mod handler;
+pub mod hosted;
 pub mod message;
 pub mod outbox;
 pub mod plan;

@@ -11,6 +11,7 @@ import {
   startExecution,
   stepContext,
 } from '@/api/generated/sdk.gen';
+import type { RecordedMessage } from '@/api/generated/types.gen';
 import { useCan } from '@/lib/auth';
 import { Button, Card, CardContent } from '@/components/ui/primitives';
 
@@ -130,6 +131,22 @@ export function useManagedExecution(executionId: string) {
   });
 }
 
+/// What one stream row is called, whichever of the three kinds it is.
+///
+/// The third is a hosted run's: a worker's own message, whose vocabulary is its
+/// own rather than one this build enumerates — so the name comes off the row
+/// instead of out of a union of literals.
+function messageName(message: RecordedMessage['message']): string {
+  switch (message.kind) {
+    case 'event':
+      return message.event;
+    case 'command':
+      return message.command;
+    case 'hosted':
+      return message.message_type;
+  }
+}
+
 export function ManagedExecutionControls({
   executionId,
   node,
@@ -225,8 +242,7 @@ export function ManagedExecutionControls({
             {history.data?.messages.map((entry) => (
               <details key={entry.stream_version} className="rounded border border-border p-2">
                 <summary className="cursor-pointer">
-                  {entry.stream_version} · {entry.direction} ·{' '}
-                  {entry.message.kind === 'event' ? entry.message.event : entry.message.command} ·{' '}
+                  {entry.stream_version} · {entry.direction} · {messageName(entry.message)} ·{' '}
                   {entry.recorded_at}
                 </summary>
                 <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap">

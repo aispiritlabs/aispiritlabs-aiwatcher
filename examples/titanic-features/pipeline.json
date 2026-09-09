@@ -1,0 +1,83 @@
+{
+  "name": "curation/titanic-features",
+  "description": "Read the Titanic training split, recode sex and the title in the name, then let a notebook fill a missing age from its status group and size the family.",
+  "blocks": [
+    {
+      "id": "corpus",
+      "title": "Hugging Face",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "spec": {
+        "kind": "source",
+        "dataset": "hub_rows",
+        "arguments": {
+          "dataset": "phihung/titanic",
+          "split": "train",
+          "limit": "100"
+        }
+      }
+    },
+    {
+      "id": "shape",
+      "title": "Feature engineering",
+      "position": {
+        "x": 300,
+        "y": 0
+      },
+      "spec": {
+        "kind": "transform",
+        "steps": "->withEntry('passenger_id', array_get(ref('row'), 'PassengerId'))\n->withEntry('name', array_get(ref('row'), 'Name'))\n->withEntry('sex', array_get(ref('row'), 'Sex'))\n->withEntry('age', array_get(ref('row'), 'Age'))\n->withEntry('pclass', array_get(ref('row'), 'Pclass'))\n->withEntry('sib_sp', array_get(ref('row'), 'SibSp'))\n->withEntry('parch', array_get(ref('row'), 'Parch'))\n->withEntry('fare', array_get(ref('row'), 'Fare'))\n->withEntry('cabin', array_get(ref('row'), 'Cabin'))\n->withEntry('survived', array_get(ref('row'), 'Survived'))\n->withEntry('sex_code', when(ref('sex')->same(lit('female')), lit(1), lit(0)))\n->withEntry('title', regex_replace(lit('/^[^,]*,\\s*([^.]+)\\..*$/'), lit('$1'), ref('name')))\n->withEntry('status', lit('rare'))\n->withEntry('status', when(ref('title')->same(lit('Mr')), lit('mr'), ref('status')))\n->withEntry('status', when(ref('title')->same(lit('Master')), lit('master'), ref('status')))\n->withEntry('status', when(any(ref('title')->same(lit('Mrs')), ref('title')->same(lit('Mme'))), lit('mrs'), ref('status')))\n->withEntry('status', when(any(ref('title')->same(lit('Miss')), ref('title')->same(lit('Mlle')), ref('title')->same(lit('Ms'))), lit('miss'), ref('status')))\n->withEntry('outcome', when(ref('survived')->same(lit(1)), lit('survived'), lit('died')))\n->withEntry('deck', when(ref('cabin')->isNull(), lit('unknown'), regex_replace(lit('/^(.).*$/'), lit('$1'), ref('cabin'))))\n->select(ref('passenger_id'), ref('name'), ref('sex'), ref('sex_code'), ref('title'), ref('status'), ref('age'), ref('pclass'), ref('sib_sp'), ref('parch'), ref('fare'), ref('deck'), ref('survived'), ref('outcome'))"
+      }
+    },
+    {
+      "id": "features",
+      "title": "Python processing",
+      "position": {
+        "x": 600,
+        "y": 0
+      },
+      "spec": {
+        "kind": "notebook",
+        "notebook": "titanic_features",
+        "params": {
+          "age_column": "age",
+          "status_column": "status",
+          "siblings_column": "sib_sp",
+          "parents_column": "parch",
+          "fare_column": "fare",
+          "age_strategy": "status_median",
+          "child_max": 12,
+          "senior_min": 60
+        }
+      }
+    },
+    {
+      "id": "result",
+      "title": "View",
+      "position": {
+        "x": 900,
+        "y": 0
+      },
+      "spec": {
+        "kind": "view",
+        "dataset": "curation/titanic-features"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "corpus",
+      "to": "shape"
+    },
+    {
+      "from": "shape",
+      "to": "features"
+    },
+    {
+      "from": "features",
+      "to": "result"
+    }
+  ]
+}

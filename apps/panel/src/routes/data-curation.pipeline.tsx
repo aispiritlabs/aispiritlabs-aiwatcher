@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { createFileRoute } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Play, Plus, Save, ServerCog, Sparkles, Upload } from 'lucide-react';
+import { Download, Play, Save, ServerCog, Sparkles, Upload } from 'lucide-react';
 import { z } from 'zod';
 
 import {
@@ -10,26 +10,33 @@ import {
   savePipeline,
   startExecution,
 } from '@/api/generated/sdk.gen';
-import type { BlockSpec, CurationPipeline, PipelineBlock } from '@/api/generated/types.gen';
+import type {
+  CurationPipeline,
+  PipelineBlock,
+  SavePipelineRequest,
+  SaveBlockTemplateRequest,
+} from '@/api/generated/types.gen';
 import { BlockInspector } from '@/components/block-inspector';
 import { ManagedRunCard, useManagedBlocks, useManagedRun } from '@/components/managed-run';
 import { ScheduleCard } from '@/components/schedule-card';
 import { FlowResultView } from '@/components/flow-preview';
-import { PipelineCanvas, blockLabel } from '@/components/pipeline-canvas';
+import { PipelineNotebook } from '@/components/pipeline-notebook';
+import { PipelineCanvas } from '@/components/pipeline-canvas';
 import { DEFAULT_WINDOW_SECONDS, TimeRange, windowParam } from '@/components/time-range';
 import { Badge, Button, Card, EmptyState, Spinner } from '@/components/ui/primitives';
 import { rejectionDetails } from '@/lib/annotations';
+import { BlockLibrary } from '@/components/block-library';
+import { exportBundle, importBundle, MAX_BUNDLE_BYTES } from '@/lib/pipeline-bundle';
 import { isFlowAvailable } from '@/lib/flow';
-import { isMlPipelineAvailable } from '@/lib/ml-pipeline';
+import { createNotebook, isMlPipelineAvailable } from '@/lib/ml-pipeline';
 import {
-  CURATION_EXAMPLES,
   compileFlow,
   followsTheRun,
   managedOutcomes,
   orderOf,
   runPipeline,
   withPinnedNotebooks,
-  type CurationExample,
+  type BlockResult,
   type PipelineOutcomes,
   type PipelineResult,
 } from '@/lib/pipeline';
@@ -59,6 +66,7 @@ import {
 const searchSchema = z.object({
   name: z.string().optional(),
   block: z.string().optional(),
+  view: z.enum(['canvas', 'notebook']).optional(),
   window: z.number().int().nonnegative().optional(),
   // The managed run this page is following. In the URL rather than in state
   // for the usual reason and one that is load-bearing here: ADR_0025's whole
@@ -108,6 +116,27 @@ function PipelinePage() {
   const [pinned, setPinned] = React.useState<Pinned>();
   const [outcomes, setOutcomes] = React.useState<PipelineOutcomes>({});
   const [result, setResult] = React.useState<PipelineResult | null>(null);
+  const notebookMode = search.view === 'notebook';
+  const [cellResults, setCellResults] = React.useState<Record<string, BlockResult>>({});
+  const [dirtyEditors, setDirtyEditors] = React.useState<Record<string, boolean>>({});
+  const reportDirty = React.useCallback((id: string, dirty: boolean) => {
+    setDirtyEditors((previous) =>
+      previous[id] === dirty ? previous : { ...previous, [id]: dirty },
+    );
+  }, []);
+  const hasUnsavedCode = Object.values(dirtyEditors).some(Boolean);
+  const executionSignature = JSON.stringify([
+    draft.blocks.map((block) => [block.id, block.spec]),
+    draft.edges,
+    windowSeconds,
+  ]);
+  const currentSignature = React.useRef(executionSignature);
+  currentSignature.current = executionSignature;
+  React.useEffect(() => {
+    setResult(null);
+    setOutcomes({});
+    setCellResults({});
+  }, [executionSignature]);
   const [problems, setProblems] = React.useState<string[]>([]);
 
   const flowReady = useQuery({
@@ -144,7 +173,7 @@ function PipelinePage() {
       name: pipeline.name,
       description: pipeline.description ?? '',
       blocks: pipeline.blocks,
-      edges: pipeline.edges,
+      edges: pipeline.edges ?? [],
     });
     setPinned({ revision: pipeline.revision, blocks: pipeline.blocks, edges: pipeline.edges });
   }, [saved.data, search.name, draft.blocks.length]);
@@ -172,7 +201,7 @@ function PipelinePage() {
   const view = chain?.find((block) => block.spec.kind === 'view');
   const publishTo = view?.spec.kind === 'view' ? view.spec.dataset : undefined;
 
-  const load = (pipeline: CurationPipeline | CurationExample) => {
+  const load = (pipeline: CurationPipeline | SavePipelineRequest) => {
     hydrated.current = true;
     // An example has no revision — nothing saved it — so loading one leaves
     // the canvas at no revision, which is the truth.
@@ -185,13 +214,18 @@ function PipelinePage() {
       name: pipeline.name,
       description: pipeline.description ?? '',
       blocks: pipeline.blocks,
-      edges: pipeline.edges,
+      edges: pipeline.edges ?? [],
     });
     setOutcomes({});
     setResult(null);
     setProblems([]);
     void navigate({
-      search: (previous) => ({ ...previous, name: pipeline.name, block: undefined }),
+      search: (previous) => ({
+        ...previous,
+        name: pipeline.name,
+        block: undefined,
+        execution: undefined,
+      }),
     });
   };
 
@@ -230,17 +264,33 @@ function PipelinePage() {
   });
 
   const execute = useMutation({
-    mutationFn: async (mode: 'preview' | 'full') => {
+    mutationFn: async ({ mode, until }: { mode: 'preview' | 'full'; until?: string }) => {
       if (!chain) throw new Error('Connect the blocks into one chain first.');
       setOutcomes({});
-      return runPipeline({
-        chain,
+      setCellResults({});
+      setResult(null);
+      const signature = currentSignature.current;
+      const end = until ? chain.findIndex((block) => block.id === until) : chain.length - 1;
+      if (end < 0) throw new Error('This cell is no longer in the flow.');
+      const produced = await runPipeline({
+        chain: chain.slice(0, end + 1),
+        inspectBlocks: notebookMode || Boolean(until),
+        onBlockResult: (id, value) => {
+          if (currentSignature.current === signature)
+            setCellResults((previous) => ({ ...previous, [id]: value }));
+        },
         mode,
         windowSeconds: windowParam(windowSeconds),
-        onOutcome: (id, outcome) => setOutcomes((previous) => ({ ...previous, [id]: outcome })),
+        onOutcome: (id, outcome) => {
+          if (currentSignature.current === signature)
+            setOutcomes((previous) => ({ ...previous, [id]: outcome }));
+        },
       });
+      return { produced, signature, complete: end === chain.length - 1 };
     },
-    onSuccess: (produced) => setResult(produced),
+    onSuccess: ({ produced, signature, complete }) => {
+      if (complete && currentSignature.current === signature) setResult(produced);
+    },
   });
 
   const publish = useMutation({
@@ -322,23 +372,138 @@ function PipelinePage() {
     onError: (error) => setProblems(rejectionDetails(error)),
   });
 
-  const busy = execute.isPending || save.isPending || publish.isPending || startOnServer.isPending;
+  const importInput = React.useRef<HTMLInputElement>(null);
+  const [transferNotice, setTransferNotice] = React.useState('');
+  const importFlow = useMutation({
+    mutationFn: async (file: File) => {
+      if (file.size > MAX_BUNDLE_BYTES) throw new Error('A flow bundle must be at most 8 MiB.');
+      return importBundle(await file.text());
+    },
+    onSuccess: (pipeline) => {
+      load(pipeline);
+      setTransferNotice(
+        'Flow and Python sources imported. Review the code and parameters, then Preview or Save.',
+      );
+      void queryClient.invalidateQueries({ queryKey: ['ml-pipeline'] });
+    },
+    onError: (error) => setProblems(rejectionDetails(error)),
+  });
+  const exportFlow = useMutation({
+    mutationFn: async () => exportBundle(draft),
+    onSuccess: (bundle) => {
+      const url = URL.createObjectURL(
+        new Blob([JSON.stringify(bundle, null, 2) + '\n'], { type: 'application/json' }),
+      );
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${draft.name.replace(/[^a-zA-Z0-9_-]/g, '-')}.flow.json`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setTransferNotice('Exported the flow, parameters, layout and exact Python source revisions.');
+    },
+    onError: (error) => setProblems(rejectionDetails(error)),
+  });
+  const newNotebookFlow = useMutation({
+    mutationFn: () => createNotebook(),
+    onSuccess: (notebook) => {
+      const name = `curation/notebook-${crypto.randomUUID().slice(0, 8)}`;
+      load({
+        name,
+        description: '',
+        blocks: [
+          {
+            id: 'source',
+            title: 'Import data',
+            position: { x: 0, y: 0 },
+            spec: { kind: 'source', dataset: 'runs', arguments: {} },
+          },
+          {
+            id: 'prepare',
+            title: 'Prepare data',
+            position: { x: 270, y: 0 },
+            spec: { kind: 'transform', steps: '->limit(100)' },
+          },
+          {
+            id: 'python',
+            title: 'My Python code',
+            position: { x: 540, y: 0 },
+            spec: {
+              kind: 'notebook',
+              notebook: notebook.name,
+              revision: notebook.revision,
+              params: {},
+            },
+          },
+          {
+            id: 'publish',
+            title: 'Save dataset',
+            position: { x: 810, y: 0 },
+            spec: { kind: 'view', dataset: name },
+          },
+        ],
+        edges: [
+          { from: 'source', to: 'prepare' },
+          { from: 'prepare', to: 'python' },
+          { from: 'python', to: 'publish' },
+        ],
+      });
+      void navigate({
+        search: (previous) => ({
+          ...previous,
+          name,
+          view: 'notebook',
+          block: undefined,
+          execution: undefined,
+        }),
+      });
+      void queryClient.invalidateQueries({ queryKey: ['ml-pipeline'] });
+    },
+    onError: (error) => setProblems(rejectionDetails(error)),
+  });
+  const [libraryBusy, setLibraryBusy] = React.useState(false);
+  const busy =
+    newNotebookFlow.isPending ||
+    libraryBusy ||
+    execute.isPending ||
+    save.isPending ||
+    publish.isPending ||
+    startOnServer.isPending ||
+    importFlow.isPending ||
+    exportFlow.isPending;
 
-  const addBlock = (kind: BlockSpec['kind']) => {
-    const id = nextId(kind, draft.blocks);
-    const last = draft.blocks[draft.blocks.length - 1];
+  const locked = busy || hasUnsavedCode;
+
+  const addBlock = (template: SaveBlockTemplateRequest) => {
+    const id = nextId(template.id, draft.blocks);
+    // PHP preparation precedes Python; Python processing precedes publication.
+    const tail = chain?.at(-1);
+    const publishTail =
+      (template.spec.kind === 'transform'
+        ? chain?.find((item) => item.spec.kind === 'notebook' || item.spec.kind === 'view')
+        : undefined) ?? (tail?.spec.kind === 'view' ? tail : undefined);
+    const successorIndex = publishTail
+      ? chain?.findIndex((item) => item.id === publishTail.id)
+      : -1;
+    const last =
+      publishTail && successorIndex !== undefined && successorIndex > 0
+        ? chain?.[successorIndex - 1]
+        : publishTail
+          ? undefined
+          : (tail ?? draft.blocks.at(-1));
     const block: PipelineBlock = {
       id,
-      title: blockLabel(kind),
+      title: template.title,
       position: { x: (last?.position?.x ?? -300) + 300, y: last?.position?.y ?? 0 },
-      spec: emptySpec(kind),
+      spec: structuredClone(template.spec),
     };
     setDraft((previous) => ({
       ...previous,
       blocks: [...previous.blocks, block],
-      // Appended to the end of the chain when there is one, because that is
-      // what "add a block" means on a chain. Anything else is a drag away.
-      edges: last ? [...previous.edges, { from: last.id, to: id }] : previous.edges,
+      edges: [
+        ...previous.edges.filter((edge) => !(publishTail && edge.to === publishTail.id)),
+        ...(last ? [{ from: last.id, to: id }] : []),
+        ...(publishTail ? [{ from: id, to: publishTail.id }] : []),
+      ],
     }));
     void navigate({ search: (previous) => ({ ...previous, block: id }), replace: true });
   };
@@ -389,34 +554,63 @@ function PipelinePage() {
         <Button
           variant="ghost"
           onClick={() => save.mutate()}
-          disabled={busy || !draft.blocks.length}
+          disabled={locked || !draft.blocks.length}
         >
           {save.isPending ? <Spinner /> : <Save className="h-3.5 w-3.5" />} Save
         </Button>
       </Card>
 
-      {/* Every example is a chain over a public corpus that runs as it stands,
-          so loading one and pressing Preview is the shortest way to see all
-          three engines answer. The one that needs no notebook runtime says so
-          the moment that runtime is known to be down, because it is then the
-          only one that still finishes. */}
-      <Card className="flex flex-wrap items-center gap-2 p-3">
-        <span className="text-xs font-medium text-muted-foreground">Load an example</span>
-        {CURATION_EXAMPLES.map((example) => (
-          <Button
-            key={example.name}
-            variant="outline"
-            size="sm"
-            title={example.description}
-            onClick={() => load(example)}
-            disabled={busy}
-          >
-            <Sparkles className="h-3.5 w-3.5" /> {example.title}
-            {!example.needsNotebooks && notebooksReady.data === false ? (
-              <span className="text-muted-foreground"> · no notebook needed</span>
-            ) : null}
-          </Button>
-        ))}
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          ref={importInput}
+          type="file"
+          accept=".json,application/json"
+          aria-label="Import flow file"
+          className="hidden"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            event.target.value = '';
+            if (file) importFlow.mutate(file);
+          }}
+        />
+        <Button variant="outline" disabled={locked} onClick={() => importInput.current?.click()}>
+          {importFlow.isPending ? <Spinner /> : <Upload className="h-3.5 w-3.5" />} Import flow
+        </Button>
+        <Button variant="outline" disabled={locked || !chain} onClick={() => exportFlow.mutate()}>
+          {exportFlow.isPending ? <Spinner /> : <Download className="h-3.5 w-3.5" />} Export flow
+          with code
+        </Button>
+        <span className="text-xs text-muted-foreground">
+          {transferNotice ||
+            'A .flow.json file includes blocks, connections, parameters and Python sources.'}
+        </span>
+      </div>
+
+      <Card className="overflow-hidden">
+        <div className="border-b border-border p-3 text-xs font-semibold">Saved pipelines</div>
+        {saved.isError ? (
+          <p className="p-3 text-xs text-danger">{saved.error.message}</p>
+        ) : saved.data?.length ? (
+          <div className="grid max-h-56 overflow-auto sm:grid-cols-2 lg:grid-cols-3">
+            {saved.data.map((pipeline) => (
+              <button
+                key={`${pipeline.name}-${pipeline.revision}`}
+                type="button"
+                onClick={() => load(pipeline)}
+                disabled={locked}
+                className="w-full p-3 text-left hover:bg-accent/40 disabled:opacity-50"
+              >
+                <p className="truncate text-sm font-medium">{pipeline.name}</p>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">
+                  {pipeline.blocks.length} blocks · {pipeline.revision.slice(0, 10)} ·{' '}
+                  {new Date(pipeline.saved_at).toLocaleString()}
+                </p>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <p className="p-3 text-xs text-muted-foreground">Nothing saved yet.</p>
+        )}
       </Card>
 
       {problems.length > 0 ? (
@@ -445,20 +639,51 @@ function PipelinePage() {
         </Card>
       ) : null}
 
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          variant={notebookMode ? 'outline' : 'default'}
+          disabled={locked}
+          onClick={() => void navigate({ search: (previous) => ({ ...previous, view: 'canvas' }) })}
+        >
+          Canvas view
+        </Button>
+        <Button
+          variant={notebookMode ? 'default' : 'outline'}
+          disabled={locked}
+          onClick={() =>
+            void navigate({ search: (previous) => ({ ...previous, view: 'notebook' }) })
+          }
+        >
+          Notebook view
+        </Button>
+        <Button
+          variant="outline"
+          disabled={locked || notebooksReady.data === false}
+          onClick={() => newNotebookFlow.mutate()}
+        >
+          New notebook flow
+        </Button>
+        {hasUnsavedCode ? (
+          <p className="text-xs text-warning">
+            Save notebook or discard code edits before running, exporting or changing views.
+          </p>
+        ) : null}
+      </div>
       {draft.blocks.length === 0 ? (
         <EmptyState
           title="No blocks yet"
-          hint="Add a source, or load one of the examples above — a Hugging Face corpus, a Flow PHP transform, a marimo notebook and a view, wired together."
+          hint="Add a source from the public solutions library, import a flow, or open a saved pipeline."
         />
-      ) : (
+      ) : notebookMode ? null : (
         <PipelineCanvas
           blocks={draft.blocks}
           edges={draft.edges}
           outcomes={canvasOutcomes}
           selected={search.block}
-          onSelect={(block) =>
-            void navigate({ search: (previous) => ({ ...previous, block }), replace: true })
-          }
+          onSelect={(block) => {
+            if (!locked)
+              void navigate({ search: (previous) => ({ ...previous, block }), replace: true });
+          }}
           onMove={(id, position) =>
             setDraft((previous) => ({
               ...previous,
@@ -494,18 +719,19 @@ function PipelinePage() {
       )}
 
       <div className="flex flex-wrap items-center gap-2">
-        {(['source', 'transform', 'notebook', 'view'] as const).map((kind) => (
-          <Button key={kind} variant="outline" size="sm" onClick={() => addBlock(kind)}>
-            <Plus className="h-3.5 w-3.5" /> {blockLabel(kind)}
-          </Button>
-        ))}
+        <BlockLibrary
+          disabled={locked}
+          selected={selected}
+          onAdd={addBlock}
+          onBusyChange={setLibraryBusy}
+        />
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <Button
             variant="outline"
-            onClick={() => execute.mutate('preview')}
-            disabled={busy || !chain || flowReady.data === false}
+            onClick={() => execute.mutate({ mode: 'preview' })}
+            disabled={locked || !chain || flowReady.data === false}
           >
-            {execute.isPending && execute.variables === 'preview' ? (
+            {execute.isPending && execute.variables?.mode === 'preview' ? (
               <Spinner />
             ) : (
               <Sparkles className="h-3.5 w-3.5" />
@@ -513,10 +739,10 @@ function PipelinePage() {
             Preview 25 rows
           </Button>
           <Button
-            onClick={() => execute.mutate('full')}
-            disabled={busy || !chain || flowReady.data === false}
+            onClick={() => execute.mutate({ mode: 'full' })}
+            disabled={locked || !chain || flowReady.data === false}
           >
-            {execute.isPending && execute.variables === 'full' ? (
+            {execute.isPending && execute.variables?.mode === 'full' ? (
               <Spinner />
             ) : (
               <Play className="h-3.5 w-3.5" />
@@ -526,7 +752,7 @@ function PipelinePage() {
           <Button
             variant="outline"
             onClick={() => startOnServer.mutate()}
-            disabled={busy || !chain}
+            disabled={locked || !chain}
             title="Compile this pipeline on the server and run it there. The browser may close."
           >
             {startOnServer.isPending ? <Spinner /> : <ServerCog className="h-3.5 w-3.5" />} Run on
@@ -535,7 +761,7 @@ function PipelinePage() {
           <Button
             variant="ghost"
             onClick={() => publish.mutate()}
-            disabled={busy || !result || !publishTo}
+            disabled={locked || !result || !publishTo}
             title={
               publishTo
                 ? `Publish as ${publishTo}`
@@ -554,12 +780,54 @@ function PipelinePage() {
         </p>
       ) : null}
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_26rem]">
+      {notebookMode && chain ? (
+        <PipelineNotebook
+          chain={chain}
+          outcomes={outcomes}
+          results={cellResults}
+          busy={busy}
+          locked={locked}
+          onChange={(block) =>
+            setDraft((previous) => ({
+              ...previous,
+              blocks: previous.blocks.map((candidate) =>
+                candidate.id === block.id ? block : candidate,
+              ),
+            }))
+          }
+          onDelete={(id) => setDraft((previous) => withoutBlock(previous, id))}
+          onRunTo={(id) => execute.mutate({ mode: 'preview', until: id })}
+          onDirtyChange={reportDirty}
+          onPublish={() => publish.mutate()}
+          canPublish={Boolean(result && publishTo)}
+        />
+      ) : null}
+      {notebookMode && execute.error ? (
+        <p role="alert" className="text-sm text-danger">
+          {execute.error.message}
+        </p>
+      ) : null}
+      {notebookMode && publish.error ? (
+        <p role="alert" className="text-sm text-danger">
+          {publish.error.message}
+        </p>
+      ) : null}
+      {notebookMode && publish.data ? (
+        <p role="status" className="text-sm text-primary">
+          Dataset {publish.data.dataset.name} saved with {publish.data.dataset.latest.row_count}{' '}
+          rows.
+        </p>
+      ) : null}
+      <div
+        className={
+          notebookMode ? 'hidden' : 'grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(26rem,40%)]'
+        }
+      >
         <div className="flex min-w-0 flex-col gap-4">
           {/* Beside the managed run rather than under the canvas: both answer
               "what does the server do with this", and a schedule read next to
               the run it produces is how somebody checks it did. */}
-          <ScheduleCard name={search.name} saved={Boolean(search.name)} />
+          <ScheduleCard name={pinned ? draft.name : undefined} saved={Boolean(pinned)} />
 
           {executionId || startOnServer.isPending ? (
             <ManagedRunCard
@@ -604,6 +872,21 @@ function PipelinePage() {
             </Card>
           ) : null}
 
+          {result?.notebooks
+            .filter((run) => run.stdout.trim())
+            .map((run, index) => (
+              <Card key={`${run.notebook}-${index}`} className="overflow-hidden">
+                <div className="border-b border-border p-3 text-xs font-semibold">
+                  {draft.blocks.find(
+                    (block) =>
+                      block.spec.kind === 'notebook' && block.spec.notebook === run.notebook,
+                  )?.title ?? 'Python report'}
+                </div>
+                <pre className="id max-h-48 overflow-auto whitespace-pre-wrap p-3 text-xs">
+                  {run.stdout}
+                </pre>
+              </Card>
+            ))}
           <ResultTable result={result} managed={Boolean(executionId)} />
 
           {chain ? (
@@ -614,37 +897,13 @@ function PipelinePage() {
               <pre className="id overflow-x-auto p-3 text-[11px]">{compileFlow(chain)}</pre>
             </Card>
           ) : null}
-
-          <Card className="overflow-hidden">
-            <div className="border-b border-border p-3 text-xs font-semibold">Saved pipelines</div>
-            {saved.isError ? (
-              <p className="p-3 text-xs text-danger">{saved.error.message}</p>
-            ) : saved.data?.length ? (
-              <div className="divide-y divide-border/50">
-                {saved.data.map((pipeline) => (
-                  <button
-                    key={`${pipeline.name}-${pipeline.revision}`}
-                    type="button"
-                    onClick={() => load(pipeline)}
-                    className="w-full p-3 text-left hover:bg-accent/40"
-                  >
-                    <p className="truncate text-sm font-medium">{pipeline.name}</p>
-                    <p className="mt-0.5 text-[11px] text-muted-foreground">
-                      {pipeline.blocks.length} blocks · {pipeline.revision.slice(0, 10)} ·{' '}
-                      {new Date(pipeline.saved_at).toLocaleString()}
-                    </p>
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <p className="p-3 text-xs text-muted-foreground">Nothing saved yet.</p>
-            )}
-          </Card>
         </div>
 
-        {selected ? (
+        {!notebookMode && selected ? (
           <BlockInspector
             block={selected}
+            disabled={busy}
+            onDirtyChange={reportDirty}
             onChange={(block) =>
               setDraft((previous) => ({
                 ...previous,
@@ -717,22 +976,9 @@ function withoutBlock(draft: Draft, id: string): Draft {
   };
 }
 
-function nextId(kind: BlockSpec['kind'], blocks: PipelineBlock[]): string {
+function nextId(kind: string, blocks: PipelineBlock[]): string {
   for (let index = 1; ; index += 1) {
     const candidate = index === 1 ? kind : `${kind}-${index}`;
     if (!blocks.some((block) => block.id === candidate)) return candidate;
-  }
-}
-
-function emptySpec(kind: BlockSpec['kind']): BlockSpec {
-  switch (kind) {
-    case 'source':
-      return { kind, dataset: 'runs', arguments: {} };
-    case 'transform':
-      return { kind, steps: '->limit(100)' };
-    case 'notebook':
-      return { kind, notebook: 'pii_detection', params: {} };
-    case 'view':
-      return { kind };
   }
 }

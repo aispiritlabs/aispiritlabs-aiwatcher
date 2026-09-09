@@ -2809,6 +2809,153 @@
         }
       }
     },
+    "/api/v1/curation-library": {
+      "get": {
+        "tags": [
+          "datasets"
+        ],
+        "summary": "Search solutions shared with all readers of this installation.",
+        "operationId": "search_block_library",
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockTemplatePage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "datasets"
+        ],
+        "summary": "Publish a reusable solution through the same registry operation as the seed.",
+        "operationId": "save_block_template",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveBlockTemplateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockTemplate"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/curation-pipelines": {
       "get": {
         "tags": [
@@ -4968,6 +5115,231 @@
         }
       }
     },
+    "/api/v1/executions/{execution_id}/decider-lease": {
+      "get": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "Who is deciding this run, if anybody still is.",
+        "description": "The read behind \"a lease is not something the claimant can check about\nitself\": the worker asks, and this answers from the row. 404 once it has run\nout, because expired and never taken are the same answer to a caller — it is\nfree.",
+        "operationId": "read_decider_lease",
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeciderLease"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Nobody holds it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "Take, or renew, the right to decide one hosted run (section 40.3).",
+        "description": "`agentic.workflow`'s `ProcessorLock`, in the store that holds the history.\nRenewing is this same call under the same name, so a heartbeat and a first\nclaim cannot come to disagree.\n\n**200 either way.** Being told who holds it is an answer to the question\nrather than a failure of it, and the alternative — a 409 whose structured\n`expires_at` has to be smuggled through an error body — is worse for the one\ncaller that has to branch on it. What *is* a 409 is appending while somebody\nelse decides.",
+        "operationId": "take_decider_lease",
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "description": "The id the run was started with",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeciderLeaseBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Taken by this caller, or held by somebody else until `expires_at`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeaseOutcome"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not a hosted run, or one that has finished",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/executions/{execution_id}/decider-lease/release": {
+      "post": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "Give up the right to decide.",
+        "description": "Worth calling rather than waiting the lease out: it is the difference\nbetween a replacement starting now and starting in five minutes. `released`\nis false when it was never this caller's to give — a worker that had already\nbeen taken over must not release its replacement's lease.",
+        "operationId": "release_decider_lease",
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeciderLeaseBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeaseReleased"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not a hosted run, or one that has finished",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/executions/{execution_id}/history": {
       "get": {
         "tags": [
@@ -5388,6 +5760,118 @@
             }
           },
           "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/executions/{execution_id}/stream": {
+      "post": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "Append a worker's messages to a hosted execution's history (section 40.3).",
+        "description": "The decider is the worker; this is the shared history `agentic.workflow`\ncannot give itself when every agent worker holds its own SQLite. What this\nroute contributes is the three things a private store has no way to offer: a\ncompare-and-append against a version, an inbox keyed by the\n`Idempotency-Key`, and a 409 that says where the stream actually got to.\n\nIt reads none of the messages. A `409` is not a failure to retry blindly:\nthe worker reloads and decides on what it now sees, and its own cached\ndecision across OCC retries is what stops that reload calling the model\nagain to discover it lost.",
+        "operationId": "append_stream",
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "description": "The id the run was started with",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "This batch's key. The durable inbox key: repeating it returns the first outcome rather than appending twice",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppendStreamBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StreamAppended"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "An empty batch, one past the limit, or no Idempotency-Key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another decider appended first, or this run is not a hosted one",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
             "description": "",
             "content": {
               "application/json": {
@@ -8798,6 +9282,35 @@
         },
         "additionalProperties": false
       },
+      "AppendStreamBody": {
+        "type": "object",
+        "description": "What a worker is appending to a hosted execution's history.\n\n`deny_unknown_fields` for the reason every body here has it: a worker that\nsent `version` where this reads `expected_version` would otherwise have its\ncompare-and-append silently become \"append at whatever it is at\", which is\nthe one guarantee it came here for.",
+        "required": [
+          "expected_version",
+          "holder",
+          "messages"
+        ],
+        "properties": {
+          "expected_version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The version the worker read. Required: an append that did not name one\nis not a compare-and-append, and a decider that did not read the stream\nhas nothing to decide from. The first one comes back on the start.",
+            "minimum": 0
+          },
+          "holder": {
+            "type": "string",
+            "description": "Which decider is appending. Checked against the lease, so a worker that\nwas taken over is told before it pays for the turn rather than after."
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HostedMessage"
+            },
+            "description": "The worker's own messages, in the order it wrote them."
+          }
+        },
+        "additionalProperties": false
+      },
       "ArchiveConfig": {
         "allOf": [
           {
@@ -9322,6 +9835,58 @@
           }
         ],
         "description": "What one block is, and everything that block kind needs.\n\nInternally tagged rather than flattened: `spec.kind` is one word a reader\nand a `switch` both understand, and the generated TypeScript is a\ndiscriminated union rather than an intersection of optional fields."
+      },
+      "BlockTemplate": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/SaveBlockTemplateRequest"
+          },
+          {
+            "type": "object",
+            "required": [
+              "revision",
+              "saved_at"
+            ],
+            "properties": {
+              "revision": {
+                "type": "string"
+              },
+              "saved_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          }
+        ]
+      },
+      "BlockTemplatePage": {
+        "type": "object",
+        "required": [
+          "templates",
+          "total",
+          "offset",
+          "limit"
+        ],
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "templates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BlockTemplate"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
       },
       "Bucket": {
         "type": "object",
@@ -10731,6 +11296,56 @@
             "type": "string"
           }
         }
+      },
+      "Decider": {
+        "type": "string",
+        "description": "Who decides what this run does next.\n\nNot a pair of `owner`/`mode` fields, because only two of their combinations\nmean anything to a caller and the other two are a run nobody would want:\n`local`+`hosted` is a decider with no plan to schedule, and `worker`+\n`compiled` is a worker that may not decide. One field with two arms is the\nchoice that actually exists. `engine:` is [`ExecutionOwner::Engine`] and is\nnot something a caller picks here — it is what ADR_0016's launch produces.",
+        "enum": [
+          "local",
+          "worker"
+        ]
+      },
+      "DeciderLease": {
+        "type": "object",
+        "description": "Who is deciding a hosted run, and since when.\n\n`agentic.workflow`'s `ProcessorLock` with the lease this system already\nkeeps — [`aiwatcher_jobs::LEASE_SECONDS`], called rather than copied, for\nthe reason the attempt lease gives: two lease rules that agree today are a\nsilent corruption the day one of them changes.\n\n## What this protects, and what it does not\n\nIt does **not** protect the history. Two deciders that both believe they\nhold this still cannot corrupt a stream, because each append names the\nversion it read and the second one is a 409 — which is the guarantee, and it\nholds whether or not anybody takes a lease at all.\n\nWhat it protects is the *work*. An agent turn is a model call: without a\nlease a worker that was merely slow is one whose replacement runs the same\nturn beside it, pays for it, and finds out at the append. With one, the\nsecond worker is told who holds it before it starts thinking.",
+        "required": [
+          "execution",
+          "holder",
+          "claimed_at"
+        ],
+        "properties": {
+          "claimed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "execution": {
+            "$ref": "#/components/schemas/ExecutionId"
+          },
+          "holder": {
+            "type": "string"
+          },
+          "previous_holder": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who held it before this holder, and only across a takeover.\n\nThe attempt row's `previous_owner`, for the same reason it cannot be\nread off `holder`: by the time a takeover is visible the field already\nnames its new one, and the question a replacement asks — \"was somebody\nelse in the middle of this?\" — has no other answer."
+          }
+        }
+      },
+      "DeciderLeaseBody": {
+        "type": "object",
+        "description": "Which decider is asking.",
+        "required": [
+          "holder"
+        ],
+        "properties": {
+          "holder": {
+            "type": "string",
+            "description": "A name this decider will keep across its own restarts if it wants to\nresume rather than be taken over. Not a credential: the route's role\ncheck is what decides who may ask at all."
+          }
+        },
+        "additionalProperties": false
       },
       "DefinitionKind": {
         "type": "string",
@@ -13342,6 +13957,34 @@
           "keypoints"
         ]
       },
+      "HostedMessage": {
+        "type": "object",
+        "description": "A hosted decider's own message, as this engine holds it.\n\n**Opaque by design** (section 40.3). The worker runs `decide`; an engine that\nread these would be a second decider, which is the thing the hosted mode\nexists to avoid. What is stored is the type *name* — enough to project a\nstatus from `TurnStarted` and `TurnCompleted`, and nothing else — the\nworker's own metadata, and a reference to the content.\n\nThe metadata is stored plain because it carries no text: it is\n`RecordedMessageMetadata`'s sixty fields, which is what a review queue needs\nand what an exclusion report counts.",
+        "required": [
+          "message_type"
+        ],
+        "properties": {
+          "message_type": {
+            "type": "string",
+            "description": "The worker's own type name. Two are understood; every other is carried\nand not read."
+          },
+          "metadata": {
+            "type": "object",
+            "description": "The worker's metadata, verbatim. `jsonb` in the store."
+          },
+          "payload": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PayloadRef",
+                "description": "Where the content is. Absent for a message that carries none — a join\nbucket, a timeout — which is most of what makes a graph resumable."
+              }
+            ]
+          }
+        }
+      },
       "HubColumn": {
         "type": "object",
         "description": "One column a hub dataset declares, in the hub's own words.\n\nCarried verbatim and not interpreted. aiwatcher does not know which column\nof somebody else's corpus is the picture, what the caption is called, or\nwhether `indices` is an id or a label — and a route that decided would be\ndeciding it for every corpus. This is what a script is written against.",
@@ -14761,6 +15404,70 @@
           "synthetic"
         ]
       },
+      "LeaseOutcome": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DeciderLease",
+                "description": "It is this caller's, until [`DeciderLease::expires_at`]."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "outcome"
+                ],
+                "properties": {
+                  "outcome": {
+                    "type": "string",
+                    "enum": [
+                      "taken"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "It is this caller's, until [`DeciderLease::expires_at`]."
+          },
+          {
+            "type": "object",
+            "description": "Somebody else has it and it has not run out. Carries *when* it does, so\na second worker waits rather than polling — the one thing it can\nusefully do with the refusal.",
+            "required": [
+              "holder",
+              "expires_at",
+              "outcome"
+            ],
+            "properties": {
+              "expires_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "holder": {
+                "type": "string"
+              },
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "held"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "What asking for a hosted run's decider lease did."
+      },
+      "LeaseReleased": {
+        "type": "object",
+        "description": "Whether the release found a lease this caller was holding.",
+        "required": [
+          "released"
+        ],
+        "properties": {
+          "released": {
+            "type": "boolean"
+          }
+        }
+      },
       "LinkDef": {
         "type": "object",
         "description": "One named reference from an instance to another instance.",
@@ -15990,6 +16697,40 @@
           },
           "kind": {
             "type": "string"
+          }
+        }
+      },
+      "PayloadPolicy": {
+        "type": "string",
+        "description": "Where a hosted execution's content lives (section 40.4).\n\nThe definition chooses, the deployment sets the default, and the free one is\nthe default: a hosted run starts with no archive, no key and no flag. There\nis deliberately **no `plain`** — a plaintext payload in the object store is\nreadable by every process holding the bucket's credentials, which is\nADR_0021's argument for the key.",
+        "enum": [
+          "external",
+          "sealed"
+        ]
+      },
+      "PayloadRef": {
+        "type": "object",
+        "description": "Where a hosted message's words are, and how big they were.\n\nNever the words themselves (section 40.4). The digest is of the *plaintext*,\nso a reader can tell whether what it fetched is what was appended — the\nprompt registry's rule, in a fourth place.",
+        "required": [
+          "reference",
+          "digest",
+          "size"
+        ],
+        "properties": {
+          "digest": {
+            "type": "string",
+            "description": "`sha256` of the plaintext, hex."
+          },
+          "policy": {
+            "$ref": "#/components/schemas/PayloadPolicy"
+          },
+          "reference": {
+            "type": "string",
+            "description": "Under `external`, a URI in the worker's own store — `agentic`'s SQLite,\nMLflow, or `conversation://<turn>` when the agent already writes turns\nto the archive. Under `sealed`, the archive key the crypt sealed it at."
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0
           }
         }
       },
@@ -18436,6 +19177,35 @@
           }
         }
       },
+      "SaveBlockTemplateRequest": {
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "spec"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/BlockSpec"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "SavePipelineRequest": {
         "type": "object",
         "required": [
@@ -19423,6 +20193,10 @@
             "format": "int64",
             "description": "Where that window ends, in seconds since the epoch. `None` is now.\n\nTwo runs that pin the same span compile to one `plan_id` and one cache\nkey, which is what makes a scheduled build of a fixed period cheap the\nsecond time. Left out, every run pins a fresh span — which is right for\n\"curate the last hour\" and is why a hit is something a caller asks for\nrather than something they get by accident."
           },
+          "decided_by": {
+            "$ref": "#/components/schemas/Decider",
+            "description": "Who decides what runs next. Left out, this system does — which is what\nevery curation pipeline and every scheduled run wants, and what this\nroute did before the field existed."
+          },
           "parameters": {
             "type": "object",
             "description": "Values bound when the execution was requested, available to every step."
@@ -19662,6 +20436,26 @@
           "uri": {
             "type": "string",
             "description": "What to put in `ImageRecord::uri`. See [`BLOB_SCHEME`]."
+          }
+        }
+      },
+      "StreamAppended": {
+        "type": "object",
+        "description": "Where the stream got to, and whether this call is what put it there.",
+        "required": [
+          "version",
+          "created"
+        ],
+        "properties": {
+          "created": {
+            "type": "boolean",
+            "description": "`false` when this batch had already been appended — a redelivery, not a\nrace. The worker carries on from `version` either way."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The version to send as the next `expected_version`.",
+            "minimum": 0
           }
         }
       },
@@ -21457,6 +22251,29 @@
                 }
               }
             ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HostedMessage",
+                "description": "A hosted decider's message. Neither a command this engine may refuse nor\nan event it folds: [`Self::event`] and [`Self::command`] both answer\n`None`, so `decide`'s replay skips it by construction rather than by\nsomebody remembering to."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "hosted"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "A hosted decider's message. Neither a command this engine may refuse nor\nan event it folds: [`Self::event`] and [`Self::command`] both answer\n`None`, so `decide`'s replay skips it by construction rather than by\nsomebody remembering to."
           }
         ],
         "description": "One thing in the stream, whichever kind it is."

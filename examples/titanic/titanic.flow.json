@@ -1,0 +1,253 @@
+{
+  "format": "aiwatcher.curation",
+  "version": 1,
+  "requirements": {
+    "python": ">=3.14",
+    "packages": [
+      "aiwatcher-ml-pipeline==0.1.0 (includes FlowAI)",
+      "marimo>=0.24,<0.25",
+      "scikit-learn>=1.8,<1.9",
+      "matplotlib>=3.10,<4",
+      "pandas>=2.2,<4"
+    ]
+  },
+  "pipeline": {
+    "name": "curation/titanic-from-scratch",
+    "description": "Titanic from raw passengers to a held-out Random Forest baseline, with thematic data curation blocks and FlowAI encoders.",
+    "blocks": [
+      {
+        "id": "passengers",
+        "title": "Titanic \u00b7 raw passengers",
+        "position": {
+          "x": 0,
+          "y": 0
+        },
+        "spec": {
+          "kind": "source",
+          "dataset": "hub_rows",
+          "arguments": {
+            "dataset": "phihung/titanic",
+            "split": "train",
+            "limit": "891"
+          }
+        }
+      },
+      {
+        "id": "columns",
+        "title": "Select raw columns",
+        "position": {
+          "x": 270,
+          "y": 0
+        },
+        "spec": {
+          "kind": "transform",
+          "steps": "->withEntry('PassengerId', array_get(ref('row'), 'PassengerId'))\n->withEntry('Survived', array_get(ref('row'), 'Survived'))\n->withEntry('Pclass', array_get(ref('row'), 'Pclass'))\n->withEntry('Name', array_get(ref('row'), 'Name'))\n->withEntry('Sex', array_get(ref('row'), 'Sex'))\n->withEntry('Age', array_get(ref('row'), 'Age'))\n->withEntry('SibSp', array_get(ref('row'), 'SibSp'))\n->withEntry('Parch', array_get(ref('row'), 'Parch'))\n->withEntry('Ticket', array_get(ref('row'), 'Ticket'))\n->withEntry('Fare', array_get(ref('row'), 'Fare'))\n->withEntry('Cabin', array_get(ref('row'), 'Cabin'))\n->withEntry('Embarked', array_get(ref('row'), 'Embarked'))\n->select(ref('PassengerId'), ref('Survived'), ref('Pclass'), ref('Name'), ref('Sex'), ref('Age'), ref('SibSp'), ref('Parch'), ref('Ticket'), ref('Fare'), ref('Cabin'), ref('Embarked'))"
+        }
+      },
+      {
+        "id": "split",
+        "title": "Train / validation split",
+        "position": {
+          "x": 540,
+          "y": 0
+        },
+        "spec": {
+          "kind": "notebook",
+          "notebook": "flowai_split",
+          "params": {
+            "seed": 42,
+            "validation_fraction": 0.2
+          },
+          "revision": "7168755cc33a64cbc3e239dfc166e8124a8c7ccf2d38c13fdde65fbe245bdd59"
+        }
+      },
+      {
+        "id": "missing-values",
+        "title": "Missing values",
+        "position": {
+          "x": 810,
+          "y": 0
+        },
+        "spec": {
+          "kind": "notebook",
+          "notebook": "flowai_missing_values",
+          "params": {},
+          "revision": "edc06d130debe1ad5d71a2a46a2de0a45a8ba9a4bba5cf7769bdf1d61bb0aaae"
+        }
+      },
+      {
+        "id": "features",
+        "title": "Feature engineering",
+        "position": {
+          "x": 1080,
+          "y": 0
+        },
+        "spec": {
+          "kind": "notebook",
+          "notebook": "flowai_titanic_features",
+          "params": {},
+          "revision": "8eff4d19afd298518bdf5833ed90757fd9ba3b905f1e648805ad59cf632fedd3"
+        }
+      },
+      {
+        "id": "visualization",
+        "title": "Visualization",
+        "position": {
+          "x": 0,
+          "y": 180
+        },
+        "spec": {
+          "kind": "notebook",
+          "notebook": "flowai_visualization",
+          "params": {},
+          "revision": "7d8eb176d4cf34f56330b2df345ae98b482f1bf5756aa210eb996726a5eff7e5"
+        }
+      },
+      {
+        "id": "one-hot",
+        "title": "OneHotEncoder",
+        "position": {
+          "x": 270,
+          "y": 180
+        },
+        "spec": {
+          "kind": "notebook",
+          "notebook": "flowai_one_hot_encoder",
+          "params": {
+            "columns": [
+              "Sex",
+              "Pclass",
+              "EmbarkedFilled",
+              "Title",
+              "Deck",
+              "AgeBand",
+              "FareBand"
+            ],
+            "handle_unknown": "ignore"
+          },
+          "revision": "973fd064fa8214f708aeef68c083394942164b79bee3414917e1ced8a059b2d2"
+        }
+      },
+      {
+        "id": "label",
+        "title": "LabelEncoder",
+        "position": {
+          "x": 540,
+          "y": 180
+        },
+        "spec": {
+          "kind": "notebook",
+          "notebook": "flowai_label_encoder",
+          "params": {
+            "target": "Survived"
+          },
+          "revision": "63919d306b495df1f0cc3388d45844a5e87ab74fca1d683bbf56a51adb118ec3"
+        }
+      },
+      {
+        "id": "model",
+        "title": "Model training & evaluation",
+        "position": {
+          "x": 810,
+          "y": 180
+        },
+        "spec": {
+          "kind": "notebook",
+          "notebook": "flowai_random_forest",
+          "params": {
+            "seed": 42,
+            "n_estimators": 120
+          },
+          "revision": "f02e07921f23e68edfabf3a4d189585fbcdc655d4e805e9fd6cecad3800f4f50"
+        }
+      },
+      {
+        "id": "publish",
+        "title": "Publish predictions",
+        "position": {
+          "x": 1080,
+          "y": 180
+        },
+        "spec": {
+          "kind": "view",
+          "dataset": "curation/titanic-from-scratch"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "from": "passengers",
+        "to": "columns"
+      },
+      {
+        "from": "columns",
+        "to": "split"
+      },
+      {
+        "from": "split",
+        "to": "missing-values"
+      },
+      {
+        "from": "missing-values",
+        "to": "features"
+      },
+      {
+        "from": "features",
+        "to": "visualization"
+      },
+      {
+        "from": "visualization",
+        "to": "one-hot"
+      },
+      {
+        "from": "one-hot",
+        "to": "label"
+      },
+      {
+        "from": "label",
+        "to": "model"
+      },
+      {
+        "from": "model",
+        "to": "publish"
+      }
+    ]
+  },
+  "notebooks": [
+    {
+      "name": "flowai_split",
+      "revision": "7168755cc33a64cbc3e239dfc166e8124a8c7ccf2d38c13fdde65fbe245bdd59",
+      "source": "\"\"\"Train / validation split \u2014 an editable FlowAI block. See examples/titanic/README.md.\"\"\"\n\nimport marimo\n\napp = marimo.App(width=\"medium\")\n\n\n@app.cell\ndef _():\n    from ml_pipeline import Block\n\n    return (Block,)\n\n\n@app.cell\ndef _(Block):\n    _block = Block.for_notebook(__file__)\n    rows = _block.get_rows()\n    params = _block.get_params()\n    return params, rows\n\n\n@app.cell\ndef _(params, rows):\n    import numpy as np\n    from sklearn.model_selection import train_test_split\n    from flowai.frame import frame_of, records_of\n\n    _frame = frame_of(rows)\n    if len(_frame) < 8:\n        raise ValueError(\"Use at least 8 labelled rows for a stratified smoke test.\")\n    if _frame[\"PassengerId\"].isna().any() or _frame[\"PassengerId\"].duplicated().any():\n        raise ValueError(\"PassengerId must be present and unique.\")\n    _train, _validation = train_test_split(\n        _frame[\"PassengerId\"],\n        test_size=float(params.get(\"validation_fraction\", 0.2)),\n        random_state=int(params.get(\"seed\", 42)),\n        stratify=_frame[\"Survived\"],\n    )\n    output = records_of(\n        _frame.assign(_split=np.where(_frame[\"PassengerId\"].isin(_train), \"train\", \"validation\"))\n    )\n    return (output,)\n\n\nif __name__ == \"__main__\":\n    app.run()\n"
+    },
+    {
+      "name": "flowai_missing_values",
+      "revision": "edc06d130debe1ad5d71a2a46a2de0a45a8ba9a4bba5cf7769bdf1d61bb0aaae",
+      "source": "\"\"\"Missing values \u2014 an editable FlowAI block. See examples/titanic/README.md.\"\"\"\n\nimport marimo\n\napp = marimo.App(width=\"medium\")\n\n\n@app.cell\ndef _():\n    from ml_pipeline import Block\n\n    return (Block,)\n\n\n@app.cell\ndef _(Block):\n    _block = Block.for_notebook(__file__)\n    rows = _block.get_rows()\n    params = _block.get_params()\n    return params, rows\n\n\n@app.cell\ndef _(params, rows):\n    import pandas as pd\n    from flowai.frame import frame_of, records_of\n\n    _frame = frame_of(rows)\n    _train = _frame.loc[_frame[\"_split\"].eq(\"train\")].copy()\n    if _train.empty:\n        raise ValueError(\"Missing values needs a split first; statistics are fitted on train only.\")\n    _train[\"Age\"] = pd.to_numeric(_train[\"Age\"])\n    _train[\"Fare\"] = pd.to_numeric(_train[\"Fare\"])\n    if _train[\"Age\"].notna().sum() == 0 or _train[\"Fare\"].notna().sum() == 0:\n        raise ValueError(\"Training rows need at least one measured Age and Fare.\")\n    _age_medians = _train.groupby([\"Sex\", \"Pclass\"], dropna=False)[\"Age\"].median().dropna()\n    _fare_medians = _train.groupby(\"Pclass\", dropna=False)[\"Fare\"].median().dropna()\n    _age_fallback = float(_train[\"Age\"].median())\n    _fare_fallback = float(_train[\"Fare\"].median())\n    _ports = _train[\"Embarked\"].replace(\"\", None).dropna().mode()\n    _port = _ports.iloc[0] if not _ports.empty else \"Unknown\"\n    imputation_state = {\n        \"age_fallback\": _age_fallback,\n        \"fare_fallback\": _fare_fallback,\n        \"embarked\": _port,\n        \"age_groups\": _age_medians.reset_index().to_numpy().tolist(),\n        \"fare_groups\": _fare_medians.reset_index().to_numpy().tolist(),\n    }\n    _age_groups = pd.Series(\n        _age_medians.reindex(pd.MultiIndex.from_frame(_frame[[\"Sex\", \"Pclass\"]])).to_numpy(),\n        index=_frame.index,\n    ).fillna(_age_fallback)\n    _fare_groups = pd.to_numeric(_frame[\"Pclass\"].map(_fare_medians)).fillna(_fare_fallback)\n    _result = _frame.assign(\n        AgeFilled=pd.to_numeric(_frame[\"Age\"]).fillna(_age_groups),\n        FareFilled=pd.to_numeric(_frame[\"Fare\"]).fillna(_fare_groups),\n        EmbarkedFilled=_frame[\"Embarked\"].replace(\"\", None).fillna(_port),\n        AgeMissing=_frame[\"Age\"].isna().astype(int),\n        FareMissing=_frame[\"Fare\"].isna().astype(int),\n        CabinMissing=_frame[\"Cabin\"].fillna(\"\").eq(\"\").astype(int),\n    )\n    output = records_of(_result)\n    return imputation_state, output\n\n\nif __name__ == \"__main__\":\n    app.run()\n"
+    },
+    {
+      "name": "flowai_titanic_features",
+      "revision": "8eff4d19afd298518bdf5833ed90757fd9ba3b905f1e648805ad59cf632fedd3",
+      "source": "\"\"\"Feature engineering \u2014 an editable FlowAI block. See examples/titanic/README.md.\"\"\"\n\nimport marimo\n\napp = marimo.App(width=\"medium\")\n\n\n@app.cell\ndef _():\n    from ml_pipeline import Block\n\n    return (Block,)\n\n\n@app.cell\ndef _(Block):\n    _block = Block.for_notebook(__file__)\n    rows = _block.get_rows()\n    params = _block.get_params()\n    return params, rows\n\n\n@app.cell\ndef _(params, rows):\n    import numpy as np\n    from flowai.frame import frame_of, records_of\n\n    _frame = frame_of(rows)\n    _train = _frame.loc[_frame[\"_split\"].eq(\"train\")]\n    if _train.empty:\n        raise ValueError(\"Feature engineering needs training rows.\")\n    _tickets = _train[\"Ticket\"].value_counts(dropna=False)\n    _age_edges = np.unique(\n        np.quantile(_train[\"AgeFilled\"].to_numpy(dtype=float), [0.2, 0.4, 0.6, 0.8])\n    )\n    _fare_edges = np.unique(\n        np.quantile(_train[\"FareFilled\"].to_numpy(dtype=float), [0.2, 0.4, 0.6, 0.8])\n    )\n    feature_state = {\n        \"age_edges\": _age_edges.tolist(),\n        \"fare_edges\": _fare_edges.tolist(),\n        \"ticket_counts\": _tickets.to_dict(),\n    }\n    _title = (\n        _frame[\"Name\"]\n        .str.extract(r\",\\s*([^.]+)\\.\", expand=False)\n        .str.strip()\n        .fillna(\"Unknown\")\n        .replace({\"Mme\": \"Mrs\", \"Mlle\": \"Miss\", \"Ms\": \"Miss\"})\n    )\n    _title = _title.where(_title.isin([\"Mr\", \"Mrs\", \"Miss\", \"Master\"]), \"Rare\")\n    _family = _frame[\"SibSp\"].astype(int) + _frame[\"Parch\"].astype(int) + 1\n    _result = _frame.assign(\n        Title=_title,\n        Deck=_frame[\"Cabin\"].fillna(\"Unknown\").replace(\"\", \"Unknown\").str[0],\n        FamilySize=_family,\n        IsAlone=_family.eq(1).astype(int),\n        FarePerPerson=_frame[\"FareFilled\"].astype(float) / _family,\n        TicketFrequency=_frame[\"Ticket\"].map(_tickets).fillna(1).astype(int),\n        AgeBand=np.searchsorted(\n            _age_edges, _frame[\"AgeFilled\"].to_numpy(dtype=float), side=\"right\"\n        ).astype(str),\n        FareBand=np.searchsorted(\n            _fare_edges, _frame[\"FareFilled\"].to_numpy(dtype=float), side=\"right\"\n        ).astype(str),\n    )\n    output = records_of(_result)\n    return feature_state, output\n\n\nif __name__ == \"__main__\":\n    app.run()\n"
+    },
+    {
+      "name": "flowai_visualization",
+      "revision": "7d8eb176d4cf34f56330b2df345ae98b482f1bf5756aa210eb996726a5eff7e5",
+      "source": "\"\"\"Visualization \u2014 an editable FlowAI block. See examples/titanic/README.md.\"\"\"\n\nimport marimo\n\napp = marimo.App(width=\"medium\")\n\n\n@app.cell\ndef _():\n    from ml_pipeline import Block\n\n    return (Block,)\n\n\n@app.cell\ndef _(Block):\n    _block = Block.for_notebook(__file__)\n    rows = _block.get_rows()\n    params = _block.get_params()\n    return params, rows\n\n\n@app.cell\ndef _(params, rows):\n    import matplotlib.pyplot as plt\n    import marimo as mo\n    from flowai.frame import frame_of\n\n    _frame = frame_of(rows)\n    _train = _frame.loc[_frame[\"_split\"].eq(\"train\")]\n    _columns = params.get(\"columns\", [\"Age\", \"Fare\", \"Cabin\", \"Embarked\"])\n    _missing = (_train[_columns].isna() | _train[_columns].eq(\"\")).sum()\n    figure, _axes = plt.subplots(1, 2, figsize=(11, 4), layout=\"constrained\")\n    _axes[0].bar(_columns, _missing, color=\"#d97706\")\n    _axes[0].set_title(\"Missing measurements \u00b7 training rows\")\n    _axes[0].set_ylabel(\"Passengers\")\n    _rates = (\n        _train.assign(Survived=_train[\"Survived\"].astype(float)).groupby(\"Sex\")[\"Survived\"].mean()\n    )\n    _axes[1].bar(_rates.index, _rates, color=\"#0891b2\")\n    _axes[1].set_ylim(0, 1)\n    _axes[1].set_title(\"Survival rate \u00b7 training rows\")\n    output = rows\n    mo.vstack(\n        [\n            mo.md(\n                \"## Visualization\\nTraining data only; the validation labels do not guide feature selection.\"\n            ),\n            figure,\n        ]\n    )\n    return figure, output\n\n\nif __name__ == \"__main__\":\n    app.run()\n"
+    },
+    {
+      "name": "flowai_one_hot_encoder",
+      "revision": "973fd064fa8214f708aeef68c083394942164b79bee3414917e1ced8a059b2d2",
+      "source": "\"\"\"OneHotEncoder \u2014 an editable FlowAI block. See examples/titanic/README.md.\"\"\"\n\nimport marimo\n\napp = marimo.App(width=\"medium\")\n\n\n@app.cell\ndef _():\n    from ml_pipeline import Block\n\n    return (Block,)\n\n\n@app.cell\ndef _(Block):\n    _block = Block.for_notebook(__file__)\n    rows = _block.get_rows()\n    params = _block.get_params()\n    return params, rows\n\n\n@app.cell\ndef _(params, rows):\n    from flowai import OneHotEncoder\n    from flowai.frame import frame_of, records_of\n\n    _frame = frame_of(rows)\n    _columns = params.get(\n        \"columns\", [\"Sex\", \"Pclass\", \"EmbarkedFilled\", \"Title\", \"Deck\", \"AgeBand\", \"FareBand\"]\n    )\n    _encoder = OneHotEncoder(\n        _columns, handle_unknown=params.get(\"handle_unknown\", \"ignore\")\n    ).fit_frame(_frame.loc[_frame[\"_split\"].eq(\"train\")])\n    encoder_state = _encoder.to_state()\n    _features = _encoder.transform_frame(_frame)\n    # Nested model_features is the notebook wire format. Pack it only at output.\n    output = records_of(_frame.assign(model_features=_features.to_dict(orient=\"records\")))\n    return encoder_state, output\n\n\nif __name__ == \"__main__\":\n    app.run()\n"
+    },
+    {
+      "name": "flowai_label_encoder",
+      "revision": "63919d306b495df1f0cc3388d45844a5e87ab74fca1d683bbf56a51adb118ec3",
+      "source": "\"\"\"LabelEncoder \u2014 an editable FlowAI block. See examples/titanic/README.md.\"\"\"\n\nimport marimo\n\napp = marimo.App(width=\"medium\")\n\n\n@app.cell\ndef _():\n    from ml_pipeline import Block\n\n    return (Block,)\n\n\n@app.cell\ndef _(Block):\n    _block = Block.for_notebook(__file__)\n    rows = _block.get_rows()\n    params = _block.get_params()\n    return params, rows\n\n\n@app.cell\ndef _(params, rows):\n    import pandas as pd\n    from flowai import LabelEncoder\n    from flowai.frame import frame_of, records_of\n\n    _frame = frame_of(rows)\n    _target = params.get(\"target\", \"Survived\")\n    _encoder = LabelEncoder().fit(_frame.loc[_frame[\"_split\"].eq(\"train\"), _target].tolist())\n    encoder_state = _encoder.to_state()\n    _present = _frame[_target].notna()\n    # One sklearn batch call, not one transform call per record.\n    _encoded = pd.Series(\n        _encoder.transform(_frame.loc[_present, _target].tolist()),\n        index=_frame.index[_present],\n        dtype=object,\n    )\n    output = records_of(_frame.assign(target_encoded=_encoded))\n    return encoder_state, output\n\n\nif __name__ == \"__main__\":\n    app.run()\n"
+    },
+    {
+      "name": "flowai_random_forest",
+      "revision": "f02e07921f23e68edfabf3a4d189585fbcdc655d4e805e9fd6cecad3800f4f50",
+      "source": "\"\"\"Model training & evaluation \u2014 an editable FlowAI block. See examples/titanic/README.md.\"\"\"\n\nimport marimo\n\napp = marimo.App(width=\"medium\")\n\n\n@app.cell\ndef _():\n    from ml_pipeline import Block\n\n    return (Block,)\n\n\n@app.cell\ndef _(Block):\n    _block = Block.for_notebook(__file__)\n    rows = _block.get_rows()\n    params = _block.get_params()\n    return params, rows\n\n\n@app.cell\ndef _(params, rows):\n    import json\n    import pandas as pd\n    import marimo as mo\n    from sklearn.ensemble import RandomForestClassifier\n    from sklearn.metrics import accuracy_score, roc_auc_score\n    from flowai.frame import frame_of, records_of\n\n    _frame = frame_of(rows)\n    _numeric = params.get(\n        \"numeric_columns\",\n        [\n            \"AgeFilled\",\n            \"FareFilled\",\n            \"FamilySize\",\n            \"IsAlone\",\n            \"FarePerPerson\",\n            \"TicketFrequency\",\n            \"AgeMissing\",\n            \"FareMissing\",\n            \"CabinMissing\",\n        ],\n    )\n    if set(_numeric) & {\"PassengerId\", \"Survived\", \"target_encoded\", \"_split\"}:\n        raise ValueError(\"IDs, split and target columns are not model features.\")\n    _train = _frame[\"_split\"].eq(\"train\")\n    _validation = _frame[\"_split\"].eq(\"validation\")\n    if not _train.any() or not _validation.any():\n        raise ValueError(\"Training and validation rows are required.\")\n    # Unpack the nested wire field once at the model input boundary.\n    _features = pd.DataFrame(_frame[\"model_features\"].tolist(), index=_frame.index)\n    _categorical = sorted(_frame.loc[_train, \"model_features\"].iloc[0])\n    _matrix = pd.concat([_frame[_numeric].astype(float), _features[_categorical]], axis=1)\n    _target = _frame[\"target_encoded\"].astype(int)\n    model = RandomForestClassifier(\n        n_estimators=int(params.get(\"n_estimators\", 120)),\n        max_depth=6,\n        min_samples_leaf=2,\n        random_state=int(params.get(\"seed\", 42)),\n        n_jobs=1,\n    )\n    model.fit(_matrix.loc[_train], _target.loc[_train])\n    if list(model.classes_) != [0, 1]:\n        raise ValueError(\"This Titanic baseline requires both target classes 0 and 1.\")\n    _predicted = model.predict(_matrix.loc[_validation])\n    _probability = model.predict_proba(_matrix.loc[_validation])[:, 1]\n    _truth = _target.loc[_validation]\n    metrics = {\n        \"train_rows\": int(_train.sum()),\n        \"validation_rows\": int(_validation.sum()),\n        \"accuracy\": float(accuracy_score(_truth, _predicted)),\n        \"roc_auc\": float(roc_auc_score(_truth, _probability)) if _truth.nunique() > 1 else None,\n        \"seed\": int(params.get(\"seed\", 42)),\n    }\n    print(json.dumps(metrics, sort_keys=True))\n    output = records_of(\n        _frame.assign(\n            prediction=model.predict(_matrix),\n            survival_probability=model.predict_proba(_matrix)[:, 1],\n        )\n    )\n    mo.md(\n        f\"## Model evaluation\\nHeld-out validation accuracy: **{metrics['accuracy']:.3f}** \u00b7 {metrics['validation_rows']} passengers.\\n\\nA 25-row preview is a wiring check, not an estimate of model quality.\"\n    )\n    return metrics, model, output\n\n\nif __name__ == \"__main__\":\n    app.run()\n"
+    }
+  ]
+}

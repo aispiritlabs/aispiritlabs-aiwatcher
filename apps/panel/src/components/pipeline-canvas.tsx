@@ -41,9 +41,9 @@ type BlockKind = BlockSpec['kind'];
 
 const KIND: Record<BlockKind, { label: string; icon: LucideIcon; tone: string }> = {
   source: { label: 'Source', icon: Database, tone: 'text-primary' },
-  transform: { label: 'Flow PHP', icon: Code2, tone: 'text-warning' },
-  notebook: { label: 'marimo', icon: NotebookPen, tone: 'text-success' },
-  view: { label: 'View', icon: Table2, tone: 'text-muted-foreground' },
+  transform: { label: 'Data transformation', icon: Code2, tone: 'text-warning' },
+  notebook: { label: 'Python', icon: NotebookPen, tone: 'text-success' },
+  view: { label: 'Publish dataset', icon: Table2, tone: 'text-muted-foreground' },
 };
 
 /** What a block is showing, under its name. */

@@ -303,20 +303,131 @@ impl WorkflowEvent {
     }
 }
 
+/// Where a hosted execution's content lives (section 40.4).
+///
+/// The definition chooses, the deployment sets the default, and the free one is
+/// the default: a hosted run starts with no archive, no key and no flag. There
+/// is deliberately **no `plain`** — a plaintext payload in the object store is
+/// readable by every process holding the bucket's credentials, which is
+/// ADR_0021's argument for the key.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum PayloadPolicy {
+    /// The content stays where the worker keeps it and aiwatcher retains
+    /// nothing. An erasure here deletes the references; the words are the
+    /// worker's responsibility, which is why a team under a retention
+    /// obligation chooses the other one.
+    #[default]
+    External,
+    /// The content is sealed through the conversation archive's crypt, on the
+    /// archive's retention clock and erasable by subject. Needs
+    /// `AIWATCHER_CONVERSATION_ARCHIVE` and `AIWATCHER_CONVERSATION_KEYS`; a
+    /// definition that chooses it without them is refused naming both, never
+    /// silently downgraded.
+    Sealed,
+}
+
+impl PayloadPolicy {
+    /// Whether resolving a payload under this policy needs the archive.
+    ///
+    /// Asked before a definition is accepted, never after — the refusal is the
+    /// point, and it has to arrive when somebody saves the definition rather
+    /// than when the first turn tries to store its words.
+    #[must_use]
+    pub const fn needs_archive(&self) -> bool {
+        matches!(self, Self::Sealed)
+    }
+}
+
+/// Where a hosted message's words are, and how big they were.
+///
+/// Never the words themselves (section 40.4). The digest is of the *plaintext*,
+/// so a reader can tell whether what it fetched is what was appended — the
+/// prompt registry's rule, in a fourth place.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
+pub struct PayloadRef {
+    /// Under `external`, a URI in the worker's own store — `agentic`'s SQLite,
+    /// MLflow, or `conversation://<turn>` when the agent already writes turns
+    /// to the archive. Under `sealed`, the archive key the crypt sealed it at.
+    pub reference: String,
+    /// `sha256` of the plaintext, hex.
+    pub digest: String,
+    pub size: usize,
+    #[serde(default)]
+    pub policy: PayloadPolicy,
+}
+
+/// A hosted decider's own message, as this engine holds it.
+///
+/// **Opaque by design** (section 40.3). The worker runs `decide`; an engine that
+/// read these would be a second decider, which is the thing the hosted mode
+/// exists to avoid. What is stored is the type *name* — enough to project a
+/// status from `TurnStarted` and `TurnCompleted`, and nothing else — the
+/// worker's own metadata, and a reference to the content.
+///
+/// The metadata is stored plain because it carries no text: it is
+/// `RecordedMessageMetadata`'s sixty fields, which is what a review queue needs
+/// and what an exclusion report counts.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, ToSchema)]
+pub struct HostedMessage {
+    /// The worker's own type name. Two are understood; every other is carried
+    /// and not read.
+    pub message_type: String,
+    /// The worker's metadata, verbatim. `jsonb` in the store.
+    #[serde(default)]
+    #[schema(value_type = Object)]
+    pub metadata: Value,
+    /// Where the content is. Absent for a message that carries none — a join
+    /// bucket, a timeout — which is most of what makes a graph resumable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload: Option<PayloadRef>,
+}
+
+/// The one message type a hosted status projection reads as "a turn opened".
+pub const TURN_STARTED: &str = "TurnStarted";
+/// The one message type a hosted status projection reads as "a turn closed".
+pub const TURN_COMPLETED: &str = "TurnCompleted";
+
 /// One thing in the stream, whichever kind it is.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum WorkflowMessage {
     Command(WorkflowCommand),
     Event(WorkflowEvent),
+    /// A hosted decider's message. Neither a command this engine may refuse nor
+    /// an event it folds: [`Self::event`] and [`Self::command`] both answer
+    /// `None`, so `decide`'s replay skips it by construction rather than by
+    /// somebody remembering to.
+    Hosted(HostedMessage),
 }
 
 impl WorkflowMessage {
+    /// What this message is called.
+    ///
+    /// Not `&'static str`, and that is the hosted arm's doing: a worker's type
+    /// names are its own vocabulary, not one this build enumerates.
     #[must_use]
-    pub fn name(&self) -> &'static str {
+    pub fn name(&self) -> &str {
         match self {
             Self::Command(command) => command.name(),
             Self::Event(event) => event.name(),
+            Self::Hosted(hosted) => &hosted.message_type,
+        }
+    }
+
+    /// Which of the three this is, as the store's `kind` column spells it.
+    ///
+    /// Derived from the message rather than from `is_event()` and an `else`:
+    /// that spelling filed a hosted message as a command, which the check
+    /// constraint permits and no read notices, because the real tag is inside
+    /// the `jsonb` beside it. A column that disagrees with the row it describes
+    /// is the kind of wrong nothing fails on.
+    #[must_use]
+    pub const fn kind(&self) -> &'static str {
+        match self {
+            Self::Command(_) => "command",
+            Self::Event(_) => "event",
+            Self::Hosted(_) => "hosted",
         }
     }
 
@@ -325,11 +436,26 @@ impl WorkflowMessage {
         matches!(self, Self::Event(_))
     }
 
+    /// Whether this is a hosted decider's message rather than one of this
+    /// engine's own.
+    #[must_use]
+    pub const fn is_hosted(&self) -> bool {
+        matches!(self, Self::Hosted(_))
+    }
+
+    #[must_use]
+    pub const fn hosted(&self) -> Option<&HostedMessage> {
+        match self {
+            Self::Hosted(hosted) => Some(hosted),
+            Self::Command(_) | Self::Event(_) => None,
+        }
+    }
+
     #[must_use]
     pub fn event(&self) -> Option<&WorkflowEvent> {
         match self {
             Self::Event(event) => Some(event),
-            Self::Command(_) => None,
+            Self::Command(_) | Self::Hosted(_) => None,
         }
     }
 
@@ -337,7 +463,7 @@ impl WorkflowMessage {
     pub fn command(&self) -> Option<&WorkflowCommand> {
         match self {
             Self::Command(command) => Some(command),
-            Self::Event(_) => None,
+            Self::Event(_) | Self::Hosted(_) => None,
         }
     }
 }
@@ -489,6 +615,84 @@ mod tests {
             .expect("serialising a command");
         assert_eq!(json["kind"], "command");
         assert_eq!(json["command"], "pause_execution");
+    }
+
+    #[test]
+    fn a_hosted_message_is_neither_folded_nor_refused_by_this_engine() {
+        // The whole of section 40.3's "what the engine does not do", enforced
+        // by the type rather than by a rule somebody keeps: `decide`'s replay
+        // reads `event()` and its refusals read `command()`, and a hosted
+        // message answers `None` to both. An engine that read these would be a
+        // second decider.
+        let message = WorkflowMessage::Hosted(HostedMessage {
+            message_type: "AgentHandedOff".to_owned(),
+            metadata: serde_json::json!({ "from": "searcher", "to": "summarizer" }),
+            payload: Some(PayloadRef {
+                reference: "agentic://turn/7".to_owned(),
+                digest: "a".repeat(64),
+                size: 4_096,
+                policy: PayloadPolicy::External,
+            }),
+        });
+        assert!(message.event().is_none());
+        assert!(message.command().is_none());
+        assert!(message.is_hosted());
+        assert_eq!(message.name(), "AgentHandedOff");
+    }
+
+    #[test]
+    fn a_hosted_message_says_which_kind_it_is_and_carries_no_words() {
+        // `kind` is what the store's check constraint reads, as it is for the
+        // other two. What follows it is a reference and a size — the content
+        // rule of section 40.4, visible in the serialised row.
+        let message = WorkflowMessage::Hosted(HostedMessage {
+            message_type: TURN_COMPLETED.to_owned(),
+            metadata: Value::Null,
+            payload: Some(PayloadRef {
+                reference: "conversation://turn-9".to_owned(),
+                digest: "b".repeat(64),
+                size: 128,
+                policy: PayloadPolicy::Sealed,
+            }),
+        });
+        let json = serde_json::to_value(&message).expect("serialising a hosted message");
+        assert_eq!(json["kind"], "hosted");
+        assert_eq!(json["message_type"], TURN_COMPLETED);
+        assert_eq!(json["payload"]["policy"], "sealed");
+        assert_eq!(json["payload"]["size"], 128);
+
+        let text = serde_json::to_string(&message).expect("serialising again");
+        assert!(
+            !text.contains("\"text\""),
+            "a payload is a reference, never words"
+        );
+
+        let back: WorkflowMessage = serde_json::from_value(json).expect("reading it back");
+        assert_eq!(back, message);
+    }
+
+    #[test]
+    fn a_hosted_message_may_carry_no_payload_at_all() {
+        // A join bucket and a timeout are the messages that make a graph
+        // resumable, and neither has any content to point at. A `PayloadRef`
+        // that had to be invented for them would be a digest of nothing.
+        let message = WorkflowMessage::Hosted(HostedMessage {
+            message_type: "JoinBucketFilled".to_owned(),
+            metadata: serde_json::json!({ "arity": 3, "received": 2 }),
+            payload: None,
+        });
+        let json = serde_json::to_value(&message).expect("serialising");
+        assert!(json.get("payload").is_none());
+    }
+
+    #[test]
+    fn only_the_sealed_policy_needs_a_key_and_an_archive() {
+        // The free one is the default, so a hosted execution starts with no
+        // archive, no key and no flag; the other is refused naming both rather
+        // than downgraded. There is no third.
+        assert!(!PayloadPolicy::default().needs_archive());
+        assert!(!PayloadPolicy::External.needs_archive());
+        assert!(PayloadPolicy::Sealed.needs_archive());
     }
 
     #[test]

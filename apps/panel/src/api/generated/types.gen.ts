@@ -155,6 +155,32 @@ export type AppendRowsRequest = {
 };
 
 /**
+ * What a worker is appending to a hosted execution's history.
+ *
+ * `deny_unknown_fields` for the reason every body here has it: a worker that
+ * sent `version` where this reads `expected_version` would otherwise have its
+ * compare-and-append silently become "append at whatever it is at", which is
+ * the one guarantee it came here for.
+ */
+export type AppendStreamBody = {
+    /**
+     * The version the worker read. Required: an append that did not name one
+     * is not a compare-and-append, and a decider that did not read the stream
+     * has nothing to decide from. The first one comes back on the start.
+     */
+    expected_version: number;
+    /**
+     * Which decider is appending. Checked against the lease, so a worker that
+     * was taken over is told before it pays for the turn rather than after.
+     */
+    holder: string;
+    /**
+     * The worker's own messages, in the order it wrote them.
+     */
+    messages: Array<HostedMessage>;
+};
+
+/**
  * What this deployment demands of a producer, and which keys it can open.
  *
  * Answered before anything is sent, on purpose: a producer that discovers the
@@ -465,6 +491,18 @@ export type BlockSpec = {
 } | {
     dataset?: string | null;
     kind: 'view';
+};
+
+export type BlockTemplate = SaveBlockTemplateRequest & {
+    revision: string;
+    saved_at: string;
+};
+
+export type BlockTemplatePage = {
+    limit: number;
+    offset: number;
+    templates: Array<BlockTemplate>;
+    total: number;
 };
 
 /**
@@ -1133,6 +1171,77 @@ export type DatasetVersionSummary = {
     recipe?: string | null;
     row_count: number;
     version: string;
+};
+
+/**
+ * Who decides what this run does next.
+ *
+ * Not a pair of `owner`/`mode` fields, because only two of their combinations
+ * mean anything to a caller and the other two are a run nobody would want:
+ * `local`+`hosted` is a decider with no plan to schedule, and `worker`+
+ * `compiled` is a worker that may not decide. One field with two arms is the
+ * choice that actually exists. `engine:` is [`ExecutionOwner::Engine`] and is
+ * not something a caller picks here — it is what ADR_0016's launch produces.
+ */
+export const Decider = { LOCAL: 'local', WORKER: 'worker' } as const;
+
+/**
+ * Who decides what this run does next.
+ *
+ * Not a pair of `owner`/`mode` fields, because only two of their combinations
+ * mean anything to a caller and the other two are a run nobody would want:
+ * `local`+`hosted` is a decider with no plan to schedule, and `worker`+
+ * `compiled` is a worker that may not decide. One field with two arms is the
+ * choice that actually exists. `engine:` is [`ExecutionOwner::Engine`] and is
+ * not something a caller picks here — it is what ADR_0016's launch produces.
+ */
+export type Decider = typeof Decider[keyof typeof Decider];
+
+/**
+ * Who is deciding a hosted run, and since when.
+ *
+ * `agentic.workflow`'s `ProcessorLock` with the lease this system already
+ * keeps — [`aiwatcher_jobs::LEASE_SECONDS`], called rather than copied, for
+ * the reason the attempt lease gives: two lease rules that agree today are a
+ * silent corruption the day one of them changes.
+ *
+ * ## What this protects, and what it does not
+ *
+ * It does **not** protect the history. Two deciders that both believe they
+ * hold this still cannot corrupt a stream, because each append names the
+ * version it read and the second one is a 409 — which is the guarantee, and it
+ * holds whether or not anybody takes a lease at all.
+ *
+ * What it protects is the *work*. An agent turn is a model call: without a
+ * lease a worker that was merely slow is one whose replacement runs the same
+ * turn beside it, pays for it, and finds out at the append. With one, the
+ * second worker is told who holds it before it starts thinking.
+ */
+export type DeciderLease = {
+    claimed_at: string;
+    execution: ExecutionId;
+    holder: string;
+    /**
+     * Who held it before this holder, and only across a takeover.
+     *
+     * The attempt row's `previous_owner`, for the same reason it cannot be
+     * read off `holder`: by the time a takeover is visible the field already
+     * names its new one, and the question a replacement asks — "was somebody
+     * else in the middle of this?" — has no other answer.
+     */
+    previous_holder?: string | null;
+};
+
+/**
+ * Which decider is asking.
+ */
+export type DeciderLeaseBody = {
+    /**
+     * A name this decider will keep across its own restarts if it wants to
+     * resume rather than be taken over. Not a credential: the route's role
+     * check is what decides who may ask at all.
+     */
+    holder: string;
 };
 
 /**
@@ -2451,6 +2560,34 @@ export const GeometryKind = {
 export type GeometryKind = typeof GeometryKind[keyof typeof GeometryKind];
 
 /**
+ * A hosted decider's own message, as this engine holds it.
+ *
+ * **Opaque by design** (section 40.3). The worker runs `decide`; an engine that
+ * read these would be a second decider, which is the thing the hosted mode
+ * exists to avoid. What is stored is the type *name* — enough to project a
+ * status from `TurnStarted` and `TurnCompleted`, and nothing else — the
+ * worker's own metadata, and a reference to the content.
+ *
+ * The metadata is stored plain because it carries no text: it is
+ * `RecordedMessageMetadata`'s sixty fields, which is what a review queue needs
+ * and what an exclusion report counts.
+ */
+export type HostedMessage = {
+    /**
+     * The worker's own type name. Two are understood; every other is carried
+     * and not read.
+     */
+    message_type: string;
+    /**
+     * The worker's metadata, verbatim. `jsonb` in the store.
+     */
+    metadata?: {
+        [key: string]: unknown;
+    };
+    payload?: null | PayloadRef;
+};
+
+/**
  * One column a hub dataset declares, in the hub's own words.
  *
  * Carried verbatim and not interpreted. aiwatcher does not know which column
@@ -3333,6 +3470,24 @@ export const LawfulBasis = {
 export type LawfulBasis = typeof LawfulBasis[keyof typeof LawfulBasis];
 
 /**
+ * What asking for a hosted run's decider lease did.
+ */
+export type LeaseOutcome = (DeciderLease & {
+    outcome: 'taken';
+}) | {
+    expires_at: string;
+    holder: string;
+    outcome: 'held';
+};
+
+/**
+ * Whether the release found a lease this caller was holding.
+ */
+export type LeaseReleased = {
+    released: boolean;
+};
+
+/**
  * One named reference from an instance to another instance.
  */
 export type LinkDef = {
@@ -3973,6 +4128,50 @@ export type ParameterKind = typeof ParameterKind[keyof typeof ParameterKind];
 export type PartSummary = {
     bytes: number;
     kind: string;
+};
+
+/**
+ * Where a hosted execution's content lives (section 40.4).
+ *
+ * The definition chooses, the deployment sets the default, and the free one is
+ * the default: a hosted run starts with no archive, no key and no flag. There
+ * is deliberately **no `plain`** — a plaintext payload in the object store is
+ * readable by every process holding the bucket's credentials, which is
+ * ADR_0021's argument for the key.
+ */
+export const PayloadPolicy = { EXTERNAL: 'external', SEALED: 'sealed' } as const;
+
+/**
+ * Where a hosted execution's content lives (section 40.4).
+ *
+ * The definition chooses, the deployment sets the default, and the free one is
+ * the default: a hosted run starts with no archive, no key and no flag. There
+ * is deliberately **no `plain`** — a plaintext payload in the object store is
+ * readable by every process holding the bucket's credentials, which is
+ * ADR_0021's argument for the key.
+ */
+export type PayloadPolicy = typeof PayloadPolicy[keyof typeof PayloadPolicy];
+
+/**
+ * Where a hosted message's words are, and how big they were.
+ *
+ * Never the words themselves (section 40.4). The digest is of the *plaintext*,
+ * so a reader can tell whether what it fetched is what was appended — the
+ * prompt registry's rule, in a fourth place.
+ */
+export type PayloadRef = {
+    /**
+     * `sha256` of the plaintext, hex.
+     */
+    digest: string;
+    policy?: PayloadPolicy;
+    /**
+     * Under `external`, a URI in the worker's own store — `agentic`'s SQLite,
+     * MLflow, or `conversation://<turn>` when the agent already writes turns
+     * to the archive. Under `sealed`, the archive key the crypt sealed it at.
+     */
+    reference: string;
+    size: number;
 };
 
 /**
@@ -5385,6 +5584,14 @@ export type SampleRecord = {
     step?: number | null;
 };
 
+export type SaveBlockTemplateRequest = {
+    description?: string;
+    id: string;
+    spec: BlockSpec;
+    tags?: Array<string>;
+    title: string;
+};
+
 export type SavePipelineRequest = {
     blocks: Array<PipelineBlock>;
     description?: string;
@@ -5978,6 +6185,12 @@ export type StartExecutionBody = {
      */
     as_of?: number | null;
     /**
+     * Who decides what runs next. Left out, this system does — which is what
+     * every curation pipeline and every scheduled run wants, and what this
+     * route did before the field existed.
+     */
+    decided_by?: Decider;
+    /**
      * Values bound when the execution was requested, available to every step.
      */
     parameters?: {
@@ -6101,6 +6314,21 @@ export type StoredBlob = {
      * What to put in `ImageRecord::uri`. See [`BLOB_SCHEME`].
      */
     uri: string;
+};
+
+/**
+ * Where the stream got to, and whether this call is what put it there.
+ */
+export type StreamAppended = {
+    /**
+     * `false` when this batch had already been appended — a redelivery, not a
+     * race. The worker carries on from `version` either way.
+     */
+    created: boolean;
+    /**
+     * The version to send as the next `expected_version`.
+     */
+    version: number;
 };
 
 /**
@@ -6835,6 +7063,8 @@ export type WorkflowMessage = (WorkflowCommand & {
     kind: 'command';
 }) | (WorkflowEvent & {
     kind: 'event';
+}) | (HostedMessage & {
+    kind: 'hosted';
 });
 
 /**
@@ -7980,6 +8210,52 @@ export type ListConversationsResponses = {
 
 export type ListConversationsResponse = ListConversationsResponses[keyof ListConversationsResponses];
 
+export type SearchBlockLibraryData = {
+    body?: never;
+    path?: never;
+    query?: {
+        search?: string | null;
+        offset?: number | null;
+        limit?: number | null;
+    };
+    url: '/api/v1/curation-library';
+};
+
+export type SearchBlockLibraryErrors = {
+    400: ErrorBody;
+    501: ErrorBody;
+};
+
+export type SearchBlockLibraryError = SearchBlockLibraryErrors[keyof SearchBlockLibraryErrors];
+
+export type SearchBlockLibraryResponses = {
+    200: BlockTemplatePage;
+};
+
+export type SearchBlockLibraryResponse = SearchBlockLibraryResponses[keyof SearchBlockLibraryResponses];
+
+export type SaveBlockTemplateData = {
+    body: SaveBlockTemplateRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/curation-library';
+};
+
+export type SaveBlockTemplateErrors = {
+    400: ErrorBody;
+    403: ErrorBody;
+    422: ErrorBody;
+    501: ErrorBody;
+};
+
+export type SaveBlockTemplateError = SaveBlockTemplateErrors[keyof SaveBlockTemplateErrors];
+
+export type SaveBlockTemplateResponses = {
+    200: BlockTemplate;
+};
+
+export type SaveBlockTemplateResponse = SaveBlockTemplateResponses[keyof SaveBlockTemplateResponses];
+
 export type ListPipelinesData = {
     body?: never;
     path?: never;
@@ -8880,6 +9156,92 @@ export type ResumeExecutionResponses = {
 
 export type ResumeExecutionResponse = ResumeExecutionResponses[keyof ResumeExecutionResponses];
 
+export type ReadDeciderLeaseData = {
+    body?: never;
+    path: {
+        execution_id: string;
+    };
+    query?: never;
+    url: '/api/v1/executions/{execution_id}/decider-lease';
+};
+
+export type ReadDeciderLeaseErrors = {
+    /**
+     * Nobody holds it
+     */
+    404: ErrorBody;
+    501: ErrorBody;
+    503: ErrorBody;
+};
+
+export type ReadDeciderLeaseError = ReadDeciderLeaseErrors[keyof ReadDeciderLeaseErrors];
+
+export type ReadDeciderLeaseResponses = {
+    200: DeciderLease;
+};
+
+export type ReadDeciderLeaseResponse = ReadDeciderLeaseResponses[keyof ReadDeciderLeaseResponses];
+
+export type TakeDeciderLeaseData = {
+    body: DeciderLeaseBody;
+    path: {
+        /**
+         * The id the run was started with
+         */
+        execution_id: string;
+    };
+    query?: never;
+    url: '/api/v1/executions/{execution_id}/decider-lease';
+};
+
+export type TakeDeciderLeaseErrors = {
+    403: ErrorBody;
+    /**
+     * Not a hosted run, or one that has finished
+     */
+    409: ErrorBody;
+    501: ErrorBody;
+    503: ErrorBody;
+};
+
+export type TakeDeciderLeaseError = TakeDeciderLeaseErrors[keyof TakeDeciderLeaseErrors];
+
+export type TakeDeciderLeaseResponses = {
+    /**
+     * Taken by this caller, or held by somebody else until `expires_at`
+     */
+    200: LeaseOutcome;
+};
+
+export type TakeDeciderLeaseResponse = TakeDeciderLeaseResponses[keyof TakeDeciderLeaseResponses];
+
+export type ReleaseDeciderLeaseData = {
+    body: DeciderLeaseBody;
+    path: {
+        execution_id: string;
+    };
+    query?: never;
+    url: '/api/v1/executions/{execution_id}/decider-lease/release';
+};
+
+export type ReleaseDeciderLeaseErrors = {
+    403: ErrorBody;
+    /**
+     * Not a hosted run, or one that has finished
+     */
+    409: ErrorBody;
+    501: ErrorBody;
+    503: ErrorBody;
+};
+
+export type ReleaseDeciderLeaseError = ReleaseDeciderLeaseErrors[keyof ReleaseDeciderLeaseErrors];
+
+export type ReleaseDeciderLeaseResponses = {
+    200: LeaseReleased;
+};
+
+export type ReleaseDeciderLeaseResponse = ReleaseDeciderLeaseResponses[keyof ReleaseDeciderLeaseResponses];
+
 export type ExecutionHistoryData = {
     body?: never;
     path: {
@@ -9039,6 +9401,47 @@ export type ProvideInputResponses = {
 };
 
 export type ProvideInputResponse = ProvideInputResponses[keyof ProvideInputResponses];
+
+export type AppendStreamData = {
+    body: AppendStreamBody;
+    headers: {
+        /**
+         * This batch's key. The durable inbox key: repeating it returns the first outcome rather than appending twice
+         */
+        'Idempotency-Key': string;
+    };
+    path: {
+        /**
+         * The id the run was started with
+         */
+        execution_id: string;
+    };
+    query?: never;
+    url: '/api/v1/executions/{execution_id}/stream';
+};
+
+export type AppendStreamErrors = {
+    /**
+     * An empty batch, one past the limit, or no Idempotency-Key
+     */
+    400: ErrorBody;
+    403: ErrorBody;
+    /**
+     * Another decider appended first, or this run is not a hosted one
+     */
+    409: ErrorBody;
+    413: ErrorBody;
+    501: ErrorBody;
+    503: ErrorBody;
+};
+
+export type AppendStreamError = AppendStreamErrors[keyof AppendStreamErrors];
+
+export type AppendStreamResponses = {
+    200: StreamAppended;
+};
+
+export type AppendStreamResponse = AppendStreamResponses[keyof AppendStreamResponses];
 
 export type LiveWebsocketData = {
     body?: never;

@@ -154,6 +154,12 @@ async fn build_registries(
 
     let prompts = Arc::new(Registry::new(Arc::clone(&store), registry_config));
     let datasets = Arc::new(DatasetRegistry::new(Arc::clone(&store), "datasets"));
+    if config.role.serves()
+        && let Some(path) = &config.seed_file
+    {
+        let imported = crate::seed::import_file(&datasets, std::path::Path::new(path)).await?;
+        tracing::info!(path, ?imported, "curation seed imported");
+    }
     // The image source is handed to the registry rather than fetched by it:
     // the queued importer runs inside `aiwatcher-annotations`, which knows
     // nothing about hubs, and this is the one process that holds both halves.

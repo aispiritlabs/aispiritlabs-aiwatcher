@@ -318,6 +318,9 @@ pub struct Config {
     pub bus: BackendKind,
     /// Directory for the write-ahead log and the dead letter queue.
     pub data_dir: String,
+    /// Optional authored-data seed, imported before the API starts serving.
+    /// `from_env` selects examples/seed.json; `none` disables importing.
+    pub seed_file: Option<String>,
     /// `user:password@host:port`. Required when `bus = Laser`.
     pub laser_connection_string: Option<String>,
     /// The Iggy stream. One per deployment, not per run.
@@ -518,6 +521,7 @@ impl Default for Config {
             listen: SocketAddr::from(([0, 0, 0, 0], 8080)),
             bus: BackendKind::default(),
             data_dir: "./.data".to_owned(),
+            seed_file: None,
             laser_connection_string: None,
             laser_stream: "aiwatcher".to_owned(),
             laser_topic: "events".to_owned(),
@@ -625,6 +629,11 @@ impl Config {
         if let Some(raw) = var("AIWATCHER_DATA_DIR") {
             config.data_dir = raw;
         }
+        config.seed_file = match var("AIWATCHER_SEED_FILE").as_deref() {
+            Some("none") => None,
+            Some(path) => Some(path.to_owned()),
+            None => Some("examples/seed.json".to_owned()),
+        };
         // `LASER_CONNECTION_STRING` is what the SDK's own `connect_env` reads,
         // so a deployment that already sets it needs no aiwatcher-specific
         // variable; the prefixed one wins where both are present.

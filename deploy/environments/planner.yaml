@@ -105,6 +105,44 @@ promptStore:
     accessKeyKey: RUSTFS_ACCESS_KEY
     secretKeyKey: RUSTFS_SECRET_KEY
 
+# ── Managed execution ────────────────────────────────────────────────────────
+#
+# This is the half of planner's import that lives on aiwatcher's side. Every
+# shipped planner profile except `local` sets
+# `PLANNER_IMPORT_ORCHESTRATOR=aiwatcher`, so the import worker posts its four
+# stages to `POST /api/v1/executions` and waits on the plan. With the chart's
+# own default — `execution.store: none` — that route answers 501
+# `executions_disabled` and every import in this namespace fails at its first
+# call, with nothing in either release's values file saying so.
+execution:
+  store: postgres
+
+postgresql:
+  # planner already runs PostgreSQL in this namespace — `planner-postgres`,
+  # which planner-api, the backup job and authentik share. The same borrowing
+  # as the prompt store above, and detection derives neither: it can see a
+  # database and it cannot see whether this release may create tables in it.
+  # Here it may, because planner's own chart creates the role and the database
+  # beside `planner_app` and `authentik`.
+  mode: external
+  database: aiwatcher
+  username: aiwatcher
+  external:
+    host: planner-postgres
+    port: 5432
+    # Read only by the NetworkPolicy below. A rule only applies in its own
+    # namespace, so the chart refuses to render one for a database somewhere
+    # else — naming the namespace is what makes that check possible.
+    namespace: planner
+    podSelector:
+      app.kubernetes.io/name: planner
+      app.kubernetes.io/instance: planner
+      app.kubernetes.io/component: postgres
+  credentialsSecret:
+    # planner's own Secret, under a key planner's chart writes for this release.
+    name: planner-secrets
+    passwordKey: AIWATCHER_POSTGRES_PASSWORD
+
 # ── Signing in ───────────────────────────────────────────────────────────────
 #
 # Left off, and this is the one setting in this file that is deliberately not
@@ -150,6 +188,15 @@ networkPolicy:
   # only" and cut off planner-web, planner-import-api and planner-mlflow. Turn
   # this on only if planner fences that pod itself.
   allowEgressToExternalPromptStore: false
+  # On, and the opposite answer to the line above it from the same rule. A
+  # NetworkPolicy is additive, so attaching an ingress rule widens pods that
+  # something already fences and narrows pods that nothing does. planner's
+  # RustFS is unfenced, so a rule there would cut off planner-web,
+  # planner-import-api and planner-mlflow. planner's PostgreSQL *is* fenced —
+  # `planner-postgres-ingress` admits planner-api, the backup job and
+  # authentik — so without this rule aiwatcher is simply refused, and the
+  # import fails on a connection rather than on anything it could report.
+  allowEgressToExternalWorkflowStore: true
 
 ingress:
   # On, because this is also the file that authenticates it: the two middlewares

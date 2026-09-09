@@ -10,7 +10,10 @@ use Psr\Http\Client\ClientInterface;
 
 use function Flow\ETL\Adapter\Http\from_http_paginated;
 use function Flow\ETL\Adapter\Http\http_pagination_cursor;
+use function Flow\ETL\Adapter\Http\http_pagination_offset;
 use function Flow\ETL\Adapter\Http\http_request_option_query;
+use function Flow\ETL\Adapter\Http\http_stop_when_empty_path;
+use function Flow\ETL\Adapter\Http\http_stop_when_max_results;
 use function Flow\ETL\DSL\array_expand;
 use function Flow\ETL\DSL\array_get;
 use function Flow\ETL\DSL\cast;
@@ -217,11 +220,9 @@ final readonly class Catalog
             name: 'hub_rows',
             path: '/api/v1/dataset-hubs/rows',
             rowsPath: 'rows',
-            // Hugging Face's rows endpoint pages by offset and reports no
-            // cursor, and a corpus is read in one bite here rather than
-            // walked: a batch somebody is about to import is a batch somebody
-            // is about to look at.
-            cursorParam: 'unused',
+            // This route has offsets rather than next_cursor. open() pages a
+            // bounded sample; read(limit: 891) must not silently return 100.
+            cursorParam: 'offset',
             grain: 'one row of one hub dataset, as the hub sent it',
             description: 'The contents of one Hugging Face dataset. The search says which corpora exist; this says what is in one — with the corpus\'s own columns under the corpus\'s own names. Which column is the picture, what the caption is called and what a family key is built from are decided here, in the query, because they are questions about that corpus.',
             columns: [
@@ -267,7 +268,7 @@ final readonly class Catalog
                 'limit' => new Parameter(
                     name: 'limit',
                     required: false,
-                    description: 'How many rows, capped at 100 by the API.',
+                    description: 'Total rows to read (1–1000, default 100), fetched in pages of at most 100.',
                 ),
                 'address' => new Parameter(
                     name: 'address',
@@ -449,6 +450,7 @@ final readonly class Catalog
         ?int $windowSeconds = null,
         array $arguments = [],
         ?int $asOf = null,
+        ?int $inputLimit = null,
     ): DataFrame {
         $path = $dataset->requiresRun
             ? \str_replace('{run}', \rawurlencode((string) $run), $dataset->path)
@@ -459,14 +461,41 @@ final readonly class Catalog
             $this->baseUrl . $path . '?' . self::query($dataset, $this->pageSize, $windowSeconds, $arguments, $asOf),
         );
 
+        $pagination = http_pagination_cursor('next_cursor', http_request_option_query($dataset->cursorParam));
+        $rowLimit = null;
+        if ($dataset->name === 'hub_rows') {
+            $rowLimit = \filter_var($arguments['limit'] ?? '100', \FILTER_VALIDATE_INT, ['options' => [
+                'min_range' => 1,
+                'max_range' => 1000,
+            ]]);
+            $offset = \filter_var($arguments['offset'] ?? '0', \FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]);
+            if ($rowLimit === false || $offset === false) {
+                throw new \InvalidArgumentException(
+                    'hub_rows requires limit: 1–1000 and a nonnegative integer offset.',
+                );
+            }
+            if ($inputLimit !== null) {
+                $rowLimit = \min($rowLimit, $inputLimit);
+            }
+            $pagination = http_pagination_offset(
+                http_request_option_query('offset'),
+                http_request_option_query('limit'),
+                \min(100, $rowLimit),
+                start_offset: $offset,
+                stop_when: http_stop_when_empty_path('rows')->or(http_stop_when_max_results($rowLimit)),
+            );
+        }
+
         $frame = data_frame()
-            ->read(from_http_paginated(
-                $this->client,
-                $request,
-                http_pagination_cursor('next_cursor', http_request_option_query($dataset->cursorParam)),
-            ))
+            ->read(from_http_paginated($this->client, $request, $pagination))
             ->withEntry('__body', cast(ref('response_body'), type_array()))
             ->withEntry('__row', array_expand(array_get(ref('__body'), $dataset->rowsPath)));
+
+        if ($rowLimit !== null) {
+            // The final HTTP page may extend past the requested sample. Cap
+            // before user transforms, so aggregations see exactly that sample.
+            $frame = $frame->limit($rowLimit);
+        }
 
         foreach (\array_keys($dataset->columns) as $column) {
             // `optional` because the API omits null fields rather than sending

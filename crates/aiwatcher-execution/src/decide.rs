@@ -31,8 +31,8 @@ use crate::message::{
 };
 use crate::plan::RuntimeBinding;
 use crate::state::{
-    AttemptRecord, Execution, ExecutionState, FailureClass, InputRequest, RunState, StateType,
-    StepState,
+    AttemptRecord, Execution, ExecutionMode, ExecutionState, FailureClass, InputRequest, RunState,
+    StateType, StepState,
 };
 
 /// Everything a decision needs that is not the state or the command.
@@ -334,7 +334,7 @@ pub fn decide(
             Ok(emit.into_messages())
         }
         (ExecutionState::Empty, message) => Err(DecisionError::NotStarted {
-            message: message.name(),
+            message: message.name().to_owned(),
         }),
         (ExecutionState::Active(execution), message) => {
             decide_active(execution, message, cause, now)
@@ -693,7 +693,7 @@ fn decide_active(
         // A reactor or the API sending anything else as an input is a caller
         // bug, and one worth naming rather than absorbing.
         other => Err(DecisionError::Unhandled {
-            message: other.name(),
+            message: other.name().to_owned(),
         }),
     }
 }
@@ -709,6 +709,17 @@ fn step_of<'a>(execution: &'a Execution, step_id: &str) -> Result<&'a StepState,
 /// Schedule every step whose parents have all completed and which has not been
 /// scheduled yet.
 fn dispatch_ready(execution: &Execution, emit: &mut Emitter, now: Now) {
+    // A hosted run's plan is its *shape*, not its program
+    // ([`ExecutionMode`]'s own words): the worker chooses the next node,
+    // because an agent graph's conditions are decided by a model and its join
+    // arity is discovered. Scheduling from the shape would put a claimable
+    // attempt in front of every reactor for work the worker is also doing —
+    // two parties executing one step, which is what section 40.3 splits the
+    // decider from the history to prevent. Guarded here rather than at the
+    // start, because a resume and a completion reach this too.
+    if execution.mode == ExecutionMode::Hosted {
+        return;
+    }
     if execution.state.state_type == StateType::Paused || execution.cancelling {
         return;
     }

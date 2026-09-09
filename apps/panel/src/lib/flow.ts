@@ -121,13 +121,11 @@ async function call(path: string, init?: RequestInit): Promise<unknown> {
     throw new FlowUnavailableError();
   }
 
-  // Nothing is listening behind the proxy. Which status that is depends on the
-  // proxy: vite's dev server answers 500 (measured), an ingress typically 502
-  // or 503. Including 500 is safe because the service itself never emits one —
-  // a refused query is a 422, and an unreachable aiwatcher is a 502 with a
-  // body. Without this, killing the service mid-session would report the next
-  // Run as a refused query rather than as a missing service.
-  if ([500, 502, 503, 504].includes(response.status)) {
+  const body: unknown = await response.json().catch(() => null);
+  const serviceError = errorSchema.safeParse(body);
+  // A structured upstream failure proves Flow answered. Preserve its reason
+  // (e.g. a dataset hub's 502); only an unstructured proxy failure means absent.
+  if ([500, 502, 503, 504].includes(response.status) && !serviceError.success) {
     throw new FlowUnavailableError();
   }
 
@@ -141,10 +139,8 @@ async function call(path: string, init?: RequestInit): Promise<unknown> {
     throw new FlowUnavailableError();
   }
 
-  const body: unknown = await response.json().catch(() => null);
-
   if (!response.ok) {
-    const parsed = errorSchema.safeParse(body);
+    const parsed = serviceError;
     throw new FlowQueryError(
       parsed.success ? parsed.data.error.message : `The service answered ${response.status}.`,
       parsed.success ? parsed.data.error.column : 0,

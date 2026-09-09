@@ -1,0 +1,57 @@
+{
+  "name": "curation/titanic-survival",
+  "description": "Survival rate, headcount and median age by status and class over the Titanic training split, as one Flow PHP query.",
+  "blocks": [
+    {
+      "id": "corpus",
+      "title": "Hugging Face",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "spec": {
+        "kind": "source",
+        "dataset": "hub_rows",
+        "arguments": {
+          "dataset": "phihung/titanic",
+          "split": "train",
+          "limit": "100"
+        }
+      }
+    },
+    {
+      "id": "rates",
+      "title": "Feature engineering",
+      "position": {
+        "x": 300,
+        "y": 0
+      },
+      "spec": {
+        "kind": "transform",
+        "steps": "->withEntry('name', array_get(ref('row'), 'Name'))\n->withEntry('sex', array_get(ref('row'), 'Sex'))\n->withEntry('pclass', array_get(ref('row'), 'Pclass'))\n->withEntry('age', array_get(ref('row'), 'Age'))\n->withEntry('survived', array_get(ref('row'), 'Survived'))\n->withEntry('title', regex_replace(lit('/^[^,]*,\\s*([^.]+)\\..*$/'), lit('$1'), ref('name')))\n->withEntry('status', lit('rare'))\n->withEntry('status', when(ref('title')->same(lit('Mr')), lit('mr'), ref('status')))\n->withEntry('status', when(ref('title')->same(lit('Master')), lit('master'), ref('status')))\n->withEntry('status', when(any(ref('title')->same(lit('Mrs')), ref('title')->same(lit('Mme'))), lit('mrs'), ref('status')))\n->withEntry('status', when(any(ref('title')->same(lit('Miss')), ref('title')->same(lit('Mlle')), ref('title')->same(lit('Ms'))), lit('miss'), ref('status')))\n->groupBy(ref('status'), ref('sex'), ref('pclass'))\n->aggregate(count(ref('survived')->as('passengers')), average(ref('survived')->as('survival_rate')), median(ref('age')))\n->sortBy(ref('survival_rate')->desc())"
+      }
+    },
+    {
+      "id": "result",
+      "title": "View",
+      "position": {
+        "x": 600,
+        "y": 0
+      },
+      "spec": {
+        "kind": "view",
+        "dataset": "curation/titanic-survival"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "corpus",
+      "to": "rates"
+    },
+    {
+      "from": "rates",
+      "to": "result"
+    }
+  ]
+}

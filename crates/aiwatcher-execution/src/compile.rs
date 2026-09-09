@@ -509,7 +509,7 @@ mod tests {
     }
 
     #[test]
-    fn a_chain_that_is_not_a_chain_is_refused_with_the_registrys_own_reasons() {
+    fn a_chain_that_is_not_a_chain_is_refused_with_every_reason_at_once() {
         // Not re-implemented here: `order_of` owns the shape rules and reports
         // every problem at once. Two validators would drift.
         let broken = CurationPipeline {

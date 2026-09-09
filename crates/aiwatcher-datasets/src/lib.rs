@@ -15,8 +15,11 @@ use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 use utoipa::ToSchema;
 
+mod library;
 /// A curation assembled out of blocks rather than written as one script.
 mod pipeline;
+
+pub use library::{BlockTemplate, BlockTemplatePage, SaveBlockTemplateRequest};
 
 pub use pipeline::{
     BlockPosition, BlockSpec, CurationPipeline, PipelineBlock, PipelineEdge, PipelinePage,

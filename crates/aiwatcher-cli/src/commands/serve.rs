@@ -1,22 +1,10 @@
-//! The aiwatcher server.
+//! Running the server: `aiwatcher serve`, `aiwatcher work`, and the bare
+//! invocation that is both.
 //!
-//! One binary, two roles (section 27, ADR_0025). `aiwatcher serve` holds the
-//! API, the read model and the object store; `aiwatcher work` holds the
-//! execution outbox and the reactors, and is the only role that opens a socket
-//! to Flow, a notebook runtime, an engine or the cluster.
-//!
-//! Called with no role — `just run`, `just dev`, `cargo run --bin aiwatcher` —
-//! it runs **both in one process**, which is not a third role: it is the two of
-//! them together, and it is what the `file` workflow store requires, since that
-//! store holds one process and both halves need it. A deployment that wants the
-//! network boundary runs two Deployments against `postgres`, and the one
-//! holding the cluster's credentials is the one holding no ingress.
-//!
-//! The projector runs in `serve` rather than in `work`, which is where section
-//! 27 puts "the consumers". In this codebase the projector *is* the read model
-//! the API answers from, in process, under a memory contract; a `serve` role
-//! without it would serve every read from an empty fold. See
-//! `execution`'s module docs.
+//! Moved here from the binary unchanged, because it is one of the CLI's
+//! commands rather than the whole of it. What changed is where the role comes
+//! from: the dispatcher has already read it, so this takes a [`Config`] that is
+//! settled and does not re-read `argv`.
 
 use std::time::Duration;
 
@@ -28,24 +16,18 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
-use aiwatcher_server::config::{Config, LogFormat, ProcessRole};
+use aiwatcher_server::config::{Config, LogFormat};
 
 /// How long a background task is given to stop before the process exits anyway.
 const GRACE: Duration = Duration::from_secs(10);
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let mut config = Config::from_env().context("reading configuration")?;
-    // The argument wins over the variable: a container sets `AIWATCHER_ROLE`
-    // and a person types `aiwatcher work`, and the one typed last is the one
-    // that was meant.
-    if let Some(role) = role_argument()? {
-        config.role = role;
-    }
-    // Read again, because the argument can have made a valid configuration
-    // invalid — splitting the binary in two on a store that holds one process
-    // is the case, and it is better said here than by a lock file.
-    config.validate().context("reading configuration")?;
+/// Run the server to completion, in whichever role `config` names.
+///
+/// # Errors
+///
+/// Whatever stopped it from starting: a configuration the crate refused, a
+/// port already held, a backend that could not be reached.
+pub async fn run(config: Config) -> Result<()> {
     init_tracing(config.log_format);
 
     tracing::info!(
@@ -167,24 +149,6 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
-}
-
-/// `aiwatcher serve` or `aiwatcher work`, when one was typed.
-///
-/// A hand-rolled read rather than a parser: this binary has exactly one
-/// argument and adding a dependency to read it would be the wrong trade. An
-/// unrecognised one is refused by name rather than ignored — a typo that
-/// silently ran both roles would be a deployment quietly holding the cluster's
-/// credentials next to its ingress.
-fn role_argument() -> Result<Option<ProcessRole>> {
-    let Some(argument) = std::env::args().nth(1) else {
-        return Ok(None);
-    };
-    argument
-        .parse()
-        .map(Some)
-        .map_err(|error| anyhow::anyhow!("{error}"))
-        .with_context(|| format!("reading the role argument {argument:?}"))
 }
 
 fn init_tracing(format: LogFormat) {

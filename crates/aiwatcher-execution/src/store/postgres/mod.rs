@@ -41,6 +41,7 @@ use sqlx::{PgPool, Row as _};
 use time::OffsetDateTime;
 
 use crate::claim::{AttemptKey, AttemptRow, AttemptWrite, ClaimFilter};
+use crate::hosted::{DeciderLease, LeaseOutcome};
 use crate::message::{
     Direction, MessageMetadata, OutboxMessage, RecordedMessage, RunProjection, WorkflowMessage,
 };
@@ -116,6 +117,128 @@ impl WorkflowStore for PostgresWorkflowStore {
         })
     }
 
+    async fn load_page(
+        &self,
+        execution: &ExecutionId,
+        after: u64,
+        limit: usize,
+    ) -> Result<StreamSlice> {
+        // The version comes from its own query rather than from the page's
+        // length: a page is a window, and `max(stream_version)` is the only
+        // thing that tells a reader whether it is looking at the end.
+        let version: i64 = sqlx::query_scalar(
+            "select coalesce(max(stream_version), 0) from workflow_messages where execution_id = $1",
+        )
+        .bind(execution.as_str())
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|error| StoreError::Backend(error.to_string()))?;
+
+        let rows = sqlx::query(
+            "select stream_version, direction, message, metadata, recorded_at
+               from workflow_messages
+              where execution_id = $1 and stream_version > $2
+              order by stream_version
+              limit $3",
+        )
+        .bind(execution.as_str())
+        .bind(after as i64)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|error| StoreError::Backend(error.to_string()))?;
+
+        let mut messages = Vec::with_capacity(rows.len());
+        for row in rows {
+            messages.push(recorded_from(&row)?);
+        }
+        Ok(StreamSlice {
+            version: version as u64,
+            messages,
+        })
+    }
+
+    async fn take_decider_lease(
+        &self,
+        execution: &ExecutionId,
+        holder: &str,
+        now: OffsetDateTime,
+    ) -> Result<LeaseOutcome> {
+        // One statement, because two — read, then write — is the race this
+        // exists to settle. The `where` is the whole rule: insert when nobody
+        // has it, update only when it is already this holder's or has run out.
+        // A row somebody else holds live matches neither, so nothing is written
+        // and `returning` yields no row, which is how the refusal is told apart
+        // from the grant.
+        let row = sqlx::query(
+            "insert into execution_decider_leases (execution_id, holder, claimed_at)
+             values ($1, $2, $3)
+             on conflict (execution_id) do update set
+               previous_holder = case
+                 when execution_decider_leases.holder = excluded.holder
+                   then execution_decider_leases.previous_holder
+                 else execution_decider_leases.holder
+               end,
+               holder = excluded.holder,
+               claimed_at = excluded.claimed_at
+             where execution_decider_leases.holder = excluded.holder
+                or execution_decider_leases.claimed_at < $4
+             returning holder, previous_holder, claimed_at",
+        )
+        .bind(execution.as_str())
+        .bind(holder)
+        .bind(now)
+        .bind(now - time::Duration::seconds(aiwatcher_jobs::LEASE_SECONDS))
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|error| StoreError::Backend(error.to_string()))?;
+
+        if let Some(row) = row {
+            return Ok(LeaseOutcome::Taken(lease_from(execution, &row)));
+        }
+
+        // Nothing was written, so somebody else holds it and it is live. Who,
+        // and until when — the one thing a refused decider can act on.
+        let held = self.decider_lease(execution).await?.ok_or_else(|| {
+            StoreError::Backend("the lease vanished between two reads".to_owned())
+        })?;
+        Ok(LeaseOutcome::Held {
+            expires_at: held.expires_at(),
+            holder: held.holder,
+        })
+    }
+
+    async fn release_decider_lease(
+        &self,
+        execution: &ExecutionId,
+        holder: &str,
+        now: OffsetDateTime,
+    ) -> Result<bool> {
+        let done = sqlx::query(
+            "delete from execution_decider_leases
+              where execution_id = $1 and holder = $2 and claimed_at >= $3",
+        )
+        .bind(execution.as_str())
+        .bind(holder)
+        .bind(now - time::Duration::seconds(aiwatcher_jobs::LEASE_SECONDS))
+        .execute(&self.pool)
+        .await
+        .map_err(|error| StoreError::Backend(error.to_string()))?;
+        Ok(done.rows_affected() > 0)
+    }
+
+    async fn decider_lease(&self, execution: &ExecutionId) -> Result<Option<DeciderLease>> {
+        let row = sqlx::query(
+            "select holder, previous_holder, claimed_at
+               from execution_decider_leases where execution_id = $1",
+        )
+        .bind(execution.as_str())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|error| StoreError::Backend(error.to_string()))?;
+        Ok(row.map(|row| lease_from(execution, &row)))
+    }
+
     async fn append(
         &self,
         execution: &ExecutionId,
@@ -177,11 +300,7 @@ impl WorkflowStore for PostgresWorkflowStore {
         let mut next = version;
         for message in std::iter::once(request.input.clone()).chain(request.outputs) {
             next += 1;
-            let kind = if message.message.is_event() {
-                "event"
-            } else {
-                "command"
-            };
+            let kind = message.message.kind();
             sqlx::query(
                 "insert into workflow_messages
                    (execution_id, stream_version, message_id, kind, direction,
@@ -669,6 +788,9 @@ impl WorkflowStore for PostgresWorkflowStore {
             // Published rows only: an unpublished one would have kept its
             // execution out of `doomed` in the first place.
             "delete from outbox_messages where execution_id = any($1)",
+            // With the run, never after it: a lease naming an execution this
+            // store has forgotten is a row nothing will ever release.
+            "delete from execution_decider_leases where execution_id = any($1)",
             "delete from execution_runs where execution_id = any($1)",
         ] {
             sqlx::query(statement)
@@ -842,6 +964,15 @@ async fn write_checkpoint(
     .await
     .map_err(|error| StoreError::Backend(error.to_string()))?;
     Ok(())
+}
+
+fn lease_from(execution: &ExecutionId, row: &PgRow) -> DeciderLease {
+    DeciderLease {
+        execution: execution.clone(),
+        holder: row.get("holder"),
+        previous_holder: row.get("previous_holder"),
+        claimed_at: row.get("claimed_at"),
+    }
 }
 
 fn recorded_from(row: &PgRow) -> Result<RecordedMessage> {

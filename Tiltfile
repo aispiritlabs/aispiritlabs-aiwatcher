@@ -77,7 +77,7 @@ docker_build(
     build_args = {'FEATURES': build_features},
     # Everything the Dockerfile reads, and nothing else: the panel, docs and
     # target/ would otherwise be shipped to the daemon on every build.
-    only = ['crates', 'Cargo.toml', 'rust-toolchain.toml'],
+    only = ['crates', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'examples/seed.json'],
 )
 
 # On the base backend aiwatcher does not need Iggy at all, so waiting for it

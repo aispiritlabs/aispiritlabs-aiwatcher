@@ -22,6 +22,7 @@ use aiwatcher_core::{Checkpoint, MessageId};
 
 use crate::claim::{AttemptKey, AttemptRow, AttemptWrite, ClaimFilter};
 use crate::error::{Result, StoreError};
+use crate::hosted::{DeciderLease, LeaseOutcome};
 use crate::message::{Direction, OutboxMessage, RecordedMessage, RunProjection};
 use crate::plan::DefinitionKind;
 use crate::schedule::slot::{
@@ -50,6 +51,9 @@ struct Inner {
     /// Ordered by `(kind, name, slot)`, so one definition's slots are a
     /// contiguous range rather than a scan of every definition's.
     slots: BTreeMap<SlotKey, SlotRecord>,
+    /// One decider at a time, per hosted execution. Kept after it expires so a
+    /// takeover can name who was interrupted.
+    decider_leases: HashMap<String, DeciderLease>,
 }
 
 /// An in-memory workflow store.
@@ -91,6 +95,73 @@ impl WorkflowStore for MemoryWorkflowStore {
             version: messages.len() as u64,
             messages,
         })
+    }
+
+    async fn load_page(
+        &self,
+        execution: &ExecutionId,
+        after: u64,
+        limit: usize,
+    ) -> Result<StreamSlice> {
+        let inner = self.inner.lock().await;
+        let stream = inner.streams.get(execution.as_str());
+        let version = stream.map_or(0, Vec::len) as u64;
+        let messages = stream
+            .into_iter()
+            .flatten()
+            .filter(|recorded| recorded.stream_version > after)
+            .take(limit)
+            .cloned()
+            .collect();
+        Ok(StreamSlice { version, messages })
+    }
+
+    async fn take_decider_lease(
+        &self,
+        execution: &ExecutionId,
+        holder: &str,
+        now: OffsetDateTime,
+    ) -> Result<LeaseOutcome> {
+        let mut inner = self.inner.lock().await;
+        match inner.decider_leases.get_mut(execution.as_str()) {
+            Some(lease) if lease.held_by(holder, now) || lease.expired(now) => {
+                lease.take(holder, now);
+                Ok(LeaseOutcome::Taken(lease.clone()))
+            }
+            Some(lease) => Ok(LeaseOutcome::Held {
+                holder: lease.holder.clone(),
+                expires_at: lease.expires_at(),
+            }),
+            None => {
+                let lease = DeciderLease::taken_by(execution, holder, now);
+                inner
+                    .decider_leases
+                    .insert(execution.as_str().to_owned(), lease.clone());
+                Ok(LeaseOutcome::Taken(lease))
+            }
+        }
+    }
+
+    async fn release_decider_lease(
+        &self,
+        execution: &ExecutionId,
+        holder: &str,
+        now: OffsetDateTime,
+    ) -> Result<bool> {
+        let mut inner = self.inner.lock().await;
+        let Some(lease) = inner.decider_leases.get(execution.as_str()) else {
+            return Ok(false);
+        };
+        if !lease.held_by(holder, now) {
+            return Ok(false);
+        }
+        inner.decider_leases.remove(execution.as_str());
+        Ok(true)
+    }
+
+    async fn decider_lease(&self, execution: &ExecutionId) -> Result<Option<DeciderLease>> {
+        let inner = self.inner.lock().await;
+        Ok(inner.decider_leases.get(execution.as_str()).cloned())
     }
 
     async fn append(

@@ -132,6 +132,10 @@ pub enum ApiError {
     #[error(transparent)]
     Execution(#[from] aiwatcher_execution::HandleError),
 
+    /// A worker's append to a hosted execution's history, refused.
+    #[error(transparent)]
+    HostedAppend(#[from] aiwatcher_execution::hosted::HostedError),
+
     #[error("this instance has no identity provider configured (AIWATCHER_AUTH_MODE)")]
     AuthDisabled,
 
@@ -293,6 +297,7 @@ impl ApiError {
             // run. Every problem with it rides in `details`.
             Self::PlanRefused { .. } => (StatusCode::UNPROCESSABLE_ENTITY, "plan_refused"),
             Self::Execution(error) => execution_parts(error),
+            Self::HostedAppend(error) => hosted_parts(error),
             // Same shape again, and the same reason: the sign-in routes exist
             // in the contract and this deployment configured no provider.
             Self::AuthDisabled => (StatusCode::NOT_IMPLEMENTED, "auth_disabled"),
@@ -489,10 +494,42 @@ fn execution_parts(error: &aiwatcher_execution::HandleError) -> (StatusCode, &'s
         HandleError::Store(aiwatcher_execution::StoreError::PayloadTooLarge { .. }) => {
             (StatusCode::PAYLOAD_TOO_LARGE, "too_large")
         }
+        // The store *worked*: somebody else appended first. A hosted decider
+        // reads this and reloads, so answering 503 with the rest of the store's
+        // failures would tell it to wait for something that is not going to
+        // change. `handle` never surfaces one — it re-reads and decides again —
+        // so this arm is the hosted append's, where the decision is the
+        // worker's and this process cannot make it a second time.
+        HandleError::Store(aiwatcher_execution::StoreError::VersionConflict { .. }) => {
+            (StatusCode::CONFLICT, "version_conflict")
+        }
         HandleError::Store(_) => (
             StatusCode::SERVICE_UNAVAILABLE,
             "workflow_store_unavailable",
         ),
+    }
+}
+
+/// Why a worker's append was refused, as a status.
+///
+/// The split that matters is 409 against 400: a conflict and a run this engine
+/// decides are both things the *caller* acts on — reload, or start the run in
+/// the mode it meant — while a batch that is empty or too long is a request
+/// that will never be accepted however many times it is sent.
+fn hosted_parts(error: &aiwatcher_execution::hosted::HostedError) -> (StatusCode, &'static str) {
+    use aiwatcher_execution::hosted::HostedError;
+    match error {
+        HostedError::NotHosted { .. } => (StatusCode::CONFLICT, "not_hosted"),
+        // Also about the run's state rather than the request, and also
+        // something the caller acts on: wait, or take it over once it has run
+        // out. Asking *for* the lease answers 200 either way — being told who
+        // has it is an answer to that question. Appending while somebody else
+        // decides is not.
+        HostedError::LeaseHeld { .. } => (StatusCode::CONFLICT, "lease_held"),
+        HostedError::Empty | HostedError::TooManyMessages { .. } => {
+            (StatusCode::BAD_REQUEST, "invalid_append")
+        }
+        HostedError::Handle(handle) => execution_parts(handle),
     }
 }
 

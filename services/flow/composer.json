@@ -23,7 +23,9 @@
   },
   "config": {
     "sort-packages": true,
-    "allow-plugins": { "*": false }
+    "allow-plugins": { "*": false },
+    "//platform": "Rozwiązuj zależności pod najniższy PHP, który `require.php` dopuszcza. Bez tego `composer update` na maszynie z 8.5 zapisuje w locku pakiety wymagające 8.4.1, a `composer install` w CI — które celowo stoi na deklarowanej podłodze — odmawia. Lock przestaje wtedy opisywać to, co ta usługa obiecuje uruchomić.",
+    "platform": { "php": "8.3.0" }
   },
   "scripts": {
     "test": "phpunit"

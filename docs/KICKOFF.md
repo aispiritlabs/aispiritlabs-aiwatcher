@@ -164,7 +164,7 @@ when a named use case requires execution without publication.
 
 ## Start here — 6. Deliver one worker integration (Phase 10 → Phase 11 Level 2)
 
-**The protocol, SDK and static workflow authoring path are delivered. Planner parity remains open.**
+**Delivered: the protocol, the SDK, the authoring path, and Planner's four stages on that boundary. Removing Flyte from Planner's chart is Phase 12's step, not this one.**
 
 Done, 2026-09-08:
 
@@ -222,16 +222,83 @@ Integration status, 2026-09-09:
    wait for the actual five-minute lease, then complete with a replacement worker.
    The result has 22 history messages and two projected graph nodes. See
    [the Rust runtime guide](RUST_WORKFLOW_RUNTIME.md) and `just test-worker-runtime`.
-7. **Planner's four stages** on that boundary, compared with the direct path in
-   Planner's own suite against a pinned SDK revision.
+7. **Planner's four stages** run on that boundary. `acquire → normalize →
+   analyze → persist` is one registered workflow of four `PythonTask` steps and
+   three artifact edges, and the review it produces is byte-for-byte the review
+   the direct path produces.
+
+   What made the comparison mean something is that the three orchestrators stop
+   holding three copies of a stage. Planner's `house_stages` is the one chain;
+   `direct`, `flyte` and `aiwatcher` are adapters behind a `PipelineRunner` port,
+   so the gate compares *transport* rather than two implementations that are free
+   to drift. The difference the transport makes is a JSON round trip — the
+   analysis carries numpy values from OpenCV, and encoding it with the client's
+   own serializer rather than Planner's would fail outright or quietly coerce.
+
+   Three things differ by construction and are each asserted rather than
+   quietly excluded: the data directory (a second run over the first one's
+   directory would hit the extraction cache and execute no stage at all), the
+   moment the review was created, and the `orchestrator` label, which is
+   provenance and is checked for equality on both sides.
+
+   Evidence, in Planner's repository against the pinned SDK: four tests in
+   `tests/test_house_orchestrator_parity.py`, which drive the real `@task`
+   functions through the real encoding; and `just ml-aiwatcher-import`, which
+   runs the same import against a **running** server — real queue, real claim,
+   real artifacts through the API — and then waits for the log fold to agree:
+   `nodes_total: 4`, `nodes_succeeded: 4`, 65 753 bytes identical, 1.6 s. Three
+   negative controls were run and confirmed: a mislabelled orchestrator, a lossy
+   artifact hand-off, and a step wired to the wrong parent's artifact.
+
+   It is also what every deployment now does, rather than something a deployment
+   could be made to do. Planner's runtime profile lost `flyteEnabled` and gained
+   `importOrchestrator`, whose default is `aiwatcher`; `local` says `direct`
+   because it is the profile with no services at all, and `docker`, `tilt` and
+   `kubernetes` say `aiwatcher`. No shipped profile selects Flyte any more — it
+   is reachable only by naming it, which is what a fallback for one release
+   should look like. An unknown value in the profile is refused as loudly as one
+   in the environment variable, because the alternative is a deployment that
+   meant to hand work to a server and quietly computed everything itself.
+
+   The three-way SDK pin drift is closed with it — `pyproject.toml`, `uv.lock`,
+   `setup-local-aiwatcher.sh`, the two documents that quote it and **the Tilt
+   checkout itself** now name one revision, and it is the one that has
+   `aiwatcher_sdk.worker` in it. Without that there was nothing to adapt, and
+   Tilt was starting a server with no execution engine against an SDK that
+   assumed one.
 
 Level 0 observation can precede all of this because it does not hand execution
 ownership to aiwatcher.
 
 **Exit:** a two-step worker plan survives worker death; the four-stage import
 runs with Flyte off and produces byte-identical review artifacts. Run the
-integration's own tests in its repository against the pinned SDK. *Worker recovery
-met; Planner parity not yet met.*
+integration's own tests in its repository against the pinned SDK. *Met.* What is
+deliberately **not** claimed by it: one pod per stage and the removal of Flyte
+from Planner's chart — the first is Phase 12, and the second is what Phase 12
+earns.
+
+## Start here next — two sessions, no shared file
+
+Section 6 is closed, and what follows it splits cleanly in two. Neither waits
+for the other and they touch different repositories.
+
+- **[The hosted decider](KICKOFF_HOSTED_DECIDER.md)** (Phase 13) — aiwatcher's
+  Rust and SDK, plus `ai_spirit_agent`. The only remaining item that delivers
+  something Flyte never did: a durable join for an agent graph, which today
+  lives in three dictionaries in one process and does not survive a restart.
+  `ExecutionOwner::Worker` and `ExecutionMode::Hosted` already compile and
+  nothing produces them.
+- **Planner's `docs/flyte-removal-kickoff.md`** (A6, in Planner's repository) —
+  take the Flyte estate out of the chart now that the byte-identical gate that
+  guarded it is met and no shipped profile selects it. It starts with a timing
+  defect item 7 left behind: the RQ job's 600-second budget against a 900-second
+  step timeout.
+
+Phase 12 is deliberately *not* one of the two. It asks for a concrete need for
+one pod per stage, and Planner does not have one — its Flyte resource
+declaration was a single value for all four tasks. Section 39.4 records the
+consequence that was accepted instead: `kubernetes` now runs four attempts in
+one worker pod, whose limits already match Flyte's task envelope.
 
 ## After these gates
 

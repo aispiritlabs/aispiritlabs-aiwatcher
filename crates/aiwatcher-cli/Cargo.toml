@@ -1,0 +1,50 @@
+[package]
+name = "aiwatcher-cli"
+description = "The aiwatcher command line: one binary that runs the local stack and speaks to any instance of it"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "aiwatcher"
+path = "src/bin/aiwatcher.rs"
+
+[features]
+default = []
+# The local database. Off by default because `bundled` compiles DuckDB's C++
+# amalgamation, which is minutes of build time and a C++ toolchain — the same
+# shape `laser` has in `aiwatcher-bus` and `postgres` in `aiwatcher-execution`.
+duckdb = ["aiwatcher-execution/duckdb", "aiwatcher-server/duckdb", "dep:duckdb"]
+# The Iggy backend, over its HTTP API. Light enough to be on by default one
+# day; off now so a plain build stays a plain build.
+iggy = ["aiwatcher-bus/iggy", "aiwatcher-server/iggy"]
+
+[dependencies]
+aiwatcher-auth.workspace = true
+aiwatcher-api.workspace = true
+aiwatcher-bus.workspace = true
+aiwatcher-core.workspace = true
+aiwatcher-execution.workspace = true
+aiwatcher-server.workspace = true
+anyhow.workspace = true
+axum.workspace = true
+duckdb = { workspace = true, optional = true }
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+toml.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+
+[lints]
+workspace = true

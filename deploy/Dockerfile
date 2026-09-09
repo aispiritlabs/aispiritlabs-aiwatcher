@@ -63,11 +63,13 @@ RUN apt-get update \
   && useradd --system --uid 10001 --home /var/lib/aiwatcher --create-home aiwatcher
 
 COPY --from=build /src/target/release/aiwatcher /usr/local/bin/aiwatcher
+COPY examples/seed.json /usr/local/share/aiwatcher/seed.json
 
 USER aiwatcher
 WORKDIR /var/lib/aiwatcher
 EXPOSE 8080
 ENV AIWATCHER_LISTEN=0.0.0.0:8080 \
+    AIWATCHER_SEED_FILE=/usr/local/share/aiwatcher/seed.json \
     AIWATCHER_DATA_DIR=/var/lib/aiwatcher
 
 ENTRYPOINT ["/usr/local/bin/aiwatcher"]

@@ -46,6 +46,7 @@ use utoipa::OpenApi;
 
 use aiwatcher_datasets::Registry as DatasetRegistry;
 use aiwatcher_execution::compile::CompileOptions;
+use aiwatcher_execution::hosted::{DeciderLease, LeaseOutcome};
 use aiwatcher_execution::message::RunProjection;
 use aiwatcher_execution::plan::{DefinitionKind, ResolvedWindow};
 use aiwatcher_execution::{
@@ -73,6 +74,10 @@ const IDEMPOTENCY_KEY: &str = "idempotency-key";
     start_execution,
     get_execution,
     execution_history,
+    append_stream,
+    take_decider_lease,
+    read_decider_lease,
+    release_decider_lease,
     cancel_execution,
     pause_execution,
     resume_execution,
@@ -94,6 +99,29 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/executions/{execution_id}/history",
             get(execution_history),
+        )
+        // The hosted decider's append side (section 40.3). There is no `GET`
+        // beside it on purpose: `…/history` already pages this stream, and a
+        // second read of one run is what the guardrail against a second live
+        // view is about. The `POST` is here rather than on `…/history` because
+        // it is the route the worker's `EventStore` is written against, and
+        // because a read that pages and a compare-and-append are not two verbs
+        // on one idea — one answers "what happened", the other decides whether
+        // anything did.
+        .route(
+            "/api/v1/executions/{execution_id}/stream",
+            post(append_stream),
+        )
+        // One decider at a time. `GET` is the half that matters most: a lease
+        // is not something a claimant may decide about itself, so it asks and
+        // this answers from the row.
+        .route(
+            "/api/v1/executions/{execution_id}/decider-lease",
+            get(read_decider_lease).post(take_decider_lease),
+        )
+        .route(
+            "/api/v1/executions/{execution_id}/decider-lease/release",
+            post(release_decider_lease),
         )
         // Section 20's command routes. Grouped under `commands/` for the run
         // and under the step for the two that name one, which is the shape the
@@ -151,6 +179,35 @@ pub struct ExecutionTarget {
     pub revision: Option<String>,
 }
 
+/// Who decides what this run does next.
+///
+/// Not a pair of `owner`/`mode` fields, because only two of their combinations
+/// mean anything to a caller and the other two are a run nobody would want:
+/// `local`+`hosted` is a decider with no plan to schedule, and `worker`+
+/// `compiled` is a worker that may not decide. One field with two arms is the
+/// choice that actually exists. `engine:` is [`ExecutionOwner::Engine`] and is
+/// not something a caller picks here — it is what ADR_0016's launch produces.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Decider {
+    /// The Rust decider schedules the plan's steps and owns their retries.
+    #[default]
+    Local,
+    /// A worker runs `decide` and appends to the history this system keeps
+    /// (ADR_0025, section 40.3). What an agent graph needs, because its next
+    /// node depends on what the last one said.
+    Worker,
+}
+
+impl Decider {
+    const fn parts(self) -> (ExecutionOwner, ExecutionMode) {
+        match self {
+            Self::Local => (ExecutionOwner::Local, ExecutionMode::Compiled),
+            Self::Worker => (ExecutionOwner::Worker, ExecutionMode::Hosted),
+        }
+    }
+}
+
 /// What a caller may ask this system to run.
 ///
 /// Note what is not here, which is the same absence as `LaunchBody`'s and
@@ -183,6 +240,11 @@ pub struct StartExecutionBody {
     /// rather than something they get by accident.
     #[serde(default)]
     pub as_of: Option<i64>,
+    /// Who decides what runs next. Left out, this system does — which is what
+    /// every curation pipeline and every scheduled run wants, and what this
+    /// route did before the field existed.
+    #[serde(default)]
+    pub decided_by: Decider,
 }
 
 /// An accepted command, and the run it started.
@@ -271,7 +333,15 @@ async fn start_execution(
 
     let plan = compile(&state, &body).await?;
     let execution_id = ExecutionId::new(execution_id_for(&headers, &plan));
-    let handled = start(&state, &execution_id, plan, body.parameters, &requester).await?;
+    let handled = start(
+        &state,
+        &execution_id,
+        plan,
+        body.parameters,
+        &requester,
+        body.decided_by,
+    )
+    .await?;
 
     tracing::info!(
         execution_id = %execution_id,
@@ -358,21 +428,25 @@ async fn execution_history(
     Path(execution_id): Path<String>,
     Query(query): Query<HistoryQuery>,
 ) -> ApiResult<Json<ExecutionHistory>> {
+    let limit = query.limit.unwrap_or(100).clamp(1, 500);
+    // One over the page, so "is there more" is answered without a second read
+    // and without comparing against a version that may have moved since.
     let stream = handler(&state)?
         .store()
-        .load(&ExecutionId::new(execution_id.clone()))
+        .load_page(
+            &ExecutionId::new(execution_id.clone()),
+            query.after.unwrap_or(0),
+            limit + 1,
+        )
         .await
         .map_err(aiwatcher_execution::HandleError::Store)?;
-    if stream.is_empty() {
+    // The *stream's* version, not the page's contents: a page past the end of a
+    // run that exists is empty and is not a 404, and reading `is_empty()` here
+    // would have said there is no such execution.
+    if stream.version == 0 {
         return Err(ApiError::NotFound(format!("execution {execution_id}")));
     }
-    let limit = query.limit.unwrap_or(100).clamp(1, 500);
-    let mut messages: Vec<_> = stream
-        .messages
-        .into_iter()
-        .filter(|message| message.stream_version > query.after.unwrap_or(0))
-        .take(limit + 1)
-        .collect();
+    let mut messages = stream.messages;
     let has_more = messages.len() > limit;
     messages.truncate(limit);
     let next_after = if has_more {
@@ -385,6 +459,251 @@ async fn execution_history(
         next_after,
         version: stream.version,
     }))
+}
+
+/// What a worker is appending to a hosted execution's history.
+///
+/// `deny_unknown_fields` for the reason every body here has it: a worker that
+/// sent `version` where this reads `expected_version` would otherwise have its
+/// compare-and-append silently become "append at whatever it is at", which is
+/// the one guarantee it came here for.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AppendStreamBody {
+    /// The version the worker read. Required: an append that did not name one
+    /// is not a compare-and-append, and a decider that did not read the stream
+    /// has nothing to decide from. The first one comes back on the start.
+    pub expected_version: u64,
+    /// Which decider is appending. Checked against the lease, so a worker that
+    /// was taken over is told before it pays for the turn rather than after.
+    pub holder: String,
+    /// The worker's own messages, in the order it wrote them.
+    pub messages: Vec<aiwatcher_execution::message::HostedMessage>,
+}
+
+/// Where the stream got to, and whether this call is what put it there.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct StreamAppended {
+    /// The version to send as the next `expected_version`.
+    pub version: u64,
+    /// `false` when this batch had already been appended — a redelivery, not a
+    /// race. The worker carries on from `version` either way.
+    pub created: bool,
+}
+
+/// Append a worker's messages to a hosted execution's history (section 40.3).
+///
+/// The decider is the worker; this is the shared history `agentic.workflow`
+/// cannot give itself when every agent worker holds its own SQLite. What this
+/// route contributes is the three things a private store has no way to offer: a
+/// compare-and-append against a version, an inbox keyed by the
+/// `Idempotency-Key`, and a 409 that says where the stream actually got to.
+///
+/// It reads none of the messages. A `409` is not a failure to retry blindly:
+/// the worker reloads and decides on what it now sees, and its own cached
+/// decision across OCC retries is what stops that reload calling the model
+/// again to discover it lost.
+#[utoipa::path(
+    post,
+    path = "/api/v1/executions/{execution_id}/stream",
+    params(
+        ("execution_id" = String, Path, description = "The id the run was started with"),
+        ("Idempotency-Key" = String, Header, description = "This batch's key. The durable inbox key: repeating it returns the first outcome rather than appending twice"),
+    ),
+    request_body = AppendStreamBody,
+    responses(
+        (status = 200, body = StreamAppended),
+        (status = 400, body = crate::error::ErrorBody, description = "An empty batch, one past the limit, or no Idempotency-Key"),
+        (status = 403, body = crate::error::ErrorBody),
+        (status = 409, body = crate::error::ErrorBody, description = "Another decider appended first, or this run is not a hosted one"),
+        (status = 413, body = crate::error::ErrorBody),
+        (status = 501, body = crate::error::ErrorBody),
+        (status = 503, body = crate::error::ErrorBody),
+    ),
+    tag = "execution",
+)]
+async fn append_stream(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(execution_id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<AppendStreamBody>,
+) -> ApiResult<Json<StreamAppended>> {
+    // An editor, which is what an ingest token is capped at. A hosted decider
+    // is a worker, and a worker is exactly the caller that cannot complete an
+    // interactive sign-in — the reason that cap exists rather than an exception
+    // to it.
+    caller.require(aiwatcher_auth::Role::Editor)?;
+
+    // Required rather than defaulted: without it there is no inbox key, and a
+    // retried request whose response was lost would append the batch twice.
+    // Deriving one from the body would make two different batches with the same
+    // content collide, which is the same bug wearing a hash.
+    let key = headers
+        .get(IDEMPOTENCY_KEY)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .ok_or_else(|| {
+            ApiError::BadRequest(format!(
+                "appending to a hosted execution needs an `{IDEMPOTENCY_KEY}` header: \
+                 it is the inbox key that stops a retried request appending twice"
+            ))
+        })?
+        .to_owned();
+
+    let execution = ExecutionId::new(execution_id);
+    let append = aiwatcher_execution::hosted::HostedAppend {
+        expected_version: body.expected_version,
+        idempotency_key: key,
+        holder: body.holder,
+        messages: body.messages,
+    };
+    let messages = append.messages.len();
+    let handled = handler(&state)?
+        .append_hosted(&execution, append, time::OffsetDateTime::now_utc())
+        .await?;
+
+    tracing::info!(
+        execution_id = %execution,
+        messages,
+        version = handled.projection.last_message_version,
+        duplicate = handled.duplicate,
+        "appended to a hosted execution"
+    );
+
+    Ok(Json(StreamAppended {
+        version: handled.projection.last_message_version,
+        created: !handled.duplicate,
+    }))
+}
+
+/// Which decider is asking.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DeciderLeaseBody {
+    /// A name this decider will keep across its own restarts if it wants to
+    /// resume rather than be taken over. Not a credential: the route's role
+    /// check is what decides who may ask at all.
+    pub holder: String,
+}
+
+/// Take, or renew, the right to decide one hosted run (section 40.3).
+///
+/// `agentic.workflow`'s `ProcessorLock`, in the store that holds the history.
+/// Renewing is this same call under the same name, so a heartbeat and a first
+/// claim cannot come to disagree.
+///
+/// **200 either way.** Being told who holds it is an answer to the question
+/// rather than a failure of it, and the alternative — a 409 whose structured
+/// `expires_at` has to be smuggled through an error body — is worse for the one
+/// caller that has to branch on it. What *is* a 409 is appending while somebody
+/// else decides.
+#[utoipa::path(
+    post,
+    path = "/api/v1/executions/{execution_id}/decider-lease",
+    params(("execution_id" = String, Path, description = "The id the run was started with")),
+    request_body = DeciderLeaseBody,
+    responses(
+        (status = 200, body = LeaseOutcome, description = "Taken by this caller, or held by somebody else until `expires_at`"),
+        (status = 403, body = crate::error::ErrorBody),
+        (status = 409, body = crate::error::ErrorBody, description = "Not a hosted run, or one that has finished"),
+        (status = 501, body = crate::error::ErrorBody),
+        (status = 503, body = crate::error::ErrorBody),
+    ),
+    tag = "execution",
+)]
+async fn take_decider_lease(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(execution_id): Path<String>,
+    Json(body): Json<DeciderLeaseBody>,
+) -> ApiResult<Json<LeaseOutcome>> {
+    caller.require(aiwatcher_auth::Role::Editor)?;
+    let execution = ExecutionId::new(execution_id);
+    let outcome = handler(&state)?
+        .take_decider_lease(&execution, &body.holder, time::OffsetDateTime::now_utc())
+        .await?;
+    tracing::info!(
+        execution_id = %execution,
+        holder = %body.holder,
+        taken = outcome.taken().is_some(),
+        "asked for a decider lease"
+    );
+    Ok(Json(outcome))
+}
+
+/// Who is deciding this run, if anybody still is.
+///
+/// The read behind "a lease is not something the claimant can check about
+/// itself": the worker asks, and this answers from the row. 404 once it has run
+/// out, because expired and never taken are the same answer to a caller — it is
+/// free.
+#[utoipa::path(
+    get,
+    path = "/api/v1/executions/{execution_id}/decider-lease",
+    params(("execution_id" = String, Path)),
+    responses(
+        (status = 200, body = DeciderLease),
+        (status = 404, body = crate::error::ErrorBody, description = "Nobody holds it"),
+        (status = 501, body = crate::error::ErrorBody),
+        (status = 503, body = crate::error::ErrorBody),
+    ),
+    tag = "execution",
+)]
+async fn read_decider_lease(
+    State(state): State<AppState>,
+    Path(execution_id): Path<String>,
+) -> ApiResult<Json<DeciderLease>> {
+    let execution = ExecutionId::new(execution_id.clone());
+    handler(&state)?
+        .decider_lease(&execution, time::OffsetDateTime::now_utc())
+        .await?
+        .map(Json)
+        .ok_or_else(|| ApiError::NotFound(format!("a decider lease on {execution_id}")))
+}
+
+/// Give up the right to decide.
+///
+/// Worth calling rather than waiting the lease out: it is the difference
+/// between a replacement starting now and starting in five minutes. `released`
+/// is false when it was never this caller's to give — a worker that had already
+/// been taken over must not release its replacement's lease.
+#[utoipa::path(
+    post,
+    path = "/api/v1/executions/{execution_id}/decider-lease/release",
+    params(("execution_id" = String, Path)),
+    request_body = DeciderLeaseBody,
+    responses(
+        (status = 200, body = LeaseReleased),
+        (status = 403, body = crate::error::ErrorBody),
+        (status = 409, body = crate::error::ErrorBody, description = "Not a hosted run, or one that has finished"),
+        (status = 501, body = crate::error::ErrorBody),
+        (status = 503, body = crate::error::ErrorBody),
+    ),
+    tag = "execution",
+)]
+async fn release_decider_lease(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(execution_id): Path<String>,
+    Json(body): Json<DeciderLeaseBody>,
+) -> ApiResult<Json<LeaseReleased>> {
+    caller.require(aiwatcher_auth::Role::Editor)?;
+    let released = handler(&state)?
+        .release_decider_lease(
+            &ExecutionId::new(execution_id),
+            &body.holder,
+            time::OffsetDateTime::now_utc(),
+        )
+        .await?;
+    Ok(Json(LeaseReleased { released }))
+}
+
+/// Whether the release found a lease this caller was holding.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct LeaseReleased {
+    pub released: bool,
 }
 
 /// Start one execution: the only path there is.
@@ -404,6 +723,7 @@ pub async fn start(
     plan: ExecutionPlan,
     parameters: BTreeMap<String, Value>,
     requested_by: &str,
+    decided_by: Decider,
 ) -> ApiResult<aiwatcher_execution::Handled> {
     // Derived from the execution, so a redelivered request — a retried POST, a
     // proxy that repeated it, a second worker on the same slot — lands on the
@@ -412,6 +732,7 @@ pub async fn start(
         "aiwatcher/execution/start/{execution_id}"
     )));
 
+    let (owner, mode) = decided_by.parts();
     let now = time::OffsetDateTime::now_utc();
     let handled = handler(state)?
         .handle(
@@ -419,12 +740,13 @@ pub async fn start(
             WorkflowMessage::Command(WorkflowCommand::StartExecution {
                 execution_id: execution_id.clone(),
                 plan: Box::new(plan),
-                // Local: the Rust decider schedules the steps and owns their
-                // retries. `engine:` and `worker` are Phases 9 and 10, and the
-                // field is here rather than derived so that a run always
-                // records who was responsible for it.
-                owner: ExecutionOwner::Local,
-                mode: ExecutionMode::Compiled,
+                // Recorded rather than derived, so a run always says who was
+                // responsible for it. The two arms are the two that exist:
+                // `local` schedules the plan here, `worker` keeps the history
+                // for a decider that runs somewhere else. `engine:` comes from
+                // ADR_0016's launch and never from this route.
+                owner,
+                mode,
                 requested_by: requested_by.to_owned(),
                 input: parameters,
             }),

@@ -10,8 +10,10 @@ repository.workspace = true
 [dependencies]
 aiwatcher-core.workspace = true
 async-trait.workspace = true
+base64 = { workspace = true, optional = true }
 bytes = { workspace = true, optional = true }
 laser-sdk = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
 futures.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -29,6 +31,13 @@ default = []
 # Wires the real `laser_sdk`. Off by default so `cargo test` needs no broker
 # and the dependency tree stays small; `just test-laser` turns it on.
 laser = ["dep:laser-sdk", "dep:bytes"]
+# Apache Iggy over its HTTP API, through the generic `BrokerClient` seam rather
+# than through `laser_sdk`. Its own feature because it is a different trade: the
+# HTTP surface throws away per-partition cursors and server-stored group
+# offsets, and buys a client that is `reqwest` and nothing else — which is what
+# lets a single-node install speak to a broker without the ~360 crates the SDK
+# brings. Off by default so a plain build stays a plain build.
+iggy = ["dep:reqwest", "dep:base64"]
 
 [lints]
 workspace = true

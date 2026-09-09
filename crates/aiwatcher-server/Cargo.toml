@@ -7,10 +7,10 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
-[[bin]]
-name = "aiwatcher"
-path = "src/bin/aiwatcher.rs"
-
+# The `aiwatcher` binary lives in `aiwatcher-cli`, which depends on this crate:
+# running the server is one of the command line's commands rather than the whole
+# of it. What stays here is the contract generator, which is a build tool and
+# has no command line to be part of.
 [[bin]]
 name = "aiwatcher-openapi"
 path = "src/bin/aiwatcher-openapi.rs"
@@ -25,6 +25,11 @@ laser = ["aiwatcher-bus/laser"]
 # `AIWATCHER_WORKFLOW_STORE=postgres` without it refuses to start naming this
 # feature rather than falling back to the store that holds one process.
 postgres = ["aiwatcher-execution/postgres"]
+# The single-machine pair of the two above: DuckDB for the workflow store and
+# the durable read model, Iggy over HTTP for the log. What `aiwatcher up`
+# builds with, and off by default for the same reason as the others.
+duckdb = ["aiwatcher-execution/duckdb", "dep:duckdb"]
+iggy = ["aiwatcher-bus/iggy"]
 
 [dependencies]
 aiwatcher-core.workspace = true
@@ -41,6 +46,7 @@ aiwatcher-pipeline.workspace = true
 aiwatcher-projector.workspace = true
 aiwatcher-prompts.workspace = true
 aiwatcher-runner.workspace = true
+duckdb = { workspace = true, optional = true }
 aiwatcher-auth.workspace = true
 aiwatcher-api.workspace = true
 anyhow.workspace = true

@@ -18,12 +18,13 @@
 //!
 //! Behind the `testing` feature, so none of this reaches a production build.
 
-use time::OffsetDateTime;
+use time::{Duration, OffsetDateTime};
 
 use aiwatcher_core::{CausationId, Checkpoint, CorrelationId, MessageId};
 
 use crate::claim::{AttemptKey, AttemptRow, AttemptWrite, ClaimFilter};
 use crate::decide::{Now, decide, replay};
+use crate::hosted::LeaseOutcome;
 use crate::message::{
     MessageMetadata, OutboxMessage, PendingMessage, RunProjection, SCHEMA_VERSION, WorkflowCommand,
     WorkflowEvent, WorkflowMessage,
@@ -237,6 +238,11 @@ pub async fn assert_contract(name: &str, store: &dyn WorkflowStore) {
     publishing_an_outbox_row_is_safe_to_repeat(name, store).await;
     a_published_outbox_row_is_dropped_rather_than_kept(name, store).await;
     a_stream_read_back_replays_to_the_state_it_recorded(name, store).await;
+    paging_a_stream_reaches_every_message_loading_it_whole_does(name, store).await;
+    a_hosted_message_survives_the_store_it_was_written_to(name, store).await;
+    one_decider_at_a_time_holds_a_hosted_run(name, store).await;
+    a_decider_that_stopped_renewing_is_taken_over_and_the_takeover_says_whose(name, store).await;
+    a_released_lease_is_free_before_it_would_have_run_out(name, store).await;
     a_message_too_large_to_store_is_refused(name, store).await;
     two_claimants_racing_for_one_attempt_produce_one_claim(name, store).await;
     a_claimant_only_takes_what_it_said_it_could_run(name, store).await;
@@ -541,6 +547,299 @@ pub async fn a_stream_read_back_replays_to_the_state_it_recorded(
         StateType::Pending,
         "{name}"
     );
+}
+
+/// A page is a window on the same stream, not a second answer about it.
+///
+/// Written against the port rather than against one adapter, because the three
+/// reach it three different ways — a slice, a file read whole, and a `limit`
+/// with its own `max(stream_version)` query — and an adapter that paged
+/// *differently* would be correct about something else. The version is checked
+/// on every page for the same reason it is queried separately in `postgres`: it
+/// is what tells a reader a short page is the last one rather than a truncated
+/// one.
+pub async fn paging_a_stream_reaches_every_message_loading_it_whole_does(
+    name: &str,
+    store: &dyn WorkflowStore,
+) {
+    let execution = fresh("paging");
+    ok!(
+        name,
+        store.append(
+            &execution,
+            start_request(&execution, ExpectedVersion::NoStream, "m-1")
+        ),
+        "an append"
+    );
+
+    let whole = ok!(name, store.load(&execution), "a load");
+    assert!(
+        whole.messages.len() > 1,
+        "{name}: this property needs a stream worth paging"
+    );
+
+    // One at a time, which is the size that finds an off-by-one in `after`.
+    let mut walked = Vec::new();
+    let mut after = 0;
+    loop {
+        let page = ok!(name, store.load_page(&execution, after, 1), "a page");
+        assert_eq!(
+            page.version, whole.version,
+            "{name}: a page reports the stream's version, not its own end"
+        );
+        let Some(last) = page.messages.last() else {
+            break;
+        };
+        assert!(page.messages.len() <= 1, "{name}: a page honours its limit");
+        after = last.stream_version;
+        walked.extend(page.messages);
+    }
+    assert_eq!(walked, whole.messages, "{name}: paged and whole agree");
+
+    // A limit past the end is the ordinary case for a short stream, and asking
+    // from where the stream got to answers nothing rather than the first page
+    // again.
+    let all_at_once = ok!(name, store.load_page(&execution, 0, 1_000), "one big page");
+    assert_eq!(all_at_once.messages, whole.messages, "{name}");
+    let past_the_end = ok!(
+        name,
+        store.load_page(&execution, whole.version, 10),
+        "a page after the end"
+    );
+    assert!(
+        past_the_end.messages.is_empty(),
+        "{name}: nothing follows the last message"
+    );
+    assert_eq!(past_the_end.version, whole.version, "{name}");
+}
+
+/// A worker's own message is a third kind, and every adapter has to hold one.
+///
+/// The one that could fail alone is `postgres`, whose `workflow_messages.kind`
+/// carries a check constraint — `0007` widens it, and a build that added the
+/// arm without the migration would pass every other property here and refuse
+/// the first real append. Which is why this is in the shared suite rather than
+/// beside that adapter: the *rule* is that a hosted message round-trips, and an
+/// adapter proving it about itself proves something narrower.
+pub async fn a_hosted_message_survives_the_store_it_was_written_to(
+    name: &str,
+    store: &dyn WorkflowStore,
+) {
+    let execution = fresh("hosted");
+    ok!(
+        name,
+        store.append(
+            &execution,
+            start_request(&execution, ExpectedVersion::NoStream, "m-1")
+        ),
+        "a start"
+    );
+
+    let written = crate::message::HostedMessage {
+        message_type: "TurnCompleted".to_owned(),
+        metadata: serde_json::json!({ "node": "summarizer", "attempt": 2 }),
+        payload: Some(crate::message::PayloadRef {
+            reference: "agentic://turn/4".to_owned(),
+            digest: "c".repeat(64),
+            size: 900,
+            policy: crate::message::PayloadPolicy::Sealed,
+        }),
+    };
+    let before = ok!(name, store.load(&execution), "a load").version;
+    ok!(
+        name,
+        store.append(
+            &execution,
+            AppendRequest {
+                expected_version: ExpectedVersion::Exact(before),
+                input: PendingMessage::input(
+                    WorkflowMessage::Hosted(crate::message::HostedMessage {
+                        message_type: crate::hosted::HOSTED_APPEND.to_owned(),
+                        metadata: serde_json::json!({ "messages": 1 }),
+                        payload: None,
+                    }),
+                    metadata(&execution, "append-1"),
+                ),
+                outputs: vec![PendingMessage::output(
+                    WorkflowMessage::Hosted(written.clone()),
+                    metadata(&execution, "hosted-1"),
+                )],
+                projection: projection(&execution, before + 2, StateType::Running),
+                outbox: Vec::new(),
+                checkpoint: None,
+                attempts: Vec::new(),
+            }
+        ),
+        "a hosted append"
+    );
+
+    let slice = ok!(name, store.load(&execution), "a reload");
+    let read = slice
+        .messages
+        .iter()
+        .filter_map(|recorded| recorded.message.hosted())
+        .find(|hosted| hosted.message_type == "TurnCompleted")
+        .unwrap_or_else(|| panic!("{name}: the hosted message did not come back"));
+    assert_eq!(read, &written, "{name}");
+
+    // And it stayed out of the fold: the run is where the start left it.
+    let state = replay(slice.events());
+    let run = state
+        .active()
+        .unwrap_or_else(|| panic!("{name}: the stream replayed to no execution"));
+    assert_eq!(run.state.state_type, StateType::Running, "{name}");
+}
+
+/// One decider at a time, and the refusal says who has it.
+///
+/// `ProcessorLock`'s semantics, proved against the port. It is deliberately not
+/// proved against one adapter: `memory` holds a map, `file` reads a file under
+/// its own gate and `postgres` settles it inside a single upsert whose `where`
+/// is the whole rule, and the only thing that makes those one design is a suite
+/// all three answer.
+pub async fn one_decider_at_a_time_holds_a_hosted_run(name: &str, store: &dyn WorkflowStore) {
+    let execution = fresh("lease");
+    let start = OffsetDateTime::UNIX_EPOCH;
+
+    let taken = ok!(
+        name,
+        store.take_decider_lease(&execution, "worker-a", start),
+        "a first claim"
+    );
+    let lease = taken
+        .taken()
+        .unwrap_or_else(|| panic!("{name}: the first claim was refused"));
+    assert_eq!(lease.holder, "worker-a", "{name}");
+    assert_eq!(
+        lease.previous_holder, None,
+        "{name}: nobody was interrupted"
+    );
+
+    // A second decider, while the first still holds it.
+    let refused = ok!(
+        name,
+        store.take_decider_lease(&execution, "worker-b", start + Duration::seconds(1)),
+        "a second claim"
+    );
+    match refused {
+        LeaseOutcome::Held { holder, expires_at } => {
+            assert_eq!(holder, "worker-a", "{name}");
+            assert_eq!(
+                expires_at,
+                start + Duration::seconds(aiwatcher_jobs::LEASE_SECONDS),
+                "{name}: the refusal says when it is worth asking again"
+            );
+        }
+        LeaseOutcome::Taken(_) => panic!("{name}: two deciders held one run"),
+    }
+
+    // The holder renewing is the same call, and it moves the clock rather than
+    // reading as a takeover of itself.
+    let renewed = ok!(
+        name,
+        store.take_decider_lease(&execution, "worker-a", start + Duration::seconds(200)),
+        "a renewal"
+    );
+    let renewed = renewed
+        .taken()
+        .unwrap_or_else(|| panic!("{name}: the holder could not renew"));
+    assert_eq!(renewed.claimed_at, start + Duration::seconds(200), "{name}");
+    assert_eq!(
+        renewed.previous_holder, None,
+        "{name}: a heartbeat is not a takeover"
+    );
+
+    // And a reader gets the same answer the claimants did.
+    let read = ok!(name, store.decider_lease(&execution), "a read")
+        .unwrap_or_else(|| panic!("{name}: the lease was not there"));
+    assert_eq!(read.holder, "worker-a", "{name}");
+}
+
+/// A worker that stopped renewing loses it, and its replacement is told whose
+/// it was.
+pub async fn a_decider_that_stopped_renewing_is_taken_over_and_the_takeover_says_whose(
+    name: &str,
+    store: &dyn WorkflowStore,
+) {
+    let execution = fresh("takeover");
+    let start = OffsetDateTime::UNIX_EPOCH;
+    let after = start + Duration::seconds(aiwatcher_jobs::LEASE_SECONDS + 1);
+
+    ok!(
+        name,
+        store.take_decider_lease(&execution, "worker-a", start),
+        "a first claim"
+    );
+    let taken = ok!(
+        name,
+        store.take_decider_lease(&execution, "worker-b", after),
+        "a takeover"
+    );
+    let lease = taken
+        .taken()
+        .unwrap_or_else(|| panic!("{name}: an expired lease was not taken over"));
+    assert_eq!(lease.holder, "worker-b", "{name}");
+    // The signal a takeover needs, and it cannot be read off `holder`: that
+    // column already names the replacement. `AttemptRow::previous_owner`, for a
+    // whole run.
+    assert_eq!(
+        lease.previous_holder.as_deref(),
+        Some("worker-a"),
+        "{name}: a takeover says who it interrupted"
+    );
+
+    // And the one it replaced no longer holds anything, however sure it is.
+    let read = ok!(name, store.decider_lease(&execution), "a read")
+        .unwrap_or_else(|| panic!("{name}: the lease was not there"));
+    assert!(!read.held_by("worker-a", after), "{name}");
+    assert!(read.held_by("worker-b", after), "{name}");
+}
+
+/// Releasing is what makes a replacement start now rather than in five minutes.
+pub async fn a_released_lease_is_free_before_it_would_have_run_out(
+    name: &str,
+    store: &dyn WorkflowStore,
+) {
+    let execution = fresh("release");
+    let start = OffsetDateTime::UNIX_EPOCH;
+    let soon = start + Duration::seconds(2);
+
+    ok!(
+        name,
+        store.take_decider_lease(&execution, "worker-a", start),
+        "a claim"
+    );
+    // Not yours to give up. Without this a worker that had already been taken
+    // over could release its replacement's lease.
+    assert!(
+        !ok!(
+            name,
+            store.release_decider_lease(&execution, "worker-b", soon),
+            "somebody else releasing"
+        ),
+        "{name}: a lease is released by the one holding it"
+    );
+    assert!(
+        ok!(
+            name,
+            store.release_decider_lease(&execution, "worker-a", soon),
+            "the holder releasing"
+        ),
+        "{name}"
+    );
+    assert!(
+        ok!(name, store.decider_lease(&execution), "a read").is_none(),
+        "{name}: a released lease is gone rather than expiring quietly"
+    );
+
+    // And the next decider takes it immediately, long before the lease would
+    // have run out on its own.
+    let taken = ok!(
+        name,
+        store.take_decider_lease(&execution, "worker-b", soon),
+        "the next claim"
+    );
+    assert!(taken.taken().is_some(), "{name}");
 }
 
 pub async fn a_message_too_large_to_store_is_refused(name: &str, store: &dyn WorkflowStore) {

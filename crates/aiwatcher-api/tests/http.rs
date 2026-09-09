@@ -44,6 +44,68 @@ const OTHER_WORKER_TOKEN: &str = "planner[plans]=0f0f0f0f0f0f0f0f0f0f0f0f0f0f";
 const OTHER_WORKER_SECRET: &str = "0f0f0f0f0f0f0f0f0f0f0f0f0f0f";
 const INGEST_SECRET: &str = "0123456789abcdef0123456789abcdef";
 
+#[tokio::test]
+async fn curation_library_publishes_searches_and_checks_editor_permissions() {
+    let fixture = Fixture::behind_a_proxy(false).await;
+    let solution = json!({
+        "id": "fill-missing", "title": "Missing values", "description": "Median imputation",
+        "tags": ["PHP", "preparation"], "spec": {"kind": "transform", "steps": "->limit(20)"}
+    });
+    let (status, _) = fixture
+        .post_as("/api/v1/curation-library", "reader", "", solution.clone())
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, saved) = fixture
+        .post_as(
+            "/api/v1/curation-library",
+            "author",
+            "aiwatcher-editors",
+            solution.clone(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let (_, same) = fixture
+        .post_as(
+            "/api/v1/curation-library",
+            "author",
+            "aiwatcher-editors",
+            solution.clone(),
+        )
+        .await;
+    assert_eq!(saved["revision"], same["revision"]);
+    assert_eq!(saved["saved_at"], same["saved_at"]);
+    let (status, page) = fixture
+        .get_as(
+            "/api/v1/curation-library?search=MISSING%20php&limit=1",
+            "reader",
+            "",
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["total"], 1);
+    assert_eq!(page["templates"][0]["spec"], solution["spec"]);
+    let (_, empty) = fixture
+        .get_as("/api/v1/curation-library?search=unknown", "reader", "")
+        .await;
+    assert_eq!(empty["total"], 0);
+    let (_, next) = fixture
+        .get_as("/api/v1/curation-library?offset=1&limit=1", "reader", "")
+        .await;
+    assert_eq!(next["total"], 1);
+    assert_eq!(next["templates"], json!([]));
+    let mut invalid = solution;
+    invalid["spec"] = json!({"kind": "notebook", "notebook": "custom", "params": {}});
+    let (status, _) = fixture
+        .post_as(
+            "/api/v1/curation-library",
+            "author",
+            "aiwatcher-editors",
+            invalid,
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
 struct Fixture {
     state: AppState,
     bus: Arc<InMemoryBus>,
@@ -3761,6 +3823,413 @@ async fn a_saved_pipeline_compiles_and_starts_and_the_caller_may_leave() {
     // And what may be done to it, decided where `decide`'s preconditions are
     // rather than by whoever renders the buttons.
     assert_eq!(run["allowed"], json!(["pause", "cancel"]), "{run}");
+}
+
+/// Start a hosted run and hand back its id and the version to append at.
+async fn hosted_run(fixture: &Fixture, name: &str) -> (String, u64) {
+    fixture
+        .post("/api/v1/curation-pipelines", flow_only_pipeline(name))
+        .await;
+    let (status, accepted) = fixture
+        .post(
+            "/api/v1/executions",
+            json!({
+                "target": { "kind": "curation_pipeline", "name": name },
+                "decided_by": "worker"
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
+    assert_eq!(accepted["execution"]["owner"], "worker");
+    assert_eq!(accepted["execution"]["mode"], "hosted");
+    // And nothing was dispatched: the plan is this run's *shape*, and the
+    // worker schedules its own next node. A `pending` step here would be a
+    // reactor about to run work the worker is also doing.
+    for step in accepted["execution"]["steps"]
+        .as_array()
+        .expect("the steps")
+    {
+        assert_eq!(step["state"]["state_type"], "scheduled", "{accepted}");
+    }
+    (
+        accepted["execution"]["execution_id"]
+            .as_str()
+            .expect("an id")
+            .to_owned(),
+        accepted["execution"]["last_message_version"]
+            .as_u64()
+            .expect("a version"),
+    )
+}
+
+fn hosted_messages(count: usize) -> Value {
+    json!(
+        (0..count)
+            .map(|index| json!({
+                "message_type": "TurnCompleted",
+                "metadata": { "node": "searcher", "index": index },
+                "payload": {
+                    "reference": format!("agentic://turn/{index}"),
+                    "digest": "f".repeat(64),
+                    "size": 300,
+                    "policy": "external"
+                }
+            }))
+            .collect::<Vec<_>>()
+    )
+}
+
+#[tokio::test]
+async fn a_worker_appends_to_its_own_history_and_the_loser_of_a_race_is_told_where_it_got_to() {
+    // Phase 13, step 1's exit over HTTP. Two deciders at one expected version:
+    // one 200, one 409 — and not a 503, because the store worked and the caller
+    // has something to do about it. The loser reloads and succeeds.
+    let fixture = Fixture::new(false);
+    let (execution, version) = hosted_run(&fixture, "graph").await;
+    let uri = format!("/api/v1/executions/{execution}/stream");
+
+    let (status, first) = fixture
+        .post_keyed(
+            &uri,
+            "batch-1",
+            json!({ "expected_version": version, "holder": "worker-a", "messages": hosted_messages(2) }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert!(first["created"].as_bool().expect("a flag"));
+    let moved = first["version"].as_u64().expect("a version");
+    assert_eq!(moved, version + 3, "one marker and two messages");
+
+    let (status, refused) = fixture
+        .post_keyed(
+            &uri,
+            "batch-2",
+            json!({ "expected_version": version, "holder": "worker-a", "messages": hosted_messages(1) }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert_eq!(refused["code"], "version_conflict", "{refused}");
+
+    // Reload, and the same batch at the version it actually reads goes in.
+    let (status, run) = fixture
+        .get(&format!("/api/v1/executions/{execution}"))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let now_at = run["execution"]["last_message_version"]
+        .as_u64()
+        .expect("a version");
+    let (status, accepted) = fixture
+        .post_keyed(
+            &uri,
+            "batch-2",
+            json!({ "expected_version": now_at, "holder": "worker-a", "messages": hosted_messages(1) }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{accepted}");
+}
+
+#[tokio::test]
+async fn a_repeated_append_returns_the_first_outcome_rather_than_appending_twice() {
+    // The `Idempotency-Key` is the inbox key. A worker whose response was lost
+    // retries the request, and must not get a second copy of every message.
+    let fixture = Fixture::new(false);
+    let (execution, version) = hosted_run(&fixture, "retried").await;
+    let uri = format!("/api/v1/executions/{execution}/stream");
+    let body = json!({ "expected_version": version, "holder": "worker-a", "messages": hosted_messages(2) });
+
+    let (first_status, first) = fixture.post_keyed(&uri, "turn-9", body.clone()).await;
+    let (second_status, second) = fixture.post_keyed(&uri, "turn-9", body).await;
+    assert_eq!(first_status, StatusCode::OK);
+    assert_eq!(second_status, StatusCode::OK, "a redelivery is not a 409");
+    assert!(first["created"].as_bool().expect("a flag"));
+    assert!(
+        !second["created"].as_bool().expect("a flag"),
+        "the second request appended nothing"
+    );
+
+    // And the history says so: one marker and two messages, once.
+    let (status, history) = fixture
+        .get(&format!("/api/v1/executions/{execution}/history?limit=500"))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let hosted = history["messages"]
+        .as_array()
+        .expect("the messages")
+        .iter()
+        .filter(|message| message["message"]["kind"] == "hosted")
+        .count();
+    assert_eq!(hosted, 3, "{history}");
+}
+
+#[tokio::test]
+async fn an_append_without_an_idempotency_key_is_refused_rather_than_given_one() {
+    // Deriving a key from the body would make two different batches with the
+    // same content collide, which is the same bug wearing a hash.
+    let fixture = Fixture::new(false);
+    let (execution, version) = hosted_run(&fixture, "unkeyed").await;
+    let (status, refused) = fixture
+        .post(
+            &format!("/api/v1/executions/{execution}/stream"),
+            json!({ "expected_version": version, "holder": "worker-a", "messages": hosted_messages(1) }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert!(
+        refused["message"]
+            .as_str()
+            .expect("a message")
+            .contains("idempotency-key"),
+        "{refused}"
+    );
+}
+
+#[tokio::test]
+async fn a_worker_may_not_append_to_a_run_this_system_decides() {
+    // Two deciders on one run is what hosted mode exists to prevent, and the
+    // refusal is a 409 rather than a 400: it is about the run's state, and the
+    // caller's way out is to start one that is hosted.
+    let fixture = Fixture::new(false);
+    fixture
+        .post("/api/v1/curation-pipelines", flow_only_pipeline("compiled"))
+        .await;
+    let (_, accepted) = fixture
+        .post(
+            "/api/v1/executions",
+            json!({ "target": { "kind": "curation_pipeline", "name": "compiled" } }),
+        )
+        .await;
+    let execution = accepted["execution"]["execution_id"]
+        .as_str()
+        .expect("an id");
+
+    let version = accepted["execution"]["last_message_version"]
+        .as_u64()
+        .expect("a version");
+    let (status, refused) = fixture
+        .post_keyed(
+            &format!("/api/v1/executions/{execution}/stream"),
+            "batch-1",
+            json!({ "expected_version": version, "holder": "worker-a", "messages": hosted_messages(1) }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert_eq!(refused["code"], "not_hosted", "{refused}");
+}
+
+#[tokio::test]
+async fn an_append_that_names_no_version_is_refused_rather_than_appended_anyway() {
+    // "Append at whatever this is at" is not a compare-and-append, and a
+    // decider that did not read the stream has nothing to decide from. Making
+    // it optional would have been a default a worker could drift into on the
+    // one call where it matters most.
+    let fixture = Fixture::new(false);
+    let (execution, _) = hosted_run(&fixture, "versionless").await;
+    let (status, refused) = fixture
+        .post_keyed(
+            &format!("/api/v1/executions/{execution}/stream"),
+            "batch-1",
+            json!({ "holder": "worker-a", "messages": hosted_messages(1) }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    assert!(
+        refused.to_string().contains("expected_version"),
+        "{refused}"
+    );
+}
+
+#[tokio::test]
+async fn an_append_that_names_a_field_this_route_does_not_read_is_refused_by_name() {
+    // `deny_unknown_fields`, and the field that matters is the one a worker
+    // would plausibly send: `version` instead of `expected_version` would
+    // otherwise turn a compare-and-append into "append at whatever this is at",
+    // which is the one guarantee it came here for.
+    let fixture = Fixture::new(false);
+    let (execution, version) = hosted_run(&fixture, "typo").await;
+    let (status, refused) = fixture
+        .post_keyed(
+            &format!("/api/v1/executions/{execution}/stream"),
+            "batch-1",
+            json!({ "version": version, "holder": "worker-a", "messages": hosted_messages(1) }),
+        )
+        .await;
+    // 422 with the field named, which is what axum's `Json` rejection is and
+    // what a rerun naming its own endpoint already gets. The status matters far
+    // less than the alternative: silently ignored, and accepted.
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    // Named, not merely refused — axum's own rejection carries the field, which
+    // is the difference between a worker's typo being findable and it being a
+    // guarantee that quietly stopped applying.
+    assert!(refused.to_string().contains("version"), "{refused}");
+}
+
+#[tokio::test]
+async fn a_history_page_walks_a_stream_rather_than_loading_it_whole() {
+    // The read side of step 1. `…/history` was already the paged read of this
+    // stream, so there is no second one — what changed is that it pages in the
+    // store instead of loading everything and slicing it, which is the
+    // difference between a curation pipeline and an agent graph that ran for a
+    // day.
+    let fixture = Fixture::new(false);
+    let (execution, version) = hosted_run(&fixture, "paged").await;
+    fixture
+        .post_keyed(
+            &format!("/api/v1/executions/{execution}/stream"),
+            "batch-1",
+            json!({ "expected_version": version, "holder": "worker-a", "messages": hosted_messages(4) }),
+        )
+        .await;
+
+    let mut seen = 0;
+    let mut after = 0;
+    loop {
+        let (status, page) = fixture
+            .get(&format!(
+                "/api/v1/executions/{execution}/history?after={after}&limit=2"
+            ))
+            .await;
+        assert_eq!(status, StatusCode::OK, "{page}");
+        let messages = page["messages"].as_array().expect("the messages");
+        assert!(messages.len() <= 2, "a page honours its limit");
+        seen += messages.len();
+        match page["next_after"].as_u64() {
+            Some(next) => after = next,
+            None => break,
+        }
+    }
+    assert_eq!(seen, (version + 5) as usize, "every message, once");
+
+    // A page past the end of a run that exists is empty, not a 404.
+    let (status, page) = fixture
+        .get(&format!(
+            "/api/v1/executions/{execution}/history?after=9999"
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert!(page["messages"].as_array().expect("an array").is_empty());
+}
+
+#[tokio::test]
+async fn one_decider_holds_a_hosted_run_and_its_replacement_takes_over_when_it_stops() {
+    // Phase 13, step 2's exit over HTTP. Asking for a lease answers 200 either
+    // way — being told who has it is an answer to that question — and it is the
+    // *append* that 409s while somebody else decides.
+    let fixture = Fixture::new(false);
+    let (execution, version) = hosted_run(&fixture, "leased").await;
+    let lease_uri = format!("/api/v1/executions/{execution}/decider-lease");
+
+    let (status, taken) = fixture
+        .post(&lease_uri, json!({ "holder": "worker-a" }))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{taken}");
+    assert_eq!(taken["outcome"], "taken", "{taken}");
+    assert_eq!(taken["holder"], "worker-a", "{taken}");
+
+    let (status, held) = fixture
+        .post(&lease_uri, json!({ "holder": "worker-b" }))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{held}");
+    assert_eq!(held["outcome"], "held", "{held}");
+    assert_eq!(held["holder"], "worker-a", "{held}");
+    assert!(
+        held["expires_at"].is_string(),
+        "the refusal says when it is worth asking again: {held}"
+    );
+
+    // And `worker-b` cannot append while it is somebody else's turn — told
+    // before it pays for the turn rather than after.
+    let (status, blocked) = fixture
+        .post_keyed(
+            &format!("/api/v1/executions/{execution}/stream"),
+            "b-1",
+            json!({
+                "expected_version": version,
+                "holder": "worker-b",
+                "messages": hosted_messages(1)
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{blocked}");
+    assert_eq!(blocked["code"], "lease_held", "{blocked}");
+
+    // A reader gets the same answer both claimants did — the worker asks, the
+    // server answers.
+    let (status, read) = fixture.get(&lease_uri).await;
+    assert_eq!(status, StatusCode::OK, "{read}");
+    assert_eq!(read["holder"], "worker-a", "{read}");
+
+    // Released rather than waited out, and then it is `worker-b`'s.
+    let (status, released) = fixture
+        .post(
+            &format!("{lease_uri}/release"),
+            json!({ "holder": "worker-b" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{released}");
+    assert!(
+        !released["released"].as_bool().expect("a flag"),
+        "a lease is released by the one holding it: {released}"
+    );
+
+    let (_, released) = fixture
+        .post(
+            &format!("{lease_uri}/release"),
+            json!({ "holder": "worker-a" }),
+        )
+        .await;
+    assert!(
+        released["released"].as_bool().expect("a flag"),
+        "{released}"
+    );
+
+    let (status, gone) = fixture.get(&lease_uri).await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "expired and never taken are one answer: {gone}"
+    );
+
+    let (status, taken) = fixture
+        .post(&lease_uri, json!({ "holder": "worker-b" }))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{taken}");
+    assert_eq!(taken["outcome"], "taken", "{taken}");
+    // And no `previous_holder`, which is the distinction worth keeping: a
+    // handover is not a takeover. `worker-a` gave the lease up, so there is
+    // nobody who was interrupted mid-turn to warn the replacement about. The
+    // takeover-after-expiry case is the contract suite's, against all three
+    // stores.
+    assert!(
+        taken.get("previous_holder").is_none(),
+        "a clean handover interrupted nobody: {taken}"
+    );
+
+    // And now `worker-b` decides: its append goes in, and `worker-a`'s does not.
+    let (status, appended) = fixture
+        .post_keyed(
+            &format!("/api/v1/executions/{execution}/stream"),
+            "b-2",
+            json!({
+                "expected_version": version,
+                "holder": "worker-b",
+                "messages": hosted_messages(1)
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{appended}");
+
+    let (status, stale) = fixture
+        .post_keyed(
+            &format!("/api/v1/executions/{execution}/stream"),
+            "a-2",
+            json!({
+                "expected_version": version,
+                "holder": "worker-a",
+                "messages": hosted_messages(1)
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{stale}");
 }
 
 #[tokio::test]

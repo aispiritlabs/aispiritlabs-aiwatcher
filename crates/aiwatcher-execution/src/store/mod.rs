@@ -34,6 +34,8 @@
 //! that needs a worker, a container job or a second API replica is refused on
 //! it, so that a development store never becomes a production one by omission.
 
+#[cfg(feature = "duckdb")]
+pub mod duckdb;
 pub mod file;
 pub mod memory;
 #[cfg(feature = "postgres")]
@@ -47,6 +49,7 @@ use aiwatcher_core::{Checkpoint, MessageId};
 
 use crate::claim::{AttemptKey, AttemptRow, AttemptWrite, ClaimFilter};
 use crate::error::{Result, StoreError};
+use crate::hosted::{DeciderLease, LeaseOutcome};
 use crate::message::{
     Direction, MAX_PAYLOAD_BYTES, OutboxMessage, PendingMessage, RecordedMessage, RunProjection,
 };
@@ -245,6 +248,79 @@ pub trait WorkflowStore: Send + Sync + std::fmt::Debug {
     ///
     /// Whatever the backend could not do.
     async fn load(&self, execution: &ExecutionId) -> Result<StreamSlice>;
+
+    /// One page of a stream: the messages after `after`, at most `limit` of
+    /// them, in order.
+    ///
+    /// [`Self::load`] is what the decider needs — a decision is a fold over the
+    /// whole history and there is no page of it. A *reader* is the other case,
+    /// and a hosted agent graph is where the two stop being the same size: an
+    /// execution that runs for a day is a stream neither the API nor the
+    /// browser can hold, which is the event log's own rule about
+    /// `read_stream_page` arriving in a second store.
+    ///
+    /// [`StreamSlice::version`] is the stream's current version rather than the
+    /// page's end, so a reader can tell a short page from the last one without
+    /// a second call. `after` is a version, not an offset: it is what the
+    /// previous page's last message reported, so a page that arrives while the
+    /// stream grows continues rather than shifts.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the backend could not do.
+    async fn load_page(
+        &self,
+        execution: &ExecutionId,
+        after: u64,
+        limit: usize,
+    ) -> Result<StreamSlice>;
+
+    /// Take, or renew, the decider lease on one hosted execution.
+    ///
+    /// `agentic.workflow`'s `ProcessorLock`, in the store this system already
+    /// keeps. Taking it again as the same holder is the renewal, so a heartbeat
+    /// and a first claim are one call and cannot disagree.
+    ///
+    /// It is **not** what keeps the history correct — the expected version is,
+    /// and it holds whether or not anybody leases anything. This keeps two
+    /// deciders from doing one turn's model call twice.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the backend could not do.
+    async fn take_decider_lease(
+        &self,
+        execution: &ExecutionId,
+        holder: &str,
+        now: OffsetDateTime,
+    ) -> Result<LeaseOutcome>;
+
+    /// Give up the decider lease. `false` when it was not this holder's to give.
+    ///
+    /// A worker that finished its turn releases rather than waiting out the
+    /// lease, which is the difference between a replacement starting now and
+    /// starting in five minutes.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the backend could not do.
+    async fn release_decider_lease(
+        &self,
+        execution: &ExecutionId,
+        holder: &str,
+        now: OffsetDateTime,
+    ) -> Result<bool>;
+
+    /// Who holds it, if anybody still does.
+    ///
+    /// `None` once it has run out, because "expired" and "never taken" are the
+    /// same answer to every caller: it is free. The row survives so that a
+    /// takeover can report [`DeciderLease::previous_holder`].
+    ///
+    /// # Errors
+    ///
+    /// Whatever the backend could not do.
+    async fn decider_lease(&self, execution: &ExecutionId) -> Result<Option<DeciderLease>>;
 
     /// The one atomic operation. Everything in `request` lands, or none of it.
     ///
@@ -494,6 +570,37 @@ impl<T: WorkflowStore + ?Sized> WorkflowStore for std::sync::Arc<T> {
 
     async fn load(&self, execution: &ExecutionId) -> Result<StreamSlice> {
         (**self).load(execution).await
+    }
+
+    async fn load_page(
+        &self,
+        execution: &ExecutionId,
+        after: u64,
+        limit: usize,
+    ) -> Result<StreamSlice> {
+        (**self).load_page(execution, after, limit).await
+    }
+
+    async fn take_decider_lease(
+        &self,
+        execution: &ExecutionId,
+        holder: &str,
+        now: OffsetDateTime,
+    ) -> Result<LeaseOutcome> {
+        (**self).take_decider_lease(execution, holder, now).await
+    }
+
+    async fn release_decider_lease(
+        &self,
+        execution: &ExecutionId,
+        holder: &str,
+        now: OffsetDateTime,
+    ) -> Result<bool> {
+        (**self).release_decider_lease(execution, holder, now).await
+    }
+
+    async fn decider_lease(&self, execution: &ExecutionId) -> Result<Option<DeciderLease>> {
+        (**self).decider_lease(execution).await
     }
 
     async fn append(

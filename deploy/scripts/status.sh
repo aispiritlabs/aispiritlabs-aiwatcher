@@ -47,5 +47,39 @@ for probe in livez readyz; do
   fi
 done
 
+printf '\n%s▶ what this release actually answers%s\n' "$B" "$NC"
+# Pods being Ready says the process started; it says nothing about whether the
+# optional subsystems a values file turned on are actually wired. Every one of
+# them answers 501 when its backend is unset — deliberately, so the panel can
+# name the variable instead of drawing an empty list — and a 501 looks exactly
+# like a healthy install to anything that only reads pod status. planner's
+# import found this the hard way: `PLANNER_IMPORT_ORCHESTRATOR=aiwatcher`
+# against a release whose `execution.store` was still the chart's default is a
+# green deployment whose first POST fails.
+#
+# `_probe` is a name nothing can have, so the enabled answer is 404 and the
+# disabled one is 501. Read-only either way.
+status_of() {
+  "${kube[@]}" -n "$namespace" exec "deploy/$release-server" -- \
+    # No `-q`: it suppresses the response headers `-S` exists to print, and
+    # those are the whole answer. Verified against the runtime image's wget.
+    wget -S -O /dev/null "http://127.0.0.1:8080$1" 2>&1 |
+    grep -oE 'HTTP/[0-9.]+ [0-9]{3}' | tail -1 | awk '{ print $2 }'
+}
+
+for surface in \
+  "managed execution|/api/v1/executions/_probe|execution.store" \
+  "prompt registry|/api/v1/prompts|promptStore.mode" \
+  "pipeline engine|/api/v1/engine|engine.mode"
+do
+  IFS='|' read -r label path setting <<<"$surface"
+  code=$(status_of "$path")
+  case "$code" in
+    "")    printf '  %-18s unreachable\n' "$label" ;;
+    501)   printf '  %-18s off — 501, set %s\n' "$label" "$setting" ;;
+    *)     printf '  %-18s on  — %s\n' "$label" "$code" ;;
+  esac
+done
+
 printf '\n%s▶ recent server log%s\n' "$B" "$NC"
 "${kube[@]}" -n "$namespace" logs "deploy/$release-server" --tail=20 2>&1 || true

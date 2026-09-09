@@ -8,6 +8,7 @@ pub mod config;
 pub mod conversations;
 pub mod execution;
 pub mod imports;
+pub mod seed;
 pub mod wiring;
 
 pub use config::{BackendKind, Config, ConfigError};

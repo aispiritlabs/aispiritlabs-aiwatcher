@@ -206,6 +206,10 @@ jobs:
       # so nothing here names one.
       - name: ruff, mypy and pytest
         run: just ml-pipeline-check
+      - name: Check curation seed and portable examples
+        run: |
+          python3 examples/build_seed.py --check
+          python3 examples/titanic/build_bundle.py --check
 
   k8s:
     name: Kubernetes manifests
