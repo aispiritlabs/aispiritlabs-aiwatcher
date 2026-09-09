@@ -64,13 +64,13 @@ artifacts = ["aiwatcher_sdk/py.typed"]
 # raising: a mask that is subtly misaligned trains a model that scores well and
 # predicts nonsense. It gets tested, so the checker needs them.
 dev = [
-    "mypy>=1.18,<2",
-    "pytest>=8.4,<9",
-    "ruff>=0.16.5,<0.17",
-    "numpy>=1.26",
-    "pillow>=10.0",
-    "jsonschema>=4,<5",
-    "types-jsonschema>=4.26.0.20260518",
+  "mypy>=1.18,<2",
+  "pytest>=8.4,<9",
+  "ruff>=0.16.5,<0.17",
+  "numpy>=1.26",
+  "pillow>=10.0",
+  "jsonschema>=4,<5",
+  "types-jsonschema>=4.26.0.20260518",
 ]
 
 [tool.uv]
