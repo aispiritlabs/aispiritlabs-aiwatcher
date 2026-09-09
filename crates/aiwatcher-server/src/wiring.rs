@@ -415,11 +415,13 @@ fn build_engine(config: &Config) -> Result<Option<Arc<FlyteEngine>>> {
 /// a 501 on the one route whose whole point is that this system does the work
 /// itself.
 ///
-/// The three adapters are the pattern this repository has set twice —
-/// `memory | wal | laser` and `none | memory | file | s3`. `file` takes an
-/// exclusive lock, which is what stops a second process from interleaving
-/// appends that each look fine alone; the refusal names the variable
-/// (ADR_0025).
+/// The four adapters are the pattern this repository has set twice —
+/// `memory | wal | laser` and `none | memory | file | s3`. `file` and `duckdb`
+/// each take an exclusive lock, which is what stops a second process from
+/// interleaving appends that each look fine alone; the refusal names the
+/// variable (ADR_0025). Between those two, `duckdb` is the one a local install
+/// wants: same single-process contract, no whole-file rewrites, and a database
+/// `aiwatcher sql` can open.
 async fn build_workflow_store(config: &Config) -> Result<Arc<dyn WorkflowStore>> {
     match config.workflow_store {
         WorkflowStoreKind::Memory => {
@@ -441,6 +443,28 @@ async fn build_workflow_store(config: &Config) -> Result<Arc<dyn WorkflowStore>>
                     .await
                     .context("opening the workflow store")?,
             ))
+        }
+        #[cfg(feature = "duckdb")]
+        WorkflowStoreKind::Duckdb => {
+            let path = std::path::Path::new(&config.data_dir).join("aiwatcher.duckdb");
+            tracing::info!(
+                path = %path.display(),
+                "the workflow store is DuckDB and holds this process only"
+            );
+            Ok(Arc::new(
+                aiwatcher_execution::store::duckdb::DuckdbWorkflowStore::open(&path)
+                    .context("opening the workflow store")?,
+            ))
+        }
+        #[cfg(not(feature = "duckdb"))]
+        WorkflowStoreKind::Duckdb => {
+            // Named rather than fallen back from, for the reason below: a
+            // silent `file` would be a different store with different
+            // durability than the one somebody asked for.
+            anyhow::bail!(
+                "AIWATCHER_WORKFLOW_STORE=duckdb needs this binary built with the `duckdb` \
+                 cargo feature (`cargo build --features duckdb`, or `just run-duckdb`)"
+            );
         }
         #[cfg(feature = "postgres")]
         WorkflowStoreKind::Postgres => {

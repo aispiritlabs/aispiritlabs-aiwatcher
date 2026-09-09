@@ -184,8 +184,12 @@ mod tests {
 
     #[test]
     fn a_loopback_address_is_the_boundary_this_mode_rests_on() {
-        assert!(LocalAuth::check_reachable("127.0.0.1".parse().expect("parses")));
+        assert!(LocalAuth::check_reachable(
+            "127.0.0.1".parse().expect("parses")
+        ));
         assert!(LocalAuth::check_reachable("::1".parse().expect("parses")));
-        assert!(!LocalAuth::check_reachable("0.0.0.0".parse().expect("parses")));
+        assert!(!LocalAuth::check_reachable(
+            "0.0.0.0".parse().expect("parses")
+        ));
     }
 }

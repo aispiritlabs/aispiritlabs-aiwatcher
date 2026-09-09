@@ -426,7 +426,8 @@ export type AttributeKind = typeof AttributeKind[keyof typeof AttributeKind];
 export const AuthMode = {
     NONE: 'none',
     OIDC: 'oidc',
-    PROXY: 'proxy'
+    PROXY: 'proxy',
+    LOCAL: 'local'
 } as const;
 
 /**
@@ -1011,6 +1012,7 @@ export const Credential = {
     SESSION: 'session',
     BEARER: 'bearer',
     TOKEN: 'token',
+    LOCAL: 'local',
     PROXY: 'proxy',
     ANONYMOUS: 'anonymous'
 } as const;

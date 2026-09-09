@@ -157,6 +157,30 @@ panel-test:
 # The prompt registry defaults to ./.data/prompts, so this needs nothing
 # running. `just run-rustfs` is the same server against the object store.
 
+# The whole local stack from the one binary: server, log, query service.
+# What a person new to this repository runs first. Everything else in this
+# section is that with one piece changed.
+up *ARGS:
+    cargo run --features duckdb --bin aiwatcher -- up {{ARGS}}
+
+# The same, on the local DuckDB store — the workflow history in one file rather
+# than in a directory of JSON, so `aiwatcher sql` can ask it questions. Not
+# while this is running: DuckDB gives a database to one writer *or* to any
+# number of readers, and a read-only open against a held file is refused by
+# name. `just up` and `aiwatcher down` are the pair that makes it readable.
+run-duckdb:
+    AIWATCHER_BUS=wal \
+    AIWATCHER_WORKFLOW_STORE=duckdb \
+    AIWATCHER_INGEST_ENABLED=true \
+    AIWATCHER_LOG=info,aiwatcher=debug \
+    cargo run --features duckdb --bin aiwatcher
+
+# The storage contract, the same twenty-nine properties the memory, file and
+# PostgreSQL adapters prove — against an embedded database, so unlike
+# `just test-postgres` this needs nothing running.
+test-duckdb:
+    cargo test --features duckdb -p aiwatcher-execution --test duckdb
+
 # Server on :8080, durable write-ahead log in ./.data.
 run:
     AIWATCHER_BUS=wal \

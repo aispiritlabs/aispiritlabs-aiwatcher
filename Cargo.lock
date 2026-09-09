@@ -2437,9 +2437,9 @@ dependencies = [
 
 [[package]]
 name = "iggy"
-version = "0.11.0-edge.4"
+version = "0.11.0-edge.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c134f1c83c541031b50377fc62f74da66dca2f1b40ecd74599ef263bc2e3c600"
+checksum = "3f18ab1a3a0527e254e38e18ef0cc33c58a30bca18544d4287b9cd0900cf8687"
 dependencies = [
  "async-broadcast",
  "async-dropper",
@@ -5118,7 +5118,7 @@ version = "2.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5283634e518fe9e82c7b20520bb4bc209009fd16c82077c802f8111ecbb0117a"
 dependencies = [
- "rand 0.10.2",
+ "rand 0.9.5",
 ]
 
 [[package]]
@@ -5525,7 +5525,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

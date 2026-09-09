@@ -139,19 +139,18 @@ impl Client {
         format!("{}/{}", self.base, path.trim_start_matches('/'))
     }
 
-    async fn send(
-        &self,
-        request: reqwest::RequestBuilder,
-        path: &str,
-    ) -> Result<Value, CliError> {
+    async fn send(&self, request: reqwest::RequestBuilder, path: &str) -> Result<Value, CliError> {
         let request = match &self.token {
             Some(token) => request.bearer_auth(token),
             None => request,
         };
-        let response = request.send().await.map_err(|source| CliError::Unreachable {
-            url: self.base.clone(),
-            source,
-        })?;
+        let response = request
+            .send()
+            .await
+            .map_err(|source| CliError::Unreachable {
+                url: self.base.clone(),
+                source,
+            })?;
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
         if !status.is_success() {
@@ -168,7 +167,9 @@ impl Client {
             return Ok(Value::Null);
         }
         serde_json::from_str(&body).map_err(|error| {
-            CliError::Other(anyhow::anyhow!("{path} answered something that is not JSON: {error}"))
+            CliError::Other(anyhow::anyhow!(
+                "{path} answered something that is not JSON: {error}"
+            ))
         })
     }
 }

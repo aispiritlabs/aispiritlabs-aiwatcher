@@ -108,8 +108,9 @@ impl DuckdbWorkflowStore {
     ///
     /// [`StoreError::Backend`] when DuckDB will not start at all.
     pub fn in_memory() -> Result<Self> {
-        let connection = Connection::open_in_memory()
-            .map_err(|error| StoreError::Backend(format!("opening an in-memory database: {error}")))?;
+        let connection = Connection::open_in_memory().map_err(|error| {
+            StoreError::Backend(format!("opening an in-memory database: {error}"))
+        })?;
         schema::apply(&connection)?;
         Ok(Self {
             inner: Arc::new(Mutex::new(connection)),
@@ -490,7 +491,7 @@ impl WorkflowStore for DuckdbWorkflowStore {
                  values (?, ?, ?, ?, ?)",
                 duckdb::params![
                     key,
-                    request.key.definition_kind.to_string(),
+                    request.key.definition_kind.as_str(),
                     request.key.definition_name.clone(),
                     stamp(request.key.slot),
                     encode(&record)?,
@@ -559,7 +560,7 @@ impl WorkflowStore for DuckdbWorkflowStore {
         limit: usize,
     ) -> Result<Vec<SlotRecord>> {
         let name = name.to_owned();
-        let kind = kind.to_string();
+        let kind = kind.as_str();
         self.with(move |db| {
             rows(
                 db,
@@ -592,13 +593,14 @@ impl WorkflowStore for DuckdbWorkflowStore {
         let filter = filter.clone();
         let owner = owner.to_owned();
         self.with(move |db| {
-            // Ordered oldest first, which is what stops a backlog being served
-            // newest-first while its head starves. The predicate is
-            // `ClaimFilter`'s and `AttemptRow`'s, in Rust, because a second
-            // copy of it in SQL is a second answer to which row is claimable.
+            // `order by updated_at`, which is what the PostgreSQL adapter
+            // orders by and what stops a backlog being served newest-first
+            // while its head starves. The predicate is `ClaimFilter`'s and
+            // `AttemptRow`'s, in Rust, because a second copy of it in SQL is a
+            // second answer to which row is claimable.
             let candidates: Vec<AttemptRow> = rows(
                 db,
-                "select payload from attempts order by dispatched_at, execution, step, attempt",
+                "select payload from attempts order by updated_at, execution, step, attempt",
                 [],
             )?;
             let Some(mut row) = candidates
@@ -694,9 +696,7 @@ impl WorkflowStore for DuckdbWorkflowStore {
 
             let doomed: Vec<String> = candidates
                 .into_iter()
-                .filter(|(_, run, activity)| {
-                    prunable(run, from_stamp(*activity), before)
-                })
+                .filter(|(_, run, activity)| prunable(run, from_stamp(*activity), before))
                 .filter(|(execution, _, _)| !speaking.contains(&format!("workflow:{execution}")))
                 .map(|(execution, _, _)| execution)
                 .take(limit)
@@ -714,7 +714,10 @@ impl WorkflowStore for DuckdbWorkflowStore {
                     .map_err(|error| StoreError::Backend(format!("pruning: {error}")))?;
                 }
                 let attempts = db
-                    .execute("delete from attempts where execution = ?", [execution.clone()])
+                    .execute(
+                        "delete from attempts where execution = ?",
+                        [execution.clone()],
+                    )
                     .map_err(|error| StoreError::Backend(format!("pruning attempts: {error}")))?;
                 pruned.attempts += attempts;
                 pruned.executions += 1;
@@ -834,15 +837,22 @@ fn read_attempt(db: &Connection, key: &AttemptKey) -> Result<Option<AttemptRow>>
     )
 }
 
+/// Write one attempt row, stamping when it was last touched.
+///
+/// `updated_at` is written here rather than taken from the row because the row
+/// does not carry one: it is a property of the *record*, not of the attempt, and
+/// it exists for one reason — `claim_attempt` orders by it, so a claim reaches
+/// the least recently touched row first. The PostgreSQL adapter's column of the
+/// same name does the same job.
 fn write_attempt(db: &Connection, row: &AttemptRow) -> Result<()> {
     db.execute(
         "insert or replace into attempts \
-         (execution, step, attempt, dispatched_at, payload) values (?, ?, ?, ?, ?)",
+         (execution, step, attempt, updated_at, payload) values (?, ?, ?, ?, ?)",
         duckdb::params![
             row.key.execution_id.to_string(),
             row.key.step_id.clone(),
             i64::from(row.key.attempt),
-            stamp(row.dispatched_at),
+            stamp(OffsetDateTime::now_utc()),
             encode(row)?
         ],
     )

@@ -66,7 +66,9 @@ pub fn create(args: &Args, paths: &Paths) -> Result<(), CliError> {
             println!("file   {}", path.display());
             println!("role   admin");
             println!();
-            println!("The server accepts it with AIWATCHER_AUTH_MODE=local, which `aiwatcher up` sets.");
+            println!(
+                "The server accepts it with AIWATCHER_AUTH_MODE=local, which `aiwatcher up` sets."
+            );
         }
     }
     Ok(())
@@ -143,8 +145,8 @@ mod tests {
 
     impl Scratch {
         fn new(name: &str) -> Self {
-            let dir = std::env::temp_dir()
-                .join(format!("aiwatcher-token-{name}-{}", std::process::id()));
+            let dir =
+                std::env::temp_dir().join(format!("aiwatcher-token-{name}-{}", std::process::id()));
             std::fs::remove_dir_all(&dir).ok();
             std::fs::create_dir_all(&dir).expect("creates");
             Self(dir)

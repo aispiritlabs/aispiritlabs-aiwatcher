@@ -141,11 +141,55 @@ final class Admission
     }
 
     /**
+     * What a callable's return type names, with `self`, `static` and `parent`
+     * resolved to the class they stand for.
+     *
+     * A relative type is the one thing reflection does not report the same way
+     * on every PHP this service supports. Flow declares almost every
+     * `DataFrame` method `: self`; PHP 8.5 resolves that to
+     * `Flow\ETL\DataFrame` in `ReflectionNamedType::getName()` and 8.3 and 8.4
+     * report the word `self`. Matching the written word therefore admitted 24
+     * steps on one interpreter and one on another — the same source, the same
+     * lock file, two different query languages, and the difference only visible
+     * to whoever ran the suite on the version CI does not.
+     *
+     * Resolving here rather than at each call site is the point: [`Frame`] and
+     * [`Values`] ask the same question and must not answer it twice.
+     */
+    public static function returned(\ReflectionFunctionAbstract $callable): string
+    {
+        $type = $callable->getReturnType();
+
+        if (!$type instanceof \ReflectionNamedType) {
+            // A union or an intersection, which `returns()` refuses anyway.
+            return (string) ($type ?? '');
+        }
+
+        $written = $type->getName();
+        $class = $callable instanceof \ReflectionMethod ? $callable->getDeclaringClass() : null;
+
+        if ($class === null) {
+            return $written;
+        }
+
+        $parent = $class->getParentClass();
+
+        return match (\strtolower($written)) {
+            'self', 'static' => $class->getName(),
+            'parent' => ($parent === false ? $class : $parent)->getName(),
+            default => $written,
+        };
+    }
+
+    /**
      * Whether a written return type sits in one of the admitted namespaces.
      *
      * A union or an intersection is refused: every admitted member of Flow's
      * API returns one type, and a union return would need a rule about which
      * half decides.
+     *
+     * Callers hand this [`returned()`]'s answer rather than the written type,
+     * so that a relative name has already become the class it stands for.
      *
      * @param list<string> $namespaces
      */

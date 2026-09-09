@@ -107,6 +107,70 @@ iterate against. For a server whose data survives one:
 just run        # :8080, durable write-ahead log in ./.data
 ```
 
+## The command line
+
+One binary runs an instance and talks to one. `aiwatcher up` is the whole local
+stack — the server, a durable log and, if this checkout has one, the query
+service — and it needs nothing else running.
+
+```bash
+just up                       # or: cargo run --bin aiwatcher -- up
+aiwatcher runs list window=1h
+aiwatcher token show          # what an agent should present
+```
+
+Values are `key=value` and may sit anywhere on the line, after Obsidian's own
+CLI; `format=json` turns any read into something a script can consume. A verb
+exists for what people type often, and `aiwatcher api` reaches every one of the
+hundred-odd routes that has no verb:
+
+```bash
+aiwatcher runs show id=run-7
+aiwatcher spans list run=run-7 slower-than=500
+aiwatcher dimensions kind=agent window=6h format=json
+aiwatcher api post path=/api/v1/events body=@run.json
+```
+
+Commands go to the instance on this machine unless told otherwise. Somewhere
+else is a profile, or a one-off `url=`:
+
+```bash
+aiwatcher profile set name=prod url=https://aiwatcher.example token=…
+aiwatcher runs list profile=prod
+```
+
+`aiwatcher help` lists the rest; `aiwatcher help commands` lists every verb with
+the route behind it.
+
+**A local instance authenticates.** `up` generates a token on first use and
+starts the server in `AIWATCHER_AUTH_MODE=local`, where that one token — held in
+a file only its owner can read — is the credential, and it authenticates as an
+admin. It is not an ingest token: those stay at most an editor because they sit
+in an agent's environment, and this one does not. See
+[ADR_0027](docs/ADR/ADR_0027_LOCAL_INSTALL.md).
+
+**Bare `aiwatcher` still runs the server**, because that is the container
+image's entry point. `aiwatcher help` is the help.
+
+### The local database
+
+Built with the `duckdb` feature, a local instance keeps its managed-run history
+in one DuckDB file instead of a directory of JSON — the same twenty-nine
+storage properties the PostgreSQL adapter proves, and a database you can ask a
+question of while the server is still running:
+
+```bash
+just run-duckdb
+just test-duckdb              # needs nothing running; DuckDB is embedded
+aiwatcher sql                 # what tables there are
+aiwatcher sql query="select execution, version, direction from streams limit 20"
+```
+
+It is opened read-only there, because the server is the writer. What is in it is
+the workflow store — the plan, the decisions, the outbox — which is the one
+thing the event log does not carry; runs, spans and dimensions stay folds over
+the log and are read through the API.
+
 ## Sending events
 
 The contract is the envelope in

@@ -48,7 +48,10 @@ fn list(args: &Args, paths: &Paths) -> Result<(), CliError> {
                 })
             })
             .collect();
-        println!("{}", serde_json::json!({ "current": current, "items": rows }));
+        println!(
+            "{}",
+            serde_json::json!({ "current": current, "items": rows })
+        );
         return Ok(());
     }
 
@@ -193,8 +196,11 @@ mod tests {
     fn removing_the_current_profile_does_not_leave_a_dangling_pointer() {
         let scratch = Scratch::new("dangling");
         let paths = scratch.paths();
-        set(&args(&["profile", "set", "name=prod", "url=https://p.example"]), &paths)
-            .expect("sets");
+        set(
+            &args(&["profile", "set", "name=prod", "url=https://p.example"]),
+            &paths,
+        )
+        .expect("sets");
         remove(&args(&["profile", "remove", "name=prod"]), &paths).expect("removes");
         let config = Config::load(&paths.config_file()).expect("loads");
         assert_eq!(config.current, None, "a removed profile stayed current");
@@ -204,8 +210,11 @@ mod tests {
     fn the_first_profile_added_becomes_the_current_one() {
         let scratch = Scratch::new("first");
         let paths = scratch.paths();
-        set(&args(&["profile", "set", "name=prod", "url=https://p.example"]), &paths)
-            .expect("sets");
+        set(
+            &args(&["profile", "set", "name=prod", "url=https://p.example"]),
+            &paths,
+        )
+        .expect("sets");
         let config = Config::load(&paths.config_file()).expect("loads");
         assert_eq!(config.current.as_deref(), Some("prod"));
     }
@@ -214,8 +223,11 @@ mod tests {
     fn switching_back_to_local_works_with_nothing_stored_under_it() {
         let scratch = Scratch::new("local");
         let paths = scratch.paths();
-        set(&args(&["profile", "set", "name=prod", "url=https://p.example"]), &paths)
-            .expect("sets");
+        set(
+            &args(&["profile", "set", "name=prod", "url=https://p.example"]),
+            &paths,
+        )
+        .expect("sets");
         use_one(&args(&["profile", "use", "name=local"]), &paths).expect("switches");
         let config = Config::load(&paths.config_file()).expect("loads");
         assert_eq!(config.current.as_deref(), Some("local"));
@@ -234,7 +246,13 @@ mod tests {
         let scratch = Scratch::new("roundtrip");
         let paths = scratch.paths();
         set(
-            &args(&["profile", "set", "name=prod", "url=https://p.example", "token=abcdefghijklmnopqrstuvwx"]),
+            &args(&[
+                "profile",
+                "set",
+                "name=prod",
+                "url=https://p.example",
+                "token=abcdefghijklmnopqrstuvwx",
+            ]),
             &paths,
         )
         .expect("sets");

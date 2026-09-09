@@ -8,8 +8,8 @@
 //! somebody adds later.
 
 pub mod api;
-pub mod read;
 pub mod profile;
+pub mod read;
 pub mod serve;
 pub mod stack;
 pub mod token;
@@ -180,9 +180,14 @@ mod tests {
     fn no_verb_is_also_the_name_of_a_server_role() {
         // `api` was both, briefly: a third spelling of the `serve` role and
         // the passthrough. `aiwatcher api get path=…` started a server.
-        for word in ["api", "up", "down", "status", "token", "profile", "sql", "help"] {
+        for word in [
+            "api", "up", "down", "status", "token", "profile", "sql", "help",
+        ] {
             assert!(
-                !matches!(word, "serve" | "server" | "work" | "worker" | "both" | "all"),
+                !matches!(
+                    word,
+                    "serve" | "server" | "work" | "worker" | "both" | "all"
+                ),
                 "{word} is a command and a role"
             );
         }
@@ -194,8 +199,14 @@ mod tests {
         // which is a coin toss between reading a run and cancelling it.
         for read in read::READS {
             assert!(
-                write::find(&read.words.iter().map(|word| (*word).to_owned()).collect::<Vec<_>>())
-                    .is_none(),
+                write::find(
+                    &read
+                        .words
+                        .iter()
+                        .map(|word| (*word).to_owned())
+                        .collect::<Vec<_>>()
+                )
+                .is_none(),
                 "{:?} is both a read and a write",
                 read.words
             );

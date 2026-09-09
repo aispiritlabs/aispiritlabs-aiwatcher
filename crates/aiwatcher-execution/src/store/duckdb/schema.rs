@@ -81,15 +81,16 @@ create table if not exists checkpoints (
 );
 
 -- Live attempts only: a settlement is the row ceasing to exist, so this stays
--- bounded by concurrency rather than by retention. `dispatched_at` is the
--- ordering `claim_attempt` reads oldest-first, which is what stops a backlog
--- being served newest-first while its head starves.
+-- bounded by concurrency rather than by retention. `updated_at` is the ordering
+-- `claim_attempt` reads oldest-first — the same column the PostgreSQL adapter
+-- orders by — which is what stops a backlog being served newest-first while its
+-- head starves.
 create table if not exists attempts (
-    execution     varchar not null,
-    step          varchar not null,
-    attempt       bigint  not null,
-    dispatched_at bigint  not null,
-    payload       varchar not null,
+    execution  varchar not null,
+    step       varchar not null,
+    attempt    bigint  not null,
+    updated_at bigint  not null,
+    payload    varchar not null,
     primary key (execution, step, attempt)
 );
 

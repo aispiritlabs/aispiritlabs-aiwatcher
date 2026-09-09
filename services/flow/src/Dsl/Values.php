@@ -70,9 +70,18 @@ final class Values
                 continue;
             }
 
-            $returns = (string) ($method->getReturnType() ?? '');
+            // A method that hands back the class it is declared on is a
+            // fluent chain — `->as()`, `->over()`, `->partitionBy()` — and the
+            // value is still the value it was. That is what `self` and
+            // `static` say, and [`Admission::returned`] has already resolved
+            // them, because PHP 8.5 reports the class and 8.3 reports the
+            // word. Written as a comparison rather than as those two spellings
+            // so that `Statistic::over(): static` and Flow's own chains are
+            // one rule: this service's value classes are not in the namespaces
+            // below and are values all the same.
+            $returns = Admission::returned($method);
 
-            if (!\in_array($returns, ['static', 'self'], true) && !Admission::returns($returns, self::RETURNS)) {
+            if ($returns !== $method->getDeclaringClass()->getName() && !Admission::returns($returns, self::RETURNS)) {
                 continue;
             }
 

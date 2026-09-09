@@ -81,11 +81,7 @@ pub fn find(words: &[String]) -> Option<&'static Command> {
 /// [`CliError::Usage`] for a missing path parameter, and whatever the instance
 /// answered — including the 409 that says the run is not in a state this
 /// command applies to, which is an answer rather than a bug.
-pub async fn command(
-    spec: &Command,
-    args: &Args,
-    client: &Client,
-) -> Result<(), CliError> {
+pub async fn command(spec: &Command, args: &Args, client: &Client) -> Result<(), CliError> {
     let format = Format::from_args(args)?;
     let path = super::read::substitute_path(spec.path, args)?;
     let body = args
@@ -210,7 +206,10 @@ mod tests {
     #[test]
     fn the_longest_matching_command_wins() {
         let words = vec!["executions".to_owned(), "retry".to_owned()];
-        assert_eq!(find(&words).expect("matches").words, ["executions", "retry"]);
+        assert_eq!(
+            find(&words).expect("matches").words,
+            ["executions", "retry"]
+        );
     }
 
     #[test]

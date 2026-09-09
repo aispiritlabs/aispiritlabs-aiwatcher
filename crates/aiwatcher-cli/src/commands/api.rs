@@ -125,8 +125,8 @@ mod tests {
 
     #[test]
     fn everything_the_command_did_not_name_becomes_a_query_parameter() {
-        let args = Args::parse(["path=/api/v1/runs", "format=json", "status=running"])
-            .expect("parses");
+        let args =
+            Args::parse(["path=/api/v1/runs", "format=json", "status=running"]).expect("parses");
         let extra = args.other_values(&["path", "method", "body", "format"]);
         assert_eq!(extra, [("status", "running")]);
     }

@@ -149,8 +149,8 @@ mod tests {
 
     impl Scratch {
         fn new(name: &str) -> Self {
-            let dir = std::env::temp_dir()
-                .join(format!("aiwatcher-paths-{name}-{}", std::process::id()));
+            let dir =
+                std::env::temp_dir().join(format!("aiwatcher-paths-{name}-{}", std::process::id()));
             std::fs::remove_dir_all(&dir).ok();
             std::fs::create_dir_all(&dir).expect("creates");
             Self(dir)
@@ -175,7 +175,11 @@ mod tests {
                 .expect("stats")
                 .permissions()
                 .mode();
-            assert_eq!(mode & 0o777, 0o600, "the token file is group or world readable");
+            assert_eq!(
+                mode & 0o777,
+                0o600,
+                "the token file is group or world readable"
+            );
         }
         assert_eq!(std::fs::read_to_string(&path).expect("reads"), "shhh");
     }

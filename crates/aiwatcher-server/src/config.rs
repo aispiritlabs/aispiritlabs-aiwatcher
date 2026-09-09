@@ -163,6 +163,11 @@ pub enum WorkflowStoreKind {
     File,
     /// What a deployment runs. Needs the `postgres` cargo feature compiled in.
     Postgres,
+    /// One DuckDB database, for one machine — what `postgres` is for a
+    /// deployment. Holds one process, like `file`, and unlike `file` it is a
+    /// thing you can ask a question of: `aiwatcher sql` opens the same file.
+    /// Needs the `duckdb` cargo feature compiled in.
+    Duckdb,
 }
 
 impl FromStr for WorkflowStoreKind {
@@ -173,10 +178,11 @@ impl FromStr for WorkflowStoreKind {
             "memory" | "in-memory" => Ok(Self::Memory),
             "file" | "fs" | "disk" => Ok(Self::File),
             "postgres" | "postgresql" | "pg" => Ok(Self::Postgres),
+            "duckdb" | "duck" => Ok(Self::Duckdb),
             other => Err(ConfigError::Invalid {
                 name: "AIWATCHER_WORKFLOW_STORE",
                 value: other.to_owned(),
-                expected: "one of memory, file, postgres",
+                expected: "one of memory, file, duckdb, postgres",
             }),
         }
     }

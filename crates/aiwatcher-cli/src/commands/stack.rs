@@ -99,7 +99,7 @@ impl Plan {
             log,
             // On when the service is there to be started and nobody said
             // otherwise: the Query tab is part of what this stack is for, and
-            // an absent PHP is reported rather than pre-empted.
+            // an absent PHP is reported rather than preempted.
             flow: !matches!(args.value("flow"), Some("off" | "no" | "false")),
             port,
             listen: args.value("listen").unwrap_or("127.0.0.1").to_owned(),
@@ -174,7 +174,9 @@ async fn up(args: &Args, paths: &Paths) -> Result<(), CliError> {
     if plan.log == Log::Iggy {
         started.started_iggy = start_iggy()?;
     }
-    if plan.flow && let Some(child) = start_flow()? {
+    if plan.flow
+        && let Some(child) = start_flow()?
+    {
         started.children.push(child);
     }
 
@@ -208,8 +210,7 @@ async fn status(args: &Args, paths: &Paths) -> Result<(), CliError> {
     let client = crate::client::Client::new(&resolved, Duration::from_secs(3))?;
 
     let server = client.ready().await;
-    let broker = docker(&["inspect", "-f", "{{.State.Running}}", IGGY_CONTAINER])
-        .unwrap_or(false);
+    let broker = docker(&["inspect", "-f", "{{.State.Running}}", IGGY_CONTAINER]).unwrap_or(false);
     let flow = reachable("127.0.0.1:8081");
 
     if crate::Format::from_args(args)? == crate::Format::Json {
@@ -261,16 +262,26 @@ fn server_config(plan: &Plan, paths: &Paths, secret: &str) -> Result<ServerConfi
     // A local instance is the one place a producer has nowhere else to publish:
     // there is no cluster, and the SDK reaches this process over HTTP.
     config.ingest_enabled = true;
+
+    // The local database, when this build has one. Overriding rather than
+    // defaulting, because `up` is the command that has an opinion: a build with
+    // the feature compiled in has it for this. A variable somebody exported
+    // deliberately still wins, which is why it is read back first.
+    #[cfg(feature = "duckdb")]
+    if std::env::var("AIWATCHER_WORKFLOW_STORE").is_err() {
+        config.workflow_store = aiwatcher_server::config::WorkflowStoreKind::Duckdb;
+    }
     if plan.flow {
         config.flow_url = Some("http://127.0.0.1:8081".to_owned());
     }
 
     config.auth.mode = AuthMode::Local;
-    config.auth.local = Some(
-        LocalAuth::new(secret, Role::Admin).map_err(|error| CliError::Other(error.into()))?,
-    );
+    config.auth.local =
+        Some(LocalAuth::new(secret, Role::Admin).map_err(|error| CliError::Other(error.into()))?);
 
-    config.validate().map_err(|error| CliError::Other(error.into()))?;
+    config
+        .validate()
+        .map_err(|error| CliError::Other(error.into()))?;
     Ok(config)
 }
 
@@ -288,7 +299,20 @@ fn announce(plan: &Plan, paths: &Paths, config: &ServerConfig) {
         }
     );
     println!("  data    {}", paths.data_dir.display());
-    println!("  token   {} (aiwatcher token show)", paths.token_file().display());
+    println!(
+        "  store   {}",
+        match config.workflow_store {
+            aiwatcher_server::config::WorkflowStoreKind::Memory => "memory".to_owned(),
+            aiwatcher_server::config::WorkflowStoreKind::File => "files, one per run".to_owned(),
+            aiwatcher_server::config::WorkflowStoreKind::Postgres => "postgresql".to_owned(),
+            aiwatcher_server::config::WorkflowStoreKind::Duckdb =>
+                format!("duckdb ({} — aiwatcher sql)", paths.database().display()),
+        }
+    );
+    println!(
+        "  token   {} (aiwatcher token show)",
+        paths.token_file().display()
+    );
     println!();
 }
 
@@ -439,9 +463,8 @@ fn reachable(address: &str) -> bool {
     let Ok(mut candidates) = address.to_socket_addrs() else {
         return false;
     };
-    candidates.any(|candidate| {
-        TcpStream::connect_timeout(&candidate, Duration::from_millis(300)).is_ok()
-    })
+    candidates
+        .any(|candidate| TcpStream::connect_timeout(&candidate, Duration::from_millis(300)).is_ok())
 }
 
 /// Block until something is listening, or give up.
@@ -492,8 +515,8 @@ mod tests {
 
     #[test]
     fn a_port_that_is_not_a_number_is_refused_before_anything_starts() {
-        let error = Plan::read(&Args::parse(["up", "port=eighty"]).expect("parses"))
-            .expect_err("refuses");
+        let error =
+            Plan::read(&Args::parse(["up", "port=eighty"]).expect("parses")).expect_err("refuses");
         assert!(error.to_string().contains("eighty"), "{error}");
     }
 }

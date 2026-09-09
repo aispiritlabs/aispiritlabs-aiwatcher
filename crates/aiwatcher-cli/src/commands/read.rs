@@ -333,7 +333,11 @@ pub fn window_seconds(args: &Args) -> Result<Option<u64>, CliError> {
 /// [`CliError::Usage`] naming what arrived.
 pub fn parse_window(raw: &str) -> Result<u64, CliError> {
     let raw = raw.trim();
-    let refuse = || CliError::Usage(format!("window={raw:?}; expected something like 15m, 6h or 7d"));
+    let refuse = || {
+        CliError::Usage(format!(
+            "window={raw:?}; expected something like 15m, 6h or 7d"
+        ))
+    };
     let (digits, multiplier) = match raw.chars().last() {
         Some('s') => (&raw[..raw.len() - 1], 1),
         Some('m') => (&raw[..raw.len() - 1], 60),
@@ -355,7 +359,11 @@ mod tests {
         assert_eq!(parse_window("15m").expect("parses"), 900);
         assert_eq!(parse_window("6h").expect("parses"), 21_600);
         assert_eq!(parse_window("7d").expect("parses"), 604_800);
-        assert_eq!(parse_window("90").expect("parses"), 90, "a bare number is seconds");
+        assert_eq!(
+            parse_window("90").expect("parses"),
+            90,
+            "a bare number is seconds"
+        );
     }
 
     #[test]

@@ -9678,7 +9678,8 @@
         "enum": [
           "none",
           "oidc",
-          "proxy"
+          "proxy",
+          "local"
         ]
       },
       "BatchPage": {
@@ -10908,6 +10909,7 @@
           "session",
           "bearer",
           "token",
+          "local",
           "proxy",
           "anonymous"
         ]

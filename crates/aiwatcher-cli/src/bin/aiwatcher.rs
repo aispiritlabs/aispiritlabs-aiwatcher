@@ -30,9 +30,7 @@ fn main() -> std::process::ExitCode {
             }
             // Distinguished rather than a flat failure, so a wrapper script can
             // retry a temporary one and never retry a mistyped one.
-            std::process::ExitCode::from(
-                u8::try_from(error.exit_code()).unwrap_or(1),
-            )
+            std::process::ExitCode::from(u8::try_from(error.exit_code()).unwrap_or(1))
         }
     }
 }

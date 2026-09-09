@@ -99,7 +99,7 @@ final class Frame
                 continue;
             }
 
-            if (!Admission::returns((string) ($method->getReturnType() ?? ''), self::RETURNS)) {
+            if (!Admission::returns(Admission::returned($method), self::RETURNS)) {
                 continue;
             }
 
