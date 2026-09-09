@@ -52,41 +52,29 @@ fn fnv1a_128(bytes: &[u8]) -> u128 {
 
 // The finalizer FNV-1a does not have.
 //
-// FNV-1a's only diffusion is the multiply, and a multiply propagates carries
-// upward only. The 128-bit prime is `2^88 + 0x13b` — two narrow groups of set
-// bits — so a difference confined to the *last* input byte lands as
-// `d * 2^88 + d * 0x13b`, with no further rounds to spread it. Measured across
-// `run-1`..`run-9`, exactly 18 of the 128 output bits can vary, in two runs:
-// bits 0..=13 and 88..=91. Sequential run ids therefore derived trace ids
-// sharing nine leading hex digits and an identical middle:
+// FNV-1a's only diffusion is the multiply, which propagates carries upward
+// only. Measured across `run-1`..`run-9`, exactly 18 of the 128 output bits
+// varied, so sequential run ids derived trace ids sharing nine leading hex
+// digits and an identical middle:
 //
 // ```text
 // run-1 -> cf5c62fe3cb22757e060139f368527ff
 // run-2 -> cf5c62fe3db22757e060139f3685293a
 // ```
 //
-// Two consequences, only one of them cosmetic:
+// The cosmetic half is that a reader cannot tell two runs apart at a glance.
+// The other half is not: the rightmost seven bytes barely varied, and those are
+// what W3C Trace Context's random-trace-id flag and OpenTelemetry's consistent
+// probability sampling read. A 1% sampler over 1000 sequential runs kept 0 of
+// them instead of ~10 — silent and total, wherever sampling is switched on.
 //
-// * A reader cannot tell two runs apart at a glance. The panel pinches ids from
-//   both ends, which is a reasonable thing to do to a 32-digit hex string in a
-//   table, but it should be a display choice rather than a workaround.
-// * The rightmost seven bytes stay nearly constant — 14 of 56 bits varied —
-//   and those are exactly what W3C Trace Context's random-trace-id flag and
-//   OpenTelemetry's consistent probability sampling read as the random part of
-//   a trace id. A 1% ratio sampler over 1000 sequential runs kept 0 of them
-//   instead of ~10. Nothing in this stack samples today; the Collector is
-//   where that would be added, and the failure would be silent and total.
+// It is not a collision problem: over 5M sequential run ids the raw hash
+// collided zero times, and a single-byte difference provably cannot collide
+// (`d * PRIME` with `PRIME` odd, hence invertible mod 2^128).
 //
-// What this is *not* is a collision problem. Over 5M sequential run ids the
-// raw hash collided zero times, and a difference in a single input byte
-// provably cannot collide: the delta is `d * PRIME` with `PRIME` odd, hence
-// invertible mod 2^128, so it is non-zero for every `d != 0`.
-//
-// Both finalizers are bijections — `wrapping_add` inverts by `wrapping_sub`,
-// and `fmix64`'s xor-shifts and odd multiplies each invert — so they change how
-// ids are *distributed* and cannot change which inputs collide. Note that they fix zero: `fmix64(0) == 0` and
-// `avalanche_128(0) == 0`, which is why the all-zero guard in each `derive`
-// still runs after mixing rather than before.
+// Both finalizers are bijections, so they change how ids are *distributed* and
+// not which inputs collide. Both fix zero, which is why the all-zero guard in
+// each `derive` runs after mixing rather than before.
 
 /// MurmurHash3's 64-bit finalizer: three xor-shifts around two multiplies.
 const fn fmix64(mut z: u64) -> u64 {

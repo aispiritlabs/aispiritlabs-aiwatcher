@@ -1,27 +1,21 @@
 //! A generic poll/commit broker adapter.
 //!
-//! This is the shape almost every log has — publish keyed, poll after a cursor,
-//! commit a cursor, ask for the head — expressed as a four-method
-//! [`BrokerClient`] trait. It exists for two reasons:
+//! The shape almost every log has — publish keyed, poll after a cursor, commit
+//! a cursor, ask for the head — as a four-method [`BrokerClient`] trait. It is
+//! what a Kafka, JetStream or Redpanda backend would implement without touching
+//! anything above `aiwatcher-bus`, and it is testable without a broker: the
+//! contract test drives subscribe, catch-up and resume over an in-process fake.
 //!
-//! * It is what a Kafka, NATS JetStream or Redpanda backend would implement,
-//!   without touching anything above `aiwatcher-bus`.
-//! * It is testable without a broker. The contract test drives the whole
-//!   subscribe/catch-up/resume path over an in-process fake, which is how the
-//!   ordering and resume logic is verified at all.
+//! The real Laser backend does **not** go through here — `laser_sdk` has
+//! per-partition cursors, server-stored group offsets and replay cursors that
+//! this lowest common denominator would throw away. See [`super::laser`].
 //!
-//! The real Laser backend does **not** go through here — `laser_sdk` has richer
-//! primitives (per-partition cursors, server-stored group offsets, replay
-//! cursors) that this lowest common denominator would throw away. See
-//! [`super::laser`].
+//! What the client must guarantee:
 //!
-//! ## What the client must guarantee
-//!
-//! * **Order within a partition.** Records published with the same
-//!   `partition_key` are delivered in publish order. The key is the stream name
-//!   (`run:<run_id>`), so one run's events never overtake each other while
-//!   unrelated runs proceed in parallel.
-//! * **At-least-once delivery.** Redelivery after a crash is expected; that is
+//! * **Order within a partition.** Records sharing a `partition_key` are
+//!   delivered in publish order. The key is `run:<run_id>`, so one run's events
+//!   never overtake each other while unrelated runs proceed in parallel.
+//! * **At-least-once delivery.** Redelivery after a crash is expected, which is
 //!   why span ids are derived rather than generated.
 //! * **Resumable cursors.** `poll` takes the last committed cursor and returns
 //!   what follows it.

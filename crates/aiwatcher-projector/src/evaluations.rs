@@ -1,33 +1,27 @@
 //! Evaluation reports: what a suite scored, and against what.
 //!
-//! An evaluation is the other half of the loop the traces come from. A trace
-//! answers "what did this run do"; an evaluation answers "is the thing that
-//! produces those runs getting better or worse". They arrive on the same log
-//! and they are folded apart:
+//! A trace answers "what did this run do"; an evaluation answers "is the thing
+//! that produces those runs getting better or worse". Same log, folded apart:
 //!
 //! ```text
 //! run.* / agent.* / llm.* / tool.* / step.*  → spans, metrics, the runs list
 //! eval.*                                     → this module, and nothing else
 //! ```
 //!
-//! **A report is not a trace.** It has a start, an end and a duration, and it
-//! still has no business in a trace store — see `EventType::forms_span`. What
-//! it has instead is parameters, metrics and a document, which is the shape
-//! MLflow's `start_run` / `log_params` / `log_metrics` / `log_dict` produces
-//! and the shape a producer switching off MLflow needs somewhere to put.
+//! **A report is not a trace.** It has a start, an end and a duration and still
+//! has no business in a trace store — see `EventType::forms_span`. What it has
+//! is parameters, metrics and a document.
 //!
-//! Two rules carry most of the meaning here:
+//! * **A comparison is pinned to a dataset.** The baseline is the previous
+//!   evaluation of the *same suite on the same dataset*. Two numbers measured
+//!   on different cases are not a comparison.
+//! * **The per-case list is capped; the counters are not.** Past
+//!   [`EvaluationConfig::max_cases_per_evaluation`] the first N are kept for the
+//!   case view and every case is still counted, so the pass rate stays true
+//!   where the detail is partial. Under memory pressure the oldest finished
+//!   evaluations give up their cases and documents and keep their metrics.
 //!
-//! * **A comparison is pinned to a dataset.** The baseline for an evaluation
-//!   is the previous one of the *same suite on the same dataset*. Two numbers
-//!   measured on different cases are not a comparison, and showing them beside
-//!   each other says they are.
-//! * **The per-case list is capped; the counters are not.** A suite with more
-//!   cases than [`EvaluationConfig::max_cases_per_evaluation`] keeps the first
-//!   N for the case view and still counts every one of them, so the pass rate
-//!   stays true even where the detail is partial. The same trade under memory
-//!   pressure: the oldest finished evaluations give up their cases and their
-//!   documents, and keep their metrics — see [`EvaluationConfig`].
+//! ADR_0010.
 
 use std::collections::{BTreeMap, HashMap};
 

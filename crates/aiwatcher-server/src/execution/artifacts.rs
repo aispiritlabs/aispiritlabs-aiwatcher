@@ -1,31 +1,24 @@
 //! Where a step's result goes, and how the next attempt finds it again.
 //!
-//! An [`ArtifactRef`] is a pointer with a digest; the bytes are the
-//! object store's — the same one the prompt registry, the annotations, the
-//! datasets and the conversation archive already write through, under a sixth
-//! prefix. A sixth *prefix* rather than a sixth registry, because an artifact
-//! has no head, no labels and no list: it is bytes named by their own hash.
+//! An [`ArtifactRef`] is a pointer with a digest; the bytes belong to the
+//! object store the registries already write through, under a sixth prefix
+//! rather than a sixth registry — an artifact has no head, no labels and no
+//! list. It is bytes named by their own hash.
 //!
 //! ```text
 //! artifacts/<kind>/<first two hex>/<sha256>/data        the bytes
 //! artifacts/receipts/<sha256 of the idempotency key>    what one attempt produced
 //! ```
 //!
-//! ## Why there is a receipt at all
+//! The receipt exists because a timeout does not prove a remote service did not
+//! finish. [`ActivityExecutor::lookup`] asks the runtime whether it ran that
+//! key — the Flow service can answer that, and deliberately keeps no rows. "It
+//! ran" and "here is what it produced" are two questions; this holds the second.
 //!
-//! Section 14: a timeout does not prove that a remote service did not finish.
-//! [`ActivityExecutor::lookup`] asks the runtime whether it already ran that
-//! key, and the Flow service can answer that — but it deliberately keeps no
-//! rows (ADR_0014 refused it an S3 client, and section 15.4 keeps the refusal).
-//! So "it ran" and "here is what it produced" are two different questions with
-//! two different answers, and this file holds the second.
-//!
-//! The receipt is written **after** the data, never before —
-//! [`aiwatcher_jobs::ORDERING`], in the fifth place it applies. A crash the
-//! right way round leaves bytes nothing points at, which the next attempt
-//! overwrites with the identical bytes. A crash the wrong way round would leave
-//! a pointer to an object that was never stored, and a completed step whose
-//! artifact 404s.
+//! The receipt is written **after** the data ([`aiwatcher_jobs::ORDERING`]). A
+//! crash the right way round leaves bytes nothing points at, which the next
+//! attempt overwrites identically; the wrong way round leaves a completed step
+//! whose artifact 404s.
 //!
 //! [`ActivityExecutor::lookup`]: aiwatcher_execution::ActivityExecutor::lookup
 

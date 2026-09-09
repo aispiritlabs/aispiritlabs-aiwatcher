@@ -1,30 +1,22 @@
 //! The prompt registry's domain: a named prompt, its immutable versions, and
 //! what an optimisation did to it.
 //!
-//! A prompt is the one artifact in this system that is **authored** rather
-//! than observed. Everything else here is a fold over the log — runs, spans,
-//! evaluations — and everything else is therefore bounded by retention. A
-//! prompt is not: the version a run used has to still be readable long after
-//! that run has been evicted, or the trace says "model x, score 0.61" and
-//! nothing can say what was asked. So the registry lives in an object store,
-//! not in the read model, and it is the only part of aiwatcher that keeps
-//! something forever.
+//! Authored rather than observed, so it is not bounded by retention: the
+//! version a run used must be readable long after that run is evicted, or the
+//! trace says "model x, score 0.61" and nothing can say what was asked.
 //!
-//! Three rules carry the meaning:
-//!
-//! * **A version is its text.** [`PromptVersionId`] is `sha256(text)`, the same
-//!   reason trace and span ids are derived rather than generated
-//!   (`ADR_0001`): publishing the same text twice lands on the version that is
-//!   already there instead of writing a second one. A producer that computes
-//!   the hash itself — as `planner` already does — arrives at the same id.
+//! * **A version is its text.** [`PromptVersionId`] is `sha256(text)`, so
+//!   publishing the same text twice lands on the version already there. A
+//!   producer that computes the hash itself arrives at the same id.
 //! * **An optimisation's verdict is computed, not supplied.** A client reports
 //!   what it measured; [`OptimizationRecord::verdict`] decides whether that
-//!   counts as an improvement. See [`OptimizationOutcome`].
-//! * **A candidate that drops a variable is not a candidate.** An optimiser
-//!   rewrites prompt text freely and can delete a `{{ placeholder }}` while
-//!   scoring better on a harness that fed it fixed inputs. Promoting that
-//!   prompt ships one that never interpolates its input. [`variables_of`] is
-//!   what makes the loss visible, and it is a hard bar on admission.
+//!   counts. See [`OptimizationOutcome`].
+//! * **A candidate that drops a variable is not a candidate.** An optimiser can
+//!   delete a `{{ placeholder }}` and still score well on a harness that fed it
+//!   fixed inputs; promoting it ships a prompt that never reads its input.
+//!   [`variables_of`] makes the loss visible, and it is a hard bar.
+//!
+//! ADR_0011.
 
 use std::collections::BTreeMap;
 use std::fmt;

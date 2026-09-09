@@ -1,29 +1,25 @@
 //! Where training data comes from, and what a human recorded about its licence.
 //!
-//! A table somebody wrote and dated, not a client. Public mirrors — Hugging
-//! Face, Kaggle, Roboflow Universe — routinely restate a corpus's licence
-//! wrongly, and a CC BY-NC dataset re-uploaded as MIT is common enough that
-//! fetching a licence live would be worse than useless: it would arrive
-//! looking authoritative. See [`crate::integrations::hubs`], which searches
-//! those mirrors and is never allowed to believe them.
+//! A table somebody wrote and dated, not a client. Public mirrors restate a
+//! corpus's licence wrongly often enough that fetching one live would be worse
+//! than useless — it would arrive looking authoritative. See
+//! [`crate::integrations::hubs`], which searches those mirrors and is never
+//! allowed to believe them.
 //!
 //! Every row says what it says *as of* a date, links the original, and errs
-//! towards [`SourceUsage::Unclear`]. It is a signpost. The only thing that is
-//! a permission is the licence text at the other end of the link.
+//! towards [`SourceUsage::Unclear`]. It is a signpost; the permission is the
+//! licence text at the other end of the link.
 //!
-//! # This build ships no rows
+//! **This build ships no rows.** Which corpora exist and what their licences
+//! permit is a question about one field of vision, so the default catalogue is
+//! empty and an instance loads its own from `AIWATCHER_DATASET_SOURCES`.
 //!
-//! The table is domain content, not code: which corpora exist and what their
-//! licences permit is a question about one field of vision, and a list shipped
-//! here would be one project's homework imposed on everybody else's. So the
-//! default catalogue is **empty**, and an instance loads its own from a JSON
-//! file named by `AIWATCHER_DATASET_SOURCES`.
+//! Empty is safe rather than degraded: nothing matches, every hub result stays
+//! `unclear`, and an import registers unknown rights — which a commercial
+//! export excludes by name. The cost of an empty table is a smaller export and
+//! a line saying why; the cost of a wrong row is a licence claim.
 //!
-//! Empty is a safe default rather than a degraded one. With no rows nothing
-//! matches, every hub result stays `unclear`, and an import of one registers
-//! its images with unknown rights — which a commercial export excludes by
-//! name, in a manifest, forever. The cost of an empty table is a smaller
-//! export and a line saying why; the cost of a wrong row is a licence claim.
+//! ADR_0019.
 
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;

@@ -292,36 +292,16 @@ fn build_workflow_runner(
     }
 }
 
-/// The pipeline engine, or `None`.
-///
-/// Absence is a 501 for the same reason the runner's is, and this one has a
-/// second edge: a catalog that answered with an empty list would say "the
-/// orchestrator has nothing to run" about a deployment that has no
-/// orchestrator. Those are different problems with different fixes.
-///
-/// Built as the concrete type rather than as `Arc<dyn WorkflowEngine>` so the
-/// same instance can serve `WorkflowRunner` as well — one connection pool, one
-/// cached token.
-/// The dataset hubs this instance may search, or `None`.
-///
-/// `None` is the default and makes `/api/v1/dataset-hubs` answer 501 naming
-/// the variables. That matters more here than for the other optional
-/// subsystems: an empty search result reads as "there is no such corpus",
-/// which is a claim about the world rather than about this deployment.
-///
-/// Note what is *not* configurable: whether a hub's licence is believed. It
-/// never is. See `aiwatcher_annotations::integrations::hubs`.
 /// The corpora somebody read the licence of, or an empty table.
 ///
-/// Empty is the shipped default and it is a *working* state, not a degraded
-/// one: with no rows nothing matches a hub result, every one keeps
-/// `SourceUsage::Unclear`, and an import of one records unknown rights — which
-/// a commercial export excludes by name. The failure direction of configuring
-/// nothing is a smaller export and a line saying why.
+/// Empty is the shipped default and a *working* state: nothing matches a hub
+/// result, every one keeps `SourceUsage::Unclear`, and an import records
+/// unknown rights — which a commercial export excludes by name. Configuring
+/// nothing costs a smaller export and a line saying why.
 ///
-/// A malformed file fails the start-up rather than being skipped. A catalogue
-/// that silently did not load would answer every licence question with
-/// "unclear" while looking exactly like one that had loaded.
+/// A malformed file fails the start-up rather than being skipped: a catalogue
+/// that silently did not load answers every licence question with "unclear"
+/// while looking exactly like one that had.
 fn build_dataset_sources(config: &Config) -> Result<Arc<SourceCatalog>> {
     let Some(path) = config.dataset_sources.as_deref() else {
         tracing::info!(
@@ -343,6 +323,14 @@ fn build_dataset_sources(config: &Config) -> Result<Arc<SourceCatalog>> {
     Ok(Arc::new(catalog))
 }
 
+/// The dataset hubs this instance may search, or `None`.
+///
+/// `None` is the default and makes `/api/v1/dataset-hubs` answer 501 naming the
+/// variables. An empty search result would read as "there is no such corpus",
+/// which is a claim about the world rather than about this deployment.
+///
+/// Not configurable: whether a hub's licence is believed. It never is. See
+/// `aiwatcher_annotations::integrations::hubs`.
 fn build_dataset_hubs(config: &Config, sources: &SourceCatalog) -> Result<Option<Arc<Hubs>>> {
     let hub_config = HubConfig {
         kaggle_username: config.kaggle_username.clone(),
@@ -369,6 +357,15 @@ fn build_dataset_hubs(config: &Config, sources: &SourceCatalog) -> Result<Option
     )))
 }
 
+/// The pipeline engine, or `None`.
+///
+/// Absence is a 501: a catalog answering with an empty list would say "the
+/// orchestrator has nothing to run" about a deployment that has no
+/// orchestrator. Different problems, different fixes.
+///
+/// Built as the concrete type rather than `Arc<dyn WorkflowEngine>`, so the
+/// same instance also serves `WorkflowRunner` — one connection pool, one
+/// cached token.
 fn build_engine(config: &Config) -> Result<Option<Arc<FlyteEngine>>> {
     match config.engine {
         EngineKind::None => {

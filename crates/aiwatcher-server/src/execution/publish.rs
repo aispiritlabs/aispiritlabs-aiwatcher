@@ -1,29 +1,21 @@
 //! The last block of a curation: a dataset version, written where the ingress
 //! is.
 //!
-//! The one binding that runs in the `serve` role, and the reason is that it
-//! *executes nothing* (ADR_0025). There is no service to call, no script to
-//! run and no credential this role does not already hold: it reads the rows the
-//! step before it stored, and writes a content-addressed version through the
-//! same object store the panel reads dataset versions from.
+//! The one binding that runs in the `serve` role, because it executes nothing —
+//! no service to call, no script to run, no credential this role lacks. It
+//! reads the rows the step before it stored and writes a content-addressed
+//! version through the object store the panel already reads.
 //!
-//! ## What is provenance and what is identity
+//! **Identity is the script, the ordered rows, the source and the window**
+//! (`aiwatcher_datasets::dataset_identity`). `produced_by` and `execution_id`
+//! are provenance and stay out of that digest: a block dragged across the
+//! canvas is a new pipeline revision and the same rows, and a version per
+//! canvas tidy-up would be a version history about layout. `execution_id` joins
+//! a published version back to the run, its waterfall and its facts.
 //!
-//! A dataset version's identity is the script, the ordered rows, the source and
-//! the window — `aiwatcher_datasets::dataset_identity`, unchanged. `produced_by`
-//! and `execution_id` are **provenance**, and they are excluded from that digest
-//! for the reason the registry already gives for `produced_by`: a block dragged
-//! across the canvas is a new pipeline revision and the same rows, and a version
-//! per canvas tidy-up would be a version history about layout. `execution_id`
-//! joins the two the other way — from a published version back to the run that
-//! produced it, its waterfall, and its facts on the log.
-//!
-//! ## Why the script comes from the plan
-//!
-//! `PublishDatasetSpec` names a dataset and a revision, not a query. The query
-//! is the Flow step's, and the reactor already loaded the plan
-//! ([`ActivityContext::plan`]) — so this reads it from there rather than
-//! carrying a second copy of one script inside `plan_id`.
+//! **The script comes from the plan.** `PublishDatasetSpec` names a dataset and
+//! a revision, not a query; the reactor already loaded the plan
+//! ([`ActivityContext::plan`]), so `plan_id` carries no second copy of it.
 
 use std::sync::Arc;
 

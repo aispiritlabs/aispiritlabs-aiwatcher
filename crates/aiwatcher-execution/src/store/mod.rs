@@ -507,43 +507,28 @@ pub trait WorkflowStore: Send + Sync + std::fmt::Debug {
 
     /// Forget finished executions that ended before `before`.
     ///
-    /// The stream is the *explanation* of a run — the commands,
-    /// the decisions, the attempt that failed and the one that did not — and it
-    /// is the one thing the event log does not carry, so this is a deletion of
-    /// something no other store holds. That is why the window is configuration
-    /// and why its default keeps everything.
+    /// The stream is the *explanation* of a run and the one thing the event log
+    /// does not carry, so this deletes something no other store holds. That is
+    /// why the window is configuration and why its default keeps everything.
     ///
-    /// Three rules, and each is a way of not leaving a half-run behind:
-    ///
-    /// * **Terminal only**, by [`StateType::is_terminal`](crate::StateType::is_terminal). A run with no end is
-    ///   `Running` and this system never decides one has died — the same rule
-    ///   the projector keeps for agent runs. Age is not evidence.
+    /// * **Terminal only**, by
+    ///   [`StateType::is_terminal`](crate::StateType::is_terminal). A run with
+    ///   no end is `Running`, and age is not evidence that one has died.
     /// * **Nothing the outbox still holds.** A pending row is a fact that has
-    ///   not reached the log; deleting the decision behind it would leave the
-    ///   publisher a message with no explanation and the log a gap with no
-    ///   record of one. [`aiwatcher_jobs::ORDERING`] in a sixth place — the
-    ///   durable copy first, and only then the thing it was derived from.
-    /// * **All of one execution together**: stream, inbox, projection, attempt
-    ///   rows. A kept projection whose stream is gone is a run the panel lists
-    ///   and cannot open, which is the guardrail about actions that would be
-    ///   refused, arriving as a link instead of a button.
+    ///   not reached the log ([`aiwatcher_jobs::ORDERING`]).
+    /// * **All of one execution together** — stream, inbox, projection,
+    ///   attempts. A kept projection whose stream is gone is a run the panel
+    ///   lists and cannot open.
     ///
-    /// Plans and checkpoints are untouched. A plan is content-addressed and
-    /// shared by every run of one revision; a checkpoint belongs to a processor
-    /// rather than to an execution, and forgetting one would re-read the log.
+    /// Plans and checkpoints are untouched: a plan is shared by every run of
+    /// one revision, and a checkpoint belongs to a processor.
     ///
-    /// `limit` bounds one pass, so turning retention on against a store with a
-    /// year of history is many short transactions rather than one that holds a
-    /// table lock for a minute. A caller that wants to catch up sweeps again
-    /// while the count comes back at the limit.
+    /// `limit` bounds one pass, so turning retention on against a year of
+    /// history is many short transactions rather than one long table lock.
     ///
-    /// ## The window has a floor nothing here can check
-    ///
-    /// The inbox goes with the stream, so a message redelivered after its
-    /// execution was pruned is decided again rather than recognised. Delivery
-    /// is at-least-once and the log is what redelivers, so the window has to be
-    /// longer than the log's own retention. That is a deployment fact this
-    /// crate cannot read, which is why it is written here rather than asserted.
+    /// The window has a floor nothing here can check: the inbox goes with the
+    /// stream, so it must outlast the log's own retention or a redelivery is
+    /// decided again instead of recognised.
     ///
     /// # Errors
     ///

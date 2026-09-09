@@ -345,31 +345,24 @@ async fn import_images(
 /// Download the bytes for rows that carry no content address, and store them
 /// here.
 ///
-/// This is the composition the import route exists to make, and it lives in
-/// the API layer because it is the only place that holds both halves: the
-/// registry writes an object store and reaches nothing, and `Hubs` reaches a
-/// hub and writes nothing.
+/// It lives in the API layer because it is the only place holding both halves:
+/// the registry writes an object store and reaches nothing, and `Hubs` reaches
+/// a hub and writes nothing.
 ///
 /// It runs for a dry run too. A row with no `image_id` is refused by
 /// `images::check`, so a preview that skipped the download would reject every
-/// row and teach the reader nothing about the batch — and blobs are addressed
-/// by their content, so a dry run followed by an import stores each picture
-/// once.
+/// row; blobs are content-addressed, so a dry run followed by an import stores
+/// each picture once.
 ///
-/// Three things bound it, and none of them is a flag:
+/// Three bounds, none of them a flag:
 ///
-/// * a row that already carries an `image_id` is left alone, which is every
-///   batch whose pipeline did its own fetching;
-/// * every byte goes through [`ImageSource`], which is the same port the
-///   queued importer uses and carries the same gates — allowlisted host,
-///   public address, no redirects, a streamed byte ceiling, a header-only
-///   pixel ceiling and a verified content address. One fetcher, both routes:
-///   a gate wired into one and not the other is the gate somebody routes
-///   around;
+/// * a row that already carries an `image_id` is left alone;
+/// * every byte goes through [`ImageSource`] — the same port the queued
+///   importer uses, with the same gates. A gate wired into one route and not
+///   the other is the gate somebody routes around;
 /// * a failure is a warning naming the row, never a failed batch. A hub asset
-///   URL expires within hours of being listed, so the interesting case is a
-///   preview from yesterday, and the reader needs to be told that rather than
-///   handed a 502.
+///   URL expires within hours, so the interesting case is a preview from
+///   yesterday and the reader needs to be told rather than handed a 502.
 async fn hydrate(
     state: &AppState,
     registry: &Registry,
