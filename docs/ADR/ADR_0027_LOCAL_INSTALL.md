@@ -57,8 +57,15 @@ check_reachable` says whether the listen address is the loopback interface.
 **A fourth workflow store, `duckdb`,** behind a cargo feature, in the shape
 `laser` has in `aiwatcher-bus` and `postgres` in this crate. It holds one
 process, as `file` does and for the same reason; unlike `file` it rewrites
-nothing, and it is a database `aiwatcher sql` opens read-only *while the server
-is running*.
+nothing, and it is a database rather than a directory — `aiwatcher sql` opens it
+read-only and answers a question about it.
+
+That last point has a limit worth stating, because the first draft of this ADR
+got it wrong: DuckDB gives a database file to one writer **or** to any number of
+readers, so the console cannot look inside a store a running instance is
+holding. It reports that as what it is, with the way out. A console that worked
+while the server ran would need the server to serve it, which is a new
+authenticated surface and a decision nobody has needed yet.
 
 The rules stay in Rust. `prunable`, `AttemptRow::is_claimable`,
 `ClaimFilter::matches` and `SlotRecord::is_available` decide, and the adapter

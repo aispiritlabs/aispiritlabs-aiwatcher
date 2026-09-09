@@ -166,10 +166,16 @@ aiwatcher sql                 # what tables there are
 aiwatcher sql query="select execution, version, direction from streams limit 20"
 ```
 
-It is opened read-only there, because the server is the writer. What is in it is
-the workflow store — the plan, the decisions, the outbox — which is the one
-thing the event log does not carry; runs, spans and dimensions stay folds over
-the log and are read through the API.
+The connection is read-only, and DuckDB gives a database file to **one writer or
+to any number of readers** — so `aiwatcher sql` reads a store no instance is
+holding, and says so plainly when one is. Stop the instance, or ask it over the
+API instead.
+
+What is in that file is the workflow store — the plan, the decisions, the
+outbox — which is the one thing the event log does not carry. Runs, spans and
+dimensions stay folds over the log and are read through the API, because a
+second read path for those is what [ADR_0026](docs/ADR/ADR_0026_ENGINE_AS_PRODUCER.md)
+rules out.
 
 ## Sending events
 
