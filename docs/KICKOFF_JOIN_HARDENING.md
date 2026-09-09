@@ -109,22 +109,28 @@ the `data` reaches the payload store and never aiwatcher's history.
 
 ## Also open, and none of it blocking
 
+Closed since this was written, so nobody starts them again: the `lab6` copy of
+`_metadata_with_updates` (all four copies now call one
+`agentic.workflow.messages.metadata_with_updates`, and the base class was the
+fourth), `deploy/Dockerfile`, and the erasure gap — a sealed payload now carries
+a plaintext head naming its run, and `aiwatcher-server`'s archive sweep erases
+the payloads of runs the workflow store has forgotten. Erasure *by subject*
+still does not reach one, and cannot until a worker declares whose words a
+payload holds.
+
+Still open:
+
 - `discovery.from_settings()` builds `LaserTransport` on its default connection
   string, because `settings` still knows only `redis_url`,
   `redis_stream_prefix` and `redis_stream_maxlen`. Naming the Laser setting,
   defaulting it, and deciding whether `redis_url` goes with it is one decision
-  and belongs to the transport migration.
-- `workshops/lab6/messages.py` has its own copy of `_metadata_with_updates`
-  with the bug `agentic_graph`'s copy just lost: trace keys splatted into a
-  constructor where they are properties. It breaks the moment lab6 gets a
-  tracer. Fix both or lift the helper into one place.
+  and belongs to the transport migration — which is in flight in
+  `ai_spirit_agent` as this is written. `RedisServiceRegistry` keeps its name
+  for the same reason.
 - `packages/agentic_runtime/tests/e2e_resilience/test_distributed_resilience.py`
-  still names `RedisStreamsTransport` and needs a live broker.
-- `deploy/Dockerfile` in aiwatcher does not copy `crates/aiwatcher-cli`, so
-  `just check`'s Dockerfile stage fails.
-- Erasure by subject does not reach a `sealed` hosted payload: a turn names
-  whose words it holds and a payload does not, because nothing on the wire says
-  so. Retention by age and deletion with the execution do reach them.
+  parametrises a `redis` arm on `RedisStreamsTransport`, which no longer exists.
+  It skips on a machine with no Redis on 6379 and **errors** on one that has it,
+  which is the wrong way round: the arm is unmigrated, not unavailable.
 
 ## Commands
 

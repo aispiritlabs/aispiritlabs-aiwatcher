@@ -308,6 +308,23 @@ execution:
   # and the inbox that recognises a redelivery goes with the stream.
   retentionDays: 0
 
+  # What an answer to a parked step may be.
+  #
+  # A step that stops to ask is resumed by a *new* attempt which re-runs the
+  # work and reads every answer given so far, so they accumulate and nothing
+  # takes any away. An agent approving each tool call adds one per turn.
+  #
+  # `maxAnswersPerStep` is the ceiling; 0 means none, which is a deployment
+  # saying so rather than a default nobody chose. The point of a ceiling is not
+  # the disk — it is that a task looping on its own question is stopped while
+  # the refusal can still name what is wrong, instead of surfacing later as the
+  # store refusing a message that has grown too large.
+  #
+  # `maxAnswerBytes` bounds one answer. An answer is a decision, not data: rows
+  # reach a step as an artifact.
+  maxAnswersPerStep: 256
+  maxAnswerBytes: 65536
+
   # Where a `flow_php` step runs. Empty derives it from `flow.enabled`, the same
   # way the panel's upstream is derived; set it when the service runs somewhere
   # this chart does not manage.

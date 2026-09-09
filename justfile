@@ -957,3 +957,21 @@ diagrams:
         name="$(basename "$source" .json)"
         node "$archify" deliver "${name##*.}" "$source" "docs/diagrams/out/$name.html" --quality showcase
     done
+
+# Re-vendor the agent skills in .claude/skills at their pinned commits.
+#
+# Not part of `just check`, for the same reason `just diagrams` is not: a stale
+# skill is a documentation problem, and wiring it into CI would make it a build
+# failure on a machine with no reason to care. `just skills-check` is there for
+# a machine that does.
+skills:
+    ./scripts/vendor-skills.py
+
+# Is .claude/skills still what .claude/skills/vendor.json says it is?
+skills-check:
+    ./scripts/vendor-skills.py --check
+
+# Move every pin to upstream HEAD and vendor it. The diff is the review.
+skills-update:
+    ./scripts/vendor-skills.py --update
+    ./scripts/vendor-skills.py

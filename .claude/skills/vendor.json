@@ -1,0 +1,50 @@
+{
+  "comment": "Upstream agent skills vendored into this repository. Pinned by commit, refreshed with `just skills`. See README.md beside this file for why each one is here.",
+  "sources": [
+    {
+      "repo": "https://github.com/dash0hq/agent-skills",
+      "commit": "b809d934546a57c740b567014f5a0c67b906ebb5",
+      "license": "Apache-2.0",
+      "license_file": "LICENSE",
+      "skills": {
+        "skills/otel-instrumentation": "otel-instrumentation",
+        "skills/otel-semantic-conventions": "otel-semantic-conventions",
+        "skills/otel-collector": "otel-collector",
+        "skills/otel-ottl": "otel-ottl"
+      }
+    },
+    {
+      "repo": "https://github.com/leonardomso/rust-skills",
+      "commit": "fd2a861ab0406a4ac536a55274d14ea6fd1ca9c9",
+      "license": "MIT",
+      "license_file": "LICENSE",
+      "skills": {
+        ".": "rust-skills"
+      },
+      "keep": [
+        "SKILL.md",
+        "rules"
+      ]
+    },
+    {
+      "repo": "https://github.com/DeckardGer/tanstack-agent-skills",
+      "commit": "b2fc14c974b2ca09b38de09c28237f240175205b",
+      "license": "MIT",
+      "license_file": "LICENSE",
+      "skills": {
+        "skills/tanstack-query": "tanstack-query-best-practices",
+        "skills/tanstack-router": "tanstack-router-best-practices"
+      }
+    },
+    {
+      "repo": "https://github.com/huggingface/skills",
+      "commit": "97862b0fcc89c850fdd00c82ede1e62d3c930a6d",
+      "license": "Apache-2.0",
+      "license_file": "LICENSE",
+      "skills": {
+        "skills/hf-cli": "hf-cli",
+        "skills/huggingface-datasets": "huggingface-datasets"
+      }
+    }
+  ]
+}

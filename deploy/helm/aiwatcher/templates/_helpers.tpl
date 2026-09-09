@@ -375,6 +375,15 @@ later as "holds no object".
 {{- if gt (int .Values.execution.retentionDays) 0 }}
 - { name: AIWATCHER_WORKFLOW_RETENTION_DAYS, value: {{ .Values.execution.retentionDays | quote }} }
 {{- end }}
+# Sent whenever they differ from the binary's own defaults, so a chart that
+# says nothing about them leaves the decision where it already was rather
+# than restating it in a second place free to drift.
+{{- if ne (int .Values.execution.maxAnswersPerStep) 256 }}
+- { name: AIWATCHER_MAX_ANSWERS_PER_STEP, value: {{ .Values.execution.maxAnswersPerStep | quote }} }
+{{- end }}
+{{- if ne (int .Values.execution.maxAnswerBytes) 65536 }}
+- { name: AIWATCHER_MAX_ANSWER_BYTES, value: {{ .Values.execution.maxAnswerBytes | quote }} }
+{{- end }}
 {{- if eq .Values.execution.store "postgres" }}
 # The password reaches the DSN through the variable above it, which
 # Kubernetes expands in `value` — so it is in a Secret rather than
