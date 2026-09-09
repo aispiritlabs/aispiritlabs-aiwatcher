@@ -2711,9 +2711,9 @@ dependencies = [
 
 [[package]]
 name = "laser-sdk"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a27ac21b73678e9610ad25eef0321a1b8467e6a7855392a06f95ac3b38495466"
+checksum = "2768120e81741563960e007b47f9274bd92d0f70ee1a6c947c3e29e2187e1cea"
 dependencies = [
  "bon",
  "bytes",
@@ -2731,9 +2731,9 @@ dependencies = [
 
 [[package]]
 name = "laser-wire"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "84d4f05bf7129dd3a7d946de8f8171d8e64c9bf463e016cf98747ec65a98cc5c"
+checksum = "82b1acefb6584d3c6908d2e45132ee8a02d3a911e79fce8a489f9c9773e414dd"
 dependencies = [
  "bon",
  "ciborium",
@@ -5118,7 +5118,7 @@ version = "2.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5283634e518fe9e82c7b20520bb4bc209009fd16c82077c802f8111ecbb0117a"
 dependencies = [
- "rand 0.9.5",
+ "rand 0.10.2",
 ]
 
 [[package]]
@@ -5525,7 +5525,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
