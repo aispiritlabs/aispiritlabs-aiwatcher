@@ -31,7 +31,9 @@ use utoipa::ToSchema;
 use crate::decide::replay;
 use crate::error::DecisionError;
 use crate::handler::{ExecutionHandler, HandleError, Handled, projection_of};
-use crate::message::{HostedMessage, MessageMetadata, PendingMessage, WorkflowMessage};
+use crate::message::{
+    HostedMessage, MessageMetadata, PayloadPolicy, PendingMessage, WorkflowMessage,
+};
 use crate::state::{ExecutionId, ExecutionMode};
 use crate::store::{AppendOutcome, AppendRequest, ExpectedVersion, WorkflowStore};
 
@@ -331,6 +333,24 @@ impl HostedAppend {
     }
 }
 
+/// Refuse a message whose payload is not governed the way the run is.
+fn check_payload(message: &HostedMessage, expected: PayloadPolicy) -> Result<(), HostedError> {
+    // A message with no payload carries no words, so there is nothing for a
+    // policy to govern — a join bucket and a timeout are exactly that, and
+    // demanding a policy of them would be demanding one of silence.
+    let Some(payload) = &message.payload else {
+        return Ok(());
+    };
+    if payload.policy == expected {
+        return Ok(());
+    }
+    Err(HostedError::PayloadPolicyMismatch {
+        timer_or_message: message.message_type.clone(),
+        found: payload.policy.as_str(),
+        expected: expected.as_str(),
+    })
+}
+
 /// Why a hosted append was refused.
 #[derive(Debug, thiserror::Error)]
 pub enum HostedError {
@@ -364,6 +384,23 @@ pub enum HostedError {
     LeaseHeld {
         holder: String,
         expires_at: OffsetDateTime,
+    },
+
+    /// A message whose payload is not governed the way the run is.
+    ///
+    /// Refused rather than corrected. A run started `sealed` and appending
+    /// `external` references is one whose words are somewhere this instance
+    /// cannot reach, and quietly accepting them would make the policy a label
+    /// on a page rather than a rule — which is the silent downgrade the whole
+    /// of it exists to prevent.
+    #[error(
+        "`{timer_or_message}` carries a {found} payload and this run was started \
+         under {expected}. A run's policy is fixed when it starts"
+    )]
+    PayloadPolicyMismatch {
+        timer_or_message: String,
+        found: &'static str,
+        expected: &'static str,
     },
 
     #[error(transparent)]
@@ -684,6 +721,20 @@ impl<S: WorkflowStore> ExecutionHandler<S> {
         // news a worker can act on before it spends the money.
         self.check_decider_lease(execution, &append.holder, now)
             .await?;
+        // The run's policy is fixed when it starts, and every message is
+        // checked against it here rather than trusted: a graph whose words were
+        // meant to be sealed and are sitting in a worker's directory instead is
+        // a fact nothing downstream can recover.
+        for message in append
+            .messages
+            .iter()
+            .chain(append.timers.iter().filter_map(|write| match write {
+                TimerWrite::Schedule(timer) => Some(&timer.message),
+                TimerWrite::Cancel(_) | TimerWrite::Fire(_) => None,
+            }))
+        {
+            check_payload(message, run.payloads)?;
+        }
 
         let metadata = MessageMetadata::caused_by(execution, &input_id, input_id.clone(), now);
         let outputs: Vec<PendingMessage> = append

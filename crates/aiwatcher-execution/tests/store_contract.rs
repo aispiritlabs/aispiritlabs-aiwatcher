@@ -172,6 +172,7 @@ fn pause(execution: &ExecutionId, message_id: &str) -> AppendRequest {
             definition_name: "import".to_owned(),
             owner: ExecutionOwner::Local,
             mode: ExecutionMode::Compiled,
+            payloads: Default::default(),
             state: RunState::of(StateType::Paused),
             requested_by: "somebody".to_owned(),
             steps: Vec::new(),

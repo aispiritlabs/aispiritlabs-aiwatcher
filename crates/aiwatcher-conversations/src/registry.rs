@@ -181,6 +181,38 @@ impl Registry {
     /// [`Error::Erased`] when the content has been removed — which is an answer
     /// rather than a 404, because an auditor asked for exactly that
     /// distinction — and [`Error::NotFound`] for a turn that never existed.
+    /// Seal one hosted execution's payload under this archive's keys.
+    ///
+    /// The `sealed` half of a run's payload policy. What comes back is what the
+    /// workflow stream records — a reference resolvable only through this
+    /// instance, and the digest and size the stream carries beside it.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Invalid`] for an empty payload, and whatever the object store
+    /// could not do.
+    pub async fn seal_payload(
+        &self,
+        execution: &str,
+        plaintext: &[u8],
+    ) -> Result<crate::payload::SealedPayload> {
+        crate::payload::seal(&self.backend, execution, plaintext).await
+    }
+
+    /// Read one back.
+    ///
+    /// Guarded by a role at the route, as a turn's content is: this is somebody
+    /// else's words, and the whole reason they are here rather than in the
+    /// worker's store is that a deployment took responsibility for them.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`] when there is no such payload, and whatever the
+    /// object store could not do.
+    pub async fn open_payload(&self, execution: &str, content_digest: &str) -> Result<Vec<u8>> {
+        crate::payload::open(&self.backend, execution, content_digest).await
+    }
+
     pub async fn content(&self, conversation_id: &str, turn_id: &str) -> Result<TurnContent> {
         crate::archive::content(&self.backend, conversation_id, turn_id).await
     }

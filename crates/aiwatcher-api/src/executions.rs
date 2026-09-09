@@ -28,6 +28,7 @@ use std::sync::Arc;
 
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
+use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
@@ -66,6 +67,8 @@ const IDEMPOTENCY_KEY: &str = "idempotency-key";
     execution_history,
     append_stream,
     execution_timers,
+    seal_payload,
+    read_payload,
     take_decider_lease,
     read_decider_lease,
     release_decider_lease,
@@ -109,6 +112,14 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/executions/{execution_id}/timers",
             get(execution_timers),
+        )
+        .route(
+            "/api/v1/executions/{execution_id}/payloads",
+            post(seal_payload),
+        )
+        .route(
+            "/api/v1/executions/{execution_id}/payloads/{digest}",
+            get(read_payload),
         )
         .route(
             "/api/v1/executions/{execution_id}/decider-lease",
@@ -675,6 +686,108 @@ async fn execution_timers(
         .await
         .map_err(aiwatcher_execution::HandleError::Store)?;
     Ok(Json(ExecutionTimers { timers }))
+}
+
+/// Where sealed content went.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct PayloadSealed {
+    /// What the workflow stream records, resolvable only through this instance.
+    pub reference: String,
+    /// `sha256` of the plaintext, recomputed here rather than believed.
+    pub digest: String,
+    pub size: usize,
+}
+
+/// Seal one hosted execution's payload under this instance's keys.
+///
+/// The `sealed` half of a run's payload policy. `external` runs never call
+/// this: their words stay wherever the worker keeps them, and this instance
+/// holds a reference it cannot resolve — which is the free default and the one
+/// a deployment gets by doing nothing.
+///
+/// The body is the plaintext, as bytes. It is not JSON on purpose: what is
+/// being stored is somebody's words, and re-encoding them on the way in would
+/// mean the digest recorded in the stream is a digest of this route's idea of
+/// them rather than of what was sent.
+#[utoipa::path(
+    post,
+    path = "/api/v1/executions/{execution_id}/payloads",
+    params(("execution_id" = String, Path)),
+    request_body(content = String, content_type = "application/octet-stream"),
+    responses(
+        (status = 200, body = PayloadSealed),
+        (status = 400, body = crate::error::ErrorBody),
+        (status = 403, body = crate::error::ErrorBody),
+        (status = 501, body = crate::error::ErrorBody, description = "This instance has no conversation archive"),
+        (status = 503, body = crate::error::ErrorBody),
+    ),
+    tag = "execution",
+)]
+async fn seal_payload(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(execution_id): Path<String>,
+    body: axum::body::Bytes,
+) -> ApiResult<Json<PayloadSealed>> {
+    // An editor, as an append is: this is a worker storing its own turn, and
+    // the cap on an ingest token is what keeps that from being more.
+    caller.require(aiwatcher_auth::Role::Editor)?;
+    let archive = state
+        .conversations
+        .as_ref()
+        .ok_or(ApiError::ConversationArchiveDisabled)?;
+    let sealed = archive
+        .seal_payload(&execution_id, &body)
+        .await
+        .map_err(ApiError::ConversationArchive)?;
+    Ok(Json(PayloadSealed {
+        reference: sealed.reference,
+        digest: sealed.digest,
+        size: sealed.size,
+    }))
+}
+
+/// Read one back.
+///
+/// An `admin`, as reading a turn's content is, and for the same reason: these
+/// are somebody's words, and the only thing that changed by sealing them here
+/// rather than leaving them with the worker is that this deployment took
+/// responsibility for them.
+#[utoipa::path(
+    get,
+    path = "/api/v1/executions/{execution_id}/payloads/{digest}",
+    params(
+        ("execution_id" = String, Path),
+        ("digest" = String, Path, description = "The plaintext `sha256` the stream recorded"),
+    ),
+    responses(
+        (status = 200, description = "The plaintext", content_type = "application/octet-stream"),
+        (status = 403, body = crate::error::ErrorBody, description = "Reading content needs the admin role"),
+        (status = 404, body = crate::error::ErrorBody),
+        (status = 501, body = crate::error::ErrorBody),
+        (status = 503, body = crate::error::ErrorBody),
+    ),
+    tag = "execution",
+)]
+async fn read_payload(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path((execution_id, digest)): Path<(String, String)>,
+) -> ApiResult<axum::response::Response> {
+    caller.require(aiwatcher_auth::Role::Admin)?;
+    let archive = state
+        .conversations
+        .as_ref()
+        .ok_or(ApiError::ConversationArchiveDisabled)?;
+    let plaintext = archive
+        .open_payload(&execution_id, &digest)
+        .await
+        .map_err(ApiError::ConversationArchive)?;
+    Ok((
+        [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
+        plaintext,
+    )
+        .into_response())
 }
 
 /// Which decider is asking.

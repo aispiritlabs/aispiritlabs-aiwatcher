@@ -460,9 +460,9 @@ impl WorkflowStore for PostgresWorkflowStore {
 
     async fn projection(&self, execution: &ExecutionId) -> Result<Option<RunProjection>> {
         let row = sqlx::query(
-            "select execution_id, plan_id, definition_name, owner, mode, state_type,
-                    state_name, requested_by, steps, last_message_version,
-                    created_at
+            "select execution_id, plan_id, definition_name, owner, mode, payloads,
+                    state_type, state_name, requested_by, steps,
+                    last_message_version, created_at
                from execution_runs where execution_id = $1",
         )
         .bind(execution.as_str())
@@ -936,15 +936,16 @@ async fn upsert_projection(
 ) -> Result<()> {
     sqlx::query(
         "insert into execution_runs
-           (execution_id, plan_id, definition_name, owner, mode, state_type,
-            state_name, requested_by, steps, last_message_version,
+           (execution_id, plan_id, definition_name, owner, mode, payloads,
+            state_type, state_name, requested_by, steps, last_message_version,
             created_at, updated_at)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
+         values ($1, $2, $3, $4, $5, $12, $6, $7, $8, $9, $10, $11, now())
          on conflict (execution_id) do update set
            plan_id = excluded.plan_id,
            definition_name = excluded.definition_name,
            owner = excluded.owner,
            mode = excluded.mode,
+           payloads = excluded.payloads,
            state_type = excluded.state_type,
            state_name = excluded.state_name,
            requested_by = excluded.requested_by,
@@ -966,6 +967,7 @@ async fn upsert_projection(
     .bind(serde_json::to_value(&projection.steps).map_err(StoreError::Encoding)?)
     .bind(projection.last_message_version as i64)
     .bind(projection.created_at)
+    .bind(projection.payloads.as_str())
     .execute(&mut **transaction)
     .await
     .map_err(|error| StoreError::Backend(error.to_string()))?;
@@ -1092,6 +1094,14 @@ fn projection_from(row: &PgRow) -> Result<RunProjection> {
             ExecutionMode::Hosted
         } else {
             ExecutionMode::Compiled
+        },
+        payloads: if row.get::<String, _>("payloads") == "sealed" {
+            crate::message::PayloadPolicy::Sealed
+        } else {
+            // Anything else is `external`, including a row written before the
+            // column existed: what those runs did is exactly what the free
+            // policy describes, so reading them as it is not a guess.
+            crate::message::PayloadPolicy::External
         },
         state: RunState {
             state_type,

@@ -582,6 +582,12 @@ pub struct RunProjection {
     pub definition_name: String,
     pub owner: ExecutionOwner,
     pub mode: ExecutionMode,
+    /// Where this run's words live. Shown rather than assumed: whether a
+    /// deployment is holding somebody's turns is the kind of thing that should
+    /// be readable off the run rather than inferred from a variable nobody
+    /// looking at the panel can see.
+    #[serde(default)]
+    pub payloads: PayloadPolicy,
     pub state: RunState,
     pub requested_by: String,
     pub steps: Vec<crate::state::StepState>,

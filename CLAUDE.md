@@ -1117,6 +1117,14 @@ what runs a real graph.
   after a notebook", which is the same rule under a name narrow enough that the
   second case looked like a new one. The registry refuses it by name, and the
   message says which of the two is in the way rather than "invalid".
+- **Never author one gate twice.** A curation block and a registered workflow's
+  step both put a question in front of a person, compile to one
+  `RuntimeBinding::HumanInput` and are answered through one route, so what a
+  valid question *is* lives once — `aiwatcher_core::human_input`, above both
+  crates, taking only the word each surface calls the thing it is refusing. The
+  panel keeps the same rule from the other end: one `AnswerGate`, used by the
+  pipeline's run card and by the Workflows view, because "which answers may be
+  pressed and by whom" is one question.
 - **Never let an authored gate name a role the answer route does not check.**
   `HumanInputSpec::role` reaches `execution.awaiting_input` on the log and the
   step's context and no authorization decision anywhere: `provide_input`

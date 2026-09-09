@@ -124,6 +124,26 @@ export function useCan(needed: Role): boolean {
   return enabled ? can(session.data, needed) : true;
 }
 
+/**
+ * The same question, with "nobody has answered yet" kept separate from "no".
+ *
+ * [`useCan`] collapses the two into `false`, which is right for hiding a
+ * button — the worst it costs is a control appearing a moment late. It is
+ * wrong for *telling somebody they may not do something*: while the session is
+ * still being read, that sentence is a refusal nobody issued. `undefined`
+ * until an answer exists, and then the answer.
+ */
+export function useRoleDecision(needed: Role): boolean | undefined {
+  const config = useAuthConfig();
+  const enabled = config.data?.enabled === true;
+  const session = useSession(enabled);
+  if (!config.isFetched) return undefined;
+  // With authentication off there is nobody to refuse, which is the same
+  // reasoning `useCan` states: a permission system nobody asked for.
+  if (!enabled) return true;
+  return session.isFetched ? can(session.data, needed) : undefined;
+}
+
 /** What to tell somebody about a control they may not use. */
 export function needsRole(needed: Role): string {
   return `This needs the ${needed} role. Ask an administrator to add you to the matching group in the identity provider.`;

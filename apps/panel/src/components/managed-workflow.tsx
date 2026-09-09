@@ -13,6 +13,7 @@ import {
 } from '@/api/generated/sdk.gen';
 import type { RecordedMessage } from '@/api/generated/types.gen';
 import { useCan } from '@/lib/auth';
+import { AnswerGate } from '@/components/answer-gate';
 import { Button, Card, CardContent } from '@/components/ui/primitives';
 
 /** Registration is authored state; execution lists and graphs remain log projections. */
@@ -232,6 +233,23 @@ export function ManagedExecutionControls({
           <p role="alert" className="text-sm text-danger">
             {command.error.message}
           </p>
+        )}
+        {/* A gate parks the graph and the answer is the only thing that moves
+            it on, so the view that watches a workflow run has to be able to
+            give one — a run stopped here with no control is a run somebody has
+            to go and find another screen for. The same component the pipeline's
+            run card uses, because it is the same question and the same route. */}
+        {node && context.data?.allowed.includes('answer') && context.data.state?.awaiting && (
+          <AnswerGate
+            executionId={executionId}
+            stepId={node}
+            attempt={context.data.state.current_attempt}
+            question={context.data.state.awaiting}
+            onAnswered={() => {
+              void queryClient.invalidateQueries({ queryKey: ['managed-execution', executionId] });
+              void queryClient.invalidateQueries({ queryKey: ['managed-step', executionId] });
+            }}
+          />
         )}
         {showHistory && (
           <div className="flex flex-col gap-2 text-xs">

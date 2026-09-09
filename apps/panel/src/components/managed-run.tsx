@@ -8,25 +8,17 @@ import {
   getExecution,
   pauseExecution,
   openEditor,
-  provideInput,
   resumeExecution,
   retryStep,
   runBlocks,
   stepContext,
 } from '@/api/generated/sdk.gen';
-import type {
-  ContextSnapshot,
-  InputRequest,
-  Role,
-  RunAction,
-  RunView,
-  StateType,
-} from '@/api/generated/types.gen';
-import { needsRole, useCan } from '@/lib/auth';
+import type { ContextSnapshot, RunAction, RunView, StateType } from '@/api/generated/types.gen';
 import { openWorkflowStream } from '@/lib/live';
 import { getNotebookRevision } from '@/lib/ml-pipeline';
 import { answerOf, answerOrNone } from '@/lib/result';
 
+import { AnswerGate } from './answer-gate';
 import { Badge, Button, Card, IdChip, Refusal, Spinner } from './ui/primitives';
 
 /**
@@ -238,6 +230,17 @@ export function ManagedRunCard({
           value={execution.execution_id.slice(0, 12)}
           full={execution.execution_id}
         />
+        {execution.payloads === 'sealed' && (
+          // Shown only when it is true, because that is the case worth
+          // knowing: the default keeps nothing here, and a badge reading
+          // "external" on every run would be a badge nobody reads by the time
+          // the other one appears. Whether this deployment is holding
+          // somebody's words is not something to infer from a variable a
+          // reader of this page cannot see.
+          <Badge tone="warning" title="This run's words are stored here, encrypted">
+            words sealed here
+          </Badge>
+        )}
         <div className="ml-auto flex items-center gap-2">
           {run.allowed.map((action) => {
             const { label, icon: Icon } = RUN_ACTIONS[action];
@@ -336,15 +339,7 @@ function StepActions({
       ),
   });
 
-  const [answer, setAnswer] = React.useState('');
   const waiting = context.data?.state?.awaiting;
-  // Whether this caller holds the role the question named. The server is the
-  // check — `provide_input` refuses the rest — and this is so that finding out
-  // costs a sentence rather than a round trip and a red box.
-  const mayAnswer = useCan(roleOf(waiting));
-  // The attempt that asked, named rather than assumed. An answer typed against
-  // a question a retry has since replaced is refused by name — which is the
-  // point of sending it, so it must be the attempt this context was read at.
   const attempt = context.data?.state?.current_attempt ?? 0;
 
   const retry = useMutation({
@@ -352,21 +347,6 @@ function StepActions({
       answerOf(
         await retryStep({ path: { execution_id: executionId, step_id: stepId } }),
         'That step could not be taken again.',
-      ),
-    onSuccess: onDone,
-  });
-
-  const answerIt = useMutation({
-    mutationFn: async (response: string) =>
-      answerOf(
-        await provideInput({
-          path: { execution_id: executionId, step_id: stepId },
-          // The answer and the attempt only; `answered_by` comes from the
-          // session and the body refuses an unknown field rather than
-          // ignoring it.
-          body: { attempt, response },
-        }),
-        'That answer was refused.',
       ),
     onSuccess: onDone,
   });
@@ -426,61 +406,14 @@ function StepActions({
         </div>
       ) : null}
 
-      {allowed.includes('answer') && waiting && !mayAnswer ? (
-        // The question, and why the answer is somebody else's. Not hidden:
-        // knowing a run is stopped on a decision you may not make is the whole
-        // of what somebody needs in order to go and find who can.
-        <div className="flex flex-col gap-1">
-          <p>{waiting.prompt}</p>
-          <span className="text-muted-foreground">{needsRole(roleOf(waiting))}</span>
-        </div>
-      ) : null}
-
-      {allowed.includes('answer') && waiting && mayAnswer ? (
-        <div className="flex flex-col gap-2">
-          <p>{waiting.prompt}</p>
-          {waiting.choices?.length ? (
-            // Buttons rather than a text box: `decide` refuses anything that is
-            // not one of these by name, so a free-typed answer would be a 409
-            // somebody had to read the error of to discover. Named as a group
-            // because what is in it is the whole answer: every button here is
-            // one the step declared, and there is no other way to answer it.
-            <div role="group" aria-label="Answers" className="flex flex-wrap gap-2">
-              {waiting.choices.map((choice) => (
-                <Button
-                  key={choice}
-                  variant="outline"
-                  size="sm"
-                  disabled={answerIt.isPending}
-                  onClick={() => answerIt.mutate(choice)}
-                >
-                  {choice}
-                </Button>
-              ))}
-            </div>
-          ) : (
-            <form
-              className="flex flex-wrap items-center gap-2"
-              onSubmit={(event) => {
-                event.preventDefault();
-                answerIt.mutate(answer);
-              }}
-            >
-              <input
-                className="h-8 min-w-48 flex-1 rounded-md border border-border bg-background px-2"
-                placeholder="Your answer"
-                value={answer}
-                onChange={(event) => setAnswer(event.target.value)}
-              />
-              <Button type="submit" size="sm" disabled={answerIt.isPending || !answer.trim()}>
-                Answer
-              </Button>
-            </form>
-          )}
-          {answerIt.isError ? (
-            <Refusal error={answerIt.error} fallback="That answer was refused." />
-          ) : null}
-        </div>
+      {allowed.includes('answer') && waiting ? (
+        <AnswerGate
+          executionId={executionId}
+          stepId={stepId}
+          attempt={attempt}
+          question={waiting}
+          onAnswered={onDone}
+        />
       ) : null}
 
       {!allowed.includes('retry') && !allowed.includes('answer') ? (
@@ -494,18 +427,6 @@ function StepActions({
       ) : null}
     </div>
   );
-}
-
-/**
- * The role a question named, as one this panel can check.
- *
- * The floor is the answer route's own: it requires an editor and reads nothing
- * weaker, so a request naming anything below that is still answered by an
- * editor and saying otherwise would put buttons in front of somebody who is
- * about to be refused. A stricter name is honoured as it stands.
- */
-function roleOf(request: InputRequest | null | undefined): Role {
-  return request?.role === 'admin' ? 'admin' : 'editor';
 }
 
 /**

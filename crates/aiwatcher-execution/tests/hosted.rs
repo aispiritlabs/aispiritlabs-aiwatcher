@@ -751,6 +751,112 @@ async fn a_timer_on_a_run_that_has_ended_is_retired_rather_than_delivered() {
 }
 
 #[tokio::test]
+async fn a_message_governed_differently_from_its_run_is_refused_rather_than_corrected() {
+    // A run started `external` and appending `sealed` references, or the other
+    // way round, is one whose words are somewhere other than where it said they
+    // would be. Accepting either would make the policy a label on a page.
+    let handler = ExecutionHandler::new(MemoryWorkflowStore::new());
+    handler
+        .handle(
+            &execution(),
+            WorkflowMessage::Command(WorkflowCommand::StartExecution {
+                execution_id: execution(),
+                plan: Box::new(plan()),
+                owner: ExecutionOwner::Worker,
+                mode: ExecutionMode::Hosted,
+                payloads: PayloadPolicy::Sealed,
+                requested_by: "the worker".to_owned(),
+                input: BTreeMap::new(),
+            }),
+            metadata("start"),
+            Now::at(at(0)),
+        )
+        .await
+        .expect("starting a sealed run");
+    let version = handler
+        .store()
+        .load(&execution())
+        .await
+        .expect("loading")
+        .version;
+
+    let refused = handler
+        .append_hosted(
+            &execution(),
+            batch("m-1", version, vec![turn("TurnCompleted")]),
+            at(1),
+        )
+        .await
+        .expect_err("an external payload on a sealed run");
+    assert!(
+        matches!(
+            &refused,
+            HostedError::PayloadPolicyMismatch { found, expected, .. }
+                if *found == "external" && *expected == "sealed"
+        ),
+        "{refused}"
+    );
+
+    // And the same message under the run's own policy goes in.
+    let mut sealed = turn("TurnCompleted");
+    if let Some(payload) = sealed.payload.as_mut() {
+        payload.policy = PayloadPolicy::Sealed;
+    }
+    handler
+        .append_hosted(&execution(), batch("m-2", version, vec![sealed]), at(1))
+        .await
+        .expect("a sealed payload on a sealed run");
+}
+
+#[tokio::test]
+async fn a_message_with_no_words_needs_no_policy() {
+    // A join bucket and a timeout carry nothing for a policy to govern, and
+    // demanding one of them would be demanding one of silence — which is most
+    // of what makes a graph resumable.
+    let handler = ExecutionHandler::new(MemoryWorkflowStore::new());
+    handler
+        .handle(
+            &execution(),
+            WorkflowMessage::Command(WorkflowCommand::StartExecution {
+                execution_id: execution(),
+                plan: Box::new(plan()),
+                owner: ExecutionOwner::Worker,
+                mode: ExecutionMode::Hosted,
+                payloads: PayloadPolicy::Sealed,
+                requested_by: "the worker".to_owned(),
+                input: BTreeMap::new(),
+            }),
+            metadata("start"),
+            Now::at(at(0)),
+        )
+        .await
+        .expect("starting a sealed run");
+    let version = handler
+        .store()
+        .load(&execution())
+        .await
+        .expect("loading")
+        .version;
+
+    handler
+        .append_hosted(
+            &execution(),
+            batch(
+                "join",
+                version,
+                vec![HostedMessage {
+                    message_type: "JoinBucketFilled".to_owned(),
+                    metadata: serde_json::json!({ "arity": 3 }),
+                    payload: None,
+                }],
+            ),
+            at(1),
+        )
+        .await
+        .expect("a message with no payload");
+}
+
+#[tokio::test]
 async fn a_redelivered_batch_is_recognised_rather_than_appended_twice() {
     // The `Idempotency-Key` is the durable inbox key, exactly as a command's
     // message id is. A worker that retried a request whose response it never

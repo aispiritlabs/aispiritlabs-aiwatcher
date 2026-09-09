@@ -43,6 +43,38 @@ class WorkflowStep:
 
 
 @dataclass(frozen=True)
+class ApprovalStep:
+    """A step that waits for a person instead of running code.
+
+    The graph stops here until somebody answers, and the answer is the whole of
+    what this step does: it registers no task, claims no queue, produces no
+    output and is taken once. Order it with ``after`` like any other step, and
+    give it ``inputs`` when the person deciding should see what they are
+    deciding about.
+
+    What a valid question is — the length of the prompt, the answers, who may
+    answer — is the server's rule and is not repeated here. It refuses a bad one
+    with every problem at once, which a check in this file could only turn into
+    the first of them.
+    """
+
+    name: str
+    prompt: str
+    choices: tuple[str, ...] = ()
+    after: tuple[str, ...] = ()
+    inputs: tuple[WorkflowInput, ...] = ()
+
+    @property
+    def dependencies(self) -> tuple[str, ...]:
+        return tuple(dict.fromkeys((*self.after, *(item.step for item in self.inputs))))
+
+
+# A plain alias rather than a `type` statement: that is 3.12, and
+# `requires-python` is 3.11.
+Step = WorkflowStep | ApprovalStep
+
+
+@dataclass(frozen=True)
 class Workflow:
     """A versioned static process with explicit dependency edges.
 
@@ -53,7 +85,7 @@ class Workflow:
 
     name: str
     version: str
-    steps: tuple[WorkflowStep, ...]
+    steps: tuple[Step, ...]
 
     def __post_init__(self) -> None:
         if any(
@@ -83,8 +115,15 @@ class Workflow:
         return f"{self.name}@{self.version}"
 
     def get_tasks(self) -> tuple[Task[Any, Any], ...]:
+        """Every task a worker of this workflow has to register.
+
+        A gate contributes none: nothing claims it, so a worker that registered
+        one would be advertising work it can never be handed.
+        """
         tasks: dict[str, Task[Any, Any]] = {}
         for step in self.steps:
+            if not isinstance(step, WorkflowStep):
+                continue
             if step.task.ref in tasks and tasks[step.task.ref] is not step.task:
                 raise ValueError(f"conflicting implementations of task {step.task.ref}")
             tasks[step.task.ref] = step.task
@@ -95,18 +134,33 @@ class Workflow:
         return {
             "name": self.name,
             "version": self.version,
-            "steps": [
-                {
-                    "id": step.name,
-                    "task_ref": step.task.ref,
-                    "queue": queue,
-                    "after": list(step.after),
-                    "inputs": [asdict(item) for item in step.inputs],
-                    "outputs": list(step.outputs),
-                    "params": dict(step.params),
-                    "retry": asdict(step.retry),
-                    "timeout_seconds": step.timeout_seconds,
-                }
-                for step in self.steps
-            ],
+            "steps": [as_definition_step(step, queue) for step in self.steps],
         }
+
+
+def as_definition_step(step: Step, queue: str) -> dict[str, object]:
+    """One step as the server's definition holds it.
+
+    A gate omits every field a step that runs needs rather than sending them
+    empty, because the server refuses a gate that names one: a queue nobody
+    claims on and a timeout nothing arms would sit on a stored definition and
+    read, to whoever opens it next, as things this system does.
+    """
+    if isinstance(step, ApprovalStep):
+        return {
+            "id": step.name,
+            "approval": {"prompt": step.prompt, "choices": list(step.choices)},
+            "after": list(step.after),
+            "inputs": [asdict(item) for item in step.inputs],
+        }
+    return {
+        "id": step.name,
+        "task_ref": step.task.ref,
+        "queue": queue,
+        "after": list(step.after),
+        "inputs": [asdict(item) for item in step.inputs],
+        "outputs": list(step.outputs),
+        "params": dict(step.params),
+        "retry": asdict(step.retry),
+        "timeout_seconds": step.timeout_seconds,
+    }

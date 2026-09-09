@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -105,5 +105,53 @@ describe('managed commands', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Retry persist' }));
     await waitFor(() => expect(server.countOf('POST', '/steps/persist/commands/retry')).toBe(1));
     expect(screen.queryByRole('button', { name: 'pause' })).toBeNull();
+  });
+
+  it('answers a gate the graph is parked on, with the answers that gate declared', async () => {
+    // A workflow gate stops the graph and the answer is the only thing that
+    // moves it on, so this view has to be able to give one — before this, a run
+    // that parked here had every control except the one that mattered.
+    const server = serve([
+      {
+        method: 'GET',
+        path: '/executions/run-1',
+        answer: {
+          status: 200,
+          body: {
+            execution: { state: { state_type: 'awaiting_input' } },
+            allowed: ['cancel'],
+          },
+        },
+      },
+      {
+        method: 'GET',
+        path: '/steps/sign-off/context',
+        answer: {
+          status: 200,
+          body: {
+            allowed: ['answer'],
+            state: {
+              current_attempt: 1,
+              awaiting: {
+                prompt: 'Import these houses?',
+                role: 'editor',
+                choices: ['approve', 'reject'],
+              },
+            },
+          },
+        },
+      },
+      { method: 'POST', path: '/steps/sign-off/input', answer: { status: 200, body: {} } },
+    ]);
+
+    render(withQueries(<ManagedExecutionControls executionId="run-1" node="sign-off" />));
+
+    await screen.findByText('Import these houses?');
+    const answers = within(screen.getByRole('group', { name: 'Answers' })).getAllByRole('button');
+    expect(answers.map((button) => button.textContent)).toEqual(['approve', 'reject']);
+
+    await userEvent.click(screen.getByRole('button', { name: 'approve' }));
+
+    await waitFor(() => expect(server.countOf('POST', '/steps/sign-off/input')).toBe(1));
   });
 });

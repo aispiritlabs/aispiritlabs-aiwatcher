@@ -528,6 +528,11 @@ fn hosted_parts(error: &aiwatcher_execution::hosted::HostedError) -> (StatusCode
         HostedError::Empty | HostedError::TooManyMessages { .. } => {
             (StatusCode::BAD_REQUEST, "invalid_append")
         }
+        // A fact about the run rather than about the request, and one the
+        // caller acts on by sealing the payload here — or by starting a run
+        // under the policy it meant. The run's policy is fixed once it starts,
+        // so this will not become true by waiting.
+        HostedError::PayloadPolicyMismatch { .. } => (StatusCode::CONFLICT, "payload_policy"),
         HostedError::Handle(handle) => execution_parts(handle),
     }
 }

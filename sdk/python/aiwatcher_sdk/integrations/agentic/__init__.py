@@ -32,6 +32,7 @@ from .payloads import (
     FilePayloadStore,
     MemoryPayloadStore,
     PayloadStore,
+    SealedPayloadStore,
     digest_of,
     encode_payload,
 )
@@ -51,6 +52,7 @@ __all__ = [
     "ReadAllResult",
     "ReadStreamResult",
     "SagaTimers",
+    "SealedPayloadStore",
     "TeeTracer",
     "TimerPolicy",
     "TimerRequest",

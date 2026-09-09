@@ -13,7 +13,7 @@ import pytest
 from aiwatcher_sdk import AiwatcherClient, NullTransport
 from aiwatcher_sdk.runtime import ExecutionPool, Runtime, RuntimeServices
 from aiwatcher_sdk.worker import get_task_context, task
-from aiwatcher_sdk.workflow import Workflow, WorkflowStep
+from aiwatcher_sdk.workflow import ApprovalStep, Workflow, WorkflowInput, WorkflowStep
 
 
 def test_runtime_runs_one_attempt_from_its_factory_without_starting_pool_capacity() -> None:
@@ -67,6 +67,54 @@ def test_declaring_a_workflow_does_not_execute_its_steps() -> None:
     assert calls == []
     assert workflow.ref == "house@1"
     assert workflow.get_tasks() == (stage,)
+
+
+def test_an_approval_step_registers_no_task_and_sends_no_placement() -> None:
+    # A gate waits for a person. Nothing claims it, so a worker registering a
+    # task for it would advertise work it can never be handed — and a queue or
+    # a timeout on the definition would sit there reading as something this
+    # system does. Both are absent rather than empty.
+    @task("stage", version="1")
+    def stage() -> None:
+        pass
+
+    workflow = Workflow(
+        "house",
+        "1",
+        (
+            WorkflowStep("acquire", stage, outputs=("rows",)),
+            ApprovalStep(
+                "sign-off",
+                "Import these houses?",
+                choices=("approve", "reject"),
+                after=("acquire",),
+            ),
+            WorkflowStep(
+                "persist",
+                stage,
+                after=("sign-off",),
+                inputs=(WorkflowInput("acquire", "rows"),),
+            ),
+        ),
+    )
+
+    assert workflow.get_tasks() == (stage,)
+    steps = workflow.to_definition("local")["steps"]
+    assert isinstance(steps, list)
+    gate = steps[1]
+    assert gate == {
+        "id": "sign-off",
+        "approval": {"prompt": "Import these houses?", "choices": ["approve", "reject"]},
+        "after": ["acquire"],
+        "inputs": [],
+    }
+    assert steps[0]["queue"] == "local"
+
+
+def test_an_approval_step_is_ordered_and_depended_on_like_any_other() -> None:
+    workflow_error = pytest.raises(ValueError, match=r"unknown")
+    with workflow_error:
+        Workflow("house", "1", (ApprovalStep("sign-off", "Go on?", after=("missing",)),))
 
 
 @pytest.mark.parametrize("after", [("missing",), ("self",)])

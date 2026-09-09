@@ -190,6 +190,29 @@ export type AppendStreamBody = {
 };
 
 /**
+ * A question this step puts in front of a person before the graph goes on.
+ *
+ * The same question a curation's `approval` block holds, and
+ * [`aiwatcher_core::human_input`] owns what a valid one is — a workflow gate
+ * and a canvas gate compile to one binding and are answered through one route.
+ */
+export type ApprovalGate = {
+    /**
+     * The answers offered. Empty is a free-text answer; anything else is the
+     * whole set, and an answer outside it is refused.
+     */
+    choices?: Array<string>;
+    /**
+     * What is being asked, in the words the person reads.
+     */
+    prompt: string;
+    /**
+     * The role that may answer.
+     */
+    role?: string;
+};
+
+/**
  * What this deployment demands of a producer, and which keys it can open.
  *
  * Answered before anything is sent, on purpose: a producer that discovers the
@@ -4222,6 +4245,21 @@ export type PayloadRef = {
 };
 
 /**
+ * Where sealed content went.
+ */
+export type PayloadSealed = {
+    /**
+     * `sha256` of the plaintext, recomputed here rather than believed.
+     */
+    digest: string;
+    /**
+     * What the workflow stream records, resolvable only through this instance.
+     */
+    reference: string;
+    size: number;
+};
+
+/**
  * Nearest-rank percentiles, in milliseconds.
  */
 export type Percentiles = {
@@ -5450,6 +5488,13 @@ export type RunProjection = {
     last_message_version: number;
     mode: ExecutionMode;
     owner: ExecutionOwner;
+    /**
+     * Where this run's words live. Shown rather than assumed: whether a
+     * deployment is holding somebody's turns is the kind of thing that should
+     * be readable off the run rather than inferred from a variable nobody
+     * looking at the panel can see.
+     */
+    payloads?: PayloadPolicy;
     plan_id: string;
     requested_by: string;
     state: RunState;
@@ -6258,6 +6303,7 @@ export type StartExecutionBody = {
     parameters?: {
         [key: string]: unknown;
     };
+    payloads?: null | PayloadPolicy;
     target: ExecutionTarget;
     /**
      * How wide the source's time window is, in seconds.
@@ -7009,6 +7055,12 @@ export type WorkflowCommand = {
     };
     mode: ExecutionMode;
     owner: ExecutionOwner;
+    /**
+     * Where this run's words live. Recorded rather than looked up, so an
+     * append can be checked against what the run was started under years
+     * after the deployment's default moved.
+     */
+    payloads?: PayloadPolicy;
     plan: ExecutionPlan;
     requested_by: string;
 } | {
@@ -7095,6 +7147,7 @@ export type WorkflowEvent = {
     };
     mode: ExecutionMode;
     owner: ExecutionOwner;
+    payloads?: PayloadPolicy;
     plan: ExecutionPlan;
     requested_by: string;
 } | {
@@ -7221,8 +7274,19 @@ export type WorkflowSpec = {
     version: string;
 };
 
+/**
+ * One step of a workflow: work a worker runs, or a gate that waits.
+ *
+ * Two shapes in one struct rather than a tagged union, because a definition is
+ * content-addressed and stored: every revision saved before gates existed has
+ * to keep parsing and keep hashing to the same revision. An internally tagged
+ * enum has no default tag, so it would have refused all of them. `approval`
+ * is what decides which shape this is, and the fields the other shape needs
+ * are refused by name when it is set.
+ */
 export type WorkflowTask = {
     after?: Array<string>;
+    approval?: null | ApprovalGate;
     id: string;
     inputs?: Array<WorkflowInput>;
     /**
@@ -7232,13 +7296,19 @@ export type WorkflowTask = {
     params?: {
         [key: string]: unknown;
     };
-    queue: string;
+    queue?: string;
     retry?: RetryPolicy;
     /**
-     * A registered function's name and pinned version. Never an import path to execute.
+     * A registered function's name and pinned version. Never an import path to
+     * execute. Empty on a gate, which runs nothing.
      */
-    task_ref: string;
-    timeout_seconds: number;
+    task_ref?: string;
+    /**
+     * How long an attempt may take. Absent on a gate: nothing dispatches a
+     * wait, so no timer is ever armed and a number here would be a deadline
+     * the code does not keep.
+     */
+    timeout_seconds?: number;
 };
 
 export type UploadBlobData = {
@@ -9385,6 +9455,67 @@ export type ExecutionHistoryResponses = {
 };
 
 export type ExecutionHistoryResponse = ExecutionHistoryResponses[keyof ExecutionHistoryResponses];
+
+export type SealPayloadData = {
+    body: string;
+    path: {
+        execution_id: string;
+    };
+    query?: never;
+    url: '/api/v1/executions/{execution_id}/payloads';
+};
+
+export type SealPayloadErrors = {
+    400: ErrorBody;
+    403: ErrorBody;
+    /**
+     * This instance has no conversation archive
+     */
+    501: ErrorBody;
+    503: ErrorBody;
+};
+
+export type SealPayloadError = SealPayloadErrors[keyof SealPayloadErrors];
+
+export type SealPayloadResponses = {
+    200: PayloadSealed;
+};
+
+export type SealPayloadResponse = SealPayloadResponses[keyof SealPayloadResponses];
+
+export type ReadPayloadData = {
+    body?: never;
+    path: {
+        execution_id: string;
+        /**
+         * The plaintext `sha256` the stream recorded
+         */
+        digest: string;
+    };
+    query?: never;
+    url: '/api/v1/executions/{execution_id}/payloads/{digest}';
+};
+
+export type ReadPayloadErrors = {
+    /**
+     * Reading content needs the admin role
+     */
+    403: ErrorBody;
+    404: ErrorBody;
+    501: ErrorBody;
+    503: ErrorBody;
+};
+
+export type ReadPayloadError = ReadPayloadErrors[keyof ReadPayloadErrors];
+
+export type ReadPayloadResponses = {
+    /**
+     * The plaintext
+     */
+    200: Blob | File;
+};
+
+export type ReadPayloadResponse = ReadPayloadResponses[keyof ReadPayloadResponses];
 
 export type RetryStepData = {
     body?: never;

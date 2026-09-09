@@ -192,9 +192,15 @@ impl RuntimeBinding {
             // Many, and that is the interesting one: the compiler folds a
             // source and every transform behind it into a single query.
             Self::FlowPhp(spec) => Some(&spec.blocks),
-            Self::Marimo(spec) => Some(spec.block.as_slice()),
-            Self::PublishDataset(spec) => Some(spec.block.as_slice()),
-            Self::HumanInput(spec) => Some(spec.block.as_slice()),
+            // `from_ref` rather than `as_slice`: a spec with no block answers
+            // `None` — *not drawn on a canvas* — instead of an empty list. The
+            // two are used differently and a gate is where the difference
+            // finally bites, because both compilers produce one: a curation's
+            // names its block, a workflow's has no canvas and is addressed by
+            // its step id.
+            Self::Marimo(spec) => spec.block.as_ref().map(std::slice::from_ref),
+            Self::PublishDataset(spec) => spec.block.as_ref().map(std::slice::from_ref),
+            Self::HumanInput(spec) => spec.block.as_ref().map(std::slice::from_ref),
             Self::PythonTask(_) | Self::ExternalWorkflow(_) => None,
         }
     }

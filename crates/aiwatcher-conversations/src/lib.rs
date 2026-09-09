@@ -45,6 +45,7 @@ use sha2::{Digest, Sha256};
 
 pub mod archive;
 pub mod export;
+pub mod payload;
 pub mod policy;
 pub mod redaction;
 pub mod registry;
@@ -63,6 +64,7 @@ pub use export::{
     ExportJobSummary, ExportManifest, ExportPage, ExportRequest, ExportRowsPage, ExportSelection,
     ExportVersionSummary, JobState, LEASE_SECONDS, ShardRef, Withdrawal,
 };
+pub use payload::{SealedPayload, parse_reference, reference_of};
 pub use policy::{
     ArchivePolicy, ConsentRecord, ContentPolicy, LawfulBasis, PolicyMode, RetentionPolicy,
     TrainingScope,

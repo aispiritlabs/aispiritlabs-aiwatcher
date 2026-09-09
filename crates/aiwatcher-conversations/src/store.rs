@@ -58,6 +58,10 @@ impl Backend {
         &self.keyring
     }
 
+    pub(crate) fn prefix(&self) -> &str {
+        &self.prefix
+    }
+
     /// A caller-supplied name, as a path segment.
     ///
     /// Hashed rather than escaped. A `conversation_id` comes from a producer

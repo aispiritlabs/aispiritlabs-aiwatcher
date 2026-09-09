@@ -1615,7 +1615,7 @@ Phase 12 earns.
 | Scheduler | Cadence, CRUD, transactional admission, per-slot outcomes, `next_run` computed on the server |
 | Worker (Phases 10, 11 Level 2) | The protocol, the Python `Runtime`, the authoring path, schedules for registered workflows, Planner on the boundary |
 | Hosted decider (Phase 13) | **Partial** — the append route, the decider lease and a worker target that mints `owner = worker, mode = hosted`. No event store, no timers, and the `sealed` refusal has no reader |
-| Human input (Phase 14) | **Partial** — a curation authors an `approval` block, it compiles to the `HumanInput` binding, a managed run stops on it and the run's card asks whoever holds the role. No deadline, no `await` from inside an attempt, and no gate in a registered workflow |
+| Human input (Phase 14) | **Partial** — both authored surfaces have a gate: a curation's `approval` block and a workflow step's `approval`, compiling to one `HumanInput` binding, answered through one route and one panel control. No deadline and no `await` from inside an attempt |
 
 ### What is left
 
@@ -1678,17 +1678,19 @@ outlived its own removal in the schema.
   declaration was a single value for all four tasks. `ContainerJob` appears
   nowhere in the workspace. §39.4 records what was accepted instead — four
   attempts in one worker pod, whose limits already match Flyte's task envelope.
-- **Phase 14** — human input. The authored gate exists for a curation: an
-  `approval` block compiles to the `HumanInput` binding, `order_of` refuses it
-  where a Flow step would then have nothing to read, and the run's card puts the
-  question and its declared answers in front of a caller who holds the role and
-  tells one who does not whose decision it is. What is missing is `on_timeout`
-  and the deadline behind it — `InputRequest::deadline` stays `None`, so a gate
-  waits indefinitely — `await` from inside an attempt, the first control message
-  on `/api/v1/live`, and a gate in a **registered workflow**, which is the second
-  compiler and its own decision. Approval inside an agent turn still depends on
-  Phase 13. The role a gate may name is `editor` and nothing else, and 43.37 says
-  why.
+- **Phase 14** — human input. Both authored surfaces have a gate. A curation's
+  `approval` block compiles to the `HumanInput` binding and `order_of` refuses
+  it where a Flow step would then have nothing to read; a registered workflow's
+  step carries an `approval` and is ordered by the `after` its author already
+  writes. One binding, one answer route, one panel control — the pipeline's run
+  card and the Workflows view share it, because a run that parked with no way
+  to answer had every control except the one that mattered. What a valid
+  question is lives once, in `aiwatcher_core::human_input`, so the two surfaces
+  cannot come to disagree. What is missing is `on_timeout` and the deadline
+  behind it — `InputRequest::deadline` stays `None`, so a gate waits
+  indefinitely — `await` from inside an attempt, and the first control message
+  on `/api/v1/live`. Approval inside an agent turn still depends on Phase 13.
+  The role a gate may name is `editor` and nothing else, and 43.38 says why.
 - **Phase 9** — engine-owned executions. Only for a consumer that needs one
   launch API for local and engine work; not a prerequisite for the worker.
 - **Phase 8** — read models in PostgreSQL. Gate: a measured replay-on-start over
@@ -3101,7 +3103,29 @@ after a notebook" is really "a Flow step reads its rows from the catalog, so it
 reads past nothing", and an approval is the second thing it reads past. One rule
 with two endings, so a refusal names what is in the way.
 
-### 43.37 The role a gate names had a reader and not a check
+### 43.37 The second gate found the first one's assumptions
+
+A workflow step is the other authored surface, and putting a gate in it turned
+three things up. `WorkflowTask` could not become a tagged union: a definition is
+content-addressed and stored, an internally tagged enum has no default tag, and
+every revision saved before gates existed would have stopped parsing. `approval`
+is a field, the fields a running step needs are skipped when empty, and the test
+that keeps that true asserts the new field is absent from what a revision
+digests.
+
+`RuntimeBinding::blocks()` said `None` meant *not drawn on a canvas* and did not
+mean it: `Marimo`, `PublishDataset` and `HumanInput` all answered `Some(&[])`
+when their `block` was absent, which reads as "drawn, and covering nothing".
+Nothing had noticed, because one compiler always set it. Two compilers producing
+one binding is where it bites — a workflow gate has no canvas — so the three now
+answer `None`, and `step_for_block`'s fallback to the step id works as its
+docstring always said.
+
+And the placement problem did not recur. A curation chain needed two cursors
+because the edge and the data binding are the same drawn line; a workflow states
+`after` and `inputs` separately, so a gate needs no special case at all.
+
+### 43.38 The role a gate names had a reader and not a check
 
 `HumanInputSpec::role` reaches `execution.awaiting_input` on the log and the
 step's context, and no authorization decision anywhere: the answer route

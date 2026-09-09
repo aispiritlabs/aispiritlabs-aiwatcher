@@ -1191,6 +1191,7 @@ mod tests {
                 definition_name: "import".to_owned(),
                 owner: ExecutionOwner::Local,
                 mode: ExecutionMode::Compiled,
+                payloads: Default::default(),
                 state: RunState::of(StateType::Running),
                 requested_by: "somebody".to_owned(),
                 steps: Vec::new(),

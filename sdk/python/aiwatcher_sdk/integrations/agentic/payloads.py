@@ -32,6 +32,7 @@ __all__ = [
     "FilePayloadStore",
     "MemoryPayloadStore",
     "PayloadStore",
+    "SealedPayloadStore",
     "digest_of",
     "encode_payload",
 ]
@@ -136,3 +137,49 @@ class FilePayloadStore:
 
     def _path(self, digest: str) -> Path:
         return self.root / f"{digest}.json"
+
+
+class SealedPayloadStore:
+    """The words go to aiwatcher, encrypted under its keys.
+
+    The `sealed` half of a run's payload policy, and the reason the port exists
+    at all: everything else about the event store is unchanged, and where the
+    content lives is one constructor argument.
+
+    What a deployment gets for it is what an `external` run cannot have — the
+    archive's retention clock, and words an erasure could one day reach. What it
+    costs is that this instance now holds them, which is why it is the choice
+    rather than the default.
+
+    Reading is deliberately not symmetrical with writing. A worker seals its own
+    turn as an editor; reading one back is an `admin`, as reading a turn's
+    content in the archive is, so a decider replaying its history gets its
+    references and not the words behind them. A store that needed to read them
+    to replay would be one that had to hold an admin credential in every worker.
+    """
+
+    def __init__(self, transport: Any, execution_id: str) -> None:
+        self._transport = transport
+        self._execution_id = execution_id
+
+    def store_payload(self, digest: str, data: Any) -> str:
+        answer = self._transport.json(
+            "POST",
+            f"/api/v1/executions/{self._execution_id}/payloads",
+            content=encode_payload(data),
+            content_type="application/octet-stream",
+        )
+        stored = str(answer["digest"])
+        # Recomputed there and compared here. The two are the same `sha256` of
+        # the same bytes, so a disagreement means what was stored is not what
+        # was sent — and a stream recording the digest of one thing beside a
+        # reference to another is the corruption no metric catches.
+        if stored != digest:
+            raise ValueError(f"aiwatcher stored {stored} for a payload whose digest is {digest}")
+        return str(answer["reference"])
+
+    def get_payload(self, reference: str) -> Any:
+        raise KeyError(
+            f"`{reference}` is sealed: reading it back needs the admin role, and a "
+            "decider replays its history from references rather than from words"
+        )

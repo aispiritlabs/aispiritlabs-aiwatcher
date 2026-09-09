@@ -155,7 +155,12 @@ impl WorkflowSpec {
                     ("queue", !step.queue.is_empty()),
                     ("outputs", !step.outputs.is_empty()),
                     ("timeout_seconds", step.timeout_seconds != 0),
-                    ("retry", step.retry != RetryPolicy::once()),
+                    // Against the *default* rather than against `once()`: an
+                    // omitted retry and an explicitly default one are the same
+                    // bytes, so refusing that would refuse every gate that
+                    // simply did not mention it. What is refused is a budget
+                    // somebody chose.
+                    ("retry", step.retry != RetryPolicy::default()),
                 ] {
                     if set {
                         problems.push(format!(
@@ -294,7 +299,14 @@ impl WorkflowSpec {
                         schema_ref: None,
                     })
                     .collect(),
-                retry: step.retry.clone(),
+                // A wait is taken once — a person answered, or nobody has
+                // yet, and neither is a failure to take again — and nothing
+                // dispatches it, so no attempt timer is ever armed. The
+                // definition carries neither and the plan says what is true.
+                retry: match &step.approval {
+                    Some(_) => RetryPolicy::once(),
+                    None => step.retry.clone(),
+                },
                 timeout_seconds: step.timeout_seconds,
                 cache: CachePolicy::Never,
             })
@@ -344,6 +356,145 @@ mod tests {
                 output: "rows".to_owned()
             }]
         );
+    }
+
+    /// The same graph with a gate between the two tasks.
+    fn gated() -> WorkflowSpec {
+        serde_json::from_value(json!({"name":"house/import", "version":"1", "steps":[
+            {"id":"acquire", "task_ref":"acquire@1", "queue":"local", "timeout_seconds":30,
+             "outputs":["rows"]},
+            {"id":"sign-off", "approval":{"prompt":"Import these houses?",
+             "choices":["approve","reject"]}, "after":["acquire"]},
+            {"id":"persist", "task_ref":"persist@1", "queue":"local", "timeout_seconds":30,
+             "after":["sign-off"], "inputs":[{"step":"acquire", "output":"rows"}]}
+        ]}))
+        .expect("definition")
+    }
+
+    #[test]
+    fn a_gate_between_two_tasks_compiles_to_the_wait_a_canvas_gate_compiles_to() {
+        // One binding for both authored surfaces. Point this arm anywhere else
+        // and the run has nothing to park on.
+        let plan = gated().compile().expect("compile");
+
+        let gate = plan.step("sign-off").expect("the gate");
+        let RuntimeBinding::HumanInput(spec) = &gate.runtime else {
+            panic!("a gate waits");
+        };
+        assert_eq!(spec.prompt, "Import these houses?");
+        assert_eq!(spec.role, aiwatcher_core::human_input::ANSWERABLE_ROLE);
+        assert_eq!(spec.choices, vec!["approve", "reject"]);
+        assert!(gate.outputs.is_empty(), "answering produces nothing");
+        // The graph runs through it: `persist` waits for the answer and still
+        // reads the rows `acquire` produced. Both are the author's own edges —
+        // a workflow states ordering and data separately, which is why a gate
+        // needs no special case here and the curation compiler needed two
+        // cursors to say the same thing about a chain.
+        assert_eq!(plan.parents_of("persist"), ["acquire", "sign-off"]);
+        assert_eq!(
+            plan.step("persist").expect("persist").inputs,
+            vec![InputBinding::Step {
+                step: "acquire".to_owned(),
+                output: "rows".to_owned()
+            }]
+        );
+    }
+
+    #[test]
+    fn a_workflow_gate_is_addressed_by_its_step_id_because_there_is_no_canvas() {
+        // `None` is not "no blocks" — it is *not drawn on a canvas*, and it is
+        // what makes the step id the address. `Some(&[])` here would make the
+        // step unreachable from both directions.
+        let plan = gated().compile().expect("compile");
+
+        let gate = plan.step("sign-off").expect("the gate");
+        assert_eq!(gate.runtime.blocks(), None);
+        assert_eq!(
+            plan.step_for_block("sign-off").map(|step| step.id.as_str()),
+            Some("sign-off")
+        );
+    }
+
+    #[test]
+    fn a_gate_that_also_names_what_a_running_step_needs_is_refused_field_by_field() {
+        let mut spec = gated();
+        spec.steps[1].task_ref = "approve@1".to_owned();
+        spec.steps[1].queue = "local".to_owned();
+        spec.steps[1].timeout_seconds = 30;
+        spec.steps[1].outputs = vec!["verdict".to_owned()];
+
+        let problems = spec.compile().expect_err("refused").problems().to_vec();
+
+        for field in ["task_ref", "queue", "outputs", "timeout_seconds"] {
+            assert!(
+                problems
+                    .iter()
+                    .any(|problem| problem.contains(&format!("names {field},"))),
+                "{field} not named: {problems:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_gate_asking_nothing_is_refused_by_the_rule_a_canvas_gate_is_refused_by() {
+        let mut spec = gated();
+        spec.steps[1].approval = Some(ApprovalGate {
+            prompt: "  ".to_owned(),
+            role: "admin".to_owned(),
+            choices: vec!["yes".to_owned(), "yes".to_owned()],
+        });
+
+        let problems = spec.compile().expect_err("refused").problems().to_vec();
+
+        assert!(
+            problems
+                .iter()
+                .any(|problem| problem.contains("does not say what it is asking")),
+            "{problems:?}"
+        );
+        assert!(
+            problems
+                .iter()
+                .any(|problem| problem.contains("asks for the 'admin' role")),
+            "{problems:?}"
+        );
+        assert!(
+            problems
+                .iter()
+                .any(|problem| problem.contains("the same answer twice")),
+            "{problems:?}"
+        );
+    }
+
+    #[test]
+    fn a_definition_saved_before_gates_existed_reads_and_digests_as_it_did() {
+        // A revision is a content address and the registry is keyed by it, so a
+        // definition stored before gates existed has to keep parsing *and* keep
+        // hashing to the same value. That is why `approval` is a field rather
+        // than a tag on a union — an internally tagged enum has no default tag,
+        // so every one of them would have stopped parsing — and why the fields
+        // a gate omits are skipped rather than written empty.
+        let spec: WorkflowSpec = serde_json::from_value(json!({
+            "name":"house/import", "version":"1", "steps":[
+                {"id":"acquire", "task_ref":"acquire@1", "queue":"local",
+                 "timeout_seconds":30, "outputs":["rows"], "after":[], "inputs":[], "params":{},
+                 "retry":{"max_attempts":3, "max_unavailable_attempts":10,
+                          "delays_seconds":[1,5,30], "delays_seconds_unavailable":[5,15,30,60]}}
+            ]
+        }))
+        .expect("an older definition");
+
+        assert!(spec.steps[0].approval.is_none());
+        let digested = canonical(&spec);
+        assert!(
+            !digested.contains("approval"),
+            "the new field is absent from what a revision digests: {digested}"
+        );
+        // And the three a gate may omit are still written by a step that runs,
+        // so nothing that was in an older digest has left it.
+        for present in ["\"task_ref\"", "\"queue\"", "\"timeout_seconds\""] {
+            assert!(digested.contains(present), "{present} left the digest");
+        }
     }
 
     #[test]

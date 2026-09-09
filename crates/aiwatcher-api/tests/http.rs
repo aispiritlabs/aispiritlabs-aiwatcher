@@ -323,6 +323,16 @@ impl Fixture {
         .await
     }
 
+    /// The same instance with its conversation archive taken away.
+    ///
+    /// Not a `build` parameter: what is being tested is one route's refusal,
+    /// and every other thing this fixture wires — the workflow store above all
+    /// — has to stay, or the refusal never runs because an earlier one does.
+    fn without_archive(mut self) -> Self {
+        self.state.conversations = None;
+        self
+    }
+
     fn router(&self) -> axum::Router {
         aiwatcher_api::router(self.state.clone())
     }
@@ -392,6 +402,40 @@ impl Fixture {
     }
 
     /// A POST carrying one extra header, for the routes that read one.
+    /// A body that is not JSON. Sealing takes the plaintext as bytes, because
+    /// re-encoding somebody's words on the way in would make the digest the
+    /// stream records a digest of this route's idea of them.
+    async fn post_bytes(&self, uri: &str, body: Vec<u8>) -> (StatusCode, Value) {
+        self.request(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header(header::CONTENT_TYPE, "application/octet-stream")
+                .body(Body::from(body))
+                .expect("request"),
+        )
+        .await
+    }
+
+    /// And an answer that is not JSON either.
+    async fn get_bytes(&self, uri: &str) -> (StatusCode, Vec<u8>) {
+        let response = self
+            .router()
+            .oneshot(
+                Request::builder()
+                    .uri(uri)
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("a response");
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("a body");
+        (status, body.to_vec())
+    }
+
     async fn post_keyed(&self, uri: &str, key: &str, body: Value) -> (StatusCode, Value) {
         self.request(
             Request::builder()
@@ -4300,6 +4344,180 @@ async fn a_saga_s_timeout_is_a_row_this_engine_holds_and_hands_back() {
         waiting["timers"].as_array().expect("an array").is_empty(),
         "a cancelled timer is not a row: {waiting}"
     );
+}
+
+#[tokio::test]
+async fn sealing_a_run_s_words_is_refused_by_name_when_there_is_no_archive() {
+    // Both variables, because turning one on without the other refuses again —
+    // and a refusal naming one at a time is two deployments' worth of round
+    // trips to reach a working instance. Never a quiet downgrade to `external`:
+    // a run that asked for its words to be sealed and got them kept somewhere
+    // else instead is the failure the policy exists to prevent.
+    let fixture = Fixture::new(false).without_archive();
+    fixture
+        .post("/api/v1/curation-pipelines", flow_only_pipeline("sealed"))
+        .await;
+    let (status, refused) = fixture
+        .post(
+            "/api/v1/executions",
+            json!({
+                "target": { "kind": "curation_pipeline", "name": "sealed" },
+                "decided_by": "worker",
+                "payloads": "sealed"
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    let said = refused["details"]
+        .as_array()
+        .expect("the reasons")
+        .iter()
+        .map(|line| line.as_str().unwrap_or_default())
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(said.contains("AIWATCHER_CONVERSATION_ARCHIVE"), "{refused}");
+    assert!(said.contains("AIWATCHER_CONVERSATION_KEYS"), "{refused}");
+
+    // And sealing a payload there is a 501 naming the store, which is the shape
+    // every optional registry here answers with — never a 404.
+    let (status, _) = fixture
+        .post("/api/v1/executions/whatever/payloads", json!({ "a": true }))
+        .await;
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+}
+
+#[tokio::test]
+async fn a_sealed_run_s_words_go_through_this_instance_and_come_back_only_to_an_admin() {
+    // The other half of the policy, on an instance that has an archive. The
+    // stream records a reference this instance issued, a plaintext digest and a
+    // size — and never the words, which is the same rule an `external` run
+    // keeps by leaving them somewhere else entirely.
+    let fixture = Fixture::new(false);
+    fixture
+        .post(
+            "/api/v1/curation-pipelines",
+            flow_only_pipeline("sealed-run"),
+        )
+        .await;
+    let (status, accepted) = fixture
+        .post(
+            "/api/v1/executions",
+            json!({
+                "target": { "kind": "curation_pipeline", "name": "sealed-run" },
+                "decided_by": "worker",
+                "payloads": "sealed"
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
+    let execution = accepted["execution"]["execution_id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+    let version = accepted["execution"]["last_message_version"]
+        .as_u64()
+        .expect("a version");
+
+    let (status, sealed) = fixture
+        .post_bytes(
+            &format!("/api/v1/executions/{execution}/payloads"),
+            b"the model said something private".to_vec(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{sealed}");
+    let digest = sealed["digest"].as_str().expect("a digest").to_owned();
+    let reference = sealed["reference"]
+        .as_str()
+        .expect("a reference")
+        .to_owned();
+    assert!(reference.starts_with("aiwatcher://executions/"), "{sealed}");
+
+    let (status, appended) = fixture
+        .post_keyed(
+            &format!("/api/v1/executions/{execution}/stream"),
+            "turn-1",
+            json!({
+                "expected_version": version,
+                "holder": "worker-a",
+                "messages": [{
+                    "message_type": "TurnCompleted",
+                    "metadata": {},
+                    "payload": {
+                        "reference": reference,
+                        "digest": digest,
+                        "size": sealed["size"],
+                        "policy": "sealed"
+                    }
+                }]
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{appended}");
+
+    // The words are not in the history: only the reference to them is.
+    let (_, history) = fixture
+        .get(&format!("/api/v1/executions/{execution}/history?limit=500"))
+        .await;
+    assert!(
+        !history.to_string().contains("something private"),
+        "the stream carries a reference, never the words"
+    );
+
+    // And they come back through the route that reads them — an `admin`, as
+    // reading a turn's content is. This instance authenticates nobody, so what
+    // is checked here is the round trip rather than the refusal.
+    let (status, plaintext) = fixture
+        .get_bytes(&format!("/api/v1/executions/{execution}/payloads/{digest}"))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(plaintext, b"the model said something private");
+}
+
+#[tokio::test]
+async fn a_run_that_asks_for_nothing_gets_the_default_and_it_is_the_visible_one() {
+    // The shipped default keeps nothing here: the words stay with the worker
+    // and this instance holds a reference, a digest and a size. A deployment
+    // that wants them held turns that on rather than finding it was already
+    // happening.
+    let fixture = Fixture::new(false);
+    let (execution, version) = hosted_run(&fixture, "default-policy").await;
+    let (status, appended) = fixture
+        .post_keyed(
+            &format!("/api/v1/executions/{execution}/stream"),
+            "turn-1",
+            json!({
+                "expected_version": version,
+                "holder": "worker-a",
+                "messages": hosted_messages(1)
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{appended}");
+
+    // And a message claiming to be sealed on that run is refused rather than
+    // stored: the run's policy is fixed when it starts.
+    let (status, refused) = fixture
+        .post_keyed(
+            &format!("/api/v1/executions/{execution}/stream"),
+            "turn-2",
+            json!({
+                "expected_version": appended["version"],
+                "holder": "worker-a",
+                "messages": [{
+                    "message_type": "TurnCompleted",
+                    "metadata": {},
+                    "payload": {
+                        "reference": "aiwatcher://executions/x/payloads/abc",
+                        "digest": "d".repeat(64),
+                        "size": 10,
+                        "policy": "sealed"
+                    }
+                }]
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert_eq!(refused["code"], "payload_policy", "{refused}");
 }
 
 #[tokio::test]

@@ -199,9 +199,19 @@ reads whose decision it is instead of pressing a button that returns a 403.
 Widening it is one line on each side once the answer route reads the request's
 own role.
 
+**A registered workflow authors the same gate.** A `WorkflowTask` carries an
+optional `approval` and compiles to the same binding; what a valid question is
+lives once, in `aiwatcher_core::human_input`, because two surfaces answered
+through one route must not have two ideas of what a gate is. Three differences
+follow from the surface rather than from the gate. A workflow states ordering
+and data separately, so `after` already says "wait for the answer" and no second
+cursor is needed. It has no canvas, so the binding names no block and the step
+id is the address. And it is a field rather than a tagged union, because a
+definition is content-addressed and stored: an internally tagged enum has no
+default tag, so every revision saved before gates existed would have stopped
+parsing.
+
 **What this does not add.** No deadline: `InputRequest::deadline` stays `None`
 and a gate waits as long as it takes. A timer for one belongs to the workflow
 store, beside every other deferred append, and not to the block — two timers
-for one wait is the same mistake as two parties retrying one attempt. And no
-gate in a registered `WorkflowDefinition`, which is a second compiler and its
-own decision.
+for one wait is the same mistake as two parties retrying one attempt.

@@ -121,6 +121,7 @@ use utoipa::OpenApi;
         crate::executions::ScheduleTimerBody,
         crate::executions::CancelTimerBody,
         crate::executions::ExecutionTimers,
+        crate::executions::PayloadSealed,
         aiwatcher_execution::definition::WorkflowSpec,
         aiwatcher_execution::definition::WorkflowTask,
         aiwatcher_execution::definition::WorkflowInput,

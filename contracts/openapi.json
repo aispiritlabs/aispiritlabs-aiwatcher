@@ -5425,6 +5425,165 @@
         }
       }
     },
+    "/api/v1/executions/{execution_id}/payloads": {
+      "post": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "Seal one hosted execution's payload under this instance's keys.",
+        "description": "The `sealed` half of a run's payload policy. `external` runs never call\nthis: their words stay wherever the worker keeps them, and this instance\nholds a reference it cannot resolve — which is the free default and the one\na deployment gets by doing nothing.\n\nThe body is the plaintext, as bytes. It is not JSON on purpose: what is\nbeing stored is somebody's words, and re-encoding them on the way in would\nmean the digest recorded in the stream is a digest of this route's idea of\nthem rather than of what was sent.",
+        "operationId": "seal_payload",
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PayloadSealed"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "This instance has no conversation archive",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/executions/{execution_id}/payloads/{digest}": {
+      "get": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "Read one back.",
+        "description": "An `admin`, as reading a turn's content is, and for the same reason: these\nare somebody's words, and the only thing that changed by sealing them here\nrather than leaving them with the worker is that this deployment took\nresponsibility for them.",
+        "operationId": "read_payload",
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "digest",
+            "in": "path",
+            "description": "The plaintext `sha256` the stream recorded",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The plaintext",
+            "content": {
+              "application/octet-stream": {}
+            }
+          },
+          "403": {
+            "description": "Reading content needs the admin role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/executions/{execution_id}/steps/{step_id}/commands/retry": {
       "post": {
         "tags": [
@@ -9366,6 +9525,31 @@
               "$ref": "#/components/schemas/TimerBody"
             },
             "description": "Deferred appends this decision sets or withdraws.\n\nIn the same request rather than a route of its own: a decision that\nschedules a timeout and the record of having scheduled it are one\ndecision, and split in two a crash between them leaves either a timer\nnobody decided on or a decision whose timer never happened."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ApprovalGate": {
+        "type": "object",
+        "description": "A question this step puts in front of a person before the graph goes on.\n\nThe same question a curation's `approval` block holds, and\n[`aiwatcher_core::human_input`] owns what a valid one is — a workflow gate\nand a canvas gate compile to one binding and are answered through one route.",
+        "required": [
+          "prompt"
+        ],
+        "properties": {
+          "choices": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The answers offered. Empty is a free-text answer; anything else is the\nwhole set, and an answer outside it is refused."
+          },
+          "prompt": {
+            "type": "string",
+            "description": "What is being asked, in the words the person reads."
+          },
+          "role": {
+            "type": "string",
+            "description": "The role that may answer."
           }
         },
         "additionalProperties": false
@@ -16861,6 +17045,29 @@
           }
         }
       },
+      "PayloadSealed": {
+        "type": "object",
+        "description": "Where sealed content went.",
+        "required": [
+          "reference",
+          "digest",
+          "size"
+        ],
+        "properties": {
+          "digest": {
+            "type": "string",
+            "description": "`sha256` of the plaintext, recomputed here rather than believed."
+          },
+          "reference": {
+            "type": "string",
+            "description": "What the workflow stream records, resolvable only through this instance."
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
       "Percentiles": {
         "type": "object",
         "description": "Nearest-rank percentiles, in milliseconds.",
@@ -18902,6 +19109,10 @@
           "owner": {
             "$ref": "#/components/schemas/ExecutionOwner"
           },
+          "payloads": {
+            "$ref": "#/components/schemas/PayloadPolicy",
+            "description": "Where this run's words live. Shown rather than assumed: whether a\ndeployment is holding somebody's turns is the kind of thing that should\nbe readable off the run rather than inferred from a variable nobody\nlooking at the panel can see."
+          },
           "plan_id": {
             "type": "string"
           },
@@ -20352,6 +20563,17 @@
             "type": "object",
             "description": "Values bound when the execution was requested, available to every step."
           },
+          "payloads": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PayloadPolicy",
+                "description": "Where this run's words live. Left out, the deployment's default, which\nis `external` unless somebody set otherwise: the content stays with the\nworker and this instance holds a reference, a digest and a size.\n\n`sealed` sends the content here to be encrypted under the conversation\narchive's keys, and is refused — naming both variables — when this\ninstance has no archive. It is never quietly downgraded: a run that\nasked for its words to be sealed and got them kept somewhere else\ninstead is the failure the whole policy exists to prevent."
+              }
+            ]
+          },
           "target": {
             "$ref": "#/components/schemas/ExecutionTarget"
           },
@@ -21725,6 +21947,10 @@
               "owner": {
                 "$ref": "#/components/schemas/ExecutionOwner"
               },
+              "payloads": {
+                "$ref": "#/components/schemas/PayloadPolicy",
+                "description": "Where this run's words live. Recorded rather than looked up, so an\nappend can be checked against what the run was started under years\nafter the deployment's default moved."
+              },
               "plan": {
                 "$ref": "#/components/schemas/ExecutionPlan"
               },
@@ -22015,6 +22241,9 @@
               },
               "owner": {
                 "$ref": "#/components/schemas/ExecutionOwner"
+              },
+              "payloads": {
+                "$ref": "#/components/schemas/PayloadPolicy"
               },
               "plan": {
                 "$ref": "#/components/schemas/ExecutionPlan"
@@ -22569,11 +22798,9 @@
       },
       "WorkflowTask": {
         "type": "object",
+        "description": "One step of a workflow: work a worker runs, or a gate that waits.\n\nTwo shapes in one struct rather than a tagged union, because a definition is\ncontent-addressed and stored: every revision saved before gates existed has\nto keep parsing and keep hashing to the same revision. An internally tagged\nenum has no default tag, so it would have refused all of them. `approval`\nis what decides which shape this is, and the fields the other shape needs\nare refused by name when it is set.",
         "required": [
-          "id",
-          "task_ref",
-          "queue",
-          "timeout_seconds"
+          "id"
         ],
         "properties": {
           "after": {
@@ -22581,6 +22808,17 @@
             "items": {
               "type": "string"
             }
+          },
+          "approval": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ApprovalGate",
+                "description": "Set to make this step a gate: it waits for a person and runs nothing."
+              }
+            ]
           },
           "id": {
             "type": "string"
@@ -22609,11 +22847,12 @@
           },
           "task_ref": {
             "type": "string",
-            "description": "A registered function's name and pinned version. Never an import path to execute."
+            "description": "A registered function's name and pinned version. Never an import path to\nexecute. Empty on a gate, which runs nothing."
           },
           "timeout_seconds": {
             "type": "integer",
             "format": "int64",
+            "description": "How long an attempt may take. Absent on a gate: nothing dispatches a\nwait, so no timer is ever armed and a number here would be a deadline\nthe code does not keep.",
             "minimum": 0
           }
         },

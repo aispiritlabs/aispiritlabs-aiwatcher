@@ -523,6 +523,7 @@ mod tests {
                 definition_name: "swept".to_owned(),
                 owner: ExecutionOwner::Local,
                 mode: ExecutionMode::Compiled,
+                payloads: Default::default(),
                 state: RunState::of(StateType::Completed),
                 requested_by: "a test".to_owned(),
                 steps: Vec::new(),

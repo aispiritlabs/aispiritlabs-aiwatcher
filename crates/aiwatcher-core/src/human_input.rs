@@ -158,9 +158,7 @@ mod tests {
     fn the_subject_is_the_word_the_surface_that_asked_uses() {
         // One rule set, two authored surfaces: a canvas block and a workflow
         // step have to be named the way each of them names things.
-        assert!(
-            question_problems("a-block", "", ANSWERABLE_ROLE, &[])[0].starts_with("a-block "),
-        );
+        assert!(question_problems("a-block", "", ANSWERABLE_ROLE, &[])[0].starts_with("a-block "),);
         assert!(question_problems("a-step", "", ANSWERABLE_ROLE, &[])[0].starts_with("a-step "));
     }
 }

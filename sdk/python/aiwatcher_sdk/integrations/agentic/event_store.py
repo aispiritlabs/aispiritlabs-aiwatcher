@@ -301,6 +301,7 @@ class AiwatcherEventStore:
         holder: str,
         stream_name: str | None = None,
         timers: TimerPolicy | None = None,
+        policy: str = "external",
     ) -> None:
         self._transport = transport
         self._execution_id = execution_id
@@ -312,6 +313,10 @@ class AiwatcherEventStore:
         #: What `agentic` calls this stream. Defaults to the execution id, which
         #: is what a decider that has no name of its own should use.
         self._stream_name = stream_name or execution_id
+        #: Which policy the payload store implements. `sealed` when `payloads`
+        #: is a :class:`SealedPayloadStore`, and it has to agree with what the
+        #: run was started under or every append is refused.
+        self._policy = policy
         #: Which of the worker's messages are also deferred appends. `None`
         #: means none of them are — an honest default, because a store that
         #: guessed would be reading the caller's vocabulary without being told
@@ -534,7 +539,11 @@ class AiwatcherEventStore:
                 "reference": self._payloads.store_payload(digest, record.data),
                 "digest": digest,
                 "size": len(encode_payload(record.data)),
-                "policy": "external",
+                # What the *store* is, not what the caller hoped: aiwatcher
+                # checks every message against the policy its run was started
+                # under, and a client that named one it is not implementing
+                # would be the silent downgrade the policy exists to prevent.
+                "policy": self._policy,
             }
         return message
 
