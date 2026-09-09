@@ -13,13 +13,32 @@
 //! data here as it is for a turn, so a ciphertext copied from one execution to
 //! another does not open.
 //!
-//! ## What this does not do yet
+//! ## What this does not delete
 //!
-//! Erasure by subject does not reach these. A turn names whose words it holds;
-//! a hosted payload does not, because nothing on the wire says so — the worker
-//! would have to declare it. Retention by age, and deletion with the execution,
-//! do reach them. A deployment sealing under an obligation to erase by subject
-//! needs that field first, and this note is what says so out loud.
+//! **Nothing does, yet.** A sealed payload is written and never removed, and
+//! the three things that look as though they would each miss it for their own
+//! reason:
+//!
+//! - **Erasure by subject** cannot name one. A turn says whose words it holds;
+//!   a payload does not, because nothing on the wire says so — the worker would
+//!   have to declare it.
+//! - **The archive's retention sweep** walks conversations whose declared
+//!   retention has run out, and a payload is not a conversation. It declares no
+//!   retention of its own either, deliberately: its lifetime is the run's.
+//! - **The execution retention sweep** forgets the run's rows and knows nothing
+//!   about this crate. It runs in the `work` role and the archive is wired in
+//!   `serve`, so joining them crosses the split of §43.11 — possible, because
+//!   that split already shares the object store, and wired by nothing.
+//!
+//! The last of those is the one to build, and it has to be driven from the
+//! run’s side: the key hashes the execution, so listing this prefix
+//! says how many payloads there are and never which run any of them belongs to.
+//! An operator deleting by hand needs `sha256(execution_id)` for the same
+//! reason.
+//!
+//! Until then, `sealed` under an obligation to erase is an obligation the
+//! deployment performs itself. This note is here rather than in a document
+//! because the sentence it replaced claimed the opposite.
 
 use crate::store::Backend;
 use crate::{Error, Result, digest};
