@@ -1,53 +1,26 @@
 //! The one place in this system that downloads bytes an outside party chose.
 //!
-//! Everything else in this crate answers from the object store. A hub search
-//! reaches out and gets back *JSON this code parses*; this reaches out and
-//! gets back a file that is about to be stored, hashed, and trained on. That
-//! difference is why the plan sequenced it as its own piece and called it
-//! security work rather than part of the importer: an import job that is
-//! wrong re-runs, and a fetcher that is wrong is a request-forgery primitive
-//! with a cluster behind it.
+//! Seven gates, in this order:
 //!
-//! Seven gates, in this order, and each one is a mistake somebody else has
-//! already made:
+//! 1. **`https` only, host parsed rather than matched.**
+//!    `https://huggingface.co@evil.test/x.png` holds the allowlisted name and
+//!    is not that host.
+//! 2. **An allowlist**, exact or dot-suffixed. An unlisted host is refused by
+//!    name, never fetched "just to see".
+//! 3. **Every resolved address is checked** before connecting — loopback,
+//!    private, link-local, unique-local, CGNAT, multicast, reserved. See
+//!    [`is_public`]. `169.254.169.254` is one DNS name away otherwise.
+//! 4. **No redirects.** Gates 1–3 ran against the address the caller named; a
+//!    `302` walks past all three. Reported with its target, never followed.
+//! 5. **A byte ceiling applied while streaming.** `Content-Length` is a claim.
+//! 6. **It must be a picture by its own first bytes** ([`pixels::describe`]).
+//!    Also the decompression-bomb gate: a 40 kB PNG declaring 60 000 × 60 000
+//!    is refused before anything decodes it.
+//! 7. **The content address is verified, never accepted from the caller.**
 //!
-//! 1. **`https` only, parsed rather than matched.** `url::Url` decides what
-//!    the host is. `https://huggingface.co@evil.test/x.png` has the
-//!    allowlisted name in it and is not that host, which is the same class of
-//!    error as the substring match that once invented a licence claim.
-//! 2. **An allowlist of hosts**, exact or dot-suffixed. A host nobody listed
-//!    is refused with its name, never fetched "just to see".
-//! 3. **Every resolved address is checked** before the connection is made:
-//!    loopback, private, link-local, unique-local, shared-CGNAT, multicast and
-//!    reserved ranges are refused. `169.254.169.254` is the cloud metadata
-//!    service and a DNS name is all it takes to point an allowlisted-looking
-//!    fetch at it. See [`is_public`], which is where that list lives.
-//! 4. **No redirects.** An allowlisted host answering `302` to
-//!    `http://169.254.169.254/` would walk straight through gates 1–3, because
-//!    they ran against the address the *caller* named. A redirect is reported
-//!    with its target rather than followed.
-//! 5. **A byte ceiling enforced while streaming.** `Content-Length` is a claim
-//!    by the server; the cap is applied to the bytes as they arrive, so a
-//!    response that lies (or omits it, or is chunked) stops at the ceiling
-//!    instead of at the memory limit.
-//! 6. **It has to be a picture, by its own first bytes.** [`pixels::describe`]
-//!    reads the header; HTML, a PDF, a zip or a truncated download is refused.
-//!    This is also the decompression-bomb gate: the header states the pixel
-//!    dimensions, so a 40 kB PNG declaring 60 000 × 60 000 is refused *before*
-//!    anything decodes it — which is the only place refusing it is cheap.
-//! 7. **The content address is verified, never accepted.** A caller that says
-//!    what it expects gets that checked against the bytes; a caller that does
-//!    not gets the digest computed here. Same rule as `put_blob`: a content
-//!    address supplied by the caller would let two different pictures occupy
-//!    one key, which is a training set whose labels belong to another image.
-//!
-//! What this does **not** close is the window between the address check and
-//! the connection: a resolver that answers differently the second time (DNS
-//! rebinding) is not defeated by checking the first answer. Closing it needs
-//! a connection-time hook — reqwest can be given a resolver, but the check has
-//! to happen where the socket is opened, not where the name is looked up. The
-//! gate that actually holds against it is the allowlist: rebinding requires a
-//! host somebody listed, and the hosts listed here are hubs.
+//! Not closed: DNS rebinding between the address check and the connection.
+//! Closing it needs a connection-time resolver hook. What holds meanwhile is
+//! gate 2 — rebinding needs a host somebody listed, and those are hubs.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::time::Duration;

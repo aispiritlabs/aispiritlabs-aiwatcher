@@ -201,7 +201,7 @@ impl ArtifactCatalog for ObjectArtifactCatalog {
         let key = self.cache_key_path(cache_key);
         // Marked, never deleted, and the artifacts it names are left alone: an
         // old execution that used them is a record of what happened, and
-        // rewriting it would be a different kind of lie (section 18).
+        // rewriting it would be a different kind of lie.
         let Some(entry) = self.read::<CacheEntry>(&key).await? else {
             return Ok(());
         };

@@ -2,7 +2,7 @@
 //! A hosted execution's history: who may append to it, what a conflict does,
 //! and what this engine refuses to read.
 //!
-//! Section 40.3. The decider is the worker; the compare-and-append, the inbox
+//! The decider is the worker; the compare-and-append, the inbox
 //! and the version are this engine's, and they are the whole of what
 //! `agentic.workflow` cannot give itself when two workers hold separate
 //! SQLite files.

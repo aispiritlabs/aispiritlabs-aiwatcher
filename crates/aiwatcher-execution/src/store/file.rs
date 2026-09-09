@@ -1,51 +1,27 @@
 //! One append-only file per execution, plus a lock nobody else may take.
 //!
-//! The same shape as `aiwatcher-bus`'s write-ahead log, and for the same
-//! reason: aiwatcher has to be useful before anybody commits to PostgreSQL.
-//! One JSON record per line, stream version = line number — no index to keep in
-//! sync, and a half-written tail is cut away before anything is written behind
-//! it, because a good record behind a broken one would freeze every later read
-//! at the break.
+//! One JSON record per line, stream version = line number. No index to keep in
+//! sync, and a half-written tail is cut away before anything is appended
+//! behind it.
 //!
-//! ## The lock is the point
+//! **The lock holds one process.** A stream has a decider, a reactor and
+//! possibly a worker racing to append, and a file offers no compare-and-append
+//! across processes — so a second process is refused at `open`, by name.
+//! [`StoreCapabilities::multi_process`] is `false`, so a plan needing a worker
+//! is refused before it starts, naming `AIWATCHER_WORKFLOW_STORE`: a
+//! development store must not become a production one by omission. The lock is
+//! the operating system's, held on the open file, so the kernel releases it
+//! however the process ends — `SIGKILL` included. See [`LockGuard`].
 //!
-//! This adapter holds **one process**. A workflow stream has a decider, a
-//! reactor and possibly a worker racing to append, and a file offers no
-//! compare-and-append across processes — so a second process is refused at
-//! `open`, by name, rather than allowed to interleave writes that would each
-//! look fine on their own.
+//! **One decision is journalled, then applied.** A decision touches five files
+//! — stream, projection, outbox, attempts, checkpoint — and a filesystem
+//! writes one at a time. [`PendingCommit`] is written whole and `fsync`ed into
+//! `commits/` first; that rename is the commit point. Everything after it is
+//! idempotent, and the record is deleted once it has all been applied.
+//! [`FileWorkflowStore::recover`] runs at `open` **and** at the top of every
+//! `append` — a crash mid-apply need not restart the process.
 //!
-//! And [`StoreCapabilities::multi_process`] is `false`, which is what makes a
-//! plan needing a worker or a container job refused *before* it starts, naming
-//! `AIWATCHER_WORKFLOW_STORE`. A development store must not become a production
-//! one by omission.
-//!
-//! The lock is the operating system's, held on the open file rather than
-//! asserted by the file's existence, so the kernel releases it however the
-//! process ends — `SIGKILL` included. See [`LockGuard`].
-//!
-//! ## One decision is journalled, then applied
-//!
-//! The atomicity is weaker than a transaction and is honest about where. A
-//! decision touches five files — stream, projection, outbox, attempts,
-//! checkpoint — and a filesystem writes one at a time. This used to write them
-//! in sequence and hope, which was wrong in a way no successful-path test could
-//! see: a crash after the stream left the input's message id recorded with none
-//! of its consequences on disk, and because that id *is* the inbox key, the
-//! retry was answered `Duplicate`. The run then had no outbox row to publish
-//! and no attempt row to claim, and nothing anywhere said so (review A1).
-//!
-//! So [`PendingCommit`] is written whole and `fsync`ed into `commits/` first,
-//! and that rename is the commit point. Everything after it is derived, every
-//! step of it is idempotent, and the record is deleted only once they are all
-//! done. A crash leaves either no record — nothing was accepted — or one that
-//! [`FileWorkflowStore::recover`] finishes, at the next `open` and at the top
-//! of the next `append`. The second matters as much as the first: A1's
-//! reproduction never restarted anything.
-//!
-//! It is [`aiwatcher_jobs::ORDERING`] again, in one more place: the intent,
-//! then the work, then the cursor that says the work is done. A crash re-does
-//! rather than loses.
+//! [`aiwatcher_jobs::ORDERING`]: the intent, then the work, then the cursor.
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -277,7 +253,7 @@ impl FileWorkflowStore {
     /// Every attempt row, keyed. One file rather than one per row, and that
     /// is affordable because the table really is one row per *unfinished*
     /// step: a settled attempt is retired rather than stored, so this file is
-    /// bounded by concurrency and not by history (section 43.34). A
+    /// bounded by concurrency and not by history. A
     /// single-process store also has no reader racing the writer.
     ///
     /// It was not always: while a completion wrote a terminal row, every claim
@@ -376,7 +352,7 @@ impl FileWorkflowStore {
     ///   one wins and re-running writes the same bytes;
     /// - an outbox row already present by `message_id` is not added twice;
     /// - a dispatch is an insert by key and a retirement is a remove, which are
-    ///   both already idempotent (section 43.34).
+    ///   both already idempotent.
     async fn apply(&self, commit: &PendingCommit) -> Result<()> {
         let (existing, valid) = self.read_stream_valid(&commit.execution).await?;
         let already = commit.records.first().is_some_and(|first| {

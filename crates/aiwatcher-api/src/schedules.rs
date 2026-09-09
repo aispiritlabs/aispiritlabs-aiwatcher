@@ -1,49 +1,24 @@
 //! When a definition runs unattended, and starting one now.
 //!
-//! Three routes over one object, plus the flag that makes setting a schedule
-//! and running it once the same click:
-//!
 //! ```text
-//! GET    /api/v1/curation-pipelines/{name}/schedule
-//! PUT    /api/v1/curation-pipelines/{name}/schedule
-//! DELETE /api/v1/curation-pipelines/{name}/schedule
-//!
-//! GET    /api/v1/workflow-definitions/{name}/schedule
-//! PUT    /api/v1/workflow-definitions/{name}/schedule
-//! DELETE /api/v1/workflow-definitions/{name}/schedule
+//! GET | PUT | DELETE  /api/v1/curation-pipelines/{name}/schedule
+//! GET | PUT | DELETE  /api/v1/workflow-definitions/{name}/schedule
 //! ```
 //!
-//! ## Two prefixes, one object, and no `kind` in a body
+//! The [`DefinitionKind`] comes from the **path**, never from a body: a body
+//! carrying its own kind would let a curation-pipeline URL write a workflow
+//! schedule that nothing on that page would ever show.
 //!
-//! The store has always been keyed by [`DefinitionKind`] and name, and
-//! everything below the three handlers already reads the kind off the stored
-//! object. What was hard-coded was the handlers, so a worker workflow could be
-//! saved and started and not left to run unattended — which is most of what
-//! authoring one is for.
+//! `run_now` is a flag rather than a fourth route. "Run it once, and from
+//! tomorrow every day at nine" is one intention, and two requests to express it
+//! is one more way for the second to fail after the first succeeded. It is not
+//! a special case either: a run now is the slot at this instant, named by
+//! [`ScheduledDefinition::execution_id_for`] exactly as a nine o'clock one is,
+//! so a double-clicked button is a redelivery rather than a second run.
 //!
-//! The kind comes from the *path* rather than from a field, because a schedule
-//! belongs to a definition that already has a URL: a body carrying its own kind
-//! would let `PUT /api/v1/curation-pipelines/x/schedule` say `workflow` and
-//! write a schedule nothing on that page would ever show.
-//!
-//! ## Why `run_now` is not a fourth route
-//!
-//! "Run it once, and from tomorrow every day at nine" is one intention, and
-//! two requests to express it is two ways for the second to fail after the
-//! first succeeded. It is also not a special case in this design: a run *now*
-//! is the slot at this instant, named by
-//! [`ScheduledDefinition::execution_id_for`] exactly as a nine o'clock one is —
-//! so a double-clicked button within one second is a redelivery and not a
-//! second run, with no idempotency key to pass.
-//!
-//! The existing **Run on the server** button is a different thing and stays:
-//! it starts an ad-hoc run of whatever is on the canvas, with no schedule
-//! involved.
-//!
-//! ## Setting a schedule does not touch the definition
-//!
-//! It is stored beside it, not in it. Changing nine to ten must not mint a
-//! pipeline revision — see [`aiwatcher_execution::schedule::store`].
+//! A schedule is stored beside its definition, never in it — changing nine to
+//! ten must not mint a revision. See
+//! [`aiwatcher_execution::schedule::store`].
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -144,7 +119,7 @@ pub struct ScheduleView {
     ///
     /// Read from the **workflow store**, not from the schedule object. They
     /// used to be one thing, which is what let a tick's write-back undo an
-    /// edit or resurrect a deleted schedule (review R3); configuration and slot
+    /// edit or resurrect a deleted schedule; configuration and slot
     /// outcomes now have different writers and live in different places.
     ///
     /// Empty when this deployment wired no execution store — there is then no
@@ -429,7 +404,7 @@ async fn write(
         updated_at: now,
         // Carried forward when this edit does not change *when* it fires, so
         // an already-due slot survives a change to `overlap`; reset when it
-        // does, so a new rule does not reach into the past (review R7).
+        // does, so a new rule does not reach into the past.
         effective_from: None,
     };
     scheduled.effective_from = Some(scheduled.activation_after(stored.as_ref(), now));

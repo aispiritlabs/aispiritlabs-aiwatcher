@@ -61,7 +61,7 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::definitions::router())
         // What a block was, so the canvas does not guess it from the draft on
         // screen — which is the one thing that is certainly not what an old run
-        // read. Section 19.
+        // read.
         .merge(crate::context::router())
         .merge(crate::schedules::router())
         // The one claimant here that is not this binary. Phase 10: a worker

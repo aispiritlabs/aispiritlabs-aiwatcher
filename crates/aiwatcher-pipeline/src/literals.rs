@@ -1,31 +1,23 @@
 //! Flyte's type system, in the two directions this adapter needs it.
 //!
 //! Outwards: a form's JSON values become a `LiteralMap` bound to the types the
-//! launch plan itself declares. Inwards: a declared interface becomes
-//! [`EngineParameter`]s a form can render, and a default becomes something a
-//! field can be pre-filled with.
+//! launch plan declares. Inwards: a declared interface becomes
+//! [`EngineParameter`]s a form can render.
 //!
-//! ## Why the types come from the engine and not from the caller
+//! **The types come from the engine, at launch time.** A caller sends
+//! `{"since": "2026-08-01T00:00:00Z"}` with no indication whether the workflow
+//! wants a timestamp, a string or an optional one, so binding reads the launch
+//! plan's own `expected_inputs` and encodes against that. A panel rendering a
+//! stale interface fails with a named error instead of sending a mistyped
+//! literal, and an input the entity does not declare is refused rather than
+//! dropped — an orchestrator that ignores an unknown field turns a typo in a
+//! filter into a run over everything.
 //!
-//! A caller sends `{"since": "2026-08-01T00:00:00Z"}` — a JSON string, with no
-//! indication of whether the workflow wants a timestamp, a string, or an
-//! optional one. Binding therefore reads the launch plan's own
-//! `expected_inputs` *at launch time* and encodes against that. Two things
-//! follow, and both are deliberate: a panel rendering a stale interface fails
-//! with a named error instead of sending a mistyped literal, and an input the
-//! entity does not declare is refused rather than dropped. An orchestrator
-//! that silently ignores an unknown field turns a typo in a filter into a run
-//! over everything.
-//!
-//! ## Why the JSON is hand-built rather than generated from the protos
-//!
-//! `flyteidl` is a large protobuf surface and this adapter uses six messages
-//! of it. Pulling in `prost`, `tonic` and the IDL crate to reach `/api/v1/…`
-//! over the gateway that already speaks JSON would put a code generator and a
-//! gRPC stack in the build for types that are a hundred lines by hand — and
-//! the gateway is a stable, documented contract. The cost is that field names
-//! live here as strings, which is what [`field`] and the round-trip tests are
-//! for.
+//! **The JSON is hand-built.** `flyteidl` is a large protobuf surface and this
+//! uses six messages of it; `prost` and `tonic` would put a code generator and
+//! a gRPC stack in the build to reach a gateway that already speaks JSON. The
+//! cost is field names as strings, which is what [`field`] and the round-trip
+//! tests are for.
 
 use std::collections::BTreeMap;
 

@@ -560,7 +560,7 @@ impl ExecutionPlan {
     /// are what they are looking at. Three source blocks folded into one Flow
     /// query light together, which is the truth about how they ran.
     ///
-    /// Derived from the pinned plan and never from a draft — section 19's rule
+    /// Derived from the pinned plan and never from a draft
     /// for a step's context, at the grain of a whole run. A browser working
     /// this out would work it out from the canvas on screen, which is the one
     /// thing that is certainly not what the run compiled.

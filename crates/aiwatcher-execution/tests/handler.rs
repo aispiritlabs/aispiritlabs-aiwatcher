@@ -645,7 +645,7 @@ async fn a_dispatch_becomes_a_row_the_reactor_that_holds_that_client_can_claim()
     // The loop Phase 3 closes: the decider dispatches, the store holds the
     // claim, and the process with the runtime's client takes it. No second
     // topic, no consumer group — the store is transactional, so a command is a
-    // row (section 11.1).
+    // row.
     let store = MemoryWorkflowStore::new();
     let handler = ExecutionHandler::new(store.clone());
     handler

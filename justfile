@@ -123,6 +123,42 @@ build-laser:
 release:
     cargo build --release --bin aiwatcher
 
+# Loose object files an older build left behind in `target/*/deps`, and the one
+# maintenance task on this repository that is not optional on macOS.
+#
+# `[profile.dev]` in Cargo.toml stops new ones being made — see the comment
+# there for why a directory full of them turns a 5.5-second test suite into a
+# half-hour one. This clears what a checkout built before that setting already
+# has: a `.o` file is a build intermediate no `cargo` freshness check reads, so
+# nothing is rebuilt by removing them.
+#
+# The keepers are moved out and the old directory is deleted whole, because
+# unlinking eight hundred thousand files one at a time takes longer than the
+# build this is meant to save.
+
+# Clear loose object files an older build left in target/*/deps.
+prune-objects:
+    #!/usr/bin/env python3
+    import glob, os, subprocess, time
+    # `target/<profile>/deps`, and `target/<dir>/<profile>/deps` for the target
+    # directories Tilt and the container build keep beside it. Globbed rather
+    # than walked: one of these holds most of the files on the disk.
+    roots = sorted(set(glob.glob("target/*/deps") + glob.glob("target/*/*/deps")))
+    for deps in roots:
+        names = os.listdir(deps)
+        stale = [n for n in names if n.endswith(".o")]
+        print(f"{deps}: {len(stale)} loose object files of {len(names)} entries")
+        if not stale:
+            continue
+        trash = f"{deps}.pruning-{int(time.time())}"
+        os.rename(deps, trash)
+        os.mkdir(deps)
+        for name in names:
+            if not name.endswith(".o"):
+                os.rename(os.path.join(trash, name), os.path.join(deps, name))
+        subprocess.Popen(["rm", "-rf", trash], start_new_session=True)
+        print(f"  kept {len(names) - len(stale)}; {trash} is being removed in the background")
+
 # ── Contract ─────────────────────────────────────────────────────────────────
 
 # Regenerate the OpenAPI document and the panel's client. Commit both.
@@ -883,7 +919,9 @@ install:
 # Run `just check` before every push.
 setup-hooks:
     @git config core.hooksPath .githooks
-    @echo "✓ core.hooksPath set to .githooks — 'git push' now runs 'just check' first (bypass: git push --no-verify)"
+    @git config commit.template .gitmessage
+    @echo "✓ core.hooksPath set to .githooks — 'git push' runs 'just check', 'git commit' checks the subject (bypass: --no-verify)"
+    @echo "✓ commit.template set to .gitmessage"
 
 # Push a realistic workload at a running server and report resident memory.
 #

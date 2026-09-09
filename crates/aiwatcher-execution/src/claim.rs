@@ -73,7 +73,7 @@ impl std::fmt::Display for AttemptKey {
 /// The older shape had to blank every field that gives an [`AttemptRow`] its
 /// meaning in order to store one: the command that dispatched it, the queue it
 /// was claimable on, the code a worker had to match. What was left described
-/// nothing and was still carried past every claim. Section 43.34.
+/// nothing and was still carried past every claim.
 /// `Deserialize`/`Serialize` because the `file` adapter journals a whole
 /// decision before applying any of it, and these are part of one.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]

@@ -31,7 +31,7 @@ use crate::state::{ExecutionId, ExecutionMode, ExecutionOwner, InputRequest, Run
 
 /// The largest a command or event payload may be, in bytes.
 ///
-/// Section 5.4. Beyond this a step hands on an artifact, because a message that
+/// Beyond this a step hands on an artifact, because a message that
 /// grows with the data is one that eventually cannot be stored, replayed, sent
 /// over SSE or shown.
 pub const MAX_PAYLOAD_BYTES: usize = 256 * 1024;
@@ -303,7 +303,7 @@ impl WorkflowEvent {
     }
 }
 
-/// Where a hosted execution's content lives (section 40.4).
+/// Where a hosted execution's content lives.
 ///
 /// The definition chooses, the deployment sets the default, and the free one is
 /// the default: a hosted run starts with no archive, no key and no flag. There
@@ -341,7 +341,7 @@ impl PayloadPolicy {
 
 /// Where a hosted message's words are, and how big they were.
 ///
-/// Never the words themselves (section 40.4). The digest is of the *plaintext*,
+/// Never the words themselves. The digest is of the *plaintext*,
 /// so a reader can tell whether what it fetched is what was appended — the
 /// prompt registry's rule, in a fourth place.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
@@ -359,7 +359,7 @@ pub struct PayloadRef {
 
 /// A hosted decider's own message, as this engine holds it.
 ///
-/// **Opaque by design** (section 40.3). The worker runs `decide`; an engine that
+/// **Opaque by design**. The worker runs `decide`; an engine that
 /// read these would be a second decider, which is the thing the hosted mode
 /// exists to avoid. What is stored is the type *name* — enough to project a
 /// status from `TurnStarted` and `TurnCompleted`, and nothing else — the
@@ -534,7 +534,7 @@ pub struct OutboxMessage {
     pub message_id: MessageId,
     /// The event type from `aiwatcher_core::catalog` this publishes as.
     pub event_type: String,
-    /// `workflow:<execution_id>`, per section 11.2.
+    /// `workflow:<execution_id>`.
     pub partition_key: String,
     pub payload: Value,
     #[serde(with = "time::serde::rfc3339")]

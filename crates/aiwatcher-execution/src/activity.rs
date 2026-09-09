@@ -1,9 +1,5 @@
 //! What a reactor does with an attempt it claimed.
 //!
-//! Section 14. The claim table hands a process one attempt; this is the port
-//! for performing it, and the eight steps that stand between "claimed" and
-//! "reported".
-//!
 //! ```text
 //!   1  deduplicate by command_id
 //!   2  claim or renew the lease
@@ -15,27 +11,20 @@
 //!   8  advance the checkpoint only after that fact is durable
 //! ```
 //!
-//! Steps 1, 2, 7 and 8 belong to [`crate::reactor`], because they are the same
-//! for every runtime. What an implementation of [`ActivityExecutor`] owns is 3
-//! to 6 — and the one thing it must get right is step 4's key.
+//! 1, 2, 7 and 8 belong to [`crate::reactor`] — they are the same for every
+//! runtime. An [`ActivityExecutor`] owns 3 to 6, and must get step 4's key
+//! right.
 //!
-//! ## A timeout proves nothing
+//! **A timeout proves nothing.** It says the caller stopped waiting, not that
+//! the runtime stopped working — a Flow query that took eleven minutes has
+//! written its rows. So [`ActivityExecutor::lookup`] asks the runtime by the
+//! idempotency key whether that attempt already finished, and only an honest
+//! `Absent` justifies running it again. A runtime that cannot answer leaves the
+//! default in place, and then a timeout is a retry that may duplicate work.
 //!
-//! It says the caller stopped waiting. It does not say the runtime stopped
-//! working, and a Flow query that took eleven minutes has still written its
-//! rows. So a retry is not the first move: [`ActivityExecutor::lookup`] asks
-//! the runtime *by the idempotency key* whether that attempt already finished,
-//! and only an honest `Absent` justifies running it again. A runtime that
-//! cannot answer says so by leaving the default in place, and then a timeout is
-//! a retry that may duplicate work — which is why the two Flow and marimo
-//! routes that gain this lookup are named in sections 15.4 and 16.4.
-//!
-//! ## Nothing here executes in the serve role
-//!
-//! An implementation holds a client for a service, or a credential for a
-//! cluster. That is the work role's, and it is why the two roles exist
-//! (ADR_0025). `PublishDataset` is the one binding that runs in the serve role
-//! and it executes nothing: it writes a content-addressed version.
+//! Nothing here executes in the `serve` role: an implementation holds a client
+//! or a credential, and those are the work role's. `PublishDataset` is the
+//! exception and executes nothing — it writes a content-addressed version.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -89,7 +78,7 @@ pub struct ActivityContext {
     /// Where this step's staged input, parameters and output live:
     /// `<execution>/<step>/<attempt>/…`. Keyed by context and never by the
     /// notebook's name, so two pipelines editing one notebook stop overwriting
-    /// each other's rows (section 16.2).
+    /// each other's rows.
     pub context_id: String,
     /// The whole plan this step belongs to.
     ///
@@ -240,7 +229,7 @@ pub trait ActivityExecutor: Send + Sync + std::fmt::Debug {
 
     /// Ask the runtime to stop. Cooperative, and best-effort by design:
     /// cancellation is cooperative first and forced termination only where a
-    /// runtime supports it safely (section 26).
+    /// runtime supports it safely.
     ///
     /// # Errors
     ///

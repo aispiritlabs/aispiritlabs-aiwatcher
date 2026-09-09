@@ -1,11 +1,6 @@
-//! What a long job over an object store is, once you have written two of them.
-//!
-//! The conversation export (ADR_0021) was the first: a request that could not
-//! be a request, because it read a whole archive, wrote a corpus and had to
-//! survive the process that started it. The Hub importer is the second, and
-//! it is the same machine with different rows in it — which is exactly the
-//! moment [plan.md](../../../plan.md) said to decide, because deciding after
-//! writing the second one is how the two drift.
+//! The rules a long job over an object store keeps. Not the records — those
+//! belong to each caller, because an export counts exclusions by policy reason
+//! and an import counts rejected rows by what was wrong with them.
 //!
 //! ```text
 //!   POST  ──►  queued ──► running ──► completed   name@sha256
@@ -14,37 +9,18 @@
 //!                  retryable         cancelled    somebody asked
 //! ```
 //!
-//! # What is shared, and what deliberately is not
+//! Four rules, each a silent corruption when one copy gets it wrong:
 //!
-//! **The rules are shared.** They are the part that must not drift, because
-//! each of them is a silent corruption when it is wrong in one copy:
-//!
-//! * a shard is written **before** the cursor that passes it, so a crash
-//!   re-does one shard and never skips rows nothing can tell you about;
-//!   [`ORDERING`] states it and every caller's `flush` keeps it;
+//! * a shard is written **before** the cursor that passes it ([`ORDERING`]), so
+//!   a crash re-does one shard and never skips rows;
 //! * a job's version is [`version_of`] — `sha256(request ‖ every shard digest,
-//!   in order)` — so the same request over unchanged inputs is the same
-//!   reference, and a shard swapped for another is a different one;
-//! * a lease is renewed per shard and re-checked at every shard boundary
-//!   ([`lease_expired`]), so a worker that lost its claim stops rather than
-//!   writing beside its replacement;
-//! * a retryable failure is requeued until [`MAX_ATTEMPTS`], a rejection is
-//!   failed immediately ([`after_failure`]) — getting that backwards either
-//!   spins forever or discards good work, which is `PortError`'s rule one
-//!   layer up.
+//!   in order)` — so the same request over unchanged inputs is one reference;
+//! * a lease is renewed per shard and re-checked at every boundary
+//!   ([`lease_expired`]), so a worker that lost its claim stops;
+//! * a retryable failure is requeued until [`MAX_ATTEMPTS`], a rejection fails
+//!   immediately ([`after_failure`]).
 //!
-//! **The records are not shared**, and that is not an oversight. An export job
-//! pins a conversation list and counts exclusions by reason; an import job
-//! pins a staged batch and counts rejected rows by reason. A generic
-//! `Job<Payload>` would either flatten those into the JSON — which produces a
-//! TypeScript intersection the panel cannot narrow, the same reason
-//! `ModelDetail` nests rather than flattens — or hide them behind a trait with
-//! a dozen accessors, which is more machinery than the thing it abstracts.
-//! What each record owes this crate is that it *keeps the rules*, and the
-//! rules are functions rather than a base class so that keeping them is a call
-//! rather than an inheritance.
-//!
-//! See ADR_0022.
+//! ADR_0022.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

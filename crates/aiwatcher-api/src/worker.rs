@@ -1,17 +1,11 @@
 //! The protocol a process somebody else operates speaks to this one.
 //!
-//! Phase 10. A worker is the only claimant here that is not this binary: it
-//! runs registered Python functions on a laptop or in somebody's own pod, and
-//! it reaches the store the same way it reaches everything else — through the
-//! API it already holds a token for.
+//! A worker runs registered Python functions on a laptop or in someone's own
+//! pod, and reaches the store through the API it already holds a token for.
 //!
-//! ## It is the reactor, with a seam in the middle
-//!
-//! [`Reactor::poll_once`] is claim → load the plan → cache lookup →
-//! `step.started` → **perform** → re-check the lease → record → report. Every
-//! one of those except `perform` is a rule that must not be decided twice, and
-//! a worker written in another language would be a second implementation of
-//! all of them. So the loop is split rather than reimplemented:
+//! It is the reactor with a seam in the middle. [`Reactor::poll_once`] is
+//! claim → load the plan → cache lookup → `step.started` → **perform** →
+//! re-check the lease → record → report, and only `perform` crosses the seam:
 //!
 //! ```text
 //!   POST /worker/claims          Reactor::take      claim, plan, cache, step.started
@@ -20,23 +14,16 @@
 //!                                Reactor::settle    lease, catalog, step.completed
 //! ```
 //!
-//! What the worker owns is its own function and nothing else. It does not
-//! decide whether a cache entry answers, whether a retry is due, or whether its
-//! lease still holds — the last of those especially, because a claimant is the
-//! one party that cannot be trusted to check it.
+//! The worker owns its own function and nothing else — not whether a cache
+//! entry answers, not whether a retry is due, and least of all whether its
+//! lease still holds, which is the one thing a claimant cannot check about
+//! itself.
 //!
-//! ## The lease is the authorization
-//!
-//! A token names queues (`AIWATCHER_AUTH_INGEST_TOKENS`, `name[queue]=secret`),
-//! and that decides what may be *claimed*. Everything afterwards is addressed
-//! by an attempt key, and the check on every one of those routes is that this
-//! caller holds that attempt's lease — [`Reactor::resume`] answers it by
-//! re-reading the row. Two consequences worth stating: a worker cannot read the
-//! inputs of an attempt it does not hold, and a worker whose lease expired
-//! under it is refused rather than allowed to write beside its replacement.
-//!
-//! Worker names are not secret, so holding the lease is checked *together* with
-//! the caller's own queue scope — otherwise a token for one queue could settle
+//! **The lease is the authorization.** A token names queues
+//! (`AIWATCHER_AUTH_INGEST_TOKENS`, `name[queue]=secret`), which decides what
+//! may be *claimed*; every route afterwards checks that this caller holds that
+//! attempt's lease. Worker names are not secret, so the lease and the token's
+//! queue scope are checked **together** — either alone lets a token settle
 //! another queue's attempt by guessing the name it was claimed under.
 
 use std::collections::BTreeMap;

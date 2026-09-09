@@ -1,36 +1,25 @@
 //! Applying the schema, once, however many replicas start together.
 //!
-//! Not a migration framework. Files in order, every statement in them written
-//! to be re-runnable, applied inside one transaction holding a PostgreSQL
-//! advisory lock — so two API pods starting at the same second apply them once
-//! and the second waits rather than racing the first through `CREATE TABLE`.
+//! Not a migration framework: files in order, every statement re-runnable,
+//! applied inside one transaction holding an advisory lock, so two pods
+//! starting in the same second apply them once. A version is recorded in
+//! `execution_schema_migrations` after its statements commit and skipped
+//! thereafter — [`aiwatcher_jobs::ORDERING`], the work then the cursor.
 //!
-//! What makes a file after the first one possible is
-//! `execution_schema_migrations`: a version is recorded after its statements
-//! commit, and a version already recorded is skipped. That ordering is
-//! [`aiwatcher_jobs::ORDERING`] again — the work, then the cursor that passes
-//! it. A crash between them re-runs a file that is idempotent by construction.
+//! `sqlx::migrate!` needs `sqlx-macros`, which wants a live database at compile
+//! time; forty lines of `include_str!` are easier to reason about than a
+//! proc-macro reading `DATABASE_URL` during `cargo build`.
 //!
-//! `sqlx`'s own `migrate!` was the alternative and needs `sqlx-macros`, which
-//! wants a live database at compile time. A proc-macro reading `DATABASE_URL`
-//! during `cargo build` is a larger thing to reason about than forty lines that
-//! run `include_str!`.
+//! **A file may not remove something a released binary still names.** The
+//! schema is applied at start-up by whichever replica gets there first, workers
+//! roll rather than stop, and an image rollback runs the old binary against the
+//! new schema. So a removal is two releases: one that stops using the thing,
+//! and a later one that drops it. Adding is unconstrained — a column the old
+//! binary never heard of costs it nothing.
 //!
-//! **A file here may not remove something a released binary still names.** The
-//! version this build expects is applied at *start-up*, and the chart rolls
-//! workers rather than stopping them, so the old process keeps serving against
-//! the schema the new one just changed — and an image rollback runs it against
-//! that schema again. A removal is therefore two releases: one that stops using
-//! the thing, and a later one that drops it. 0003 dropped two columns the
-//! release before it named, 0005 puts them back, and `docs/INSTALL.md` carries
-//! the procedure. Adding is unconstrained in the same way that removing is not:
-//! a column the old binary has never heard of costs it nothing.
-//!
-//! And a file that has been applied anywhere is never edited. A version is
-//! recorded once and skipped forever after, so a rewrite reaches no database
-//! that already ran it and only makes two installations at one version
-//! disagree about what that version did. What withdraws a migration is another
-//! migration.
+//! **An applied file is never edited.** A rewrite reaches no database that ran
+//! it and only makes two installations at one version disagree about what that
+//! version did. What withdraws a migration is another migration.
 
 use sqlx::{Executor as _, PgPool};
 

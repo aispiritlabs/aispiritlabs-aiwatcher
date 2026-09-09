@@ -1,34 +1,21 @@
-//! Where a step's output goes, and what it was made from.
+//! Where a step's output goes, and what it was made from: what an artifact is,
+//! what produced it, and whether this exact work has already been done.
 //!
-//! Sections 9.5, 17 and 18. Three questions with one owner, because they are
-//! the same fact read three ways: *what is this artifact*, *what produced it*,
-//! and *has this exact work already been done*.
+//! **The catalog stores no bytes.** An [`ArtifactRef`] is a pointer with a
+//! digest; the bytes belong to the `ObjectStore` port the registries already
+//! write through. A catalog holding content would be a second copy of something
+//! addressed by its content.
 //!
-//! ## The catalog stores no bytes
+//! Two adapters, one port: [`memory`] for tests and a development run that
+//! keeps no lineage across a restart, [`object`] for everything else, under the
+//! `artifacts/` prefix beside the bytes it describes.
 //!
-//! An [`ArtifactRef`] is a pointer with a digest. The bytes are the object
-//! store's — `aiwatcher-core`'s `ObjectStore` port, the same one the prompt
-//! registry, the annotations and the conversation archive already write
-//! through. A catalog that also held content would be a second copy of
-//! something addressed by its content, which is the one duplication that cannot
-//! be detected afterwards.
-//!
-//! ## Two adapters, one port
-//!
-//! [`memory`] for tests and a development run that keeps no lineage across a
-//! restart, [`object`] for everything else — over the same `ObjectStore` the
-//! five registries use, under the `artifacts/` prefix beside the bytes it
-//! describes. The pattern `store` next door already sets.
-//!
-//! ## Deleting the index loses nothing authoritative
-//!
-//! The cache is an *index*, and section 18 is explicit that dropping it must
-//! cost a rerun and never a result. So a hit is recorded in the workflow
-//! history as [`WorkflowEvent::StepCacheHit`](crate::WorkflowEvent), with the
-//! key and the artifact ids in it — the run stays explainable after the index
-//! is gone. And invalidation *marks* an entry rather than deleting the
-//! artifacts it names: an old execution that used them is a record of what
-//! happened, and rewriting it would be a different kind of lie.
+//! **Deleting the index loses nothing authoritative.** Dropping the cache must
+//! cost a rerun and never a result, so a hit is recorded in the workflow
+//! history as [`WorkflowEvent::StepCacheHit`](crate::WorkflowEvent) with its
+//! key and artifact ids — the run stays explainable without the index. And
+//! invalidation *marks* an entry rather than deleting the artifacts it names:
+//! an old execution that used them is a record of what happened.
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};

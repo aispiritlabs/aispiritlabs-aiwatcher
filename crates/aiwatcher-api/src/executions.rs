@@ -1,37 +1,27 @@
 //! Managed execution: asking this system to run something, and reading how far
 //! it got.
 //!
-//! Two routes, and the asymmetry between them is the design. `POST` accepts a
-//! **command** — it compiles a definition, writes one transaction and answers
-//! 202; nothing has run. `GET` reads the store's inline projection for one run:
-//! its own page, and the state the next command is accepted against.
+//! `POST` accepts a **command** — compile a definition, write one transaction,
+//! answer 202; nothing has run. `GET` reads the store's inline projection for
+//! one run: its own page, and the state the next command is accepted against.
 //!
-//! ## Why there is no list here
+//! **No list here.** That is `/api/v1/workflow-executions`, folded from
+//! `workflow.declared` and `step.*` on the event log. Two lists would be two
+//! pictures of one run, free to disagree with nothing able to say which is
+//! right.
 //!
-//! ADR_0026. The store's projection exists to accept the next command and to
-//! draw one run; a list of executions is what `/api/v1/workflow-executions`
-//! already serves, folded from `workflow.declared` and `step.*` on the event
-//! log. Two lists would be two pictures of one run, and the first time a
-//! producer and the engine described the same node they would disagree — with
-//! nothing able to say which was right.
+//! **Not `/api/v1/engine/launches`.** That asks somebody else's orchestrator to
+//! start something it holds; this runs a plan *here*, compiled from a
+//! definition this system stores, against reactors this deployment configured.
+//! They differ in who owns the retries.
 //!
-//! ## Why this is not `/api/v1/engine/launches`
+//! **`editor`, not `admin`.** A launch and a rerun ask another system to work
+//! inside the cluster; this is aiwatcher doing its own work and producing the
+//! same artifact as `POST /api/v1/datasets`. So a leaked ingest token can build
+//! a dataset it could already publish, and cannot start anything in anybody's
+//! cluster.
 //!
-//! That route asks somebody else's orchestrator to start something it already
-//! holds (ADR_0016). This one runs a plan **here**, compiled from a definition
-//! this system stores, against reactors this deployment configured. They differ
-//! in who owns the retries, which is the whole of ADR_0025 — and a picker that
-//! merged them could not say which of the two a row was.
-//!
-//! ## Why an editor, and not an admin
-//!
-//! A launch and a rerun need `admin` because they are aiwatcher asking *another
-//! system* to do work inside the cluster on the caller's behalf. This is
-//! aiwatcher doing its own work, against services this deployment named, and it
-//! produces the same artifact as `POST /api/v1/datasets` — which is an editor's
-//! to publish. Capping the ingest token at editor still holds: a leaked agent
-//! environment can build a dataset it could already have published, and cannot
-//! start anything in anybody's cluster.
+//! ADR_0025, ADR_0026.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -100,7 +90,7 @@ pub fn router() -> Router<AppState> {
             "/api/v1/executions/{execution_id}/history",
             get(execution_history),
         )
-        // The hosted decider's append side (section 40.3). There is no `GET`
+        // The hosted decider's append side. There is no `GET`
         // beside it on purpose: `…/history` already pages this stream, and a
         // second read of one run is what the guardrail against a second live
         // view is about. The `POST` is here rather than on `…/history` because
@@ -153,7 +143,7 @@ pub fn router() -> Router<AppState> {
 ///
 /// Two arms, which is what the enum was for: both compile to the same
 /// `ExecutionPlan` from different editors, with different provenance, and the
-/// names live in different registries under different prefixes (section 4). A
+/// names live in different registries under different prefixes. A
 /// `kind` nobody had to send would have to be guessed from the name — and two
 /// definitions may share one, which is exactly what `WorkflowSpec` being saved
 /// beside `CurationPipeline` allows.
@@ -194,7 +184,7 @@ pub enum Decider {
     #[default]
     Local,
     /// A worker runs `decide` and appends to the history this system keeps
-    /// (ADR_0025, section 40.3). What an agent graph needs, because its next
+    /// (ADR_0025). What an agent graph needs, because its next
     /// node depends on what the last one said.
     Worker,
 }
@@ -491,7 +481,7 @@ pub struct StreamAppended {
     pub created: bool,
 }
 
-/// Append a worker's messages to a hosted execution's history (section 40.3).
+/// Append a worker's messages to a hosted execution's history.
 ///
 /// The decider is the worker; this is the shared history `agentic.workflow`
 /// cannot give itself when every agent worker holds its own SQLite. What this
@@ -588,7 +578,7 @@ pub struct DeciderLeaseBody {
     pub holder: String,
 }
 
-/// Take, or renew, the right to decide one hosted run (section 40.3).
+/// Take, or renew, the right to decide one hosted run.
 ///
 /// `agentic.workflow`'s `ProcessorLock`, in the store that holds the history.
 /// Renewing is this same call under the same name, so a heartbeat and a first

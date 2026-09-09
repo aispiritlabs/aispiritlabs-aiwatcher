@@ -4487,7 +4487,7 @@ async fn a_running_steps_context_is_the_plan_that_run_pinned() {
     assert_eq!(status, StatusCode::OK, "{context}");
     assert_eq!(context["plan_id"], accepted["execution"]["plan_id"]);
     // Keyed by the attempt its staging is named after, never by a notebook's
-    // name (section 16.2).
+    // name.
     assert_eq!(context["context_id"], format!("{execution}/read/1"));
     assert_eq!(context["state"]["state"]["state_type"], "pending");
 
@@ -5187,7 +5187,7 @@ async fn a_run_now_without_a_request_id_still_starts_one_run() {
 
 // ── The worker protocol ──────────────────────────────────────────────────────
 //
-// Phase 10. What these check is the *seam*: the server keeps every rule the
+// What these check is the *seam*: the server keeps every rule the
 // reactor keeps and the worker keeps none of them, so a claimant cannot decide
 // its own lease, answer its own cache, or name an artifact this instance never
 // stored.

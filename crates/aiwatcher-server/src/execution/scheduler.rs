@@ -1,38 +1,25 @@
 //! The tick: an interval, and what fell in it.
 //!
-//! The loop is deliberately stupid. It reads where the last tick stopped, asks
-//! the clock where it is now, hands both to
-//! [`Schedule::slots_between`](aiwatcher_execution::Schedule::slots_between) —
-//! which is pure — and starts what that returns. Nothing here decides when
-//! anything runs; it only supplies the interval, which is the inversion
-//! `PassageOfTimeJob` is about (see [`aiwatcher_execution::schedule`]).
+//! It reads where the last tick stopped, asks the clock where it is now, hands
+//! both to [`Schedule::slots_between`](aiwatcher_execution::Schedule::slots_between)
+//! — which is pure — and starts what comes back. Nothing here decides when
+//! anything runs.
 //!
-//! ## Two workers, no lease
-//!
-//! An execution started for a slot is named after that slot:
+//! An execution is named after its slot:
 //!
 //! ```text
 //! aiwatcher/execution/schedule/curation_pipeline/curation-pii/2026-09-08T07:00:00Z
 //! ```
 //!
-//! So two workers that both notice 09:00 is due derive **one** id, and
+//! So two workers that both notice 09:00 derive **one** id, and
 //! `ExpectedVersion::NoStream` makes the second a conflict rather than a second
-//! run — the mechanism that already makes two API replicas racing a start safe,
-//! and ADR_0001's "ids are derived, not generated" one layer up. There is no
-//! lease here and nothing to expire.
+//! run. No lease, nothing to expire. It is derived from the definition and the
+//! slot, never from the compiled plan: two workers reading the head a moment
+//! apart compile different `plan_id`s and both runs would go through.
 //!
-//! It is deliberately derived from the *definition and the slot* rather than
-//! from the compiled plan: two workers reading the head a moment apart could
-//! compile different `plan_id`s, and an id built on one of those would let both
-//! runs through.
-//!
-//! ## The cursor moves last
-//!
-//! [`aiwatcher_jobs::ORDERING`] in a seventh place. The starts commit, then the
-//! checkpoint advances. A crash in between re-derives the same slot ids on the
-//! next tick and the inbox recognises them, so the failure is a repeat that
-//! costs nothing — while the other order would skip a slot with nothing
-//! anywhere to say it had.
+//! The cursor moves last ([`aiwatcher_jobs::ORDERING`]). A crash between the
+//! starts and the checkpoint re-derives the same ids and the inbox recognises
+//! them; the other order skips a slot with nothing to say it had.
 
 use std::sync::Arc;
 

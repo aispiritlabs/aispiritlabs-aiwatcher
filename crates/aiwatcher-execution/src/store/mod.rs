@@ -1,6 +1,6 @@
 //! The one transactional operation, and the port behind it.
 //!
-//! Handling one workflow input is six writes that have to happen together:
+//! Handling one workflow input is six writes that must land together:
 //!
 //! ```text
 //! BEGIN
@@ -17,22 +17,19 @@
 //! Splitting them is the dual-write gap: an outbox row with no decision behind
 //! it publishes a `step.completed` for an attempt the store does not consider
 //! complete, and a decision with no outbox row is a run the panel never sees
-//! finish. That requirement is what settles the backend — the event log offers
-//! ordered offsets and at-least-once delivery and no transaction spanning
-//! itself and this state (ADR_0025).
+//! finish.
 //!
-//! ## Three adapters, one contract
+//! Four adapters, one contract — `memory`, `file`, `postgres` and `duckdb`,
+//! the last two behind cargo features. `tests/store_contract.rs` runs against
+//! every one: an adapter that passes a *different* suite is correct about
+//! something else.
 //!
-//! `memory` for tests, `file` for `just dev`, and `postgres` for a deployment —
-//! the pattern `memory | wal | laser` and `none | memory | file | s3` already
-//! set. The suite in `tests/store_contract.rs` runs against every one of them,
-//! because an adapter that passes a *different* suite is an adapter that is
-//! correct about something else.
+//! `file` and `duckdb` hold **one process** and say so by name
+//! ([`StoreError::SingleProcessOnly`]). A run needing a worker, a container job
+//! or a second replica is refused on them, so a development store never becomes
+//! a production one by omission.
 //!
-//! The `file` adapter holds **one process**, and says so by name
-//! ([`StoreError::SingleProcessOnly`]) rather than by corrupting quietly. A run
-//! that needs a worker, a container job or a second API replica is refused on
-//! it, so that a development store never becomes a production one by omission.
+//! ADR_0025.
 
 #[cfg(feature = "duckdb")]
 pub mod duckdb;
@@ -510,7 +507,7 @@ pub trait WorkflowStore: Send + Sync + std::fmt::Debug {
 
     /// Forget finished executions that ended before `before`.
     ///
-    /// Section 43.25. The stream is the *explanation* of a run — the commands,
+    /// The stream is the *explanation* of a run — the commands,
     /// the decisions, the attempt that failed and the one that did not — and it
     /// is the one thing the event log does not carry, so this is a deletion of
     /// something no other store holds. That is why the window is configuration

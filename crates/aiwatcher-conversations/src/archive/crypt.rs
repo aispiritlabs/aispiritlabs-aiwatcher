@@ -1,10 +1,8 @@
 //! Envelope encryption for archived content, and the keyring that rotates it.
 //!
-//! The object store is not the security boundary. RustFS holds prompts,
-//! datasets, annotations and training runs beside this, its credentials are in
-//! the same environment as everything else, and a backup of that bucket is a
-//! file somebody can copy. Conversation content is the one thing in the bucket
-//! that must not be readable from the bucket, so it is sealed before it gets
+//! The object store is not the boundary: it holds prompts, datasets,
+//! annotations and training runs beside this, under the same credentials, and a
+//! backup of it is a file somebody can copy. Content is sealed before it gets
 //! there.
 //!
 //! ```text
@@ -17,24 +15,15 @@
 //!                                        { v, key_id, salt, nonce, ciphertext }
 //! ```
 //!
-//! Three decisions carry it.
-//!
-//! **A key per object, derived rather than stored.** The master key never
-//! encrypts anything directly, so a nonce collision would need the same random
-//! salt *and* the same random nonce. Storing wrapped data keys instead would be
-//! the same security with an extra object per turn.
-//!
-//! **The object's path is authenticated.** It is HKDF `info` and it is the
-//! AEAD's associated data, so a ciphertext copied from one turn's key to
-//! another's does not open. Without it, anyone who can write to the bucket can
-//! substitute one person's words for another's and every digest still checks
-//! out, because the digest is of the plaintext they never had to touch.
-//!
-//! **Old keys stay readable.** The keyring is ordered, the first entry seals,
-//! and every entry opens. Rotation is prepending a key and re-deploying;
-//! retiring one is removing it, which makes anything still sealed under it
-//! unreadable — deliberately, because that is also how a key is destroyed on
-//! purpose.
+//! * **A key per object, derived rather than stored.** A nonce collision would
+//!   need the same random salt *and* the same random nonce.
+//! * **The object's path is authenticated** — HKDF `info` and the AEAD's
+//!   associated data. Without it, anyone who can write to the bucket can
+//!   substitute one person's words for another's and every digest still checks
+//!   out, because the digest is of a plaintext they never touched.
+//! * **Old keys stay readable.** The keyring is ordered: the first entry seals,
+//!   every entry opens. Removing one makes anything still sealed under it
+//!   unreadable — which is also how a key is destroyed on purpose.
 
 use std::collections::BTreeMap;
 

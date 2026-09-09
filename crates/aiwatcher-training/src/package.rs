@@ -1,52 +1,33 @@
-//! What a serving runtime is handed, and what it is allowed to assume.
+//! What a serving runtime is handed, and what it may assume.
 //!
-//! [plan.md](../../../plan.md) sequences this before any loader, and the
-//! reason is the one ADR_0011 gives for `OptimizationRecord::verdict`: the
-//! side that produces an artifact is the wrong side to decide what the artifact
-//! means. A checkpoint URI is a pointer and nothing else — it does not say what
-//! framework wrote it, what shape it eats, what it hands back, what it needs to
-//! run, or whether the bytes at that address are the bytes anybody measured.
-//! A runtime given only the URI has to guess all six, and every one of those
-//! guesses is a way to load the wrong model and serve it confidently.
-//!
-//! So a package is a **declaration on the version**, written by whoever
-//! trained it, and every field here exists because a serving process would
-//! otherwise infer it:
+//! A checkpoint URI says nothing about what framework wrote it, what shape it
+//! eats, what it returns, what it needs to run, or whether those bytes are the
+//! ones anybody measured. A package declares all of it on the version.
 //!
 //! ```text
 //!  runtime + version   which loader, and which build of it
 //!  entry_point         what inside the artifact to load
-//!  inputs / outputs    the shape, so a request can be refused rather than
+//!  inputs / outputs    the shape, so a request is refused rather than
 //!                      reshaped into something that predicts nonsense
 //!  preprocessing       what the trainer did to its inputs, named
-//!  dependencies        what has to be present for the entry point to import
-//!  artifacts           every file, with a digest — see below
-//!  resources           what it needs, so a scheduler can refuse rather than
-//!                      thrash
+//!  dependencies        what must be present for the entry point to import
+//!  artifacts           every file, with a digest
+//!  resources           what it needs, so a scheduler can refuse
 //! ```
 //!
-//! Three rules carry it.
+//! * **Every artifact carries a digest, and a package with none is refused.**
+//!   An address is not an identity: `s3://models/latest.pt` is different bytes
+//!   tomorrow, and the registry's promise is that a span naming a version
+//!   reaches the images it learned from.
+//! * **A runtime is declared, never sniffed.** A loader chosen by looking at
+//!   the file is a loader chosen by whoever wrote the file.
+//!   [`Runtime::Python`] is a named variant so a control plane can refuse it
+//!   before `torch.load` rather than after.
+//! * **A package is optional and, once given, complete.** A *half* package —
+//!   a declared runtime with an undigested artifact — is refused, because it
+//!   reads as provenance and is not.
 //!
-//! **Every artifact has a digest, and a package with none is refused.** This
-//! is the same rule as `put_blob` hashing what it received: an address is not
-//! an identity, and `s3://models/latest.pt` can be different bytes tomorrow.
-//! The whole point of the model registry is that a span naming a version can
-//! be traced to the images it learned from, and that chain is only as strong
-//! as "these are the weights".
-//!
-//! **A runtime is declared, never sniffed.** A loader chosen by looking at the
-//! file is a loader that can be chosen by whoever wrote the file.
-//! [`Runtime::Python`] exists and is the one a control plane must not load
-//! in-process, which is why it is a named variant rather than a fallback: the
-//! shape of the danger is visible in the manifest rather than discovered at
-//! `torch.load` time.
-//!
-//! **A package is optional and, once given, complete.** Versions registered
-//! before this existed have none, and a runtime that meets one says so rather
-//! than guessing — the same choice ADR_0019 makes about a licence nobody
-//! recorded. What is refused is a *half* package: a declared runtime with an
-//! artifact carrying no digest is worse than no declaration at all, because it
-//! reads as one.
+//! ADR_0023.
 
 use std::collections::BTreeMap;
 

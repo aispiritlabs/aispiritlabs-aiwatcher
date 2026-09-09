@@ -476,7 +476,7 @@ mod tests {
 
     #[test]
     fn a_schedule_written_during_an_outage_does_not_run_the_days_before_it_existed() {
-        // Review R7. The tick hands every schedule the whole interval its
+        // The tick hands every schedule the whole interval its
         // checkpoint accumulated, so a worker down from Monday to Thursday
         // ticks once with `previous` on Monday — and a schedule somebody wrote
         // on Wednesday would have run Monday's and Tuesday's nine o'clock too,

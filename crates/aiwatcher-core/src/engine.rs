@@ -1,34 +1,23 @@
 //! The orchestration engine: what can be started, and starting one.
 //!
-//! Everything else in this crate describes what *happened*. This module
-//! describes what somebody could *ask to happen*, which is a different kind of
-//! fact and belongs to a different system — Flyte in this deployment, and the
-//! whole point of a port is that it need not be.
+//! Not the workflow catalog. [`crate::catalog`] and `/workflows` answer "which
+//! graphs has this instance seen", folded from `workflow.declared`. This port
+//! answers "which graphs could I start right now", and the two sets overlap
+//! only by coincidence — a workflow declared last week may be gone from the
+//! orchestrator, and a launch plan registered this morning has published
+//! nothing. Merging them offers things nothing can run and hides things nobody
+//! has run yet.
 //!
-//! ## Why this is not the workflow catalog
+//! The *shape* of a graph still comes from the declaration on the log, because
+//! that is the source that is right when the orchestrator is bypassed. What
+//! comes from the engine is the launchable inventory and its input interface,
+//! which the log cannot know.
 //!
-//! [`crate::catalog`] and the projector's `/workflows` answer "which graphs
-//! has this instance seen?", folded from `workflow.declared` on the log. This
-//! port answers "which graphs could I start right now?", and the two sets
-//! overlap only by coincidence: a workflow declared last week may have been
-//! deleted from the orchestrator, and a launch plan registered this morning
-//! has never published an event. Merging them would produce a picker that
-//! offers things nothing can run and hides things nobody has run yet.
+//! A launch carries names and values a caller chose. It never carries an
+//! endpoint, an image or a command — the engine's address is configuration,
+//! exactly as the rerun target is.
 //!
-//! ADR_0012 rejected reading Flyte's API *for the shape of a graph*, and this
-//! does not reverse it: the shape still comes from the declaration on the log,
-//! because that is the only source that is right when the orchestrator is
-//! bypassed. What comes from the engine is the launchable inventory and its
-//! input interface, which the log cannot know — nothing publishes an event
-//! about a workflow nobody has run.
-//!
-//! ## What aiwatcher supplies and what it never supplies
-//!
-//! A launch carries names and values a caller chose: which registered entity,
-//! and what to bind its declared inputs to. It never carries an endpoint, a
-//! container image, a command, or anything else describing *how* to run
-//! something — see [`WorkflowEngine`] and ADR_0016. The engine's address is
-//! configuration, exactly as the rerun target is.
+//! ADR_0012, ADR_0016.
 
 use std::collections::BTreeMap;
 

@@ -1,33 +1,22 @@
 //! A curation as a chain of blocks, and the rules that make one runnable.
 //!
-//! The other half of [`CurationRecipe`](crate::CurationRecipe). A recipe is one
-//! Flow PHP script somebody wrote; a pipeline is the same job assembled out of
-//! blocks — where the rows come from, what transforms them, what a notebook
-//! does to them, and what is published at the end.
+//! The other half of [`CurationRecipe`](crate::CurationRecipe): a recipe is one
+//! Flow PHP script, a pipeline is the same job assembled out of blocks. Nothing
+//! here executes anything — each block belongs to a different engine, and two
+//! of the three are optional services this binary does not know exist. What
+//! this crate owns is the definition: an immutable, content-addressed revision.
 //!
-//! Nothing here executes anything. The panel drives the chain, because each
-//! block belongs to a different engine and two of the three are optional
-//! services the aiwatcher binary does not know exist (ADR_0008, ADR_0024). What
-//! this crate owns is the *definition*: an immutable, content-addressed
-//! revision, stored beside the recipes and the dataset versions it produces.
+//! **The shape is a chain**: one head, one tail, everything reachable. A block
+//! with two parents would need to be told how to combine them, and one with two
+//! children would run twice. What is refused is a shape that could not run, not
+//! one that is untidy.
 //!
-//! ## Why the shape is a chain
+//! **A transform may not follow a notebook.** A Flow block's input is a
+//! `read()` from the query service's catalog; there is no way to hand it rows a
+//! notebook produced, so such a chain would run the transform against the
+//! *source* again and quietly produce something else. Refused by name.
 //!
-//! A block hands its rows to the next one, so a block with two parents would
-//! have to be told how to combine them and a block with two children would run
-//! twice. Neither has an answer that is right more often than it is wrong, and
-//! the panel would have to draw the difference. So the graph is validated as a
-//! chain: one head, one tail, everything reachable. A canvas is still a canvas
-//! — blocks are placed, dragged and connected — and what is refused is a shape
-//! that could not be run rather than a shape that is untidy.
-//!
-//! ## Why a transform may not follow a notebook
-//!
-//! A Flow PHP block's input is a `read()` from the query service's catalog: it
-//! names a dataset and the service fetches it. There is no way to hand Flow a
-//! list of rows a notebook produced, so a chain that tried would run the
-//! transform against the *source* again and quietly produce something else.
-//! That is a shape with no correct execution, and it is refused by name.
+//! ADR_0024.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -229,7 +218,7 @@ impl Registry {
     /// The pinned read is what makes a managed execution repeatable — a run
     /// compiles the revision it was asked for, and editing the definition
     /// while it is going creates a new revision and changes nothing about what
-    /// is already running (ADR_0025, section 5.3).
+    /// is already running (ADR_0025).
     pub async fn pipeline(
         &self,
         name: &str,

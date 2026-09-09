@@ -1,12 +1,9 @@
-//! The key layout, and the orderings that are contracts.
-//!
-//! Every slice reads and writes through here. `pub(crate)` on purpose, exactly
-//! as `aiwatcher_annotations::store` is: callers get [`Registry`](crate::Registry),
-//! which is a vocabulary of archive operations, and this is a vocabulary of
-//! keys.
+//! The key layout, and the orderings that are contracts. `pub(crate)`: callers
+//! get [`Registry`](crate::Registry), which is a vocabulary of operations, and
+//! this is a vocabulary of keys.
 //!
 //! ```text
-//! conversations/<conversation>/head.json      counts, first and last seen
+//! conversations/<conversation>/head.json           counts, first and last seen
 //! conversations/<conversation>/index/000000.json   the order an export reads
 //! conversations/<conversation>/turns/<turn>.json   the plaintext head
 //! content/<turn>.json                              the sealed content
@@ -18,18 +15,13 @@
 //! exports/index/<name>.json                        which versions exist
 //! ```
 //!
-//! Three orderings are contracts rather than choices, and the first two are the
-//! ones the prompt and annotation registries already keep.
-//!
-//! * **The content before the head that names it.** A head pointing at content
-//!   that was never sealed is a turn whose review page 404s.
-//! * **The head before the index entry.** An index naming a head that is not
-//!   there is a list whose rows fail, and an unindexed head is merely invisible
-//!   — which the next write of the same turn repairs, because the head records
-//!   whether it was ever indexed.
-//! * **The shard before the cursor that passes it.** This is the export's
-//!   resumability: a crash between the two rewrites one shard identically, and
-//!   a crash the other way round would skip its rows forever.
+//! * **The content before the head that names it** — otherwise a turn's review
+//!   page 404s.
+//! * **The head before the index entry** — an index naming a missing head is a
+//!   list whose rows fail; an unindexed head is merely invisible, and the next
+//!   write of that turn repairs it.
+//! * **The shard before the cursor that passes it** — a crash between the two
+//!   rewrites one shard identically; the other order skips rows forever.
 
 use std::sync::Arc;
 

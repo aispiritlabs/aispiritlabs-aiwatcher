@@ -1,16 +1,9 @@
 //! Vector image annotations, the label schemas they are drawn against, and the
 //! immutable exports a training run names.
 //!
-//! This is the third authored artifact in this workspace, after prompts
-//! (ADR_0011) and datasets (ADR_0014), and it is authored for the same reason:
-//! everything folded from the event log is bounded by retention, and a training
-//! label has to outlive every run that used it.
-//!
-//! What is specific to this one is that **the vector shape is the source and
-//! every raster is derived** — see ADR_0017. A segmentation mask cannot say
-//! which wall an opening sits on, which way a door swings, or which two rooms
-//! it connects, and those are exactly the fields the product's output JSON has
-//! to carry. Draw pixels and they are lost at the moment of drawing.
+//! The vector shape is the source and every raster is derived. A mask cannot
+//! say which wall an opening sits on, which way a door swings or which two
+//! rooms it connects, and those are fields the output has to carry.
 //!
 //! ```text
 //! project ─ label schema (versioned by content)
@@ -26,31 +19,30 @@
 //!
 //! # Layout
 //!
-//! Sliced by noun rather than by layer, so a change to "what an image is"
-//! touches one directory:
+//! Sliced by noun, so a change to "what an image is" touches one directory:
 //!
 //! ```text
-//! registry     the facade. Resolves a project, then delegates. The only
-//!              public door: every operation below is crate-internal.
-//! project      a project: its vocabulary, its split policy, its overrides
-//! images/      SLICE — one picture: its head, revisions, review, bytes
+//! registry     the facade, and the only public door. Resolves a project,
+//!              then delegates; everything below is crate-internal.
+//! project      its vocabulary, its split policy, its overrides
+//! images/      SLICE — one picture: head, revisions, review, bytes
 //!   store        what the registry does to one
 //!   import       many at once, from rows a Flow pipeline produced
-//! imports/     SLICE — the queued import: a staged batch, read a page at a
+//! imports/     SLICE — the queued import: a staged batch read a page at a
 //!              time by a job that survives the process that started it
-//!   staging      the staged artifact: pages, digests, sealing
-//! export       freezing a project into an immutable manifest, and COCO
-//! license      what may be done with the data. One question, one module.
+//!   staging      pages, digests, sealing
+//! export       freezing a project into a manifest, and COCO
+//! license      what may be done with the data
 //! schema       the label vocabulary a drawing is checked against
-//! shapes       the geometry itself, and what makes a drawing finished
-//! sources      the dated table of public corpora somebody read the licence of
+//! shapes       the geometry, and what makes a drawing finished
+//! sources      the dated table of corpora somebody read the licence of
 //! integrations/  what this crate reaches *out* to
-//!   fetch        the bounded downloader: the only place bytes an outside
-//!                party chose are fetched, and every gate that bounds it
-//!   hubs         Kaggle and Hugging Face — asked what exists, never what is
-//!                permitted
-//! store        (private) the key layout every slice reads and writes through
+//!   fetch        the only place bytes an outside party chose are fetched
+//!   hubs         Kaggle and Hugging Face — what exists, never what is allowed
+//! store        (private) the key layout every slice reads through
 //! ```
+//!
+//! ADR_0017, ADR_0020, ADR_0022.
 
 use aiwatcher_core::ports::{PortError, PortResult};
 use aiwatcher_core::prompts::ObjectStore;

@@ -5,7 +5,7 @@
 
 //! The storage contract, written once so every adapter proves the same thing.
 //!
-//! Section 29.2 of `docs/PIPELINE_ARCHITECTURE.md`. An adapter that passes a
+//! An adapter that passes a
 //! *different* suite is an adapter that is correct about something else — and
 //! the two that ship here are correct in different ways by construction, since
 //! one holds everything under a mutex and the other under a transaction. That
@@ -1134,7 +1134,7 @@ pub async fn a_heartbeat_keeps_a_long_step_from_being_taken_over(
 ///
 /// Two assertions, and the second is the one that costs something to break: a
 /// terminal row is invisible to a claimant either way, so keeping one looks
-/// correct until the table is the size of the history. Section 43.34.
+/// correct until the table is the size of the history.
 pub async fn a_finished_attempt_leaves_no_row_behind(name: &str, store: &dyn WorkflowStore) {
     let execution = fresh("claim-settled");
     ok!(
@@ -1511,7 +1511,7 @@ pub async fn a_settled_slot_is_never_admitted_again(name: &str, store: &dyn Work
 
 /// A transient failure leaves the slot due rather than consuming it.
 ///
-/// Review R2. The release before this one wrote every failure down as
+/// The release before this one wrote every failure down as
 /// `refused` and then moved the global cursor past the slot, so a store that
 /// was unreachable for ten seconds at 09:00 cost the day's run and left a note
 /// saying it had been refused.
@@ -1652,7 +1652,7 @@ pub async fn a_definition_with_a_run_that_has_not_finished_blocks_its_next_slot(
     // shares one definition name, so the answer is whichever of them is still
     // going. What is the property is that the store named a real one: a
     // blocking id nothing backs would be an answer invented rather than read,
-    // which is exactly what the read model was giving before (review R1).
+    // which is exactly what the read model was giving before.
     let blocker = ok!(
         name,
         store.projection(&ExecutionId::new(execution_id.clone())),

@@ -1,32 +1,24 @@
 //! The staged artifact: rows written to the object store in pages, before
 //! anything looks at them.
 //!
-//! The synchronous import (`images::import`) takes every row in one request
-//! body, and the cap that makes that safe — five thousand rows — is not a cap
-//! a corpus fits inside. Making the body bigger only moves the number: the
-//! request still has to be held open, retried whole, and kept in one process's
-//! memory, and a network blip at row 900 000 loses the lot.
+//! The synchronous import takes every row in one body, and the cap that makes
+//! that safe is not one a corpus fits inside. A bigger body only moves the
+//! number — the request is still held open, retried whole, and a blip at row
+//! 900 000 loses the lot.
 //!
-//! So a batch is staged first. A page of rows is appended, hashed and stored;
-//! the batch manifest is updated *after* the page it names — the same ordering
-//! as every other staged write in this workspace ([`aiwatcher_jobs::ORDERING`])
-//! — and a crash between the two costs one re-sent page rather than a corpus.
+//! So a page is appended, hashed and stored, and the batch manifest is updated
+//! *after* the page it names ([`aiwatcher_jobs::ORDERING`]). A crash between
+//! the two costs one re-sent page rather than a corpus.
 //!
-//! Two properties are worth stating because they are what the import job then
-//! relies on.
-//!
-//! **A page is idempotent when the caller numbers it.** An `append` that
-//! carries a `page` already written is compared by digest: identical bytes are
-//! an acknowledged retry, different bytes are a refusal naming the page. A
-//! client streaming a million rows over a flaky link needs to be able to
-//! re-send without wondering whether it duplicated, and a client that changed
-//! its mind about page 12 needs to be told rather than silently agreed with.
+//! **A page is idempotent when the caller numbers it.** An `append` carrying a
+//! `page` already written is compared by digest: identical bytes are an
+//! acknowledged retry, different bytes are a refusal naming the page.
 //!
 //! **Sealing is what makes a batch a thing.** A sealed batch has a digest over
-//! its page digests, in order, and takes no more rows. That digest is what the
-//! import job's version is built from, which is what makes "re-run the same
-//! pinned source and pipeline" a reference somebody can compare rather than a
-//! promise.
+//! its page digests, in order, and takes no more rows. The import job's version
+//! is built from that digest.
+//!
+//! ADR_0022.
 
 use aiwatcher_jobs::{ShardRef, version_of};
 use serde::{Deserialize, Serialize};

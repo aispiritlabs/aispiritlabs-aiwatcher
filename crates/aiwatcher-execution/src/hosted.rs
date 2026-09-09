@@ -1,4 +1,4 @@
-//! The append side of a hosted execution (section 40.3).
+//! The append side of a hosted execution.
 //!
 //! A hosted run's decider is the worker. An agent graph's conditions are
 //! LLM-decided, its fan-out is chosen by a `planner` node at run time and its

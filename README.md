@@ -1,194 +1,57 @@
 # aiwatcher
 
-Executable examples: [Titanic from scratch with data curation and FlowAI](examples/titanic/README.md).
-
-Observability for AI agent runs. Python and TypeScript agents publish events to
-a durable log; a Rust backend consumes them, assembles OpenTelemetry traces,
-exports to VictoriaTraces and VictoriaMetrics, and serves a live view over
-SSE/WebSocket to a React panel.
-
-The log is what is true. Spans are derived from it rather than written
-alongside it, by pure functions of the event stream — so a redelivered event
-lands on the span it already wrote instead of a duplicate, and a backend that
-learns something new about an old event type can be pointed at the same log
-again. Most of the design below follows from that one commitment.
+Observability for AI agent runs. Agents publish events; a Rust backend folds them
+into traces, metrics and a live view.
 
 ```
 Python / TypeScript agents
-         │  events
-         ▼
-   durable log  (Laser, or the built-in write-ahead log)
-         │
-         ▼
-   Rust projector ─┬─► live events ──► Axum SSE/WebSocket ──► panel
-                   ├─► finished spans ─► VictoriaTraces
-                   ├─► aggregates ─────► VictoriaMetrics
-                   └─► read model ─────► REST reads
-
-   prompt registry ──► RustFS (S3)   authored, and outside retention entirely
+        │ events
+        ▼
+   durable log ──► Rust projector ─┬─► live view  ──► SSE / WebSocket ──► React panel
+                                   ├─► spans      ──► VictoriaTraces
+                                   ├─► aggregates ──► VictoriaMetrics
+                                   └─► read model ──► REST
 ```
 
-The registry is the one exception to the paragraph above, and it is a
-deliberate one: a prompt is written by a person, not observed, and the version
-a run used has to be readable after that run has been evicted from the log. See
-[ADR_0011](docs/ADR/ADR_0011_PROMPT_REGISTRY.md).
+The log is the source of truth. Spans are derived from it by pure functions, so a
+redelivered event lands on the span it already wrote instead of a duplicate.
 
-## Powered by
-
-<table>
-<tr>
-<td width="90" align="center" valign="middle">
-<a href="https://github.com/apache/iggy"><img src="https://raw.githubusercontent.com/apache/iggy/master/assets/logo/SVG/iggy-apache-sygnet-color-lightbg.svg" height="44" alt="Apache Iggy"></a>
-</td>
-<td valign="middle">
-<a href="https://github.com/apache/iggy"><b>Apache Iggy</b></a> — the persistent
-message streaming behind the Laser backend. It is the durable log the projector
-reads from, under the <code>laser</code> cargo feature; a plain build uses the
-built-in write-ahead log instead and needs no broker.
-</td>
-</tr>
-<tr>
-<td width="90" align="center" valign="middle">
-<a href="https://github.com/rustfs/rustfs"><img src="https://avatars.githubusercontent.com/rustfs" height="44" alt="RustFS"></a>
-</td>
-<td valign="middle">
-<a href="https://github.com/rustfs/rustfs"><b>RustFS</b></a> — the S3-compatible
-object store behind the prompt registry: one Rust binary, no JVM, no external
-metadata service. The adapter speaks S3 rather than RustFS, so MinIO, Ceph or a
-real bucket work by changing one environment variable.
-</td>
-</tr>
-<tr>
-<td width="90" align="center" valign="middle">
-<a href="https://github.com/flow-php/flow"><img src="https://raw.githubusercontent.com/flow-php/flow/1.x/web/landing/assets/images/elephant.svg" height="44" alt="Flow PHP"></a>
-</td>
-<td valign="middle">
-<a href="https://github.com/flow-php/flow"><b>Flow PHP</b></a> — the strongly
-typed data processing framework behind <code>services/flow</code>, the optional
-service serving the panel's Query tab and a curation pipeline's transforms. A
-query is lexed, whitelisted and turned into Flow objects through an explicit
-<code>match</code> — parsed, never executed.
-</td>
-</tr>
-<tr>
-<td width="90" align="center" valign="middle">
-<a href="https://github.com/marimo-team/marimo"><img src="https://avatars.githubusercontent.com/marimo-team" height="44" alt="marimo"></a>
-</td>
-<td valign="middle">
-<a href="https://github.com/marimo-team/marimo"><b>marimo</b></a> — the reactive
-Python notebook behind a curation pipeline's notebook blocks
-(<code>services/ml_pipeline</code>). A notebook is a plain Python file, so the
-same one is run as a step through <code>App.run(defs=…)</code> and served as a
-live app inside the block's editor — no harness, and the widgets move against
-the rows the block will actually run on.
-</td>
-</tr>
-</table>
+Authored artifacts — prompts, datasets, annotations, conversations, models — go to
+an object store instead of the log, because they have to stay readable after the
+run that used them has been evicted.
 
 ## Quick start
 
-Rust 1.98 (pinned in `rust-toolchain.toml`, installed on demand by rustup) and
-Node for the panel. No broker, no cluster, no Docker.
+Needs Rust 1.98 (installed on demand by rustup) and Node. No broker, no Docker.
 
 ```bash
-just install    # panel and TypeScript SDK dependencies
-just dev        # server on :8080 with an in-memory bus, panel on :5173
-just seed       # publish a demo run into it
+just install   # panel and TypeScript SDK dependencies
+just dev       # server on :8080 (in-memory), panel on :5173
+just seed      # publish a demo run into it
 ```
 
-What that gets you, screen by screen: [EXAMPLES.md](EXAMPLES.md). For the two
-complete data-to-model paths — tracked conversation and Hugging Face import —
-follow [instructions.md](instructions.md).
-
-`just dev` keeps nothing across a restart, which is what makes it fast to
-iterate against. For a server whose data survives one:
+`just dev` keeps nothing across a restart. For data that survives one:
 
 ```bash
-just run        # :8080, durable write-ahead log in ./.data
+just run       # :8080, durable write-ahead log in ./.data
 ```
 
-## The command line
+## Examples
 
-One binary runs an instance and talks to one. `aiwatcher up` is the whole local
-stack — the server, a durable log and, if this checkout has one, the query
-service — and it needs nothing else running.
-
-```bash
-just up                       # or: cargo run --bin aiwatcher -- up
-aiwatcher runs list window=1h
-aiwatcher token show          # what an agent should present
-```
-
-Values are `key=value` and may sit anywhere on the line, after Obsidian's own
-CLI; `format=json` turns any read into something a script can consume. A verb
-exists for what people type often, and `aiwatcher api` reaches every one of the
-hundred-odd routes that has no verb:
-
-```bash
-aiwatcher runs show id=run-7
-aiwatcher spans list run=run-7 slower-than=500
-aiwatcher dimensions kind=agent window=6h format=json
-aiwatcher api post path=/api/v1/events body=@run.json
-```
-
-Commands go to the instance on this machine unless told otherwise. Somewhere
-else is a profile, or a one-off `url=`:
-
-```bash
-aiwatcher profile set name=prod url=https://aiwatcher.example token=…
-aiwatcher runs list profile=prod
-```
-
-`aiwatcher help` lists the rest; `aiwatcher help commands` lists every verb with
-the route behind it.
-
-**A local instance authenticates.** `up` generates a token on first use and
-starts the server in `AIWATCHER_AUTH_MODE=local`, where that one token — held in
-a file only its owner can read — is the credential, and it authenticates as an
-admin. It is not an ingest token: those stay at most an editor because they sit
-in an agent's environment, and this one does not. See
-[ADR_0027](docs/ADR/ADR_0027_LOCAL_INSTALL.md).
-
-**Bare `aiwatcher` still runs the server**, because that is the container
-image's entry point. `aiwatcher help` is the help.
-
-### The local database
-
-Built with the `duckdb` feature, a local instance keeps its managed-run history
-in one DuckDB file instead of a directory of JSON — the same twenty-nine
-storage properties the PostgreSQL adapter proves, and a database you can ask a
-question of while the server is still running:
-
-```bash
-just run-duckdb
-just test-duckdb              # needs nothing running; DuckDB is embedded
-aiwatcher sql                 # what tables there are
-aiwatcher sql query="select execution, version, direction from streams limit 20"
-```
-
-The connection is read-only, and DuckDB gives a database file to **one writer or
-to any number of readers** — so `aiwatcher sql` reads a store no instance is
-holding, and says so plainly when one is. Stop the instance, or ask it over the
-API instead.
-
-What is in that file is the workflow store — the plan, the decisions, the
-outbox — which is the one thing the event log does not carry. Runs, spans and
-dimensions stay folds over the log and are read through the API, because a
-second read path for those is what [ADR_0026](docs/ADR/ADR_0026_ENGINE_AS_PRODUCER.md)
-rules out.
+| Where | What it shows |
+|---|---|
+| [examples/titanic](examples/titanic/README.md) | Raw CSV to a trained model, through the curation canvas. Runnable. |
+| [instructions.md](instructions.md) | Two complete paths: agent conversation to a corpus, Hugging Face to a served model. |
+| [EXAMPLES.md](EXAMPLES.md) | Every panel screen, with screenshots of real data. |
 
 ## Sending events
 
-The contract is the envelope in
-[`contracts/envelope.schema.json`](contracts/envelope.schema.json), not the
-client libraries — anything that can produce that JSON and get it onto the log
-is a valid producer. The SDKs exist so the common case is three lines, and so
-that the two things easy to get wrong by hand are not: event ids that let the
-backend deduplicate a redelivery, and a `call_id` that keeps two concurrent LLM
-calls inside one agent from collapsing into a single span.
+The contract is [`contracts/envelope.schema.json`](contracts/envelope.schema.json).
+Anything that produces that JSON is a valid producer; the SDKs just make the common
+case three lines.
 
 ```python
-from aiwatcher_sdk import AiwatcherClient  # AIWATCHER_URL picks the transport
+from aiwatcher_sdk import AiwatcherClient      # AIWATCHER_URL picks the transport
 
 client = AiwatcherClient(service="research-service")
 with client.run("run-123", conversation_id="conv-1") as run:
@@ -198,351 +61,87 @@ with client.run("run-123", conversation_id="conv-1") as run:
             call.usage(prompt_tokens=812, completion_tokens=193)
 ```
 
-An evaluation is the other thing a producer reports, and it is deliberately not
-a trace — no span, no row in the runs list, its own projection:
+An evaluation is reported separately, and forms no span:
 
 ```python
 client.record_evaluation(
     suite="catalog-floor-plan",
-    dataset="house-catalog@3",     # what makes two reports comparable
-    params={"model": "gpt-5-mini", "threshold": 0.9},
+    dataset="house-catalog@3",          # what makes two reports comparable
     metrics={"mean_score": 0.88},
-    report={"scorer": "catalog-contract-v2"},
 )
-client.flush()  # delivery boundary for a short-lived evaluation CLI
+client.flush()
 ```
 
-That is the same four pieces as an MLflow `start_run` block, on the client that
-is already imported for tracing. `client.evaluation(...)` is the scope form, for
-a suite that publishes each case as it scores it.
-
-`sdk/typescript` mirrors it. Unset `AIWATCHER_URL` and both drop everything, so
-importing either never breaks a test. An event type the backend does not
-recognise is **not** rejected: it is stored and streamed live, and simply takes
-part in no span, which is what lets a producer run ahead of the backend. See
-[docs/event-catalog.md](docs/event-catalog.md).
-
-## Prompts, and what an optimiser did to them
-
-A prompt is the thing an evaluation is usually *about*, and it is the one
-artifact here that is authored rather than observed. So it lives in an object
-store rather than in the read model — the version a run used has to outlive
-every trace of that run.
-
-```python
-registry = client.prompts
-prompt = registry.resolve("planner.floor-plan")   # what `production` points at
-system = prompt.render(page=page_json, language="pl")
-```
-
-`version_id` is `sha256(text)`, so publishing the same prompt twice is one
-version and a deploy job can publish on every start. `render` refuses a partial
-substitution: a missing value would ship a prompt with a literal `{{ page }}` in
-it, which the model reads as an instruction.
-
-An optimiser records what it did, and **the server decides whether it counts**:
-
-```python
-from aiwatcher_sdk.integrations.deepeval import record_optimization
-
-record = record_optimization(
-    registry, "planner.floor-plan",
-    report=PromptOptimizer(...).optimize(...),
-    baseline=baseline.version_id,
-    dev=scores(dev_before, dev_after),      # what the search ran against
-    test=scores(test_before, test_after),   # cases it never saw
-    promote=True,
-)
-record.outcome      # "admitted" | "rejected"
-record.reason       # "no_held_out_improvement" | "variables_lost" | ...
-record.overfit_gap  # how far dev outran the held-out split
-```
-
-A candidate is admitted only when it improves the **held-out** score and still
-interpolates every variable the baseline declared. Both refusals matter: an
-optimiser selected its candidate by maximising the dev number it then reports,
-and one that has quietly stopped mentioning `{{ page }}` scores well on a
-harness that fed it fixed inputs. Neither is visible in the score.
-
-The Prompts tab shows the version history, a diff against whatever a version
-was derived from, and every optimisation with its dev gain beside its held-out
-gain.
+`sdk/typescript` mirrors it. With `AIWATCHER_URL` unset both drop everything, so
+importing either never breaks a test. Unknown event types are stored and streamed,
+never rejected. Event types: [docs/event-catalog.md](docs/event-catalog.md).
 
 ## The panel
 
-Every view below, with screenshots of it against real data and what each one is
-for: [EXAMPLES.md](EXAMPLES.md).
+Screens and screenshots: [EXAMPLES.md](EXAMPLES.md). Every list carries the same
+time window in the URL, so a link carries the period with it.
 
-The product areas are served from aiwatcher's own read model — except authored
-artifacts such as Prompts, Datasets, Annotations and Conversations, which
-read the registry. Every one of them carries the same time window — 15m, 1h,
-6h, 24h, 7d or everything — in the URL, so a link carries the period with it,
-and a run is in the window when it was last *heard from* rather than when it
-started:
+| Area | What it answers |
+|---|---|
+| Runs | What ran, and what stalled. |
+| Explore | One run, drilled down — pivot by session, agent, model or tool. |
+| Metrics | Tokens, latency percentiles, cache hits, ranked breakdowns. |
+| Workflows | The orchestration above a run, as a graph. |
+| Evaluation | Suites, reports, per-case scores, and the delta on the same dataset. |
+| Prompts | Versions, diffs, and what an optimiser did — with the verdict. |
+| Datasets | Immutable curated versions, browsable row by row. |
+| Data Curation | A canvas of blocks, or a single Flow PHP query. Both saveable, both runnable. |
+| Annotations | Vector labelling, licence tracking, and COCO exports split by subject. |
+| Conversations | What people said to your agents. Off by default, encrypted, erasable. |
+| Training | The curve, the checkpoint, and the model registry the panel promotes from. |
+| Experiments | Start training, evaluation and inference workflows. |
 
-- **Runs** — the flat list, filterable. A run whose producer stopped talking
-  reads as `stalled 22m` rather than as a spinner that never stops: nothing
-  here promotes silence to a failure, but a run last heard from before the
-  span assembler gave up on it should not still look busy.
-- **Explore** — one page for every level. The tree pivots on **session, agent,
-  model or tool**; below the root it is always run → span → messages, so
-  switching what the top level *is* costs no relearning. Selecting a span
-  narrows the messages without collapsing the levels above it, and every
-  selection is in the URL. Messages group by span, agent or event type.
-- **Metrics** — tokens, latency percentiles, cache hit rate, and ranked
-  breakdowns by model, agent and tool.
-- **Workflows** — the level above a run: pick an orchestration, see its
-  executions, and watch one as a graph. Stages carry their status, duration,
-  agents and artifacts; a stage nothing has started is drawn dim rather than
-  omitted, which is the whole reason the topology rides the log. Messages
-  between agents are drawn as their own kind of edge, never merged with the
-  declared ones — sequence is not communication. Rerun asks a configured
-  orchestrator to run it again; unconfigured, it says which variable is unset.
-- **Evaluation** — suites, reports, per-case scores, and each report against the
-  previous one on the same dataset. A mean that improved while a case regressed
-  is the thing this view exists to show.
-- **Prompts** — versions, the text, a diff against the parent, and every
-  optimisation with its verdict. Editable: publishing a new version and moving
-  the `production` label are two separate acts, because storing a prompt and
-  deploying it are two decisions.
-- **Datasets** — immutable, content-addressed versions of cases curated from
-  production runs. A promotion can target one session, one agent or any of
-  several agents, and keeps the source run/session/trace identifiers. Each
-  collection opens in a Hugging Face-style TanStack Table viewer: rows arrive
-  in lazy 50-row slices, search runs across the whole version, and tabs show
-  every linked evaluation plus the Flow PHP lineage. Evaluations should pin the
-  exact reference as `dataset-name@version-sha256`.
-- **Conversations** — what people said to your agents, kept on purpose. Off by
-  default; when it is on, the archive holds each turn as a plaintext head and an
-  encrypted body, so the review queue, the finding counts and an export's
-  exclusion report are all readable without decrypting anything. **Review** is
-  the gate — reading a turn's words needs the `admin` role and is one explicit
-  click, never a page load. **Corpora** queues an asynchronous export and shows
-  what it left out, by reason; what comes out is one immutable
-  `name@sha256` a training run can record. An erasure request removes the words
-  from the archive *and* from every corpus that already had them.
-- **Data Curation** — two views, for two sizes of the same job. **Pipeline** is
-  a canvas: `Hugging Face → Flow PHP → marimo → View`, wired as blocks. Click a
-  block and its settings open, or its code — and a notebook block opens as a
-  *live* marimo app running against the rows the chain last produced, so a
-  detector is built against the data it will run on. Preview 25 rows through
-  every block, run it, and save the exact output as a version that records the
-  chain that made it. **Recipe** is the single-script editor for when the whole
-  curation is one Flow PHP query, with the same four stages — test without
-  reading, simulate 25 rows, execute, save — and the orchestrator's own curation
-  workflows beside it, as a form rendered from their declared inputs.
-- **Annotations** — the labelling tool, and the two things around it. **Label**
-  is a canvas over a plan: polygons for rooms, polylines with a thickness for
-  wall centrelines, named keypoints for a door's opening, hinge and leaf, typed
-  attributes for what a shape says about itself, and links between instances so
-  an opening knows which wall it sits on and which two rooms it connects. A
-  drawing the registry refuses comes back with *every* problem at once, drawn
-  red on the shapes that caused them. **Sources** is a dated table of the public
-  corpora somebody read the licence of — what each labels, and whether it permits a
-  commercial model — with the filter that matters as one click. **Exports**
-  freezes the project into an immutable manifest whose id is the string a
-  training run records, lists every image it left out with the reason, and
-  serves COCO per split. The split key is the *building*, not the image, so a
-  plan's mirror never lands on the opposite side from the plan.
-- **Training** — the one area that reads nothing folded from the log. **Runs**
-  is the curve: metrics per epoch, the checkpoint that was selected and what
-  selected it, and a profiler summary rather than a flame graph. **Models** is
-  what a run produced — versions with their validation and held-out numbers
-  side by side, the gap between them, and one label that decides which weights
-  a service loads next. That label is refused on a version nothing measured on
-  held-out data, and refused on one trained against a dataset name rather than
-  an immutable export. From a bad agent run back to the labelled images is two
-  clicks: model → version → export. A version also declares a **model
-  package** — the runtime, the entry point, the input and output shapes, and
-  every artifact with its `sha256` — because an address is not an identity and
-  `s3://models/latest.pt` is different bytes tomorrow.
-  `just serve-model` is the runnable proof: it resolves `production`,
-  verifies those digests before loading, warms before reporting ready, watches
-  the label and rolls forward in two phases while the old version keeps
-  serving, keeps that version for a rollback that needs no rebuild, and reports
-  every inference with the model, the version, the latency and the outcome —
-  and never with what went in or came out. Two runtimes load: a weight vector
-  and an **ONNX** graph, whose declared shapes are cross-checked against what
-  the graph says about itself, because a package describing a different model
-  is a version whose scores belong to something else. Every other runtime is
-  refused by name. Artifacts may be local or fetched from one configured S3
-  bucket with SigV4, a streaming byte ceiling and an atomic, digest-verified
-  version cache. An optional second label receives bounded, no-queue shadow
-  calls whose answers are discarded and whose runtime health is reported per
-  version. The rest are in [plan.md](plan.md).
-- **Experiments** — the same picker over training, evaluation and inference
-  workflows: the other three legs of the feature/training/inference cycle,
-  started from here and watched in Workflows. The comparison half of the area
-  is still a placeholder that says what it is waiting on rather than rendering
-  plausible fake rows.
+## The command line
 
-Launching needs the `admin` role, exactly as a rerun does, and an instance with
-no orchestrator configured says which variable is unset rather than showing an
-empty catalog.
-
-## The Laser backend
-
-`adapters::laser` runs against the real `laser_sdk` 0.3 over Apache Iggy, behind
-the `laser` cargo feature so a plain build needs neither the SDK nor a broker:
+One binary runs an instance and talks to one. `aiwatcher up` is the whole local
+stack and needs nothing else running.
 
 ```bash
-just iggy-up      # Apache Iggy in Docker, with the three flags it needs
-just run-laser
-just test-laser   # six integration tests, ~2s against the real broker
+just up                          # or: cargo run --bin aiwatcher -- up
+aiwatcher runs list window=1h
+aiwatcher runs show id=run-7
+aiwatcher dimensions kind=agent window=6h format=json
+aiwatcher api post path=/api/v1/events body=@run.json
+aiwatcher token show             # what an agent should present
 ```
 
-Running Iggy takes three settings, and each one fails in a way that does not
-name its cause. `just iggy-up` and the Kubernetes manifests set all three:
-
-| Setting | What happens without it |
-|---------|-------------------------|
-| `seccomp=unconfined` | `Cannot create runtime: Operation not permitted`. Iggy's runtime is io_uring; the default seccomp profiles block it. |
-| `IGGY_SYSTEM_SHARDING_CPU_ALLOCATION` | `MemoryAffinityFailed`. The default `numa:auto` binds shard memory to a NUMA node, which fails in a container VM. |
-| `IGGY_ROOT_USERNAME` / `_PASSWORD` | The server accepts the connection and closes it mid-login. The client reports a VSR header error and then reconnects forever — it looks like a protocol mismatch and is not. |
-
-Pin an Iggy **0.9.x** server: a 0.8.x one never answers the `iggy` 0.11 client's
-login regardless of the above.
-
-## The crates
-
-In dependency order. A crate may only depend on ones above it.
-
-| Crate | Holds |
-|-------|-------|
-| `aiwatcher-core` | Domain: ids, envelope, correlation, event catalog, ports. Knows nothing about Laser, HTTP or OTLP. |
-| `aiwatcher-bus` | `MessageSource` / `MessageSink` / `Checkpointer` + memory, write-ahead-log, Laser and generic-broker adapters |
-| `aiwatcher-trace` | `SpanAssembler` and the OTLP/JSON exporters |
-| `aiwatcher-prompts` | The prompt registry over an `ObjectStore` port: content-addressed versions, optimisation verdicts, RustFS/S3 and filesystem adapters, and a hand-written SigV4 signer |
-| `aiwatcher-annotations` | Vector image annotations for any vision domain, over the same `ObjectStore` port. Ships no vocabulary — the project's label schema carries the domain. Sliced by noun: `images/` (head, revisions, review, bytes, bulk import), `project`, `export` and COCO, `license`, `schema`, `shapes`, the loaded corpus table in `sources`, and `integrations/hubs` for the Kaggle/Hugging Face search that is reconciled against it and never believed over it |
-| `aiwatcher-conversations` | Governed conversation training data over the same `ObjectStore` port, and the only one that is off by default: the `turn` contract, consent and retention, **encrypted** content beside a plaintext head, the human review gate, and a resumable export job whose version is a content address. An erasure reaches the published corpora too |
-| `aiwatcher-training` | Training runs and the model versions they produce, over the same `ObjectStore` port and none of the log's machinery: a curve, a checkpoint pointer, a profiler summary, and a promotion that is refused without a held-out score |
-| `aiwatcher-pipeline` | Pipeline engines behind a `WorkflowEngine` port: an orchestrator's launchable catalog, the inputs each entry declares, and starting one. Flyte 2 over its `/api/v1/` gateway |
-| `aiwatcher-auth` | Single sign-on: OIDC discovery, a JWKS cache, the authorization-code flow with PKCE, signed session cookies, authentik's forward-auth headers, group-to-role mapping |
-| `aiwatcher-projector` | The pipeline, live hub, read model, dimension and span folds, dedup, retry, dead letters |
-| `aiwatcher-api` | axum router: REST, SSE, WebSocket, OpenAPI |
-| `aiwatcher-server` | Config, wiring, graceful shutdown. The only crate that knows every implementation exists. |
-
-Around them: `apps/panel` (React), `sdk/python`, `sdk/typescript`, `contracts/`,
-`deploy/`, `docs/ADR/`, and two optional services outside the Cargo workspace
-and unknown to the Rust binary — `services/flow`, the PHP query surface behind
-the Query tab and a pipeline's transforms, and `services/ml_pipeline`, the
-Python notebook runtime behind its marimo blocks.
-
-## The decisions that explain most of the code
-
-Each has an ADR. Read the relevant one before changing that area; the section
-that matters in every one of them is what would make the decision wrong.
-
-- **Ids are derived, not generated**
-  ([0001](docs/ADR/ADR_0001_EVENT_ENVELOPE.md)). Delivery is at-least-once, so
-  `TraceId::derive` and `SpanId::derive` are pure functions of the run id and a
-  stable span key. A redelivery lands on the same span rather than a duplicate.
-- **An event is not a span** ([0003](docs/ADR/ADR_0003_SPAN_ASSEMBLY.md)).
-  Hundreds of events fold into a handful of spans. `llm.chunk` is counted, never
-  stored per chunk — streaming a 2000-token reply would otherwise write 2000
-  trace records for one call.
-- **A reconnect closes its own gap**
-  ([0004](docs/ADR/ADR_0004_LIVE_STREAM_RESUME.md)). Every SSE frame carries its
-  checkpoint as the `id:`, so the browser resumes through `Last-Event-ID` with
-  no application code on either side.
-- **Laser sits behind a port, feature-gated**
-  ([0002](docs/ADR/ADR_0002_EVENT_BUS_PORT.md)). Nothing above `aiwatcher-bus`
-  names it; the default backend is the built-in write-ahead log.
-- **One fold slices runs every way, and every list is a cursor page**
-  ([0007](docs/ADR/ADR_0007_EXPLORER_DIMENSIONS.md)). Nothing loads a whole run,
-  and search runs on the server.
-- **An evaluation report is not a trace**
-  ([0010](docs/ADR/ADR_0010_EVALUATION_REPORTS.md)). `eval.*` events ride the
-  same log and form no span: a report is parameters, metrics and a document,
-  folded into its own bounded projection. It is what a producer needs to stop
-  running MLflow for four fields.
-- **A Flow PHP query is parsed, never executed**
-  ([0008](docs/ADR/ADR_0008_FLOW_QUERY_SURFACE.md)). The Query tab's pipeline is
-  lexed, whitelisted and turned into objects through an explicit `match` — no
-  `eval`, and no name from a query ever becomes a callable.
-- **Flow executes curation; the Rust registry versions it**
-  ([0014](docs/ADR/ADR_0014_DATA_CURATION.md)). The optional PHP service remains
-  stateless; authenticated Rust endpoints save content-addressed script
-  revisions and the exact rows a completed transformation produced.
-- **A workflow graph is declared on the log, not read from an orchestrator**
-  ([0012](docs/ADR/ADR_0012_WORKFLOW_GRAPH.md)). `workflow.declared` carries the
-  shape, `step.*` executes a node of it, and `workflow_run_id` joins the stages
-  a per-pod orchestrator scatters across four runs. That is what makes a stage
-  nothing has started drawable, and what makes swapping the orchestrator a
-  change aiwatcher never notices.
-- **Conversation content is an encrypted archive, not events on the log**
-  ([0021](docs/ADR/ADR_0021_CONVERSATION_ARCHIVE.md)). Putting `input` and
-  `output` on `llm.completed` wrote somebody's words into the durable log the
-  Collector's redaction exists to keep them out of, on a retention clock sized
-  for volume, in a store where a deletion cannot delete. So a turn is not an
-  event: content is sealed with AES-256-GCM beside a plaintext head, retention
-  is this module's own clock, an erasure names a *person* and reaches the
-  published corpora too, and reading the words needs the `admin` role. It is
-  the one authored store that is off by default, because holding somebody's
-  words is a decision rather than something to inherit on an upgrade.
-- **An annotation is vector-first, and split by family**
-  ([0017](docs/ADR/ADR_0017_IMAGE_ANNOTATION.md)). A mask cannot say which wall
-  an opening sits on or which way a door swings, so the shape is the source and
-  every raster is derived. The split key is the building rather than the image,
-  because a catalogue plan, its mirror and its garage variant are four
-  renderings of one house and splitting them apart measures memorisation. Usage
-  rights are required, and an export excludes what fails its policy by name —
-  the best public corpora are non-commercial, and that failure shows up in a
-  legal review rather than in a metric.
-- **A training run is a record, not a trace**
-  ([0018](docs/ADR/ADR_0018_TRAINING_RUNS.md)). It was on the event log once,
-  and every step of following that through produced an exception: an epoch is
-  not a span, a step does not belong on the log, a profiler session is not a
-  trace. So training is its own module with its own store — a run opens,
-  accumulates a curve and closes. The other half is the model registry, which
-  is the reason this is here and not in Weights & Biases: a version names the
-  export it was trained on, an agent span names a model, and a promotion is
-  refused without a held-out score.
-- **A hub says what exists; the table says what is permitted**
-  ([0019](docs/ADR/ADR_0019_DATASET_HUB_DISCOVERY.md)). Kaggle and Hugging Face
-  are searched, and neither is asked what a licence allows. A result carries
-  the mirror's `claimed_license` and aiwatcher's `usage` as two fields that are
-  never merged, and `usage` reads `unclear` unless the row matched a corpus
-  somebody read the licence for at its original. The first live search returned
-  a FloorPlanCAD mirror declaring `cc-by-sa-4.0` for a corpus whose authors say
-  the drawings are not theirs to license.
-
-- **The orchestrator is read for its inventory, never for its history**
-  ([0016](docs/ADR/ADR_0016_PIPELINE_ENGINE.md)). Nothing publishes an event
-  about a workflow nobody has run, and no event carries an input interface — so
-  `/api/v1/engine` asks Flyte what it could start while `/api/v1/workflows`
-  still folds what has run. A launch binds its inputs to the types the engine
-  declares at that moment, always pins a version, and carries an id the panel
-  can stream before anything has published.
-
-The full index, including trace storage and the local-Kubernetes guards, is in
-[docs/ADR/README.md](docs/ADR/README.md).
-
-## Signing in
-
-Off by default. `AIWATCHER_AUTH_MODE=oidc` makes aiwatcher an OpenID Connect
-relying party — built against authentik, and nothing in the code is specific to
-it beyond two defaults — and `proxy` reads the identity from an authenticating
-reverse proxy that is already in front.
+Arguments are `key=value` in any order. `format=json` makes any read scriptable.
+`aiwatcher api` reaches every route that has no verb. Another instance is a
+profile, or a one-off `url=`:
 
 ```bash
-just authentik-up   # authentik in Docker: server, worker, PostgreSQL, Redis
-just run-sso        # the server as a relying party against it
+aiwatcher profile set name=prod url=https://aiwatcher.example token=…
+aiwatcher runs list profile=prod
 ```
 
-The authorization-code exchange happens in the server, the provider's tokens
-are read once and dropped, and the browser keeps an HttpOnly cookie the server
-signed — because the panel's two most important routes are an SSE stream and a
-WebSocket, and a browser can set headers on neither
-([0013](docs/ADR/ADR_0013_SINGLE_SIGN_ON.md)).
+`aiwatcher help commands` lists every verb with the route behind it.
 
-Roles come from authentik groups and there are three: `viewer` reads, `editor`
-publishes prompt versions and events, `admin` dispatches a rerun — the one
-route that asks another system to do work. A producer cannot sign in
-interactively, so it carries a token instead (`AIWATCHER_TOKEN`), which grants
-editor and never admin.
+## Optional backends
 
-Setting it up, either way round: [deploy/authentik/README.md](deploy/authentik/README.md).
+Everything below is off by default. Each recipe starts the dependency and a server
+wired to it.
+
+| You want | Run |
+|---|---|
+| Apache Iggy as the log | `just iggy-up && just run-laser` |
+| S3 (RustFS) for the registries | `just rustfs-up && just run-rustfs` |
+| PostgreSQL for managed runs | `just postgres-up && just run-postgres` |
+| DuckDB for managed runs, queryable | `just run-duckdb`, then `aiwatcher sql` |
+| Flow PHP for queries and curation | `just flow-serve` |
+| marimo notebook blocks | `just ml-pipeline-serve` |
+| Flyte as the pipeline engine | `just run-flyte` |
+| Kaggle / Hugging Face search | `just run-hubs` |
+| SSO against authentik | `just authentik-up && just run-sso` |
+| Traces and metrics in Grafana | `just stack-up` |
+| Conversation archive | `just run-conversations` |
+
+An unconfigured area answers `501` naming the variable that is unset, never an
+empty list.
 
 ## Deploying
 
@@ -552,16 +151,9 @@ just install-plan      # render and diff; change nothing
 just install-cluster   # apply, after asking on any non-local context
 ```
 
-Installation reads the cluster instead of trusting a flag
-([0009](docs/ADR/ADR_0009_INSTALL_BY_DETECTION.md)). A second VictoriaMetrics
-beside an existing one splits one workload's metrics across two stores with no
-error anywhere — just a gap in a graph. So every backend is
-`install | external | none`, never a boolean, and a Collector that detection
-merely *found* is never reused: a foreign one almost certainly lacks the
-processor that redacts prompt and completion text.
-
-Full walkthrough, including installing beside an existing stack:
-[docs/INSTALL.md](docs/INSTALL.md).
+Installation reads the cluster rather than trusting a flag, because a second
+metrics store beside an existing one splits one workload across two with no error
+anywhere. Full walkthrough: [docs/INSTALL.md](docs/INSTALL.md).
 
 ## Commands
 
@@ -571,37 +163,24 @@ just check         # everything CI runs; green here means green there
 just test          # cargo test --workspace --all-targets
 just test-one PAT  # one test by name, e.g. `just test-one two_parallel`
 just openapi       # regenerate contracts/openapi.json and the panel's client
-just seed-curation # 80 runs, saved Flow recipes and two immutable datasets
-just seed-annotations  # 24 synthetic plans, 12 families, an export, a training run
-just seed-import   # stage a corpus in pages and import it with the queued job
-just run-conversations # the server with the encrypted conversation archive on
-just seed-conversations  # record, review and export one conversation end to end
-just e2e-train     # the whole chain, end to end, against a running server
-just serve-model   # serve its production-labelled package on :8091
-just onnx-version  # the same model as an ONNX graph, and the label moves to it
-just run-hubs      # the server with Kaggle/Hugging Face dataset search on
-just stack-up      # docker compose: VictoriaTraces, VictoriaMetrics, Collector, Grafana
-just tilt-up       # the same stack on a local Kubernetes, rebuilt on save
-just flow-check    # the PHP query service's own gate — `just check` excludes it
-just authentik-up  # a local identity provider, for `just run-sso`
+just seed-*        # populate one area with demo data
 ```
 
-The annotation seed uses the floor-plan labels `wall_exterior`,
-`wall_interior`, `space`, `stairs`, `column`, `door`, `window` and `passage` by
-default. Point it at another project or rename any generated class without
-editing the script:
+`just seed` and its friends fill the panel; `just` lists all of them.
 
-```bash
-just seed-annotations --project floor-plans/kickoff --label space=room
-```
+## Docs
 
-`contracts/openapi.json` is generated from the axum routes and the panel's
-client is generated from it, so `just openapi` after any route change and commit
-both — CI fails on a stale contract, because a stale client is a runtime
-`undefined` rather than a compile error.
+| Document | For |
+|---|---|
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | The crates, the data flow, the backends |
+| [docs/event-catalog.md](docs/event-catalog.md) | Event types, and how to add one |
+| [docs/INSTALL.md](docs/INSTALL.md) | Installing into a cluster |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | What is expected of a change |
 
-Before opening a PR, and what else is expected of a change:
-[CONTRIBUTING.md](CONTRIBUTING.md).
+Built on [Apache Iggy](https://github.com/apache/iggy),
+[RustFS](https://github.com/rustfs/rustfs),
+[Flow PHP](https://github.com/flow-php/flow) and
+[marimo](https://github.com/marimo-team/marimo).
 
 ## Licence
 

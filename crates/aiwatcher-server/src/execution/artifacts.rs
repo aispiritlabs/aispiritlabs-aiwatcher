@@ -1,6 +1,6 @@
 //! Where a step's result goes, and how the next attempt finds it again.
 //!
-//! Section 17. An [`ArtifactRef`] is a pointer with a digest; the bytes are the
+//! An [`ArtifactRef`] is a pointer with a digest; the bytes are the
 //! object store's — the same one the prompt registry, the annotations, the
 //! datasets and the conversation archive already write through, under a sixth
 //! prefix. A sixth *prefix* rather than a sixth registry, because an artifact

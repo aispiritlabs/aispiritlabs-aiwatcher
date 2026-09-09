@@ -1,41 +1,23 @@
 //! What a block was, so the panel does not have to work it out.
 //!
-//! Section 19, and its first sentence is the whole reason this module exists:
-//! *the panel must not reconstruct upstream context*. Every part of the answer
-//! is somewhere the browser is not — the pinned plan, the artifacts a parent
-//! produced, the attempt a staging key is named after — so a canvas that
-//! guessed would guess from the draft on screen, which is the one thing that is
-//! certainly not what an old run read.
-//!
-//! Three routes for three questions, and their shapes differ in ways that
-//! matter:
-//!
 //! ```text
-//! /executions/{execution}/steps/{step}/context        what it did read
-//! /curation-pipelines/{name}/revisions/{rev}/blocks/{block}/context   what it would
-//! /executions/{execution}/blocks                      which blocks became which steps
+//! /executions/{execution}/steps/{step}/context                       what it did read
+//! /curation-pipelines/{name}/revisions/{rev}/blocks/{block}/context  what it would
+//! /executions/{execution}/blocks                                     which blocks became which steps
 //! ```
 //!
-//! The first is exact — a run pins a plan and a plan is immutable, so opening a
-//! step of last week's execution shows last week's script over last week's
-//! rows, whatever the definition has become since. The second has no input
+//! The first is exact: a run pins an immutable plan, so opening last week's
+//! step shows last week's script over last week's rows. The second has no input
 //! artifacts and no state, and says so with empty fields rather than borrowing
 //! the newest run's.
 //!
-//! The third is the same rule at the grain of a whole run, and it is what lets
-//! a canvas light up. A run reports `step.started` for a *step*; a person is
-//! looking at *blocks*, and three of them fold into one Flow query. Working
-//! that out in the browser would mean working it out from the draft on screen,
-//! which is certainly not what the run compiled — so the answer carries the
-//! authored revision the plan was compiled from, and a canvas whose draft was
-//! saved as a different one shows drift instead of borrowing this run's states.
+//! The third is what lets a canvas light up. A run reports `step.started` for a
+//! *step*; a person is looking at *blocks*, and three of them fold into one
+//! Flow query. The answer carries the authored revision the plan was compiled
+//! from, so a canvas whose draft was saved as a different one shows drift
+//! rather than borrowing this run's states.
 //!
-//! ## Why this is not two modules
-//!
-//! A module is a facade and the thing it owns is a noun. The noun here is
-//! *context*, and the two routes return one type: splitting them by path prefix
-//! would put one answer in two files and give a reader two places to look when
-//! a runtime gains a field.
+//! One module, because the noun is *context* and the routes return one type.
 
 use std::sync::Arc;
 

@@ -7,43 +7,26 @@
 //! # let _ = bus; Ok(()) }
 //! ```
 //!
-//! ## What lands where
-//!
 //! | aiwatcher | Laser |
 //! |---|---|
-//! | one run | a partition key (`run:<run_id>`), so a run's events keep their order |
+//! | one run | a partition key (`run:<run_id>`), so a run keeps its order |
 //! | one event | one record, payload = the producer's [`EventEnvelope`] as JSON |
 //! | `global_position` | the record's Iggy offset, plus one |
 //! | projector resume | the consumer group's server-stored offset |
 //! | checkpoint commit | [`Consumer::store_offset`], only after the durable write |
 //!
-//! ## The envelope on the wire, not the record
+//! The **consumer** promotes an envelope to a [`RecordedEvent`], not the
+//! producer: the broker assigns the position, so a producer never has to
+//! compute one. That is what lets a Python agent publish to Laser directly.
 //!
-//! The other adapters promote an [`EventEnvelope`] into a [`RecordedEvent`] at
-//! append time, because they *are* the store and they assign the position. Here
-//! the broker assigns it, and a producer has no way to know it in advance. So
-//! the topic carries the envelope and the **consumer** promotes, stamping the
-//! position from the offset Iggy actually gave the record.
+//! [`LaserConfig::partitions`] defaults to **1**. A [`Checkpoint`] is one
+//! ordered scalar, which is what makes `Last-Event-ID` resume work with no
+//! client bookkeeping; a multi-partition log has no total order, so a scalar
+//! cursor would silently skip a lagging partition. Raising it requires a
+//! per-partition vector first — the constructor warns rather than letting it
+//! pass quietly.
 //!
-//! That also means a producer never has to be able to compute a position, which
-//! is what lets a Python agent publish to Laser directly rather than through
-//! this process.
-//!
-//! ## One partition, deliberately
-//!
-//! A [`Checkpoint`] is a single ordered scalar: that is what makes
-//! `Last-Event-ID` resume work with no client-side bookkeeping, and what lets
-//! the live tail drop what a client already saw with one comparison. A
-//! multi-partition log has no total order — partition 0 offset 100 and
-//! partition 1 offset 5 are not comparable — so a scalar cursor would silently
-//! skip events on a lagging partition.
-//!
-//! [`LaserConfig::partitions`] therefore defaults to 1, and the records are
-//! still keyed by run so that raising it preserves per-run ordering. Raising it
-//! above 1 **requires** replacing the scalar checkpoint with a per-partition
-//! vector; the constructor warns rather than letting that pass quietly. One
-//! Iggy partition carries far more than agent telemetry produces, so this is a
-//! ceiling worth hitting before designing around.
+//! ADR_0002.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};

@@ -1,45 +1,27 @@
-//! Single sign-on, with authentik as the provider it was built against.
+//! Single sign-on, built against authentik.
 //!
-//! aiwatcher had no notion of a person before this crate. What guarded it was
-//! whatever guarded its ingress — in planner's cluster, a Traefik forward-auth
-//! to authentik — which answers "may this request in" and nothing else. Every
-//! run looked equally anonymous, a rerun had no requester, and anything inside
-//! the cluster that could reach the Service was past the only gate there was.
-//!
-//! Three modes, and the middle one is the reason the other two are not enough
-//! on their own:
-//!
-//! | `AIWATCHER_AUTH_MODE` | Who says who you are | What it costs to adopt |
+//! | `AIWATCHER_AUTH_MODE` | Who says who you are | Cost to adopt |
 //! |---|---|---|
 //! | `none` (default) | nobody | nothing; unchanged behaviour |
 //! | `oidc` | this process, as an OIDC relying party | an application in authentik |
-//! | `proxy` | the authenticating proxy already in front | one variable, where that proxy exists |
+//! | `proxy` | the authenticating proxy already in front | one variable |
+//! | `local` | one token in a file only its owner can read | `aiwatcher up` |
 //!
-//! `none` stays the default because every other setting in this workspace has
-//! a default that works with nothing running, and because a release that
-//! started refusing requests would be an upgrade that took an installation
-//! down.
+//! `none` is the default because a release that started refusing requests
+//! would be an upgrade that took an installation down.
 //!
-//! ## The session is a cookie, and that is a decision
+//! **The session is a cookie.** The panel's two most important routes are an
+//! SSE stream and a WebSocket, and a browser can set headers on neither. So the
+//! authorization-code exchange happens in this process, the provider's tokens
+//! are read once and dropped, and the browser keeps an HttpOnly cookie this
+//! server signed. No token reaches JavaScript and `EventSource` needs no
+//! special case.
 //!
-//! A single-page app usually holds a token in memory and sends it as a header.
-//! That does not work here: the panel's two most important routes are an SSE
-//! stream and a WebSocket, and browsers let neither set request headers. The
-//! alternatives are a credential in a query string — which is the one place a
-//! credential ends up in every access log between here and the browser — or a
-//! cookie the browser attaches on its own. So the authorization-code exchange
-//! happens *in this process*, the provider's tokens are read once and dropped,
-//! and what the browser keeps is an HttpOnly cookie this server signed. No
-//! token ever reaches JavaScript, and `EventSource` needs no special case.
+//! **This crate stores nothing** — no session table, no refresh-token vault, no
+//! user directory. The cost is that the session lifetime *is* the revocation
+//! window, eight hours by default.
 //!
-//! ## What this crate does not do
-//!
-//! It stores nothing. There is no session table, no refresh-token vault and no
-//! user directory: the provider owns all three. The cost is that signing out
-//! clears the browser's cookie but cannot invalidate a copy taken from it, so
-//! the session lifetime *is* the revocation window — eight hours by default.
-//! A deployment that needs a shorter one shortens it; a deployment that needs
-//! true revocation needs a store, which is a different decision than this one.
+//! ADR_0013.
 
 pub mod cookie;
 pub mod error;

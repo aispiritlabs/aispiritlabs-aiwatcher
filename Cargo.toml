@@ -142,6 +142,32 @@ unwrap_used = "warn"
 expect_used = "warn"
 panic = "warn"
 
+# Debug info goes into a `.dSYM` beside the binary, never into loose object
+# files. This is not a taste preference — it is what keeps `cargo test` from
+# taking half an hour on macOS.
+#
+# Cargo's default here is `split-debuginfo = "unpacked"`: rustc leaves one
+# `.o` per codegen unit in `target/debug/deps/` and the linked binary points at
+# them through a debug map. Nothing ever deletes them, so every rebuild adds
+# another set — this workspace accumulated 798 325 of them in fourteen days.
+#
+# What makes that expensive is not the disk. macOS assesses an executable the
+# first time it is run, and the assessment walks the directory the executable
+# sits in. Every test binary cargo builds sits in `deps/`, so each one paid for
+# a walk of eight hundred thousand siblings: measured at 20-80 s per binary
+# against 0.24 s for the same bytes in an ordinary directory, and 15 minutes
+# across the 42 test binaries whose tests themselves take 5.5 s in total.
+#
+# `packed` runs `dsymutil` at link time and leaves no loose objects, so the
+# directory stays the size of the build rather than the size of its history.
+# `line-tables-only` is what keeps that cheap: a panic still reports
+# `file:line`, which is what a failing test needs, and the DWARF `dsymutil`
+# has to copy is a fraction of the full thing. Set `debug = true` here for a
+# debugger session that needs variables.
+[profile.dev]
+debug = "line-tables-only"
+split-debuginfo = "packed"
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

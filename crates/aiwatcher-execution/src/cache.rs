@@ -107,7 +107,7 @@ fn code_digest(runtime: &RuntimeBinding) -> Option<String> {
             // because the query service can now read one: `POST /flow/query`
             // takes `window_from`/`window_to` and the API's windowed routes take
             // `as_of`, so a plan that pinned 09:00–10:00 and a retry five
-            // minutes later read the same rows (section 43.18).
+            // minutes later read the same rows.
             //
             // The key being *well defined* is this function's question. Whether
             // the run that produced a result actually happened under those

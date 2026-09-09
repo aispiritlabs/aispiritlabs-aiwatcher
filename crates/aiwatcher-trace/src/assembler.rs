@@ -1,7 +1,5 @@
 //! Folds events into spans.
 //!
-//! ## The shape it produces
-//!
 //! ```text
 //! run                             trace
 //! └── agent execution             span
@@ -11,30 +9,21 @@
 //!     └── tool call               span
 //! ```
 //!
-//! ## Parenting
+//! **Parenting.** An explicit `parent_span_id` always wins; an SDK that tracks
+//! its own scope stack should send one. Otherwise the parent is inferred as the
+//! most recently opened still-open *container* span in the same run — a run, an
+//! agent and a step are containers, an LLM or tool call is not. That is what
+//! makes two parallel LLM calls parent onto their agent rather than onto each
+//! other, and a sub-agent nest inside the agent that spawned it. A leaf
+//! wrapping another leaf needs an explicit parent.
 //!
-//! An explicit `parent_span_id` from the producer always wins, and an SDK that
-//! tracks its own scope stack should always send one — it knows the nesting
-//! exactly, and the backend can only infer it.
+//! **A span is written only on its end event.** An open span may still gain
+//! children and attributes, and trace stores do not support rewriting one. The
+//! cost is that a producer which crashes leaves spans open;
+//! [`SpanAssembler::sweep`] closes those and marks them so the difference stays
+//! visible.
 //!
-//! Inference is the fallback, for producers that cannot. The parent is then
-//! **the most recently opened still-open container span** in the same run,
-//! where a run, an agent and a step are containers and an LLM or tool call is
-//! not. That covers the two cases a naive stack gets wrong: two LLM calls
-//! issued in parallel both parent onto their agent rather than onto each other,
-//! and a sub-agent still nests inside the agent that spawned it.
-//!
-//! Steps are containers, so a retrieval that wraps an embedding nests
-//! correctly. A leaf that wraps another leaf — a model calling a model — is the
-//! shape inference cannot see; that one needs an explicit parent.
-//!
-//! ## Why spans are only written on an end event
-//!
-//! A span that is still open may still gain children and attributes. Writing it
-//! early means either rewriting it later — which trace stores do not support —
-//! or losing what came after. The cost is that a producer which crashes without
-//! sending its end events leaves spans open; [`SpanAssembler::sweep`] closes
-//! those, and marks them so the difference stays visible.
+//! ADR_0003.
 
 use std::collections::HashMap;
 

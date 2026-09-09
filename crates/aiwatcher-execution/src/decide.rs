@@ -542,7 +542,7 @@ fn decide_active(
         // of running it. Handled beside the completion rather than folded into
         // it, because the two are different facts: a hit says the work was not
         // done, and a run that reports one has to stay explainable after the
-        // index is dropped (section 18).
+        // index is dropped.
         WorkflowMessage::Event(WorkflowEvent::StepCacheHit {
             step_id,
             attempt,

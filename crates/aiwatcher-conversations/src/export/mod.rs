@@ -1,11 +1,5 @@
 //! Freezing a selection of the archive into an immutable, reproducible corpus.
 //!
-//! Asynchronous, because the synchronous exporter this replaced could not be
-//! anything else: it read every event of every run of a conversation into one
-//! process, built one JSON body and posted it, and the 1 000-row and 4 MiB caps
-//! that made that safe are not caps a real corpus fits inside. Making the body
-//! bigger would only move the number.
-//!
 //! ```text
 //!   POST  ──►  queued ──► running ──► completed  name@sha256
 //!                 ▲          │  │
@@ -13,36 +7,21 @@
 //!                  retryable         cancelled   somebody asked
 //! ```
 //!
-//! Four properties, and each one is a thing the synchronous exporter did not
-//! have.
+//! * **The selection is pinned when the job is created**, so a conversation
+//!   that starts mid-export does not appear halfway through it.
+//! * **A shard never splits a conversation.** Rows are buffered until a whole
+//!   one is rendered, so a chat row cannot straddle two shards. The cost is a
+//!   shard overshooting by one conversation.
+//! * **A shard is written before the cursor that passes it.** A crash re-does
+//!   at most one shard and writes byte-identical bytes; the reverse ordering
+//!   loses rows nothing can tell you about.
+//! * **The version is `sha256(request ‖ every shard digest, in order)`**, so
+//!   the same request over an unchanged archive is the same `name@version` a
+//!   training run can record.
+//! * **Every excluded row is counted, by reason.** "The corpus is small" and
+//!   "3 900 turns are waiting for review" are different facts.
 //!
-//! **The selection is pinned when the job is created.** The conversation list
-//! is resolved once and stored on the job, so a conversation that starts while
-//! the export is running does not appear halfway through it — which would make
-//! the same request produce a different corpus depending on how long it took.
-//!
-//! **A shard never splits a conversation.** Rows are buffered until a whole
-//! conversation is rendered, whatever the shape asks for, so a chat row — which
-//! *is* a conversation — cannot straddle two shards. The cost is a shard that
-//! overshoots its target by one conversation's worth of rows, which is a bound
-//! on a conversation rather than on the corpus.
-//!
-//! **A shard is written before the cursor that passes it.** The unit of resume
-//! is a shard, so a crash re-does at most one shard's conversations and writes
-//! byte-identical bytes to the same key. The reverse ordering would advance
-//! past rows that were never stored, which is the one failure an export must
-//! not have: a corpus missing rows nothing can tell you about.
-//!
-//! **The version is a function of the content.** `sha256(request ‖ every shard
-//! digest, in order)`, computed from the shards rather than from a running hash
-//! nobody could resume. The same request over an unchanged archive produces the
-//! same version, which is what makes `name@version` a thing a training run can
-//! name — the rule ADR_0018 refuses a promotion without.
-//!
-//! **Every row that was left out is counted, by reason.** An export that
-//! silently produced 40 rows from 4 000 turns is indistinguishable from one
-//! that worked; the counts are what turns "the corpus is small" into "3 900
-//! turns are still waiting for review".
+//! ADR_0021, ADR_0022.
 
 pub mod format;
 

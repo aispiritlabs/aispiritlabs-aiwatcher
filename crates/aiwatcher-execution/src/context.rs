@@ -1,43 +1,25 @@
 //! What a block was, when it ran — or when it was saved.
 //!
-//! Section 19. The panel must not reconstruct upstream context: it asks, and
-//! what comes back is everything needed to reopen a block exactly as it was.
-//! That is the whole of Phase 4's exit, and the reason it is a server question
-//! is that every part of the answer is somewhere the browser is not — the
-//! pinned plan, the artifacts a parent produced, the attempt a staging key is
-//! named after.
+//! Every part of the answer is somewhere the browser is not: the pinned plan,
+//! the artifacts a parent produced, the attempt a staging key is named after.
+//! So the server answers it.
 //!
-//! ## Two contexts, and they answer different questions
+//! [`ContextSnapshot::of_step`] is one step of one **run** — what it read, what
+//! it produced, which attempt it is on. Exact, because a run pins an immutable
+//! plan: opening last week's step shows last week's script over last week's
+//! rows.
 //!
-//! [`ContextSnapshot::of_step`] is one step of one **run**: what it actually
-//! read, what it produced, which attempt it is on. Exact, because a run pins a
-//! plan and a plan is immutable — opening a step of last week's execution shows
-//! last week's script over last week's rows, whatever the definition has since
-//! become.
+//! [`ContextSnapshot::of_block`] is one block of one **revision** — what it
+//! would run. No input artifacts and no state, said with empty fields rather
+//! than borrowed from the newest run.
 //!
-//! [`ContextSnapshot::of_block`] is one block of one **revision**: what it
-//! would run. There are no input artifacts and no state, because nothing has
-//! happened — and saying so with empty fields is the honest answer rather than
-//! borrowing the newest run's.
+//! The runtime is the plan's own `RuntimeBinding`, not a second description of
+//! it, so a runtime gaining a field changes one place.
 //!
-//! ## Why the runtime is the plan's own binding
-//!
-//! A `RuntimeBinding` already *is* the resolved context: the compiled Flow
-//! script beside its structured source (15.3), the notebook name beside the
-//! digest the revision pinned, the dataset a view publishes to. Re-describing
-//! it in a second type would be a second place to change when a runtime gains a
-//! field, and the two would drift.
-//!
-//! ## What the code revision is, and what it is not
-//!
-//! For a notebook it is the `sha256` the pipeline pinned when it was saved. It
-//! is **not** a copy of the source: that file is what marimo serves, what
-//! `ml_pipeline.step` imports and what a test reads, and a copy in a registry
-//! would be a second source of truth for a file that has to stay runnable on
-//! its own (ADR_0024). So this reports what was pinned, and whether the file
-//! still hashes to it is a comparison the notebook runtime's own answer
-//! settles — the one part of a context that the process holding the plan
-//! cannot know.
+//! `code_revision` is the `sha256` the pipeline pinned, never a copy of the
+//! source — that file is what marimo serves and what a test reads. Whether it
+//! still hashes to the pin is the notebook runtime's answer, and the one part
+//! of a context the process holding the plan cannot know.
 
 use std::collections::BTreeMap;
 

@@ -1,39 +1,19 @@
 //! One time window, shared by every list.
 //!
-//! Every list in the panel answers "what happened recently", and until this
-//! only the metrics page could say how recently — everything else showed the
-//! whole retention window and left the reader to date the rows themselves.
+//! Relative: seconds back from now, resolved on the server, so a link someone
+//! pastes means "the last hour" when it is opened rather than the hour it was
+//! copied. `None` and `Some(0)` both mean everything.
 //!
-//! The window is **relative**: seconds back from now, resolved on the server.
-//! A pair of timestamps would have been more expressive and worse to share — a
-//! link someone pastes into a chat should mean "the last hour" when it is
-//! opened, not the hour it was copied.
+//! `as_of` pins the end for a caller that needs two reads to agree — a managed
+//! step retried five minutes later must read the hour its cache key claims.
+//! Absent, the end is now.
 //!
-//! ## `as_of`, for the caller that has to pin one
+//! Lists window on **last activity**, not on start: a run that began three
+//! hours ago and emitted an event a minute ago is happening now.
+//! [`crate::metrics`] is the exception and windows by start, because there the
+//! window is the timeline's x-axis and a run before it has no bucket.
 //!
-//! That reasoning argued against *replacing* the relative window, and it also
-//! said absolute bounds "belong on a route that pins an incident, and there is
-//! not one yet". There is one now: a managed execution pins a run, and a step
-//! that reads "the last hour" has to read the same hour when it is retried five
-//! minutes later — or the rows it produced are not the rows its cache key
-//! claims (section 43.15).
-//!
-//! So the window keeps its shape and gains an optional *end*. Absent, it is
-//! now, and every link still means what it meant. Present, the window is a
-//! closed span and two reads of it agree.
-//!
-//! `None` and `Some(0)` both mean everything, so a panel can send its "all"
-//! preset as a zero rather than as an absent parameter and keep one shape.
-//!
-//! ## What the window matches
-//!
-//! Every list here windows on **last activity**, not on start: a run that
-//! began three hours ago and emitted an event a minute ago is something
-//! happening now, and dropping it from the last-15-minutes view would hide
-//! exactly the long run someone is looking for. [`crate::metrics`] is the one
-//! exception and keeps windowing by start, because there the window is the
-//! timeline's x-axis rather than a filter — a run that started before the axis
-//! has no bucket to be counted in.
+//! ADR_0007.
 
 use time::OffsetDateTime;
 

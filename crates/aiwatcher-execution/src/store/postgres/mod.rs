@@ -1,36 +1,23 @@
 //! One transaction per workflow decision.
 //!
-//! A module behind the `postgres` feature, not a crate. The plan proposed a
-//! crate "so sqlx is out of every build that does not set the feature, exactly
-//! as `laser` keeps laser_sdk out" — and that reason does not hold, because
-//! `laser` is not a crate: `laser_sdk` and the ~360 crates beneath it are kept
-//! out of `aiwatcher-bus` by an optional dependency behind a feature, from a
-//! module beside `memory` and `wal`. This is the same shape, for the same
-//! reason, and it also keeps the rule that a crate is named for its capability
-//! and never for a vendor.
+//! A module behind the `postgres` feature rather than a crate — the shape
+//! `laser` has in `aiwatcher-bus`, which keeps `sqlx` out of every build that
+//! does not ask for it and keeps a crate named for its capability.
 //!
-//! Everything in [`AppendRequest`] lands together or none of it does — the
+//! Everything in [`AppendRequest`] lands together or none of it does: the
 //! input, the outputs, the projection, the attempt rows, the outbox and the
-//! checkpoint. That is the requirement that settled the backend (ADR_0025): the
-//! event log offers ordered offsets and at-least-once delivery and no
-//! transaction spanning itself and this state, and the object store cannot do a
-//! compare-and-append at all on the store this system ships.
+//! checkpoint.
 //!
-//! Three things are worth reading closely.
+//! * **The version check is the primary key, not a `SELECT`.** Two deciders
+//!   racing to write version *N* produce one row and one unique violation,
+//!   surfaced as [`StoreError::VersionConflict`]. `SELECT … FOR UPDATE` would
+//!   serialise every command on an execution for a decision that never blocks.
+//! * **The inbox is checked inside the transaction.** Outside it, a redelivery
+//!   arriving beside its first delivery decides twice.
+//! * **A claim is `FOR UPDATE SKIP LOCKED`**, so two workers polling together
+//!   take two different attempts rather than one waiting on the other's lock.
 //!
-//! **The version check is the primary key, not a `SELECT`.** Two deciders
-//! racing to write version *N* produce one row and one unique violation, and
-//! the violation is [`StoreError::VersionConflict`] rather than a database
-//! failure. A `SELECT … FOR UPDATE` on the run row would work and would
-//! serialise every command on an execution for the duration of a decision that
-//! never blocks.
-//!
-//! **The inbox is checked inside the transaction.** Outside it, a redelivery
-//! arriving beside its first delivery would decide twice.
-//!
-//! **A claim is `FOR UPDATE SKIP LOCKED`.** The row a claimant sees is one no
-//! other transaction is holding, so two workers polling together take two
-//! different attempts rather than one of them waiting for the other's lock.
+//! ADR_0025.
 
 pub mod error;
 pub mod schema;

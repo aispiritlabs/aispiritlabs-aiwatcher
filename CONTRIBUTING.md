@@ -31,6 +31,38 @@ live-locks in that file — unbounded redelivery, and a subscription that outliv
 its stream and held its consumer-group membership — were invisible to the
 in-process fake and obvious within seconds against a real broker.
 
+## Commit messages
+
+```
+<type>: <what changed>
+
+<why, when the subject is not enough>
+```
+
+Types: `feat` `fix` `refactor` `perf` `docs` `test` `chore` `build` `ci`.
+
+- Pick the type the change **is**. A refactor is not a `feat`, and a dependency
+  bump is not one either. Reading `git log --oneline` should tell you what kind
+  of release the last twenty commits add up to.
+- Say what changed, not which files. The diff already lists those.
+- Max 72 characters, imperative, lowercase, no trailing period.
+- No two commits with the same subject. `feat: add annotation` four times in a
+  row is four commits nobody can tell apart, and the fourth is the one you will
+  need to find.
+- The body answers **why**. Skip it when the subject is the whole story.
+
+```
+fix: the hub search parameter is `q`, and a 404 behind the proxy is absence
+
+Hugging Face renamed `search` to `q` in the datasets API. The proxy answered
+404 for both "no such dataset" and "the upstream is down", so a typo read as
+an outage.
+```
+
+`just setup-hooks` installs a `commit-msg` hook that checks the shape, and sets
+`git commit` to open the template in [`.gitmessage`](.gitmessage). Bypass with
+`git commit --no-verify`.
+
 ## Changing an API route or a type it exposes
 
 ```bash

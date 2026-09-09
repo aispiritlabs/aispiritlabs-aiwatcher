@@ -1,12 +1,5 @@
 //! The work role: the outbox publisher, and the reactors.
 //!
-//! Section 27 splits this binary in two. `serve` holds the API, the read model
-//! and the object store; `work` holds the loops in this module and is the only
-//! role that opens a socket to Flow, a notebook runtime, an engine or the
-//! cluster. That is how ADR_0008's "the binary does not know the optional
-//! services exist" survives — as a statement about the *API*, which is where it
-//! was load-bearing.
-//!
 //! ```text
 //!   serve                        work
 //!   ─────                        ────
@@ -16,22 +9,17 @@
 //!            └──────── one WorkflowStore ────────┘
 //! ```
 //!
-//! ## Why `publish_dataset` runs in `serve`
+//! `work` is the only role that opens a socket to Flow, a notebook runtime, an
+//! engine or the cluster.
 //!
-//! It is the one binding that executes nothing: it writes a content-addressed
-//! dataset version through the object store the serve role already holds
-//! (ADR_0025). Putting it in `work` would give the role that reaches Flow a
-//! second reason to hold the registry's credentials, for no capability it does
-//! not already have.
+//! `publish_dataset` runs in `serve` because it executes nothing: it writes a
+//! content-addressed version through the object store that role already holds.
+//! Putting it in `work` would give the role that reaches Flow the registry's
+//! credentials for no capability it lacks.
 //!
-//! ## Why the projector stays in `serve`
-//!
-//! Section 27 says `work` "holds the consumers". In this codebase the
-//! projector *is* the read model the API serves from, in process, under a
-//! memory contract (`AIWATCHER_MAX_SPANS_TOTAL`). A `serve` role without it
-//! would answer every read from an empty fold. Moving the folds out of process
-//! is Phase 8, deferred behind its own gate — so until then the consumer that
-//! runs here is the outbox, and the plan is corrected rather than followed.
+//! The projector stays in `serve` because it *is* the read model the API
+//! answers from, in process, under `AIWATCHER_MAX_SPANS_TOTAL`. A `serve` role
+//! without it would answer every read from an empty fold.
 
 pub mod artifacts;
 pub mod editor;
@@ -329,7 +317,7 @@ const SWEEP_BATCH: usize = 500;
 
 /// Forget finished executions past the retention window.
 ///
-/// Section 43.25. The window is the deployment's; the three rules it keeps are
+/// The window is the deployment's; the three rules it keeps are
 /// [`WorkflowStore::prune`]'s, and none of them is age alone.
 fn spawn_retention(
     store: Arc<dyn WorkflowStore>,

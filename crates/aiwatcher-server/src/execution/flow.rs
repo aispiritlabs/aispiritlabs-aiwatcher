@@ -1,12 +1,5 @@
 //! One Flow PHP query, as a managed step.
 //!
-//! Section 15.2. The panel may still call the query service directly for
-//! Observability Query, validation and an explicit editor test — that is ad-hoc
-//! mode, it is not durable, and it is labelled as such. This is the other half:
-//! Rust compiled the script (`aiwatcher_execution::compile::flow_script`), a
-//! reactor sends it under a stable key, and what comes back becomes an artifact
-//! with a digest.
-//!
 //! ```text
 //!   execute   POST {flow}/flow/query  {pipeline, window_seconds?, execution_id}
 //!             └─► rows ─► object store ─► ArtifactRef ─► receipt
@@ -14,31 +7,21 @@
 //!             └─► running | done {digest, rows} | absent
 //! ```
 //!
-//! ## The address is configuration, and only configuration
+//! The script is compiled in Rust
+//! (`aiwatcher_execution::compile::flow_script`); the panel's direct calls to
+//! the query service are the ad-hoc path and are labelled as such.
 //!
-//! `AIWATCHER_FLOW_URL`. A `FlowStepSpec` carries a script and a source and
-//! never a host — ADR_0012's and ADR_0016's reasoning, unchanged: a plan that
-//! could name its own endpoint would be a request-forgery primitive posted by
-//! anything that can reach the API. A process with no address registers no Flow
-//! executor, and therefore claims no `flow_php` attempt, because the claim
-//! filter is built from what is registered.
+//! The address is `AIWATCHER_FLOW_URL`. A `FlowStepSpec` carries a script and a
+//! source, never a host — a plan that named its own endpoint would be a
+//! request-forgery primitive posted by anything that can reach the API. A
+//! process without the address registers no Flow executor and claims no
+//! `flow_php` attempt.
 //!
-//! ## What a timeout means
-//!
-//! Nothing about the runtime. A Flow query that took eleven minutes has still
-//! read its rows, and re-running it is work done twice — against a service that
-//! may still be doing it. So [`FlowExecutor::lookup`] asks two things, and they
-//! are two questions rather than one:
-//!
-//! * the query service, whether it ran that key at all — it is the only party
-//!   that knows a query is *still executing*;
-//! * the object store's receipt, what the finished attempt produced — the
-//!   service deliberately keeps no rows (ADR_0014 refused it an S3 client, and
-//!   section 15.4 keeps that refusal).
-//!
-//! `done` with no receipt is the honest gap between them: the query finished
-//! and its rows never reached the store, so running it again is the only way to
-//! get them.
+//! [`FlowExecutor::lookup`] asks **two** questions. The query service is the
+//! only party that knows a query is *still executing*; the object store's
+//! receipt says what a finished attempt produced, because the service keeps no
+//! rows. `done` with no receipt is the honest gap: the query finished, the rows
+//! never landed, and running it again is the only way to get them.
 
 use std::sync::Arc;
 use std::time::Duration;

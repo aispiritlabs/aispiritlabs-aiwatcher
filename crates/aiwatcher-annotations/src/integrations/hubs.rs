@@ -1,32 +1,24 @@
-//! Searching Kaggle and Hugging Face, without letting either of them decide
-//! anything.
+//! Searching Kaggle and Hugging Face, without letting either decide anything.
 //!
-//! [`sources`](crate::sources) is a table a human wrote and dated, and its
-//! module docstring says why it is not a client: those two hubs, and Roboflow
-//! Universe with them, restate corpus licences wrongly often enough that a
-//! live answer would be *worse* than none, because it would arrive looking
-//! authoritative. A CC BY-NC dataset re-uploaded as MIT is not a rare event.
+//! Two different questions:
 //!
-//! That rule is intact, and this module is what it looks like when you also
-//! want the search. The split is between two different questions:
+//! **"What exists?"** has no wrong answer that costs anything, and a hub
+//! answers it far better than a table of eight rows. That is what this asks.
 //!
-//! **"What exists?"** is a discovery question, it has no wrong answer that
-//! costs anything, and a hub answers it far better than a table of eight rows
-//! ever will. That is what this module asks.
+//! **"What may we train on?"** has an expensive wrong answer, and no hub may
+//! answer it. Every result is [`SourceUsage::Unclear`] with the hub's own words
+//! kept verbatim in [`HubDataset::claimed_license`] — *claimed*, in the field
+//! name, because that is all it is. The one exception is a row matching
+//! [`sources`](crate::sources) by URL, which carries the curated verdict and
+//! says which row it came from.
 //!
-//! **"What may we train on?"** is a permission question with an expensive
-//! wrong answer, and no hub is allowed to answer it. Every result comes back
-//! [`SourceUsage::Unclear`] with the hub's own words preserved verbatim in
-//! [`HubDataset::claimed_license`] — *claimed*, in the field name, because
-//! that is all it is. The single exception is a row that matches the curated
-//! table by URL, which then carries the curated verdict and says which row it
-//! came from.
-//!
-//! So the worst case is that somebody imports a corpus as
+//! So the worst case is an import as
 //! [`UsageRights::Unknown`](crate::license::UsageRights::Unknown), which a
-//! commercial export excludes by name, in a manifest, forever. The failure
-//! mode is a smaller export and a line saying why — not a model that was
-//! quietly trained on somebody else's non-commercial data.
+//! commercial export excludes by name in a manifest — a smaller export and a
+//! line saying why, rather than a model quietly trained on somebody else's
+//! non-commercial data.
+//!
+//! ADR_0019.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;

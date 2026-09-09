@@ -1,22 +1,10 @@
-//! Conversation content, kept on purpose: the one thing here that is
-//! **encrypted, separately retained, and erasable**.
+//! Conversation content, kept on purpose: the one store here that is
+//! **encrypted, separately retained, and erasable**, and the one that is off
+//! by default.
 //!
-//! Everything else authored in this workspace — prompts, curation recipes,
-//! annotations, training runs — is kept forever because keeping it is the
-//! point. A conversation turn is not like that. It is somebody's words, and it
-//! is only in this system because a person decided a model should be trained
-//! on them. So the three properties that make the other registries simple are
-//! all reversed here: content is encrypted at rest, it expires on a clock that
-//! has nothing to do with the event log's retention, and a deletion has to
-//! actually delete.
-//!
-//! **It is not on the event log, and that is the decision.** ADR_0021. Putting
-//! `input` and `output` on `llm.completed` — which is what this replaced —
-//! writes the bodies into the durable log, into every projector's memory and
-//! into whatever the log's retention happens to be, and offers no place to put
-//! the consent record that made the capture lawful. The lesson is ADR_0018's,
-//! one turn further: a design whose last step is an exception in somebody
-//! else's retention policy is a design in the wrong place.
+//! A turn is somebody's words. So content is encrypted at rest, it expires on
+//! this module's own clock rather than the log's, and a deletion deletes —
+//! including from every corpus that already published it.
 //!
 //! ```text
 //! producer ── redacts, attaches consent ──► POST /api/v1/conversation-turns
@@ -36,21 +24,20 @@
 //!
 //! # Layout
 //!
-//! Sliced by noun, the way `aiwatcher-annotations` is, so a change to what one
-//! thing *is* touches one directory:
-//!
 //! ```text
 //! turn         the contract: roles, ordering, content parts, tool results
-//! policy       consent, retention and what a deployment demands of both
-//! redaction    what a producer says it removed, and what the server finds anyway
+//! policy       consent, retention, and what a deployment demands of both
+//! redaction    what a producer says it removed, and what the server finds
 //! review       the human gate: findings, approval, rejection
 //! archive/     SLICE — the encrypted store and its retention clock
-//!   crypt        envelope encryption over `ring`, and the keyring rotation
+//!   crypt        envelope encryption over `ring`, and keyring rotation
 //! export/      SLICE — the asynchronous job that freezes a selection
 //!   format       chat, prompt/response, SFT and DPO shapes
 //! registry     the facade, and the only public door
 //! store        (private) the key layout every slice reads through
 //! ```
+//!
+//! ADR_0021.
 
 use aiwatcher_core::ports::{PortError, PortResult};
 use aiwatcher_core::prompts::ObjectStore;

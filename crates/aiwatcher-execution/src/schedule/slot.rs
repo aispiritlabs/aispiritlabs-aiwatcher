@@ -1,37 +1,27 @@
 //! One slot, and what this system did about it.
 //!
-//! The state the tick keeps, split out of [`ScheduledDefinition`] — which is
-//! **configuration**, owned by whoever sets it, and which the tick may no
-//! longer write. Review R3: the loop read every schedule, did its work and
-//! wrote the whole object back, so an edit or a DELETE that landed in between
-//! was overwritten by a snapshot taken before it. A deleted schedule came back
-//! enabled. Nothing about that is fixable by re-reading before the write; the
-//! two things simply have different writers and different lifetimes, and they
-//! now live in different places.
+//! The state the tick keeps, held apart from [`ScheduledDefinition`], which is
+//! **configuration** owned by whoever sets it. The tick may not write that: a
+//! loop that read every schedule and wrote the whole object back overwrote any
+//! edit or DELETE that landed in between, and a deleted schedule came back
+//! enabled. Re-reading before the write does not close it — the two have
+//! different writers and different lifetimes.
 //!
-//! ## Why the workflow store and not another object
+//! It lives in the **workflow store** rather than in a second object, because
+//! two things need a decision taken atomically against state another replica
+//! can see:
 //!
-//! A second object beside the first would answer R3 and neither of the other
-//! two. Both remaining findings need a decision taken **atomically against
-//! state a second replica can see**:
+//! * `overlap = skip` must ask "does this definition have an unfinished run" of
+//!   the same transaction that takes the slot. Asked of the read model it was
+//!   answered from an asynchronous fold that is *empty in the `work` role*, so
+//!   skip never skipped where the tick runs.
+//! * A transient failure must not become a recorded refusal. A slot taken under
+//!   a lease does not depend on the global cursor, so a tick that dies holding
+//!   one leaves work the next tick picks up — rather than costing the day's run
+//!   and leaving a note claiming it was refused.
 //!
-//! * R1 — `overlap = skip` was answered from `state.read_model`, an
-//!   asynchronous fold that is *empty in the `work` role*, because
-//!   `bin/aiwatcher.rs` ends that path before the projector starts. Skip
-//!   therefore never skipped where the tick actually runs. The question "does
-//!   this definition have a run that has not finished" has to be asked of the
-//!   same transaction that takes the slot, and the workflow store is the only
-//!   place that holds both.
-//! * R2 — a transient failure became `Refused` and the global cursor moved
-//!   past the slot, so a store that was briefly unreachable at 09:00 cost the
-//!   day's run with a note saying it had been refused. A slot that is durable
-//!   in its own right does not depend on the cursor at all: it is taken under
-//!   a lease, and a tick that dies holding one leaves work the next tick picks
-//!   up.
-//!
-//! An object store offers no compare-and-set, so neither is expressible over
-//! it. The workflow store is transactional by construction — it is what
-//! ADR_0025 chose it for.
+//! An object store offers no compare-and-set; the workflow store is
+//! transactional by construction.
 
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;

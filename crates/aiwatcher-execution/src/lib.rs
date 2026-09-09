@@ -1,9 +1,5 @@
 //! Owned execution: the plan, the pure decider, and the store its history lives
-//! in.
-//!
-//! aiwatcher runs a curation, a workflow or an agent graph itself, rather than
-//! asking a browser or an orchestrator to (ADR_0025). This crate is the part
-//! that has no I/O in it and the port that does.
+//! in. No I/O in this crate — only the port that has it.
 //!
 //! ```text
 //!   definition ──► compile ──► ExecutionPlan ──► ExecutionRun
@@ -17,28 +13,23 @@
 //!      └──── the store's inbox ◄──────────────┴─► the outbox ──► the log (what happened)
 //! ```
 //!
-//! # What lives where, and why the split is this one
-//!
 //! [`decide`] is pure: no clock, no socket, no random value. Time arrives in
-//! [`decide::Now`] and ids are *derived* from what they name, so replaying a
-//! decision produces the same command id and a redelivered dispatch lands on
-//! the attempt it already created — `TraceId::derive`'s rule, one layer up.
+//! [`decide::Now`] and ids are derived from what they name, so a replay reaches
+//! the same command id and a redelivered dispatch lands on the attempt it
+//! already created.
 //!
-//! [`store`] is the one transactional operation. Six writes that must land
-//! together, behind a port with three adapters — `memory`, `file` and
-//! `postgres`, the last behind a cargo feature, the shape `laser` has in
-//! `aiwatcher-bus`. Splitting the writes is the dual-write gap this design
-//! exists to close.
+//! [`store`] is the one transactional operation — six writes that must land
+//! together, behind a port with four adapters (`memory | file | postgres |
+//! duckdb`, the last two behind cargo features). Splitting them is the
+//! dual-write gap this design closes.
 //!
-//! # What this crate does not do
+//! It executes nothing: no Flow client, no notebook client, no cluster
+//! credential. Those belong to the reactors, and every address is
+//! configuration. It holds no second copy of the durable-job rules either —
+//! [`aiwatcher_jobs::LEASE_SECONDS`], [`aiwatcher_jobs::after_failure`] and
+//! [`aiwatcher_jobs::ORDERING`] are called, not restated.
 //!
-//! It executes nothing. No Flow client, no notebook client, no engine client,
-//! no cluster credential — those belong to the reactors in the work role, and
-//! every one of their addresses is configuration. It also holds **no second
-//! copy** of the durable-job rules: the lease is
-//! [`aiwatcher_jobs::LEASE_SECONDS`], the attempt rule is
-//! [`aiwatcher_jobs::after_failure`], and the write-then-advance ordering is
-//! [`aiwatcher_jobs::ORDERING`]. ADR_0022 says why a copy is worse than a call.
+//! ADR_0025, ADR_0026.
 
 pub mod activity;
 pub mod artifact;

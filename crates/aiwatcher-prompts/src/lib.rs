@@ -1,36 +1,23 @@
-//! The prompt registry.
-//!
-//! Everything else in aiwatcher is a fold over the durable log, and everything
-//! else is therefore bounded by retention. A prompt is the exception: it is
-//! authored rather than observed, and the version a run used has to outlive
-//! every trace of that run. So it lives in an object store — RustFS in a
-//! deployment, a directory under `just run` — and this crate owns the layout
-//! and the rules.
+//! The prompt registry: authored, so it outlives the runs that used it.
 //!
 //! ```text
-//! {prefix}/{name}/head.json                        mutable index: labels, description, summaries
-//! {prefix}/{name}/versions/{version_id}.json       immutable, content-addressed
-//! {prefix}/{name}/optimizations/{id}.json          immutable
+//! {prefix}/{name}/head.json                     mutable index: labels, description, summaries
+//! {prefix}/{name}/versions/{version_id}.json    immutable, content-addressed
+//! {prefix}/{name}/optimizations/{id}.json       immutable
 //! ```
 //!
-//! Three things decide how this behaves.
+//! * **The head is derived; the versions are the truth.** It holds no fact that
+//!   is not in an object it points at — except the labels, which live nowhere
+//!   else. [`Registry::rebuild`] recovers the rest by listing.
+//! * **The version is written before the head.** An index naming an object that
+//!   was never stored is a list whose rows 404; an unindexed object is waiting
+//!   to be rebuilt.
+//! * **The verdict is computed here, not sent.**
+//!   [`Registry::record_optimization`] fetches the baseline's text, works out
+//!   what the candidate dropped, and decides — an optimiser picked its
+//!   candidate by maximising the number it reports.
 //!
-//! **The head is derived; the versions are the truth.** `head.json` exists so
-//! that listing a prompt is one request instead of one per object. It holds no
-//! fact that is not also in an object it points at — except the labels, which
-//! are pointers somebody moved and live nowhere else. Anything the head loses
-//! to a concurrent write, [`Registry::rebuild`] recovers by listing.
-//!
-//! **The version is written before the head.** The same ordering the pipeline
-//! applies to its checkpoint, for the same reason: an index naming an object
-//! that was never stored is a list whose rows 404, while an object nobody
-//! indexed is simply waiting to be rebuilt. Writing the head first would turn
-//! a crash into the first case.
-//!
-//! **The verdict is computed here, not sent.** An optimiser reports what it
-//! measured; [`Registry::record_optimization`] fetches the baseline's text,
-//! works out what the candidate dropped, and decides. See
-//! [`aiwatcher_core::prompts::OptimizationRecord::verdict`].
+//! ADR_0011.
 
 pub mod adapters;
 pub mod sigv4;

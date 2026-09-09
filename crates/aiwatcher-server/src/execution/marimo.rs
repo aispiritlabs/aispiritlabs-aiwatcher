@@ -1,66 +1,30 @@
 //! One marimo notebook, as a managed step.
 //!
-//! Section 16, and the other half of ADR_0024's notebook block. The panel may
-//! still run a notebook from the browser for an editor test — that is ad-hoc
-//! mode and is labelled as such. This is the managed one: the plan pinned a
-//! notebook and the `sha256` of the source it was saved against, the rows come
-//! from an artifact its parent produced, and what comes back becomes an
-//! artifact of its own.
-//!
 //! ```text
 //!   execute   GET  {runtime}/ml-pipeline/notebooks/{name}/revisions/{sha256}
 //!             POST {runtime}/ml-pipeline/run  {notebook, code_revision, rows, …}
 //!             └─► rows ─► object store ─► ArtifactRef ─► receipt
-//!   lookup    the receipt, and only the receipt — see below
+//!   lookup    the receipt, and only the receipt
 //! ```
 //!
-//! ## The run resolves the pin; it does not ask the head to still match it
+//! The plan pins a notebook and the `sha256` of its source. This names that
+//! revision and gets those bytes however far the editable head has moved. The
+//! digest is checked twice — before anything runs, and against what the
+//! subprocess imported — because a run whose provenance says one thing and
+//! whose rows came from another is what content addressing exists to prevent.
 //!
-//! A managed run pins the code it ran, which is why the compiler refuses a
-//! notebook block with no revision. The runtime keeps every source it has been
-//! given, named by its own `sha256`, so this **names the revision** and gets
-//! exactly those bytes however far the editable head has moved since.
+//! The source never travels in a request. The notebook file is what marimo
+//! serves and what a test reads; a copy would be a second source of truth.
 //!
-//! It was not always so. This used to read the head's digest and refuse a run
-//! whose pin no longer matched — provenance protected by making every earlier
-//! execution unrepeatable, which is a strange thing to call protection, and
-//! which work 5 exists to undo.
+//! `lookup` asks the object store's receipt, which answers only whether a
+//! previous attempt got all the way through. The notebook runtime remembers
+//! nothing, so a step whose notebook is still running in a process this one
+//! cannot see may run twice.
 //!
-//! The revision is still checked twice, and both are the same rule. The GET
-//! *before* anything executes says the runtime holds that source and that the
-//! stored bytes still hash to the pin — a refusal there costs one request
-//! rather than a run and an artifact. The comparison *after* says which source
-//! the subprocess actually imported. Neither is a warning: a run whose
-//! provenance says one thing and whose rows came from another is the failure
-//! the whole content-addressing exists to prevent.
+//! The address is `AIWATCHER_ML_PIPELINE_URL`. A process without it registers
+//! no notebook executor and claims no `marimo` attempt.
 //!
-//! Note what this does **not** do: it never sends the source. The notebook file
-//! is what marimo serves, what `ml_pipeline.step` imports and what a test
-//! reads, and a copy travelling in a request would be a second source of truth
-//! for a file that has to stay runnable on its own.
-//!
-//! ## What a timeout means here, and why `lookup` can say so little
-//!
-//! Less than it does for a Flow query, and the difference is the runtime's
-//! rather than this file's. The query service remembers that it ran a key
-//! (section 15.4); the notebook runtime remembers nothing — a run is a
-//! subprocess it holds open, and there is no route to ask "did you run this".
-//!
-//! So `lookup` can only ask the object store's receipt, which answers one
-//! question honestly: whether a *previous attempt got all the way through*,
-//! rows stored and receipt written. That covers a redelivered dispatch and a
-//! reactor that died after storing. It does not cover a notebook still running
-//! in a process this one cannot see, and the consequence is that such a step
-//! may run twice. Recorded rather than hidden: giving the notebook runtime the
-//! query service's execution memory is the fix, and it is a change to that
-//! service.
-//!
-//! ## The address is configuration
-//!
-//! `AIWATCHER_ML_PIPELINE_URL`. A `MarimoStepSpec` names a notebook and a
-//! revision, never a host — the rule every executor here keeps. A process with
-//! no address registers no notebook executor and therefore claims no `marimo`
-//! attempt.
+//! ADR_0024.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -381,7 +345,7 @@ impl MarimoExecutor {
 /// the obvious is `context`: the notebook runtime stages the rows it was given
 /// so the *live app* opens on them, and staging keyed by the notebook's name
 /// means two pipelines using one notebook overwrite each other. The context id
-/// is `<execution>/<step>/<attempt>`, which is what section 16.2 asks for.
+/// is `<execution>/<step>/<attempt>`, which is what the runtime keys on.
 fn request_of(
     spec: &aiwatcher_execution::plan::MarimoStepSpec,
     context: &ActivityContext,

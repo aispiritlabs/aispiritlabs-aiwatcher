@@ -1,14 +1,7 @@
 //! Registering a staged batch, a page at a time, in a job that survives the
-//! process that started it.
-//!
-//! The second caller of [`aiwatcher_jobs`], and the reason that crate exists:
-//! the conversation archive's export was the first, and
-//! [plan.md](../../../../plan.md) said to decide whether the machinery becomes
-//! shared *before* writing this one rather than after. What is shared is the
-//! rules — lease, retry budget, shard-before-cursor, the content address a
-//! finished job is named by. What is not is the record, because an export
-//! counts exclusions by policy reason and an import counts rejected rows by
-//! what was wrong with them, and those are different questions.
+//! process that started it. The rules are [`aiwatcher_jobs`]'; the record is
+//! this module's, because an import counts rejected rows by what was wrong
+//! with them.
 //!
 //! ```text
 //!  stage ──► append page ──► append page ──► … ──► queue
@@ -25,30 +18,16 @@
 //!                                          manifest  project@sha256
 //! ```
 //!
-//! Four things are worth reading rather than skipping.
+//! * A page is the unit of resume, which is safe only because registering an
+//!   image is idempotent: the id is the content address of its bytes.
+//! * Bytes go through [`fetch`](crate::integrations::fetch), in the job rather
+//!   than at the edge.
+//! * A rejected row is written to its own shard, not returned — six hundred
+//!   thousand rows do not fit in a response.
+//! * An interrupted job has no manifest and therefore no version. The images
+//!   it registered stay registered.
 //!
-//! **A page is the unit of resume**, so a killed process re-does at most one
-//! page. That is only safe because registering an image is idempotent: an
-//! image id is the content address of its bytes, and re-registering keeps the
-//! revisions and the review state. An import job could not resume at all if
-//! that were not true.
-//!
-//! **The bytes go through [`fetch`](crate::integrations::fetch).** Every gate —
-//! host allowlist, public-address check, no redirects, a streamed byte
-//! ceiling, a header-only pixel ceiling, a verified content address — is
-//! applied to every row, in the job, rather than at the edge. A fetcher wired
-//! into one route and not the other is the fetcher somebody routes around.
-//!
-//! **A rejected row is written down, not returned.** Six hundred thousand rows
-//! do not fit in a response, so the counts go on the job and the rows go into
-//! their own shards, paged. "Progress and rejected-row reasons are observable
-//! without reading the whole artifact" is an acceptance criterion, and this is
-//! what satisfies it.
-//!
-//! **An interrupted job has no manifest**, and therefore no version. The
-//! images it registered stay registered — they are content-addressed, and
-//! re-running writes the same ones — but nothing indexes a corpus somebody
-//! stopped halfway.
+//! ADR_0022.
 
 pub mod staging;
 

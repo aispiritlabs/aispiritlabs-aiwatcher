@@ -1,0 +1,9 @@
+# <type>: <what changed>            <- imperative, lowercase, max 72 chars
+#
+# <why it changed>                  <- only when the subject is not enough
+#
+# type: feat fix refactor perf docs test chore build ci
+#
+# Pick the type the change actually is. A refactor is not a feat.
+# Say what changed, not which files. The diff already lists those.
+# No trailing period. No two commits with the same subject.

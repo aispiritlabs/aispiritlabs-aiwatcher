@@ -1,44 +1,25 @@
 //! The workflow store on DuckDB: what `postgres` is for a deployment, for one
 //! machine.
 //!
-//! ## Why a fourth adapter
+//! It replaces two properties of `file`. That adapter rewrites whole files —
+//! the outbox on every publish, the claim table on every claim — which is
+//! quadratic where retention is opt-in; and a directory of JSON answers no
+//! questions, while `aiwatcher sql` opens this one with no server running.
 //!
-//! `file` is what a single-node install runs today, and it has two properties
-//! worth replacing. It rewrites whole files — the outbox on every publish, the
-//! claim table on every claim — which is quadratic in a store whose retention
-//! is opt-in; the guardrail about not storing a finished attempt as a row was
-//! written after that cost was measured at 458 ms over fifty thousand rows. And
-//! it is a directory of JSON that nobody can ask a question of, which is the
-//! other half of what a local install wants: `aiwatcher sql` opens this file and
-//! the run history is there, in tables, without a server running.
+//! **The rules are not here.** `prunable`, `AttemptRow::is_claimable`,
+//! `ClaimFilter::matches` and `SlotRecord::is_available` decide in Rust exactly
+//! as they do for the other three adapters; this file loads rows and asks them.
+//! A second answer in SQL is what `store::prunable` exists to prevent. The cost
+//! is that `claim_attempt` and `admit_slot` read the live rows rather than
+//! pushing a predicate down — bounded by concurrency and the tick rather than
+//! by retention. A deployment with a real backlog runs `postgres` and its
+//! `SKIP LOCKED`.
 //!
-//! ## What is *not* here
-//!
-//! The rules. `prunable`, `AttemptRow::is_claimable`, `ClaimFilter::matches`
-//! and `SlotRecord::is_available` decide in Rust, exactly as they do for the
-//! other three adapters, and this file loads rows and asks them. Expressing
-//! them again in SQL is the mistake `store::prunable` exists to prevent — a
-//! second answer to "finished long enough ago", free to drift, with a property
-//! suite that would only ever have proved it about one adapter.
-//!
-//! What that costs is honest and bounded: `claim_attempt` and `admit_slot` read
-//! the live rows rather than pushing a predicate down. Live rows are the
-//! attempts not yet settled and the slots not yet outcome-bearing — bounded by
-//! concurrency and by the scheduler's tick, not by retention — and on one
-//! machine that is a handful. A deployment with a real backlog runs `postgres`,
-//! which is what its `SKIP LOCKED` is for.
-//!
-//! ## Concurrency
-//!
-//! One connection behind a mutex, and every call goes through
-//! [`DuckdbWorkflowStore::with`], which hands the closure to `spawn_blocking` —
-//! DuckDB's API is synchronous, and running it on the runtime's own threads
-//! would let a checkpoint flush stall every other task in the process. The
-//! mutex is the transaction, as it is for `memory` and `file`: whoever holds it
-//! writes all six pieces of a decision or none. DuckDB takes an exclusive lock
-//! on the database file, so [`StoreCapabilities::multi_process`] is `false` and
-//! a managed run that needs a worker is refused by name rather than allowed to
-//! interleave writes that each look fine alone.
+//! One connection behind a mutex, every call through
+//! [`DuckdbWorkflowStore::with`] on `spawn_blocking` — DuckDB's API is
+//! synchronous and would otherwise stall the runtime. The mutex is the
+//! transaction. DuckDB takes an exclusive file lock, so
+//! [`StoreCapabilities::multi_process`] is `false`.
 
 mod schema;
 
@@ -458,7 +439,7 @@ impl WorkflowStore for DuckdbWorkflowStore {
             // The overlap check reads this store's own projection, in the same
             // critical section that takes the slot — never the read model,
             // which is an asynchronous fold and is empty in the `work` role
-            // where the tick runs. Review R1.
+            // where the tick runs.
             if request.overlap == crate::OverlapPolicy::Skip {
                 let running: Vec<RunProjection> = rows(
                     db,

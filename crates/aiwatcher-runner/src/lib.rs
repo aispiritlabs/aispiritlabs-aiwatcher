@@ -1,31 +1,20 @@
-//! Asking somebody else to run a workflow again.
+//! Asking somebody else to run a workflow again. The one crate here that makes
+//! something happen rather than recording that it did.
 //!
-//! This is the one crate here that makes something happen rather than
-//! recording that it did, and the whole design is about keeping that
-//! difference visible.
+//! aiwatcher does not orchestrate: it knows a graph's shape because a producer
+//! declared it on the log, not because it can execute one. So a rerun is a
+//! **dispatch** — one HTTP POST to one configured endpoint, carrying names the
+//! producer already chose. What comes back is an acknowledgement, never a
+//! result; the evidence is the events the rerun publishes.
 //!
-//! aiwatcher does not orchestrate. It knows the shape of a graph because a
-//! producer declared it on the log — not because it can execute one. So a
-//! rerun is a **dispatch**: one HTTP POST to one endpoint the operator
-//! configured, carrying names the producer already chose. What comes back is
-//! an acknowledgement, never a result; the evidence that the rerun happened is
-//! the events it publishes, on the same log as everything else.
+//! **The endpoint comes from configuration**, never from an event. A
+//! `workflow.declared` naming its own callback URL would be a request-forgery
+//! primitive posted by anything that can reach ingest — aiwatcher runs inside
+//! the cluster. The declaration names a workflow; the operator names a runner.
 //!
-//! ## The endpoint comes from configuration
-//!
-//! Never from an event, and this is the security boundary rather than a
-//! stylistic preference. A `workflow.declared` naming its own callback URL
-//! would be a request-forgery primitive posted by anything that can reach
-//! ingest: aiwatcher runs inside the cluster, so "POST this url" is a request
-//! to reach the cluster's internal network on the caller's behalf. The
-//! declaration names a *workflow*; the operator names a *runner*.
-//!
-//! ## Why this is a crate of its own
-//!
-//! `reqwest` is deliberately absent from `core`, `projector`, `api` and
-//! `server` — only `trace` and `prompts` carry it, each for one adapter. This
-//! is the third, and putting it in `server` would make the wiring crate an
-//! HTTP client.
+//! It is a crate of its own because `reqwest` is deliberately absent from
+//! `core`, `projector`, `api` and `server`; putting this in `server` would make
+//! the wiring crate an HTTP client.
 
 use std::time::Duration;
 

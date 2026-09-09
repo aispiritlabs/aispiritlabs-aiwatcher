@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Keeps commit subjects short, typed and distinct. Bypass: git commit --no-verify.
+set -euo pipefail
+
+subject=$(grep -v '^#' "$1" | sed '/./,$!d' | head -1)
+
+# Merges, fixups and reverts are written by git, not by a person.
+case "$subject" in
+    Merge\ *|Revert\ *|fixup!\ *|squash!\ *|amend!\ *) exit 0 ;;
+esac
+
+fail() {
+    echo "commit-msg: $1" >&2
+    echo "            subject: $subject" >&2
+    echo >&2
+    echo "  <type>: <what changed>   types: feat fix refactor perf docs test chore build ci" >&2
+    echo "  max 72 chars, imperative, lowercase, no trailing period" >&2
+    echo "  bypass with --no-verify" >&2
+    exit 1
+}
+
+[ -n "$subject" ] && [ "$subject" != " " ] || fail "empty subject"
+
+grep -qE '^(feat|fix|refactor|perf|docs|test|chore|build|ci)(\([a-z0-9._/-]+\))?!?: .+' \
+    <<<"$subject" || fail "no conventional type prefix"
+
+[ "${#subject}" -le 72 ] || fail "subject is ${#subject} chars, max 72"
+
+case "$subject" in
+    *.) fail "subject ends with a period" ;;
+esac
+
+body_first=$(grep -v '^#' "$1" | sed '/./,$!d' | sed -n 2p)
+[ -z "$body_first" ] || fail "no blank line between the subject and the body"
+
+exit 0

@@ -1,46 +1,28 @@
 //! Registering many images at once, from rows a Flow PHP pipeline produced.
 //!
-//! The bulk half of the [`images`](crate::images) slice. Everything the single
-//! image path checks, checked the same way: this runs the *same* validation
-//! and the *same* write as a one-at-a-time registration, so a dry run and a
-//! write cannot disagree about what is valid.
+//! The bulk half of the [`images`](crate::images) slice. It runs the *same*
+//! validation and the *same* write as a one-at-a-time registration, so a dry
+//! run and a write cannot disagree about what is valid.
 //!
-//! The other end of [`hubs`](crate::integrations::hubs). A search says a corpus exists; this
-//! is how the images in it become rows in a project somebody can draw on. In
-//! between sits a Flow query, for a reason worth stating rather than assuming:
-//! **every hub lays its files out differently**, and a mapping written in
-//! Rust would be a `match` on hub names that grows by one arm per corpus and
-//! is wrong for the next one.
+//! The mapping from a hub's layout to these column names is a Flow query rather
+//! than Rust, because every hub lays its files out differently and a `match` on
+//! hub names grows one arm per corpus and is wrong for the next one.
 //!
-//! A Flow pipeline is where that mapping belongs. It is a saved recipe (the
-//! curation registry already versions those), it is readable by whoever has to
-//! fix it, and it is the same surface the panel already uses to build a
-//! dataset. What arrives here is a list of rows that already have this
-//! module's column names.
+//! # What this refuses
 //!
-//! ## What this refuses
-//!
-//! Three things, and each is a mistake that is invisible afterwards.
-//!
-//! **A claimed licence.** [`ImportRequest::rights`] is what the *caller*
-//! asserts, and the caller is a person. A hub row cannot supply it: the
-//! discovery surface carries [`SourceUsage::Unclear`] and the panel offers
-//! [`UsageRights::Unknown`], which a commercial export then excludes by name.
-//! Somebody who has read the licence at the original can say otherwise, and
-//! that assertion is recorded with their name on it.
-//!
-//! **A licence better than the curated table's.** When the row matched a
-//! curated corpus and that corpus is research-only, an import claiming
-//! commercial terms is refused outright. This is the one case where aiwatcher
-//! knows more than the person clicking: a human read that licence at the
-//! source, on a date, and wrote it down.
-//!
-//! **A family key that is really an image key.** [`ImportRow::group_id`] is
-//! the *building*. A pipeline that mapped it from the file name gives every
-//! image its own family, which silently turns the family split back into a
-//! per-image split — and nothing in the numbers afterwards says so. So a
-//! request whose rows are all singleton families is reported as such, loudly,
-//! on a response that still succeeded.
+//! * **A claimed licence with nobody behind it.** [`ImportRequest::rights`] is
+//!   the caller's assertion. A hub row cannot supply it — discovery carries
+//!   [`SourceUsage::Unclear`] and the default is [`UsageRights::Unknown`],
+//!   which a commercial export excludes by name.
+//! * **A licence better than the curated table's.** A row matching a
+//!   research-only corpus cannot be imported on commercial terms. The one case
+//!   where aiwatcher knows more than the person clicking: a human read that
+//!   licence at the source, on a date.
+//! * **A family key that is really an image key.** [`ImportRow::group_id`] is
+//!   the *building*. Mapped from the file name it gives every image its own
+//!   family, which turns the family split back into a per-image split with
+//!   nothing in the numbers to say so. Reported loudly on a response that
+//!   still succeeded.
 
 use std::collections::{BTreeMap, BTreeSet};
 

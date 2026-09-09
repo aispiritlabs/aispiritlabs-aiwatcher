@@ -1,8 +1,5 @@
 //! Workflow graphs: the shape an orchestration declared, and what a traversal
-//! of it actually did.
-//!
-//! Everything else in this crate folds *what happened*. This module folds one
-//! thing that did not: the topology. That is the whole reason it exists.
+//! of it actually did. The one fold here over something that did not happen.
 //!
 //! ```text
 //! workflow.declared   → the catalog: nodes and edges, before anything runs
@@ -12,29 +9,20 @@
 //! run.*               → which runs a traversal is made of
 //! ```
 //!
-//! Three rules carry the meaning.
-//!
-//! * **A node that never ran is `Pending`, and that is only expressible
-//!   because something declared it.** A projection over observed events alone
-//!   can answer "what has this done" and can never answer "what has it not
-//!   done yet" — which is the question somebody watching a workflow is
-//!   actually asking. The declaration is what turns a list of finished stages
-//!   into a graph with a front edge.
-//!
+//! * **A node that never ran is `Pending`**, which only the declaration makes
+//!   expressible. A fold over observed events can say what a workflow has done
+//!   and never what it has not done yet.
 //! * **An execution is not a run.** A stage-per-pod orchestrator gives every
 //!   stage its own process, so one traversal is four runs joined by
-//!   `workflow_run_id` (see [`aiwatcher_core::EventEnvelope::workflow_run`]).
-//!   A workflow that runs start to finish in one process is its own execution
-//!   and nobody has to know the difference.
+//!   `workflow_run_id`. One process start to finish is its own execution.
+//! * **A node the declaration never mentioned is kept and flagged**
+//!   ([`NodeState::declared`]) — dropping it would hide a graph that has
+//!   drifted from the code that runs it.
 //!
-//! * **A node the declaration never mentioned is kept, and flagged.** Dropping
-//!   it would hide the one case worth seeing: a graph that has drifted from
-//!   the code that runs it. [`NodeState::declared`] is how the panel tells the
-//!   two apart.
+//! Bounded like every projection here: detail is shed before whole executions
+//! are dropped, and a running execution is never the one evicted.
 //!
-//! Bounded like every other projection here, and by the same two-tier rule:
-//! detail is shed before whole executions are dropped, and a running execution
-//! is never the one evicted — it is the one somebody is watching.
+//! ADR_0012.
 
 use std::collections::{BTreeSet, HashMap};
 

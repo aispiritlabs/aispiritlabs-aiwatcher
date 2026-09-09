@@ -1,8 +1,5 @@
 //! Opening a block's editor on what one step actually read.
-//!
-//! [`core::ports::EditorHost`], implemented. §16.3, and the shape it settled
-//! on rather than the one it described: a **server-resolved context**, with no
-//! token and no session object.
+//! [`core::ports::EditorHost`], implemented.
 //!
 //! ```text
 //!   object store ──► the rows that step read
@@ -10,38 +7,23 @@
 //!                        └─► app_url, for an iframe
 //! ```
 //!
-//! ## Why no token
+//! **No token.** The notebook runtime has no authentication at all — it binds
+//! to localhost and is a development surface — so a token it cannot validate
+//! would be ceremony rather than a boundary. The gate is the route that calls
+//! this: aiwatcher decides who may open which run's rows and reads them itself.
 //!
-//! §16.3 asked for a short-lived session carrying permissions, expiry and a
-//! signature. The service it would be presented to has **no authentication at
-//! all** — it binds to localhost and is a development surface by design — so a
-//! token it cannot validate would be ceremony rather than a boundary. The gate
-//! that does exist is the one on the route that calls this: aiwatcher decides
-//! who may open which run's rows, reads them itself, and hands the runtime a
-//! staging request no different in kind from the one a run makes.
-//!
-//! ## What this deliberately does not do
-//!
-//! It **stages and stops**. Running the notebook to fill its editor would
+//! **It stages and stops.** Running the notebook to fill its editor would
 //! execute somebody's code because they clicked "open", and would overwrite the
 //! output of the run being looked at.
 //!
-//! And the live app serves the notebook's **head**: marimo's dynamic directory
-//! turns the notebook root into apps, and the history is kept out of that root
-//! precisely so a hundred copies of one notebook do not appear in the picker.
-//! So a session opened on an old run's rows shows *those rows* under *today's
-//! code*, and the code that ran is read beside it by its digest through the
-//! revision route. The session says which revision that was, so the two are
-//! never silently conflated.
+//! **The live app serves the notebook's head**, because marimo turns the
+//! notebook root into apps and the revision history is kept out of it. So a
+//! session on an old run's rows shows those rows under today's code; the
+//! session names the revision that ran, so the two are never conflated.
 //!
-//! ## The address is configuration, and this role needs it too
-//!
-//! `AIWATCHER_ML_PIPELINE_URL`, the same variable the reactor uses — and this
-//! is the second reason it exists. A `serve` process without it registers no
-//! editor host and the route answers 501 naming the variable, which is the
-//! ordinary state of a deployment that runs no notebook runtime at all.
-//! Registering nothing rather than failing every request is the claim filter's
-//! rule, one layer up: a process that cannot do the work does not offer it.
+//! The address is `AIWATCHER_ML_PIPELINE_URL`. Without it this registers no
+//! editor host and the route answers 501 naming the variable — a process that
+//! cannot do the work does not offer it.
 
 use std::sync::Arc;
 use std::time::Duration;
