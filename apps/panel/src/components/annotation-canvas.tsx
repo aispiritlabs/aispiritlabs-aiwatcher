@@ -17,28 +17,26 @@ import { cn } from '@/lib/utils';
  * The drawing surface.
  *
  * An `<img>` and an `<svg>` in one transformed container, both sized to the
- * image's natural pixels. That is the whole trick: SVG user units *are* image
- * coordinates, so no shape ever carries a zoom level and the browser does the
- * scaling. The alternative — converting on every render — is where an
- * annotation tool acquires its off-by-a-pixel drift.
+ * image's natural pixels. SVG user units *are* image coordinates, so no shape
+ * carries a zoom level and the browser does the scaling. Converting on every
+ * render is where an annotation tool acquires its off-by-a-pixel drift.
  *
- * Interaction is deliberately close to CVAT's, because that is what a labeller
- * who has done this before will try:
+ * Interaction follows CVAT's, because that is what a labeller who has done this
+ * before will try:
  *
  * * wheel zooms at the cursor, shift-drag pans, and so does a drag on empty
- *   canvas while the select tool is active;
- * * a draw tool takes clicks, and the shape ends four ways: click the vertex
- *   it would close on, double-click, press `Enter`, or press the button on
- *   the bar the canvas shows while a shape is open. `Backspace` removes the
- *   last point, `Escape` abandons the shape. Four ways because a labeller who
- *   cannot find the first one concludes the tool will not let them stop —
- *   which is the bug this bar exists to close;
- * * a selected shape shows its vertices, which drag; the shape itself drags
- *   with `alt` held, so a stray drag does not silently move a wall.
+ *   canvas under the select tool;
+ * * a draw tool takes clicks and ends four ways — click the closing vertex,
+ *   double-click, `Enter`, or the button on the bar shown while a shape is
+ *   open. `Backspace` removes a point, `Escape` abandons the shape. Four,
+ *   because a labeller who cannot find the first concludes the tool will not
+ *   let them stop;
+ * * a selected shape shows draggable vertices; the shape itself drags only with
+ *   `alt` held, so a stray drag does not silently move a wall.
  *
- * What it does not do is decide anything. Validation lives in the registry, so
- * a half-drawn door is refused with a reason rather than quietly fixed here
- * into something the labeller did not draw.
+ * It decides nothing. Validation lives in the registry, so a half-drawn door is
+ * refused with a reason rather than quietly fixed here into something the
+ * labeller did not draw.
  */
 
 export type Tool = 'select' | 'draw';

@@ -51,7 +51,7 @@ use crate::state::AppState;
 
 /// The header a caller repeats to reach the same execution twice.
 ///
-/// Section 20 asks every mutating command endpoint for one. Here it does its
+/// every mutating command endpoint for one. Here it does its
 /// work by *deriving the execution id* rather than by a table of keys: the same
 /// key produces the same id, the same id produces the same stream, and the
 /// store's own inbox answers the second request with what the first decided.

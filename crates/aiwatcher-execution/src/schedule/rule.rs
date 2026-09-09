@@ -120,7 +120,7 @@ impl Schedule {
     ///
     /// The three fields that decide *when*, and deliberately not `overlap`,
     /// which decides what happens when a slot comes round rather than whether
-    /// one does. The distinction is the whole of review R7's second half: a new
+    /// one does. The distinction is: a new
     /// activation moment silently drops a slot that was already due, so it may
     /// only be taken when the rule for producing slots actually changed.
     /// Somebody switching `skip` to `allow` at 08:59 must not lose the nine
@@ -161,7 +161,7 @@ impl Schedule {
         };
 
         // Enumerated by **local calendar date**, never by stepping from
-        // `previous`. That is the whole of the fix for review R5: the old walk
+        // `previous`. That is: the old walk
         // sampled the zone at `previous`, `previous + step`, … and around a
         // fall-back the same local time exists at two instants, so which of
         // them a sample landed on depended on where the interval had been cut.

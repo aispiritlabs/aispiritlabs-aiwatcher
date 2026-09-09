@@ -4,7 +4,7 @@
  * The generated client does **not** throw by default: a 403 comes back as
  * `{ data: undefined, error }` and the promise *resolves*. That is how a
  * refused command used to run react-query's `onSuccess`, and how a refused
- * DELETE used to clear the form for a schedule it had not deleted (review R6).
+ * DELETE used to clear the form for a schedule it had not deleted.
  *
  * So every call goes through one of the three readers here, chosen by what
  * absence means on that route: [`answerOf`] where there is always a body,

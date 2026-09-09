@@ -9,27 +9,20 @@ use HiFolks\Statistics\Stat;
 /**
  * What a query may ask of a column of numbers, beyond what Flow ships.
  *
- * Flow's aggregations are `count`, `sum`, `average`, `min`, `max`, `first`,
- * `last` and the two collectors — enough for "how many" and "how much", and
- * missing the half of `describe()` that says how a column is *distributed*. A
- * median is not an average when a handful of first-class fares are ten times
- * everybody else's, and knowing which of the two a curation published matters
- * to whoever trains on it.
+ * Flow's aggregations answer "how many" and "how much" and miss the half of
+ * `describe()` that says how a column is *distributed*. A median is not an
+ * average when a handful of first-class fares are ten times everybody else's.
  *
- * The arithmetic is [hi-folks/statistics][lib] rather than written here. It is
- * MIT, has no dependencies of its own, ports the Python `statistics` module's
- * definitions, and is checked at PHPStan level 8 — and a hand-rolled quantile
- * with an off-by-one in its interpolation is a wrong number that looks right,
- * which is the worst kind of thing to own.
+ * The arithmetic is [hi-folks/statistics][lib] rather than written here: MIT, no
+ * dependencies, the Python `statistics` module's definitions, PHPStan level 8.
+ * A hand-rolled quantile with an off-by-one in its interpolation is a wrong
+ * number that looks right.
  *
- * ## Not enough data is not zero
- *
- * Every one of these is undefined below some number of values, and the library
- * says so by throwing. What a query gets back instead is **null**: a group of
- * one passenger has no sample deviation, and answering 0 would be publishing a
- * claim nobody made. Flow's own `average()` answers 0 for an empty group,
- * which is its choice and not one to copy — a curation is read later by
- * somebody who was not there when it ran.
+ * **Not enough data is not zero.** Each of these is undefined below some number
+ * of values, and a query gets **null** rather than 0 — a group of one passenger
+ * has no sample deviation, and 0 would be a claim nobody made. Flow's own
+ * `average()` answers 0 for an empty group, which is its choice and not one to
+ * copy: a curation is read later by somebody who was not there when it ran.
  *
  * [lib]: https://github.com/Hi-Folks/statistics
  */

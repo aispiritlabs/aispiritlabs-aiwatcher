@@ -10,30 +10,22 @@ use Flow\ETL\DataFrame\GroupedDataFrame;
 /**
  * The steps a pipeline may take, derived from `DataFrame` rather than listed.
  *
- * The same rule [`Registry`] applies to functions, applied to methods: a step
- * is admitted when it **returns a frame** and no parameter of it is one
- * [`Admission`] refuses. On Flow 0.43 that admits 24 of the 53 public methods
- * — `join`, `crossJoin`, `offset`, `until`, `batchBy` and the rest of the
- * shaping vocabulary among them — and refuses every method that could write a
- * file, open a source or run somebody's code: `write` and `load` take a
- * `Loader`, `map` and `forEach` take a `callable`, `transform` takes a
- * `Transformer`, `filterPartitions` takes a `Path\Filter`, `mode` and
- * `saveMode` take a `SaveMode`.
+ * [`Registry`]'s rule, applied to methods: a step is admitted when it **returns
+ * a frame** and no parameter is one [`Admission`] refuses. On Flow 0.43 that is
+ * 24 of the 53 public methods — `join`, `crossJoin`, `offset`, `until`,
+ * `batchBy` among them — and refuses everything that could write a file, open a
+ * source or run somebody's code: `write` and `load` take a `Loader`, `map` and
+ * `forEach` a `callable`, `transform` a `Transformer`.
  *
- * The hand-written list this replaces had fourteen steps in it. Nothing chose
- * those fourteen except the order somebody needed them in, which is why
- * `join()` — the one operation people asked for most — was missing for no
- * reason that survived being written down.
- *
- * ## Dispatch
+ * The hand-written list this replaces had fourteen steps. Nothing chose those
+ * fourteen except the order somebody needed them in, which is why `join()` was
+ * missing for no reason that survived being written down.
  *
  * A name from a query selects a `ReflectionMethod` **in a map built here** and
- * is invoked against a `DataFrame`. That is a change from the explicit `match`
- * ADR_0008 describes, and the property that mattered is unchanged: the
- * reachable set is fixed, small and derived from types — every member of it
- * reshapes rows and none of them can reach a file, a socket or a callable. A
- * `match` gave that set by hand; this gives it by rule, and the rule is the
- * thing that stays right when Flow adds a method.
+ * is invoked against a `DataFrame`. The property ADR_0008 cares about is
+ * unchanged: the reachable set is fixed, small and derived from types, and none
+ * of it can reach a file, a socket or a callable. A `match` gave that set by
+ * hand; this gives it by rule, and the rule stays right when Flow adds a method.
  */
 final class Frame
 {

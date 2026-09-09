@@ -174,7 +174,7 @@ final readonly class QueryRunner
     /**
      * What this service remembers about a managed execution, if anything.
      *
-     * The lookup half of section 15.4. `absent` is the ordinary answer and the safe one:
+     * The lookup half. `absent` is the ordinary answer and the safe one:
      * the reactor treats it as "run it again", and a retry of a deterministic query over
      * the same window writes the same digest. A second replica behind a load balancer
      * therefore answers `absent` for the other replica's execution, by design.

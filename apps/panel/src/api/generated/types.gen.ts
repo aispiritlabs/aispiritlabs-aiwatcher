@@ -2564,7 +2564,7 @@ export type GeometryKind = typeof GeometryKind[keyof typeof GeometryKind];
 /**
  * A hosted decider's own message, as this engine holds it.
  *
- * **Opaque by design** (section 40.3). The worker runs `decide`; an engine that
+ * **Opaque by design**. The worker runs `decide`; an engine that
  * read these would be a second decider, which is the thing the hosted mode
  * exists to avoid. What is stored is the type *name* — enough to project a
  * status from `TurnStarted` and `TurnCompleted`, and nothing else — the
@@ -4133,7 +4133,7 @@ export type PartSummary = {
 };
 
 /**
- * Where a hosted execution's content lives (section 40.4).
+ * Where a hosted execution's content lives.
  *
  * The definition chooses, the deployment sets the default, and the free one is
  * the default: a hosted run starts with no archive, no key and no flag. There
@@ -4144,7 +4144,7 @@ export type PartSummary = {
 export const PayloadPolicy = { EXTERNAL: 'external', SEALED: 'sealed' } as const;
 
 /**
- * Where a hosted execution's content lives (section 40.4).
+ * Where a hosted execution's content lives.
  *
  * The definition chooses, the deployment sets the default, and the free one is
  * the default: a hosted run starts with no archive, no key and no flag. There
@@ -4157,7 +4157,7 @@ export type PayloadPolicy = typeof PayloadPolicy[keyof typeof PayloadPolicy];
 /**
  * Where a hosted message's words are, and how big they were.
  *
- * Never the words themselves (section 40.4). The digest is of the *plaintext*,
+ * Never the words themselves. The digest is of the *plaintext*,
  * so a reader can tell whether what it fetched is what was appended — the
  * prompt registry's rule, in a fourth place.
  */
@@ -5714,7 +5714,7 @@ export type ScheduleView = {
      *
      * Read from the **workflow store**, not from the schedule object. They
      * used to be one thing, which is what let a tick's write-back undo an
-     * edit or resurrect a deleted schedule (review R3); configuration and slot
+     * edit or resurrect a deleted schedule; configuration and slot
      * outcomes now have different writers and live in different places.
      *
      * Empty when this deployment wired no execution store — there is then no
@@ -6384,7 +6384,7 @@ export type SuiteSummary = {
  *
  * Two arms, which is what the enum was for: both compile to the same
  * `ExecutionPlan` from different editors, with different provenance, and the
- * names live in different registries under different prefixes (section 4). A
+ * names live in different registries under different prefixes. A
  * `kind` nobody had to send would have to be guessed from the name — and two
  * definitions may share one, which is exactly what `WorkflowSpec` being saved
  * beside `CurationPipeline` allows.
@@ -6396,7 +6396,7 @@ export const TargetKind = { CURATION_PIPELINE: 'curation_pipeline', WORKFLOW: 'w
  *
  * Two arms, which is what the enum was for: both compile to the same
  * `ExecutionPlan` from different editors, with different provenance, and the
- * names live in different registries under different prefixes (section 4). A
+ * names live in different registries under different prefixes. A
  * `kind` nobody had to send would have to be guessed from the name — and two
  * definitions may share one, which is exactly what `WorkflowSpec` being saved
  * beside `CurationPipeline` allows.

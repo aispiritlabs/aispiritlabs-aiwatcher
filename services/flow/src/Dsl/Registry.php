@@ -7,48 +7,27 @@ namespace Aiwatcher\Flow\Dsl;
 /**
  * What a query may name. The whole decision, and the only one.
  *
- * ADR 0008's rule is that a name from the query never becomes a callable. That
- * rule is about **dispatch**, not about enumeration: a string that selects a
- * key in a map built here is exactly as safe as one that selects a `match`
- * arm, and it is what lets this file admit Flow's own function namespace
- * without widening the boundary by one call.
+ * ADR 0008's rule is about **dispatch**: a name from a query never becomes a
+ * callable. A string that selects a key in a map built here is exactly as safe
+ * as one that selects a `match` arm, which is what lets this admit Flow's own
+ * function namespace without widening the boundary by one call.
  *
- * There used to be a hand-written `Whitelist` beside it, holding 24 names that
- * this class already admitted by signature and reading, to anybody opening the
- * file, like the boundary. It was not: the two were consulted with `||`, so
- * the effective vocabulary had been this class's since the day it landed. A
- * list that decides nothing and looks like it decides everything is worse than
- * no list, so it is gone.
+ * Two vocabularies are not Flow's and are enums rather than lists, so neither
+ * grows by accident: [`Sink`] and [`Statistics\Descriptive`].
  *
- * Two vocabularies are not Flow's and are therefore not here, and both are
- * enums that *are* their own implementation rather than a list beside one:
- * [`Sink`] — the three loaders that mean "give the rows back" — and
- * [`Statistics\Descriptive`] — `median`, `stddev`, `variance`, `percentile`,
- * which Flow does not ship. Neither can grow by accident: a case is a `match`
- * arm somebody had to write.
+ * Three rules decide admission, and none is a name:
  *
- * ## Three rules decide admission, and none of them is a name
+ * - **The return type's namespace.** A query composes values; it does not open
+ *   sources or write sinks, so `Flow\ETL\Loader`, `Extractor` and `Filesystem`
+ *   are absent. The catalog owns what may be read, `write()` owns the sinks.
+ * - **Any parameter accepting a callable** is refused — `call()` and
+ *   `to_callable()` are the remote code execution this service exists to
+ *   refuse, and refusing by signature covers whatever Flow adds next.
+ * - **[`self::DECLINED`]**, which is about correctness rather than safety and
+ *   keeps its own reasons.
  *
- * **The return type's namespace.** A query composes values; it does not open
- * sources or write sinks. `Flow\ETL\Loader`, `Flow\ETL\Extractor` and
- * `Flow\ETL\Filesystem` are how a query would read or write a file of its own
- * choosing, so those categories are absent — the catalog owns what may be
- * read, and `write()` owns the three sinks that mean "return the rows".
- *
- * **Any parameter that accepts a callable.** `call()` and `to_callable()` are
- * the two Flow has, and they are precisely the remote code execution this
- * service exists to refuse. Refused by *signature* rather than by name, so a
- * function Flow adds later is refused before anybody here has heard of it.
- *
- * **[`self::DECLINED`]**, which is about correctness rather than safety and
- * keeps its own reasons.
- *
- * ## Why the return type is read as a string
- *
- * `class_exists()` and `is_a()` autoload, and `Flow\ETL\Function\Uuid` throws
- * at load when neither `ramsey/uuid` nor `symfony/uid` is installed. Loading a
- * class in order to decide whether a query may name it would take the service
- * down over an optional dependency of a function nobody called.
+ * The return type is read as a **string**: `class_exists()` autoloads, and
+ * `Flow\ETL\Function\Uuid` throws at load without `ramsey/uuid`.
  */
 final class Registry
 {

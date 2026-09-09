@@ -42,29 +42,17 @@ import {
  *
  * The tree on the left is the whole hierarchy, expandable in place; the pane on
  * the right is the messages for whatever is selected. Selecting deeper never
- * loses the levels above it, which is the thing that made this hard before:
- * inspecting one LLM call meant going back to a list and re-filtering, and the
- * way back up was gone.
+ * loses the levels above it. Every selection lives in the URL, so a level is
+ * linkable and the back button walks the hierarchy.
  *
- * Every selection lives in the URL, so a level is linkable and the back button
- * walks the hierarchy.
+ * **One grouping control, not two.** The pivot decides the shape; below it the
+ * list is flat and in order. A second control in the message pane grouped
+ * already-narrowed data by the thing it had just been narrowed to, and
+ * collapsed the one view that has to stay chronological.
  *
- * ## Why there is one grouping control and not two
- *
- * There used to be a second one, in the message pane: having narrowed to a
- * span, you could then re-group its messages by span, agent or type. It was
- * grouping already-narrowed data by the thing it had just been narrowed to, and
- * it collapsed the one view that has to stay chronological. The pivot decides
- * the shape; below it the list is flat and in order.
- *
- * ## Why nothing here loads eagerly
- *
- * Every list is a cursor page from the server and a virtual window in the
- * browser. A run with forty thousand events used to arrive in one response and
- * mount forty thousand rows; now it arrives two hundred at a time and mounts
- * what fits on screen. The searches are server-side for the same reason —
- * filtering in the browser requires having downloaded everything first, which
- * is exactly what this avoids.
+ * **Nothing loads eagerly.** Every list is a cursor page from the server and a
+ * virtual window in the browser, and the searches are server-side for the same
+ * reason: filtering in the browser means downloading everything first.
  */
 
 /** What the tree's top level is. Everything below it stays the same. */

@@ -619,7 +619,7 @@ mod tests {
 
     #[test]
     fn a_hosted_message_is_neither_folded_nor_refused_by_this_engine() {
-        // The whole of section 40.3's "what the engine does not do", enforced
+        // The whole.3's "what the engine does not do", enforced
         // by the type rather than by a rule somebody keeps: `decide`'s replay
         // reads `event()` and its refusals read `command()`, and a hosted
         // message answers `None` to both. An engine that read these would be a
@@ -644,7 +644,7 @@ mod tests {
     fn a_hosted_message_says_which_kind_it_is_and_carries_no_words() {
         // `kind` is what the store's check constraint reads, as it is for the
         // other two. What follows it is a reference and a size — the content
-        // rule of section 40.4, visible in the serialised row.
+        // rule, visible in the serialised row.
         let message = WorkflowMessage::Hosted(HostedMessage {
             message_type: TURN_COMPLETED.to_owned(),
             metadata: Value::Null,

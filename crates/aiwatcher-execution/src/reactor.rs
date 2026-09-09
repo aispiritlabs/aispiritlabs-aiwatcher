@@ -443,7 +443,7 @@ impl<S: WorkflowStore> Reactor<S> {
     /// A usable entry for this key, or nothing.
     ///
     /// A catalog that could not be read answers `None` and the work is done
-    /// again, which is what section 18 means by the index losing nothing
+    /// again, which is the index losing nothing
     /// authoritative. It is logged rather than returned: a cache being down is
     /// not a reason to fail a step.
     async fn cached(

@@ -813,7 +813,7 @@ export const resumeExecution = <ThrowOnError extends boolean = false>(options: O
 export const readDeciderLease = <ThrowOnError extends boolean = false>(options: Options<ReadDeciderLeaseData, ThrowOnError>): RequestResult<ReadDeciderLeaseResponses, ReadDeciderLeaseErrors, ThrowOnError> => (options.client ?? client).get<ReadDeciderLeaseResponses, ReadDeciderLeaseErrors, ThrowOnError>({ url: '/api/v1/executions/{execution_id}/decider-lease', ...options });
 
 /**
- * Take, or renew, the right to decide one hosted run (section 40.3).
+ * Take, or renew, the right to decide one hosted run.
  *
  * `agentic.workflow`'s `ProcessorLock`, in the store that holds the history.
  * Renewing is this same call under the same name, so a heartbeat and a first
@@ -900,7 +900,7 @@ export const provideInput = <ThrowOnError extends boolean = false>(options: Opti
 });
 
 /**
- * Append a worker's messages to a hosted execution's history (section 40.3).
+ * Append a worker's messages to a hosted execution's history.
  *
  * The decider is the worker; this is the shared history `agentic.workflow`
  * cannot give itself when every agent worker holds its own SQLite. What this

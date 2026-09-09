@@ -419,7 +419,7 @@ pub trait WorkflowStore: Send + Sync + std::fmt::Debug {
 
     /// Take one schedule slot, or say why not.
     ///
-    /// **The transactional half of the scheduler** (review R1, R2, R3). Three
+    /// **The transactional half of the scheduler**. Three
     /// things happen inside one transaction and none of them can be split:
     /// the slot is created if it does not exist, it is refused if somebody
     /// already settled it or holds a live lease on it, and — when the policy
@@ -520,15 +520,12 @@ pub trait WorkflowStore: Send + Sync + std::fmt::Debug {
     ///   attempts. A kept projection whose stream is gone is a run the panel
     ///   lists and cannot open.
     ///
-    /// Plans and checkpoints are untouched: a plan is shared by every run of
-    /// one revision, and a checkpoint belongs to a processor.
-    ///
-    /// `limit` bounds one pass, so turning retention on against a year of
-    /// history is many short transactions rather than one long table lock.
-    ///
-    /// The window has a floor nothing here can check: the inbox goes with the
-    /// stream, so it must outlast the log's own retention or a redelivery is
-    /// decided again instead of recognised.
+    /// Plans and checkpoints are untouched. `limit` bounds one pass, so
+    /// turning retention on against a year of history is many short
+    /// transactions rather than one long table lock. The window has a floor
+    /// nothing here can check: the inbox goes with the stream, so it must
+    /// outlast the log's own retention or a redelivery is decided again
+    /// instead of recognised.
     ///
     /// # Errors
     ///

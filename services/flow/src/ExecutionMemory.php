@@ -8,33 +8,23 @@ namespace Aiwatcher\Flow;
  * What this service remembers about a managed execution: that it ran, and what the
  * result hashed to. Never the rows.
  *
- * Section 15.4 of `docs/PIPELINE_ARCHITECTURE.md`. A reactor's timeout proves nothing
- * about whether a query finished, so before it runs one again it asks by the idempotency
- * key `<execution>/<step>/<attempt>`. Three answers, and each sends the reactor somewhere
- * different:
+ * A reactor's timeout proves nothing about whether a query finished, so before it runs
+ * one again it asks by the idempotency key `<execution>/<step>/<attempt>`:
  *
  *   running  the query is still executing here — wait, do not send it again
  *   done     it finished, and this is what it hashed to
- *   absent   this service has no record of that key — running it again is safe
+ *   absent   no record of that key — running it again is safe
  *
- * ADR 0014 refused this service an S3 client, and that refusal stands: the rows go to the
- * artifact the *reactor* uploads, and what stays here is a note. So `done` answers "it
- * ran"; "here is what it produced" is a different question, answered by the object store
- * the reactor wrote to.
+ * ADR 0014 refused this service an S3 client and that stands: the rows go to the artifact
+ * the *reactor* uploads. So `done` answers "it ran"; "here is what it produced" is the
+ * object store's question.
  *
- * ## Why the notes are files
- *
- * "In memory, for minutes" is the shape, and a PHP process has no memory between requests.
- * `php -S` forks workers and PHP-FPM forks children, so a static array would answer
- * `absent` to whichever worker happened to take the lookup — which is the bug this route
- * exists to remove, arriving from a different direction.
- *
- * Files in the system temp directory have the property that matters and no more of it: the
- * note lives as long as the lookup window and is scoped to one host, so a second replica
- * behind a load balancer answers `absent` for the other replica's execution. That is
- * exactly what section 15.4 says it should do, and it is safe — the reactor treats
- * `absent` as "retry", and a retry of a deterministic query over the same window writes
- * the same digest.
+ * The notes are **files** because a PHP process has no memory between requests: `php -S`
+ * forks workers and PHP-FPM forks children, so a static array would answer `absent` to
+ * whichever worker took the lookup. Files in the system temp directory live as long as
+ * the lookup window and are scoped to one host, so a second replica answers `absent` for
+ * the other's execution — which is safe, because the reactor treats `absent` as "retry"
+ * and a deterministic query over the same window writes the same digest.
  */
 final readonly class ExecutionMemory
 {

@@ -10,29 +10,22 @@ use Aiwatcher\Flow\Dsl\Enrichment;
 /**
  * Syntax diagnostics for a query, from Mago.
  *
- * Mago is a PHP parser, and a query is nearly PHP — near enough that once
- * [`Enrichment`] has substituted the bareword dataset names it parses cleanly,
- * and its parse errors are better than anything worth hand-writing:
+ * A query is nearly PHP — near enough that once [`Enrichment`] has substituted
+ * the bareword dataset names it parses cleanly, and its parse errors are better
+ * than anything worth hand-writing:
  *
  * ```text
  * Expected one of `RightParenthesis`, found `Semicolon`   line 4
  * ```
  *
- * It parses; it never runs the query. Neither does anything else here.
+ * It parses; it never runs the query. Strictly an editor aid: Mago has no idea
+ * what a dataset or a column is, so it cannot decide whether a query is
+ * *allowed*. That stays with the parser and the builder, which are the security
+ * boundary; this catches the mistake they report tersely — a bracket in the
+ * wrong place.
  *
- * ## Where this sits
- *
- * Strictly an editor aid. Mago has no idea what a dataset, a column or the
- * whitelist are, so it cannot decide whether a query is *allowed* — that stays
- * with the parser and the builder, which are the security boundary. This runs
- * alongside them to catch the class of mistake they report tersely: a bracket
- * in the wrong place.
- *
- * ## When Mago is not installed
- *
- * `composer install --no-dev` leaves it out, and that is fine. Absence returns
- * no diagnostics rather than an error: the check endpoint still reports
- * everything the parser found.
+ * `composer install --no-dev` leaves Mago out, and absence returns no
+ * diagnostics rather than an error.
  */
 final readonly class MagoLinter
 {

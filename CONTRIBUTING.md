@@ -63,6 +63,42 @@ an outage.
 `git commit` to open the template in [`.gitmessage`](.gitmessage). Bypass with
 `git commit --no-verify`.
 
+## Comments
+
+A comment explains the code beside it. That is the whole rule, and everything
+below follows from it.
+
+**A module doc says what the module is and what a reader must not get wrong.**
+Invariants, orderings, refusals — the things that are true of the code and not
+visible in a signature. Not the history of how it got here, not the
+alternatives that were rejected, not the argument for the decision. Those go in
+`docs/ADR/`, where they can be read once and cited from many places.
+
+**Diagrams earn their space.** A data flow, a key layout, a table of routes —
+fence them as ```` ```text ```` and they are not counted against the length
+limit, because they carry structure rather than argument.
+
+**Never cite a moving document.** `Section 43.18`, `Phase 10`, `review R2`,
+`plan.md` — a reader of the code cannot open any of those, and they are wrong
+the next time the document is edited. Say the rule, and cite an ADR if one
+decided it.
+
+`scripts/lint-comments.py` runs in `just check` and enforces both: no comment
+block over 25 lines of prose, and no new stale references.
+
+```rust
+//! One time window, shared by every list.
+//!
+//! Relative: seconds back from now, resolved on the server, so a link someone
+//! pastes means "the last hour" when it is opened. `None` and `Some(0)` both
+//! mean everything.
+//!
+//! Lists window on **last activity**, not on start. [`crate::metrics`] is the
+//! exception, because there the window is the timeline's x-axis.
+//!
+//! ADR_0007.
+```
+
 ## Changing an API route or a type it exposes
 
 ```bash

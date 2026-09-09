@@ -5180,7 +5180,7 @@
         "tags": [
           "execution"
         ],
-        "summary": "Take, or renew, the right to decide one hosted run (section 40.3).",
+        "summary": "Take, or renew, the right to decide one hosted run.",
         "description": "`agentic.workflow`'s `ProcessorLock`, in the store that holds the history.\nRenewing is this same call under the same name, so a heartbeat and a first\nclaim cannot come to disagree.\n\n**200 either way.** Being told who holds it is an answer to the question\nrather than a failure of it, and the alternative — a 409 whose structured\n`expires_at` has to be smuggled through an error body — is worse for the one\ncaller that has to branch on it. What *is* a 409 is appending while somebody\nelse decides.",
         "operationId": "take_decider_lease",
         "parameters": [
@@ -5777,7 +5777,7 @@
         "tags": [
           "execution"
         ],
-        "summary": "Append a worker's messages to a hosted execution's history (section 40.3).",
+        "summary": "Append a worker's messages to a hosted execution's history.",
         "description": "The decider is the worker; this is the shared history `agentic.workflow`\ncannot give itself when every agent worker holds its own SQLite. What this\nroute contributes is the three things a private store has no way to offer: a\ncompare-and-append against a version, an inbox keyed by the\n`Idempotency-Key`, and a 409 that says where the stream actually got to.\n\nIt reads none of the messages. A `409` is not a failure to retry blindly:\nthe worker reloads and decides on what it now sees, and its own cached\ndecision across OCC retries is what stops that reload calling the model\nagain to discover it lost.",
         "operationId": "append_stream",
         "parameters": [
@@ -13961,7 +13961,7 @@
       },
       "HostedMessage": {
         "type": "object",
-        "description": "A hosted decider's own message, as this engine holds it.\n\n**Opaque by design** (section 40.3). The worker runs `decide`; an engine that\nread these would be a second decider, which is the thing the hosted mode\nexists to avoid. What is stored is the type *name* — enough to project a\nstatus from `TurnStarted` and `TurnCompleted`, and nothing else — the\nworker's own metadata, and a reference to the content.\n\nThe metadata is stored plain because it carries no text: it is\n`RecordedMessageMetadata`'s sixty fields, which is what a review queue needs\nand what an exclusion report counts.",
+        "description": "A hosted decider's own message, as this engine holds it.\n\n**Opaque by design**. The worker runs `decide`; an engine that\nread these would be a second decider, which is the thing the hosted mode\nexists to avoid. What is stored is the type *name* — enough to project a\nstatus from `TurnStarted` and `TurnCompleted`, and nothing else — the\nworker's own metadata, and a reference to the content.\n\nThe metadata is stored plain because it carries no text: it is\n`RecordedMessageMetadata`'s sixty fields, which is what a review queue needs\nand what an exclusion report counts.",
         "required": [
           "message_type"
         ],
@@ -16704,7 +16704,7 @@
       },
       "PayloadPolicy": {
         "type": "string",
-        "description": "Where a hosted execution's content lives (section 40.4).\n\nThe definition chooses, the deployment sets the default, and the free one is\nthe default: a hosted run starts with no archive, no key and no flag. There\nis deliberately **no `plain`** — a plaintext payload in the object store is\nreadable by every process holding the bucket's credentials, which is\nADR_0021's argument for the key.",
+        "description": "Where a hosted execution's content lives.\n\nThe definition chooses, the deployment sets the default, and the free one is\nthe default: a hosted run starts with no archive, no key and no flag. There\nis deliberately **no `plain`** — a plaintext payload in the object store is\nreadable by every process holding the bucket's credentials, which is\nADR_0021's argument for the key.",
         "enum": [
           "external",
           "sealed"
@@ -16712,7 +16712,7 @@
       },
       "PayloadRef": {
         "type": "object",
-        "description": "Where a hosted message's words are, and how big they were.\n\nNever the words themselves (section 40.4). The digest is of the *plaintext*,\nso a reader can tell whether what it fetched is what was appended — the\nprompt registry's rule, in a fourth place.",
+        "description": "Where a hosted message's words are, and how big they were.\n\nNever the words themselves. The digest is of the *plaintext*,\nso a reader can tell whether what it fetched is what was appended — the\nprompt registry's rule, in a fourth place.",
         "required": [
           "reference",
           "digest",
@@ -19436,7 +19436,7 @@
             "items": {
               "$ref": "#/components/schemas/SlotRecord"
             },
-            "description": "What the tick did, newest first.\n\nRead from the **workflow store**, not from the schedule object. They\nused to be one thing, which is what let a tick's write-back undo an\nedit or resurrect a deleted schedule (review R3); configuration and slot\noutcomes now have different writers and live in different places.\n\nEmpty when this deployment wired no execution store — there is then no\ntick either, so nothing has fired and an empty list is the true answer\nrather than a missing one."
+            "description": "What the tick did, newest first.\n\nRead from the **workflow store**, not from the schedule object. They\nused to be one thing, which is what let a tick's write-back undo an\nedit or resurrect a deleted schedule; configuration and slot\noutcomes now have different writers and live in different places.\n\nEmpty when this deployment wired no execution store — there is then no\ntick either, so nothing has fired and an empty list is the true answer\nrather than a missing one."
           },
           "next_run": {
             "type": [
@@ -20583,7 +20583,7 @@
       },
       "TargetKind": {
         "type": "string",
-        "description": "What kind of definition is being run.\n\nTwo arms, which is what the enum was for: both compile to the same\n`ExecutionPlan` from different editors, with different provenance, and the\nnames live in different registries under different prefixes (section 4). A\n`kind` nobody had to send would have to be guessed from the name — and two\ndefinitions may share one, which is exactly what `WorkflowSpec` being saved\nbeside `CurationPipeline` allows.",
+        "description": "What kind of definition is being run.\n\nTwo arms, which is what the enum was for: both compile to the same\n`ExecutionPlan` from different editors, with different provenance, and the\nnames live in different registries under different prefixes. A\n`kind` nobody had to send would have to be guessed from the name — and two\ndefinitions may share one, which is exactly what `WorkflowSpec` being saved\nbeside `CurationPipeline` allows.",
         "enum": [
           "curation_pipeline",
           "workflow"

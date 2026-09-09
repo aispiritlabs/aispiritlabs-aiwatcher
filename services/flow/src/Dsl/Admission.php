@@ -7,38 +7,28 @@ namespace Aiwatcher\Flow\Dsl;
 /**
  * The one rule that decides what a query may reach, on any of the three surfaces.
  *
- * There are three: the functions a query may name ([`Registry`]), the steps a
- * pipeline may take ([`Frame`]), and the methods a value supports
- * ([`Values`]). They used to be answered by three hand-written lists and are
- * now answered here, by signature — because a list is a queue: Flow ships 239
- * functions, 53 `DataFrame` methods and well over a hundred fluent methods on
- * a reference, and every one somebody forgot to type out was a thing this
- * query language could not say for no reason anybody could defend.
+ * The functions a query may name ([`Registry`]), the steps a pipeline may take
+ * ([`Frame`]) and the methods a value supports ([`Values`]) were three
+ * hand-written lists and are now one signature check. A list is a queue: Flow
+ * ships 239 functions and 53 `DataFrame` methods, and every one somebody forgot
+ * to type out was something the language could not say for no reason.
  *
- * ## What is refused, and why it is a *type* rather than a name
+ * Refused by **type**, never by name:
  *
- * A parameter that accepts a **callable** is where a name from a query would
- * become code — `call()` and `to_callable()` are the two Flow has, and any
- * third one Flow adds is refused before anybody here has heard of it.
- *
- * A parameter that accepts a **Loader, an Extractor, a Path or a Filesystem**
- * is where a query would open a source or write a sink of its own choosing.
- * The catalog decides what may be read; `write()` decides what "give the rows
- * back" means. `to_csv('/etc/anything')` in a service with no authentication
- * is a file write whose name looks as harmless as any other.
- *
- * A parameter that accepts a **Transformer, a Transformation or a
- * DataFrameFactory** is an object whose whole purpose is to run somebody's
- * code over the rows, which is the same hole with a longer name.
+ * - a parameter accepting a **callable** — where a name from a query would
+ *   become code. Any third one Flow adds is refused before anybody here has
+ *   heard of it.
+ * - a parameter accepting a **Loader, Extractor, Path or Filesystem** — where a
+ *   query would open a source or write a sink of its own choosing.
+ *   `to_csv('/etc/anything')` here is a file write whose name looks as harmless
+ *   as any other.
+ * - a parameter accepting a **Transformer, Transformation or
+ *   DataFrameFactory** — an object whose purpose is to run somebody's code.
  *
  * Everything else composes values or reshapes a frame, and is admitted.
  *
- * ## What this does not do
- *
- * It does not load a class to decide. `class_exists()` autoloads, and
- * `Flow\ETL\Function\Uuid` throws at load without `ramsey/uuid` — deciding
- * admission by loading would take the service down over an optional
- * dependency of a function nobody called. Types are matched as **strings**.
+ * Types are matched as **strings**: `class_exists()` autoloads, and
+ * `Flow\ETL\Function\Uuid` throws at load without `ramsey/uuid`.
  */
 final class Admission
 {

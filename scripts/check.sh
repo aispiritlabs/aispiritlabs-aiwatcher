@@ -134,6 +134,8 @@ else
   skip "Tiltfile" "tilt is not installed"
 fi
 
+run "comments" python3 scripts/lint-comments.py
+
 # ── Optional repo-wide linters ───────────────────────────────────────────────
 if have typos; then run "typos" typos; else skip "typos" "cargo install typos-cli"; fi
 if have taplo; then run "taplo fmt" taplo fmt --check; else skip "taplo fmt" "cargo install taplo-cli"; fi

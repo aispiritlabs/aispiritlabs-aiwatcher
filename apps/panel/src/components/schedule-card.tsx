@@ -158,7 +158,7 @@ export function ScheduleCard({ name, saved }: { name?: string; saved: boolean })
   const forget = useMutation({
     // A successful DELETE is 204 with no body, so "is there data" was never
     // the question — and asking it is what let a refused DELETE clear the
-    // form for a schedule that is still there (review R6).
+    // form for a schedule that is still there.
     mutationFn: async () =>
       confirmDone(
         await clearSchedule({ path: { name: name ?? '' } }),

@@ -159,7 +159,7 @@ export function ManagedRunCard({
   const command = useMutation({
     // Read through `answerOf`, because the generated client resolves on a
     // refusal: without it a 403 or a 409 ran `onSuccess`, the run was
-    // re-read, nothing had changed and nothing said why (review R6).
+    // re-read, nothing had changed and nothing said why.
     mutationFn: async (action: RunAction) => {
       const path = { execution_id: executionId ?? '' };
       const refused = `That ${action} was refused.`;

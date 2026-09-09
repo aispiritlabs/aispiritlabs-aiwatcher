@@ -188,7 +188,7 @@ impl FromStr for WorkflowStoreKind {
     }
 }
 
-/// Which half of the binary this process is (section 27, ADR_0025).
+/// Which half of the binary this process is (ADR_0025).
 ///
 /// `Serve` holds the API, the read model and the object store, and opens no
 /// socket to Flow, a notebook runtime, an engine or the cluster. `Work` holds
