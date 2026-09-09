@@ -3,8 +3,8 @@
 `tracer` is the `LLMTracer` a graph already routes every model call through.
 `event_store` is `agentic.workflow.EventStore` over one hosted execution —
 the shared history a fan-out needs when every agent worker holds its own
-SQLite (section 40.3). `payloads` is where the words go while aiwatcher holds
-only the reference (section 40.4).
+SQLite. `payloads` is where the words go while aiwatcher holds only the
+reference.
 
 Neither imports the agent's packages. The tracer matches a protocol
 structurally; the event store is handed its message type through a codec, and
@@ -23,6 +23,9 @@ from .event_store import (
     MessageRecord,
     ReadAllResult,
     ReadStreamResult,
+    SagaTimers,
+    TimerPolicy,
+    TimerRequest,
     dataclass_codec,
 )
 from .payloads import (
@@ -47,7 +50,10 @@ __all__ = [
     "PayloadStore",
     "ReadAllResult",
     "ReadStreamResult",
+    "SagaTimers",
     "TeeTracer",
+    "TimerPolicy",
+    "TimerRequest",
     "aiwatcher_tracer",
     "dataclass_codec",
     "digest_of",

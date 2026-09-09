@@ -141,6 +141,98 @@ impl LeaseOutcome {
     }
 }
 
+/// A message a hosted decider asked this engine to append later.
+///
+/// The one *active* thing this engine does for a hosted run, and it is
+/// deliberately the smallest possible active thing: a deferred append.
+/// The worker composes the message when it schedules the timer, and the engine
+/// stores it and hands it back at the time — so "the engine does not interpret
+/// the messages" survives intact. It is not reading a stream to work out that
+/// something is due; it was told, explicitly, in a row.
+///
+/// ## Why a row rather than the stream
+///
+/// `agentic.workflow.Saga` already keeps its timers *in* the stream, as
+/// `saga.timeout_scheduled` events, and works out what is due by folding it.
+/// That fold is the worker's and stays the worker's. What it cannot do from
+/// there is *notice*: nothing wakes up and looks. A row is what an index over
+/// every hosted run can be built on, so one tick finds what is due across all
+/// of them without reading a single stream.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, ToSchema)]
+pub struct Timer {
+    pub execution: ExecutionId,
+    /// The worker's own id, unique inside one execution. `agentic`'s
+    /// `timeout_id`, and the reason a repeated schedule is one timer.
+    pub timer_id: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub due_at: OffsetDateTime,
+    /// What to append when it comes due. Composed by the worker at the moment
+    /// it schedules, never assembled here — an engine that built this would be
+    /// deciding what a timeout means.
+    pub message: HostedMessage,
+}
+
+impl Timer {
+    /// The id the fired message is recorded under.
+    ///
+    /// Derived from the execution and the timer, so two ticks that both find it
+    /// due converge on one inbox entry rather than appending twice. `agentic`'s
+    /// own `saga-timeout:{name}:{saga}:{timeout}` reasoning, in this store's
+    /// vocabulary, and the rule that an id names everything it identifies: one
+    /// derived from less than that reads as a redelivery of something else.
+    #[must_use]
+    pub fn fired_id(&self) -> MessageId {
+        MessageId::new(crate::derive_uuid(&format!(
+            "hosted-timer/{}/{}",
+            self.execution.as_str(),
+            self.timer_id
+        )))
+    }
+
+    #[must_use]
+    pub fn is_due(&self, now: OffsetDateTime) -> bool {
+        self.due_at <= now
+    }
+}
+
+/// What one decision does to the timer table.
+///
+/// Applied in the same transaction as the decision that authorised it, for
+/// [`crate::claim::AttemptWrite`]'s reason: a timer scheduled by anything other
+/// than a decision would be work nobody decided on, and one retired outside the
+/// append that fired it could fire twice.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+pub enum TimerWrite {
+    /// Set it, or move an existing one. Scheduling the same `timer_id` twice is
+    /// one timer, which is what makes a decider's retry safe.
+    Schedule(Timer),
+    /// Withdraw it. A no-op when there is none, because a saga that cancels a
+    /// timeout it already handled is doing the ordinary thing.
+    Cancel(String),
+    /// It has fired. Written *with* the message it produced, so "fired once" is
+    /// a property of the transaction rather than of a lease somebody renews.
+    Fire(String),
+}
+
+impl TimerWrite {
+    #[must_use]
+    pub fn timer_id(&self) -> &str {
+        match self {
+            Self::Schedule(timer) => &timer.timer_id,
+            Self::Cancel(id) | Self::Fire(id) => id,
+        }
+    }
+}
+
+/// The most timers one tick fires in a pass.
+///
+/// A bound rather than a batch size: every one of these is an append, and a
+/// thousand due at once must not hold the loop that also has to notice the next
+/// thousand. What is left over is due on the next pass, which is what makes
+/// this an operational choice rather than a correctness one — the scheduler
+/// tick's rule, in a second loop.
+pub const TIMERS_PER_TICK: usize = 100;
+
 /// The type name of the row that records one append.
 ///
 /// A hosted append is stored the way every other decision is: the input that
@@ -149,6 +241,26 @@ impl LeaseOutcome {
 /// `Idempotency-Key` — which is what makes the durable inbox work for a hosted
 /// run without a second dedup table.
 pub const HOSTED_APPEND: &str = "HostedAppend";
+
+/// The type name of the row that records one timer coming due.
+///
+/// The *input* of that decision, exactly as [`HOSTED_APPEND`] is the input of a
+/// worker's. What it produces is the message the worker composed when it
+/// scheduled the timer, unchanged — this engine defers an append and composes
+/// nothing.
+pub const HOSTED_TIMER: &str = "HostedTimerFired";
+
+/// What firing one timer did.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Fired {
+    pub execution: ExecutionId,
+    pub timer_id: String,
+    /// `false` when the run had already ended, or was never a hosted one. The
+    /// timer is retired either way — a row nothing can deliver would otherwise
+    /// come back due on every tick for ever — and the difference is worth
+    /// reporting rather than counting as a delivery.
+    pub delivered: bool,
+}
 
 /// The most messages one append may carry.
 ///
@@ -184,6 +296,13 @@ pub struct HostedAppend {
     pub holder: String,
     /// The worker's own messages, in the order it wrote them.
     pub messages: Vec<HostedMessage>,
+    /// Deferred appends this decision sets or withdraws.
+    ///
+    /// In the same append rather than beside it, because a decision that
+    /// schedules a timeout and one that records having scheduled it are the
+    /// same decision — split in two, a crash between them leaves either a timer
+    /// nobody decided on or a decision the timer never happened for.
+    pub timers: Vec<TimerWrite>,
 }
 
 impl HostedAppend {
@@ -252,6 +371,117 @@ pub enum HostedError {
 }
 
 impl<S: WorkflowStore> ExecutionHandler<S> {
+    /// Append every timer that has come due, and retire it in the same
+    /// transaction.
+    ///
+    /// Fired **once**, and neither half of that is a lease. The message is
+    /// recorded under [`Timer::fired_id`], so two ticks that both find it due
+    /// land on one inbox entry rather than beside each other; and the append
+    /// that delivers it carries [`TimerWrite::Fire`], so delivery and
+    /// retirement are one transaction — split in two, a crash between them
+    /// fires twice.
+    ///
+    /// A conflict is not retried here: the timer is still due and the next tick
+    /// has it. One tick late is an operational cost; twice is a bug.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the store could not do while *reading* what is due. A single
+    /// timer that cannot be fired is reported and skipped, because one bad row
+    /// must not stop the loop that delivers every other run's.
+    pub async fn fire_due_timers(
+        &self,
+        now: OffsetDateTime,
+        limit: usize,
+    ) -> Result<Vec<Fired>, HostedError> {
+        let due = self
+            .store()
+            .due_timers(now, limit)
+            .await
+            .map_err(HandleError::from)?;
+        let mut fired = Vec::new();
+        for timer in due {
+            match self.fire(&timer, now).await {
+                Ok(outcome) => fired.push(outcome),
+                // Not fatal to the pass. A stream that could not be read is one
+                // run's problem, and the next tick has this timer again.
+                Err(error) => tracing::warn!(
+                    execution_id = %timer.execution,
+                    timer_id = %timer.timer_id,
+                    %error,
+                    "a due timer could not be fired"
+                ),
+            }
+        }
+        Ok(fired)
+    }
+
+    async fn fire(&self, timer: &Timer, now: OffsetDateTime) -> Result<Fired, HostedError> {
+        let slice = self
+            .store()
+            .load(&timer.execution)
+            .await
+            .map_err(HandleError::from)?;
+        let state = replay(slice.events());
+        // A run that has ended, or one that was never hosted, cannot be handed
+        // a message — and the timer has to go anyway, or it is due on every
+        // tick for ever. Retired with no output, which leaves the reason in the
+        // stream rather than in a log line nobody reads.
+        let deliverable = state.active().is_some_and(|run| {
+            run.mode == ExecutionMode::Hosted && !run.state.state_type.is_terminal()
+        });
+
+        let input_id = timer.fired_id();
+        let outputs = if deliverable {
+            vec![PendingMessage::output(
+                WorkflowMessage::Hosted(timer.message.clone()),
+                MessageMetadata::caused_by(
+                    &timer.execution,
+                    &input_id,
+                    MessageId::new(crate::derive_uuid(&format!(
+                        "hosted-timer-message/{}/{}",
+                        timer.execution.as_str(),
+                        timer.timer_id
+                    ))),
+                    now,
+                ),
+            )]
+        } else {
+            Vec::new()
+        };
+
+        let version = slice.version + 1 + outputs.len() as u64;
+        let request = AppendRequest {
+            expected_version: ExpectedVersion::Exact(slice.version),
+            input: PendingMessage::input(
+                WorkflowMessage::Hosted(HostedMessage {
+                    message_type: HOSTED_TIMER.to_owned(),
+                    metadata: serde_json::json!({
+                        "timer_id": timer.timer_id,
+                        "delivered": deliverable,
+                    }),
+                    payload: None,
+                }),
+                MessageMetadata::caused_by(&timer.execution, &input_id, input_id.clone(), now),
+            ),
+            outputs,
+            projection: projection_of(&timer.execution, &state, version),
+            outbox: Vec::new(),
+            checkpoint: None,
+            timers: vec![TimerWrite::Fire(timer.timer_id.clone())],
+            attempts: Vec::new(),
+        };
+        self.store()
+            .append(&timer.execution, request)
+            .await
+            .map_err(HandleError::from)?;
+        Ok(Fired {
+            execution: timer.execution.clone(),
+            timer_id: timer.timer_id.clone(),
+            delivered: deliverable,
+        })
+    }
+
     /// Take, or renew, the right to decide one hosted run.
     ///
     /// Renewing is taking it again under the same name, so a heartbeat and a
@@ -494,6 +724,7 @@ impl<S: WorkflowStore> ExecutionHandler<S> {
             // engine cannot honestly describe.
             outbox: Vec::new(),
             checkpoint: None,
+            timers: append.timers,
             // A hosted run has no claimable attempts: the worker schedules its
             // own next node.
             attempts: Vec::new(),

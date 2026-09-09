@@ -18,6 +18,7 @@ pub mod context;
 pub mod engine;
 pub mod envelope;
 pub mod error;
+pub mod human_input;
 pub mod ids;
 pub mod ports;
 pub mod prompts;

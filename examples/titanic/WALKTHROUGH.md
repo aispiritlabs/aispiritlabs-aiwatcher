@@ -1,136 +1,139 @@
-# Titanic krok po kroku: FlowPHP + FlowAI
+# Titanic step by step: FlowPHP + FlowAI
 
-Ten wariant przygotowuje dane w PHP. FlowAI dostarcza podział danych, uzupełnianie
-braków i encodery. Python wykonuje wizualizację oraz trening Random Forest.
-Gotowy plik do importu: [titanic-php.flow.json](titanic-php.flow.json).
-Instalacja i uruchomienie od zera: [README](README.md#recommended-flowphp--flowai).
-Wszystkie bloki można też otworzyć jako komórki: [widok notebooka i własny kod](NOTEBOOK.md).
+This variant prepares data in PHP. FlowAI provides data splitting, missing-value
+imputation, and encoders. Python handles visualization and Random Forest training.
+Ready-to-import file: [titanic-php.flow.json](titanic-php.flow.json).
+Setup and execution from scratch: [README](README.md#recommended-flowphp--flowai).
+You can also open all blocks as cells: [notebook view and custom code](NOTEBOOK.md).
 
-Poniżej są rzeczywiste zrzuty panelu z 9 września 2026. Każdy krok pokazuje
-konfigurację konkretnego bloku. Tabela po lewej pokazuje **końcowy wynik całego
-flow**, nie wynik pośredni zaznaczonego bloku. Bloki PHP wykonują się razem jako
-jedno zapytanie; ich liczniki dotyczą tego wspólnego wykonania. Zrzuty źródła
-i importu wykonano przed uruchomieniem, pozostałe po przetworzeniu 891 rekordów.
+Below are actual panel screenshots from September 9, 2026. Each step shows the
+configuration of a specific block. The table on the left shows the **final output
+of the entire flow**, not the intermediate output of the selected block. PHP blocks
+run together as a single query; their counters refer to that shared execution.
+The source and import screenshots were taken before execution; the remaining
+screenshots were taken after processing 891 records.
 
-## 0. Import przykładu
+## 0. Import the example
 
-Otwórz **Data Curation → Pipeline → Import flow** i wybierz
-`examples/titanic/titanic-php.flow.json`. Pojawi się szkic `curation/titanic-flowphp`:
-10 bloków, 9 połączeń, kod transformacji PHP i dwa źródła Pythona.
-Import sprawdza sumy kontrolne źródeł. Sam nie uruchamia kodu.
-Alternatywnie wybierz **curation/titanic-flowphp** z **Saved pipelines**.
+Open **Data Curation → Pipeline → Import flow** and select
+`examples/titanic/titanic-php.flow.json`. A draft named `curation/titanic-flowphp`
+appears with 10 blocks, 9 connections, PHP transformation code, and two Python sources.
+Import verifies source checksums. It does not run the code.
+Alternatively, select **curation/titanic-flowphp** from **Saved pipelines**.
 
-![Zaimportowany flow z blokami tematycznymi](screenshots/00-import.png)
+![Imported flow with thematic blocks](screenshots/00-import.png)
 
-## 1. Source — surowi pasażerowie
+## 1. Source — raw passenger data
 
-Kliknij **Titanic · raw passengers**. Ustaw dataset `hub_rows`, źródło
-`phihung/titanic`, split `train`, limit `891`. Serwis pobiera kolejne strony
-po maksymalnie 100 rekordów. Wyjściowe pola pasażera są zagnieżdżone w `row`.
+Click **Titanic · raw passengers**. Set the dataset to `hub_rows`, source to
+`phihung/titanic`, split to `train`, and limit to `891`. The service fetches
+successive pages of up to 100 records. The output passenger fields are nested in `row`.
 
-![Konfiguracja źródła danych](screenshots/01-source.png)
+![Data source configuration](screenshots/01-source.png)
 
-## 2. Select raw columns — jawny zestaw kolumn
+## 2. Select raw columns — an explicit set of columns
 
-Ten blok przenosi oryginalne 12 pól z `row` na najwyższy poziom.
-`PassengerId` identyfikuje rekord, `Survived` jest celem. `Age`, `Fare`, `Cabin`
-i `Embarked` pozostają surowe — nie ukrywamy ich braków.
-Kod można edytować w inspektorze po prawej.
+This block moves the original 12 fields from `row` to the top level.
+`PassengerId` identifies the record, and `Survived` is the target. `Age`, `Fare`,
+`Cabin`, and `Embarked` remain raw, with their missing values still visible.
+You can edit the code in the inspector on the right.
 
-![Wybór kolumn w FlowPHP](screenshots/02-columns.png)
+![Selecting columns in FlowPHP](screenshots/02-columns.png)
 
-## 3. Train / validation split — podział przed uczeniem
+## 3. Train / validation split — split before fitting
 
 `trainTestSplit('PassengerId', target: 'Survived', fraction: 0.2, seed: 42)`
-dodaje `_split`. Dla pełnego zbioru daje 712 rekordów `train` i 179 `validation`.
-Podział uwzględnia klasy celu i jest deterministyczny przy przestawieniu kolejności
-wejścia. Wymaga unikalnych identyfikatorów i przynajmniej dwóch rekordów klasy.
+adds `_split`. For the full dataset, it produces 712 `train` and 179 `validation` records.
+The split is stratified by target class and remains deterministic when the input
+order changes. It requires unique identifiers and at least two records per class.
 
-![Podział treningowy i walidacyjny w PHP](screenshots/03-split.png)
+![Training and validation split in PHP](screenshots/03-split.png)
 
-## 4. Missing values — uzupełnianie braków
+## 4. Missing values — imputation
 
-`imputeMissing` uczy się median wyłącznie na `fitOn: '_split'`, domyślnie
-`fitValue: 'train'`. Wiek uzupełnia według `Sex,Pclass`, opłatę według `Pclass`,
-a port według najczęstszej wartości treningowej. Nieznana grupa korzysta
-ze statystyki całego treningu. Powstają `AgeFilled`, `FareFilled`,
-`EmbarkedFilled` i flagi braków. Oryginalne kolumny zostają do kontroli.
+`imputeMissing` learns medians only from rows selected by `fitOn: '_split'`, with
+`fitValue: 'train'` by default. It fills age by `Sex,Pclass`, fare by `Pclass`,
+and embarkation port with the most frequent training value. An unknown group falls
+back to the statistic for the entire training set. This creates `AgeFilled`,
+`FareFilled`, `EmbarkedFilled`, and missing-value flags. The original columns remain
+available for inspection.
 
-![Uzupełnianie braków z dopasowaniem na treningu](screenshots/04-missing-values.png)
+![Missing-value imputation fitted on the training set](screenshots/04-missing-values.png)
 
-## 5. Feature engineering — budowanie cech w FlowPHP
+## 5. Feature engineering — building features in FlowPHP
 
-Tworzymy `Title`, `Deck`, `FamilySize`, `IsAlone`, `FarePerPerson` i
-`TicketFrequency`. Częstość biletu zlicza tylko pasażerów treningowych;
-nieznany bilet dostaje wartość 1. Hash biletu służy jako techniczny klucz
-partycji, ponieważ niektóre numery zawierają `/`. Oryginalny `Ticket` zostaje.
-To zwykłe transformacje FlowPHP, które można rozbudować we własnym flow.
+We create `Title`, `Deck`, `FamilySize`, `IsAlone`, `FarePerPerson`, and
+`TicketFrequency`. Ticket frequency counts only training passengers;
+an unknown ticket gets a value of 1. A ticket hash serves as an internal partition
+key because some ticket numbers contain `/`. The original `Ticket` is preserved.
+These are standard FlowPHP transformations that you can extend in your own flow.
 
-![Budowa cech pasażera w FlowPHP](screenshots/05-features.png)
+![Building passenger features in FlowPHP](screenshots/05-features.png)
 
-## 6. OneHotEncoder — cechy kategoryczne w PHP
+## 6. OneHotEncoder — categorical features in PHP
 
-`oneHotEncode` dopasowuje słownik `Sex`, `Pclass`, `EmbarkedFilled`, `Title`
-i `Deck` do części treningowej. Zapisuje numeryczne wskaźniki w `model_features`.
-Nieznana kategoria walidacyjna daje zera (`handleUnknown: 'ignore'`).
-`stateOutput: 'feature_encoder'` zachowuje słownik wraz z wierszami.
-Można go później przekazać jako `state: '<JSON>'`, aby tylko transformować dane.
+`oneHotEncode` fits a vocabulary for `Sex`, `Pclass`, `EmbarkedFilled`, `Title`,
+and `Deck` on the training subset. It writes numeric indicators to `model_features`.
+An unknown validation category produces zeros (`handleUnknown: 'ignore'`).
+`stateOutput: 'feature_encoder'` preserves the vocabulary alongside the rows.
+You can later pass it as `state: '<JSON>'` to transform data without fitting again.
 
-![OneHotEncoder dostępny bezpośrednio w zapytaniu PHP](screenshots/06-one-hot.png)
+![OneHotEncoder available directly in a PHP query](screenshots/06-one-hot.png)
 
-## 7. LabelEncoder — kodowanie celu w PHP
+## 7. LabelEncoder — target encoding in PHP
 
-`labelEncode('Survived', fitOn: '_split')` tworzy `target_encoded`.
-W tym zbiorze klasy 0 i 1 pozostają odpowiednio 0 i 1. Nieznana klasa powoduje
-błąd. Stan w `label_encoder` pozwala odtworzyć mapowanie; klasę PHP można też
-wywołać samodzielnie przez `fit`, `transform` i `inverseTransform`.
-Cel nie trafia do cech modelu.
+`labelEncode('Survived', fitOn: '_split')` creates `target_encoded`.
+In this dataset, classes 0 and 1 remain 0 and 1, respectively. An unknown class
+raises an error. The state in `label_encoder` lets you restore the mapping;
+you can also use the PHP class independently through `fit`, `transform`, and
+`inverseTransform`. The target is excluded from the model features.
 
-![LabelEncoder i zapis jego stanu](screenshots/07-label.png)
+![LabelEncoder and its saved state](screenshots/07-label.png)
 
-## 8. Visualization — wykresy treningu
+## 8. Visualization — training data charts
 
-Pierwszy blok Pythona pokazuje liczbę surowych braków i przeżywalność według płci.
-Wykresy korzystają tylko z treningu. Blok przekazuje wszystkie 891 wierszy dalej,
-bez ich filtrowania. Kliknij **Visualization** i przewiń inspektor do podglądu
-Live. Źródło wykresu jest edytowalne i dołączane do eksportu.
+The first Python block shows raw missing-value counts and survival rates by sex.
+The charts use only training data. The block passes all 891 rows onward without
+filtering them. Click **Visualization** and scroll the inspector to the Live preview.
+The chart source is editable and included in the export.
 
-![Rzeczywiste wykresy w podglądzie Visualization](screenshots/08-visualization.png)
+![Actual charts in the Visualization preview](screenshots/08-visualization.png)
 
-## 9. Model training & evaluation — model i wynik walidacyjny
+## 9. Model training & evaluation — model and validation results
 
-Random Forest używa jawnie wybranych cech numerycznych oraz `model_features`.
-Uczy się na `train`, ocenia wyłącznie `validation`, a predykcje dodaje do każdego
-wiersza jako `prediction` i `survival_probability`. Dla pełnego zbioru oraz
-zapisanych zależności: **accuracy 0,837989, ROC AUC 0,885310**.
+Random Forest uses explicitly selected numeric features together with `model_features`.
+It trains on `train`, evaluates only on `validation`, and adds predictions to every
+row as `prediction` and `survival_probability`. With the full dataset and the
+recorded dependencies: **accuracy 0.837989, ROC AUC 0.885310**.
 
-To wynik jednego podziału kontrolnego. Rodziny i wspólne bilety mogą występować
-po obu stronach podziału; nie jest to ocena generalizacji na nowe rodziny ani
-wynik konkursowego test.csv. **Preview 25 rows** służy do sprawdzenia połączeń.
+This is the result of a single holdout split. Families and shared tickets may appear
+on both sides of the split; this does not measure generalization to new families
+and is not a score on the competition's test.csv. **Preview 25 rows** is used to
+check the connections.
 
-![Raport modelu na 179 pasażerach walidacyjnych](screenshots/09-model.png)
+![Model report for 179 validation passengers](screenshots/09-model.png)
 
-## 10. Publish predictions — docelowy dataset
+## 10. Publish predictions — target dataset
 
-Blok **Publish predictions** określa nazwę `curation/titanic-flowphp`.
-**Run** daje podgląd wyniku. Osobne **Publish** zapisuje wersję datasetu.
-Zrzut pokazuje konfigurację gotową do publikacji, nie potwierdzenie publikacji.
-**Save** zapisuje definicję flow i przypina rewizje notebooków. Formularz
-Schedule jest osobną funkcją: samo zapisanie pipeline nie włącza harmonogramu.
+The **Publish predictions** block sets the name to `curation/titanic-flowphp`.
+**Run** previews the result. The separate **Publish** action saves a dataset version.
+The screenshot shows a configuration ready for publication, not a publication confirmation.
+**Save** saves the flow definition and pins notebook revisions. The Schedule form
+is a separate feature: saving the pipeline alone does not enable scheduling.
 
-![Konfiguracja datasetu wynikowego](screenshots/10-publish.png)
+![Output dataset configuration](screenshots/10-publish.png)
 
-## 11. Eksport i dalsza praca
+## 11. Export and continue working
 
-Kliknij **Export flow with code**. Paczka zawiera kod PHP w blokach `transform`,
-źródła dwóch notebooków, parametry, połączenia i pozycje. Otwórz ją ponownie przez
-**Import flow** na instancji z zainstalowanymi bibliotekami FlowAI.
-Zapisany stan encoderów jest częścią danych wynikowych; paczka flow przenosi
-przepis i kod, a nie wytrenowany model czy snapshot pasażerów.
+Click **Export flow with code**. The bundle contains PHP code in `transform` blocks,
+the sources of two notebooks, parameters, connections, and positions. Open it again
+using **Import flow** on an instance with the FlowAI libraries installed.
+Saved encoder state is part of the output data; the flow bundle carries the recipe
+and code, not a trained model or a snapshot of the passengers.
 
-![Ukończony flow i komunikat eksportu](screenshots/11-export.png)
+![Completed flow and export message](screenshots/11-export.png)
 
-Kod tej wersji jest również w [pipeline-php.json](pipeline-php.json),
-a kompletne zapytanie w [preparation.flow](preparation.flow).
-Wariant offline uruchomisz przez `run.py --php --csv /path/to/train.csv`.
-Lokalny runner zapisuje wykres, metryki, predykcje oraz oba stany encoderów.
+The code for this version is also in [pipeline-php.json](pipeline-php.json),
+and the complete query is in [preparation.flow](preparation.flow).
+Run the offline variant with `run.py --php --csv /path/to/train.csv`.
+The local runner saves the chart, metrics, predictions, and both encoder states.

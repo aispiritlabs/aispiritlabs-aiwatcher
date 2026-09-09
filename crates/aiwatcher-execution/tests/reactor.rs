@@ -96,6 +96,7 @@ fn start() -> WorkflowMessage {
         plan: Box::new(plan()),
         owner: ExecutionOwner::Local,
         mode: ExecutionMode::Compiled,
+        payloads: Default::default(),
         requested_by: "mk".to_owned(),
         input: BTreeMap::new(),
     })
@@ -358,6 +359,7 @@ async fn started_with(store: &MemoryWorkflowStore, plan: ExecutionPlan) {
                 plan: Box::new(plan),
                 owner: ExecutionOwner::Local,
                 mode: ExecutionMode::Compiled,
+                payloads: Default::default(),
                 requested_by: "mk".to_owned(),
                 input: BTreeMap::new(),
             }),

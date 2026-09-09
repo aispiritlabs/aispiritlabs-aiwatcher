@@ -40,7 +40,7 @@ use utoipa::{OpenApi, ToSchema};
 use aiwatcher_core::ArtifactRef;
 use aiwatcher_core::ports::AttemptArtifacts;
 use aiwatcher_execution::claim::{AttemptKey, ClaimFilter};
-use aiwatcher_execution::message::{Direction, WorkflowEvent};
+use aiwatcher_execution::message::WorkflowEvent;
 use aiwatcher_execution::plan::{RuntimeBinding, RuntimeKind};
 use aiwatcher_execution::reactor::{Claimed, Reactor, Taken};
 use aiwatcher_execution::state::{ExecutionId, FailureClass, StepError};
@@ -622,6 +622,16 @@ async fn report(
         .ok_or_else(|| ApiError::LeaseLost(key.idempotency_key()))
 }
 
+/// How many rows of a stream hold its plan.
+///
+/// The plan arrives in `ExecutionRequested`, the first *output* of the first
+/// decision, which sits at version two behind the `StartExecution` that caused
+/// it. Eight is room for that plus whatever else the opening decision emitted —
+/// a dispatch per ready step — and it is a bound rather than a guess: a stream
+/// whose first eight rows hold no `ExecutionRequested` is one that was never
+/// started, which this route already answers `None` for.
+const PLAN_PREFIX: usize = 8;
+
 /// A matching outcome is safe to acknowledge after its lease row was retired.
 /// Queue access still comes from the pinned plan, never from the request. This
 /// reads history only: it cannot grant an expired worker another write lease.
@@ -632,13 +642,20 @@ async fn recorded_result(
     report: &WorkReport,
 ) -> ApiResult<Option<Settled>> {
     caller.require(aiwatcher_auth::Role::Editor)?;
-    let history = handler(state)?
+    // A bounded prefix rather than the whole stream. The plan is in
+    // `ExecutionRequested`, which `decide` emits as the first output of the
+    // first decision — every stream starts with a `StartExecution` and nothing
+    // else is accepted from `Empty` — so a handful of rows is enough to fold a
+    // run that has one, and a run that does not is one this route answers
+    // `None` for anyway. Reading the whole history to reach row two is the
+    // performance follow-up the worker protocol review left behind.
+    let opening = handler(state)?
         .store()
-        .load(&key.execution_id)
+        .load_page(&key.execution_id, 0, PLAN_PREFIX)
         .await
         .map_err(aiwatcher_execution::HandleError::from)
         .map_err(ApiError::Execution)?;
-    let replayed = aiwatcher_execution::replay(history.events());
+    let replayed = aiwatcher_execution::replay(opening.events());
     let Some(run) = replayed.active() else {
         return Ok(None);
     };
@@ -669,34 +686,27 @@ async fn recorded_result(
             error: StepError::new(*class, message.clone()),
         },
     };
-    for recorded in &history.messages {
-        if recorded.direction != Direction::Output {
-            continue;
-        }
-        let Some(event) = recorded.message.event() else {
-            continue;
-        };
-        let matches_attempt = match event {
-            WorkflowEvent::StepCompleted {
-                step_id, attempt, ..
-            }
-            | WorkflowEvent::StepFailed {
-                step_id, attempt, ..
-            } => step_id == &key.step_id && attempt == &key.attempt,
-            _ => false,
-        };
-        if matches_attempt {
-            if event != &expected {
-                return Err(ApiError::WorkerReportConflict(key.idempotency_key()));
-            }
-            return Ok(Some(Settled {
-                step_id: key.step_id.clone(),
-                attempt: key.attempt,
-                succeeded: matches!(event, WorkflowEvent::StepCompleted { .. }),
-            }));
-        }
+    // Asked of the store rather than scanned for here: `postgres` and `duckdb`
+    // answer it from an index, and all four adapters agree on which events
+    // count as an outcome — a rule that lived in this loop would have been a
+    // fifth answer to that question.
+    let Some(event) = handler(state)?
+        .store()
+        .recorded_outcome(key)
+        .await
+        .map_err(aiwatcher_execution::HandleError::from)
+        .map_err(ApiError::Execution)?
+    else {
+        return Ok(None);
+    };
+    if event != expected {
+        return Err(ApiError::WorkerReportConflict(key.idempotency_key()));
     }
-    Ok(None)
+    Ok(Some(Settled {
+        step_id: key.step_id.clone(),
+        attempt: key.attempt,
+        succeeded: matches!(event, WorkflowEvent::StepCompleted { .. }),
+    }))
 }
 
 /// A report, with the worker that is making it.

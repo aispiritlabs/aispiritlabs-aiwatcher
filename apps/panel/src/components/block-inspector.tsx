@@ -80,6 +80,9 @@ export function BlockInspector({
               onDirtyChange={onDirtyChange}
             />
           ) : null}
+          {block.spec.kind === 'approval' ? (
+            <ApprovalSettings spec={block.spec} onChange={setSpec} />
+          ) : null}
           {block.spec.kind === 'view' ? (
             <ViewSettings spec={block.spec} onChange={setSpec} />
           ) : null}
@@ -407,6 +410,69 @@ function NotebookEditor({
           </details>
         </div>
       ) : null}
+    </>
+  );
+}
+
+/**
+ * A gate: what is asked, and the answers offered.
+ *
+ * The answers are a list rather than free text because the server matches an
+ * answer against them by equality and refuses anything else — so offering a
+ * text box for a question that declared choices would be offering an answer
+ * that is going to come back a 409. Leave the list empty and the answer *is*
+ * free text, which is the same rule read the other way.
+ *
+ * Who may answer is not a control. The route that carries an answer requires
+ * the editor role and reads no other, so a gate is answered by an editor and
+ * the registry refuses one that claims otherwise — a selector here would be
+ * offering a promise nothing keeps.
+ */
+function ApprovalSettings({
+  spec,
+  onChange,
+}: {
+  spec: Extract<BlockSpec, { kind: 'approval' }>;
+  onChange: (spec: BlockSpec) => void;
+}) {
+  return (
+    <>
+      <Field
+        label="Question"
+        hint="What somebody reads before the run goes on. The chain stops here until it is answered."
+      >
+        <textarea
+          aria-label="Approval question"
+          value={spec.prompt ?? ''}
+          onChange={(event) => onChange({ ...spec, prompt: event.target.value })}
+          rows={3}
+          className="w-full resize-y rounded-md border border-border bg-transparent p-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-primary"
+        />
+      </Field>
+      <Field
+        label="Answers"
+        hint="One per line. Leave it empty for a typed answer; anything listed is the whole set, and nothing else is accepted."
+      >
+        <textarea
+          aria-label="Approval answers"
+          value={(spec.choices ?? []).join('\n')}
+          onChange={(event) =>
+            onChange({
+              ...spec,
+              choices: event.target.value
+                .split('\n')
+                .map((choice) => choice.trim())
+                .filter(Boolean),
+            })
+          }
+          rows={4}
+          className="w-full resize-y rounded-md border border-border bg-transparent p-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-primary"
+        />
+      </Field>
+      <p className="text-xs text-muted-foreground">
+        Answered by anyone with the <code className="id">editor</code> role. A run waiting here is
+        on its own card, where the question and these answers are what a person sees.
+      </p>
     </>
   );
 }

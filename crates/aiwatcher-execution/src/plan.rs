@@ -194,7 +194,8 @@ impl RuntimeBinding {
             Self::FlowPhp(spec) => Some(&spec.blocks),
             Self::Marimo(spec) => Some(spec.block.as_slice()),
             Self::PublishDataset(spec) => Some(spec.block.as_slice()),
-            Self::PythonTask(_) | Self::HumanInput(_) | Self::ExternalWorkflow(_) => None,
+            Self::HumanInput(spec) => Some(spec.block.as_slice()),
+            Self::PythonTask(_) | Self::ExternalWorkflow(_) => None,
         }
     }
 }
@@ -293,6 +294,10 @@ pub struct HumanInputSpec {
     pub role: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub choices: Vec<String>,
+    /// The authored block this step came from, for the canvas box that lights
+    /// up while it waits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, ToSchema)]

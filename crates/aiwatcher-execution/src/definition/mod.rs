@@ -11,7 +11,7 @@ use serde_json::Value;
 use utoipa::ToSchema;
 
 use crate::plan::{
-    CachePolicy, DefinitionKind, DefinitionRevision, ExecutionPlan, InputBinding,
+    CachePolicy, DefinitionKind, DefinitionRevision, ExecutionPlan, HumanInputSpec, InputBinding,
     OutputDeclaration, PlanEdge, PlanStep, PythonTaskSpec, RetryPolicy, RuntimeBinding, canonical,
 };
 use crate::{CompileError, digest};
@@ -26,13 +26,27 @@ pub struct WorkflowSpec {
     pub steps: Vec<WorkflowTask>,
 }
 
+/// One step of a workflow: work a worker runs, or a gate that waits.
+///
+/// Two shapes in one struct rather than a tagged union, because a definition is
+/// content-addressed and stored: every revision saved before gates existed has
+/// to keep parsing and keep hashing to the same revision. An internally tagged
+/// enum has no default tag, so it would have refused all of them. `approval`
+/// is what decides which shape this is, and the fields the other shape needs
+/// are refused by name when it is set.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WorkflowTask {
     pub id: String,
-    /// A registered function's name and pinned version. Never an import path to execute.
+    /// A registered function's name and pinned version. Never an import path to
+    /// execute. Empty on a gate, which runs nothing.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub task_ref: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub queue: String,
+    /// Set to make this step a gate: it waits for a person and runs nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<ApprovalGate>,
     #[serde(default)]
     pub after: Vec<String>,
     #[serde(default)]
@@ -45,7 +59,38 @@ pub struct WorkflowTask {
     pub params: BTreeMap<String, Value>,
     #[serde(default)]
     pub retry: RetryPolicy,
+    /// How long an attempt may take. Absent on a gate: nothing dispatches a
+    /// wait, so no timer is ever armed and a number here would be a deadline
+    /// the code does not keep.
+    #[serde(default, skip_serializing_if = "is_zero")]
     pub timeout_seconds: u64,
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
+}
+
+/// A question this step puts in front of a person before the graph goes on.
+///
+/// The same question a curation's `approval` block holds, and
+/// [`aiwatcher_core::human_input`] owns what a valid one is — a workflow gate
+/// and a canvas gate compile to one binding and are answered through one route.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovalGate {
+    /// What is being asked, in the words the person reads.
+    pub prompt: String,
+    /// The role that may answer.
+    #[serde(default = "answerable_role")]
+    pub role: String,
+    /// The answers offered. Empty is a free-text answer; anything else is the
+    /// whole set, and an answer outside it is refused.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub choices: Vec<String>,
+}
+
+fn answerable_role() -> String {
+    aiwatcher_core::human_input::ANSWERABLE_ROLE.to_owned()
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, ToSchema)]
@@ -87,34 +132,68 @@ impl WorkflowSpec {
         }
         let mut edges = BTreeSet::new();
         for step in &self.steps {
-            if !valid_name(&step.id) || !valid_name(&step.queue) {
+            if !valid_name(&step.id) {
                 problems.push(format!(
-                    "{}: step id and queue must be nonempty without outer whitespace",
+                    "{}: step id must be nonempty without outer whitespace",
                     step.id
                 ));
             }
-            if !step
-                .task_ref
-                .split_once('@')
-                .is_some_and(|(name, version)| {
-                    valid_name(name) && valid_name(version) && !version.contains('@')
-                })
-            {
-                problems.push(format!("{}: task_ref must be name@version", step.id));
-            }
-            if step.timeout_seconds == 0 || step.timeout_seconds > 604_800 {
-                problems.push(format!(
-                    "{}: timeout_seconds must be between 1 and 604800",
-                    step.id
+            if let Some(gate) = &step.approval {
+                problems.extend(aiwatcher_core::human_input::question_problems(
+                    &step.id,
+                    &gate.prompt,
+                    &gate.role,
+                    &gate.choices,
                 ));
-            }
-            if step.retry.max_attempts == 0 || step.retry.max_unavailable_attempts == 0 {
-                problems.push(format!("{}: retry budgets must be positive", step.id));
-            }
-            if step.outputs.iter().any(|output| !valid_name(output))
-                || step.outputs.iter().collect::<BTreeSet<_>>().len() != step.outputs.len()
-            {
-                problems.push(format!("{}: outputs must be nonempty and unique", step.id));
+                // Everything a step that *runs* needs, refused here by name.
+                // Silently ignoring them would leave a queue nobody claims on,
+                // a timeout nothing arms and a retry budget nothing spends
+                // sitting on a saved definition, read by whoever opens it next
+                // as things this system does.
+                for (field, set) in [
+                    ("task_ref", !step.task_ref.is_empty()),
+                    ("queue", !step.queue.is_empty()),
+                    ("outputs", !step.outputs.is_empty()),
+                    ("timeout_seconds", step.timeout_seconds != 0),
+                    ("retry", step.retry != RetryPolicy::once()),
+                ] {
+                    if set {
+                        problems.push(format!(
+                            "{}: an approval step names {field}, and it waits rather than running                              — nobody claims it, nothing times it out and answering it once is                              the whole of what it does",
+                            step.id
+                        ));
+                    }
+                }
+            } else {
+                if !valid_name(&step.queue) {
+                    problems.push(format!(
+                        "{}: queue must be nonempty without outer whitespace",
+                        step.id
+                    ));
+                }
+                if !step
+                    .task_ref
+                    .split_once('@')
+                    .is_some_and(|(name, version)| {
+                        valid_name(name) && valid_name(version) && !version.contains('@')
+                    })
+                {
+                    problems.push(format!("{}: task_ref must be name@version", step.id));
+                }
+                if step.timeout_seconds == 0 || step.timeout_seconds > 604_800 {
+                    problems.push(format!(
+                        "{}: timeout_seconds must be between 1 and 604800",
+                        step.id
+                    ));
+                }
+                if step.retry.max_attempts == 0 || step.retry.max_unavailable_attempts == 0 {
+                    problems.push(format!("{}: retry budgets must be positive", step.id));
+                }
+                if step.outputs.iter().any(|output| !valid_name(output))
+                    || step.outputs.iter().collect::<BTreeSet<_>>().len() != step.outputs.len()
+                {
+                    problems.push(format!("{}: outputs must be nonempty and unique", step.id));
+                }
             }
             let mut input_names = BTreeSet::new();
             for input in &step.inputs {
@@ -179,11 +258,25 @@ impl WorkflowSpec {
             .into_iter()
             .map(|step| PlanStep {
                 id: step.id.clone(),
-                runtime: RuntimeBinding::PythonTask(PythonTaskSpec {
-                    task_ref: step.task_ref.clone(),
-                    queue: step.queue.clone(),
-                    params: step.params.clone(),
-                }),
+                // One binding for both authored surfaces. A gate on a canvas
+                // and a gate in a graph are the same wait, parked by the same
+                // decision and released by the same answer.
+                runtime: match &step.approval {
+                    Some(gate) => RuntimeBinding::HumanInput(HumanInputSpec {
+                        prompt: gate.prompt.clone(),
+                        role: gate.role.clone(),
+                        choices: gate.choices.clone(),
+                        // No canvas here: a workflow's editor addresses steps
+                        // by their own id, which is what `blocks()` answering
+                        // `None` means.
+                        block: None,
+                    }),
+                    None => RuntimeBinding::PythonTask(PythonTaskSpec {
+                        task_ref: step.task_ref.clone(),
+                        queue: step.queue.clone(),
+                        params: step.params.clone(),
+                    }),
+                },
                 inputs: step
                     .inputs
                     .iter()

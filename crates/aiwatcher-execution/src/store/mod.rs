@@ -46,9 +46,10 @@ use aiwatcher_core::{Checkpoint, MessageId};
 
 use crate::claim::{AttemptKey, AttemptRow, AttemptWrite, ClaimFilter};
 use crate::error::{Result, StoreError};
-use crate::hosted::{DeciderLease, LeaseOutcome};
+use crate::hosted::{DeciderLease, LeaseOutcome, Timer, TimerWrite};
 use crate::message::{
     Direction, MAX_PAYLOAD_BYTES, OutboxMessage, PendingMessage, RecordedMessage, RunProjection,
+    WorkflowEvent,
 };
 use crate::plan::DefinitionKind;
 use crate::schedule::slot::{
@@ -88,6 +89,12 @@ pub struct AppendRequest {
     pub outbox: Vec<OutboxMessage>,
     /// `(processor_id, checkpoint)` when this input came from the log.
     pub checkpoint: Option<(String, Checkpoint)>,
+    /// What this decision does to the timer table.
+    ///
+    /// In the same transaction for [`AttemptWrite`]'s reason, and with a
+    /// sharper one: firing a timer is an append plus a retirement, and split in
+    /// two it fires twice.
+    pub timers: Vec<TimerWrite>,
     /// What this decision does to the claim table.
     ///
     /// Applied in the same transaction as the decision that authorised it, so a
@@ -203,6 +210,34 @@ impl Pruned {
     }
 }
 
+/// Whether this event is the terminal outcome of that attempt.
+///
+/// The rule behind [`WorkflowStore::recorded_outcome`], written once for the
+/// same reason [`prunable`] is: three adapters answering it three ways would be
+/// three receipt lookups, and the one that disagreed would acknowledge a report
+/// that was never recorded.
+///
+/// `StepCacheHit` is not one of these. It settles an attempt's *row*, but no
+/// worker ever reports it — it is this engine answering from an earlier
+/// identical step — so a worker asking what its own attempt recorded must not
+/// be shown one.
+#[must_use]
+pub fn settles(event: &WorkflowEvent, step: &str, attempt: u32) -> bool {
+    match event {
+        WorkflowEvent::StepCompleted {
+            step_id,
+            attempt: recorded,
+            ..
+        }
+        | WorkflowEvent::StepFailed {
+            step_id,
+            attempt: recorded,
+            ..
+        } => step_id == step && *recorded == attempt,
+        _ => false,
+    }
+}
+
 /// Whether one execution may be forgotten, given a cutoff.
 ///
 /// The rule the three adapters share, written once. An adapter that decided
@@ -271,6 +306,38 @@ pub trait WorkflowStore: Send + Sync + std::fmt::Debug {
         after: u64,
         limit: usize,
     ) -> Result<StreamSlice>;
+
+    /// Every timer that has come due, oldest first, at most `limit` of them.
+    ///
+    /// Across every hosted execution, which is the whole reason a timer is a
+    /// row rather than an event in the stream it belongs to: one tick has to
+    /// notice what is due without reading a stream per run.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the backend could not do.
+    async fn due_timers(&self, now: OffsetDateTime, limit: usize) -> Result<Vec<Timer>>;
+
+    /// The timers one execution is still waiting on, soonest first.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the backend could not do.
+    async fn timers_of(&self, execution: &ExecutionId) -> Result<Vec<Timer>>;
+
+    /// The terminal event already recorded for one attempt, if there is one.
+    ///
+    /// The worker protocol's receipt lookup: a committed report whose HTTP
+    /// reply was lost is acknowledged from the history rather than re-decided.
+    /// It is a *port* method rather than a scan by the caller because the
+    /// caller had to load the whole stream to do it — bounded by nothing but
+    /// retention — and because `postgres` can answer it from an index while the
+    /// other two walk what they already hold.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the backend could not do.
+    async fn recorded_outcome(&self, key: &AttemptKey) -> Result<Option<WorkflowEvent>>;
 
     /// Take, or renew, the decider lease on one hosted execution.
     ///
@@ -558,6 +625,18 @@ impl<T: WorkflowStore + ?Sized> WorkflowStore for std::sync::Arc<T> {
         limit: usize,
     ) -> Result<StreamSlice> {
         (**self).load_page(execution, after, limit).await
+    }
+
+    async fn due_timers(&self, now: OffsetDateTime, limit: usize) -> Result<Vec<Timer>> {
+        (**self).due_timers(now, limit).await
+    }
+
+    async fn timers_of(&self, execution: &ExecutionId) -> Result<Vec<Timer>> {
+        (**self).timers_of(execution).await
+    }
+
+    async fn recorded_outcome(&self, key: &AttemptKey) -> Result<Option<WorkflowEvent>> {
+        (**self).recorded_outcome(key).await
     }
 
     async fn take_decider_lease(

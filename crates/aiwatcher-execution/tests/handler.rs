@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use aiwatcher_core::{CausationId, Checkpoint, CorrelationId, MessageId};
-use aiwatcher_execution::hosted::{DeciderLease, LeaseOutcome};
+use aiwatcher_execution::hosted::{DeciderLease, LeaseOutcome, Timer};
 use aiwatcher_execution::message::{MessageMetadata, OutboxMessage, RunProjection, SCHEMA_VERSION};
 use aiwatcher_execution::plan::{
     CachePolicy, DefinitionKind, DefinitionRevision, PlanStep, PythonTaskSpec, RetryPolicy,
@@ -73,6 +73,7 @@ fn start() -> WorkflowMessage {
         plan: Box::new(plan()),
         owner: ExecutionOwner::Local,
         mode: ExecutionMode::Compiled,
+        payloads: Default::default(),
         requested_by: "mk".to_owned(),
         input: BTreeMap::new(),
     })
@@ -182,6 +183,25 @@ impl WorkflowStore for OneProcess {
         limit: usize,
     ) -> aiwatcher_execution::Result<StreamSlice> {
         self.0.load_page(execution, after, limit).await
+    }
+
+    async fn due_timers(
+        &self,
+        now: OffsetDateTime,
+        limit: usize,
+    ) -> aiwatcher_execution::Result<Vec<Timer>> {
+        self.0.due_timers(now, limit).await
+    }
+
+    async fn timers_of(&self, execution: &ExecutionId) -> aiwatcher_execution::Result<Vec<Timer>> {
+        self.0.timers_of(execution).await
+    }
+
+    async fn recorded_outcome(
+        &self,
+        key: &AttemptKey,
+    ) -> aiwatcher_execution::Result<Option<WorkflowEvent>> {
+        self.0.recorded_outcome(key).await
     }
 
     async fn take_decider_lease(
@@ -364,6 +384,25 @@ impl WorkflowStore for Contends {
         limit: usize,
     ) -> aiwatcher_execution::Result<StreamSlice> {
         self.inner.load_page(execution, after, limit).await
+    }
+
+    async fn due_timers(
+        &self,
+        now: OffsetDateTime,
+        limit: usize,
+    ) -> aiwatcher_execution::Result<Vec<Timer>> {
+        self.inner.due_timers(now, limit).await
+    }
+
+    async fn timers_of(&self, execution: &ExecutionId) -> aiwatcher_execution::Result<Vec<Timer>> {
+        self.inner.timers_of(execution).await
+    }
+
+    async fn recorded_outcome(
+        &self,
+        key: &AttemptKey,
+    ) -> aiwatcher_execution::Result<Option<WorkflowEvent>> {
+        self.inner.recorded_outcome(key).await
     }
 
     async fn take_decider_lease(

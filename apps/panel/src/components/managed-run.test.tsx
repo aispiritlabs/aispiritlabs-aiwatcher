@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -244,6 +244,142 @@ describe('reopening one step of a run', () => {
 
     // And says the run executed it anyway, because it did.
     await screen.findByText(/It is still what the run executed/);
+  });
+});
+
+describe('answering a step that is waiting on a person', () => {
+  const CONTEXT = '/steps/sign-off/context';
+  const ANSWER = '/steps/sign-off/input';
+
+  const WAITING: RunView = {
+    allowed: ['pause', 'cancel'],
+    execution: {
+      ...RUNNING.execution,
+      steps: [
+        {
+          step_id: 'sign-off',
+          runtime: 'human_input',
+          current_attempt: 1,
+          state: { state_type: 'awaiting_input' },
+        },
+      ],
+    },
+  };
+
+  /** The context of a gate the run is stopped on, as the server answers it. */
+  function gate(choices: string[]) {
+    return {
+      context_id: 'e-1/sign-off/1',
+      definition_kind: 'curation_pipeline',
+      definition_name: 'import',
+      definition_revision: 'rev-1',
+      plan_id: 'plan-1',
+      step_id: 'sign-off',
+      allowed: ['answer'],
+      input_artifacts: [],
+      runtime: {
+        runtime: 'human_input',
+        prompt: 'Publish these 4,120 rows?',
+        role: 'editor',
+        choices,
+        block: 'sign-off',
+      },
+      state: {
+        step_id: 'sign-off',
+        current_attempt: 1,
+        state: { state_type: 'awaiting_input' },
+        awaiting: { prompt: 'Publish these 4,120 rows?', role: 'editor', choices },
+      },
+    };
+  }
+
+  /** Authentication on, and this is who is asking. */
+  function signedInAs(role: string) {
+    return [
+      {
+        method: 'GET',
+        path: '/auth/config',
+        answer: { status: 200, body: { enabled: true } },
+      },
+      {
+        method: 'GET',
+        path: '/auth/me',
+        answer: {
+          status: 200,
+          body: { credential: 'session', subject: 'somebody', roles: [role] },
+        },
+      },
+    ];
+  }
+
+  it('offers exactly the answers the question declared, and sends the attempt that asked', async () => {
+    // The negative control for the choices: offer anything the spec does not
+    // carry and the answer comes back a 409 nobody could have predicted from
+    // the screen. So the buttons *are* the spec's list, and nothing else.
+    const server = serve([
+      ...signedInAs('editor'),
+      { method: 'GET', path: EXECUTION, answer: { status: 200, body: WAITING } },
+      {
+        method: 'GET',
+        path: CONTEXT,
+        answer: { status: 200, body: gate(['approve', 'reject']) },
+      },
+      { method: 'POST', path: ANSWER, answer: { status: 200, body: WAITING } },
+    ]);
+
+    render(withQueries(<Harness />));
+    await userEvent.click(await screen.findByRole('button', { name: /sign-off/ }));
+
+    await screen.findByText('Publish these 4,120 rows?');
+    // Exactly these, and in this order — not "these among others". An answer
+    // the step never declared is refused by name, so a button offering one is
+    // a 409 somebody had to press to find out about.
+    const answers = within(screen.getByRole('group', { name: 'Answers' })).getAllByRole('button');
+    expect(answers.map((button) => button.textContent)).toEqual(['approve', 'reject']);
+    // A question with a list is answered from the list. A free-text box beside
+    // it would be a way to type something the server will refuse.
+    expect(screen.queryByPlaceholderText('Your answer')).toBeNull();
+
+    await userEvent.click(screen.getByRole('button', { name: 'approve' }));
+
+    await waitFor(() => expect(server.countOf('POST', ANSWER)).toBe(1));
+  });
+
+  it('types the answer to a question that offered none', async () => {
+    serve([
+      ...signedInAs('editor'),
+      { method: 'GET', path: EXECUTION, answer: { status: 200, body: WAITING } },
+      { method: 'GET', path: CONTEXT, answer: { status: 200, body: gate([]) } },
+      { method: 'POST', path: ANSWER, answer: { status: 200, body: WAITING } },
+    ]);
+
+    render(withQueries(<Harness />));
+    await userEvent.click(await screen.findByRole('button', { name: /sign-off/ }));
+
+    await screen.findByPlaceholderText('Your answer');
+    expect(screen.queryByRole('button', { name: 'approve' })).toBeNull();
+  });
+
+  it('tells a viewer whose decision this is rather than offering a button that would be refused', async () => {
+    serve([
+      ...signedInAs('viewer'),
+      { method: 'GET', path: EXECUTION, answer: { status: 200, body: WAITING } },
+      {
+        method: 'GET',
+        path: CONTEXT,
+        answer: { status: 200, body: gate(['approve', 'reject']) },
+      },
+    ]);
+
+    render(withQueries(<Harness />));
+    await userEvent.click(await screen.findByRole('button', { name: /sign-off/ }));
+
+    // The question is still shown: a run stopped on a decision somebody else
+    // has to make is exactly what a viewer needs to be able to see.
+    await screen.findByText('Publish these 4,120 rows?');
+    await screen.findByText(/This needs the editor role/);
+    expect(screen.queryByRole('button', { name: 'approve' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'reject' })).toBeNull();
   });
 });
 

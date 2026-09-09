@@ -166,6 +166,53 @@ describe('portable curation flows', () => {
     expect(saveNotebook).not.toHaveBeenCalled();
   });
 
+  it('carries an approval gate through an export and back', async () => {
+    // A .flow.json is what somebody hands to a colleague, so a chain that
+    // saves has to be one the importer accepts. A gate the schema did not know
+    // about would export perfectly well and refuse to come back.
+    const bundle = await smallBundle();
+    bundle.pipeline.blocks.push({
+      id: 'sign-off',
+      title: 'Approval',
+      spec: {
+        kind: 'approval',
+        prompt: 'Publish these rows?',
+        role: 'editor',
+        choices: ['approve', 'reject'],
+      },
+    });
+    bundle.pipeline.edges.push({ from: 'missing', to: 'sign-off' });
+
+    const parsed = await parseBundle(JSON.stringify(bundle));
+
+    expect(parsed.pipeline.blocks.at(-1)?.spec).toEqual({
+      kind: 'approval',
+      prompt: 'Publish these rows?',
+      role: 'editor',
+      choices: ['approve', 'reject'],
+    });
+  });
+
+  it('refuses a data transform behind an approval, as the registry does', async () => {
+    const bundle = await smallBundle();
+    bundle.pipeline.blocks = [
+      { id: 'source', title: 'Source', spec: { kind: 'source', dataset: 'runs' } },
+      {
+        id: 'sign-off',
+        title: 'Approval',
+        spec: { kind: 'approval', prompt: 'Go on?', role: 'editor', choices: [] },
+      },
+      { id: 'shape', title: 'Shape', spec: { kind: 'transform', steps: '->limit(10)' } },
+    ];
+    bundle.pipeline.edges = [
+      { from: 'source', to: 'sign-off' },
+      { from: 'sign-off', to: 'shape' },
+    ];
+    bundle.notebooks = [];
+
+    await expect(parseBundle(JSON.stringify(bundle))).rejects.toThrow(/must precede/);
+  });
+
   it('refuses to overwrite locally edited imported sources', async () => {
     vi.mocked(getNotebook).mockResolvedValue({
       name: 'missing',

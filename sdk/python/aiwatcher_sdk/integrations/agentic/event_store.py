@@ -1,6 +1,6 @@
 """`agentic.workflow.EventStore`, backed by one aiwatcher hosted execution.
 
-Section 40.3. `agentic.workflow` already has the worker half of a durable
+`agentic.workflow` already has the worker half of a durable
 decider — `DurableWorkflowExecutor`, an inbox by causation, a cached decision
 across OCC retries, `ProcessorLock`. What it does not have is a **shared**
 history: in lab 6 every agent worker holds its own SQLite, so a fan-out of three
@@ -30,7 +30,7 @@ A record's `type` and `metadata` go to aiwatcher plainly: metadata carries no
 text, and it is what a review queue and an exclusion report read. The `data` is
 conversation content and does **not** — it goes to a :class:`PayloadStore` and
 aiwatcher is told a reference, a plaintext digest and a size. That is the
-`external` policy of section 40.4, and it is the only one this client
+`external` payload policy, and it is the only one this client
 implements: `sealed` needs the conversation archive's crypt behind routes that
 do not exist yet, and quietly writing `external` when somebody asked for
 `sealed` is the silent downgrade that policy forbids.
@@ -39,6 +39,7 @@ do not exist yet, and quietly writing `external` when somebody asked for
 from __future__ import annotations
 
 import dataclasses
+import datetime
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -55,6 +56,9 @@ __all__ = [
     "MessageCodec",
     "MessageRecord",
     "ReadStreamResult",
+    "SagaTimers",
+    "TimerPolicy",
+    "TimerRequest",
     "dataclass_codec",
 ]
 
@@ -103,6 +107,74 @@ def _conflict(stream_name: str, expected: object, current: object) -> Exception:
         return ConcurrencyConflictError(stream_name, expected, current)
     theirs: Exception = Agentic(stream_name, expected, current)
     return theirs
+
+
+@dataclass(frozen=True, slots=True)
+class TimerRequest:
+    """A deferred append the engine should hold until `due_at`.
+
+    `cancel` withdraws one instead of setting it, which is what a saga does when
+    the thing it was waiting for arrived first.
+    """
+
+    timer_id: str
+    due_at: float | None = None
+    cancel: bool = False
+
+
+class TimerPolicy(Protocol):
+    """Which of a worker's own messages are also timers.
+
+    A seam rather than a rule, and the reason is where the vocabulary lives:
+    `saga.timeout_scheduled` is `agentic.workflow.Saga`'s word, not this store's
+    and certainly not the engine's. The worker is allowed to know what its
+    messages mean — that is what makes it the decider — so the recognising
+    happens here, in its own client, and aiwatcher is handed a row it was told
+    about rather than a stream it worked something out from.
+    """
+
+    def timer_for(self, record: MessageRecord) -> TimerRequest | None:
+        """The timer this message asks for, if it asks for one."""
+        ...
+
+
+class SagaTimers:
+    """`agentic.workflow.Saga`'s timeouts, recognised by their own event types.
+
+    This is the whole of what makes a saga's timers *fire* with no change to
+    `agentic`. That package has had `schedule_timeout`, `due_timeouts` and
+    `fire_timeout` since before any of this existed, and every one of them works
+    — what has never existed is something that wakes up and looks, because a
+    worker holding its own SQLite is not running when the timeout comes due.
+    A `saga.timeout_scheduled` event still goes into the stream exactly as it
+    did; alongside it, this asks aiwatcher to hold the fired message and hand it
+    back at the time.
+    """
+
+    #: What a saga appends when it sets a timeout.
+    SCHEDULED = "saga.timeout_scheduled"
+    #: What it appends when one has been dealt with.
+    FIRED = "saga.timeout_fired"
+
+    def timer_for(self, record: MessageRecord) -> TimerRequest | None:
+        if not isinstance(record.data, dict):
+            return None
+        timeout_id = record.data.get("timeout_id")
+        if not isinstance(timeout_id, str):
+            return None
+        if record.type == self.SCHEDULED:
+            due_at_ns = record.data.get("due_at_ns")
+            if not isinstance(due_at_ns, int):
+                return None
+            # `agentic` counts nanoseconds and this API takes seconds; the
+            # conversion is here rather than on the wire so that the number a
+            # saga wrote is the number it reads back.
+            return TimerRequest(timer_id=timeout_id, due_at=due_at_ns / 1_000_000_000)
+        if record.type == self.FIRED:
+            # Handled: withdraw the row, so a tick does not deliver it a second
+            # time to a saga that has already moved on.
+            return TimerRequest(timer_id=timeout_id, cancel=True)
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,6 +300,7 @@ class AiwatcherEventStore:
         codec: MessageCodec,
         holder: str,
         stream_name: str | None = None,
+        timers: TimerPolicy | None = None,
     ) -> None:
         self._transport = transport
         self._execution_id = execution_id
@@ -239,6 +312,11 @@ class AiwatcherEventStore:
         #: What `agentic` calls this stream. Defaults to the execution id, which
         #: is what a decider that has no name of its own should use.
         self._stream_name = stream_name or execution_id
+        #: Which of the worker's messages are also deferred appends. `None`
+        #: means none of them are — an honest default, because a store that
+        #: guessed would be reading the caller's vocabulary without being told
+        #: it.
+        self._timers = timers
 
     # ── The protocol ─────────────────────────────────────────────────────
 
@@ -299,11 +377,23 @@ class AiwatcherEventStore:
         self._check_stream(stream_name)
         records = [self._codec.as_record(event) for event in events]
         version = self._version_for(stream_name, expected_version)
-        body = {
+        messages = [self._wire_message(record) for record in records]
+        body: dict[str, Any] = {
             "expected_version": version,
             "holder": self._holder,
-            "messages": [self._wire_message(record) for record in records],
+            "messages": messages,
         }
+        # In the same append rather than beside it: a decision that schedules a
+        # timeout and the record of having scheduled it are one decision, and
+        # split in two a crash between them leaves either a timer nobody decided
+        # on or a decision whose timer never happened.
+        timers = [
+            wire
+            for record, message in zip(records, messages, strict=True)
+            if (wire := self._wire_timer(record, message)) is not None
+        ]
+        if timers:
+            body["timers"] = timers
         try:
             answer = self._transport.json(
                 "POST",
@@ -448,6 +538,28 @@ class AiwatcherEventStore:
             }
         return message
 
+    def _wire_timer(self, record: MessageRecord, message: dict[str, Any]) -> dict[str, Any] | None:
+        """The timer this message asks for, as the append route spells it."""
+        if self._timers is None:
+            return None
+        asked = self._timers.timer_for(record)
+        if asked is None:
+            return None
+        if asked.cancel:
+            return {"cancel": {"timer_id": asked.timer_id}}
+        if asked.due_at is None:  # pragma: no cover - a policy that asked for nothing
+            return None
+        return {
+            "schedule": {
+                "timer_id": asked.timer_id,
+                "due_at": _rfc3339(asked.due_at),
+                # The message the engine hands back when it comes due — the same
+                # one being appended now, so a saga reading its own history and
+                # a saga receiving the timeout see the same words.
+                "message": message,
+            }
+        }
+
     def _message_from(self, row: Any) -> Any | None:
         """One `…/history` row as the caller's message, or `None` when it is not one.
 
@@ -492,12 +604,19 @@ class AiwatcherEventStore:
         return data
 
 
+def _rfc3339(seconds: float) -> str:
+    """A Unix instant as the API reads times, in UTC with a `Z`."""
+    return (
+        datetime.datetime.fromtimestamp(seconds, tz=datetime.UTC).isoformat().replace("+00:00", "Z")
+    )
+
+
 def _key_for(records: Sequence[MessageRecord]) -> str:
     """One batch's idempotency key, derived from the messages in it.
 
-    Named by what it identifies (section 43.10, and the kickoff's first trap):
-    every message id in the batch, in order. Two calls carrying the same
-    messages are one append; two carrying different ones are two. A key derived
+    Named by everything it identifies: every message id in the batch, in
+    order. Two calls carrying the same messages are one append; two carrying
+    different ones are two. A key derived
     from the execution alone would make the second batch a redelivery of the
     first.
     """

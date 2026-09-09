@@ -14,7 +14,15 @@ import {
   runBlocks,
   stepContext,
 } from '@/api/generated/sdk.gen';
-import type { ContextSnapshot, RunAction, RunView, StateType } from '@/api/generated/types.gen';
+import type {
+  ContextSnapshot,
+  InputRequest,
+  Role,
+  RunAction,
+  RunView,
+  StateType,
+} from '@/api/generated/types.gen';
+import { needsRole, useCan } from '@/lib/auth';
 import { openWorkflowStream } from '@/lib/live';
 import { getNotebookRevision } from '@/lib/ml-pipeline';
 import { answerOf, answerOrNone } from '@/lib/result';
@@ -330,6 +338,10 @@ function StepActions({
 
   const [answer, setAnswer] = React.useState('');
   const waiting = context.data?.state?.awaiting;
+  // Whether this caller holds the role the question named. The server is the
+  // check — `provide_input` refuses the rest — and this is so that finding out
+  // costs a sentence rather than a round trip and a red box.
+  const mayAnswer = useCan(roleOf(waiting));
   // The attempt that asked, named rather than assumed. An answer typed against
   // a question a retry has since replaced is refused by name — which is the
   // point of sending it, so it must be the attempt this context was read at.
@@ -414,14 +426,26 @@ function StepActions({
         </div>
       ) : null}
 
-      {allowed.includes('answer') && waiting ? (
+      {allowed.includes('answer') && waiting && !mayAnswer ? (
+        // The question, and why the answer is somebody else's. Not hidden:
+        // knowing a run is stopped on a decision you may not make is the whole
+        // of what somebody needs in order to go and find who can.
+        <div className="flex flex-col gap-1">
+          <p>{waiting.prompt}</p>
+          <span className="text-muted-foreground">{needsRole(roleOf(waiting))}</span>
+        </div>
+      ) : null}
+
+      {allowed.includes('answer') && waiting && mayAnswer ? (
         <div className="flex flex-col gap-2">
           <p>{waiting.prompt}</p>
           {waiting.choices?.length ? (
             // Buttons rather than a text box: `decide` refuses anything that is
             // not one of these by name, so a free-typed answer would be a 409
-            // somebody had to read the error of to discover.
-            <div className="flex flex-wrap gap-2">
+            // somebody had to read the error of to discover. Named as a group
+            // because what is in it is the whole answer: every button here is
+            // one the step declared, and there is no other way to answer it.
+            <div role="group" aria-label="Answers" className="flex flex-wrap gap-2">
               {waiting.choices.map((choice) => (
                 <Button
                   key={choice}
@@ -470,6 +494,18 @@ function StepActions({
       ) : null}
     </div>
   );
+}
+
+/**
+ * The role a question named, as one this panel can check.
+ *
+ * The floor is the answer route's own: it requires an editor and reads nothing
+ * weaker, so a request naming anything below that is still answered by an
+ * editor and saying otherwise would put buttons in front of somebody who is
+ * about to be refused. A stricter name is honoured as it stands.
+ */
+function roleOf(request: InputRequest | null | undefined): Role {
+  return request?.role === 'admin' ? 'admin' : 'editor';
 }
 
 /**

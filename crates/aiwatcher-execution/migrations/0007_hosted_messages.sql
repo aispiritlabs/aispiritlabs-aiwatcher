@@ -1,4 +1,4 @@
--- A hosted decider's messages are a third kind (section 40.3).
+-- A hosted decider's messages are a third kind.
 --
 -- `workflow_messages.kind` was `command | event` because those were the two a
 -- Rust decider produces. A hosted execution's history is the worker's own, and

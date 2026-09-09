@@ -37,8 +37,8 @@ use aiwatcher_core::{Checkpoint, MessageId};
 
 use crate::claim::{AttemptKey, AttemptRow, AttemptWrite, ClaimFilter};
 use crate::error::{Result, StoreError};
-use crate::hosted::{DeciderLease, LeaseOutcome};
-use crate::message::{OutboxMessage, RecordedMessage, RunProjection};
+use crate::hosted::{DeciderLease, LeaseOutcome, Timer, TimerWrite};
+use crate::message::{Direction, OutboxMessage, RecordedMessage, RunProjection, WorkflowEvent};
 use crate::plan::DefinitionKind;
 use crate::schedule::slot::{
     SlotAdmission, SlotAdmissionRequest, SlotKey, SlotRecord, SlotSettlement,
@@ -60,6 +60,8 @@ const ATTEMPTS_FILE: &str = "attempts.json";
 /// for the same reason: this adapter holds one process, so the map is small
 /// and reading it whole is what the process would do anyway.
 const LEASES_FILE: &str = "decider-leases.json";
+/// Deferred appends, by execution and the worker's own timer id.
+const TIMERS_FILE: &str = "timers.json";
 /// One record per decision that has been accepted and not yet fully applied.
 const COMMITS_DIR: &str = "commits";
 /// One definition's slots. Keyed like a stream, so a schedule with a name full
@@ -133,6 +135,11 @@ struct PendingCommit {
     projection: RunProjection,
     outbox: Vec<OutboxMessage>,
     attempts: Vec<AttemptWrite>,
+    /// Deferred appends this decision set, withdrew or fired. Journalled with
+    /// the rest, because a fire that landed without its message would be a
+    /// timer nothing will ever deliver.
+    #[serde(default)]
+    timers: Vec<TimerWrite>,
     checkpoint: Option<(String, Checkpoint)>,
 }
 
@@ -287,6 +294,27 @@ impl FileWorkflowStore {
         write_atomically(&self.root.join(LEASES_FILE), &serde_json::to_vec(&rows)?).await
     }
 
+    async fn read_timers(&self) -> Result<BTreeMap<(String, String), Timer>> {
+        let Ok(body) = fs::read(self.root.join(TIMERS_FILE)).await else {
+            return Ok(BTreeMap::new());
+        };
+        Ok(serde_json::from_slice::<Vec<Timer>>(&body)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|timer| {
+                (
+                    (timer.execution.as_str().to_owned(), timer.timer_id.clone()),
+                    timer,
+                )
+            })
+            .collect())
+    }
+
+    async fn write_timers(&self, timers: &BTreeMap<(String, String), Timer>) -> Result<()> {
+        let rows: Vec<&Timer> = timers.values().collect();
+        write_atomically(&self.root.join(TIMERS_FILE), &serde_json::to_vec(&rows)?).await
+    }
+
     async fn write_attempts(&self, rows: &BTreeMap<AttemptKey, AttemptRow>) -> Result<()> {
         let rows: Vec<&AttemptRow> = rows.values().collect();
         write_atomically(&self.root.join(ATTEMPTS_FILE), &serde_json::to_vec(&rows)?).await
@@ -400,6 +428,24 @@ impl FileWorkflowStore {
                     .cloned(),
             );
             self.write_outbox(&rows).await?;
+        }
+
+        if !commit.timers.is_empty() {
+            let mut timers = self.read_timers().await?;
+            for write in &commit.timers {
+                match write {
+                    TimerWrite::Schedule(timer) => {
+                        timers.insert(
+                            (timer.execution.as_str().to_owned(), timer.timer_id.clone()),
+                            timer.clone(),
+                        );
+                    }
+                    TimerWrite::Cancel(id) | TimerWrite::Fire(id) => {
+                        timers.remove(&(commit.execution.as_str().to_owned(), id.clone()));
+                    }
+                }
+            }
+            self.write_timers(&timers).await?;
         }
 
         if !commit.attempts.is_empty() {
@@ -587,6 +633,44 @@ impl WorkflowStore for FileWorkflowStore {
         })
     }
 
+    async fn due_timers(&self, now: OffsetDateTime, limit: usize) -> Result<Vec<Timer>> {
+        let mut due: Vec<Timer> = self
+            .read_timers()
+            .await?
+            .into_values()
+            .filter(|timer| timer.is_due(now))
+            .collect();
+        due.sort_by_key(|timer| timer.due_at);
+        due.truncate(limit);
+        Ok(due)
+    }
+
+    async fn timers_of(&self, execution: &ExecutionId) -> Result<Vec<Timer>> {
+        let mut waiting: Vec<Timer> = self
+            .read_timers()
+            .await?
+            .into_values()
+            .filter(|timer| timer.execution.as_str() == execution.as_str())
+            .collect();
+        waiting.sort_by_key(|timer| timer.due_at);
+        Ok(waiting)
+    }
+
+    async fn recorded_outcome(&self, key: &AttemptKey) -> Result<Option<WorkflowEvent>> {
+        // This adapter reads the stream file whole whatever is asked of it, and
+        // saying so is better than a signature that implies an index: it holds
+        // one process and a development store, and a run long enough for the
+        // difference to matter is one `AIWATCHER_WORKFLOW_STORE=postgres`
+        // already covers.
+        Ok(self
+            .read_stream(&key.execution_id)
+            .await?
+            .into_iter()
+            .filter(|recorded| recorded.direction == Direction::Output)
+            .filter_map(|recorded| recorded.message.event().cloned())
+            .find(|event| crate::store::settles(event, &key.step_id, key.attempt)))
+    }
+
     async fn take_decider_lease(
         &self,
         execution: &ExecutionId,
@@ -706,6 +790,7 @@ impl WorkflowStore for FileWorkflowStore {
             projection: request.projection,
             outbox: request.outbox,
             attempts: request.attempts,
+            timers: request.timers,
             checkpoint: request.checkpoint,
         };
 
@@ -1123,6 +1208,7 @@ mod tests {
                 last_error: None,
             }],
             checkpoint: Some(("projector".to_owned(), Checkpoint::from_global_position(42))),
+            timers: Vec::new(),
             attempts: vec![AttemptWrite::Dispatch(AttemptRow::claimable(
                 AttemptKey::new(execution.clone(), "extract", 1),
                 RuntimeKind::FlowPhp,

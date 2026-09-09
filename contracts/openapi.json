@@ -5884,6 +5884,58 @@
         }
       }
     },
+    "/api/v1/executions/{execution_id}/timers": {
+      "get": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "The deferred appends this run is holding.",
+        "description": "A read, so a decider that restarted can see what it scheduled before it went\naway — which is the question the whole of step 4 exists to make answerable.",
+        "operationId": "execution_timers",
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionTimers"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/live": {
       "get": {
         "tags": [
@@ -9307,6 +9359,13 @@
               "$ref": "#/components/schemas/HostedMessage"
             },
             "description": "The worker's own messages, in the order it wrote them."
+          },
+          "timers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TimerBody"
+            },
+            "description": "Deferred appends this decision sets or withdraws.\n\nIn the same request rather than a route of its own: a decision that\nschedules a timeout and the record of having scheduled it are one\ndecision, and split in two a crash between them leaves either a timer\nnobody decided on or a decision whose timer never happened."
           }
         },
         "additionalProperties": false
@@ -9815,6 +9874,36 @@
           },
           {
             "type": "object",
+            "description": "A gate somebody has to open: a managed run stops here and waits, for as\nlong as it takes, until somebody who holds the role answers.\n\nIt performs nothing and produces nothing. The rows it was asked about\nare the ones the block before it produced, and the block after it reads\nthose same rows — so an approval sits *between* work rather than in the\nmiddle of it, which is why answering completes the step.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "choices": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "The answers offered. Empty is a free-text answer; anything else is\nthe whole set, and an answer outside it is refused."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "approval"
+                ]
+              },
+              "prompt": {
+                "type": "string",
+                "description": "What is being asked, in the words the person reads."
+              },
+              "role": {
+                "type": "string",
+                "description": "The role that may answer."
+              }
+            }
+          },
+          {
+            "type": "object",
             "description": "The end of the chain: the rows, and the dataset a version of them is\npublished to.",
             "required": [
               "kind"
@@ -10058,6 +10147,19 @@
           "reason": {
             "type": "string",
             "description": "Recorded on the decision and read by whoever finds the run stopped.\nEmpty is allowed; a wrong reason would be worse than none."
+          }
+        },
+        "additionalProperties": false
+      },
+      "CancelTimerBody": {
+        "type": "object",
+        "description": "The timer to withdraw.",
+        "required": [
+          "timer_id"
+        ],
+        "properties": {
+          "timer_id": {
+            "type": "string"
           }
         },
         "additionalProperties": false
@@ -12974,6 +13076,22 @@
         },
         "additionalProperties": false
       },
+      "ExecutionTimers": {
+        "type": "object",
+        "description": "What one execution is still waiting on.",
+        "required": [
+          "timers"
+        ],
+        "properties": {
+          "timers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Timer"
+            },
+            "description": "Soonest first. A fired or cancelled timer is not a row, so everything\nhere is still going to happen."
+          }
+        }
+      },
       "ExportCounts": {
         "type": "object",
         "required": [
@@ -14297,6 +14415,13 @@
           "role"
         ],
         "properties": {
+          "block": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The authored block this step came from, for the canvas box that lights\nup while it waits."
+          },
           "choices": {
             "type": "array",
             "items": {
@@ -19424,6 +19549,30 @@
           }
         }
       },
+      "ScheduleTimerBody": {
+        "type": "object",
+        "description": "A deferred append, as a caller asks for one.",
+        "required": [
+          "timer_id",
+          "due_at",
+          "message"
+        ],
+        "properties": {
+          "due_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "message": {
+            "$ref": "#/components/schemas/HostedMessage",
+            "description": "What to append when it comes due. Composed by the caller, because an\nengine that assembled one would be deciding what a timeout means."
+          },
+          "timer_id": {
+            "type": "string",
+            "description": "The worker's own id, unique inside this execution."
+          }
+        },
+        "additionalProperties": false
+      },
       "ScheduleView": {
         "type": "object",
         "description": "A schedule, when it next fires, and what setting it started.",
@@ -20627,6 +20776,64 @@
           }
         },
         "additionalProperties": false
+      },
+      "Timer": {
+        "type": "object",
+        "description": "A message a hosted decider asked this engine to append later.\n\nThe one *active* thing this engine does for a hosted run, and it is\ndeliberately the smallest possible active thing: a deferred append.\nThe worker composes the message when it schedules the timer, and the engine\nstores it and hands it back at the time — so \"the engine does not interpret\nthe messages\" survives intact. It is not reading a stream to work out that\nsomething is due; it was told, explicitly, in a row.\n\n## Why a row rather than the stream\n\n`agentic.workflow.Saga` already keeps its timers *in* the stream, as\n`saga.timeout_scheduled` events, and works out what is due by folding it.\nThat fold is the worker's and stays the worker's. What it cannot do from\nthere is *notice*: nothing wakes up and looks. A row is what an index over\nevery hosted run can be built on, so one tick finds what is due across all\nof them without reading a single stream.",
+        "required": [
+          "execution",
+          "timer_id",
+          "due_at",
+          "message"
+        ],
+        "properties": {
+          "due_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "execution": {
+            "$ref": "#/components/schemas/ExecutionId"
+          },
+          "message": {
+            "$ref": "#/components/schemas/HostedMessage",
+            "description": "What to append when it comes due. Composed by the worker at the moment\nit schedules, never assembled here — an engine that built this would be\ndeciding what a timeout means."
+          },
+          "timer_id": {
+            "type": "string",
+            "description": "The worker's own id, unique inside one execution. `agentic`'s\n`timeout_id`, and the reason a repeated schedule is one timer."
+          }
+        }
+      },
+      "TimerBody": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Hold this message until `due_at`. Scheduling one id twice is one timer,\nwhich is what makes a decider's retry safe.",
+            "required": [
+              "schedule"
+            ],
+            "properties": {
+              "schedule": {
+                "$ref": "#/components/schemas/ScheduleTimerBody",
+                "description": "Hold this message until `due_at`. Scheduling one id twice is one timer,\nwhich is what makes a decider's retry safe."
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Withdraw it. A no-op when there is none, because a saga that cancels a\ntimeout it already handled is doing the ordinary thing.",
+            "required": [
+              "cancel"
+            ],
+            "properties": {
+              "cancel": {
+                "$ref": "#/components/schemas/CancelTimerBody",
+                "description": "Withdraw it. A no-op when there is none, because a saga that cancels a\ntimeout it already handled is doing the ordinary thing."
+              }
+            }
+          }
+        ],
+        "description": "One thing to do to this execution's timers.\n\nA tagged pair rather than a struct with a `cancel` flag, because the two\ncarry different fields and a body that could name a `due_at` while\ncancelling would be a shape with a meaningless half."
       },
       "ToolBreakdown": {
         "type": "object",

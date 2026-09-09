@@ -1,12 +1,17 @@
 //! From an authored curation chain to a runnable plan.
 //!
-//! ADR_0024's four block kinds compile to three runtimes, and the interesting
-//! part is that they do not compile one-to-one. **Flow executes one pipeline**,
-//! so a source and every transform after it fold into a single
+//! ADR_0024's block kinds compile to four runtimes, and the interesting part is
+//! that they do not compile one-to-one. **Flow executes one pipeline**, so a
+//! source and every transform after it fold into a single
 //! [`RuntimeBinding::FlowPhp`] step whose `blocks` lists the authored ids the
-//! panel lights up together. That fold is also what makes "no transform after a
-//! notebook" a compiler refusal rather than a runtime surprise: there is
+//! panel lights up together. That fold is also what makes "a transform reads
+//! past nothing" a compiler refusal rather than a runtime surprise: there is
 //! nowhere for a second Flow step to read from.
+//!
+//! An **approval** compiles the way a notebook does — its own step, ending the
+//! fold — and unlike every other kind it is in the chain without being in the
+//! data: it reads the rows the step before produced and hands nothing on, so
+//! the block after it reads those same rows.
 //!
 //! The shape rules are **not** re-implemented here.
 //! [`aiwatcher_datasets::order_of`] owns them and reports every problem at
@@ -22,8 +27,8 @@ use aiwatcher_datasets::{BlockSpec, CurationPipeline, PipelineBlock, order_of};
 use crate::error::CompileError;
 use crate::plan::{
     CachePolicy, DefinitionKind, DefinitionRevision, ExecutionPlan, FlowSourceRef, FlowStepSpec,
-    InputBinding, MarimoStepSpec, OutputDeclaration, PlanEdge, PlanStep, PublishDatasetSpec,
-    ResolvedWindow, RetryPolicy, RuntimeBinding,
+    HumanInputSpec, InputBinding, MarimoStepSpec, OutputDeclaration, PlanEdge, PlanStep,
+    PublishDatasetSpec, ResolvedWindow, RetryPolicy, RuntimeBinding,
 };
 
 /// A Flow query is a request/response to a service that holds nothing.
@@ -32,6 +37,12 @@ const FLOW_TIMEOUT_SECONDS: u64 = 300;
 const NOTEBOOK_TIMEOUT_SECONDS: u64 = 900;
 /// Publishing writes one content-addressed version in this process.
 const PUBLISH_TIMEOUT_SECONDS: u64 = 120;
+/// A wait is dispatched nowhere, so no attempt timer is ever armed and this
+/// number is read by nothing. Zero rather than an invented quarter of an hour:
+/// how long a person may be left is `InputRequest::deadline`, and a runtime
+/// that ever did dispatch a wait should fail at once rather than sit out a
+/// duration nobody chose.
+const NO_ATTEMPT_TIMER: u64 = 0;
 
 /// What a compilation may resolve that the definition left open.
 #[derive(Clone, Copy, Debug, Default)]
@@ -59,11 +70,19 @@ pub fn compile_curation(
     let mut problems = Vec::new();
     let mut steps: Vec<PlanStep> = Vec::new();
     let mut edges: Vec<PlanEdge> = Vec::new();
+    // Two cursors, because an approval is in the chain and not in the data.
+    // `previous` is what the plan edge comes from, so the order somebody drew
+    // is the order steps become ready in; `rows_from` is the last step that
+    // actually produced rows, which is what the next piece of work reads. A
+    // gate that overwrote the second would leave the block after it bound to
+    // an output nobody produces.
     let mut previous: Option<String> = None;
+    let mut rows_from: Option<String> = None;
 
-    // The source and every transform before the first notebook are one Flow
-    // query. `order_of` has already refused a transform after a notebook, so
-    // "the transforms" is a prefix rather than a search.
+    // The source and every transform before the first block that is neither is
+    // one Flow query. `order_of` has already refused a transform behind a
+    // notebook or an approval, so "the transforms" is a prefix rather than a
+    // search.
     let flow_blocks: Vec<&PipelineBlock> = chain
         .iter()
         .copied()
@@ -111,7 +130,8 @@ pub fn compile_curation(
             // refuses to produce a key rather than trusting this flag.
             cache: CachePolicy::ByContent,
         });
-        previous = Some(step_id);
+        previous = Some(step_id.clone());
+        rows_from = Some(step_id);
     }
 
     for block in chain.iter().skip(flow_blocks.len()) {
@@ -121,7 +141,8 @@ pub fn compile_curation(
                 // `order_of` refused this shape; reaching here means the two
                 // disagree, which is worth saying rather than compiling past.
                 problems.push(format!(
-                    "{} is a Flow PHP block after a notebook, which has no rows to read",
+                    "{} is a Flow PHP block that no query reaches: everything before it that a \
+                     Flow step could read has already been compiled into one",
                     block.id
                 ));
             }
@@ -147,13 +168,7 @@ pub fn compile_curation(
                         params: params.clone(),
                         block: Some(block.id.clone()),
                     }),
-                    inputs: previous
-                        .iter()
-                        .map(|step| InputBinding::Step {
-                            step: step.clone(),
-                            output: "rows".to_owned(),
-                        })
-                        .collect(),
+                    inputs: reads_rows(rows_from.as_ref()),
                     outputs: vec![OutputDeclaration {
                         name: "rows".to_owned(),
                         kind: ArtifactKind::Rows,
@@ -162,6 +177,39 @@ pub fn compile_curation(
                     retry: RetryPolicy::default(),
                     timeout_seconds: NOTEBOOK_TIMEOUT_SECONDS,
                     cache: CachePolicy::ByContent,
+                });
+                rows_from = Some(step_id.clone());
+            }
+            BlockSpec::Approval {
+                prompt,
+                role,
+                choices,
+            } => {
+                steps.push(PlanStep {
+                    id: step_id.clone(),
+                    runtime: RuntimeBinding::HumanInput(HumanInputSpec {
+                        prompt: prompt.clone(),
+                        role: role.clone(),
+                        choices: choices.clone(),
+                        block: Some(block.id.clone()),
+                    }),
+                    // What is being approved, named: the artifact the person is
+                    // deciding about is the one the step before produced, and a
+                    // gate that read nothing would be a question with no
+                    // subject in its own context.
+                    inputs: reads_rows(rows_from.as_ref()),
+                    // Nothing. Answering completes the step, and the rows the
+                    // chain carries on with are still the ones behind it —
+                    // which is why `rows_from` does not move here.
+                    outputs: Vec::new(),
+                    // Nothing is retried automatically: a person answered, or
+                    // nobody has yet, and neither is a failure to take again.
+                    retry: RetryPolicy::once(),
+                    timeout_seconds: NO_ATTEMPT_TIMER,
+                    // A decision somebody made about another run is never
+                    // reused. `RuntimeKind::is_cacheable` says the same, and
+                    // this says it where the step is written.
+                    cache: CachePolicy::Never,
                 });
             }
             BlockSpec::View { dataset } => {
@@ -181,13 +229,7 @@ pub fn compile_curation(
                         produced_by: format!("{}@{}", pipeline.name, pipeline.revision),
                         block: Some(block.id.clone()),
                     }),
-                    inputs: previous
-                        .iter()
-                        .map(|step| InputBinding::Step {
-                            step: step.clone(),
-                            output: "rows".to_owned(),
-                        })
-                        .collect(),
+                    inputs: reads_rows(rows_from.as_ref()),
                     outputs: Vec::new(),
                     retry: RetryPolicy::default(),
                     timeout_seconds: PUBLISH_TIMEOUT_SECONDS,
@@ -217,6 +259,19 @@ pub fn compile_curation(
         steps,
         edges,
     ))
+}
+
+/// The rows a step reads, bound to the step that produced them.
+///
+/// `None` only before anything has: a chain starts at a source, so every block
+/// after the first has one of these.
+fn reads_rows(step: Option<&String>) -> Vec<InputBinding> {
+    step.map(|step| InputBinding::Step {
+        step: step.clone(),
+        output: "rows".to_owned(),
+    })
+    .into_iter()
+    .collect()
 }
 
 /// A plan step is named after the authored block it came from.
@@ -485,6 +540,134 @@ mod tests {
         // Provenance names the *authored* revision, not the plan id: it is what
         // somebody saved, and it is what `produced_by` has always meant.
         assert_eq!(publish.produced_by, format!("pii@{}", "ab".repeat(32)));
+    }
+
+    #[test]
+    fn an_approval_compiles_to_a_wait_that_names_the_block_it_was_drawn_as() {
+        // The negative control for the binding: point this arm at any other
+        // `RuntimeBinding` and this is the test that fails. `HumanInput` is
+        // what `decide` parks on and what the Answer route completes; nothing
+        // else in the taxonomy waits.
+        let plan = compile_curation(
+            &pipeline(vec![
+                block("read", source()),
+                block(
+                    "sign-off",
+                    BlockSpec::Approval {
+                        prompt: "Publish these rows?".to_owned(),
+                        role: "editor".to_owned(),
+                        choices: vec!["approve".to_owned(), "reject".to_owned()],
+                    },
+                ),
+                block(
+                    "publish",
+                    BlockSpec::View {
+                        dataset: Some("pii-clean".to_owned()),
+                    },
+                ),
+            ]),
+            CompileOptions::default(),
+        )
+        .expect("a gated chain");
+
+        let kinds: Vec<RuntimeKind> = plan.steps.iter().map(|step| step.runtime.kind()).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                RuntimeKind::FlowPhp,
+                RuntimeKind::HumanInput,
+                RuntimeKind::PublishDataset
+            ]
+        );
+        let RuntimeBinding::HumanInput(spec) = &plan.steps[1].runtime else {
+            panic!("the gate waits for a person");
+        };
+        assert_eq!(spec.prompt, "Publish these rows?");
+        assert_eq!(spec.choices, vec!["approve", "reject"]);
+        // The canvas box lights from the step's own facts, and the mapping is
+        // the server's: a gate whose binding named no block would leave that
+        // box dark for the whole time it is the only thing a run is waiting on.
+        assert_eq!(
+            plan.steps[1].runtime.blocks(),
+            Some(["sign-off".to_owned()].as_slice())
+        );
+        assert_eq!(
+            plan.step_for_block("sign-off").map(|step| step.id.as_str()),
+            Some("sign-off")
+        );
+    }
+
+    #[test]
+    fn what_follows_a_gate_reads_the_rows_from_before_it_rather_than_from_the_gate() {
+        // An approval produces nothing — answering is the whole of what it
+        // does — so binding the publish step to it would be binding it to an
+        // output no step declares. The edge still runs through the gate, which
+        // is what makes the publish wait for the answer.
+        let plan = compile_curation(
+            &pipeline(vec![
+                block("read", source()),
+                block(
+                    "sign-off",
+                    BlockSpec::Approval {
+                        prompt: "Publish these rows?".to_owned(),
+                        role: "editor".to_owned(),
+                        choices: Vec::new(),
+                    },
+                ),
+                block(
+                    "publish",
+                    BlockSpec::View {
+                        dataset: Some("pii-clean".to_owned()),
+                    },
+                ),
+            ]),
+            CompileOptions::default(),
+        )
+        .expect("a gated chain");
+
+        assert!(plan.steps[1].outputs.is_empty(), "a gate produces nothing");
+        assert_eq!(
+            plan.steps[2].inputs,
+            vec![InputBinding::Step {
+                step: "read".to_owned(),
+                output: "rows".to_owned(),
+            }]
+        );
+        assert_eq!(
+            plan.edges,
+            vec![
+                PlanEdge {
+                    from: "read".to_owned(),
+                    to: "sign-off".to_owned()
+                },
+                PlanEdge {
+                    from: "sign-off".to_owned(),
+                    to: "publish".to_owned()
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn a_gate_is_never_answered_from_a_cache() {
+        let plan = compile_curation(
+            &pipeline(vec![
+                block("read", source()),
+                block(
+                    "sign-off",
+                    BlockSpec::Approval {
+                        prompt: "Publish these rows?".to_owned(),
+                        role: "editor".to_owned(),
+                        choices: Vec::new(),
+                    },
+                ),
+            ]),
+            CompileOptions::default(),
+        )
+        .expect("a gated chain");
+
+        assert_eq!(plan.steps[1].cache, CachePolicy::Never);
+        assert!(crate::cache_key(&plan.steps[1], &[]).is_none());
     }
 
     #[test]

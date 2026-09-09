@@ -1,6 +1,6 @@
 """Where a hosted decider's words live, and how a reference to them is made.
 
-Section 40.4 of the architecture, from the worker's side. Every hop in an agent
+From the worker's side of the content rule. Every hop in an agent
 graph carries text — a prompt, a completion, a tool result — and that is
 conversation content. aiwatcher's workflow stream carries a **reference**, a
 plaintext digest and a size, never the words; under the default `external`
@@ -85,9 +85,9 @@ class MemoryPayloadStore:
     """A payload store that lives as long as the process does.
 
     For tests, and for a decider that genuinely has nowhere durable to put
-    anything. **Not a default**: a worker restarting is the case Phase 13
-    exists for, and one that came back to references it can no longer resolve
-    would have kept a history it cannot replay. `AiwatcherEventStore` takes the
+    anything. **Not a default**: a worker restarting is the case a shared
+    history exists for, and one that came back to references it can no longer
+    resolve would have kept a history it cannot replay. `AiwatcherEventStore` takes the
     store as an argument for exactly that reason — where the words live is a
     decision, not something to fall into.
     """

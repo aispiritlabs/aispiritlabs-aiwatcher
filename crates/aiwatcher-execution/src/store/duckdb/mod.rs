@@ -35,8 +35,8 @@ use aiwatcher_core::{Checkpoint, MessageId};
 
 use crate::claim::{AttemptKey, AttemptRow, AttemptWrite, ClaimFilter};
 use crate::error::{Result, StoreError};
-use crate::hosted::{DeciderLease, LeaseOutcome};
-use crate::message::{OutboxMessage, RecordedMessage, RunProjection};
+use crate::hosted::{DeciderLease, LeaseOutcome, Timer, TimerWrite};
+use crate::message::{Direction, OutboxMessage, RecordedMessage, RunProjection, WorkflowEvent};
 use crate::plan::DefinitionKind;
 use crate::schedule::slot::{
     SlotAdmission, SlotAdmissionRequest, SlotKey, SlotRecord, SlotSettlement,
@@ -161,6 +161,25 @@ fn one<T: serde::de::DeserializeOwned>(
     Ok(rows(connection, sql, parameters)?.into_iter().next())
 }
 
+/// The step and attempt one terminal event settles, if it is one.
+///
+/// [`super::settles`] asked the other way round: that answers "is this the
+/// outcome of *that* attempt", which is what a lookup needs, and this answers
+/// "which attempt is this the outcome of", which is what an index needs. Both
+/// read the same two variants, and `StepCacheHit` is in neither — no worker
+/// reports one, so a worker asking what it recorded must not be shown one.
+fn settled_by(event: &WorkflowEvent) -> Option<(&str, u32)> {
+    match event {
+        WorkflowEvent::StepCompleted {
+            step_id, attempt, ..
+        }
+        | WorkflowEvent::StepFailed {
+            step_id, attempt, ..
+        } => Some((step_id, *attempt)),
+        _ => None,
+    }
+}
+
 /// A timestamp as this schema stores it.
 ///
 /// Microseconds since the epoch, as a `BIGINT`, rather than DuckDB's own
@@ -229,6 +248,44 @@ impl WorkflowStore for DuckdbWorkflowStore {
                 version: version as u64,
                 messages,
             })
+        })
+        .await
+    }
+
+    async fn due_timers(&self, now: OffsetDateTime, limit: usize) -> Result<Vec<Timer>> {
+        let at = stamp(now);
+        self.with(move |db| {
+            rows(
+                db,
+                "select payload from timers where due_at <= ? order by due_at limit ?",
+                duckdb::params![at, limit as i64],
+            )
+        })
+        .await
+    }
+
+    async fn timers_of(&self, execution: &ExecutionId) -> Result<Vec<Timer>> {
+        let key = execution.to_string();
+        self.with(move |db| {
+            rows(
+                db,
+                "select payload from timers where execution = ? order by due_at",
+                [key],
+            )
+        })
+        .await
+    }
+
+    async fn recorded_outcome(&self, key: &AttemptKey) -> Result<Option<WorkflowEvent>> {
+        let execution = key.execution_id.to_string();
+        let step = key.step_id.clone();
+        let attempt = i64::from(key.attempt);
+        self.with(move |db| {
+            one(
+                db,
+                "select payload from outcomes where execution = ? and step = ? and attempt = ?",
+                duckdb::params![execution, step, attempt],
+            )
         })
         .await
     }
@@ -744,6 +801,23 @@ fn append_all(
             ],
         )
         .map_err(|error| StoreError::Backend(format!("appending a message: {error}")))?;
+
+        // The receipt index, written with the row it describes rather than
+        // derived later: a lookup that had to decode every message of a run to
+        // answer "did this attempt already record something" is the performance
+        // item this replaces, and an index built outside this transaction could
+        // disagree with the stream it indexes.
+        if recorded.direction == Direction::Output
+            && let Some(event) = recorded.message.event()
+            && let Some((step, attempt)) = settled_by(event)
+        {
+            db.execute(
+                "insert or replace into outcomes (execution, step, attempt, payload) \
+                 values (?, ?, ?, ?)",
+                duckdb::params![key, step, i64::from(attempt), encode(event)?],
+            )
+            .map_err(|error| StoreError::Backend(format!("indexing an outcome: {error}")))?;
+        }
     }
 
     db.execute(
@@ -763,6 +837,33 @@ fn append_all(
         ],
     )
     .map_err(|error| StoreError::Backend(format!("writing a projection: {error}")))?;
+
+    for write in request.timers {
+        match write {
+            TimerWrite::Schedule(timer) => {
+                db.execute(
+                    "insert or replace into timers (execution, timer_id, due_at, payload) \
+                     values (?, ?, ?, ?)",
+                    duckdb::params![
+                        timer.execution.to_string(),
+                        timer.timer_id.clone(),
+                        stamp(timer.due_at),
+                        encode(&timer)?
+                    ],
+                )
+                .map_err(|error| StoreError::Backend(format!("scheduling a timer: {error}")))?;
+            }
+            // A fired timer is not a row, for the reason a finished attempt is
+            // not one: nothing reads it back.
+            TimerWrite::Cancel(id) | TimerWrite::Fire(id) => {
+                db.execute(
+                    "delete from timers where execution = ? and timer_id = ?",
+                    duckdb::params![key, id],
+                )
+                .map_err(|error| StoreError::Backend(format!("retiring a timer: {error}")))?;
+            }
+        }
+    }
 
     for write in request.attempts {
         match write {

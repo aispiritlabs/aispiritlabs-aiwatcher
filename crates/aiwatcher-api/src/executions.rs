@@ -36,7 +36,7 @@ use utoipa::OpenApi;
 
 use aiwatcher_datasets::Registry as DatasetRegistry;
 use aiwatcher_execution::compile::CompileOptions;
-use aiwatcher_execution::hosted::{DeciderLease, LeaseOutcome};
+use aiwatcher_execution::hosted::{DeciderLease, LeaseOutcome, Timer, TimerWrite};
 use aiwatcher_execution::message::RunProjection;
 use aiwatcher_execution::plan::{DefinitionKind, ResolvedWindow};
 use aiwatcher_execution::{
@@ -65,6 +65,7 @@ const IDEMPOTENCY_KEY: &str = "idempotency-key";
     get_execution,
     execution_history,
     append_stream,
+    execution_timers,
     take_decider_lease,
     read_decider_lease,
     release_decider_lease,
@@ -105,6 +106,10 @@ pub fn router() -> Router<AppState> {
         // One decider at a time. `GET` is the half that matters most: a lease
         // is not something a claimant may decide about itself, so it asks and
         // this answers from the row.
+        .route(
+            "/api/v1/executions/{execution_id}/timers",
+            get(execution_timers),
+        )
         .route(
             "/api/v1/executions/{execution_id}/decider-lease",
             get(read_decider_lease).post(take_decider_lease),
@@ -234,6 +239,17 @@ pub struct StartExecutionBody {
     /// route did before the field existed.
     #[serde(default)]
     pub decided_by: Decider,
+    /// Where this run's words live. Left out, the deployment's default, which
+    /// is `external` unless somebody set otherwise: the content stays with the
+    /// worker and this instance holds a reference, a digest and a size.
+    ///
+    /// `sealed` sends the content here to be encrypted under the conversation
+    /// archive's keys, and is refused — naming both variables — when this
+    /// instance has no archive. It is never quietly downgraded: a run that
+    /// asked for its words to be sealed and got them kept somewhere else
+    /// instead is the failure the whole policy exists to prevent.
+    #[serde(default)]
+    pub payloads: Option<aiwatcher_execution::message::PayloadPolicy>,
 }
 
 /// An accepted command, and the run it started.
@@ -322,6 +338,7 @@ async fn start_execution(
 
     let plan = compile(&state, &body).await?;
     let execution_id = ExecutionId::new(execution_id_for(&headers, &plan));
+    let payloads = resolve_payloads(&state, body.payloads)?;
     let handled = start(
         &state,
         &execution_id,
@@ -329,6 +346,7 @@ async fn start_execution(
         body.parameters,
         &requester,
         body.decided_by,
+        payloads,
     )
     .await?;
 
@@ -468,6 +486,50 @@ pub struct AppendStreamBody {
     pub holder: String,
     /// The worker's own messages, in the order it wrote them.
     pub messages: Vec<aiwatcher_execution::message::HostedMessage>,
+    /// Deferred appends this decision sets or withdraws.
+    ///
+    /// In the same request rather than a route of its own: a decision that
+    /// schedules a timeout and the record of having scheduled it are one
+    /// decision, and split in two a crash between them leaves either a timer
+    /// nobody decided on or a decision whose timer never happened.
+    #[serde(default)]
+    pub timers: Vec<TimerBody>,
+}
+
+/// One thing to do to this execution's timers.
+///
+/// A tagged pair rather than a struct with a `cancel` flag, because the two
+/// carry different fields and a body that could name a `due_at` while
+/// cancelling would be a shape with a meaningless half.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum TimerBody {
+    /// Hold this message until `due_at`. Scheduling one id twice is one timer,
+    /// which is what makes a decider's retry safe.
+    Schedule(ScheduleTimerBody),
+    /// Withdraw it. A no-op when there is none, because a saga that cancels a
+    /// timeout it already handled is doing the ordinary thing.
+    Cancel(CancelTimerBody),
+}
+
+/// A deferred append, as a caller asks for one.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ScheduleTimerBody {
+    /// The worker's own id, unique inside this execution.
+    pub timer_id: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub due_at: time::OffsetDateTime,
+    /// What to append when it comes due. Composed by the caller, because an
+    /// engine that assembled one would be deciding what a timeout means.
+    pub message: aiwatcher_execution::message::HostedMessage,
+}
+
+/// The timer to withdraw.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CancelTimerBody {
+    pub timer_id: String,
 }
 
 /// Where the stream got to, and whether this call is what put it there.
@@ -547,6 +609,19 @@ async fn append_stream(
         idempotency_key: key,
         holder: body.holder,
         messages: body.messages,
+        timers: body
+            .timers
+            .into_iter()
+            .map(|timer| match timer {
+                TimerBody::Schedule(set) => TimerWrite::Schedule(Timer {
+                    execution: execution.clone(),
+                    timer_id: set.timer_id,
+                    due_at: set.due_at,
+                    message: set.message,
+                }),
+                TimerBody::Cancel(drop) => TimerWrite::Cancel(drop.timer_id),
+            })
+            .collect(),
     };
     let messages = append.messages.len();
     let handled = handler(&state)?
@@ -565,6 +640,41 @@ async fn append_stream(
         version: handled.projection.last_message_version,
         created: !handled.duplicate,
     }))
+}
+
+/// What one execution is still waiting on.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct ExecutionTimers {
+    /// Soonest first. A fired or cancelled timer is not a row, so everything
+    /// here is still going to happen.
+    pub timers: Vec<Timer>,
+}
+
+/// The deferred appends this run is holding.
+///
+/// A read, so a decider that restarted can see what it scheduled before it went
+/// away — which is the question the whole of step 4 exists to make answerable.
+#[utoipa::path(
+    get,
+    path = "/api/v1/executions/{execution_id}/timers",
+    params(("execution_id" = String, Path)),
+    responses(
+        (status = 200, body = ExecutionTimers),
+        (status = 501, body = crate::error::ErrorBody),
+        (status = 503, body = crate::error::ErrorBody),
+    ),
+    tag = "execution",
+)]
+async fn execution_timers(
+    State(state): State<AppState>,
+    Path(execution_id): Path<String>,
+) -> ApiResult<Json<ExecutionTimers>> {
+    let timers = handler(&state)?
+        .store()
+        .timers_of(&ExecutionId::new(execution_id))
+        .await
+        .map_err(aiwatcher_execution::HandleError::Store)?;
+    Ok(Json(ExecutionTimers { timers }))
 }
 
 /// Which decider is asking.
@@ -695,6 +805,42 @@ pub struct LeaseReleased {
     pub released: bool,
 }
 
+/// What this run's words are governed by, given what it asked for.
+///
+/// The refusal has to arrive here rather than at the first append: a graph that
+/// ran for an hour and then could not store a turn has already produced the
+/// content it cannot keep.
+///
+/// # Errors
+///
+/// [`ApiError::PlanRefused`] naming both variables when `sealed` was asked of
+/// an instance with no archive, or when the deployment has pinned its choice.
+pub fn resolve_payloads(
+    state: &AppState,
+    asked: Option<aiwatcher_execution::message::PayloadPolicy>,
+) -> ApiResult<aiwatcher_execution::message::PayloadPolicy> {
+    let policy = state
+        .execution_payloads
+        .resolve(asked)
+        .map_err(|why| ApiError::PlanRefused {
+            summary: "this instance will not run that execution".to_owned(),
+            problems: vec![why],
+        })?;
+    if policy.needs_archive() && state.conversations.is_none() {
+        return Err(ApiError::PlanRefused {
+            summary: "sealed payloads need the conversation archive".to_owned(),
+            // Both, because turning one on without the other refuses again —
+            // and a refusal that names one variable at a time is two
+            // deployments' worth of round trips to reach a working instance.
+            problems: vec![
+                "set AIWATCHER_CONVERSATION_ARCHIVE=true".to_owned(),
+                "set AIWATCHER_CONVERSATION_KEYS to the keys it seals with".to_owned(),
+            ],
+        });
+    }
+    Ok(policy)
+}
+
 /// Start one execution: the only path there is.
 ///
 /// Taken out of the route rather than left in it because it has a second
@@ -713,6 +859,7 @@ pub async fn start(
     parameters: BTreeMap<String, Value>,
     requested_by: &str,
     decided_by: Decider,
+    payloads: aiwatcher_execution::message::PayloadPolicy,
 ) -> ApiResult<aiwatcher_execution::Handled> {
     // Derived from the execution, so a redelivered request — a retried POST, a
     // proxy that repeated it, a second worker on the same slot — lands on the
@@ -736,6 +883,7 @@ pub async fn start(
                 // ADR_0016's launch and never from this route.
                 owner,
                 mode,
+                payloads,
                 requested_by: requested_by.to_owned(),
                 input: parameters,
             }),

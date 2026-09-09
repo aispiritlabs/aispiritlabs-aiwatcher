@@ -40,7 +40,7 @@ use crate::message::{
     MessageMetadata, OutboxMessage, PendingMessage, RunProjection, WorkflowEvent, WorkflowMessage,
 };
 use crate::plan::{ExecutionPlan, RuntimeBinding};
-use crate::state::{ExecutionId, ExecutionState, RunState, StateType};
+use crate::state::{ExecutionId, ExecutionMode, ExecutionState, RunState, StateType};
 use crate::store::{AppendOutcome, AppendRequest, ExpectedVersion, WorkflowStore};
 
 /// How many times a conflict is re-read before the caller is told.
@@ -187,8 +187,8 @@ impl<S: WorkflowStore> ExecutionHandler<S> {
         // Before the run, not after. Here rather than in the API, so that
         // every caller of `StartExecution` — a route, a schedule, a test —
         // meets the same refusal.
-        if let Some(WorkflowCommand::StartExecution { plan, .. }) = input.command() {
-            self.check_capacity(plan)?;
+        if let Some(WorkflowCommand::StartExecution { plan, mode, .. }) = input.command() {
+            self.check_capacity(plan, *mode)?;
         }
 
         for attempt in 0..=MAX_CONFLICT_RETRIES {
@@ -243,6 +243,9 @@ impl<S: WorkflowStore> ExecutionHandler<S> {
                 projection: projection.clone(),
                 outbox: outbox.clone(),
                 checkpoint: checkpoint.clone(),
+                // A compiled run schedules no timers: they are a hosted
+                // decider's, and `decide` has no vocabulary for one.
+                timers: Vec::new(),
                 attempts,
             };
 
@@ -279,9 +282,22 @@ impl<S: WorkflowStore> ExecutionHandler<S> {
     /// ([`crate::store::StoreCapabilities`]), and `file` is the adapter that
     /// answers `false`. ADR_0025: a development store must not become a
     /// production one by omission.
-    fn check_capacity(&self, plan: &ExecutionPlan) -> Result<(), HandleError> {
+    fn check_capacity(&self, plan: &ExecutionPlan, mode: ExecutionMode) -> Result<(), HandleError> {
         if self.store.capabilities().multi_process {
             return Ok(());
+        }
+        // A hosted run's *decider* is the second process, whatever its plan
+        // holds. The check below reads the plan's steps, and a hosted agent
+        // graph's steps are its shape rather than its program — so a graph made
+        // only of Flow blocks would have passed it while the worker that
+        // decides the run sat in another process appending to a store that
+        // holds one. That is the same hole the step check exists to close,
+        // reached from the side the step check cannot see.
+        if mode == ExecutionMode::Hosted {
+            return Err(HandleError::NeedsMultiProcess {
+                what: "a hosted execution — the worker that decides it is another process"
+                    .to_owned(),
+            });
         }
         let pulled = plan.steps_needing_another_process();
         if pulled.is_empty() {

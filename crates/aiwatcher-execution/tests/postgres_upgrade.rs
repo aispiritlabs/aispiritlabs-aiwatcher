@@ -42,7 +42,7 @@ fn url() -> String {
 /// One place, because four tests assert it and a fifth migration should be a
 /// one-line change here rather than a hunt. It is written out rather than read
 /// from `schema`'s own list, which would make the assertion agree with itself.
-const APPLIED: [i64; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
+const APPLIED: [i64; 9] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 
 /// Every schema file a released build could have applied, with its version.
 ///

@@ -336,6 +336,7 @@ mod tests {
                 plan: Box::new(plan),
                 owner: crate::ExecutionOwner::Local,
                 mode: crate::ExecutionMode::Compiled,
+                payloads: Default::default(),
                 requested_by: "mk".to_owned(),
                 input: BTreeMap::from([("limit".to_owned(), Value::from(500))]),
             }));

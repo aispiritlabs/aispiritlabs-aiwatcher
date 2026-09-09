@@ -28,9 +28,10 @@ use sqlx::{PgPool, Row as _};
 use time::OffsetDateTime;
 
 use crate::claim::{AttemptKey, AttemptRow, AttemptWrite, ClaimFilter};
-use crate::hosted::{DeciderLease, LeaseOutcome};
+use crate::hosted::{DeciderLease, LeaseOutcome, Timer, TimerWrite};
 use crate::message::{
-    Direction, MessageMetadata, OutboxMessage, RecordedMessage, RunProjection, WorkflowMessage,
+    Direction, MessageMetadata, OutboxMessage, RecordedMessage, RunProjection, WorkflowEvent,
+    WorkflowMessage,
 };
 use crate::plan::DefinitionKind;
 use crate::schedule::slot::{
@@ -143,6 +144,63 @@ impl WorkflowStore for PostgresWorkflowStore {
             version: version as u64,
             messages,
         })
+    }
+
+    async fn due_timers(&self, now: OffsetDateTime, limit: usize) -> Result<Vec<Timer>> {
+        let rows = sqlx::query(
+            "select execution_id, timer_id, due_at, message
+               from execution_timers
+              where due_at <= $1
+              order by due_at
+              limit $2",
+        )
+        .bind(now)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|error| StoreError::Backend(error.to_string()))?;
+        rows.iter().map(timer_from).collect()
+    }
+
+    async fn timers_of(&self, execution: &ExecutionId) -> Result<Vec<Timer>> {
+        let rows = sqlx::query(
+            "select execution_id, timer_id, due_at, message
+               from execution_timers where execution_id = $1 order by due_at",
+        )
+        .bind(execution.as_str())
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|error| StoreError::Backend(error.to_string()))?;
+        rows.iter().map(timer_from).collect()
+    }
+
+    async fn recorded_outcome(&self, key: &AttemptKey) -> Result<Option<WorkflowEvent>> {
+        // The index `0009` adds, matched exactly: the same expression, the same
+        // partial condition. A read that spelled it differently would be a
+        // sequential scan over every message of every run — which is the whole
+        // of the performance item this replaces.
+        let row: Option<serde_json::Value> = sqlx::query_scalar(
+            "select message from workflow_messages
+              where execution_id = $1
+                and message_type in ('step_completed', 'step_failed')
+                and message ->> 'step_id' = $2
+                and (message ->> 'attempt')::int = $3
+                and direction = 'output'
+              order by stream_version
+              limit 1",
+        )
+        .bind(key.execution_id.as_str())
+        .bind(&key.step_id)
+        .bind(i64::from(key.attempt))
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|error| StoreError::Backend(error.to_string()))?;
+        let Some(document) = row else {
+            return Ok(None);
+        };
+        let message: WorkflowMessage =
+            serde_json::from_value(document).map_err(StoreError::Encoding)?;
+        Ok(message.event().cloned())
     }
 
     async fn take_decider_lease(
@@ -321,6 +379,39 @@ impl WorkflowStore for PostgresWorkflowStore {
         }
 
         upsert_projection(&mut transaction, &request.projection).await?;
+
+        for write in request.timers {
+            match write {
+                TimerWrite::Schedule(timer) => {
+                    sqlx::query(
+                        "insert into execution_timers
+                           (execution_id, timer_id, due_at, message)
+                         values ($1, $2, $3, $4)
+                         on conflict (execution_id, timer_id) do update set
+                           due_at = excluded.due_at,
+                           message = excluded.message",
+                    )
+                    .bind(timer.execution.as_str())
+                    .bind(&timer.timer_id)
+                    .bind(timer.due_at)
+                    .bind(serde_json::to_value(&timer.message).map_err(StoreError::Encoding)?)
+                    .execute(&mut *transaction)
+                    .await
+                    .map_err(|error| StoreError::Backend(error.to_string()))?;
+                }
+                TimerWrite::Cancel(id) | TimerWrite::Fire(id) => {
+                    sqlx::query(
+                        "delete from execution_timers
+                          where execution_id = $1 and timer_id = $2",
+                    )
+                    .bind(execution.as_str())
+                    .bind(&id)
+                    .execute(&mut *transaction)
+                    .await
+                    .map_err(|error| StoreError::Backend(error.to_string()))?;
+                }
+            }
+        }
 
         for write in request.attempts {
             match write {
@@ -778,6 +869,9 @@ impl WorkflowStore for PostgresWorkflowStore {
             // With the run, never after it: a lease naming an execution this
             // store has forgotten is a row nothing will ever release.
             "delete from execution_decider_leases where execution_id = any($1)",
+            // With the run: a timer naming an execution this store has
+            // forgotten would fire a message into a stream that is gone.
+            "delete from execution_timers where execution_id = any($1)",
             "delete from execution_runs where execution_id = any($1)",
         ] {
             sqlx::query(statement)
@@ -951,6 +1045,15 @@ async fn write_checkpoint(
     .await
     .map_err(|error| StoreError::Backend(error.to_string()))?;
     Ok(())
+}
+
+fn timer_from(row: &PgRow) -> Result<Timer> {
+    Ok(Timer {
+        execution: ExecutionId::new(row.get::<String, _>("execution_id")),
+        timer_id: row.get("timer_id"),
+        due_at: row.get("due_at"),
+        message: serde_json::from_value(row.get("message")).map_err(StoreError::Encoding)?,
+    })
 }
 
 fn lease_from(execution: &ExecutionId, row: &PgRow) -> DeciderLease {

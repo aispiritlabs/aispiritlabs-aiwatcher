@@ -13,7 +13,7 @@ ticket frequencies, quantile bands, encoders, and a Random Forest baseline.
 
 ## Recommended: FlowPHP + FlowAI
 
-Start with **[the illustrated Polish walkthrough](WALKTHROUGH.md)**: every block
+Start with **[the illustrated walkthrough](WALKTHROUGH.md)**: every block
 has a screenshot, its purpose and the expected result.
 Use **[Notebook view or create your own notebook](NOTEBOOK.md)** to edit the
 whole flow as sequential cells with per-cell output, PHP/Python code and publication.

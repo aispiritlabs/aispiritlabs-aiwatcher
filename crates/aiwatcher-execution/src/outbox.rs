@@ -177,6 +177,7 @@ mod tests {
                     projection: projection(),
                     outbox: rows,
                     checkpoint: None,
+                    timers: Vec::new(),
                     attempts: Vec::new(),
                 },
             )

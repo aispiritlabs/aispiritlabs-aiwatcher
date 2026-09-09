@@ -27,6 +27,7 @@ pub mod flow;
 pub mod marimo;
 pub mod publish;
 pub mod scheduler;
+pub mod timers;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -59,6 +60,7 @@ pub struct Tasks {
     pub outbox: Option<JoinHandle<()>>,
     pub retention: Option<JoinHandle<()>>,
     pub scheduler: Option<JoinHandle<()>>,
+    pub timers: Option<JoinHandle<()>>,
     pub reactors: Vec<(&'static str, JoinHandle<()>)>,
 }
 
@@ -75,6 +77,15 @@ impl Tasks {
                 // the failure ADR_0026 is about, and this ordering is what
                 // makes the first outcome the one that happens.
                 Err(_) => tracing::warn!("the execution outbox did not stop within the grace"),
+            }
+        }
+        if let Some(task) = self.timers {
+            match tokio::time::timeout(grace, task).await {
+                Ok(Ok(())) => tracing::info!("the timer loop stopped"),
+                Ok(Err(error)) => tracing::error!(%error, "the timer loop panicked"),
+                // Every timer it did not deliver is still due, so the next
+                // process to run this loop delivers it. Late, never lost.
+                Err(_) => tracing::warn!("the timer loop did not stop within the grace"),
             }
         }
         if let Some(task) = self.scheduler {
@@ -184,6 +195,11 @@ pub fn spawn(
                 shutdown.clone(),
             )
         });
+
+        // Beside the scheduler and for the same reason it is in this role: a
+        // hosted timer's delivery is an append, and the loops that write to the
+        // store belong with the outbox that publishes what they wrote.
+        tasks.timers = Some(timers::spawn(state, Arc::clone(store), shutdown.clone()));
 
         tasks.outbox = Some(spawn_outbox(
             Arc::clone(store),
@@ -515,6 +531,7 @@ mod tests {
             },
             outbox: Vec::new(),
             checkpoint: None,
+            timers: Vec::new(),
             attempts: Vec::new(),
         }
     }

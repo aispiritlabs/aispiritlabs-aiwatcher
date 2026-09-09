@@ -22,8 +22,8 @@ use aiwatcher_core::{Checkpoint, MessageId};
 
 use crate::claim::{AttemptKey, AttemptRow, AttemptWrite, ClaimFilter};
 use crate::error::{Result, StoreError};
-use crate::hosted::{DeciderLease, LeaseOutcome};
-use crate::message::{Direction, OutboxMessage, RecordedMessage, RunProjection};
+use crate::hosted::{DeciderLease, LeaseOutcome, Timer, TimerWrite};
+use crate::message::{Direction, OutboxMessage, RecordedMessage, RunProjection, WorkflowEvent};
 use crate::plan::DefinitionKind;
 use crate::schedule::slot::{
     SlotAdmission, SlotAdmissionRequest, SlotKey, SlotRecord, SlotSettlement,
@@ -54,6 +54,8 @@ struct Inner {
     /// One decider at a time, per hosted execution. Kept after it expires so a
     /// takeover can name who was interrupted.
     decider_leases: HashMap<String, DeciderLease>,
+    /// Deferred appends, by execution and the worker's own timer id.
+    timers: BTreeMap<(String, String), Timer>,
 }
 
 /// An in-memory workflow store.
@@ -114,6 +116,46 @@ impl WorkflowStore for MemoryWorkflowStore {
             .cloned()
             .collect();
         Ok(StreamSlice { version, messages })
+    }
+
+    async fn due_timers(&self, now: OffsetDateTime, limit: usize) -> Result<Vec<Timer>> {
+        let inner = self.inner.lock().await;
+        let mut due: Vec<Timer> = inner
+            .timers
+            .values()
+            .filter(|timer| timer.is_due(now))
+            .cloned()
+            .collect();
+        // Oldest first, so a backlog drains in the order it accumulated rather
+        // than in whatever order the map happens to hold.
+        due.sort_by_key(|timer| timer.due_at);
+        due.truncate(limit);
+        Ok(due)
+    }
+
+    async fn timers_of(&self, execution: &ExecutionId) -> Result<Vec<Timer>> {
+        let inner = self.inner.lock().await;
+        let mut waiting: Vec<Timer> = inner
+            .timers
+            .values()
+            .filter(|timer| timer.execution.as_str() == execution.as_str())
+            .cloned()
+            .collect();
+        waiting.sort_by_key(|timer| timer.due_at);
+        Ok(waiting)
+    }
+
+    async fn recorded_outcome(&self, key: &AttemptKey) -> Result<Option<WorkflowEvent>> {
+        let inner = self.inner.lock().await;
+        Ok(inner
+            .streams
+            .get(key.execution_id.as_str())
+            .into_iter()
+            .flatten()
+            .filter(|recorded| recorded.direction == Direction::Output)
+            .filter_map(|recorded| recorded.message.event())
+            .find(|event| crate::store::settles(event, &key.step_id, key.attempt))
+            .cloned())
     }
 
     async fn take_decider_lease(
@@ -235,6 +277,24 @@ impl WorkflowStore for MemoryWorkflowStore {
                 // A finished attempt is not a row. See `AttemptWrite`.
                 AttemptWrite::Retire(key) => {
                     inner.attempts.remove(&key);
+                }
+            }
+        }
+        for write in request.timers {
+            match write {
+                // Scheduling the same id twice is one timer, which is what
+                // makes a decider's retry safe.
+                TimerWrite::Schedule(timer) => {
+                    inner.timers.insert(
+                        (timer.execution.as_str().to_owned(), timer.timer_id.clone()),
+                        timer,
+                    );
+                }
+                // A fired timer is not a row, for the reason a finished attempt
+                // is not one: nothing reads it back, and keeping it would mean
+                // every read of what is due filtering out history.
+                TimerWrite::Cancel(id) | TimerWrite::Fire(id) => {
+                    inner.timers.remove(&(execution.as_str().to_owned(), id));
                 }
             }
         }

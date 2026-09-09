@@ -109,6 +109,32 @@ create table if not exists decider_leases (
     execution varchar primary key,
     payload   varchar not null
 );
+
+-- Deferred appends: a message the worker composed, held until a time and then
+-- appended. `due_at` is lifted out of the payload because that is the only
+-- question the tick asks — what is due across every hosted run — and it asks it
+-- often enough that folding a document per row to answer it would be the whole
+-- cost of the loop.
+create table if not exists timers (
+    execution varchar not null,
+    timer_id  varchar not null,
+    -- Microseconds since the epoch, as everything temporal here is. See `stamp`.
+    due_at    bigint  not null,
+    payload   varchar not null,
+    primary key (execution, timer_id)
+);
+
+-- What a receipt lookup reads. The step and the attempt are lifted out for the
+-- same reason `due_at` is: a worker whose reply was lost asks whether its
+-- attempt already recorded an outcome, and answering it by decoding every
+-- message of the run is the performance item this replaces.
+create table if not exists outcomes (
+    execution varchar not null,
+    step      varchar not null,
+    attempt   bigint  not null,
+    payload   varchar not null,
+    primary key (execution, step, attempt)
+);
 ";
 
 #[cfg(test)]

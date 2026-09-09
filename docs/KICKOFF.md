@@ -276,28 +276,34 @@ deliberately **not** claimed by it: one pod per stage and the removal of Flyte
 from Planner's chart — the first is Phase 12, and the second is what Phase 12
 earns.
 
-## Start here next — two sessions, no shared file
+## Start here next
 
-Section 6 is closed, and what follows it splits cleanly in two. Neither waits
-for the other and they touch different repositories.
+Of the two sessions this file used to name, **planner's
+`docs/flyte-removal-kickoff.md` is closed** (2026-09-09: the timing defect
+fixed, the Tilt gate passed, one pod per stage recorded as a decision, and
+`helm template` and `uv.lock` rendering and pinning nothing from Flyte). One
+remains.
 
 - **[The hosted decider](KICKOFF_HOSTED_DECIDER.md)** (Phase 13) — aiwatcher's
   Rust and SDK, plus `ai_spirit_agent`. The only remaining item that delivers
   something Flyte never did: a durable join for an agent graph, which today
   lives in three dictionaries in one process and does not survive a restart.
-  `ExecutionOwner::Worker` and `ExecutionMode::Hosted` already compile and
-  nothing produces them.
-- **Planner's `docs/flyte-removal-kickoff.md`** (A6, in Planner's repository) —
-  take the Flyte estate out of the chart now that the byte-identical gate that
-  guarded it is met and no shipped profile selects it. It starts with a timing
-  defect item 7 left behind: the RQ job's 600-second budget against a 900-second
-  step timeout.
+  Its append route and decider lease are built; the event store, the timers, the
+  `sealed` refusal and the graph's own join are not.
 
-Phase 12 is deliberately *not* one of the two. It asks for a concrete need for
-one pod per stage, and Planner does not have one — its Flyte resource
-declaration was a single value for all four tasks. Section 39.4 records the
-consequence that was accepted instead: `kubernetes` now runs four attempts in
-one worker pod, whose limits already match Flyte's task envelope.
+Anything running **beside** it must not touch `aiwatcher-execution`,
+`executions.rs`, the generated client or `aiwatcher_sdk.integrations.agentic`,
+which is where that session lives. What is disjoint and worth doing is in
+[architecture §28's *What is left*](PIPELINE_ARCHITECTURE.md#what-is-left):
+planner's own leftovers (a red `just lint-ml`, five pre-existing `mypy` errors,
+`deploy/config.json` unvalidated against its schema, and the market-research
+harness with no tracer), and the measurements that gate a workflow GC.
+
+Phase 12 is deliberately not among them. It asks for a concrete need for one pod
+per stage, and planner does not have one — its Flyte resource declaration was a
+single value for all four tasks. Section 39.4 records the consequence that was
+accepted instead: `kubernetes` now runs four attempts in one worker pod, whose
+limits already match Flyte's task envelope.
 
 ## After these gates
 

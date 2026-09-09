@@ -266,6 +266,10 @@ impl Fixture {
             export_worker: None,
             import_worker: None,
             execution_worker: None,
+            // The shipped default: words stay with the worker and this instance
+            // holds a reference. A run may still ask for `sealed`, and is
+            // refused here because no archive is wired.
+            execution_payloads: aiwatcher_api::state::PayloadDefault::default(),
             // Empty, like the shipped default: nothing is curated, so no hub
             // result can be promoted past `unclear`.
             sources: Arc::new(aiwatcher_annotations::SourceCatalog::default()),
@@ -4233,6 +4237,72 @@ async fn one_decider_holds_a_hosted_run_and_its_replacement_takes_over_when_it_s
 }
 
 #[tokio::test]
+async fn a_saga_s_timeout_is_a_row_this_engine_holds_and_hands_back() {
+    // The timer rides the append that scheduled it
+    // — one decision, one transaction — and the run's own page says what it is
+    // still waiting on, which is the question a decider that restarted asks.
+    let fixture = Fixture::new(false);
+    let (execution, version) = hosted_run(&fixture, "timed").await;
+
+    let (status, appended) = fixture
+        .post_keyed(
+            &format!("/api/v1/executions/{execution}/stream"),
+            "turn-1",
+            json!({
+                "expected_version": version,
+                "holder": "worker-a",
+                "messages": hosted_messages(1),
+                "timers": [{
+                    "schedule": {
+                        "timer_id": "reply-deadline",
+                        "due_at": "2030-01-01T00:00:00Z",
+                        "message": {
+                            "message_type": "saga.timeout_fired",
+                            "metadata": { "timeout_id": "reply-deadline" }
+                        }
+                    }
+                }]
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{appended}");
+
+    let (status, waiting) = fixture
+        .get(&format!("/api/v1/executions/{execution}/timers"))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{waiting}");
+    let timers = waiting["timers"].as_array().expect("the timers");
+    assert_eq!(timers.len(), 1, "{waiting}");
+    assert_eq!(timers[0]["timer_id"], "reply-deadline");
+    // The message the engine will hand back is the worker's own, stored whole.
+    assert_eq!(timers[0]["message"]["message_type"], "saga.timeout_fired");
+
+    // And withdrawing it is the ordinary thing a saga does when what it was
+    // waiting for arrived first.
+    let version = appended["version"].as_u64().expect("a version");
+    let (status, _) = fixture
+        .post_keyed(
+            &format!("/api/v1/executions/{execution}/stream"),
+            "turn-2",
+            json!({
+                "expected_version": version,
+                "holder": "worker-a",
+                "messages": hosted_messages(1),
+                "timers": [{ "cancel": { "timer_id": "reply-deadline" } }]
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, waiting) = fixture
+        .get(&format!("/api/v1/executions/{execution}/timers"))
+        .await;
+    assert!(
+        waiting["timers"].as_array().expect("an array").is_empty(),
+        "a cancelled timer is not a row: {waiting}"
+    );
+}
+
+#[tokio::test]
 async fn one_idempotency_key_repeated_starts_one_execution() {
     // Repeating the same key returns the original command result.
     // The mechanism is the derived execution id and the store's own inbox, so
@@ -5262,6 +5332,7 @@ impl Fixture {
                     // which is the hosted mode and not this.
                     owner: ExecutionOwner::Local,
                     mode: ExecutionMode::Compiled,
+                    payloads: Default::default(),
                     requested_by: "mk".to_owned(),
                     input: std::collections::BTreeMap::new(),
                 }),

@@ -180,6 +180,7 @@ fn pause(execution: &ExecutionId, message_id: &str) -> AppendRequest {
         },
         outbox: Vec::new(),
         checkpoint: None,
+        timers: Vec::new(),
         attempts: Vec::new(),
     }
 }

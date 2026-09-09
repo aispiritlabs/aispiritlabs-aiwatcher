@@ -432,6 +432,8 @@ pub struct Execution {
     pub plan: ExecutionPlan,
     pub owner: ExecutionOwner,
     pub mode: ExecutionMode,
+    /// Where this run's words live. `external` unless the run said otherwise.
+    pub payloads: crate::message::PayloadPolicy,
     pub requested_by: String,
     pub input: BTreeMap<String, Value>,
     pub state: RunState,

@@ -285,6 +285,11 @@ async fn start_run(
         // needs a worker present to decide it, which a slot coming due cannot
         // arrange.
         aiwatcher_api::executions::Decider::Local,
+        // The deployment's own. Read through the same refusal the route uses,
+        // and classified the same way: a pinned instance with no archive is a
+        // fact about the deployment, so `failure_of` files it as a refusal
+        // rather than as something to come back for.
+        aiwatcher_api::executions::resolve_payloads(state, None).map_err(failure_of)?,
     )
     .await
     .map_err(failure_of)?;

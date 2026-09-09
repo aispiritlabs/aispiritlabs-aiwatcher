@@ -428,6 +428,7 @@ mod tests {
             plan: Box::new(plan()),
             owner: ExecutionOwner::Local,
             mode: crate::state::ExecutionMode::Compiled,
+            payloads: Default::default(),
             requested_by: "mk".to_owned(),
             input: BTreeMap::new(),
         });

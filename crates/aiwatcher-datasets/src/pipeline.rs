@@ -11,10 +11,15 @@
 //! children would run twice. What is refused is a shape that could not run, not
 //! one that is untidy.
 //!
-//! **A transform may not follow a notebook.** A Flow block's input is a
-//! `read()` from the query service's catalog; there is no way to hand it rows a
-//! notebook produced, so such a chain would run the transform against the
-//! *source* again and quietly produce something else. Refused by name.
+//! **A transform reads past nothing.** A Flow block's input is a `read()` from
+//! the query service's catalog, so a notebook or an approval ends the one
+//! query a chain compiles to, and a transform after either would run against
+//! the *source* again and quietly produce something else. One rule, refused by
+//! name, saying which of the two is in the way.
+//!
+//! **An approval is a gate between work, not a question inside it**: it reads
+//! the rows before it, produces nothing, and the block after it reads those
+//! same rows.
 //!
 //! ADR_0024.
 
@@ -79,12 +84,37 @@ pub enum BlockSpec {
         #[schema(value_type = Object)]
         params: BTreeMap<String, Value>,
     },
+    /// A gate somebody has to open: a managed run stops here and waits, for as
+    /// long as it takes, until somebody who holds the role answers.
+    ///
+    /// It performs nothing and produces nothing. The rows it was asked about
+    /// are the ones the block before it produced, and the block after it reads
+    /// those same rows — so an approval sits *between* work rather than in the
+    /// middle of it, which is why answering completes the step.
+    Approval {
+        /// What is being asked, in the words the person reads.
+        #[serde(default)]
+        prompt: String,
+        /// The role that may answer.
+        #[serde(default = "answerable_role")]
+        role: String,
+        /// The answers offered. Empty is a free-text answer; anything else is
+        /// the whole set, and an answer outside it is refused.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        choices: Vec<String>,
+    },
     /// The end of the chain: the rows, and the dataset a version of them is
     /// published to.
     View {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         dataset: Option<String>,
     },
+}
+
+/// A gate nobody gave a role to is answered by an editor, which is the role the
+/// answer route checks. [`aiwatcher_core::human_input`] owns the rest.
+fn answerable_role() -> String {
+    aiwatcher_core::human_input::ANSWERABLE_ROLE.to_owned()
 }
 
 impl BlockSpec {
@@ -95,6 +125,7 @@ impl BlockSpec {
             Self::Source { .. } => "source",
             Self::Transform { .. } => "transform",
             Self::Notebook { .. } => "notebook",
+            Self::Approval { .. } => "approval",
             Self::View { .. } => "view",
         }
     }
@@ -402,17 +433,19 @@ fn chain_problems(chain: &[&PipelineBlock]) -> Vec<String> {
         }
     }
 
-    let mut seen_notebook: Option<&str> = None;
+    // What a Flow step cannot read past. Flow reads its rows by naming a
+    // dataset in the query service's catalog, so the one query a chain
+    // compiles to ends at the first block that is neither a source nor a
+    // transform — and a transform after that would quietly run against the
+    // *source* again and produce something else.
+    let mut sealed: Option<&PipelineBlock> = None;
     let mut seen_view: Option<&str> = None;
     for block in chain {
         match block.spec {
-            BlockSpec::Notebook { .. } => seen_notebook = Some(&block.id),
+            BlockSpec::Notebook { .. } | BlockSpec::Approval { .. } => sealed = Some(block),
             BlockSpec::Transform { .. } => {
-                if let Some(notebook) = seen_notebook {
-                    problems.push(format!(
-                        "{} is a Flow PHP block after the notebook {notebook}. A Flow step reads its rows from the query service's catalog, so it cannot be handed what a notebook produced — put every transform before the first notebook",
-                        block.id
-                    ));
+                if let Some(before) = sealed {
+                    problems.push(flow_after(block, before));
                 }
             }
             _ => {}
@@ -429,6 +462,31 @@ fn chain_problems(chain: &[&PipelineBlock]) -> Vec<String> {
     }
 
     problems
+}
+
+/// A Flow PHP block that cannot reach its rows, and what is in the way.
+///
+/// One rule with two endings, because what stands between the transform and
+/// its rows is a different thing in each case and a reader needs to know
+/// which. Both say the same reason first: a Flow step names a dataset in the
+/// query service's catalog and cannot be handed rows.
+fn flow_after(block: &PipelineBlock, before: &PipelineBlock) -> String {
+    let ending = match before.spec {
+        BlockSpec::Approval { .. } => {
+            "an approval is a step of its own, so the query this would belong to has already \
+             run — put every transform before the first approval"
+        }
+        _ => {
+            "it cannot be handed what a notebook produced — put every transform before the \
+             first notebook"
+        }
+    };
+    format!(
+        "{} is a Flow PHP block after the {} {}. A Flow step reads its rows from the query service's catalog, so {ending}",
+        block.id,
+        before.spec.kind(),
+        before.id
+    )
 }
 
 /// What is wrong with one block, whatever it is connected to.
@@ -488,6 +546,19 @@ pub(crate) fn block_problems(block: &PipelineBlock) -> Vec<String> {
                     block.id
                 ));
             }
+        }
+        BlockSpec::Approval {
+            prompt,
+            role,
+            choices,
+        } => {
+            // Not this file's rules: a workflow step authors the same question
+            // and is answered through the same route, so one of the two
+            // accepting what the other refuses would be two ideas of what a
+            // gate is.
+            problems.extend(aiwatcher_core::human_input::question_problems(
+                &block.id, prompt, role, choices,
+            ));
         }
         BlockSpec::View { dataset } => {
             if let Some(dataset) = dataset
@@ -575,6 +646,17 @@ mod tests {
                 notebook: "pii_detection".to_owned(),
                 revision: None,
                 params: BTreeMap::new(),
+            },
+        )
+    }
+
+    fn approval() -> PipelineBlock {
+        block(
+            "sign-off",
+            BlockSpec::Approval {
+                prompt: "Publish these rows?".to_owned(),
+                role: "editor".to_owned(),
+                choices: vec!["approve".to_owned(), "reject".to_owned()],
             },
         )
     }
@@ -735,6 +817,113 @@ mod tests {
                 .any(|problem| problem.contains("form a loop")),
             "{refusals:?}"
         );
+    }
+
+    #[test]
+    fn an_approval_reads_what_the_block_before_it_produced_and_hands_it_on() {
+        let request = SavePipelineRequest {
+            blocks: vec![source(), transform(), approval(), notebook(), view()],
+            edges: vec![
+                edge("corpus", "shape"),
+                edge("shape", "sign-off"),
+                edge("sign-off", "detect"),
+                edge("detect", "result"),
+            ],
+            ..demo()
+        };
+
+        let chain = order_of(&request.blocks, &request.edges).expect("a gated chain");
+
+        assert_eq!(
+            chain
+                .iter()
+                .map(|block| block.id.as_str())
+                .collect::<Vec<_>>(),
+            ["corpus", "shape", "sign-off", "detect", "result"]
+        );
+    }
+
+    #[test]
+    fn an_approval_between_two_transforms_is_refused_by_name() {
+        // The negative control for the placement rule: delete the `Approval`
+        // arm from `chain_problems` and this is the test that fails.
+        let request = SavePipelineRequest {
+            blocks: vec![source(), approval(), transform(), view()],
+            edges: vec![
+                edge("corpus", "sign-off"),
+                edge("sign-off", "shape"),
+                edge("shape", "result"),
+            ],
+            ..demo()
+        };
+
+        let refusals = problems(&request);
+
+        assert!(
+            refusals
+                .iter()
+                .any(|problem| problem
+                    .contains("shape is a Flow PHP block after the approval sign-off")),
+            "{refusals:?}"
+        );
+    }
+
+    #[test]
+    fn a_gate_that_asks_nothing_is_refused_together_with_every_other_problem() {
+        // Every problem at once, which is the contract the canvas renders: the
+        // blank question, the role nothing checks and the repeated answer all
+        // come back from one save.
+        let request = SavePipelineRequest {
+            blocks: vec![
+                source(),
+                block(
+                    "sign-off",
+                    BlockSpec::Approval {
+                        prompt: "  ".to_owned(),
+                        role: "admin".to_owned(),
+                        choices: vec!["yes".to_owned(), "yes".to_owned()],
+                    },
+                ),
+            ],
+            edges: vec![edge("corpus", "sign-off")],
+            ..demo()
+        };
+
+        let refusals = problems(&request);
+
+        assert!(
+            refusals
+                .iter()
+                .any(|problem| problem.contains("does not say what it is asking")),
+            "{refusals:?}"
+        );
+        assert!(
+            refusals
+                .iter()
+                .any(|problem| problem.contains("asks for the 'admin' role")),
+            "{refusals:?}"
+        );
+        assert!(
+            refusals
+                .iter()
+                .any(|problem| problem.contains("the same answer twice")),
+            "{refusals:?}"
+        );
+    }
+
+    #[test]
+    fn a_gate_that_names_no_role_is_answered_by_an_editor() {
+        let spec: BlockSpec = serde_json::from_value(serde_json::json!({
+            "kind": "approval",
+            "prompt": "Publish these rows?",
+        }))
+        .expect("an approval with no role");
+
+        let BlockSpec::Approval { role, choices, .. } = &spec else {
+            panic!("an approval");
+        };
+        assert_eq!(role, "editor");
+        assert!(choices.is_empty());
     }
 
     #[test]

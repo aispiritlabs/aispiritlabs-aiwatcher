@@ -424,6 +424,10 @@ async fn write(
             // decides it. A hosted run's decider is a worker that has to be
             // there to receive it, which is not something a tick can arrange.
             crate::executions::Decider::Local,
+            // The deployment's own, and refused here for the same reason the
+            // route refuses it: a schedule that could not store a turn at nine
+            // tomorrow should say so when it is saved.
+            crate::executions::resolve_payloads(&state, None)?,
         )
         .await?;
         // Recorded like any other firing, and in the same place the tick

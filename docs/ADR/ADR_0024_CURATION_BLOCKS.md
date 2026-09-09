@@ -1,6 +1,7 @@
 # ADR_0024: A curation is a chain of blocks, each belonging to the engine that can run it
 
-- **Status**: accepted; the execution half superseded by ADR_0025
+- **Status**: accepted; the execution half superseded by ADR_0025; the block
+  vocabulary amended 2026-09-09 (below)
 - **Date**: 2026-09-04
 
 The block vocabulary, the chain validation and the content-addressed revision
@@ -42,19 +43,21 @@ Three further facts shaped the answer:
 ## Decision
 
 A curation may also be a **chain of blocks**, saved in the dataset registry
-beside the recipes as a content-addressed revision. Four kinds:
+beside the recipes as a content-addressed revision. Five kinds — four here and
+`approval`, added by the amendment below:
 
 | Block | Engine | What it holds |
 |-------|--------|---------------|
 | `source` | Flow PHP | a dataset in the query service's catalog, and the arguments that catalog declares |
 | `transform` | Flow PHP | steps appended to the `read()` |
 | `notebook` | `services/ml_pipeline` | the name of a marimo notebook, its settings, and the revision it was saved against |
+| `approval` | nobody — it waits | the question, the role that may answer it, and the answers offered |
 | `view` | Rust registry | the dataset an immutable version is published to |
 
 **The shape is a chain**, validated in `aiwatcher-datasets`: one head,
 one next per block, everything reached, a source first, nothing after the view
-— and every `transform` before the first `notebook`, because a Flow step cannot
-be handed rows. A refusal is a 422 carrying *every* problem, and the canvas
+— and every `transform` before the first block a Flow step cannot read past,
+because a Flow step cannot be handed rows. A refusal is a 422 carrying *every* problem, and the canvas
 renders those lines and implements no rules of its own, exactly as the
 annotation canvas does not re-implement the shape validator.
 
@@ -151,3 +154,54 @@ block definitions saved here are exactly what such a job would read. The other
 signal is a second notebook runtime — a second language, or a hosted one — which
 would mean `notebook` needs the `Runtime`-style declaration ADR_0023 gives a
 model package, instead of being one service's notion of a notebook.
+
+## Amendment, 2026-09-09: a fifth kind, which waits
+
+A managed curation runs unattended (ADR_0025), and the first thing anybody
+wanted from one was the ability to stop it: publish a dataset version over a
+corpus somebody has actually looked at, rather than over whatever the query
+returned at nine in the morning. The mechanism for that already existed —
+`RuntimeBinding::HumanInput`, the parked step, the answer route — and nothing
+could ask for it, because no block compiled to it.
+
+**Decision: `approval` joins the vocabulary**, holding a question, the role
+that may answer and the answers offered. It compiles to
+`RuntimeBinding::HumanInput`; no new binding, because a wait is a wait and a
+second variant would cost an exhaustive `match` in half a crate for no
+distinction.
+
+**It compiles the way a notebook does — its own step, ending the Flow fold.**
+The alternative was to let a gate sit inside the roll-up and split it into two
+Flow queries, which cannot work for the reason the notebook rule already
+states: the second query would have to read what the first produced, and a Flow
+step reads its rows by naming a dataset in the catalog. So the placement rule
+is not a second rule. "No transform after a notebook" turned out to be one rule
+under a narrow name — *a Flow step reads past nothing* — and an approval is the
+second thing it reads past. One refusal, with an ending that names what is in
+the way.
+
+**A gate is in the chain without being in the data.** It reads the rows the
+step before produced so its context names what is being decided about, and it
+produces nothing: answering *is* the step's completion, so `StepCompleted`
+carries no outputs. The block after a gate is therefore bound to the last step
+that actually produced rows, which is not its parent in the plan. The edge and
+the data binding are two different questions and the compiler now keeps two
+cursors for them; one cursor bound the publisher to an output no step declares,
+which is a dataset version over no rows — the one failure that looks like a
+success.
+
+**The role a gate may name is `editor` and nothing else, for now.** The route
+that carries an answer requires the editor role and reads nothing stricter, so
+a gate saying `admin` would describe a check nobody makes. It is refused by
+name rather than accepted and quietly ignored, and the panel asks whether the
+caller holds the role the question declared, so somebody who cannot answer
+reads whose decision it is instead of pressing a button that returns a 403.
+Widening it is one line on each side once the answer route reads the request's
+own role.
+
+**What this does not add.** No deadline: `InputRequest::deadline` stays `None`
+and a gate waits as long as it takes. A timer for one belongs to the workflow
+store, beside every other deferred append, and not to the block — two timers
+for one wait is the same mistake as two parties retrying one attempt. And no
+gate in a registered `WorkflowDefinition`, which is a second compiler and its
+own decision.

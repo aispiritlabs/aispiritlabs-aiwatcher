@@ -825,6 +825,10 @@ pub async fn build(config: Config) -> Result<Runtime> {
                 as Arc<dyn aiwatcher_execution::ArtifactCatalog>
         }),
         engine: engine.map(|engine| engine as Arc<dyn aiwatcher_core::engine::WorkflowEngine>),
+        execution_payloads: aiwatcher_api::state::PayloadDefault {
+            policy: config.execution_payloads,
+            locked: config.execution_payloads_locked,
+        },
         auth: build_authenticator(&config).await?,
         health,
     };

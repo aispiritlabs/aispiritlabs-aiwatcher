@@ -33,6 +33,14 @@ const spec = z.discriminatedUnion('kind', [
       params: z.record(z.unknown()).optional(),
     })
     .strict(),
+  z
+    .object({
+      kind: z.literal('approval'),
+      prompt: limitedText(4 * 1024).optional(),
+      role: z.string().optional(),
+      choices: z.array(limitedText(80)).max(8).optional(),
+    })
+    .strict(),
   z.object({ kind: z.literal('view'), dataset: pipelineName.nullish() }).strict(),
 ]);
 
@@ -98,7 +106,7 @@ export async function parseBundle(text: string): Promise<PipelineBundle> {
   const chain = orderOf(blocks, edges);
   if (!chain || chain[0]?.spec.kind !== 'source')
     throw new Error('The flow must be one chain starting with a source.');
-  let python = false;
+  let sealed = false;
   for (const [index, block] of chain.entries()) {
     if (
       block.spec.kind === 'source' &&
@@ -112,9 +120,12 @@ export async function parseBundle(text: string): Promise<PipelineBundle> {
     )
       throw new Error('Python parameters exceed 32 KiB.');
     if (index > 0 && block.spec.kind === 'source') throw new Error('A flow has one source.');
-    if (block.spec.kind === 'notebook') python = true;
-    if (python && block.spec.kind === 'transform')
-      throw new Error('Data transforms must precede Python blocks.');
+    // A data transform is one Flow PHP query, and the query ends at the first
+    // block that is not part of it. Everything after that reads rows the query
+    // service cannot be handed.
+    if (block.spec.kind === 'notebook' || block.spec.kind === 'approval') sealed = true;
+    if (sealed && block.spec.kind === 'transform')
+      throw new Error('Data transforms must precede Python and approval blocks.');
     if (block.spec.kind === 'view' && index !== chain.length - 1)
       throw new Error('Publish must end the flow.');
   }

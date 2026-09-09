@@ -69,6 +69,7 @@ fn start(plan: ExecutionPlan) -> WorkflowMessage {
         plan: Box::new(plan),
         owner: ExecutionOwner::Local,
         mode: ExecutionMode::Compiled,
+        payloads: Default::default(),
         requested_by: "somebody".to_owned(),
         input: BTreeMap::new(),
     })
@@ -587,6 +588,7 @@ fn a_human_step_waits_rather_than_being_dispatched_anywhere() {
                 prompt: "promote this model?".to_owned(),
                 role: "admin".to_owned(),
                 choices: vec!["yes".to_owned(), "no".to_owned()],
+                block: None,
             }),
             retry: RetryPolicy::once(),
             ..task("approve")
@@ -624,6 +626,7 @@ fn an_answer_the_step_did_not_offer_is_refused_and_the_right_one_completes_it() 
                 prompt: "promote?".to_owned(),
                 role: "admin".to_owned(),
                 choices: vec!["yes".to_owned(), "no".to_owned()],
+                block: None,
             }),
             retry: RetryPolicy::once(),
             ..task("approve")

@@ -10,6 +10,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use aiwatcher_auth::{AuthConfig, AuthMode, IngestToken, ProxyHeaders, Role, RoleMapping};
+use aiwatcher_execution::message::PayloadPolicy;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -385,6 +386,24 @@ pub struct Config {
     pub conversation_keys: Option<String>,
     /// Key prefix inside the same object store the other registries use.
     pub conversation_prefix: String,
+    /// Where a hosted execution's words live unless the run says otherwise.
+    ///
+    /// `external` — the free one, and the default — means the content stays
+    /// wherever the worker keeps it and this instance holds a reference, a
+    /// plaintext digest and a size. `sealed` means the content comes here and
+    /// is encrypted under the conversation archive's keys.
+    ///
+    /// The default is the visible one on purpose: a hosted execution starts
+    /// with no archive, no key and no flag, and a deployment that wants its
+    /// words held here turns that on rather than discovering it was already
+    /// happening.
+    pub execution_payloads: PayloadPolicy,
+    /// Whether a run may choose a policy other than the default.
+    ///
+    /// Off, so a definition picks for itself. On, the deployment's choice is
+    /// the only one — which is what an instance under a retention obligation
+    /// sets so that a graph cannot opt its own turns out of the archive.
+    pub execution_payloads_locked: bool,
     /// Whether consent provenance is demanded of a producer.
     pub conversation_policy: ConversationPolicyMode,
     /// The longest retention this deployment will apply. A producer asking for
@@ -556,6 +575,8 @@ impl Default for Config {
             // keeps nothing.
             conversation_archive: false,
             conversation_keys: None,
+            execution_payloads: PayloadPolicy::External,
+            execution_payloads_locked: false,
             conversation_prefix: "conversations".to_owned(),
             conversation_policy: ConversationPolicyMode::default(),
             conversation_max_ttl_days: 365,
@@ -745,6 +766,26 @@ impl Config {
             config.conversation_archive = parse_bool("AIWATCHER_CONVERSATION_ARCHIVE", &raw)?;
         }
         config.conversation_keys = var("AIWATCHER_CONVERSATION_KEYS");
+        if let Some(raw) = var("AIWATCHER_EXECUTION_PAYLOADS") {
+            config.execution_payloads = match raw.as_str() {
+                "external" => PayloadPolicy::External,
+                "sealed" => PayloadPolicy::Sealed,
+                _ => {
+                    return Err(ConfigError::Invalid {
+                        name: "AIWATCHER_EXECUTION_PAYLOADS",
+                        value: raw,
+                        // No `plain`: content in the object store with no key is
+                        // readable by every process holding the bucket's
+                        // credentials, which is what the key exists for.
+                        expected: "external | sealed",
+                    });
+                }
+            };
+        }
+        if let Some(raw) = var("AIWATCHER_EXECUTION_PAYLOADS_LOCKED") {
+            config.execution_payloads_locked =
+                parse_bool("AIWATCHER_EXECUTION_PAYLOADS_LOCKED", &raw)?;
+        }
         if let Some(raw) = var("AIWATCHER_CONVERSATION_PREFIX") {
             config.conversation_prefix = raw.trim_matches('/').to_owned();
         }
@@ -941,6 +982,17 @@ impl Config {
                 because: "AIWATCHER_CONVERSATION_ARCHIVE=on",
             });
         }
+        // Sealing needs somewhere to seal *into* and something to seal with, and
+        // a deployment that made it the default without them would refuse every
+        // hosted run at the moment somebody tried one. Named here, at start-up,
+        // to whoever set it — the archive's own rule, one store along.
+        if self.execution_payloads.needs_archive() && !self.conversation_archive {
+            return Err(ConfigError::Required {
+                name: "AIWATCHER_CONVERSATION_ARCHIVE",
+                because: "AIWATCHER_EXECUTION_PAYLOADS=sealed",
+            });
+        }
+
         // And an archive with nowhere to put anything is the same class of
         // mistake one layer down: every route would answer 501 while the
         // deployment believed it had turned capture on.

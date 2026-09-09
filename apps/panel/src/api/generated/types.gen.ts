@@ -178,6 +178,15 @@ export type AppendStreamBody = {
      * The worker's own messages, in the order it wrote them.
      */
     messages: Array<HostedMessage>;
+    /**
+     * Deferred appends this decision sets or withdraws.
+     *
+     * In the same request rather than a route of its own: a decision that
+     * schedules a timeout and the record of having scheduled it are one
+     * decision, and split in two a crash between them leaves either a timer
+     * nobody decided on or a decision whose timer never happened.
+     */
+    timers?: Array<TimerBody>;
 };
 
 /**
@@ -490,6 +499,21 @@ export type BlockSpec = {
     };
     revision?: string | null;
 } | {
+    /**
+     * The answers offered. Empty is a free-text answer; anything else is
+     * the whole set, and an answer outside it is refused.
+     */
+    choices?: Array<string>;
+    kind: 'approval';
+    /**
+     * What is being asked, in the words the person reads.
+     */
+    prompt?: string;
+    /**
+     * The role that may answer.
+     */
+    role?: string;
+} | {
     dataset?: string | null;
     kind: 'view';
 };
@@ -572,6 +596,13 @@ export type CancelBody = {
      * Empty is allowed; a wrong reason would be worse than none.
      */
     reason?: string;
+};
+
+/**
+ * The timer to withdraw.
+ */
+export type CancelTimerBody = {
+    timer_id: string;
 };
 
 export type CaseDelta = {
@@ -2115,6 +2146,17 @@ export type ExecutionTarget = {
     revision?: string | null;
 };
 
+/**
+ * What one execution is still waiting on.
+ */
+export type ExecutionTimers = {
+    /**
+     * Soonest first. A fired or cancelled timer is not a row, so everything
+     * here is still going to happen.
+     */
+    timers: Array<Timer>;
+};
+
 export type ExportCounts = {
     excluded: number;
     groups: number;
@@ -2787,6 +2829,11 @@ export type HumanFinding = {
 };
 
 export type HumanInputSpec = {
+    /**
+     * The authored block this step came from, for the canvas box that lights
+     * up while it waits.
+     */
+    block?: string | null;
     choices?: Array<string>;
     /**
      * What is being asked, in the words the person reads.
@@ -5703,6 +5750,22 @@ export type Schedule = {
 };
 
 /**
+ * A deferred append, as a caller asks for one.
+ */
+export type ScheduleTimerBody = {
+    due_at: string;
+    /**
+     * What to append when it comes due. Composed by the caller, because an
+     * engine that assembled one would be deciding what a timeout means.
+     */
+    message: HostedMessage;
+    /**
+     * The worker's own id, unique inside this execution.
+     */
+    timer_id: string;
+};
+
+/**
  * A schedule, when it next fires, and what setting it started.
  */
 export type ScheduleView = {
@@ -6430,6 +6493,62 @@ export type TensorSpec = {
      * `[null, 3, 224, 224]`. A `null` is a free dimension.
      */
     shape?: Array<number | null>;
+};
+
+/**
+ * A message a hosted decider asked this engine to append later.
+ *
+ * The one *active* thing this engine does for a hosted run, and it is
+ * deliberately the smallest possible active thing: a deferred append.
+ * The worker composes the message when it schedules the timer, and the engine
+ * stores it and hands it back at the time — so "the engine does not interpret
+ * the messages" survives intact. It is not reading a stream to work out that
+ * something is due; it was told, explicitly, in a row.
+ *
+ * ## Why a row rather than the stream
+ *
+ * `agentic.workflow.Saga` already keeps its timers *in* the stream, as
+ * `saga.timeout_scheduled` events, and works out what is due by folding it.
+ * That fold is the worker's and stays the worker's. What it cannot do from
+ * there is *notice*: nothing wakes up and looks. A row is what an index over
+ * every hosted run can be built on, so one tick finds what is due across all
+ * of them without reading a single stream.
+ */
+export type Timer = {
+    due_at: string;
+    execution: ExecutionId;
+    /**
+     * What to append when it comes due. Composed by the worker at the moment
+     * it schedules, never assembled here — an engine that built this would be
+     * deciding what a timeout means.
+     */
+    message: HostedMessage;
+    /**
+     * The worker's own id, unique inside one execution. `agentic`'s
+     * `timeout_id`, and the reason a repeated schedule is one timer.
+     */
+    timer_id: string;
+};
+
+/**
+ * One thing to do to this execution's timers.
+ *
+ * A tagged pair rather than a struct with a `cancel` flag, because the two
+ * carry different fields and a body that could name a `due_at` while
+ * cancelling would be a shape with a meaningless half.
+ */
+export type TimerBody = {
+    /**
+     * Hold this message until `due_at`. Scheduling one id twice is one timer,
+     * which is what makes a decider's retry safe.
+     */
+    schedule: ScheduleTimerBody;
+} | {
+    /**
+     * Withdraw it. A no-op when there is none, because a saga that cancels a
+     * timeout it already handled is doing the ordinary thing.
+     */
+    cancel: CancelTimerBody;
 };
 
 export type ToolBreakdown = {
@@ -9441,6 +9560,28 @@ export type AppendStreamResponses = {
 };
 
 export type AppendStreamResponse = AppendStreamResponses[keyof AppendStreamResponses];
+
+export type ExecutionTimersData = {
+    body?: never;
+    path: {
+        execution_id: string;
+    };
+    query?: never;
+    url: '/api/v1/executions/{execution_id}/timers';
+};
+
+export type ExecutionTimersErrors = {
+    501: ErrorBody;
+    503: ErrorBody;
+};
+
+export type ExecutionTimersError = ExecutionTimersErrors[keyof ExecutionTimersErrors];
+
+export type ExecutionTimersResponses = {
+    200: ExecutionTimers;
+};
+
+export type ExecutionTimersResponse = ExecutionTimersResponses[keyof ExecutionTimersResponses];
 
 export type LiveWebsocketData = {
     body?: never;

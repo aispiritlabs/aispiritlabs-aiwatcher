@@ -11,10 +11,47 @@ use aiwatcher_conversations::Registry as ConversationArchive;
 use aiwatcher_core::engine::WorkflowEngine;
 use aiwatcher_core::ports::{AttemptArtifacts, EditorHost, WorkflowRunner};
 use aiwatcher_datasets::Registry as DatasetRegistry;
+use aiwatcher_execution::message::PayloadPolicy;
 use aiwatcher_execution::{ArtifactCatalog, ExecutionHandler, WorkflowStore};
 use aiwatcher_projector::{LiveHub, ReadModel};
 use aiwatcher_prompts::Registry;
 use aiwatcher_training::Registry as TrainingRegistry;
+
+/// What this deployment decided about a hosted run's words.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PayloadDefault {
+    /// `AIWATCHER_EXECUTION_PAYLOADS`.
+    pub policy: PayloadPolicy,
+    /// `AIWATCHER_EXECUTION_PAYLOADS_LOCKED`: a run may not choose its own.
+    pub locked: bool,
+}
+
+impl PayloadDefault {
+    /// What this run gets, given what it asked for.
+    ///
+    /// `None` is the ordinary case — nothing asked, so the deployment's answer.
+    /// A run that asks while the deployment has pinned its choice is refused
+    /// rather than quietly given the pin: the point of asking for `external` on
+    /// a `sealed` instance is to keep words out of the archive, and silently
+    /// putting them in is the failure the lock exists to prevent, reached from
+    /// the other side.
+    ///
+    /// # Errors
+    ///
+    /// The refusal, as prose, when the lock forbids the request.
+    pub fn resolve(self, asked: Option<PayloadPolicy>) -> Result<PayloadPolicy, String> {
+        match asked {
+            None => Ok(self.policy),
+            Some(asked) if asked == self.policy => Ok(asked),
+            Some(_) if self.locked => Err(format!(
+                "this instance pins every hosted run to `{}` \
+                 (AIWATCHER_EXECUTION_PAYLOADS_LOCKED=true)",
+                self.policy.as_str()
+            )),
+            Some(asked) => Ok(asked),
+        }
+    }
+}
 
 /// Shared application state.
 ///
@@ -152,6 +189,13 @@ pub struct AppState {
     /// is in: deleting the index never loses an authoritative result, taken to
     /// its limit.
     pub catalog: Option<Arc<dyn ArtifactCatalog>>,
+    /// Where a hosted run's words live unless the run says otherwise, and
+    /// whether a run may say otherwise at all.
+    ///
+    /// The default is the visible one: a hosted execution starts with no
+    /// archive, no key and no flag, and a deployment that wants its words held
+    /// here turns that on rather than finding it was already happening.
+    pub execution_payloads: PayloadDefault,
     /// `None` when no identity provider is configured, which is the default.
     /// Unlike `prompts` and `runner`, absence here is not a 501 on a few
     /// routes — it is every caller being [`aiwatcher_auth::Identity::anonymous`]

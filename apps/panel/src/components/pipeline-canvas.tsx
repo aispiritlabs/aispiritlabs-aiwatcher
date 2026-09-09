@@ -13,7 +13,7 @@ import {
   type NodeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { AlertCircle, Code2, Database, NotebookPen, Table2 } from 'lucide-react';
+import { AlertCircle, Code2, Database, NotebookPen, ShieldCheck, Table2 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 import type { BlockSpec, PipelineBlock, PipelineEdge } from '@/api/generated/types.gen';
@@ -43,6 +43,7 @@ const KIND: Record<BlockKind, { label: string; icon: LucideIcon; tone: string }>
   source: { label: 'Source', icon: Database, tone: 'text-primary' },
   transform: { label: 'Data transformation', icon: Code2, tone: 'text-warning' },
   notebook: { label: 'Python', icon: NotebookPen, tone: 'text-success' },
+  approval: { label: 'Approval', icon: ShieldCheck, tone: 'text-warning' },
   view: { label: 'Publish dataset', icon: Table2, tone: 'text-muted-foreground' },
 };
 
@@ -59,6 +60,11 @@ function describeBlock(spec: BlockSpec): string {
     }
     case 'notebook':
       return spec.notebook;
+    case 'approval':
+      // The question, because that is what somebody has to read to know what
+      // this box is holding up. The answers are in the inspector and, while a
+      // managed run waits on it, on the run's own card.
+      return spec.prompt || 'no question yet';
     case 'view':
       return spec.dataset ?? 'not published';
   }

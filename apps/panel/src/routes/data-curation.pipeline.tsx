@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { createFileRoute } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Download, Play, Save, ServerCog, Sparkles, Upload } from 'lucide-react';
+import { Download, Play, Save, ServerCog, ShieldCheck, Sparkles, Upload } from 'lucide-react';
 import { z } from 'zod';
 
 import {
@@ -461,6 +461,23 @@ function PipelinePage() {
     onError: (error) => setProblems(rejectionDetails(error)),
   });
   const [libraryBusy, setLibraryBusy] = React.useState(false);
+  // Not a library entry: the library holds solutions somebody on this
+  // installation published, and a gate has nothing to share — no code, no
+  // parameters, and a question that belongs to the chain it stops. So it is
+  // the page's own affordance, put beside the library because that is where a
+  // block gets added.
+  const approvalTemplate = (): SaveBlockTemplateRequest => ({
+    id: 'approval',
+    title: 'Approval',
+    description: '',
+    tags: [],
+    spec: {
+      kind: 'approval',
+      prompt: '',
+      role: 'editor',
+      choices: ['approve', 'reject'],
+    },
+  });
   const busy =
     newNotebookFlow.isPending ||
     libraryBusy ||
@@ -725,6 +742,14 @@ function PipelinePage() {
           onAdd={addBlock}
           onBusyChange={setLibraryBusy}
         />
+        <Button
+          variant="outline"
+          disabled={locked}
+          onClick={() => addBlock(approvalTemplate())}
+          title="Stop a managed run here until somebody answers. The browser-driven run walks past it."
+        >
+          <ShieldCheck className="h-3.5 w-3.5" /> Add an approval
+        </Button>
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <Button
             variant="outline"

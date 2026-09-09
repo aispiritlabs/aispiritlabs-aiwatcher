@@ -159,7 +159,7 @@ things. The implementation should use these names consistently:
 
 | Term | Meaning |
 |---|---|
-| `CurationPipelineDefinition` | Authored source/transform/notebook/view blocks |
+| `CurationPipelineDefinition` | Authored source/transform/notebook/approval/view blocks |
 | `WorkflowDefinition` | An authored or registered agent/search/ML workflow |
 | `DefinitionRevision` | Immutable content-addressed version of either definition |
 | `ExecutionPlan` | Server-compiled, immutable runtime-neutral graph |
@@ -1615,7 +1615,7 @@ Phase 12 earns.
 | Scheduler | Cadence, CRUD, transactional admission, per-slot outcomes, `next_run` computed on the server |
 | Worker (Phases 10, 11 Level 2) | The protocol, the Python `Runtime`, the authoring path, schedules for registered workflows, Planner on the boundary |
 | Hosted decider (Phase 13) | **Partial** — the append route, the decider lease and a worker target that mints `owner = worker, mode = hosted`. No event store, no timers, and the `sealed` refusal has no reader |
-| Human input (Phase 14) | The `HumanInput` binding and the Answer route exist; nothing authors a step that uses them |
+| Human input (Phase 14) | **Partial** — a curation authors an `approval` block, it compiles to the `HumanInput` binding, a managed run stops on it and the run's card asks whoever holds the role. No deadline, no `await` from inside an attempt, and no gate in a registered workflow |
 
 ### What is left
 
@@ -1659,11 +1659,17 @@ actually missing.
 survives a worker restart between the second and third completion and fires the
 summarizer **once**.
 
-**In Planner's repository, not this one.** `docs/flyte-removal-kickoff.md` takes
-the Flyte estate out of the chart, now that the byte-identical gate that guarded
-it is met and no shipped profile selects Flyte. It starts with a timing defect
-work 6 left behind: the RQ job's 600-second budget against a 900-second step
-timeout. It shares no file with Phase 13, so the two run at the same time.
+**In planner's repository, and now closed.** `docs/flyte-removal-kickoff.md` is
+done as of 2026-09-09: the timing defect work 6 left behind is one authored
+table (`STAGE_BUDGET_SECONDS`) with two readers, the Tilt profile ran the import
+end to end — which is what found `AIWATCHER_WORKFLOW_STORE` and
+`AIWATCHER_PROMPT_STORE` being wrong there — one pod per import is a recorded
+decision rather than a default (39.4), and `helm template` and `uv.lock` render
+and pin nothing from Flyte. What is left over from that session is planner's
+own: `just lint-ml` is red on a scratch file committed by accident, `mypy`
+reports five pre-existing errors in its test suite, and nothing validates
+`deploy/config.json` against `config.schema.json` — which is how `flyteEnabled`
+outlived its own removal in the schema.
 
 **Behind their own gates, with nothing building them.**
 
@@ -1672,11 +1678,17 @@ timeout. It shares no file with Phase 13, so the two run at the same time.
   declaration was a single value for all four tasks. `ContainerJob` appears
   nowhere in the workspace. §39.4 records what was accepted instead — four
   attempts in one worker pod, whose limits already match Flyte's task envelope.
-- **Phase 14** — human input. The binding and the Answer route exist; what is
-  missing is an authored gate, `await` from inside an attempt, `on_timeout`, the
-  first control message on `/api/v1/live` and the panel's first dialog. A
-  curation approval can follow work 5 as soon as there is a real authored gate;
-  approval inside an agent turn depends on Phase 13.
+- **Phase 14** — human input. The authored gate exists for a curation: an
+  `approval` block compiles to the `HumanInput` binding, `order_of` refuses it
+  where a Flow step would then have nothing to read, and the run's card puts the
+  question and its declared answers in front of a caller who holds the role and
+  tells one who does not whose decision it is. What is missing is `on_timeout`
+  and the deadline behind it — `InputRequest::deadline` stays `None`, so a gate
+  waits indefinitely — `await` from inside an attempt, the first control message
+  on `/api/v1/live`, and a gate in a **registered workflow**, which is the second
+  compiler and its own decision. Approval inside an agent turn still depends on
+  Phase 13. The role a gate may name is `editor` and nothing else, and 43.37 says
+  why.
 - **Phase 9** — engine-owned executions. Only for a consumer that needs one
   launch API for local and engine work; not a prerequisite for the worker.
 - **Phase 8** — read models in PostgreSQL. Gate: a measured replay-on-start over
@@ -1694,10 +1706,22 @@ timeout. It shares no file with Phase 13, so the two run at the same time.
 - Schedules for another definition kind wait for a compiler for that kind. Flow
   `join` waits for a concrete sub-pipeline use case. Schedule window and
   parameter policy must be explicit before promising "process the previous day".
-- Level 0 in `ai_spirit_agent` is worth more than its size and waits for nothing:
+- Level 0 in `ai_spirit_agent` is worth more than its size:
   `build_compiled_graph_system` builds its runtime with no tracer, the tee in
   `agentic_runtime/trace.py` is uncommitted, and `declare_graph` is about thirty
-  lines. It is also what makes Phase 13's exit observable when it lands.
+  lines. It is what makes Phase 13's exit observable — and it belongs to that
+  session rather than beside it, because it edits the same `compiler.py` as the
+  join buckets and lands `declare_graph` in the same SDK module as the event
+  store.
+- planner's Level 0 is delivered for the `direct` and `cache` branches (§38).
+  What is left of it is one file: `app/agents/_app/_harness.py` names no tracer,
+  so the market-research harness's `AgentStepTrace` reaches nothing, while the
+  personal assistant beside it emits full traces.
+- planner's own leftovers, none of which came from the work that found them:
+  `just lint-ml` is red on a scratch file committed by accident, `mypy` reports
+  five pre-existing errors in its test suite, and nothing validates
+  `deploy/config.json` against `config.schema.json` — the omission that let
+  `flyteEnabled` outlive its own removal in the schema.
 
 The original phase scopes follow, kept because other documents and the ADRs cite
 them by number. The delivered ones are one line each; the rest keep their scope
@@ -2349,26 +2373,26 @@ resources, and a pod template with a PVC, a ConfigMap and five secrets. A
 
 Each level is independent of the ones after it and useful on its own.
 
-**Level 0 — observe.** *Half of it arrived with Level 2 and the other half did
-not.* An import run through the `aiwatcher` orchestrator publishes
+**Level 0 — observe.** **Delivered 2026-09-09, in two halves that arrived
+separately.** An import run through the `aiwatcher` orchestrator publishes
 `workflow.declared`, `step.*` and `artifact.produced` on its own, because the
 engine is a producer (ADR 0026) — the workflow tab draws it with no planner code
-at all. The `direct` and `cache` branches still publish nothing, and they are
-the branches a laptop and a repeated project take. What is below is therefore
-still worth doing, and is now smaller: it applies to two branches, not three.
-Two SDK calls in
-`run_house_import_flow`: `client.workflow("house-import", nodes=[acquire,
-normalize, analyze, persist], edges=[…], execution_id=job_id)` and `with
-flow.node(stage, attempt=…)` around each stage — on the Flyte branch, the
-direct branch and the cache branch, the last as a `step.completed` with
-`data.cached = true`. One `flow.artifact(...)` per stage manifest with the
-RustFS digest after `persist_review_artifacts`. And `trace_aiwatcher_agent`
-gains `workflow_run_id=job_id`, so the vectorizer's run joins the traversal
-instead of being a row of its own. About thirty lines. Result: the workflow
-tab shows planner for the first time, `Pending` stages included, whichever
-orchestrator ran — the point of ADR 0012. Separately, the market-research
-harness's `AgentStepTrace` maps one-to-one onto `run.agent(...).step(...)`.
-Needs nothing from this plan.
+at all, and planner publishing beside it would be the two-publishers case the
+guardrail forbids. The `direct` and `cache` branches have no such engine, so
+they declare the shape themselves: `declared_house_import(job_id)` opens the
+workflow with the planner job's own id, `SilentImportGraph` is the "telemetry is
+off" case written once rather than as four `if`s, and a cache hit reports the
+stages it skipped. That path reports **no** artifacts, and deliberately: `direct`
+hands stages on by value in memory, so there is no reference to publish, and an
+`artifact.produced` with no `uri` is dropped rather than listed as a row nobody
+can open. `trace_aiwatcher_agent` now nests inside the managed run instead of
+minting its own, so a model call made inside a stage stops landing in a
+different run, trace and workflow.
+
+What is left of Level 0 is one item: the market-research harness's
+`AgentStepTrace` maps one-to-one onto `run.agent(...).step(...)`, and
+`app/agents/_app/_harness.py` still names no tracer. Needs nothing from this
+plan.
 
 **Level 1 — launch through the engine.** Blocked by planner, not aiwatcher:
 `/api/v1/engine` lists launch plans and planner registers nothing — it calls
@@ -3055,6 +3079,46 @@ that worked. Works 1–5 close all of it, and the
 a committed report whose reply was lost, an attempt nobody could target, a
 declared output nobody checked, and a workflow fold inferring success from one
 completed child.
+
+### 43.36 A gate is in the chain and not in the data
+
+The compiler carried one cursor and used it for two things: the plan edge, which
+is what makes a step wait for the one before it, and the input binding, which is
+what a step reads. An approval produces nothing — answering *is* its completion,
+so `StepCompleted` carries no outputs — so the block after a gate would have been
+bound to an output no step declares. Two cursors now: `previous` for the edge,
+`rows_from` for the last step that actually produced rows.
+
+`RuntimeBinding::blocks()` answered `None` for a wait, which was right while
+nothing drew one. `step_for_block` falls back to the step id, so opening the
+block would have worked; `blocks_by_step`, which is the map the canvas reads,
+returned an empty list — and the box would have stayed dark for exactly the time
+it was the only thing the run was waiting on. `HumanInputSpec` gained `block`,
+as `MarimoStepSpec` and `PublishDatasetSpec` already had.
+
+The placement rule turned out to be one rule under a narrow name. "No transform
+after a notebook" is really "a Flow step reads its rows from the catalog, so it
+reads past nothing", and an approval is the second thing it reads past. One rule
+with two endings, so a refusal names what is in the way.
+
+### 43.37 The role a gate names had a reader and not a check
+
+`HumanInputSpec::role` reaches `execution.awaiting_input` on the log and the
+step's context, and no authorization decision anywhere: the answer route
+requires the editor role and reads nothing stricter, so a gate saying `admin`
+would have read as a check nobody makes. So the authored block admits `editor`
+and refuses any other role **by name**, and the panel asks whether this caller
+holds the role the question declared — a viewer reads whose decision it is
+instead of pressing a button that comes back a 403. Both halves widen in a line
+each on the day the answer route reads the request's own role; until then the
+refusal is the field's reader.
+
+Two things the plan expected to be missing were already there. The run card
+renders a question's `prompt` and turns its `choices` into buttons, and
+`ContextSnapshot::allowed` already carried `Answer` only while a step held a
+question — so what this delivery added on that side is the role gate and a test
+asserting the buttons are *exactly* the declared answers rather than merely
+including them.
 
 ### 43.9 What did not need changing
 

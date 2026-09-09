@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use aiwatcher_core::{CausationId, CorrelationId, MessageId};
 use aiwatcher_execution::hosted::{
-    HOSTED_APPEND, HostedAppend, HostedError, LeaseOutcome, MAX_BATCH,
+    HOSTED_APPEND, HostedAppend, HostedError, LeaseOutcome, MAX_BATCH, Timer, TimerWrite,
 };
 use aiwatcher_execution::message::{
     HostedMessage, MessageMetadata, PayloadPolicy, PayloadRef, SCHEMA_VERSION,
@@ -81,6 +81,7 @@ fn start(mode: ExecutionMode, owner: ExecutionOwner) -> WorkflowMessage {
         plan: Box::new(plan()),
         owner,
         mode,
+        payloads: PayloadPolicy::External,
         requested_by: "the worker".to_owned(),
         input: BTreeMap::new(),
     })
@@ -109,6 +110,7 @@ fn by(holder: &str, key: &str, expected: u64, messages: Vec<HostedMessage>) -> H
         idempotency_key: key.to_owned(),
         holder: holder.to_owned(),
         messages,
+        timers: Vec::new(),
     }
 }
 
@@ -370,6 +372,382 @@ async fn a_lease_is_refused_on_a_run_this_engine_decides() {
         .await
         .expect_err("a lease on a compiled run");
     assert!(matches!(error, HostedError::NotHosted { .. }), "{error}");
+}
+
+/// A store that reports [`StoreCapabilities::multi_process`] false.
+///
+/// Wrapping the memory one rather than opening a file store, because what is
+/// being checked is the *capability*, and borrowing a real single-process
+/// adapter would also borrow its locking and its disk.
+#[derive(Debug)]
+struct OneProcess(MemoryWorkflowStore);
+
+#[async_trait::async_trait]
+impl WorkflowStore for OneProcess {
+    fn capabilities(&self) -> aiwatcher_execution::store::StoreCapabilities {
+        aiwatcher_execution::store::StoreCapabilities {
+            multi_process: false,
+            claimable: false,
+        }
+    }
+
+    async fn load(
+        &self,
+        execution: &ExecutionId,
+    ) -> aiwatcher_execution::Result<aiwatcher_execution::store::StreamSlice> {
+        self.0.load(execution).await
+    }
+
+    async fn load_page(
+        &self,
+        execution: &ExecutionId,
+        after: u64,
+        limit: usize,
+    ) -> aiwatcher_execution::Result<aiwatcher_execution::store::StreamSlice> {
+        self.0.load_page(execution, after, limit).await
+    }
+
+    async fn due_timers(
+        &self,
+        now: OffsetDateTime,
+        limit: usize,
+    ) -> aiwatcher_execution::Result<Vec<Timer>> {
+        self.0.due_timers(now, limit).await
+    }
+
+    async fn timers_of(&self, execution: &ExecutionId) -> aiwatcher_execution::Result<Vec<Timer>> {
+        self.0.timers_of(execution).await
+    }
+
+    async fn recorded_outcome(
+        &self,
+        key: &aiwatcher_execution::AttemptKey,
+    ) -> aiwatcher_execution::Result<Option<aiwatcher_execution::WorkflowEvent>> {
+        self.0.recorded_outcome(key).await
+    }
+
+    async fn take_decider_lease(
+        &self,
+        execution: &ExecutionId,
+        holder: &str,
+        now: OffsetDateTime,
+    ) -> aiwatcher_execution::Result<LeaseOutcome> {
+        self.0.take_decider_lease(execution, holder, now).await
+    }
+
+    async fn release_decider_lease(
+        &self,
+        execution: &ExecutionId,
+        holder: &str,
+        now: OffsetDateTime,
+    ) -> aiwatcher_execution::Result<bool> {
+        self.0.release_decider_lease(execution, holder, now).await
+    }
+
+    async fn decider_lease(
+        &self,
+        execution: &ExecutionId,
+    ) -> aiwatcher_execution::Result<Option<aiwatcher_execution::hosted::DeciderLease>> {
+        self.0.decider_lease(execution).await
+    }
+
+    async fn append(
+        &self,
+        execution: &ExecutionId,
+        request: aiwatcher_execution::store::AppendRequest,
+    ) -> aiwatcher_execution::Result<aiwatcher_execution::store::AppendOutcome> {
+        self.0.append(execution, request).await
+    }
+
+    async fn projection(
+        &self,
+        execution: &ExecutionId,
+    ) -> aiwatcher_execution::Result<Option<aiwatcher_execution::message::RunProjection>> {
+        self.0.projection(execution).await
+    }
+
+    async fn pending_outbox(
+        &self,
+        limit: usize,
+    ) -> aiwatcher_execution::Result<Vec<aiwatcher_execution::message::OutboxMessage>> {
+        self.0.pending_outbox(limit).await
+    }
+
+    async fn mark_published(
+        &self,
+        ids: &[aiwatcher_core::MessageId],
+        at: OffsetDateTime,
+    ) -> aiwatcher_execution::Result<()> {
+        self.0.mark_published(ids, at).await
+    }
+
+    async fn claim_attempt(
+        &self,
+        filter: &aiwatcher_execution::ClaimFilter,
+        owner: &str,
+        now: OffsetDateTime,
+    ) -> aiwatcher_execution::Result<Option<aiwatcher_execution::AttemptRow>> {
+        self.0.claim_attempt(filter, owner, now).await
+    }
+
+    async fn heartbeat(
+        &self,
+        key: &aiwatcher_execution::AttemptKey,
+        owner: &str,
+        now: OffsetDateTime,
+    ) -> aiwatcher_execution::Result<bool> {
+        self.0.heartbeat(key, owner, now).await
+    }
+
+    async fn attempt(
+        &self,
+        key: &aiwatcher_execution::AttemptKey,
+    ) -> aiwatcher_execution::Result<Option<aiwatcher_execution::AttemptRow>> {
+        self.0.attempt(key).await
+    }
+
+    async fn admit_slot(
+        &self,
+        request: &aiwatcher_execution::schedule::slot::SlotAdmissionRequest,
+    ) -> aiwatcher_execution::Result<aiwatcher_execution::schedule::slot::SlotAdmission> {
+        self.0.admit_slot(request).await
+    }
+
+    async fn settle_slot(
+        &self,
+        key: &aiwatcher_execution::schedule::slot::SlotKey,
+        owner: &str,
+        settlement: aiwatcher_execution::schedule::slot::SlotSettlement,
+        now: OffsetDateTime,
+    ) -> aiwatcher_execution::Result<()> {
+        self.0.settle_slot(key, owner, settlement, now).await
+    }
+
+    async fn recent_slots(
+        &self,
+        kind: aiwatcher_execution::plan::DefinitionKind,
+        name: &str,
+        limit: usize,
+    ) -> aiwatcher_execution::Result<Vec<aiwatcher_execution::schedule::slot::SlotRecord>> {
+        self.0.recent_slots(kind, name, limit).await
+    }
+
+    async fn checkpoint(
+        &self,
+        processor: &str,
+    ) -> aiwatcher_execution::Result<Option<aiwatcher_core::Checkpoint>> {
+        self.0.checkpoint(processor).await
+    }
+
+    async fn advance_checkpoint(
+        &self,
+        processor: &str,
+        checkpoint: aiwatcher_core::Checkpoint,
+    ) -> aiwatcher_execution::Result<()> {
+        self.0.advance_checkpoint(processor, checkpoint).await
+    }
+
+    async fn prune(
+        &self,
+        before: OffsetDateTime,
+        limit: usize,
+    ) -> aiwatcher_execution::Result<aiwatcher_execution::store::Pruned> {
+        self.0.prune(before, limit).await
+    }
+}
+
+fn saga_timeout(timer_id: &str, due_at: OffsetDateTime) -> TimerWrite {
+    TimerWrite::Schedule(Timer {
+        execution: execution(),
+        timer_id: timer_id.to_owned(),
+        due_at,
+        // `agentic`'s own name for what a saga's timeout produces. Stored whole
+        // and handed back unchanged: this engine defers an append and composes
+        // nothing.
+        message: HostedMessage {
+            message_type: "saga.timeout_fired".to_owned(),
+            metadata: serde_json::json!({ "timeout_id": timer_id }),
+            payload: None,
+        },
+    })
+}
+
+#[tokio::test]
+async fn a_timeout_scheduled_before_a_restart_fires_after_it_and_fires_once() {
+    // `agentic.workflow.Saga` has had
+    // `schedule_timeout`, `due_timeouts` and `fire_timeout` all along; what it
+    // has never had is something that wakes up and looks, because a worker
+    // holding its own SQLite is not running when the timeout comes due.
+    // The store is the shared, durable half — that is the whole premise of a
+    // hosted run — so what restarts here is the *worker*: one handler schedules
+    // the timeout and goes away, and a second one, holding nothing it learnt,
+    // delivers it. Durability across a restart of the store itself is the
+    // contract suite's, against the adapters that have a disk.
+    let store = MemoryWorkflowStore::new();
+    let due = at(300);
+
+    {
+        let handler = ExecutionHandler::new(store.clone());
+        handler
+            .handle(
+                &execution(),
+                start(ExecutionMode::Hosted, ExecutionOwner::Worker),
+                metadata("start"),
+                Now::at(at(0)),
+            )
+            .await
+            .expect("starting the execution");
+        let version = handler
+            .store()
+            .load(&execution())
+            .await
+            .expect("loading")
+            .version;
+        handler
+            .append_hosted(
+                &execution(),
+                HostedAppend {
+                    expected_version: version,
+                    idempotency_key: "schedule".to_owned(),
+                    holder: "worker-a".to_owned(),
+                    messages: vec![turn("TurnStarted")],
+                    timers: vec![saga_timeout("reply-deadline", due)],
+                },
+                at(1),
+            )
+            .await
+            .expect("scheduling the timeout");
+        assert!(
+            handler
+                .fire_due_timers(at(2), 10)
+                .await
+                .expect("a tick before it is due")
+                .is_empty(),
+            "a timer is not due before its time"
+        );
+    }
+    // The worker is gone. Everything it knew is in the store.
+
+    let handler = ExecutionHandler::new(store);
+    assert_eq!(
+        handler
+            .store()
+            .timers_of(&execution())
+            .await
+            .expect("the run's timers")
+            .len(),
+        1,
+        "the timeout survived the restart"
+    );
+
+    let fired = handler
+        .fire_due_timers(due, 10)
+        .await
+        .expect("the tick that delivers it");
+    assert_eq!(fired.len(), 1);
+    assert_eq!(fired[0].timer_id, "reply-deadline");
+    assert!(fired[0].delivered);
+
+    // Once. The message is recorded under an id derived from the execution and
+    // the timer, and the append that delivered it retired the row in the same
+    // transaction — so a second tick has nothing to find and could not append
+    // beside the first if it did.
+    assert!(
+        handler
+            .fire_due_timers(due, 10)
+            .await
+            .expect("a second tick")
+            .is_empty()
+    );
+    let delivered: Vec<_> = handler
+        .store()
+        .load(&execution())
+        .await
+        .expect("loading")
+        .messages
+        .iter()
+        .filter_map(|recorded| recorded.message.hosted())
+        .filter(|hosted| hosted.message_type == "saga.timeout_fired")
+        .cloned()
+        .collect();
+    assert_eq!(delivered.len(), 1, "fired once");
+    assert_eq!(delivered[0].metadata["timeout_id"], "reply-deadline");
+}
+
+#[tokio::test]
+async fn a_hosted_run_is_refused_on_a_store_that_holds_one_process() {
+    // The decider *is* the second process, whatever the plan holds. The step
+    // check cannot see that: a graph made only of Flow blocks needs no worker
+    // for its steps, and would have been allowed on a store one process holds
+    // while the worker deciding it appended from another.
+    let handler = ExecutionHandler::new(OneProcess(MemoryWorkflowStore::new()));
+    let refused = handler
+        .handle(
+            &execution(),
+            start(ExecutionMode::Hosted, ExecutionOwner::Worker),
+            metadata("start"),
+            Now::at(at(0)),
+        )
+        .await
+        .expect_err("a hosted run on a single-process store");
+    assert!(
+        matches!(&refused, HandleError::NeedsMultiProcess { what } if what.contains("decides it")),
+        "{refused}"
+    );
+}
+
+#[tokio::test]
+async fn a_timer_on_a_run_that_has_ended_is_retired_rather_than_delivered() {
+    // A row nothing can deliver would otherwise come back due on every tick for
+    // ever. Retired with no output, which leaves the reason in the stream
+    // rather than in a log line nobody reads.
+    let handler = started(ExecutionMode::Compiled).await;
+    let version = handler
+        .store()
+        .load(&execution())
+        .await
+        .expect("loading")
+        .version;
+    handler
+        .store()
+        .append(
+            &execution(),
+            aiwatcher_execution::store::AppendRequest {
+                expected_version: aiwatcher_execution::store::ExpectedVersion::Exact(version),
+                input: aiwatcher_execution::PendingMessage::input(
+                    WorkflowMessage::Command(WorkflowCommand::PauseExecution),
+                    metadata("park"),
+                ),
+                outputs: Vec::new(),
+                projection: handler
+                    .store()
+                    .projection(&execution())
+                    .await
+                    .expect("a projection")
+                    .expect("a run"),
+                outbox: Vec::new(),
+                checkpoint: None,
+                timers: vec![saga_timeout("orphan", at(10))],
+                attempts: Vec::new(),
+            },
+        )
+        .await
+        .expect("scheduling a timer on a compiled run");
+
+    let fired = handler.fire_due_timers(at(20), 10).await.expect("a tick");
+    assert_eq!(fired.len(), 1);
+    assert!(
+        !fired[0].delivered,
+        "a run this engine decides is handed no hosted message"
+    );
+    assert!(
+        handler
+            .fire_due_timers(at(20), 10)
+            .await
+            .expect("a second tick")
+            .is_empty(),
+        "and it does not come back due for ever"
+    );
 }
 
 #[tokio::test]

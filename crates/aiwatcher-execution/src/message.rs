@@ -113,6 +113,11 @@ pub enum WorkflowCommand {
         plan: Box<ExecutionPlan>,
         owner: ExecutionOwner,
         mode: ExecutionMode,
+        /// Where this run's words live. Recorded rather than looked up, so an
+        /// append can be checked against what the run was started under years
+        /// after the deployment's default moved.
+        #[serde(default)]
+        payloads: PayloadPolicy,
         requested_by: String,
         #[serde(default)]
         #[schema(value_type = Object)]
@@ -193,6 +198,8 @@ pub enum WorkflowEvent {
         plan: Box<ExecutionPlan>,
         owner: ExecutionOwner,
         mode: ExecutionMode,
+        #[serde(default)]
+        payloads: PayloadPolicy,
         requested_by: String,
         #[serde(default)]
         #[schema(value_type = Object)]
@@ -328,6 +335,15 @@ pub enum PayloadPolicy {
 }
 
 impl PayloadPolicy {
+    /// The name this is configured and reported under.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::External => "external",
+            Self::Sealed => "sealed",
+        }
+    }
+
     /// Whether resolving a payload under this policy needs the archive.
     ///
     /// Asked before a definition is accepted, never after — the refusal is the

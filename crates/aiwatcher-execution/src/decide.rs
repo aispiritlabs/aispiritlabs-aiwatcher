@@ -72,6 +72,7 @@ pub fn evolve(state: ExecutionState, event: &WorkflowEvent) -> ExecutionState {
                 plan,
                 owner,
                 mode,
+                payloads,
                 requested_by,
                 input,
             },
@@ -87,6 +88,7 @@ pub fn evolve(state: ExecutionState, event: &WorkflowEvent) -> ExecutionState {
                 })
                 .collect();
             ExecutionState::Active(Box::new(Execution {
+                payloads: *payloads,
                 execution_id: execution_id.clone(),
                 plan: (**plan).clone(),
                 owner: owner.clone(),
@@ -291,6 +293,7 @@ pub fn decide(
                 plan,
                 owner,
                 mode,
+                payloads,
                 requested_by,
                 input,
             }),
@@ -307,6 +310,7 @@ pub fn decide(
                 plan: plan.clone(),
                 owner: owner.clone(),
                 mode: *mode,
+                payloads: *payloads,
                 requested_by: requested_by.clone(),
                 input: input.clone(),
             });
@@ -322,6 +326,7 @@ pub fn decide(
                         plan: plan.clone(),
                         owner: owner.clone(),
                         mode: *mode,
+                        payloads: *payloads,
                         requested_by: requested_by.clone(),
                         input: input.clone(),
                     },

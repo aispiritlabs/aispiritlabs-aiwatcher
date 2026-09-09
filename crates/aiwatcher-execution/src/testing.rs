@@ -24,7 +24,8 @@ use aiwatcher_core::{CausationId, Checkpoint, CorrelationId, MessageId};
 
 use crate::claim::{AttemptKey, AttemptRow, AttemptWrite, ClaimFilter};
 use crate::decide::{Now, decide, replay};
-use crate::hosted::LeaseOutcome;
+use crate::hosted::{LeaseOutcome, Timer, TimerWrite};
+use crate::message::HostedMessage;
 use crate::message::{
     MessageMetadata, OutboxMessage, PendingMessage, RunProjection, SCHEMA_VERSION, WorkflowCommand,
     WorkflowEvent, WorkflowMessage,
@@ -92,6 +93,7 @@ fn start_command(execution: &ExecutionId) -> WorkflowMessage {
         plan: Box::new(plan()),
         owner: ExecutionOwner::Local,
         mode: ExecutionMode::Compiled,
+        payloads: crate::message::PayloadPolicy::External,
         requested_by: "somebody".to_owned(),
         input: std::collections::BTreeMap::new(),
     })
@@ -150,6 +152,76 @@ fn start_request(
         projection: projection(execution, count + 1, StateType::Running),
         outbox: vec![outbox_row(execution, "outbox-1")],
         checkpoint: Some(("execution".to_owned(), Checkpoint::from_global_position(7))),
+        timers: Vec::new(),
+        attempts: Vec::new(),
+    }
+}
+
+/// One timer, as a worker would have composed it.
+fn timer(execution: &ExecutionId, timer_id: &str, due_at: OffsetDateTime) -> Timer {
+    Timer {
+        execution: execution.clone(),
+        timer_id: timer_id.to_owned(),
+        due_at,
+        // `agentic`'s own name for what a saga's timeout produces. The point of
+        // storing the whole message is that this string is the worker's and
+        // never this engine's.
+        message: HostedMessage {
+            message_type: "saga.timeout_fired".to_owned(),
+            metadata: serde_json::json!({ "timeout_id": timer_id }),
+            payload: None,
+        },
+    }
+}
+
+/// An append that only touches the timer table.
+fn timer_request(
+    execution: &ExecutionId,
+    message_id: &str,
+    timers: Vec<TimerWrite>,
+) -> AppendRequest {
+    AppendRequest {
+        expected_version: ExpectedVersion::Any,
+        input: PendingMessage::input(
+            WorkflowMessage::Command(WorkflowCommand::PauseExecution),
+            metadata(execution, message_id),
+        ),
+        outputs: Vec::new(),
+        projection: projection(execution, 1, StateType::Running),
+        outbox: Vec::new(),
+        checkpoint: None,
+        timers,
+        attempts: Vec::new(),
+    }
+}
+
+/// An append that records one attempt's terminal outcome.
+fn outcome_request(
+    execution: &ExecutionId,
+    version: u64,
+    message_id: &str,
+    step_id: &str,
+    attempt: u32,
+) -> AppendRequest {
+    AppendRequest {
+        expected_version: ExpectedVersion::Exact(version),
+        input: PendingMessage::input(
+            WorkflowMessage::Command(WorkflowCommand::PauseExecution),
+            metadata(execution, message_id),
+        ),
+        outputs: vec![PendingMessage::output(
+            WorkflowMessage::Event(WorkflowEvent::StepCompleted {
+                step_id: step_id.to_owned(),
+                attempt,
+                outputs: Vec::new(),
+                result: None,
+            }),
+            metadata(execution, &format!("{message_id}-out")),
+        )],
+        projection: projection(execution, version + 2, StateType::Running),
+        outbox: Vec::new(),
+        checkpoint: None,
+        timers: Vec::new(),
         attempts: Vec::new(),
     }
 }
@@ -194,6 +266,7 @@ fn dispatch(execution: &ExecutionId, message_id: &str, rows: Vec<AttemptWrite>) 
         projection: projection(execution, 1, StateType::Running),
         outbox: Vec::new(),
         checkpoint: None,
+        timers: Vec::new(),
         attempts: rows,
     }
 }
@@ -214,6 +287,7 @@ fn finish(execution: &ExecutionId, message_id: &str) -> AppendRequest {
         projection: projection(execution, 1, StateType::Completed),
         outbox: Vec::new(),
         checkpoint: None,
+        timers: Vec::new(),
         attempts: Vec::new(),
     }
 }
@@ -243,6 +317,9 @@ pub async fn assert_contract(name: &str, store: &dyn WorkflowStore) {
     one_decider_at_a_time_holds_a_hosted_run(name, store).await;
     a_decider_that_stopped_renewing_is_taken_over_and_the_takeover_says_whose(name, store).await;
     a_released_lease_is_free_before_it_would_have_run_out(name, store).await;
+    a_timer_is_due_when_its_time_comes_and_not_before(name, store).await;
+    a_fired_timer_leaves_no_row_to_fire_again(name, store).await;
+    one_attempt_s_outcome_is_found_without_reading_its_neighbours(name, store).await;
     a_message_too_large_to_store_is_refused(name, store).await;
     two_claimants_racing_for_one_attempt_produce_one_claim(name, store).await;
     a_claimant_only_takes_what_it_said_it_could_run(name, store).await;
@@ -316,6 +393,7 @@ pub async fn a_decision_only_lands_at_the_version_its_author_read(
                 projection: projection(&execution, version + 2, StateType::Paused),
                 outbox: Vec::new(),
                 checkpoint: None,
+                timers: Vec::new(),
                 attempts: Vec::new(),
             },
         ),
@@ -667,6 +745,7 @@ pub async fn a_hosted_message_survives_the_store_it_was_written_to(
                 projection: projection(&execution, before + 2, StateType::Running),
                 outbox: Vec::new(),
                 checkpoint: None,
+                timers: Vec::new(),
                 attempts: Vec::new(),
             }
         ),
@@ -840,6 +919,222 @@ pub async fn a_released_lease_is_free_before_it_would_have_run_out(
         "the next claim"
     );
     assert!(taken.taken().is_some(), "{name}");
+}
+
+/// A deferred append is due at its time, across every execution at once.
+///
+/// The whole reason a timer is a row rather than an event in the stream it
+/// belongs to: one tick has to find what is due without opening a stream per
+/// run. Written against the port, because the four adapters answer it four
+/// ways — a map, a file read whole, an indexed `due_at`, and a lifted column.
+pub async fn a_timer_is_due_when_its_time_comes_and_not_before(
+    name: &str,
+    store: &dyn WorkflowStore,
+) {
+    let execution = fresh("timers");
+    let start = OffsetDateTime::UNIX_EPOCH;
+    ok!(
+        name,
+        store.append(
+            &execution,
+            timer_request(
+                &execution,
+                "m-1",
+                vec![
+                    TimerWrite::Schedule(timer(&execution, "soon", start + Duration::seconds(10))),
+                    TimerWrite::Schedule(timer(
+                        &execution,
+                        "later",
+                        start + Duration::seconds(600)
+                    )),
+                ]
+            )
+        ),
+        "scheduling two timers"
+    );
+
+    assert!(
+        ok!(name, store.due_timers(start, 10), "nothing due yet").is_empty(),
+        "{name}: a timer is not due before its time"
+    );
+    let due = ok!(
+        name,
+        store.due_timers(start + Duration::seconds(11), 10),
+        "one due"
+    );
+    assert_eq!(
+        due.iter().map(|t| t.timer_id.as_str()).collect::<Vec<_>>(),
+        ["soon"],
+        "{name}"
+    );
+    // The message comes back as the worker composed it. An engine that
+    // assembled one here would be deciding what a timeout means.
+    assert_eq!(due[0].message.message_type, "saga.timeout_fired", "{name}");
+
+    // Both, oldest first, once the second is due as well.
+    let due = ok!(
+        name,
+        store.due_timers(start + Duration::seconds(3_600), 10),
+        "both due"
+    );
+    assert_eq!(
+        due.iter().map(|t| t.timer_id.as_str()).collect::<Vec<_>>(),
+        ["soon", "later"],
+        "{name}: a backlog drains in the order it accumulated"
+    );
+
+    // And a run's own page shows what it is still waiting on.
+    let waiting = ok!(name, store.timers_of(&execution), "the run's timers");
+    assert_eq!(waiting.len(), 2, "{name}");
+}
+
+/// Fired and cancelled timers leave nothing behind, and rescheduling is one row.
+pub async fn a_fired_timer_leaves_no_row_to_fire_again(name: &str, store: &dyn WorkflowStore) {
+    let execution = fresh("fired");
+    let start = OffsetDateTime::UNIX_EPOCH;
+    let due = start + Duration::seconds(5);
+
+    ok!(
+        name,
+        store.append(
+            &execution,
+            timer_request(
+                &execution,
+                "m-1",
+                vec![
+                    TimerWrite::Schedule(timer(&execution, "once", due)),
+                    TimerWrite::Schedule(timer(&execution, "withdrawn", due)),
+                ]
+            )
+        ),
+        "scheduling"
+    );
+    // Scheduling the same id again is one timer, which is what makes a
+    // decider's retry safe.
+    ok!(
+        name,
+        store.append(
+            &execution,
+            timer_request(
+                &execution,
+                "m-2",
+                vec![TimerWrite::Schedule(timer(&execution, "once", due))]
+            )
+        ),
+        "scheduling the same id again"
+    );
+    assert_eq!(
+        ok!(name, store.timers_of(&execution), "after a repeat").len(),
+        2,
+        "{name}: the same id twice is one timer"
+    );
+
+    ok!(
+        name,
+        store.append(
+            &execution,
+            timer_request(
+                &execution,
+                "m-3",
+                vec![
+                    TimerWrite::Fire("once".to_owned()),
+                    TimerWrite::Cancel("withdrawn".to_owned()),
+                ]
+            )
+        ),
+        "firing and cancelling"
+    );
+    assert!(
+        ok!(name, store.due_timers(due, 10), "after firing")
+            .iter()
+            .all(|found| found.execution.as_str() != execution.as_str()),
+        "{name}: a fired timer is not a row"
+    );
+    assert!(
+        ok!(name, store.timers_of(&execution), "the run's timers").is_empty(),
+        "{name}"
+    );
+
+    // Cancelling one that was never there is the ordinary thing a saga does
+    // when it already handled the thing it was waiting for.
+    ok!(
+        name,
+        store.append(
+            &execution,
+            timer_request(
+                &execution,
+                "m-4",
+                vec![TimerWrite::Cancel("never".to_owned())]
+            )
+        ),
+        "cancelling nothing"
+    );
+}
+
+/// A worker whose reply was lost is answered from the history, not from a scan.
+///
+/// The read that loaded the *whole* execution stream before this existed — the
+/// performance follow-up the worker protocol review left behind. It is a port
+/// method so that `postgres` and `duckdb` answer it from an index while the
+/// other two walk what they already hold, and so that all four agree on which
+/// events count as an outcome.
+pub async fn one_attempt_s_outcome_is_found_without_reading_its_neighbours(
+    name: &str,
+    store: &dyn WorkflowStore,
+) {
+    let execution = fresh("outcome");
+    ok!(
+        name,
+        store.append(
+            &execution,
+            start_request(&execution, ExpectedVersion::NoStream, "m-1")
+        ),
+        "a start"
+    );
+    let before = ok!(name, store.load(&execution), "a load").version;
+    ok!(
+        name,
+        store.append(
+            &execution,
+            outcome_request(&execution, before, "m-2", "extract", 1)
+        ),
+        "an outcome"
+    );
+
+    let found = ok!(
+        name,
+        store.recorded_outcome(&AttemptKey::new(execution.clone(), "extract", 1)),
+        "the recorded outcome"
+    );
+    assert!(
+        matches!(
+            found,
+            Some(WorkflowEvent::StepCompleted { ref step_id, attempt, .. })
+                if step_id == "extract" && attempt == 1
+        ),
+        "{name}: {found:?}"
+    );
+
+    // A neighbour's attempt and a neighbour's step are not this one's. Getting
+    // that wrong would acknowledge a report nothing ever recorded.
+    assert!(
+        ok!(
+            name,
+            store.recorded_outcome(&AttemptKey::new(execution.clone(), "extract", 2)),
+            "another attempt"
+        )
+        .is_none(),
+        "{name}"
+    );
+    assert!(
+        ok!(
+            name,
+            store.recorded_outcome(&AttemptKey::new(execution.clone(), "load", 1)),
+            "another step"
+        )
+        .is_none(),
+        "{name}"
+    );
 }
 
 pub async fn a_message_too_large_to_store_is_refused(name: &str, store: &dyn WorkflowStore) {

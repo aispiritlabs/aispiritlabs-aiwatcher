@@ -24,6 +24,7 @@ from aiwatcher_sdk.integrations.agentic import (
     ConcurrencyConflictError,
     FilePayloadStore,
     MemoryPayloadStore,
+    SagaTimers,
     dataclass_codec,
     digest_of,
     event_store,
@@ -118,7 +119,7 @@ class Server:
         self.rows.append({"stream_version": len(self.rows) + 1, "message": message})
 
 
-def store(server: Server, payloads: Any = None) -> AiwatcherEventStore:
+def store(server: Server, payloads: Any = None, timers: Any = None) -> AiwatcherEventStore:
     return AiwatcherEventStore(
         Transport(
             "http://aiwatcher.invalid",
@@ -129,6 +130,7 @@ def store(server: Server, payloads: Any = None) -> AiwatcherEventStore:
         payloads=payloads or MemoryPayloadStore(),
         codec=dataclass_codec(Message, Metadata),
         holder="worker-a",
+        timers=timers,
     )
 
 
@@ -364,6 +366,76 @@ def test_a_metadata_field_this_build_does_not_know_is_dropped_rather_than_fatal(
     server.rows[-1]["message"]["metadata"]["a_field_from_next_year"] = 1
 
     assert subject.read_stream(EXECUTION).events[0].metadata.message_id == "m-1"
+
+
+def timeout(timeout_id: str, due_at_ns: int, type_: str) -> Message:
+    return Message(
+        kind="event",
+        type=type_,
+        data={"timeout_id": timeout_id, "due_at_ns": due_at_ns},
+        metadata=Metadata(message_id=f"{type_}:{timeout_id}"),
+    )
+
+
+def test_a_saga_s_timeout_becomes_a_row_the_engine_can_wake_up_for() -> None:
+    # The whole of what makes `agentic`'s sagas fire with no change to
+    # `agentic`. `schedule_timeout`, `due_timeouts` and `fire_timeout` have all
+    # worked since before any of this existed; what has never existed is
+    # something that wakes up and looks, because a worker holding its own SQLite
+    # is not running when the timeout comes due. The event still goes into the
+    # stream exactly as it did — the row goes beside it, in the same append.
+    server = Server()
+    subject = store(server, timers=SagaTimers())
+    subject.append_to_stream(
+        EXECUTION,
+        (timeout("reply", 1_700_000_000_000_000_000, SagaTimers.SCHEDULED),),
+        expected_version=0,
+    )
+
+    body = json.loads(server.requests[-1].content)
+    assert len(body["messages"]) == 1, "the event is appended as it always was"
+    schedule = body["timers"][0]["schedule"]
+    assert schedule["timer_id"] == "reply"
+    assert schedule["due_at"] == "2023-11-14T22:13:20Z"
+    # The message the engine hands back is the one being appended now, so a saga
+    # reading its own history and a saga receiving the timeout see the same
+    # words.
+    assert schedule["message"] == body["messages"][0]
+
+
+def test_a_timeout_that_was_handled_withdraws_its_row() -> None:
+    # A saga appends `saga.timeout_fired` when it has dealt with one. Leaving
+    # the row would have a tick deliver it again to a saga that moved on.
+    server = Server()
+    subject = store(server, timers=SagaTimers())
+    subject.append_to_stream(
+        EXECUTION,
+        (timeout("reply", 0, SagaTimers.FIRED),),
+        expected_version=0,
+    )
+    body = json.loads(server.requests[-1].content)
+    assert body["timers"] == [{"cancel": {"timer_id": "reply"}}]
+
+
+def test_a_store_with_no_policy_asks_for_no_timers_rather_than_guessing() -> None:
+    # `saga.timeout_scheduled` is `agentic.workflow.Saga`'s word, not this
+    # store's. A store that recognised it without being told would be reading a
+    # caller's vocabulary it was never handed.
+    server = Server()
+    subject = store(server)
+    subject.append_to_stream(
+        EXECUTION,
+        (timeout("reply", 1_700_000_000_000_000_000, SagaTimers.SCHEDULED),),
+        expected_version=0,
+    )
+    assert "timers" not in json.loads(server.requests[-1].content)
+
+
+def test_a_message_that_is_not_a_timeout_asks_for_no_row() -> None:
+    server = Server()
+    subject = store(server, timers=SagaTimers())
+    subject.append_to_stream(EXECUTION, (turn("m-1"),), expected_version=0)
+    assert "timers" not in json.loads(server.requests[-1].content)
 
 
 def test_the_codec_takes_a_message_apart_without_naming_its_class() -> None:

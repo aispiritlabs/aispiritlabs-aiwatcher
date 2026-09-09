@@ -147,7 +147,7 @@ Crates, in dependency order. A crate may only depend on ones above it.
 | `aiwatcher-annotations` | Vector image annotations for **any** vision domain — it ships no vocabulary, and the project's label schema carries the domain (ADR_0020). Sliced by noun: `images/` (one picture — head, revisions, review, bytes, bulk import), `imports/` (the staged batch and the queued job that reads it, ADR_0022), `project`, `export`, `license` (what may be done with the data), `schema`, `shapes`, `sources` (a catalogue an instance loads), `integrations/` — `hubs` (Kaggle and Hugging Face) and `fetch`, the bounded downloader every outbound byte goes through. `registry` is the facade and the only public door; `store` is the private key layout every slice reads through. |
 | `aiwatcher-conversations` | Governed conversation training data: the `turn` contract, consent and retention, the **encrypted** archive, the human review gate, and the resumable export job that freezes a corpus. The one authored store that is off by default, whose content is sealed, and whose deletions delete. Sliced by noun: `turn`, `policy`, `redaction`, `review`, `archive/` (the store and its retention clock, `crypt` beneath it), `export/` (the job, `format` beneath it). `registry` is the facade and the only public door; `store` is the private key layout. |
 | `aiwatcher-training` | Training runs and the model versions they produce. The one registry here whose contents never came from the event log: a run is a record that grows in place, and a promotion is refused without a held-out score. `package` is what a serving runtime is handed — the runtime, the entry point, the shapes, and every artifact with its digest (ADR_0023). |
-| `aiwatcher-datasets` | Curation recipes, the dataset versions they produce, and the **block pipelines** of ADR_0024 — a chain of source, transform, notebook and view, refused as a whole with every problem at once. Nothing here executes anything; the panel drives the chain because the engines are three different systems. |
+| `aiwatcher-datasets` | Curation recipes, the dataset versions they produce, and the **block pipelines** of ADR_0024 — a chain of source, transform, notebook, approval and view, refused as a whole with every problem at once. Nothing here executes anything; the panel drives the chain because the engines are three different systems. |
 | `aiwatcher-execution` | Owned execution (ADR_0025, ADR_0026): the compiled `ExecutionPlan` and its `plan_id`, the states, the attempts, the pure `decide`/`evolve`, the cache key, the compiler from ADR_0024's blocks, the atomic command handler, the claim table, the `ContextSnapshot` that reopens a block, the fact encoder and the outbox publisher. Three ports: `WorkflowStore` (`memory | file | postgres`, the last behind a feature so `sqlx` is out of every build that does not ask for it — the shape `laser` has in `aiwatcher-bus`), `ActivityExecutor` (what a reactor does with a claimed attempt) and `ArtifactCatalog` (metadata, lineage, the cache index). Executes nothing itself, and holds no second copy of `aiwatcher-jobs`' rules — it calls them. |
 | `aiwatcher-runner` | The workflow rerun dispatcher: one HTTP POST to one configured endpoint, behind `core::ports::WorkflowRunner`. |
 | `aiwatcher-pipeline` | Pipeline engines behind `core::engine::WorkflowEngine`: the orchestrator's launchable catalog, the inputs each entry declares, and starting one. Flyte 2 over its `/api/v1/` gateway, plus the literal encoder that binds a form's JSON to Flyte's declared types. With the runner, the second and last thing here that asks another system to do work. |
@@ -176,7 +176,7 @@ them and a break there is a break in the execution path.
 
 | Term | Meaning |
 |------|---------|
-| `CurationPipelineDefinition` | ADR_0024's authored source/transform/notebook/view blocks |
+| `CurationPipelineDefinition` | ADR_0024's authored source/transform/notebook/approval/view blocks |
 | `WorkflowDefinition` | An authored or registered agent, search or ML workflow |
 | `DefinitionRevision` | The immutable content-addressed version of either — the whole authored request, canvas positions included |
 | `ExecutionPlan` | The compiled, runtime-neutral graph, addressed by `plan_id` over the executable fields only |
@@ -429,8 +429,9 @@ area.
    "the far side of the seam" when they were only missing from a hand-written
    list. They are in the query now (ADR_0008, amended); a notebook is for what
    the language has *no vocabulary* for, which is a model or a scanner. So a pipeline is
-   `source → transform → notebook → view`, saved as a content-addressed revision
-   beside the recipes, and **the panel drives it** — every source and transform
+   `source → transform → notebook → view`, with an `approval` wherever a gate
+   belongs, saved as a content-addressed revision beside the recipes, and
+   **the panel drives it** — every source and transform
    compiles to one Flow query, its rows go to a marimo notebook the
    `ml_pipeline` service runs, and the view publishes a dataset version carrying
    `produced_by`. The chain's rules live in `aiwatcher-datasets` and a refusal
@@ -1107,11 +1108,33 @@ what runs a real graph.
   `ArtifactRef` and its answer as a bounded inline value. The last of those is
   conversation content and belongs in the archive with a retention clock —
   ADR_0021's rule, in a second store.
-- **Never let a Flow PHP block follow a notebook block.** A Flow step reads its
-  rows by naming a dataset in the query service's catalog; there is no way to
-  hand it what a notebook produced. A chain that tried would silently run the
-  transform against the *source* again and produce something else. The registry
-  refuses it by name — the message says why rather than "invalid".
+- **Never let a Flow PHP block read past something it cannot read.** A Flow step
+  reads its rows by naming a dataset in the query service's catalog, so the one
+  query a chain compiles to ends at the first block that is neither a source nor
+  a transform — a notebook, or an approval. A chain that put a transform behind
+  either would silently run it against the *source* again and produce something
+  else. One rule rather than one per kind: it used to be called "no transform
+  after a notebook", which is the same rule under a name narrow enough that the
+  second case looked like a new one. The registry refuses it by name, and the
+  message says which of the two is in the way rather than "invalid".
+- **Never let an authored gate name a role the answer route does not check.**
+  `HumanInputSpec::role` reaches `execution.awaiting_input` on the log and the
+  step's context and no authorization decision anywhere: `provide_input`
+  requires `Editor` and reads nothing stricter. So `BlockSpec::Approval` admits
+  `editor` and refuses any other role **by name**, and the panel asks whether
+  this caller holds the role the question declared — a viewer reads whose
+  decision it is instead of pressing a button that returns a 403. A gate saying
+  `admin` would read as a stricter check and be none, which is a policy field
+  with no reader wearing a security badge. Widening it is one line on each side,
+  on the day the route reads the request's own role.
+- **Never let a step's edge and its data binding be one cursor.** An approval is
+  in the chain without being in the data: it reads the rows before it, produces
+  nothing — answering *is* its completion — and the block after it reads those
+  same rows, so that block is bound to a step that is not its parent.
+  `resolved_inputs` resolves by step id rather than by adjacency, which is what
+  makes that legal. One cursor bound the publisher to an output no step
+  declares: a dataset version over no rows, which is the one failure that looks
+  like a success.
 - **Never issue a token to a service that cannot check one.** §16.3 asked an
   editor session to carry permissions, expiry and a signature; the notebook
   runtime has no authentication at all, so a signed token presented to it would

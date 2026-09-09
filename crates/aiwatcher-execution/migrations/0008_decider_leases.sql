@@ -1,4 +1,4 @@
--- One decider at a time for a hosted execution (section 40.3).
+-- One decider at a time for a hosted execution.
 --
 -- `agentic.workflow`'s `ProcessorLock`, in the store this system already keeps.
 -- The plan said `execution_runs.lease_*`; this is a table of its own, for two

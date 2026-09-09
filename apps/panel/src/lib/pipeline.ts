@@ -255,6 +255,17 @@ export async function runPipeline(options: {
     });
   }
 
+  // A gate is not asked here. This path is the browser driving the chain for a
+  // preview or an ad-hoc run, and there is no run for anybody to hold up or
+  // answer — the question belongs to a managed execution, whose card is where
+  // it is put in front of somebody. Said rather than left blank, because a box
+  // reading "not run" beside three that finished is a box somebody goes
+  // looking for the failure of.
+  for (const block of chain) {
+    if (block.spec.kind !== 'approval') continue;
+    report(block.id, { status: 'idle', note: 'asked on a managed run' });
+  }
+
   let rows: Row[] = flow.rows;
   let columns = flow.columns;
   const notebooks: NotebookRun[] = [];

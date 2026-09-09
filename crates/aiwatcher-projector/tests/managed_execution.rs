@@ -154,6 +154,7 @@ fn start() -> WorkflowMessage {
         plan: Box::new(house_import()),
         owner: ExecutionOwner::Local,
         mode: ExecutionMode::Compiled,
+        payloads: Default::default(),
         requested_by: "mk".to_owned(),
         input: BTreeMap::new(),
     })

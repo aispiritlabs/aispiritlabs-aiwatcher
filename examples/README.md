@@ -2,8 +2,8 @@
 
 - [Titanic from scratch](titanic/README.md): raw data, thematic curation blocks,
   portable flow with PHP and Python code, native PHP FlowAI encoders, and a validation baseline.
-- [Titanic krok po kroku — 12 zrzutów ekranu](titanic/WALKTHROUGH.md).
-- [Własny notebook z komórkami PHP/Python i wynikami po każdym kroku](titanic/NOTEBOOK.md).
+- [Titanic step by step — 12 screenshots](titanic/WALKTHROUGH.md).
+- [Your own notebook with PHP/Python cells and output after each step](titanic/NOTEBOOK.md).
 
 Examples are executable integration exercises. The portable `.flow.json` file
 can be imported in **Data curation → Pipeline → Import flow** and exported after
