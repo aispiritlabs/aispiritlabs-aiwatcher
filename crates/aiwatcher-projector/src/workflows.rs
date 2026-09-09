@@ -417,6 +417,9 @@ impl Default for WorkflowConfig {
 #[derive(Clone, Debug)]
 struct Held {
     summary: ExecutionSummary,
+    /// Managed executions publish their own lifecycle. Child attempts cannot
+    /// terminate the traversal while it is waiting for another worker or retry.
+    managed: Option<ManagedLifecycle>,
     /// Node order, so the graph draws the same way twice. Declared nodes in
     /// declaration order, then observed ones in first-seen order.
     node_order: Vec<String>,
@@ -443,9 +446,17 @@ struct Held {
     finished_runs: BTreeSet<String>,
 }
 
+#[derive(Clone, Debug)]
+struct ManagedLifecycle {
+    status: ExecutionStatus,
+    ended_at: Option<OffsetDateTime>,
+    error: Option<String>,
+}
+
 impl Held {
     fn new(event: &RecordedEvent, workflow_run_id: String, workflow_id: String) -> Self {
         Self {
+            managed: None,
             summary: ExecutionSummary {
                 workflow_run_id,
                 workflow_id,
@@ -564,6 +575,18 @@ impl Held {
         self.summary.artifacts = self.artifact_uris.len() as u64;
         self.summary.messages = self.message_ids.len() as u64;
         self.summary.runs = self.seen_runs.iter().cloned().collect();
+
+        if let Some(managed) = &self.managed {
+            self.summary.status = managed.status;
+            self.summary.ended_at = managed.ended_at;
+            self.summary.error.clone_from(&managed.error);
+            self.summary.duration_ms = managed.ended_at.map(|ended| {
+                (ended - self.summary.started_at)
+                    .whole_milliseconds()
+                    .max(0) as i64
+            });
+            return;
+        }
 
         // Three clauses, each checkable on its own:
         //
@@ -691,6 +714,7 @@ impl WorkflowState {
             held.seen_runs.insert(event.metadata.run_id.clone());
 
             match event.event_type.subject() {
+                Subject::Execution => apply_execution(held, event),
                 Subject::Run => apply_run(held, event),
                 Subject::Step => apply_step(held, event, config),
                 Subject::Workflow if event.event_type == EventType::ArtifactProduced => {
@@ -1057,6 +1081,41 @@ impl WorkflowState {
 }
 
 // ── Per-subject folds ────────────────────────────────────────────────────────
+
+fn apply_execution(held: &mut Held, event: &RecordedEvent) {
+    let (status, ended_at, error) = match event.event_type {
+        EventType::ExecutionCompleted => (
+            ExecutionStatus::Succeeded,
+            Some(event.metadata.occurred_at),
+            None,
+        ),
+        EventType::ExecutionFailed | EventType::ExecutionCancelled => (
+            ExecutionStatus::Failed,
+            Some(event.metadata.occurred_at),
+            Some(
+                event
+                    .data_str("reason")
+                    .unwrap_or(if event.event_type == EventType::ExecutionCancelled {
+                        "the execution was cancelled"
+                    } else {
+                        "the execution failed"
+                    })
+                    .to_owned(),
+            ),
+        ),
+        EventType::ExecutionRequested
+        | EventType::ExecutionStarted
+        | EventType::ExecutionResumed
+        | EventType::ExecutionPaused
+        | EventType::ExecutionAwaitingInput => (ExecutionStatus::Running, None, None),
+        _ => return,
+    };
+    held.managed = Some(ManagedLifecycle {
+        status,
+        ended_at,
+        error,
+    });
+}
 
 fn apply_run(held: &mut Held, event: &RecordedEvent) {
     let run_id = event.metadata.run_id.clone();
@@ -1462,6 +1521,84 @@ mod tests {
                 { "from": "analyze", "to": "persist" },
             ],
         })
+    }
+
+    #[test]
+    fn a_managed_execution_waits_for_its_own_completion_not_a_finished_child() {
+        let mut run = Traversal::new("house-import", "managed");
+        let mut events = vec![
+            run.emit(EventType::WorkflowDeclared, "managed", None, declaration()),
+            run.emit(EventType::ExecutionStarted, "managed", None, json!({})),
+            run.after(10).emit(
+                EventType::StepCompleted,
+                "managed",
+                None,
+                json!({"node":"acquire"}),
+            ),
+        ];
+        let state = fold(&events);
+        let summary = state.execution("managed").expect("execution").summary;
+        assert_eq!(summary.status, ExecutionStatus::Running);
+        assert_eq!(summary.ended_at, None);
+        events.push(run.after(10).emit(
+            EventType::StepFailed,
+            "managed",
+            None,
+            json!({"node":"normalize", "error":"temporary"}),
+        ));
+        assert_eq!(
+            fold(&events)
+                .execution("managed")
+                .expect("execution")
+                .summary
+                .status,
+            ExecutionStatus::Running
+        );
+        events.push(run.after(10).emit(
+            EventType::ExecutionFailed,
+            "managed",
+            None,
+            json!({"reason":"retry budget exhausted"}),
+        ));
+        assert_eq!(
+            fold(&events)
+                .execution("managed")
+                .expect("execution")
+                .summary
+                .error
+                .as_deref(),
+            Some("retry budget exhausted")
+        );
+        events.push(
+            run.after(10)
+                .emit(EventType::ExecutionResumed, "managed", None, json!({})),
+        );
+        let summary = fold(&events)
+            .execution("managed")
+            .expect("execution")
+            .summary;
+        assert_eq!(summary.status, ExecutionStatus::Running);
+        assert!(summary.error.is_none());
+        assert!(summary.ended_at.is_none());
+        let completion =
+            run.after(100)
+                .emit(EventType::ExecutionCompleted, "managed", None, json!({}));
+        let ended = completion.metadata.occurred_at;
+        events.push(completion);
+        events.push(
+            run.after(100)
+                .emit(EventType::AgentCompleted, "managed", None, json!({})),
+        );
+        let summary = fold(&events)
+            .execution("managed")
+            .expect("execution")
+            .summary;
+        assert_eq!(summary.status, ExecutionStatus::Succeeded);
+        assert_eq!(
+            summary.ended_at,
+            Some(ended),
+            "late child telemetry cannot change the completion time"
+        );
     }
 
     #[test]

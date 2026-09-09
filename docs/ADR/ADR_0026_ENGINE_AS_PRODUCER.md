@@ -59,12 +59,14 @@ design exists to prevent. It is `aiwatcher_jobs::ORDERING` in the fourth place
 it applies, after the pipeline's checkpoint, the prompt registry's head and the
 annotation export's manifest.
 
-**Exactly one party publishes a step's events per attempt.** A `local`
-execution's reactor publishes for the steps it ran. A worker publishes for the
-attempts it ran, through its own client, because it is the process that ran them
-and its agent spans nest under them. An `engine:<name>` execution's pods publish
-their own and the engine publishes none. `data.published_by` records which, and
-the workflow fold flags a node that received two.
+**Exactly one party publishes a step's events per attempt.** Updated 2026-09-09
+for the implemented worker protocol: the reactor publishes managed step facts
+through its transactional outbox, including attempts performed by external
+workers. Assignments carry the execution identity and attempt span; workers
+publish child agent/LLM/tool telemetry under that parent, without another step
+lifecycle. An `engine:<name>` execution's pods publish their own and the engine
+publishes none. `data.published_by` records which, and the workflow fold flags
+a node that received two.
 
 ## Alternatives considered
 

@@ -749,6 +749,11 @@ pub async fn build(config: Config) -> Result<Runtime> {
         prompts: registries.prompts,
         datasets: registries.datasets,
         // The same object store the definitions live in, under its own prefix.
+        workflow_definitions: registries.objects.as_ref().map(|store| {
+            Arc::new(aiwatcher_execution::definition::DefinitionRegistry::new(
+                Arc::clone(store),
+            ))
+        }),
         schedules: registries
             .objects
             .as_ref()

@@ -7,7 +7,24 @@
 //! GET    /api/v1/curation-pipelines/{name}/schedule
 //! PUT    /api/v1/curation-pipelines/{name}/schedule
 //! DELETE /api/v1/curation-pipelines/{name}/schedule
+//!
+//! GET    /api/v1/workflow-definitions/{name}/schedule
+//! PUT    /api/v1/workflow-definitions/{name}/schedule
+//! DELETE /api/v1/workflow-definitions/{name}/schedule
 //! ```
+//!
+//! ## Two prefixes, one object, and no `kind` in a body
+//!
+//! The store has always been keyed by [`DefinitionKind`] and name, and
+//! everything below the three handlers already reads the kind off the stored
+//! object. What was hard-coded was the handlers, so a worker workflow could be
+//! saved and started and not left to run unattended — which is most of what
+//! authoring one is for.
+//!
+//! The kind comes from the *path* rather than from a field, because a schedule
+//! belongs to a definition that already has a URL: a body carrying its own kind
+//! would let `PUT /api/v1/curation-pipelines/x/schedule` say `workflow` and
+//! write a schedule nothing on that page would ever show.
 //!
 //! ## Why `run_now` is not a fourth route
 //!
@@ -48,7 +65,14 @@ use crate::state::AppState;
 
 /// This module's operations, as the contract they satisfy.
 #[derive(OpenApi)]
-#[openapi(paths(get_schedule, set_schedule, clear_schedule))]
+#[openapi(paths(
+    get_schedule,
+    set_schedule,
+    clear_schedule,
+    get_workflow_schedule,
+    set_workflow_schedule,
+    clear_workflow_schedule
+))]
 struct Api;
 
 /// The operations this module serves. Composed by [`crate::openapi`].
@@ -58,10 +82,17 @@ pub fn openapi() -> utoipa::openapi::OpenApi {
 }
 
 pub fn router() -> Router<AppState> {
-    Router::new().route(
-        "/api/v1/curation-pipelines/{name}/schedule",
-        get(get_schedule).put(set_schedule).delete(clear_schedule),
-    )
+    Router::new()
+        .route(
+            "/api/v1/curation-pipelines/{name}/schedule",
+            get(get_schedule).put(set_schedule).delete(clear_schedule),
+        )
+        .route(
+            "/api/v1/workflow-definitions/{name}/schedule",
+            get(get_workflow_schedule)
+                .put(set_workflow_schedule)
+                .delete(clear_workflow_schedule),
+        )
 }
 
 /// What a caller sets.
@@ -248,15 +279,54 @@ fn schedules(state: &AppState) -> ApiResult<&ScheduleStore> {
     tag = "data-curation",
 )]
 async fn get_schedule(
-    State(state): State<AppState>,
+    state: State<AppState>,
     Path(name): Path<String>,
 ) -> ApiResult<Json<ScheduleView>> {
+    read(state, DefinitionKind::CurationPipeline, name).await
+}
+
+/// One workflow's schedule, or 404 when it has none.
+#[utoipa::path(
+    get,
+    path = "/api/v1/workflow-definitions/{name}/schedule",
+    params(("name" = String, Path, description = "The registered workflow")),
+    responses(
+        (status = 200, body = ScheduleView),
+        (status = 404, body = crate::error::ErrorBody),
+        (status = 501, body = crate::error::ErrorBody),
+    ),
+    tag = "execution",
+)]
+async fn get_workflow_schedule(
+    state: State<AppState>,
+    Path(name): Path<String>,
+) -> ApiResult<Json<ScheduleView>> {
+    read(state, DefinitionKind::Workflow, name).await
+}
+
+async fn read(
+    State(state): State<AppState>,
+    kind: DefinitionKind,
+    name: String,
+) -> ApiResult<Json<ScheduleView>> {
     let schedule = schedules(&state)?
-        .get(DefinitionKind::CurationPipeline, &name)
+        .get(kind, &name)
         .await
         .map_err(aiwatcher_execution::HandleError::Store)?
-        .ok_or_else(|| ApiError::NotFound(format!("a schedule for pipeline {name}")))?;
+        .ok_or_else(|| ApiError::NotFound(format!("a schedule for {} {name}", noun(kind))))?;
     Ok(Json(ScheduleView::of(&state, schedule, None).await))
+}
+
+/// What a definition of this kind is called in a sentence somebody reads.
+///
+/// `DefinitionKind::as_str` is the wire word — `curation_pipeline` — and a 404
+/// is prose. Kept next to the routes because it is presentation, and the same
+/// reason `stage_hint` may decide nothing else.
+const fn noun(kind: DefinitionKind) -> &'static str {
+    match kind {
+        DefinitionKind::CurationPipeline => "pipeline",
+        DefinitionKind::Workflow => "workflow",
+    }
 }
 
 /// Set or replace a schedule, and optionally start it once.
@@ -278,9 +348,46 @@ async fn get_schedule(
     tag = "data-curation",
 )]
 async fn set_schedule(
-    State(state): State<AppState>,
+    state: State<AppState>,
     caller: Caller,
     Path(name): Path<String>,
+    body: Json<SetScheduleBody>,
+) -> ApiResult<Json<ScheduleView>> {
+    write(state, caller, DefinitionKind::CurationPipeline, name, body).await
+}
+
+/// Set or replace a workflow's schedule, and optionally start it once.
+///
+/// A workflow that does not compile is refused here rather than at nine
+/// tomorrow, exactly as a pipeline is — the compiler differs and nothing else
+/// does, which is why one function serves both.
+#[utoipa::path(
+    put,
+    path = "/api/v1/workflow-definitions/{name}/schedule",
+    params(("name" = String, Path, description = "The registered workflow")),
+    request_body = SetScheduleBody,
+    responses(
+        (status = 200, body = ScheduleView),
+        (status = 404, body = crate::error::ErrorBody),
+        (status = 422, body = crate::error::ErrorBody, description = "The schedule cannot mean anything"),
+        (status = 501, body = crate::error::ErrorBody),
+    ),
+    tag = "execution",
+)]
+async fn set_workflow_schedule(
+    state: State<AppState>,
+    caller: Caller,
+    Path(name): Path<String>,
+    body: Json<SetScheduleBody>,
+) -> ApiResult<Json<ScheduleView>> {
+    write(state, caller, DefinitionKind::Workflow, name, body).await
+}
+
+async fn write(
+    State(state): State<AppState>,
+    caller: Caller,
+    kind: DefinitionKind,
+    name: String,
     Json(body): Json<SetScheduleBody>,
 ) -> ApiResult<Json<ScheduleView>> {
     let who = caller
@@ -298,22 +405,24 @@ async fn set_schedule(
         .check()
         .map_err(|error| ApiError::BadRequest(error.to_string()))?;
 
-    // A pipeline that does not compile is refused here rather than at nine
-    // tomorrow. It is also what turns a typo in the name into a 404 now.
-    let plan = crate::executions::compile_curation_named(&state, &name, None, None).await?;
+    // A definition that does not compile is refused here rather than at nine
+    // tomorrow. It is also what turns a typo in the name into a 404 now — and
+    // it is the API's own compiler, the same one the tick will reach for when
+    // the slot comes due.
+    let plan = crate::executions::compile_head(&state, kind, &name).await?;
 
     // What the tick last did survives an edit. It is a fact about the
     // *definition* — a run was started for it at that slot — and changing the
     // hour does not make it untrue. Clearing it would make every edit look
     // like a schedule that has never fired.
     let stored = schedules(&state)?
-        .get(DefinitionKind::CurationPipeline, &name)
+        .get(kind, &name)
         .await
         .map_err(aiwatcher_execution::HandleError::Store)?;
 
     let now = OffsetDateTime::now_utc();
     let mut scheduled = ScheduledDefinition {
-        definition_kind: DefinitionKind::CurationPipeline,
+        definition_kind: kind,
         definition_name: name,
         schedule,
         set_by: who.clone(),
@@ -391,13 +500,41 @@ async fn set_schedule(
     tag = "data-curation",
 )]
 async fn clear_schedule(
-    State(state): State<AppState>,
+    state: State<AppState>,
     caller: Caller,
     Path(name): Path<String>,
 ) -> ApiResult<StatusCode> {
+    forget(state, caller, DefinitionKind::CurationPipeline, name).await
+}
+
+/// Forget a workflow's schedule.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/workflow-definitions/{name}/schedule",
+    params(("name" = String, Path, description = "The registered workflow")),
+    responses(
+        (status = 204),
+        (status = 501, body = crate::error::ErrorBody),
+    ),
+    tag = "execution",
+)]
+async fn clear_workflow_schedule(
+    state: State<AppState>,
+    caller: Caller,
+    Path(name): Path<String>,
+) -> ApiResult<StatusCode> {
+    forget(state, caller, DefinitionKind::Workflow, name).await
+}
+
+async fn forget(
+    State(state): State<AppState>,
+    caller: Caller,
+    kind: DefinitionKind,
+    name: String,
+) -> ApiResult<StatusCode> {
     caller.require(aiwatcher_auth::Role::Editor)?;
     schedules(&state)?
-        .clear(DefinitionKind::CurationPipeline, &name)
+        .clear(kind, &name)
         .await
         .map_err(aiwatcher_execution::HandleError::Store)?;
     // 204 whether or not there was one: the caller asked for there to be no

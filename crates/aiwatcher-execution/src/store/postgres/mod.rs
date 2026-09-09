@@ -353,6 +353,7 @@ impl WorkflowStore for PostgresWorkflowStore {
                                   'awaiting_input')
                 and (claimed_at is null or claimed_at <= $3)
                 and (not_before is null or not_before <= $4)
+                and ($6::text is null or (execution_id = $6 and step_id = $7 and attempt::bigint = $8))
                 and ( (queue is not null and queue = any($1)
                        and task_ref is not null and task_ref = any($5))
                    or (queue is null and runtime = any($2)) )
@@ -365,6 +366,9 @@ impl WorkflowStore for PostgresWorkflowStore {
         .bind(stale)
         .bind(now)
         .bind(&tasks)
+        .bind(filter.attempt.as_ref().map(|key| key.execution_id.as_str()))
+        .bind(filter.attempt.as_ref().map(|key| key.step_id.as_str()))
+        .bind(filter.attempt.as_ref().map(|key| i64::from(key.attempt)))
         .fetch_optional(&mut *transaction)
         .await
         .map_err(|error| StoreError::Backend(error.to_string()))?;

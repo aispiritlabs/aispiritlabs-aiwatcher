@@ -32,11 +32,21 @@ import uuid
 from collections.abc import Generator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 # Re-exported so `from aiwatcher_sdk import PromptRegistry` works and
 # `AiwatcherClient.prompts` has something to hand back.
-from aiwatcher_sdk.prompts import PromptRegistry
+if TYPE_CHECKING:
+    from aiwatcher_sdk.prompts import PromptRegistry
+
+
+def __getattr__(name: str) -> Any:
+    if name == "PromptRegistry":
+        from aiwatcher_sdk.prompts import PromptRegistry
+
+        return PromptRegistry
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 SCHEMA_VERSION = 1
 
@@ -594,6 +604,8 @@ class AiwatcherClient:
                 "The registry has no offline mode — reading a prompt is not telemetry."
             )
         if self._prompts is None:
+            from aiwatcher_sdk.prompts import PromptRegistry
+
             self._prompts = PromptRegistry(self._base_url, token=self._token)
         return self._prompts
 
@@ -783,7 +795,7 @@ class RunContext(Scope):
             correlation_id=self._context.correlation_id,
             causation_id=self._context.correlation_id,
         )
-        self._client.emit("agent.started", context)
+        self._client.emit("agent.started", context, parent_span_id=self._context.parent_span_id)
         agent_context = AgentContext(self._client, context)
         try:
             yield agent_context

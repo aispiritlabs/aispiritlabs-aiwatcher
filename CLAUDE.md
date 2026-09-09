@@ -937,6 +937,17 @@ what runs a real graph.
   a sharper failure: a second implementation would have its own idea of when the
   clocks change, and the first hour it disagreed on would be one somebody
   planned a morning around.
+- **Never let a schedule and its tick reach different compilers.** Two kinds are
+  schedulable now — a curation pipeline and a registered workflow — and the
+  route that agrees to *save* a schedule compiles the definition first, so a
+  name nobody saved is a 404 today rather than a failure at nine tomorrow. The
+  tick compiles it again when the slot comes due. Both go through
+  `executions::compile_head`, because a `match` on each side is two answers to
+  "what does this schedule run": the day a third kind arrives, one of them
+  starts a run and the other refuses to save the schedule for it. The kind comes
+  from the route's own path and never from a body — the store is keyed by kind
+  and name, so a pipeline and a workflow may share a name, and a body carrying
+  its own kind would write a schedule no page would ever show.
 - **Never put a clock tick on the event log.** The reference this is taken from
   publishes `MinuteHasPassed` on a bus; here the only subscriber is the
   scheduler and the log is the durable one every projector folds. What is

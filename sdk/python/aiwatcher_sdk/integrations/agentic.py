@@ -115,19 +115,24 @@ class AiwatcherTracer:
         client: AiwatcherClient | None = None,
         service: str = "ai-spirit-agent",
         base_url: str | None = None,
+        context: Correlation | None = None,
     ) -> None:
+        self._owns_client = client is None
+        self._managed = context is not None
         self._client = client or AiwatcherClient(
             service=service,
             base_url=base_url or os.environ.get("AIWATCHER_URL"),
         )
         # A stack, not a single value: agents nest, and a tool call belongs to
         # the innermost one.
-        self._runs: list[Correlation] = []
+        self._runs: list[Correlation] = [context] if context is not None else []
         self._agents: list[Correlation] = []
         # Open span ids, innermost last. The top is the parent of whatever
         # opens next; a leaf pushes and pops around its own body so that a
         # nested call sees it.
-        self._spans: list[str] = []
+        self._spans: list[str] = (
+            [context.parent_span_id] if context and context.parent_span_id else []
+        )
 
     # -- context -----------------------------------------------------------
 
@@ -151,6 +156,7 @@ class AiwatcherTracer:
             run_id=base.run_id,
             conversation_id=base.conversation_id,
             workflow_id=base.workflow_id,
+            workflow_run_id=base.workflow_run_id,
             agent_id=agent_id,
             correlation_id=base.correlation_id,
             causation_id=base.causation_id,
@@ -215,6 +221,11 @@ class AiwatcherTracer:
         tracing_context: Any | None = None,
     ) -> Generator[NoopSpan, None, None]:
         del input, tracing_context
+        if self._managed:
+            # The engine owns this run's lifecycle. Agentic's workflow scope
+            # uses its assigned parent rather than emitting a second root.
+            yield NoopSpan()
+            return
         # A fresh run per workflow, grouped by session. One chat session runs
         # the agent many times; a trace covering the whole session would never
         # close and would be unreadable in every trace UI.
@@ -281,6 +292,7 @@ class AiwatcherTracer:
             run_id=parent.run_id,
             conversation_id=parent.conversation_id,
             workflow_id=parent.workflow_id,
+            workflow_run_id=parent.workflow_run_id,
             agent_id=agent_id or name,
             correlation_id=parent.correlation_id,
             causation_id=parent.correlation_id,
@@ -400,7 +412,7 @@ class AiwatcherTracer:
         with self._scoped_span() as (span_id, parent_span):
             self._emit("llm.started", context, payload, span_id=span_id, parent_span_id=parent_span)
             try:
-                response = invoke(**kwargs)
+                response = invoke()
             except BaseException as error:
                 self._emit(
                     "llm.failed",
@@ -460,11 +472,15 @@ class AiwatcherTracer:
 
     def flush(self) -> None:
         with contextlib.suppress(Exception):
-            self._client.close()
+            self._client.flush()
 
     def shutdown(self, timeout_seconds: float = 5.0) -> None:
         del timeout_seconds
-        self.flush()
+        if self._owns_client:
+            with contextlib.suppress(Exception):
+                self._client.close()
+        else:
+            self.flush()
 
 
 def _elapsed_ms(started: float) -> float:

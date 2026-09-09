@@ -1934,8 +1934,9 @@ simulation mode only with a named requirement for execution without publication.
 
 ### Work 6 — one worker integration, then Planner (Phase 10 → Phase 11 Level 2)
 
-**In progress. The protocol is delivered; the SDK, the authoring path and
-Planner are not.**
+**In progress. The protocol and the authoring path are delivered; Planner is
+not.** The SDK and the worker-recovery gate move faster than this section — the
+integration status in [KICKOFF](KICKOFF.md) is where those two are recorded.
 
 **Dependency:** works 1–5's applicable execution and product gates. Phase 9,
 Phase 8 and container jobs are not prerequisites. Planner Level 0 observation
@@ -1965,9 +1966,30 @@ can be delivered earlier because it leaves execution ownership unchanged.
   be the problem.
 - **Open:** `aiwatcher_sdk.worker` — `@task`, `Worker`, `TaskContext`, the poll
   loop, the heartbeat and `run-attempt`.
-- **Open:** the authoring path. Nothing compiles a `python_task` step yet —
-  `compile_curation` is the only compiler, and these tests seal a plan directly.
-  A worker workflow needs a definition somebody can save.
+- ~~The authoring path.~~ **Done, and it is saved *and scheduled*.**
+  `definition::WorkflowSpec` is the second compiler: it validates every
+  reference, resolves a deterministic topological order, reports every authored
+  problem at once and seals a plan of `RuntimeBinding::PythonTask` steps.
+  `DefinitionRegistry` versions it outside execution retention with ADR_0011's
+  two orderings — the version object before the head that indexes it — so an
+  edit never strands the runs pinned to what it replaced.
+
+  The scheduling half matters as much as the saving half, because a workflow
+  nobody can leave running unattended is a workflow somebody has to press a
+  button for. `/api/v1/workflow-definitions/{name}/schedule` mirrors the
+  pipeline's three routes; the kind comes from the **path** rather than from a
+  field, so a body cannot write a schedule that no page would ever show. The
+  store was already keyed by definition kind, so a pipeline and a workflow may
+  share a name and keep separate hours — a collision whose failure would
+  otherwise be silent, one schedule overwriting the other's on a card that still
+  reads correctly.
+
+  What the two prefixes must *not* become is two answers. The schedule route
+  refuses a definition that does not compile — now, rather than at nine
+  tomorrow — and the tick compiles it again when the slot comes due; both reach
+  a compiler through one `executions::compile_head`, so a schedule the API
+  agreed to save cannot be one the tick then refuses to start. A `match` on each
+  side would be free to disagree the day a third kind arrives.
 - **Open:** `just dev` runs one worker; a two-step plan surviving worker death
   end to end, and late-result rejection through the SDK rather than through a
   request written by hand.
@@ -1996,10 +2018,19 @@ and the input route, with the correctly-scoped token accepted beside them.
 Removing the postgres `task_ref` predicate fails the contract suite on all
 three adapters. `just check` and `just test-postgres` green.
 
+The authoring path adds three definition tests — the topological order an input
+establishes, every authored problem reported at once, and a registration that is
+idempotent while a new head leaves pinned versions alone — and two schedule
+tests, with a negative control each. Writing the schedule under a hard-coded
+`CurationPipeline` makes the shared-name test read `curation_pipeline` where it
+expects `workflow`; pointing `compile_head`'s workflow arm at the curation
+compiler makes `run_now` answer 404 for a definition that is saved. Both were
+run and both fail as intended.
+
 **Exit:** the laptop worker path survives restart; Planner runs with Flyte off
 and produces byte-identical review artifacts. Keep the existing direct path
-available until that comparison passes. *Not met — the SDK and the authoring
-path are what stand between the protocol and this.*
+available until that comparison passes. *Planner parity not yet met — it is what
+stands between the authoring path and this.*
 
 ### What follows, by dependency rather than phase number
 

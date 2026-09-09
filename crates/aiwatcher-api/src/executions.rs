@@ -36,7 +36,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -47,7 +47,7 @@ use utoipa::OpenApi;
 use aiwatcher_datasets::Registry as DatasetRegistry;
 use aiwatcher_execution::compile::CompileOptions;
 use aiwatcher_execution::message::RunProjection;
-use aiwatcher_execution::plan::ResolvedWindow;
+use aiwatcher_execution::plan::{DefinitionKind, ResolvedWindow};
 use aiwatcher_execution::{
     ExecutionHandler, ExecutionId, ExecutionMode, ExecutionOwner, ExecutionPlan, MessageMetadata,
     Now, RunAction, WorkflowCommand, WorkflowMessage, WorkflowStore, allowed_run_actions,
@@ -72,6 +72,7 @@ const IDEMPOTENCY_KEY: &str = "idempotency-key";
 #[openapi(paths(
     start_execution,
     get_execution,
+    execution_history,
     cancel_execution,
     pause_execution,
     resume_execution,
@@ -90,6 +91,10 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/v1/executions", post(start_execution))
         .route("/api/v1/executions/{execution_id}", get(get_execution))
+        .route(
+            "/api/v1/executions/{execution_id}/history",
+            get(execution_history),
+        )
         // Section 20's command routes. Grouped under `commands/` for the run
         // and under the step for the two that name one, which is the shape the
         // plan asked for and reads correctly: pausing is done to a run, and
@@ -118,16 +123,19 @@ pub fn router() -> Router<AppState> {
 
 /// What kind of definition is being run.
 ///
-/// One arm today, and an enum rather than a bare name because the second is
-/// already named: a `WorkflowDefinition` compiles to the same `ExecutionPlan`
-/// from a different editor, with different permissions and different
-/// provenance (section 4). A `kind` nobody had to send would have to be guessed
-/// from the name the day the second arrives.
+/// Two arms, which is what the enum was for: both compile to the same
+/// `ExecutionPlan` from different editors, with different provenance, and the
+/// names live in different registries under different prefixes (section 4). A
+/// `kind` nobody had to send would have to be guessed from the name — and two
+/// definitions may share one, which is exactly what `WorkflowSpec` being saved
+/// beside `CurationPipeline` allows.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TargetKind {
     /// ADR_0024's source/transform/notebook/view chain.
     CurationPipeline,
+    /// A registered Python workflow.
+    Workflow,
 }
 
 /// Which definition, at which revision.
@@ -327,6 +335,58 @@ async fn get_execution(
     }))
 }
 
+/// An ordered page of durable commands and decisions. Live facts use the existing workflow stream.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct ExecutionHistory {
+    pub messages: Vec<aiwatcher_execution::RecordedMessage>,
+    pub next_after: Option<u64>,
+    pub version: u64,
+}
+
+#[derive(Deserialize, utoipa::IntoParams)]
+struct HistoryQuery {
+    after: Option<u64>,
+    limit: Option<usize>,
+}
+
+#[utoipa::path(get, path = "/api/v1/executions/{execution_id}/history",
+    params(("execution_id" = String, Path), HistoryQuery),
+    responses((status = 200, body = ExecutionHistory), (status = 404, body = crate::error::ErrorBody),
+        (status = 501, body = crate::error::ErrorBody), (status = 503, body = crate::error::ErrorBody)), tag = "execution")]
+async fn execution_history(
+    State(state): State<AppState>,
+    Path(execution_id): Path<String>,
+    Query(query): Query<HistoryQuery>,
+) -> ApiResult<Json<ExecutionHistory>> {
+    let stream = handler(&state)?
+        .store()
+        .load(&ExecutionId::new(execution_id.clone()))
+        .await
+        .map_err(aiwatcher_execution::HandleError::Store)?;
+    if stream.is_empty() {
+        return Err(ApiError::NotFound(format!("execution {execution_id}")));
+    }
+    let limit = query.limit.unwrap_or(100).clamp(1, 500);
+    let mut messages: Vec<_> = stream
+        .messages
+        .into_iter()
+        .filter(|message| message.stream_version > query.after.unwrap_or(0))
+        .take(limit + 1)
+        .collect();
+    let has_more = messages.len() > limit;
+    messages.truncate(limit);
+    let next_after = if has_more {
+        messages.last().map(|message| message.stream_version)
+    } else {
+        None
+    };
+    Ok(Json(ExecutionHistory {
+        messages,
+        next_after,
+        version: stream.version,
+    }))
+}
+
 /// Start one execution: the only path there is.
 ///
 /// Taken out of the route rather than left in it because it has a second
@@ -387,15 +447,76 @@ pub async fn start(
 /// `aiwatcher-datasets`'; this function only decides *which* definition. A
 /// refusal carries every problem at once, which is what the canvas renders.
 async fn compile(state: &AppState, body: &StartExecutionBody) -> ApiResult<ExecutionPlan> {
-    let TargetKind::CurationPipeline = body.target.kind;
-    compile_curation_named(
-        state,
-        &body.target.name,
-        body.target.revision.as_deref(),
-        body.window_seconds
-            .map(|seconds| resolve_window(seconds, body.as_of)),
-    )
-    .await
+    match body.target.kind {
+        TargetKind::CurationPipeline => {
+            compile_curation_named(
+                state,
+                &body.target.name,
+                body.target.revision.as_deref(),
+                body.window_seconds
+                    .map(|seconds| resolve_window(seconds, body.as_of)),
+            )
+            .await
+        }
+        TargetKind::Workflow => {
+            if body.window_seconds.is_some() || body.as_of.is_some() {
+                return Err(ApiError::BadRequest(
+                    "time windows apply only to curation pipelines".to_owned(),
+                ));
+            }
+            compile_workflow_named(state, &body.target.name, body.target.revision.as_deref()).await
+        }
+    }
+}
+
+/// Compile an immutable registered workflow for API or scheduler callers.
+/// # Errors
+/// A missing definition, storage error, or invalid saved definition.
+pub async fn compile_workflow_named(
+    state: &AppState,
+    name: &str,
+    revision: Option<&str>,
+) -> ApiResult<ExecutionPlan> {
+    let saved = crate::definitions::registry(state)?
+        .get(name, revision)
+        .await
+        .map_err(aiwatcher_execution::HandleError::Store)?
+        .ok_or_else(|| ApiError::NotFound(format!("workflow {name}")))?;
+    saved
+        .definition
+        .compile()
+        .map_err(|error| ApiError::PlanRefused {
+            summary: format!("{name} does not compile"),
+            problems: error.problems().to_vec(),
+        })
+}
+
+/// Compile whichever kind of definition a name refers to, at its head.
+///
+/// The two callers that have no request body — the schedule route, which
+/// refuses a definition that does not compile rather than letting it fail at
+/// nine tomorrow, and the tick that starts it — reach a compiler through this
+/// and never pick one themselves. A `match` in each would be two answers to
+/// "what does this schedule run", free to disagree the day a third kind
+/// arrives: one of them would start a run and the other would refuse to save
+/// the schedule for it.
+///
+/// The head, never a pinned revision. A schedule says *what* to run, and the
+/// run records the revision it pinned.
+///
+/// # Errors
+///
+/// A 404 when nothing is saved under that name, or a 422 carrying every reason
+/// it does not compile.
+pub async fn compile_head(
+    state: &AppState,
+    kind: DefinitionKind,
+    name: &str,
+) -> ApiResult<ExecutionPlan> {
+    match kind {
+        DefinitionKind::CurationPipeline => compile_curation_named(state, name, None, None).await,
+        DefinitionKind::Workflow => compile_workflow_named(state, name, None).await,
+    }
 }
 
 /// The same compile, by name, for a caller that has no request body.

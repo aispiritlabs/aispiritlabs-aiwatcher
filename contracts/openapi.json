@@ -4968,6 +4968,91 @@
         }
       }
     },
+    "/api/v1/executions/{execution_id}/history": {
+      "get": {
+        "tags": [
+          "execution"
+        ],
+        "operationId": "execution_history",
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionHistory"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/executions/{execution_id}/steps/{step_id}/commands/retry": {
       "post": {
         "tags": [
@@ -7570,7 +7655,7 @@
           "worker"
         ],
         "summary": "Report what an attempt produced, and let the decider decide what follows.",
-        "description": "The server re-checks the lease, records the outputs and the cache entry,\nand reports `step.completed` or `step.failed`. None of that is the worker's\nto do: a claimant is the one party that cannot check its own lease, and a\ncache entry must not be written by whoever benefits from it.",
+        "description": "The server re-checks the lease, records the outputs and the cache entry,\nand reports `step.completed` or `step.failed`. None of that is the worker's\nto do: a claimant is the one party that cannot check its own lease, and a\ncache entry must not be written by whoever benefits from it.\nRedelivery of the same durable outcome is acknowledged from history without\nrestoring a lease. Different outcomes conflict; diagnostics and cache hints\ndo not alter an already committed result.",
         "operationId": "report",
         "parameters": [
           {
@@ -7624,6 +7709,16 @@
               }
             }
           },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "403": {
             "description": "",
             "content": {
@@ -7653,6 +7748,344 @@
                 }
               }
             }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workflow-definitions": {
+      "get": {
+        "tags": [
+          "execution"
+        ],
+        "operationId": "list_workflow_definitions",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SavedWorkflow"
+                  }
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "execution"
+        ],
+        "operationId": "register_workflow",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkflowSpec"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedWorkflow"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workflow-definitions/{name}": {
+      "get": {
+        "tags": [
+          "execution"
+        ],
+        "operationId": "get_workflow_definition",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "revision",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedWorkflow"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workflow-definitions/{name}/schedule": {
+      "get": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "One workflow's schedule, or 404 when it has none.",
+        "operationId": "get_workflow_schedule",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The registered workflow",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "Set or replace a workflow's schedule, and optionally start it once.",
+        "description": "A workflow that does not compile is refused here rather than at nine\ntomorrow, exactly as a pipeline is — the compiler differs and nothing else\ndoes, which is why one function serves both.",
+        "operationId": "set_workflow_schedule",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The registered workflow",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetScheduleBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The schedule cannot mean anything",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "Forget a workflow's schedule.",
+        "operationId": "clear_workflow_schedule",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The registered workflow",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
           },
           "501": {
             "description": "",
@@ -8627,6 +9060,28 @@
         },
         "additionalProperties": false
       },
+      "AttemptKey": {
+        "type": "object",
+        "description": "Which attempt, of which step, of which execution.",
+        "required": [
+          "execution_id",
+          "step_id",
+          "attempt"
+        ],
+        "properties": {
+          "attempt": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "execution_id": {
+            "$ref": "#/components/schemas/ExecutionId"
+          },
+          "step_id": {
+            "type": "string"
+          }
+        }
+      },
       "AttemptRecord": {
         "type": "object",
         "description": "One physical attempt to perform a step. Immutable once terminal.\n\n**When it started and ended is not here.** An attempt's `step.*` events form\na span (ADR_0003), so the waterfall already times it — from the trace store,\nwith the shape a duration is actually read in. The two fields were here,\nwritten by nothing and read by nothing (43.33).",
@@ -9176,6 +9631,17 @@
           "tasks"
         ],
         "properties": {
+          "attempt": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AttemptKey",
+                "description": "Claim only this attempt, while still enforcing queue and task capabilities."
+              }
+            ]
+          },
           "queues": {
             "type": "array",
             "items": {
@@ -10419,6 +10885,14 @@
           }
         }
       },
+      "Direction": {
+        "type": "string",
+        "description": "Which side of a decision a message was on.\n\nRecording both in one stream is what makes a decision explainable: the input\nthat caused it and the outputs it produced sit together, at the version it\nwas accepted at.",
+        "enum": [
+          "input",
+          "output"
+        ]
+      },
       "EditorSession": {
         "type": "object",
         "description": "Where to look, and what is under it.",
@@ -11592,6 +12066,35 @@
           },
           "summary": {
             "$ref": "#/components/schemas/ExecutionSummary"
+          }
+        }
+      },
+      "ExecutionHistory": {
+        "type": "object",
+        "description": "An ordered page of durable commands and decisions. Live facts use the existing workflow stream.",
+        "required": [
+          "messages",
+          "version"
+        ],
+        "properties": {
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecordedMessage"
+            }
+          },
+          "next_after": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       },
@@ -14466,6 +14969,71 @@
           "Command"
         ]
       },
+      "MessageMetadata": {
+        "type": "object",
+        "description": "Everything about a message that is not what it says.\n\nThe four correlation ids are `aiwatcher-core`'s, unchanged: an execution's\n`correlation_id` is normally its own id, and `causation_id` names the input\nmessage that produced this output. A reactor's completion event is caused by\nthe command that dispatched it, which is what makes a stream readable as a\nchain of causes rather than a list.",
+        "required": [
+          "schema_version",
+          "message_id",
+          "occurred_at",
+          "correlation_id",
+          "causation_id"
+        ],
+        "properties": {
+          "attempt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "causation_id": {
+            "$ref": "#/components/schemas/CausationId"
+          },
+          "correlation_id": {
+            "$ref": "#/components/schemas/CorrelationId"
+          },
+          "message_id": {
+            "$ref": "#/components/schemas/MessageId"
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "schema_version": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "span_id": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SpanId"
+              }
+            ]
+          },
+          "step_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "trace_id": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TraceId"
+              }
+            ]
+          }
+        }
+      },
       "MetricDelta": {
         "type": "object",
         "required": [
@@ -16489,6 +17057,37 @@
           }
         }
       },
+      "RecordedMessage": {
+        "type": "object",
+        "description": "A message as the stream holds it.",
+        "required": [
+          "stream_version",
+          "direction",
+          "message",
+          "metadata",
+          "recorded_at"
+        ],
+        "properties": {
+          "direction": {
+            "$ref": "#/components/schemas/Direction"
+          },
+          "message": {
+            "$ref": "#/components/schemas/WorkflowMessage"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/MessageMetadata"
+          },
+          "recorded_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "stream_version": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
       "RecordedMetadata": {
         "type": "object",
         "description": "What the store fills in. Emmett's `RecordedMessageMetadata`, plus the\naiwatcher-specific identity fields a projector would otherwise dig out of\n`data` on every event.",
@@ -18004,6 +18603,30 @@
           }
         }
       },
+      "SavedWorkflow": {
+        "type": "object",
+        "required": [
+          "definition",
+          "revision",
+          "registered_by",
+          "registered_at"
+        ],
+        "properties": {
+          "definition": {
+            "$ref": "#/components/schemas/WorkflowSpec"
+          },
+          "registered_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "registered_by": {
+            "type": "string"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/DefinitionRevision"
+          }
+        }
+      },
       "Schedule": {
         "type": "object",
         "description": "A definition's schedule, as somebody set it.\n\n**Mutable, and deliberately not part of the definition's content address.**\nChanging the hour must not mint a new pipeline revision: that would be a\nrevision history about scheduling, which is the same mistake as making\n`produced_by` part of a dataset version's identity. It lives as a head\nbeside the definition, the way a prompt's labels live beside its versions.",
@@ -19164,9 +19787,10 @@
       },
       "TargetKind": {
         "type": "string",
-        "description": "What kind of definition is being run.\n\nOne arm today, and an enum rather than a bare name because the second is\nalready named: a `WorkflowDefinition` compiles to the same `ExecutionPlan`\nfrom a different editor, with different permissions and different\nprovenance (section 4). A `kind` nobody had to send would have to be guessed\nfrom the name the day the second arrives.",
+        "description": "What kind of definition is being run.\n\nTwo arms, which is what the enum was for: both compile to the same\n`ExecutionPlan` from different editors, with different provenance, and the\nnames live in different registries under different prefixes (section 4). A\n`kind` nobody had to send would have to be guessed from the name — and two\ndefinitions may share one, which is exactly what `WorkflowSpec` being saved\nbeside `CurationPipeline` allows.",
         "enum": [
-          "curation_pipeline"
+          "curation_pipeline",
+          "workflow"
         ]
       },
       "TensorSpec": {
@@ -19871,7 +20495,12 @@
         "type": "object",
         "description": "One attempt, and everything performing it needs.",
         "required": [
+          "report_idempotent",
+          "outputs",
           "execution_id",
+          "workflow_id",
+          "trace_id",
+          "parent_span_id",
           "step_id",
           "attempt",
           "task_ref",
@@ -19913,6 +20542,13 @@
             "format": "date-time",
             "description": "When this claim stops being trusted unless it is renewed.\n\nAn instant rather than a duration, and the difference matters: a worker\ntold \"five minutes\" has to agree with this process about when the five\nminutes started, and the two clocks are the whole question. A deadline\nis one fact. It also means a client cannot hard-code the lease length\nand keep beating at the wrong rate the day the rule moves —\n`aiwatcher_jobs` owns that number, and nothing here restates it."
           },
+          "outputs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Named row outputs required by the pinned plan."
+          },
           "parameters": {
             "type": "object",
             "description": "What the run itself was started with."
@@ -19921,8 +20557,15 @@
             "type": "object",
             "description": "The step's authored parameters."
           },
+          "parent_span_id": {
+            "type": "string"
+          },
           "queue": {
             "type": "string"
+          },
+          "report_idempotent": {
+            "type": "boolean",
+            "description": "The result route can acknowledge a matching outcome from durable history."
           },
           "step_id": {
             "type": "string"
@@ -19936,6 +20579,13 @@
             "format": "int64",
             "description": "The step's own deadline. Past it the server stops waiting for a report.",
             "minimum": 0
+          },
+          "trace_id": {
+            "type": "string"
+          },
+          "workflow_id": {
+            "type": "string",
+            "description": "Correlation supplied by the platform; the worker emits only child spans."
           }
         }
       },
@@ -20041,6 +20691,204 @@
         ],
         "description": "A report, with the worker that is making it.\n\nTwo structs rather than a flattened one: serde's `flatten` and\n`deny_unknown_fields` do not compose, and the report is a tagged enum whose\nvariants are the whole point of the body being checked."
       },
+      "WorkflowCommand": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "execution_id",
+              "plan",
+              "owner",
+              "mode",
+              "requested_by",
+              "command"
+            ],
+            "properties": {
+              "command": {
+                "type": "string",
+                "enum": [
+                  "start_execution"
+                ]
+              },
+              "execution_id": {
+                "$ref": "#/components/schemas/ExecutionId"
+              },
+              "input": {
+                "type": "object"
+              },
+              "mode": {
+                "$ref": "#/components/schemas/ExecutionMode"
+              },
+              "owner": {
+                "$ref": "#/components/schemas/ExecutionOwner"
+              },
+              "plan": {
+                "$ref": "#/components/schemas/ExecutionPlan"
+              },
+              "requested_by": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Take a failed or crashed step again, from its pinned inputs and code.\nHistorical attempts are preserved; this is a new one.",
+            "required": [
+              "step_id",
+              "command"
+            ],
+            "properties": {
+              "command": {
+                "type": "string",
+                "enum": [
+                  "retry_step"
+                ]
+              },
+              "step_id": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "command"
+            ],
+            "properties": {
+              "command": {
+                "type": "string",
+                "enum": [
+                  "cancel_execution"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "command"
+            ],
+            "properties": {
+              "command": {
+                "type": "string",
+                "enum": [
+                  "pause_execution"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "command"
+            ],
+            "properties": {
+              "command": {
+                "type": "string",
+                "enum": [
+                  "resume_execution"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The answer a `HumanInput` step asked for.",
+            "required": [
+              "step_id",
+              "attempt",
+              "answered_by",
+              "response",
+              "command"
+            ],
+            "properties": {
+              "answered_by": {
+                "type": "string"
+              },
+              "attempt": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "command": {
+                "type": "string",
+                "enum": [
+                  "provide_input"
+                ]
+              },
+              "response": {
+                "type": "object"
+              },
+              "step_id": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Dispatch one attempt. The effect command a reactor deduplicates by\n`command_id`, and the row a worker claims.",
+            "required": [
+              "step_id",
+              "attempt",
+              "runtime",
+              "idempotency_key",
+              "command"
+            ],
+            "properties": {
+              "attempt": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "command": {
+                "type": "string",
+                "enum": [
+                  "execute_step"
+                ]
+              },
+              "idempotency_key": {
+                "type": "string",
+                "description": "The stable idempotency key: `<execution>/<step>/<attempt>`. What a\nreactor asks a runtime by before it retries a timeout."
+              },
+              "runtime": {
+                "$ref": "#/components/schemas/RuntimeKind"
+              },
+              "step_id": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Put a question in front of somebody. Not dispatched to anything: the\nanswer arrives as `ProvideInput`.",
+            "required": [
+              "step_id",
+              "attempt",
+              "command"
+            ],
+            "properties": {
+              "attempt": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "command": {
+                "type": "string",
+                "enum": [
+                  "request_input"
+                ]
+              },
+              "step_id": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "What somebody wants to happen.\n\nTwo families in one enum, and the split is by who sends it. The first six\nare **intentions** the API accepts from a caller. `ExecuteStep` and\n`RequestInput` are **effects** the decider emits for a reactor or a worker\nto pick up; they never reach the event log, because ADR_0026 keeps the\nreasoning in the store and puts only facts about work on the log."
+      },
       "WorkflowDefinition": {
         "type": "object",
         "description": "A workflow as the catalog holds it.",
@@ -20134,6 +20982,485 @@
           }
         }
       },
+      "WorkflowEvent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "execution_id",
+              "plan",
+              "owner",
+              "mode",
+              "requested_by",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "execution_requested"
+                ]
+              },
+              "execution_id": {
+                "$ref": "#/components/schemas/ExecutionId"
+              },
+              "input": {
+                "type": "object"
+              },
+              "mode": {
+                "$ref": "#/components/schemas/ExecutionMode"
+              },
+              "owner": {
+                "$ref": "#/components/schemas/ExecutionOwner"
+              },
+              "plan": {
+                "$ref": "#/components/schemas/ExecutionPlan"
+              },
+              "requested_by": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "execution_started"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "step_id",
+              "attempt",
+              "runtime",
+              "event"
+            ],
+            "properties": {
+              "attempt": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "cache_key": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "step_scheduled"
+                ]
+              },
+              "runtime": {
+                "$ref": "#/components/schemas/RuntimeKind"
+              },
+              "step_id": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The delay before a retry may be dispatched, resolved to an instant here\nso that replay reaches the same schedule.",
+            "required": [
+              "step_id",
+              "attempt",
+              "not_before",
+              "event"
+            ],
+            "properties": {
+              "attempt": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "step_retry_scheduled"
+                ]
+              },
+              "not_before": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "step_id": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "step_id",
+              "attempt",
+              "event"
+            ],
+            "properties": {
+              "attempt": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "step_started"
+                ]
+              },
+              "step_id": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "step_id",
+              "attempt",
+              "event"
+            ],
+            "properties": {
+              "attempt": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "step_completed"
+                ]
+              },
+              "outputs": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ArtifactRef"
+                }
+              },
+              "result": {
+                "type": "object",
+                "description": "A bounded control value. Rows go in an artifact."
+              },
+              "step_id": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "step_id",
+              "attempt",
+              "error",
+              "event"
+            ],
+            "properties": {
+              "attempt": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "error": {
+                "$ref": "#/components/schemas/StepError"
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "step_failed"
+                ]
+              },
+              "step_id": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The step was answered from an earlier identical one, and this records\nwhich artifacts were reused. A hit is an execution state, not a silence.\n\nIt names the **attempt** it answered, because that attempt was claimed\nand dispatched like any other: something has to settle its row, or it\nstays claimable behind a lease nobody releases.",
+            "required": [
+              "step_id",
+              "attempt",
+              "cache_key",
+              "event"
+            ],
+            "properties": {
+              "attempt": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "cache_key": {
+                "type": "string"
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "step_cache_hit"
+                ]
+              },
+              "outputs": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ArtifactRef"
+                }
+              },
+              "step_id": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The step will not run: something it needed did not succeed.",
+            "required": [
+              "step_id",
+              "reason",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "step_skipped"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              },
+              "step_id": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "step_id",
+              "attempt",
+              "request",
+              "event"
+            ],
+            "properties": {
+              "attempt": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "input_requested"
+                ]
+              },
+              "request": {
+                "$ref": "#/components/schemas/InputRequest"
+              },
+              "step_id": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "step_id",
+              "attempt",
+              "answered_by",
+              "response",
+              "event"
+            ],
+            "properties": {
+              "answered_by": {
+                "type": "string"
+              },
+              "attempt": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "event": {
+                "type": "string",
+                "enum": [
+                  "input_provided"
+                ]
+              },
+              "response": {
+                "type": "object"
+              },
+              "step_id": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "execution_paused"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "execution_resumed"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "A cancel was accepted. Cooperative: running steps are asked to stop, and\n`ExecutionCancelled` follows when they have.",
+            "required": [
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "execution_cancelling"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "execution_cancelled"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "execution_completed"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "reason",
+              "event"
+            ],
+            "properties": {
+              "event": {
+                "type": "string",
+                "enum": [
+                  "execution_failed"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "What happened.\n\nThe ones a reactor or a worker reports — `StepStarted`, `StepCompleted`,\n`StepFailed` — arrive as *inputs* to the decider, because the decider did\nnot know them: something outside performed the effect and came back. Every\nother variant is an output the decider produced."
+      },
+      "WorkflowInput": {
+        "type": "object",
+        "required": [
+          "step",
+          "output"
+        ],
+        "properties": {
+          "output": {
+            "type": "string"
+          },
+          "step": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowMessage": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowCommand"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "command"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WorkflowEvent"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "event"
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        ],
+        "description": "One thing in the stream, whichever kind it is."
+      },
       "WorkflowNode": {
         "type": "object",
         "description": "One node of a declared graph.",
@@ -20188,6 +21515,83 @@
             }
           }
         }
+      },
+      "WorkflowSpec": {
+        "type": "object",
+        "description": "A workflow's executable definition, saved by content before it is run.",
+        "required": [
+          "name",
+          "version",
+          "steps"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowTask"
+            }
+          },
+          "version": {
+            "type": "string",
+            "description": "The application's release label; the immutable identity is the revision digest."
+          }
+        },
+        "additionalProperties": false
+      },
+      "WorkflowTask": {
+        "type": "object",
+        "required": [
+          "id",
+          "task_ref",
+          "queue",
+          "timeout_seconds"
+        ],
+        "properties": {
+          "after": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "string"
+          },
+          "inputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowInput"
+            }
+          },
+          "outputs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Named row artifacts this step produces."
+          },
+          "params": {
+            "type": "object"
+          },
+          "queue": {
+            "type": "string"
+          },
+          "retry": {
+            "$ref": "#/components/schemas/RetryPolicy"
+          },
+          "task_ref": {
+            "type": "string",
+            "description": "A registered function's name and pinned version. Never an import path to execute."
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
       }
     }
   },

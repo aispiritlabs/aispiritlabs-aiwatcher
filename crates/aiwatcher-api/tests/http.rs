@@ -148,6 +148,11 @@ impl Fixture {
                     "datasets",
                 ))
             }),
+            workflow_definitions: registry_enabled.then(|| {
+                Arc::new(aiwatcher_execution::definition::DefinitionRegistry::new(
+                    Arc::new(MemoryObjectStore::new()),
+                ))
+            }),
             schedules: registry_enabled.then(|| {
                 Arc::new(aiwatcher_execution::ScheduleStore::new(Arc::new(
                     MemoryObjectStore::new(),
@@ -5046,6 +5051,7 @@ async fn an_output_this_instance_never_stored_is_refused_rather_than_recorded() 
                     "name": "rows",
                     "uri": "object://artifacts/rows/deadbeef/data",
                     "digest": "de".repeat(32),
+                    "kind": "rows",
                 }]
             })),
         )
@@ -5275,4 +5281,444 @@ async fn holding_the_lease_is_not_enough_if_the_token_is_for_another_queue() {
         )
         .await;
     assert_eq!(status, StatusCode::NO_CONTENT, "{ok}");
+}
+
+fn authored_worker_workflow() -> Value {
+    json!({"name":"sdk-import", "version":"1", "steps":[
+        {"id":"acquire", "task_ref":"acquire@1", "queue":"planner-import", "timeout_seconds":30,
+         "outputs":["rows"], "retry":{"max_attempts":2,"delays_seconds":[0],"delays_seconds_unavailable":[0]}},
+        {"id":"persist", "task_ref":"persist@1", "queue":"planner-import", "timeout_seconds":30,
+         "inputs":[{"step":"acquire","output":"rows"}]}
+    ]})
+}
+
+#[tokio::test]
+async fn authored_workflows_run_and_retry_through_the_same_durable_engine_and_event_log() {
+    use aiwatcher_execution::{ExecutionId, WorkflowEvent, WorkflowStore};
+    let fixture = Fixture::new(true);
+    let (status, saved) = fixture
+        .post("/api/v1/workflow-definitions", authored_worker_workflow())
+        .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let (_, repeated) = fixture
+        .post("/api/v1/workflow-definitions", authored_worker_workflow())
+        .await;
+    assert_eq!(saved, repeated);
+    let (status, started) = fixture.post("/api/v1/executions", json!({"target":{
+        "kind":"workflow", "name":"sdk-import", "revision":saved["revision"]}, "parameters":{"house":1}})).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{started}");
+    let id = started["execution"]["execution_id"].as_str().expect("id");
+    let claim =
+        json!({"worker":"one", "queues":["planner-import"], "tasks":["acquire@1","persist@1"]});
+    let (status, first) = fixture.post("/api/v1/worker/claims", claim.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!(first["step_id"], "acquire");
+    assert_eq!(first["workflow_id"], "sdk-import");
+    let (status, body) = fixture
+        .post(
+            &format!("/api/v1/worker/claims/{id}/acquire/1/result"),
+            json!({"worker":"one", "outcome":"failed", "class":"transient", "message":"try again"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, second) = fixture.post("/api/v1/worker/claims", claim.clone()).await;
+    assert_eq!(second["attempt"], 2);
+    assert_ne!(first["parent_span_id"], second["parent_span_id"]);
+    let (status, artifact) = fixture
+        .post(
+            &format!("/api/v1/worker/claims/{id}/acquire/2/outputs/rows?worker=one"),
+            json!({"rows":[{"house":1}]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{artifact}");
+    let (status, body) = fixture
+        .post(
+            &format!("/api/v1/worker/claims/{id}/acquire/2/result"),
+            json!({"worker":"one", "outcome":"completed", "outputs":[artifact]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, third) = fixture.post("/api/v1/worker/claims", claim.clone()).await;
+    assert_eq!(third["step_id"], "persist");
+    let (status, rows) = fixture
+        .get(&format!(
+            "/api/v1/worker/claims/{id}/persist/1/inputs/rows?worker=one"
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(rows, json!({"rows":[{"house":1}]}));
+    fixture.post(&format!("/api/v1/worker/claims/{id}/persist/1/result"),
+        json!({"worker":"one", "outcome":"failed", "class":"user_code", "message":"repair then retry"})).await;
+    let (status, body) = fixture
+        .post(
+            &format!("/api/v1/executions/{id}/steps/persist/commands/retry"),
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, retried) = fixture.post("/api/v1/worker/claims", claim).await;
+    assert_eq!(retried["step_id"], "persist");
+    assert_eq!(retried["attempt"], 2);
+    fixture
+        .post(
+            &format!("/api/v1/worker/claims/{id}/persist/2/result"),
+            json!({"worker":"one", "outcome":"completed", "result":{"saved":true}}),
+        )
+        .await;
+    let store = fixture.state.executions.as_ref().expect("handler").store();
+    let stream = store.load(&ExecutionId::new(id)).await.expect("stream");
+    assert!(
+        stream
+            .events()
+            .any(|event| matches!(event, WorkflowEvent::ExecutionCompleted))
+    );
+    assert_eq!(
+        stream
+            .events()
+            .filter(|event| matches!(event, WorkflowEvent::StepFailed { .. }))
+            .count(),
+        2
+    );
+    let (status, history) = fixture
+        .get(&format!("/api/v1/executions/{id}/history?limit=2"))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(history["messages"].as_array().expect("messages").len(), 2);
+    assert!(history["next_after"].is_number());
+    aiwatcher_execution::publish_pending(
+        store.as_ref(),
+        fixture.bus.as_ref(),
+        time::OffsetDateTime::now_utc(),
+    )
+    .await
+    .expect("publish");
+    use aiwatcher_bus::MessageSource;
+    let events = fixture
+        .bus
+        .read(&Checkpoint::beginning(), 1000)
+        .await
+        .expect("events");
+    assert!(!events.is_empty());
+    for event in &events {
+        fixture.read_model.apply(event).await;
+    }
+    let (status, graph) = fixture
+        .get(&format!("/api/v1/workflow-executions/{id}"))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{graph}");
+    assert_eq!(graph["nodes"].as_array().expect("nodes").len(), 2);
+}
+
+#[tokio::test]
+async fn workflow_registration_validates_the_graph_and_requires_an_editor() {
+    let fixture = Fixture::behind_a_proxy(true).await;
+    let (status, _) = fixture
+        .post_as(
+            "/api/v1/workflow-definitions",
+            "viewer",
+            "aiwatcher-viewers",
+            authored_worker_workflow(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let mut invalid = authored_worker_workflow();
+    invalid["steps"][0]["task_ref"] = json!("unpinned");
+    invalid["steps"][0]["after"] = json!(["persist"]);
+    let (status, body) = fixture
+        .post_as(
+            "/api/v1/workflow-definitions",
+            "editor",
+            "aiwatcher-editors",
+            invalid,
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert!(body["details"].as_array().expect("problems").len() >= 2);
+    let (_, definitions) = fixture
+        .get_as(
+            "/api/v1/workflow-definitions",
+            "viewer",
+            "aiwatcher-viewers",
+        )
+        .await;
+    assert_eq!(definitions, json!([]));
+}
+
+#[tokio::test]
+async fn a_registered_workflow_is_scheduled_beside_a_pipeline_that_shares_its_name() {
+    // The second half of "a definition somebody can save and schedule". The
+    // store has always been keyed by kind *and* name and everything below the
+    // handlers already read the kind off the stored object; what was hard-coded
+    // was the three handlers, so a worker workflow could be saved and started
+    // and never left to run unattended — which is most of what authoring one is
+    // for.
+    //
+    // Two kinds sharing one name is the case worth pinning, because its failure
+    // is silent: one schedule overwriting the other's hour, on a card that still
+    // reads correctly.
+    let fixture = Fixture::new(false);
+    let daily = |hour: u8| {
+        json!({ "cadence": { "every": "daily", "hour": hour, "minute": 0 },
+                "timezone": "Europe/Warsaw" })
+    };
+
+    // Refused now rather than at nine tomorrow, and by the workflow compiler:
+    // a schedule for a definition nobody saved is a run that fails every
+    // morning with nobody watching.
+    let (status, body) = fixture
+        .put("/api/v1/workflow-definitions/sdk-import/schedule", daily(9))
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+
+    let (status, saved) = fixture
+        .post("/api/v1/workflow-definitions", authored_worker_workflow())
+        .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let (status, _) = fixture
+        .post(
+            "/api/v1/curation-pipelines",
+            flow_only_pipeline("sdk-import"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, set) = fixture
+        .put("/api/v1/workflow-definitions/sdk-import/schedule", daily(9))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{set}");
+    // Setting when something runs is not asking it to run.
+    assert_eq!(set["started"], Value::Null, "{set}");
+    assert_eq!(set["schedule"]["definition_kind"], "workflow");
+    // From the server, so nothing else works out when the clocks change.
+    assert!(set["next_run"].is_string(), "{set}");
+
+    let (status, other) = fixture
+        .put("/api/v1/curation-pipelines/sdk-import/schedule", daily(10))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{other}");
+    assert_eq!(other["schedule"]["definition_kind"], "curation_pipeline");
+
+    let (status, read) = fixture
+        .get("/api/v1/workflow-definitions/sdk-import/schedule")
+        .await;
+    assert_eq!(status, StatusCode::OK, "{read}");
+    assert_eq!(
+        read["schedule"]["schedule"]["cadence"]["hour"], 9,
+        "the pipeline's ten must not have landed on the workflow: {read}"
+    );
+
+    // Forgetting one leaves the other, for the same reason.
+    let (status, _) = fixture
+        .delete("/api/v1/workflow-definitions/sdk-import/schedule")
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = fixture
+        .get("/api/v1/workflow-definitions/sdk-import/schedule")
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, kept) = fixture
+        .get("/api/v1/curation-pipelines/sdk-import/schedule")
+        .await;
+    assert_eq!(status, StatusCode::OK, "{kept}");
+    assert_eq!(kept["schedule"]["schedule"]["cadence"]["hour"], 10);
+}
+
+#[tokio::test]
+async fn scheduling_a_workflow_run_now_starts_the_run_a_worker_then_claims() {
+    // The compiler the schedule route checks with and the one the tick starts
+    // with are the same function, so this is also what says the tick can start
+    // a workflow at all: `run_now` goes through `executions::start` exactly as
+    // a slot does.
+    let fixture = Fixture::new(true);
+    let (status, saved) = fixture
+        .post("/api/v1/workflow-definitions", authored_worker_workflow())
+        .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+
+    let (status, set) = fixture
+        .put(
+            "/api/v1/workflow-definitions/sdk-import/schedule",
+            json!({ "cadence": { "every": "daily", "hour": 9, "minute": 0 },
+                    "timezone": "Europe/Warsaw", "run_now": true,
+                    "request_id": "one-click" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{set}");
+    let started = set["started"].as_str().expect("a run").to_owned();
+
+    // Recorded as the schedule's, not as somebody pressing Run on a canvas.
+    let (status, run) = fixture.get(&format!("/api/v1/executions/{started}")).await;
+    assert_eq!(status, StatusCode::OK, "{run}");
+    assert!(
+        run["execution"]["requested_by"]
+            .as_str()
+            .is_some_and(|who| who.starts_with("schedule:")),
+        "{run}"
+    );
+
+    // And it is a real worker plan: the first step is claimable by a worker
+    // holding that queue and that pinned version, which is the whole point of
+    // authoring one.
+    let (status, first) = fixture
+        .post(
+            "/api/v1/worker/claims",
+            json!({"worker":"one", "queues":["planner-import"],
+                   "tasks":["acquire@1","persist@1"]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!(first["execution_id"], started);
+    assert_eq!(first["step_id"], "acquire");
+
+    // The same request again is the same slot and the same run — the id is
+    // derived from the request, so a repeated PUT starts nothing beside it.
+    let (status, again) = fixture
+        .put(
+            "/api/v1/workflow-definitions/sdk-import/schedule",
+            json!({ "cadence": { "every": "daily", "hour": 9, "minute": 0 },
+                    "timezone": "Europe/Warsaw", "run_now": true,
+                    "request_id": "one-click" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["started"], Value::String(started));
+}
+
+#[tokio::test]
+async fn worker_reports_replay_from_history_without_duplicate_decisions_or_queue_access() {
+    let fixture = Fixture::behind_a_proxy(false).await;
+    fixture.seed_worker_run("receipt").await;
+    fixture.seed_worker_run("neighbour").await;
+    let target = json!({"execution_id":"receipt", "step_id":"stage", "attempt":1});
+    let (status, claim) = fixture
+        .claim_as(
+            WORKER_SECRET,
+            json!({"worker":"one", "tasks":["stage@1"], "attempt":target}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{claim}");
+    assert_eq!(claim["execution_id"], "receipt");
+    assert_eq!(claim["outputs"], json!(["rows"]));
+    assert_eq!(claim["report_idempotent"], true);
+    let path = "/api/v1/worker/claims/receipt/stage/1/result";
+    let missing = json!({"worker":"one", "outcome":"completed"});
+    let (status, _) = fixture
+        .send_with_token("POST", path, WORKER_SECRET, Some(missing))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (_, artifact) = fixture
+        .send_with_token(
+            "POST",
+            "/api/v1/worker/claims/receipt/stage/1/outputs/rows?worker=one",
+            WORKER_SECRET,
+            Some(json!({"rows":[{"number":1}]})),
+        )
+        .await;
+    let body =
+        json!({"worker":"one", "outcome":"completed", "outputs":[artifact], "result":{"count":1}});
+    let (status, original) = fixture
+        .send_with_token("POST", path, WORKER_SECRET, Some(body.clone()))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{original}");
+    let store = fixture.state.executions.as_ref().expect("handler").store();
+    let execution = aiwatcher_execution::ExecutionId::new("receipt");
+    let before = store.load(&execution).await.expect("history");
+    let (status, duplicate) = fixture
+        .send_with_token("POST", path, WORKER_SECRET, Some(body.clone()))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{duplicate}");
+    assert_eq!(original, duplicate);
+    assert_eq!(
+        store.load(&execution).await.expect("history").version,
+        before.version
+    );
+    let (status, _) = fixture
+        .send_with_token("POST", path, OTHER_WORKER_SECRET, Some(body.clone()))
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let mut conflict = body;
+    conflict["result"] = json!({"count":2});
+    let (status, error) = fixture
+        .send_with_token("POST", path, WORKER_SECRET, Some(conflict))
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{error}");
+    assert_eq!(error["code"], "worker_report_conflict");
+    let (status, _) = fixture
+        .send_with_token(
+            "POST",
+            "/api/v1/worker/claims/receipt/stage/1/heartbeat",
+            WORKER_SECRET,
+            Some(json!({"worker":"one"})),
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "receipt must not restore the retired lease"
+    );
+    assert_eq!(
+        store.load(&execution).await.expect("history").version,
+        before.version
+    );
+}
+
+#[tokio::test]
+async fn a_failed_worker_report_is_acknowledged_after_the_next_attempt_is_dispatched() {
+    let fixture = Fixture::behind_a_proxy(false).await;
+    fixture.seed_worker_run("failed-receipt").await;
+    fixture
+        .claim_as(WORKER_SECRET, json!({"worker":"one", "tasks":["stage@1"]}))
+        .await;
+    let path = "/api/v1/worker/claims/failed-receipt/stage/1/result";
+    let body =
+        json!({"worker":"one", "outcome":"failed", "class":"transient", "message":"network down"});
+    let (status, first) = fixture
+        .send_with_token("POST", path, WORKER_SECRET, Some(body.clone()))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let (status, second) = fixture
+        .send_with_token("POST", path, WORKER_SECRET, Some(body))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    assert_eq!(first, second);
+    assert_eq!(first["succeeded"], false);
+}
+
+#[tokio::test]
+async fn concurrent_worker_report_deliveries_share_one_recorded_outcome() {
+    let fixture = Fixture::behind_a_proxy(false).await;
+    fixture.seed_worker_run("concurrent-receipt").await;
+    fixture
+        .claim_as(WORKER_SECRET, json!({"worker":"one", "tasks":["stage@1"]}))
+        .await;
+    let path = "/api/v1/worker/claims/concurrent-receipt/stage/1/result";
+    let body =
+        json!({"worker":"one", "outcome":"failed", "class":"user_code", "message":"broken input"});
+    let (first, second) = tokio::join!(
+        fixture.send_with_token("POST", path, WORKER_SECRET, Some(body.clone())),
+        fixture.send_with_token("POST", path, WORKER_SECRET, Some(body)),
+    );
+    assert_eq!(first.0, StatusCode::OK, "{:?}", first.1);
+    assert_eq!(second, first);
+    let history = fixture
+        .state
+        .executions
+        .as_ref()
+        .expect("handler")
+        .store()
+        .load(&aiwatcher_execution::ExecutionId::new("concurrent-receipt"))
+        .await
+        .expect("history");
+    let failures = history
+        .messages
+        .iter()
+        .filter(|row| {
+            row.direction == aiwatcher_execution::message::Direction::Output
+                && matches!(
+                    row.message.event(),
+                    Some(aiwatcher_execution::WorkflowEvent::StepFailed { .. })
+                )
+        })
+        .count();
+    assert_eq!(failures, 1);
 }

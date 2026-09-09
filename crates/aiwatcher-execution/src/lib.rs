@@ -47,6 +47,7 @@ pub mod claim;
 pub mod compile;
 pub mod context;
 pub mod decide;
+pub mod definition;
 pub mod error;
 pub mod facts;
 pub mod handler;

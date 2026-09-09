@@ -240,6 +240,7 @@ pub async fn assert_contract(name: &str, store: &dyn WorkflowStore) {
     a_message_too_large_to_store_is_refused(name, store).await;
     two_claimants_racing_for_one_attempt_produce_one_claim(name, store).await;
     a_claimant_only_takes_what_it_said_it_could_run(name, store).await;
+    an_exact_attempt_filter_never_claims_a_neighbour(name, store).await;
     a_lost_claim_expires_and_the_next_claimant_takes_it_over(name, store).await;
     a_heartbeat_keeps_a_long_step_from_being_taken_over(name, store).await;
     a_finished_attempt_leaves_no_row_behind(name, store).await;
@@ -611,6 +612,67 @@ pub async fn two_claimants_racing_for_one_attempt_produce_one_claim(
         first.expect("a claim").lease_owner.as_deref(),
         Some("worker-a"),
         "{name}"
+    );
+}
+
+pub async fn an_exact_attempt_filter_never_claims_a_neighbour(
+    name: &str,
+    store: &dyn WorkflowStore,
+) {
+    let execution = fresh("exact-claim");
+    let first = claimable(&execution);
+    let mut second = first.clone();
+    second.key.step_id = "second".to_owned();
+    let now = OffsetDateTime::UNIX_EPOCH;
+    ok!(
+        name,
+        store.append(
+            &execution,
+            dispatch(
+                &execution,
+                "exact-dispatch",
+                vec![
+                    AttemptWrite::Dispatch(first.clone()),
+                    AttemptWrite::Dispatch(second.clone())
+                ]
+            )
+        ),
+        "dispatch neighbours"
+    );
+    let mut filter = mine(&execution);
+    filter.attempt = Some(AttemptKey::new(execution.clone(), "absent", 1));
+    assert!(
+        ok!(
+            name,
+            store.claim_attempt(&filter, "worker", now),
+            "absent target"
+        )
+        .is_none()
+    );
+    filter.attempt = Some(second.key.clone());
+    filter.tasks.clear();
+    assert!(ok!(name, store.claim_attempt(&filter, "worker", now), "no code").is_none());
+    filter.tasks.push(STAGE_TASK.to_owned());
+    let taken = ok!(
+        name,
+        store.claim_attempt(&filter, "worker", now),
+        "exact target"
+    )
+    .expect("target available");
+    assert_eq!(taken.key, second.key, "{name}: took a neighbour");
+    assert!(
+        ok!(
+            name,
+            store.claim_attempt(&filter, "competitor", now),
+            "held target"
+        )
+        .is_none()
+    );
+    assert!(
+        ok!(name, store.attempt(&first.key), "untouched neighbour")
+            .expect("row")
+            .lease_owner
+            .is_none()
     );
 }
 

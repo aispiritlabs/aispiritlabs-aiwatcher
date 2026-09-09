@@ -53,8 +53,9 @@ use utoipa::{OpenApi, ToSchema};
 use aiwatcher_core::ArtifactRef;
 use aiwatcher_core::ports::AttemptArtifacts;
 use aiwatcher_execution::claim::{AttemptKey, ClaimFilter};
+use aiwatcher_execution::message::{Direction, WorkflowEvent};
 use aiwatcher_execution::plan::{RuntimeBinding, RuntimeKind};
-use aiwatcher_execution::reactor::{Claimed, Performed, Reactor, Taken};
+use aiwatcher_execution::reactor::{Claimed, Reactor, Taken};
 use aiwatcher_execution::state::{ExecutionId, FailureClass, StepError};
 use aiwatcher_execution::{ActivityResult, ExecutionHandler, ExecutorRegistry, WorkflowStore};
 
@@ -100,6 +101,9 @@ pub fn router() -> Router<AppState> {
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ClaimRequest {
+    /// Claim only this attempt, while still enforcing queue and task capabilities.
+    #[serde(default)]
+    pub attempt: Option<AttemptKey>,
     /// The name this worker holds leases under.
     ///
     /// Unique per process — a pod name, a host and a pid. Two workers sharing
@@ -122,7 +126,15 @@ pub struct ClaimRequest {
 /// One attempt, and everything performing it needs.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct WorkAssignment {
+    /// The result route can acknowledge a matching outcome from durable history.
+    pub report_idempotent: bool,
+    /// Named row outputs required by the pinned plan.
+    pub outputs: Vec<String>,
     pub execution_id: String,
+    /// Correlation supplied by the platform; the worker emits only child spans.
+    pub workflow_id: String,
+    pub trace_id: String,
+    pub parent_span_id: String,
     pub step_id: String,
     pub attempt: u32,
     /// `name@version`, from the plan. The worker matches it against what it
@@ -173,7 +185,7 @@ pub struct WorkerBody {
 }
 
 /// What a worker did with its attempt.
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Clone, Debug, Deserialize, ToSchema)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum WorkReport {
     /// It ran and produced something.
@@ -322,6 +334,14 @@ async fn claim(
     Json(body): Json<ClaimRequest>,
 ) -> ApiResult<axum::response::Response> {
     caller.require(aiwatcher_auth::Role::Editor)?;
+    if body.worker.trim().is_empty()
+        || body.worker.len() > 256
+        || body.worker.chars().any(char::is_control)
+    {
+        return Err(ApiError::BadRequest(
+            "worker must be a nonempty process identity of at most 256 bytes".to_owned(),
+        ));
+    }
 
     let queues = match caller.identity().claimable_queues() {
         // A token names its queues, and an empty request means all of them.
@@ -353,7 +373,8 @@ async fn claim(
     }
 
     let reactor = reactor(&state, &body.worker)?;
-    let filter = ClaimFilter::for_queues(&queues, &body.tasks);
+    let mut filter = ClaimFilter::for_queues(&queues, &body.tasks);
+    filter.attempt = body.attempt;
     let now = time::OffsetDateTime::now_utc();
     let taken = reactor
         .take(&filter, PERFORMABLE, now)
@@ -393,7 +414,26 @@ fn assignment(claimed: &Claimed) -> WorkAssignment {
             BTreeMap::new(),
         ),
     };
+    let trace = aiwatcher_core::TraceId::derive(claimed.row.key.execution_id.as_str());
+    let span_key = aiwatcher_core::EventType::StepStarted.span_key(
+        Some(&format!(
+            "{}/{}",
+            claimed.row.key.step_id, claimed.row.key.attempt
+        )),
+        None,
+    );
     WorkAssignment {
+        report_idempotent: true,
+        outputs: claimed
+            .command
+            .step
+            .outputs
+            .iter()
+            .map(|output| output.name.clone())
+            .collect(),
+        workflow_id: claimed.context.plan.definition_name.clone(),
+        trace_id: trace.to_hex(),
+        parent_span_id: aiwatcher_core::SpanId::derive(trace, &span_key).to_hex(),
         execution_id: claimed.row.key.execution_id.as_str().to_owned(),
         step_id: claimed.row.key.step_id.clone(),
         attempt: claimed.row.key.attempt,
@@ -470,6 +510,9 @@ async fn heartbeat(
 /// and reports `step.completed` or `step.failed`. None of that is the worker's
 /// to do: a claimant is the one party that cannot check its own lease, and a
 /// cache entry must not be written by whoever benefits from it.
+/// Redelivery of the same durable outcome is acknowledged from history without
+/// restoring a lease. Different outcomes conflict; diagnostics and cache hints
+/// do not alter an already committed result.
 #[utoipa::path(
     post,
     path = "/api/v1/worker/claims/{execution_id}/{step_id}/{attempt}/result",
@@ -481,6 +524,7 @@ async fn heartbeat(
     request_body = WorkerReport,
     responses(
         (status = 200, body = Settled),
+        (status = 400, body = crate::error::ErrorBody),
         (status = 403, body = crate::error::ErrorBody),
         (status = 409, body = crate::error::ErrorBody),
         (status = 422, body = crate::error::ErrorBody),
@@ -495,15 +539,47 @@ async fn report(
     Json(body): Json<WorkerReport>,
 ) -> ApiResult<Json<Settled>> {
     let key = key_of(&execution_id, &step_id, attempt);
-    let (reactor, claimed) = held(&state, &caller, &body.worker, &key).await?;
+    if let Some(receipt) = recorded_result(&state, &caller, &key, &body.report).await? {
+        return Ok(Json(receipt));
+    }
+    let (reactor, claimed) = match held(&state, &caller, &body.worker, &key).await {
+        Ok(held) => held,
+        Err(error @ ApiError::LeaseLost(_)) => {
+            // A concurrent delivery may have retired the lease after the
+            // history read above. Its committed outcome still answers us.
+            return recorded_result(&state, &caller, &key, &body.report)
+                .await?
+                .map(Json)
+                .ok_or(error);
+        }
+        Err(error) => return Err(error),
+    };
 
-    let outcome = match body.report {
+    let outcome = match body.report.clone() {
         WorkReport::Completed {
             outputs,
             result,
             diagnostics,
             cacheable,
         } => {
+            let names: std::collections::BTreeSet<_> =
+                outputs.iter().map(|output| output.name.as_str()).collect();
+            if names.len() != outputs.len() {
+                return Err(ApiError::BadRequest(
+                    "output names must be unique".to_owned(),
+                ));
+            }
+            for declared in &claimed.command.step.outputs {
+                if !outputs
+                    .iter()
+                    .any(|output| output.name == declared.name && output.kind == declared.kind)
+                {
+                    return Err(ApiError::BadRequest(format!(
+                        "missing declared output {} with kind {:?}",
+                        declared.name, declared.kind
+                    )));
+                }
+            }
             // Every reference a worker reports must be one this instance
             // stored. Checked rather than trusted, because a completed step
             // pointing at an object that 404s is the one failure nothing
@@ -547,20 +623,93 @@ async fn report(
         .await
         .map_err(ApiError::Execution)?;
 
-    match performed {
-        Performed::Reported {
-            step_id,
-            attempt,
-            succeeded,
-        } => Ok(Json(Settled {
-            step_id,
-            attempt,
-            succeeded,
-        })),
-        // The lease went between `held` and the settlement. The work is lost on
-        // purpose — see the reactor's module docs.
-        _ => Err(ApiError::LeaseLost(key.idempotency_key())),
+    // A concurrent cancellation or a competing report can make the decider
+    // decline this report. Only committed history is an acknowledgement.
+    tracing::debug!(
+        ?performed,
+        "worker report processed; checking durable outcome"
+    );
+    recorded_result(&state, &caller, &key, &body.report)
+        .await?
+        .map(Json)
+        .ok_or_else(|| ApiError::LeaseLost(key.idempotency_key()))
+}
+
+/// A matching outcome is safe to acknowledge after its lease row was retired.
+/// Queue access still comes from the pinned plan, never from the request. This
+/// reads history only: it cannot grant an expired worker another write lease.
+async fn recorded_result(
+    state: &AppState,
+    caller: &Caller,
+    key: &AttemptKey,
+    report: &WorkReport,
+) -> ApiResult<Option<Settled>> {
+    caller.require(aiwatcher_auth::Role::Editor)?;
+    let history = handler(state)?
+        .store()
+        .load(&key.execution_id)
+        .await
+        .map_err(aiwatcher_execution::HandleError::from)
+        .map_err(ApiError::Execution)?;
+    let replayed = aiwatcher_execution::replay(history.events());
+    let Some(run) = replayed.active() else {
+        return Ok(None);
+    };
+    let Some(step) = run.plan.step(&key.step_id) else {
+        return Ok(None);
+    };
+    let RuntimeBinding::PythonTask(spec) = &step.runtime else {
+        return Ok(None);
+    };
+    if !caller.identity().may_claim(&spec.queue) {
+        return Err(ApiError::Forbidden {
+            needed: aiwatcher_auth::Role::Editor,
+            held: caller.identity().role(),
+        });
     }
+    let expected = match report {
+        WorkReport::Completed {
+            outputs, result, ..
+        } => WorkflowEvent::StepCompleted {
+            step_id: key.step_id.clone(),
+            attempt: key.attempt,
+            outputs: outputs.clone(),
+            result: result.clone(),
+        },
+        WorkReport::Failed { class, message, .. } => WorkflowEvent::StepFailed {
+            step_id: key.step_id.clone(),
+            attempt: key.attempt,
+            error: StepError::new(*class, message.clone()),
+        },
+    };
+    for recorded in &history.messages {
+        if recorded.direction != Direction::Output {
+            continue;
+        }
+        let Some(event) = recorded.message.event() else {
+            continue;
+        };
+        let matches_attempt = match event {
+            WorkflowEvent::StepCompleted {
+                step_id, attempt, ..
+            }
+            | WorkflowEvent::StepFailed {
+                step_id, attempt, ..
+            } => step_id == &key.step_id && attempt == &key.attempt,
+            _ => false,
+        };
+        if matches_attempt {
+            if event != &expected {
+                return Err(ApiError::WorkerReportConflict(key.idempotency_key()));
+            }
+            return Ok(Some(Settled {
+                step_id: key.step_id.clone(),
+                attempt: key.attempt,
+                succeeded: matches!(event, WorkflowEvent::StepCompleted { .. }),
+            }));
+        }
+    }
+    Ok(None)
 }
 
 /// A report, with the worker that is making it.

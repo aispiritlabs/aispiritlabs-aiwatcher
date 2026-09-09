@@ -329,14 +329,33 @@ run-laser:
 panel:
     cd {{panel}} && npm run dev
 
-# Server (in-memory bus) and the panel together. Nothing survives a restart.
+# Server, one SDK worker and the panel. Development stores are ephemeral.
 dev:
     #!/usr/bin/env bash
     set -euo pipefail
-    AIWATCHER_BUS=memory AIWATCHER_INGEST_ENABLED=true cargo run --bin aiwatcher &
+    AIWATCHER_BUS=memory AIWATCHER_WORKFLOW_STORE=memory AIWATCHER_INGEST_ENABLED=true cargo run --bin aiwatcher &
     server=$!
-    trap 'kill $server 2>/dev/null || true' EXIT INT TERM
+    worker=""
+    trap 'kill $server ${worker:-} 2>/dev/null || true' EXIT INT TERM
+    for attempt in $(seq 1 120); do
+        curl -fsS http://127.0.0.1:8080/healthz >/dev/null && break
+        kill -0 "$server"
+        sleep 1
+    done
+    curl -fsS http://127.0.0.1:8080/healthz >/dev/null
+    (cd sdk/python && PYTHONPATH=examples uv run aiwatcher-runtime --factory worker_workflow:build_runtime) &
+    worker=$!
     cd {{panel}} && npm run dev
+
+# Real PostgreSQL, Rust restart and SIGKILL of a Python worker; waits for the real lease.
+test-worker-runtime:
+    cargo build --bin aiwatcher --features postgres
+    cd sdk/python && uv run python ../../scripts/check-worker-runtime.py
+
+# Durable report redelivery across a Rust restart and one Runtime process per attempt.
+test-worker-protocol:
+    cargo build --bin aiwatcher --features postgres
+    cd sdk/python && uv run python ../../scripts/check-worker-runtime.py --protocol
 
 # Publish a demo run into a running server.
 seed run_id="":

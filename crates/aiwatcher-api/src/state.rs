@@ -50,6 +50,8 @@ pub struct AppState {
     /// and will hold a workflow's as readily as a pipeline's, and it lives
     /// under its own prefix for that reason.
     pub schedules: Option<Arc<aiwatcher_execution::ScheduleStore>>,
+    /// Authored Python workflows, versioned outside execution retention.
+    pub workflow_definitions: Option<Arc<aiwatcher_execution::definition::DefinitionRegistry>>,
     /// Vector image annotations and the training exports built from them.
     /// Same store, third prefix, and the same reason all three are here rather
     /// than on the log: a training label has to outlive every run that used

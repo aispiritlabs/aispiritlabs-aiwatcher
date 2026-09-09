@@ -19,10 +19,10 @@
 //! it observes. One `workflow.declared` per execution, one `step.*` pair per
 //! attempt, one `artifact.produced` per artifact, and nothing else.
 //!
-//! **Exactly one party per attempt.** A reactor-run step is published here with
-//! `data.published_by = "engine"`; a worker publishes its own attempts through
-//! its own client, because it is the process that ran them and its agent spans
-//! nest under them. The workflow fold flags a node that received both.
+//! **Exactly one party per attempt.** The reactor publishes managed step facts
+//! here with `data.published_by = "engine"`, including external worker results.
+//! Workers publish child telemetry under the assigned attempt span. The workflow
+//! fold flags a node if a worker also publishes a duplicate step lifecycle.
 
 use aiwatcher_core::{EventEnvelope, EventType, MessageId, Sdk, Source};
 use serde_json::{Value, json};
@@ -341,9 +341,8 @@ fn step_payload(context: &FactContext<'_>, step_id: &str, attempt: u32) -> Value
 fn envelope(event_type: EventType, context: &FactContext<'_>, data: Value) -> EventEnvelope {
     let mut envelope = EventEnvelope::new(
         event_type,
-        // An engine-run step happens in no agent's process, so the execution
-        // *is* the run. A worker-run attempt is published by the worker, under
-        // the run it opened.
+        // Managed attempts share the execution's run, including workers whose
+        // child telemetry carries this same identity and the attempt's span.
         context.execution.as_str(),
         context.occurred_at,
         Source::new(PUBLISHER_SERVICE, Sdk::Rust),

@@ -29,6 +29,11 @@ import {
 import { VirtualList } from '@/components/virtual-list';
 import { WorkflowGraph } from '@/components/workflow-graph';
 import {
+  WorkflowLauncher,
+  ManagedExecutionControls,
+  useManagedExecution,
+} from '@/components/managed-workflow';
+import {
   Badge,
   Button,
   Card,
@@ -192,6 +197,12 @@ function WorkflowsPage() {
         />
       </div>
 
+      <WorkflowLauncher
+        onStarted={(workflow, execution) => merge({ workflow, execution, node: undefined })}
+      />
+      {selectedExecution && (
+        <ManagedExecutionControls executionId={selectedExecution} node={search.node} />
+      )}
       <div className="grid gap-4 xl:grid-cols-[minmax(16rem,20rem)_1fr]">
         <div className="flex flex-col gap-4">
           <Card className="overflow-hidden">
@@ -381,6 +392,7 @@ function ExecutionPane({
   const queryClient = useQueryClient();
   const [phase, setPhase] = React.useState<StreamPhase>('catching-up');
   const [resyncedFrom, setResyncedFrom] = React.useState<string | null>(null);
+  const managed = useManagedExecution(executionId);
 
   const query = useQuery({
     queryKey: ['workflow-execution', executionId],
@@ -450,11 +462,13 @@ function ExecutionPane({
               <IdChip label="version" value={shortId(summary.version, 12)} full={summary.version} />
             ) : null}
           </div>
-          <RerunButton
-            workflowId={workflowId ?? summary.workflow_id}
-            executionId={summary.workflow_run_id}
-            fromNode={node?.node_id}
-          />
+          {managed.data === null && (
+            <RerunButton
+              workflowId={workflowId ?? summary.workflow_id}
+              executionId={summary.workflow_run_id}
+              fromNode={node?.node_id}
+            />
+          )}
         </CardContent>
       </Card>
 
@@ -484,7 +498,7 @@ function ExecutionPane({
           <Stat label="Running" value={formatCount(summary.nodes_running)} />
           <Stat label="Failed" value={formatCount(summary.nodes_failed)} />
           <Stat label="Artifacts" value={formatCount(summary.artifacts)} />
-          <Stat label="Runs" value={formatCount(summary.runs.length)} hint="one per stage pod" />
+          <Stat label="Runs" value={formatCount(summary.runs.length)} />
         </CardContent>
       </Card>
 

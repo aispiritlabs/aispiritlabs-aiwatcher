@@ -498,15 +498,17 @@ function PinnedNotebook({ notebook, revision }: { notebook: string; revision: st
 
   return (
     <div className="flex flex-col gap-1">
-      <button
-        type="button"
-        className="flex items-center gap-2 text-left text-muted-foreground hover:underline"
-        onClick={() => setOpen((current) => !current)}
-      >
-        <FileCode2 className="h-3 w-3" />
-        {open ? 'Hide' : 'Show'} the code this step ran
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          className="flex items-center gap-2 text-left text-muted-foreground hover:underline"
+          onClick={() => setOpen((current) => !current)}
+        >
+          <FileCode2 className="h-3 w-3" />
+          {open ? 'Hide' : 'Show'} the code this step ran
+        </button>
         <IdChip label={notebook} value={revision.slice(0, 12)} full={revision} />
-      </button>
+      </div>
       {open && source.isPending ? (
         <span className="flex items-center gap-2 text-muted-foreground">
           <Spinner /> Reading it…

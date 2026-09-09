@@ -1,0 +1,112 @@
+"""Workflow definitions describe a process; execution placement belongs to Runtime."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, field
+from graphlib import CycleError, TopologicalSorter
+from typing import Any
+
+from aiwatcher_sdk.task import Task
+
+
+@dataclass(frozen=True)
+class RetryPolicy:
+    max_attempts: int = 3
+    max_unavailable_attempts: int = 10
+    delays_seconds: tuple[int, ...] = (1, 5, 30)
+    delays_seconds_unavailable: tuple[int, ...] = (5, 15, 30, 60)
+
+
+@dataclass(frozen=True)
+class WorkflowInput:
+    step: str
+    output: str
+
+
+@dataclass(frozen=True)
+class WorkflowStep:
+    """One invocation in a static workflow, not one worker or deployment."""
+
+    name: str
+    task: Task[Any, Any]
+    after: tuple[str, ...] = ()
+    inputs: tuple[WorkflowInput, ...] = ()
+    outputs: tuple[str, ...] = ()
+    params: Mapping[str, object] = field(default_factory=dict)
+    retry: RetryPolicy = field(default_factory=RetryPolicy)
+    timeout_seconds: int = 300
+
+    @property
+    def dependencies(self) -> tuple[str, ...]:
+        return tuple(dict.fromkeys((*self.after, *(item.step for item in self.inputs))))
+
+
+@dataclass(frozen=True)
+class Workflow:
+    """A versioned static process with explicit dependency edges.
+
+    Building a definition validates its shape without executing application code.
+    Runtime registers the definition and starts executions through the API.
+    The Rust server compiles the graph and owns all scheduling and retries.
+    """
+
+    name: str
+    version: str
+    steps: tuple[WorkflowStep, ...]
+
+    def __post_init__(self) -> None:
+        if any(
+            not value.strip() or value != value.strip() or "@" in value
+            for value in (self.name, self.version)
+        ):
+            raise ValueError("a workflow requires a name and version without @ or outer whitespace")
+        if not self.steps:
+            raise ValueError("a workflow must contain at least one step")
+        names = {step.name for step in self.steps}
+        if len(names) != len(self.steps) or any(not name.strip() for name in names):
+            raise ValueError("workflow step names must be nonempty and unique")
+        for step in self.steps:
+            if missing := set(step.dependencies) - names:
+                raise ValueError(f"step {step.name!r} depends on unknown steps: {sorted(missing)}")
+        try:
+            tuple(
+                TopologicalSorter(
+                    {step.name: step.dependencies for step in self.steps}
+                ).static_order()
+            )
+        except CycleError as error:
+            raise ValueError("workflow dependencies contain a cycle") from error
+
+    @property
+    def ref(self) -> str:
+        return f"{self.name}@{self.version}"
+
+    def get_tasks(self) -> tuple[Task[Any, Any], ...]:
+        tasks: dict[str, Task[Any, Any]] = {}
+        for step in self.steps:
+            if step.task.ref in tasks and tasks[step.task.ref] is not step.task:
+                raise ValueError(f"conflicting implementations of task {step.task.ref}")
+            tasks[step.task.ref] = step.task
+        return tuple(tasks.values())
+
+    def to_definition(self, queue: str) -> dict[str, object]:
+        """Bind execution placement at the runtime boundary, outside task code."""
+        return {
+            "name": self.name,
+            "version": self.version,
+            "steps": [
+                {
+                    "id": step.name,
+                    "task_ref": step.task.ref,
+                    "queue": queue,
+                    "after": list(step.after),
+                    "inputs": [asdict(item) for item in step.inputs],
+                    "outputs": list(step.outputs),
+                    "params": dict(step.params),
+                    "retry": asdict(step.retry),
+                    "timeout_seconds": step.timeout_seconds,
+                }
+                for step in self.steps
+            ],
+        }

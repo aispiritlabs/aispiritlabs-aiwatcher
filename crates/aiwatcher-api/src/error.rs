@@ -29,6 +29,9 @@ pub enum ApiError {
     #[error("this instance has no dataset registry configured (AIWATCHER_PROMPT_STORE)")]
     DatasetRegistryDisabled,
 
+    #[error("this instance has no workflow definition registry (AIWATCHER_PROMPT_STORE)")]
+    WorkflowDefinitionsDisabled,
+
     #[error("this instance has no annotation registry configured (AIWATCHER_PROMPT_STORE)")]
     AnnotationRegistryDisabled,
 
@@ -100,6 +103,8 @@ pub enum ApiError {
     /// call or to re-authenticate.
     #[error("this worker no longer holds {0}")]
     LeaseLost(String),
+    #[error("attempt {0} already has a different recorded outcome")]
+    WorkerReportConflict(String),
 
     /// The one `Option` in [`AppState`](crate::state::AppState) that is never
     /// `None` in the server binary: an execution store needs no more
@@ -237,6 +242,7 @@ impl ApiError {
             // between a permission problem and a configuration one.
             Self::RegistryDisabled
             | Self::DatasetRegistryDisabled
+            | Self::WorkflowDefinitionsDisabled
             | Self::AnnotationRegistryDisabled
             | Self::TrainingRegistryDisabled
             | Self::ConversationArchiveDisabled => {
@@ -280,6 +286,7 @@ impl ApiError {
                 ),
             },
             Self::LeaseLost(_) => (StatusCode::CONFLICT, "lease_lost"),
+            Self::WorkerReportConflict(_) => (StatusCode::CONFLICT, "worker_report_conflict"),
             Self::ExecutionsDisabled => (StatusCode::NOT_IMPLEMENTED, "executions_disabled"),
             // The same 422 a refused pipeline gets, for the same reason: the
             // request was well formed and the thing it describes cannot be

@@ -216,6 +216,8 @@ impl AttemptRow {
 /// takes whatever is there.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ClaimFilter {
+    /// Optional exact attempt. This narrows capabilities; it never replaces them.
+    pub attempt: Option<AttemptKey>,
     pub runtimes: Vec<RuntimeKind>,
     pub queues: Vec<String>,
     /// The `name@version` refs a worker has registered code for.
@@ -238,6 +240,7 @@ impl ClaimFilter {
     #[must_use]
     pub fn for_runtimes(runtimes: &[RuntimeKind]) -> Self {
         Self {
+            attempt: None,
             runtimes: runtimes.to_vec(),
             queues: Vec::new(),
             tasks: Vec::new(),
@@ -248,6 +251,7 @@ impl ClaimFilter {
     #[must_use]
     pub fn for_queues(queues: &[String], tasks: &[String]) -> Self {
         Self {
+            attempt: None,
             runtimes: Vec::new(),
             queues: queues.to_vec(),
             tasks: tasks.to_vec(),
@@ -257,6 +261,9 @@ impl ClaimFilter {
     /// Whether this claimant would take that row.
     #[must_use]
     pub fn matches(&self, row: &AttemptRow) -> bool {
+        if self.attempt.as_ref().is_some_and(|key| key != &row.key) {
+            return false;
+        }
         match &row.queue {
             // A pulled attempt belongs to whoever holds its queue, and to
             // nobody else — a reactor listing `python_task` must not take work

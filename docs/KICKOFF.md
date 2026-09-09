@@ -2,10 +2,10 @@
 
 - **Status:** active backlog after the 2026-09-08 review. Every item below is
   open until its acceptance evidence is recorded. Items 1–5 are closed; item 6
-  is part-delivered — the worker protocol is in, the SDK and Planner are not.
+  is part-delivered — the protocol, SDK and authoring path are in; Planner parity is not.
   Every finding in the review is closed; what remains is one integration.
 - **Audience:** whoever picks this up next, in a session that starts cold.
-- **Last updated:** 2026-09-08
+- **Last updated:** 2026-09-09
 
 Managed Flow and marimo runs, execution controls, retention, schedules and the
 chart exist. Upgrade compatibility, local recovery, the scheduler, the panel's
@@ -164,7 +164,7 @@ when a named use case requires execution without publication.
 
 ## Start here — 6. Deliver one worker integration (Phase 10 → Phase 11 Level 2)
 
-**The protocol is delivered. The SDK, the authoring path and Planner are not.**
+**The protocol, SDK and static workflow authoring path are delivered. Planner parity remains open.**
 
 Done, 2026-09-08:
 
@@ -184,16 +184,44 @@ Done, 2026-09-08:
    content-addressed on the way in and every reported output is checked to exist
    before a step is settled.
 
-Left to do, in order:
+Integration status, 2026-09-09:
 
-4. **`aiwatcher_sdk.worker`** — `@task`, `Worker`, `TaskContext`, the poll loop,
-   the heartbeat, `run-attempt`. The registry half of the SDK's dependency
-   split (`httpx`, `tenacity`), not the telemetry half.
-5. **The authoring path.** Nothing compiles a `python_task` step: `compile_curation`
-   is the only compiler, and the tests seal a plan directly. A worker workflow
-   needs a definition somebody can save and schedule.
-6. **`just dev` runs one worker**, and the two-step plan survives worker death
-   end to end rather than through requests written by hand.
+4. **`aiwatcher_sdk.worker`** — the Python pull worker is implemented:
+   versioned typed `@task`, explicit worker task lists, `get_task_context()`, background
+   heartbeat, proxied row artifacts, failure classification and a CLI.
+   The public API was revised after comparing Temporal, Prefect and ZenML;
+   see [the design decisions](PYTHON_SDK_DESIGN.md). Tests cover normal Python
+   signatures, context lifetime, artifact handoff, lease loss and ambiguous HTTP delivery.
+   The application entry point is now `Runtime(workflows, pools, placement)`:
+   static `Workflow` definitions, shared service factories, local capacity
+   changes and draining shutdown; workers are internal slots. Replica autoscaling,
+   global instance limits and hosted deciders remain separate server/controller work.
+   [The worker guide](../sdk/python/aiwatcher_sdk/worker/README.md) records the
+   current boundary. `run-attempt` now narrows the store's claim to one key;
+   the Runtime factory remains the setup entry point for a one-attempt process.
+   Result redelivery reads the accepted outcome from history, including after
+   Rust restarts; mismatches receive 409 without changing the stored outcome.
+   Assignments now carry required outputs and step-attempt span
+   correlation, and `ctx.tracer` attaches task telemetry to the managed run.
+   [The follow-up review](WORKER_PROTOCOL_REVIEW_2026-09-09.md) records the gaps
+   closed, including the workflow fold now using managed lifecycle events
+   instead of inferring completion from one child.
+5. **The authoring path is delivered.** Rust validates and compiles registered
+   workflow declarations into immutable `PythonTask` plans. Runtime, REST and
+   the Workflows panel start pinned definitions through the same command API;
+   retry preserves successful parents and the earlier attempt history.
+   A registered workflow is also **schedulable**, which is the other half of
+   "somebody can save it": `/api/v1/workflow-definitions/{name}/schedule` mirrors
+   the pipeline's three routes, and both the route and the tick reach a compiler
+   through one `executions::compile_head` — so a schedule the API agreed to save
+   cannot be one the tick refuses to start. The store was already keyed by
+   definition kind, so a pipeline and a workflow may share a name and keep
+   separate hours.
+6. **`just dev` runs one worker.** The real PostgreSQL recovery gate passed:
+   kill the worker during the first step, restart Rust on the same database/log,
+   wait for the actual five-minute lease, then complete with a replacement worker.
+   The result has 22 history messages and two projected graph nodes. See
+   [the Rust runtime guide](RUST_WORKFLOW_RUNTIME.md) and `just test-worker-runtime`.
 7. **Planner's four stages** on that boundary, compared with the direct path in
    Planner's own suite against a pinned SDK revision.
 
@@ -202,7 +230,8 @@ ownership to aiwatcher.
 
 **Exit:** a two-step worker plan survives worker death; the four-stage import
 runs with Flyte off and produces byte-identical review artifacts. Run the
-integration's own tests in its repository against the pinned SDK. *Not met.*
+integration's own tests in its repository against the pinned SDK. *Worker recovery
+met; Planner parity not yet met.*
 
 ## After these gates
 
@@ -217,7 +246,7 @@ integration's own tests in its repository against the pinned SDK. *Not met.*
 - **Engine ownership (Phase 9):** only for a consumer that needs a unified
   launch API; it is not a prerequisite for the Python worker.
 - **Phase 8 / Phase 15:** retain their own measurement/use-case gates.
-- Other definition schedules wait for a second compiler. Flow `join` waits for
+- Other definition schedules wait for their compiler. Flow `join` waits for
   a concrete sub-pipeline use case. Measure artifact/staging growth before
   designing retention or GC that could remove referenced data.
 

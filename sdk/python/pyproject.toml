@@ -41,6 +41,10 @@ onnx = ["onnxruntime>=1.17", "numpy>=1.26"]
 [project.urls]
 Homepage = "https://github.com/ai-spirit/aiwatcher"
 
+[project.scripts]
+aiwatcher-worker = "aiwatcher_sdk.worker.__main__:main"
+aiwatcher-runtime = "aiwatcher_sdk.runtime.__main__:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -59,7 +63,15 @@ artifacts = ["aiwatcher_sdk/py.typed"]
 # rasteriser is the one thing in this SDK that can be wrong without anything
 # raising: a mask that is subtly misaligned trains a model that scores well and
 # predicts nonsense. It gets tested, so the checker needs them.
-dev = ["mypy>=1.18,<2", "pytest>=8.4,<9", "ruff>=0.16.5,<0.17", "numpy>=1.26", "pillow>=10.0"]
+dev = [
+    "mypy>=1.18,<2",
+    "pytest>=8.4,<9",
+    "ruff>=0.16.5,<0.17",
+    "numpy>=1.26",
+    "pillow>=10.0",
+    "jsonschema>=4,<5",
+    "types-jsonschema>=4.26.0.20260518",
+]
 
 [tool.uv]
 # `uv` reads this and refuses to run under an older one, which is what keeps a

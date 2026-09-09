@@ -58,6 +58,7 @@ pub fn router(state: AppState) -> Router {
         // or an object store, and the one whose whole promise is that closing
         // the browser changes nothing. See ADR_0025.
         .merge(crate::executions::router())
+        .merge(crate::definitions::router())
         // What a block was, so the canvas does not guess it from the draft on
         // screen — which is the one thing that is certainly not what an old run
         // read. Section 19.

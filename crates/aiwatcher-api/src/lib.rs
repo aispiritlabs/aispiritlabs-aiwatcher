@@ -57,6 +57,7 @@ pub mod auth;
 pub mod context;
 pub mod conversations;
 pub mod datasets;
+pub mod definitions;
 pub mod engine;
 pub mod error;
 pub mod evaluations;

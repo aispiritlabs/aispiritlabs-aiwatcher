@@ -217,6 +217,8 @@ class Transport:
         content: bytes | None = None,
         content_type: str | None = None,
         idempotent: bool | None = None,
+        idempotency_key: str | None = None,
+        attempts: int | None = None,
     ) -> dict[str, Any]:
         """A request whose answer is a JSON object, or an exception.
 
@@ -233,6 +235,8 @@ class Transport:
             content=content,
             content_type=content_type,
             idempotent=idempotent,
+            idempotency_key=idempotency_key,
+            attempts=attempts,
         )
         if not response.content:
             return {}
@@ -268,6 +272,8 @@ class Transport:
         content: bytes | None = None,
         content_type: str | None = None,
         idempotent: bool | None = None,
+        idempotency_key: str | None = None,
+        attempts: int | None = None,
     ) -> httpx.Response:
         """One request, retried by the policy, raising this client's error.
 
@@ -281,13 +287,16 @@ class Transport:
         query = {key: value for key, value in (params or {}).items() if value is not None}
 
         def attempt() -> httpx.Response:
+            headers = self._headers(url, content_type=content_type, body=body is not None) or {}
+            if idempotency_key is not None:
+                headers["idempotency-key"] = idempotency_key
             response = self._client.request(
                 method,
                 url,
                 params=query or None,
                 json=None if body is None else dict(body),
                 content=content,
-                headers=self._headers(url, content_type=content_type, body=body is not None),
+                headers=headers or None,
             )
             # Not `is_error`, which is 4xx and 5xx only. A 3xx matters here
             # because redirects are not followed: left alone it would return a
@@ -298,7 +307,7 @@ class Transport:
             return response
 
         try:
-            return self._retrying(repeatable)(attempt)
+            return self._retrying(repeatable, attempts)(attempt)
         except httpx.HTTPError as error:
             raise self._error(
                 f"{self._subject} at {self.base_url} is unreachable: {error}"
@@ -306,9 +315,9 @@ class Transport:
 
     # ── Policy ───────────────────────────────────────────────────────────
 
-    def _retrying(self, repeatable: bool) -> Retrying:
+    def _retrying(self, repeatable: bool, attempts: int | None = None) -> Retrying:
         return Retrying(
-            stop=stop_after_attempt(self._attempts),
+            stop=stop_after_attempt(self._attempts if attempts is None else max(1, attempts)),
             wait=_wait,
             retry=retry_if_exception(lambda error: _worth_repeating(error, repeatable)),
             # The caller wants the failure that happened, not tenacity's

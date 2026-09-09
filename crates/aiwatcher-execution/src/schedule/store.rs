@@ -374,6 +374,21 @@ mod tests {
             scheduled("curation/pii", 9).execution_id_for(slot),
             scheduled("curation/pii", 9).execution_id_for(slot + time::Duration::days(1)),
         );
+        // Two kinds may share a name — the store is keyed by both, and a
+        // registered workflow is schedulable beside a pipeline. An id that
+        // dropped the kind would make the two nine o'clocks one run, and the
+        // second would be refused as a redelivery of the first with nothing
+        // anywhere to say a schedule had not fired.
+        let mut workflow = scheduled("curation/pii", 9);
+        workflow.definition_kind = DefinitionKind::Workflow;
+        assert_ne!(
+            scheduled("curation/pii", 9).execution_id_for(slot),
+            workflow.execution_id_for(slot),
+        );
+        assert_ne!(
+            scheduled("curation/pii", 9).execution_id_for_request("one-click"),
+            workflow.execution_id_for_request("one-click"),
+        );
     }
 
     #[tokio::test]

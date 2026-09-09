@@ -38,7 +38,6 @@ use std::sync::Arc;
 
 use aiwatcher_api::state::AppState;
 use aiwatcher_core::Checkpoint;
-use aiwatcher_execution::plan::DefinitionKind;
 use aiwatcher_execution::{
     ScheduleReader, ScheduleStore, ScheduledDefinition, SlotAdmission, SlotAdmissionRequest,
     SlotKey, SlotSettlement, WorkflowStore,
@@ -271,21 +270,20 @@ async fn start_run(
     definition: &ScheduledDefinition,
     slot: OffsetDateTime,
 ) -> std::result::Result<String, StartFailure> {
-    let DefinitionKind::CurationPipeline = definition.definition_kind else {
-        return Err(StartFailure {
-            permanent: true,
-            detail: "only a curation pipeline can be scheduled so far".to_owned(),
-        });
-    };
     // The head, read and pinned now. A schedule says *what* to run and never
     // which revision: "every day at nine, the latest saved version" is what
     // somebody setting one means, and the run records the revision it pinned so
     // a bad save is visible in the run rather than silent.
-    let plan = aiwatcher_api::executions::compile_curation_named(
+    //
+    // Which compiler answers is the definition's kind, and the choice is made
+    // once, in the API, by the same function the schedule route calls before it
+    // agrees to save this. A `match` here as well would be a second answer to
+    // "what does this schedule run": the day a third kind arrives, one side
+    // starts a run and the other refuses to save the schedule for it.
+    let plan = aiwatcher_api::executions::compile_head(
         state,
+        definition.definition_kind,
         &definition.definition_name,
-        None,
-        None,
     )
     .await
     .map_err(failure_of)?;

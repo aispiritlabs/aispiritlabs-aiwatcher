@@ -21,6 +21,19 @@ between a request nothing applied and one that may have been.
 uv add aiwatcher-sdk
 ```
 
+## Workflow runtime
+
+`Runtime(workflows=..., pools=..., placement=...)` is the composition root for
+workflow implementations, shared services, execution capacity and shutdown.
+`Workflow` describes a versioned process; typed `@task` functions implement its
+steps. Start the application with `aiwatcher-runtime --factory planner_runtime:build_runtime`.
+
+See [the runtime guide](aiwatcher_sdk/runtime/README.md) for setup, local scaling
+and the pending workflow registration/start boundary. The
+[worker guide](aiwatcher_sdk/worker/README.md) covers the lower-level task and
+HTTP contract. These are foundations for replacing Flyte, not a completed
+Planner migration.
+
 ## Tracing a run
 
 ```python

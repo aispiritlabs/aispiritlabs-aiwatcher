@@ -334,6 +334,15 @@ export type ArtifactRef = {
 };
 
 /**
+ * Which attempt, of which step, of which execution.
+ */
+export type AttemptKey = {
+    attempt: number;
+    execution_id: ExecutionId;
+    step_id: string;
+};
+
+/**
  * One physical attempt to perform a step. Immutable once terminal.
  *
  * **When it started and ended is not here.** An attempt's `step.*` events form
@@ -573,6 +582,7 @@ export type CheckpointRecord = {
  * A worker saying what it is and what it can run.
  */
 export type ClaimRequest = {
+    attempt?: null | AttemptKey;
     /**
      * The queues to take from. Every one must be a queue this caller's token
      * authorises; an empty list means all of them.
@@ -1239,6 +1249,24 @@ export type DimensionSummary = {
 };
 
 /**
+ * Which side of a decision a message was on.
+ *
+ * Recording both in one stream is what makes a decision explainable: the input
+ * that caused it and the outputs it produced sit together, at the version it
+ * was accepted at.
+ */
+export const Direction = { INPUT: 'input', OUTPUT: 'output' } as const;
+
+/**
+ * Which side of a decision a message was on.
+ *
+ * Recording both in one stream is what makes a decision explainable: the input
+ * that caused it and the outputs it produced sit together, at the version it
+ * was accepted at.
+ */
+export type Direction = typeof Direction[keyof typeof Direction];
+
+/**
  * Where to look, and what is under it.
  */
 export type EditorSession = {
@@ -1841,6 +1869,15 @@ export type ExecutionDetail = {
      */
     nodes: Array<NodeState>;
     summary: ExecutionSummary;
+};
+
+/**
+ * An ordered page of durable commands and decisions. Live facts use the existing workflow stream.
+ */
+export type ExecutionHistory = {
+    messages: Array<RecordedMessage>;
+    next_after?: number | null;
+    version: number;
 };
 
 /**
@@ -3406,6 +3443,27 @@ export const MessageKind = { EVENT: 'Event', COMMAND: 'Command' } as const;
  */
 export type MessageKind = typeof MessageKind[keyof typeof MessageKind];
 
+/**
+ * Everything about a message that is not what it says.
+ *
+ * The four correlation ids are `aiwatcher-core`'s, unchanged: an execution's
+ * `correlation_id` is normally its own id, and `causation_id` names the input
+ * message that produced this output. A reactor's completion event is caused by
+ * the command that dispatched it, which is what makes a stream readable as a
+ * chain of causes rather than a list.
+ */
+export type MessageMetadata = {
+    attempt?: number | null;
+    causation_id: CausationId;
+    correlation_id: CorrelationId;
+    message_id: MessageId;
+    occurred_at: string;
+    schema_version: number;
+    span_id?: null | SpanId;
+    step_id?: string | null;
+    trace_id?: null | TraceId;
+};
+
 export type MetricDelta = {
     baseline?: number | null;
     current?: number | null;
@@ -4499,6 +4557,17 @@ export type RecordedEvent = {
 };
 
 /**
+ * A message as the stream holds it.
+ */
+export type RecordedMessage = {
+    direction: Direction;
+    message: WorkflowMessage;
+    metadata: MessageMetadata;
+    recorded_at: string;
+    stream_version: number;
+};
+
+/**
  * What the store fills in. Emmett's `RecordedMessageMetadata`, plus the
  * aiwatcher-specific identity fields a projector would otherwise dig out of
  * `data` on every event.
@@ -5386,6 +5455,13 @@ export type SavedRevision = {
     revision: AnnotationRevision;
 };
 
+export type SavedWorkflow = {
+    definition: WorkflowSpec;
+    registered_at: string;
+    registered_by: string;
+    revision: DefinitionRevision;
+};
+
 /**
  * A definition's schedule, as somebody set it.
  *
@@ -6076,22 +6152,24 @@ export type SuiteSummary = {
 /**
  * What kind of definition is being run.
  *
- * One arm today, and an enum rather than a bare name because the second is
- * already named: a `WorkflowDefinition` compiles to the same `ExecutionPlan`
- * from a different editor, with different permissions and different
- * provenance (section 4). A `kind` nobody had to send would have to be guessed
- * from the name the day the second arrives.
+ * Two arms, which is what the enum was for: both compile to the same
+ * `ExecutionPlan` from different editors, with different provenance, and the
+ * names live in different registries under different prefixes (section 4). A
+ * `kind` nobody had to send would have to be guessed from the name — and two
+ * definitions may share one, which is exactly what `WorkflowSpec` being saved
+ * beside `CurationPipeline` allows.
  */
-export const TargetKind = { CURATION_PIPELINE: 'curation_pipeline' } as const;
+export const TargetKind = { CURATION_PIPELINE: 'curation_pipeline', WORKFLOW: 'workflow' } as const;
 
 /**
  * What kind of definition is being run.
  *
- * One arm today, and an enum rather than a bare name because the second is
- * already named: a `WorkflowDefinition` compiles to the same `ExecutionPlan`
- * from a different editor, with different permissions and different
- * provenance (section 4). A `kind` nobody had to send would have to be guessed
- * from the name the day the second arrives.
+ * Two arms, which is what the enum was for: both compile to the same
+ * `ExecutionPlan` from different editors, with different provenance, and the
+ * names live in different registries under different prefixes (section 4). A
+ * `kind` nobody had to send would have to be guessed from the name — and two
+ * definitions may share one, which is exactly what `WorkflowSpec` being saved
+ * beside `CurationPipeline` allows.
  */
 export type TargetKind = typeof TargetKind[keyof typeof TargetKind];
 
@@ -6478,6 +6556,10 @@ export type WorkAssignment = {
      */
     lease_expires_at: string;
     /**
+     * Named row outputs required by the pinned plan.
+     */
+    outputs: Array<string>;
+    /**
      * What the run itself was started with.
      */
     parameters: {
@@ -6489,7 +6571,12 @@ export type WorkAssignment = {
     params: {
         [key: string]: unknown;
     };
+    parent_span_id: string;
     queue: string;
+    /**
+     * The result route can acknowledge a matching outcome from durable history.
+     */
+    report_idempotent: boolean;
     step_id: string;
     /**
      * `name@version`, from the plan. The worker matches it against what it
@@ -6501,6 +6588,11 @@ export type WorkAssignment = {
      * The step's own deadline. Past it the server stops waiting for a report.
      */
     timeout_seconds: number;
+    trace_id: string;
+    /**
+     * Correlation supplied by the platform; the worker emits only child spans.
+     */
+    workflow_id: string;
 };
 
 /**
@@ -6555,6 +6647,59 @@ export type WorkerReport = WorkReport & {
 };
 
 /**
+ * What somebody wants to happen.
+ *
+ * Two families in one enum, and the split is by who sends it. The first six
+ * are **intentions** the API accepts from a caller. `ExecuteStep` and
+ * `RequestInput` are **effects** the decider emits for a reactor or a worker
+ * to pick up; they never reach the event log, because ADR_0026 keeps the
+ * reasoning in the store and puts only facts about work on the log.
+ */
+export type WorkflowCommand = {
+    command: 'start_execution';
+    execution_id: ExecutionId;
+    input?: {
+        [key: string]: unknown;
+    };
+    mode: ExecutionMode;
+    owner: ExecutionOwner;
+    plan: ExecutionPlan;
+    requested_by: string;
+} | {
+    command: 'retry_step';
+    step_id: string;
+} | {
+    command: 'cancel_execution';
+    reason?: string;
+} | {
+    command: 'pause_execution';
+} | {
+    command: 'resume_execution';
+} | {
+    answered_by: string;
+    attempt: number;
+    command: 'provide_input';
+    response: {
+        [key: string]: unknown;
+    };
+    step_id: string;
+} | {
+    attempt: number;
+    command: 'execute_step';
+    /**
+     * The stable idempotency key: `<execution>/<step>/<attempt>`. What a
+     * reactor asks a runtime by before it retries a timeout.
+     */
+    idempotency_key: string;
+    runtime: RuntimeKind;
+    step_id: string;
+} | {
+    attempt: number;
+    command: 'request_input';
+    step_id: string;
+};
+
+/**
  * A workflow as the catalog holds it.
  */
 export type WorkflowDefinition = {
@@ -6589,6 +6734,110 @@ export type WorkflowEdge = {
 };
 
 /**
+ * What happened.
+ *
+ * The ones a reactor or a worker reports — `StepStarted`, `StepCompleted`,
+ * `StepFailed` — arrive as *inputs* to the decider, because the decider did
+ * not know them: something outside performed the effect and came back. Every
+ * other variant is an output the decider produced.
+ */
+export type WorkflowEvent = {
+    event: 'execution_requested';
+    execution_id: ExecutionId;
+    input?: {
+        [key: string]: unknown;
+    };
+    mode: ExecutionMode;
+    owner: ExecutionOwner;
+    plan: ExecutionPlan;
+    requested_by: string;
+} | {
+    event: 'execution_started';
+} | {
+    attempt: number;
+    cache_key?: string | null;
+    event: 'step_scheduled';
+    runtime: RuntimeKind;
+    step_id: string;
+} | {
+    attempt: number;
+    event: 'step_retry_scheduled';
+    not_before: string;
+    step_id: string;
+} | {
+    attempt: number;
+    event: 'step_started';
+    step_id: string;
+} | {
+    attempt: number;
+    event: 'step_completed';
+    outputs?: Array<ArtifactRef>;
+    /**
+     * A bounded control value. Rows go in an artifact.
+     */
+    result?: {
+        [key: string]: unknown;
+    };
+    step_id: string;
+} | {
+    attempt: number;
+    error: StepError;
+    event: 'step_failed';
+    step_id: string;
+} | {
+    attempt: number;
+    cache_key: string;
+    event: 'step_cache_hit';
+    outputs?: Array<ArtifactRef>;
+    step_id: string;
+} | {
+    event: 'step_skipped';
+    reason: string;
+    step_id: string;
+} | {
+    attempt: number;
+    event: 'input_requested';
+    request: InputRequest;
+    step_id: string;
+} | {
+    answered_by: string;
+    attempt: number;
+    event: 'input_provided';
+    response: {
+        [key: string]: unknown;
+    };
+    step_id: string;
+} | {
+    event: 'execution_paused';
+} | {
+    event: 'execution_resumed';
+} | {
+    event: 'execution_cancelling';
+    reason?: string;
+} | {
+    event: 'execution_cancelled';
+} | {
+    event: 'execution_completed';
+} | {
+    event: 'execution_failed';
+    reason: string;
+};
+
+export type WorkflowInput = {
+    output: string;
+    step: string;
+};
+
+/**
+ * One thing in the stream, whichever kind it is.
+ */
+export type WorkflowMessage = (WorkflowCommand & {
+    kind: 'command';
+}) | (WorkflowEvent & {
+    kind: 'event';
+});
+
+/**
  * One node of a declared graph.
  */
 export type WorkflowNode = {
@@ -6610,6 +6859,38 @@ export type WorkflowPage = {
     next_cursor?: string | null;
     total_known: number;
     workflows: Array<WorkflowDefinition>;
+};
+
+/**
+ * A workflow's executable definition, saved by content before it is run.
+ */
+export type WorkflowSpec = {
+    name: string;
+    steps: Array<WorkflowTask>;
+    /**
+     * The application's release label; the immutable identity is the revision digest.
+     */
+    version: string;
+};
+
+export type WorkflowTask = {
+    after?: Array<string>;
+    id: string;
+    inputs?: Array<WorkflowInput>;
+    /**
+     * Named row artifacts this step produces.
+     */
+    outputs?: Array<string>;
+    params?: {
+        [key: string]: unknown;
+    };
+    queue: string;
+    retry?: RetryPolicy;
+    /**
+     * A registered function's name and pinned version. Never an import path to execute.
+     */
+    task_ref: string;
+    timeout_seconds: number;
 };
 
 export type UploadBlobData = {
@@ -8599,6 +8880,32 @@ export type ResumeExecutionResponses = {
 
 export type ResumeExecutionResponse = ResumeExecutionResponses[keyof ResumeExecutionResponses];
 
+export type ExecutionHistoryData = {
+    body?: never;
+    path: {
+        execution_id: string;
+    };
+    query?: {
+        after?: number | null;
+        limit?: number | null;
+    };
+    url: '/api/v1/executions/{execution_id}/history';
+};
+
+export type ExecutionHistoryErrors = {
+    404: ErrorBody;
+    501: ErrorBody;
+    503: ErrorBody;
+};
+
+export type ExecutionHistoryError = ExecutionHistoryErrors[keyof ExecutionHistoryErrors];
+
+export type ExecutionHistoryResponses = {
+    200: ExecutionHistory;
+};
+
+export type ExecutionHistoryResponse = ExecutionHistoryResponses[keyof ExecutionHistoryResponses];
+
 export type RetryStepData = {
     body?: never;
     path: {
@@ -9617,6 +9924,7 @@ export type ReportData = {
 };
 
 export type ReportErrors = {
+    400: ErrorBody;
     403: ErrorBody;
     409: ErrorBody;
     422: ErrorBody;
@@ -9630,6 +9938,151 @@ export type ReportResponses = {
 };
 
 export type ReportResponse = ReportResponses[keyof ReportResponses];
+
+export type ListWorkflowDefinitionsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/workflow-definitions';
+};
+
+export type ListWorkflowDefinitionsErrors = {
+    501: ErrorBody;
+    503: ErrorBody;
+};
+
+export type ListWorkflowDefinitionsError = ListWorkflowDefinitionsErrors[keyof ListWorkflowDefinitionsErrors];
+
+export type ListWorkflowDefinitionsResponses = {
+    200: Array<SavedWorkflow>;
+};
+
+export type ListWorkflowDefinitionsResponse = ListWorkflowDefinitionsResponses[keyof ListWorkflowDefinitionsResponses];
+
+export type RegisterWorkflowData = {
+    body: WorkflowSpec;
+    path?: never;
+    query?: never;
+    url: '/api/v1/workflow-definitions';
+};
+
+export type RegisterWorkflowErrors = {
+    403: ErrorBody;
+    422: ErrorBody;
+    501: ErrorBody;
+    503: ErrorBody;
+};
+
+export type RegisterWorkflowError = RegisterWorkflowErrors[keyof RegisterWorkflowErrors];
+
+export type RegisterWorkflowResponses = {
+    200: SavedWorkflow;
+};
+
+export type RegisterWorkflowResponse = RegisterWorkflowResponses[keyof RegisterWorkflowResponses];
+
+export type GetWorkflowDefinitionData = {
+    body?: never;
+    path: {
+        name: string;
+    };
+    query?: {
+        revision?: string | null;
+    };
+    url: '/api/v1/workflow-definitions/{name}';
+};
+
+export type GetWorkflowDefinitionErrors = {
+    404: ErrorBody;
+    501: ErrorBody;
+    503: ErrorBody;
+};
+
+export type GetWorkflowDefinitionError = GetWorkflowDefinitionErrors[keyof GetWorkflowDefinitionErrors];
+
+export type GetWorkflowDefinitionResponses = {
+    200: SavedWorkflow;
+};
+
+export type GetWorkflowDefinitionResponse = GetWorkflowDefinitionResponses[keyof GetWorkflowDefinitionResponses];
+
+export type ClearWorkflowScheduleData = {
+    body?: never;
+    path: {
+        /**
+         * The registered workflow
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/workflow-definitions/{name}/schedule';
+};
+
+export type ClearWorkflowScheduleErrors = {
+    501: ErrorBody;
+};
+
+export type ClearWorkflowScheduleError = ClearWorkflowScheduleErrors[keyof ClearWorkflowScheduleErrors];
+
+export type ClearWorkflowScheduleResponses = {
+    204: void;
+};
+
+export type ClearWorkflowScheduleResponse = ClearWorkflowScheduleResponses[keyof ClearWorkflowScheduleResponses];
+
+export type GetWorkflowScheduleData = {
+    body?: never;
+    path: {
+        /**
+         * The registered workflow
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/workflow-definitions/{name}/schedule';
+};
+
+export type GetWorkflowScheduleErrors = {
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type GetWorkflowScheduleError = GetWorkflowScheduleErrors[keyof GetWorkflowScheduleErrors];
+
+export type GetWorkflowScheduleResponses = {
+    200: ScheduleView;
+};
+
+export type GetWorkflowScheduleResponse = GetWorkflowScheduleResponses[keyof GetWorkflowScheduleResponses];
+
+export type SetWorkflowScheduleData = {
+    body: SetScheduleBody;
+    path: {
+        /**
+         * The registered workflow
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/workflow-definitions/{name}/schedule';
+};
+
+export type SetWorkflowScheduleErrors = {
+    404: ErrorBody;
+    /**
+     * The schedule cannot mean anything
+     */
+    422: ErrorBody;
+    501: ErrorBody;
+};
+
+export type SetWorkflowScheduleError = SetWorkflowScheduleErrors[keyof SetWorkflowScheduleErrors];
+
+export type SetWorkflowScheduleResponses = {
+    200: ScheduleView;
+};
+
+export type SetWorkflowScheduleResponse = SetWorkflowScheduleResponses[keyof SetWorkflowScheduleResponses];
 
 export type ListWorkflowExecutionsData = {
     body?: never;
