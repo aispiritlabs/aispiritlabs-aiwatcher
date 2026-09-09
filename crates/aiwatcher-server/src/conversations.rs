@@ -9,6 +9,12 @@
 //! policy nothing enforces is a paragraph, and the difference between the two
 //! is a loop that runs every hour and usually finds nothing.
 //!
+//! **The orphan payload sweep** is what gives a hosted run's sealed words the
+//! lifetime they were promised. It rides the same tick as the retention sweep
+//! and is the one job here that reads a store outside the archive — see
+//! [`forget_orphan_payloads`] for why it is in this role rather than beside the
+//! execution retention it mirrors.
+//!
 //! Both are one task, because they share a shutdown and neither is busy. A
 //! replica that is not running them loses nothing: the job state and the expiry
 //! are in the object store, so whichever process does run them picks up the
@@ -19,6 +25,8 @@ use std::sync::Arc;
 
 use aiwatcher_api::state::AppState;
 use aiwatcher_conversations::Registry;
+use aiwatcher_execution::state::ExecutionId;
+use aiwatcher_execution::store::WorkflowStore;
 use time::OffsetDateTime;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -38,6 +46,12 @@ pub fn spawn(
 ) -> Option<JoinHandle<()>> {
     let archive = Arc::clone(state.conversations.as_ref()?);
     let notify = Arc::clone(state.export_worker.as_ref()?);
+    // The workflow store, for the orphan sweep only. `None` in a process with
+    // no execution store, which is a process that seals no payloads either.
+    let runs = state
+        .executions
+        .as_ref()
+        .map(|handler| Arc::clone(handler.store()));
     let poll = config.conversation_export_poll;
     let sweep = config.conversation_sweep_interval;
     let worker = worker_id();
@@ -48,7 +62,7 @@ pub fn spawn(
         "the conversation archive's export worker and retention sweep are running"
     );
     Some(tokio::spawn(async move {
-        run(archive, notify, poll, sweep, worker, shutdown).await;
+        run(archive, notify, runs, poll, sweep, worker, shutdown).await;
     }))
 }
 
@@ -68,6 +82,7 @@ fn worker_id() -> String {
 async fn run(
     archive: Arc<Registry>,
     notify: Arc<tokio::sync::Notify>,
+    runs: Option<Arc<dyn WorkflowStore>>,
     poll: std::time::Duration,
     sweep: std::time::Duration,
     worker: String,
@@ -88,7 +103,10 @@ async fn run(
             }
             () = notify.notified() => drain(&archive, &worker, &shutdown).await,
             _ = poll_tick.tick() => drain(&archive, &worker, &shutdown).await,
-            _ = sweep_tick.tick() => expire(&archive).await,
+            _ = sweep_tick.tick() => {
+                expire(&archive).await;
+                forget_orphan_payloads(&archive, runs.as_deref()).await;
+            }
         }
     }
 }
@@ -155,5 +173,189 @@ async fn expire(archive: &Registry) {
         ),
         Ok(_) => tracing::debug!("nothing in the conversation archive has expired"),
         Err(error) => tracing::warn!(%error, "the conversation retention sweep failed"),
+    }
+}
+
+/// Forget the sealed payloads of runs the workflow store no longer holds.
+///
+/// A hosted run's `sealed` words live for as long as the run's history does —
+/// that is what a deployment turning the policy on is promised, and until this
+/// existed nothing kept it. The three things that look as though they would
+/// each miss for their own reason, and `aiwatcher_conversations::payload` says
+/// which; this is the one that was worth building.
+///
+/// **Why here rather than beside the retention it mirrors.** The execution
+/// retention sweep runs in the `work` role and the archive in `serve`. §43.11
+/// already makes those two share the object store *and* the workflow store, so
+/// the join costs nothing here and would cost an archive wired into the other
+/// role there. A split deployment sweeps from `serve`; a combined one is the
+/// same process either way.
+///
+/// **Why "no projection" is the whole test.** A projection is written by the
+/// first command of every run and removed only by `prune`, and
+/// `POST …/payloads` refuses a run that has none — so a payload whose run has
+/// no projection belongs to a run that has been forgotten. A store that cannot
+/// answer stops the pass rather than continuing: an error is not an absence,
+/// but a store that is down will be down for the next run too.
+async fn forget_orphan_payloads(archive: &Registry, runs: Option<&dyn WorkflowStore>) {
+    let Some(runs) = runs else {
+        return;
+    };
+    let sealed = match archive.payload_executions().await {
+        Ok(sealed) => sealed,
+        Err(error) => {
+            tracing::warn!(%error, "cannot list the runs that have sealed payloads");
+            return;
+        }
+    };
+    let (mut payloads, mut executions) = (0, 0);
+    for execution in sealed {
+        match runs.projection(&ExecutionId::new(execution.clone())).await {
+            Ok(Some(_)) => {}
+            Ok(None) => match archive.erase_payloads_of(&execution).await {
+                Ok(erased) => {
+                    payloads += erased;
+                    executions += 1;
+                }
+                Err(error) => {
+                    tracing::warn!(%execution, %error, "cannot erase a forgotten run's payloads");
+                }
+            },
+            Err(error) => {
+                tracing::warn!(%error, "cannot ask whether a run still exists");
+                return;
+            }
+        }
+    }
+    if executions > 0 {
+        tracing::info!(
+            payloads,
+            executions,
+            "sealed payloads went with the runs that were forgotten"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use aiwatcher_conversations::{ArchivePolicy, Keyring};
+    use aiwatcher_core::{CausationId, CorrelationId, MessageId};
+    use aiwatcher_execution::store::memory::MemoryWorkflowStore;
+    use aiwatcher_execution::{
+        AppendRequest, ExecutionMode, ExecutionOwner, ExpectedVersion, MessageMetadata,
+        PendingMessage, RunProjection, RunState, StateType, WorkflowCommand, WorkflowMessage,
+    };
+    use aiwatcher_prompts::adapters::memory::MemoryObjectStore;
+    use time::OffsetDateTime;
+
+    const KEY: [u8; 32] = [7; 32];
+
+    fn archive() -> Registry {
+        Registry::new(
+            Arc::new(MemoryObjectStore::new()),
+            "conversations",
+            Keyring::single("k1", KEY),
+            ArchivePolicy::default(),
+        )
+    }
+
+    /// One running execution, written straight into the store.
+    ///
+    /// What the sweep reads is the projection, so a start decided through
+    /// `decide` would put a plan and three events into a test about a loop.
+    fn running(execution: &ExecutionId) -> AppendRequest {
+        AppendRequest {
+            expected_version: ExpectedVersion::NoStream,
+            input: PendingMessage::input(
+                WorkflowMessage::Command(WorkflowCommand::PauseExecution),
+                MessageMetadata {
+                    schema_version: aiwatcher_execution::message::SCHEMA_VERSION,
+                    message_id: MessageId::new(format!("{execution}/only")),
+                    occurred_at: OffsetDateTime::UNIX_EPOCH,
+                    correlation_id: CorrelationId::new(execution.as_str()),
+                    causation_id: CausationId::new("test"),
+                    trace_id: None,
+                    span_id: None,
+                    step_id: None,
+                    attempt: None,
+                },
+            ),
+            outputs: Vec::new(),
+            projection: RunProjection {
+                execution_id: execution.clone(),
+                plan_id: String::new(),
+                definition_name: "hosted".to_owned(),
+                owner: ExecutionOwner::Worker,
+                mode: ExecutionMode::Hosted,
+                payloads: Default::default(),
+                state: RunState::of(StateType::Running),
+                requested_by: "a test".to_owned(),
+                steps: Vec::new(),
+                last_message_version: 1,
+                created_at: OffsetDateTime::UNIX_EPOCH,
+            },
+            outbox: Vec::new(),
+            checkpoint: None,
+            timers: Vec::new(),
+            attempts: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_forgotten_run_loses_its_payloads_and_a_live_one_keeps_its_own() {
+        let archive = archive();
+        let store = MemoryWorkflowStore::new();
+        let live = ExecutionId::new("run-live");
+        store
+            .append(&live, running(&live))
+            .await
+            .expect("a running execution");
+        let kept = archive
+            .seal_payload("run-live", b"still running")
+            .await
+            .expect("sealing");
+        let gone = archive
+            .seal_payload("run-forgotten", b"pruned last week")
+            .await
+            .expect("sealing");
+
+        forget_orphan_payloads(&archive, Some(&store as &dyn WorkflowStore)).await;
+
+        assert!(
+            archive.open_payload("run-live", &kept.digest).await.is_ok(),
+            "a run the store still holds keeps its words"
+        );
+        assert!(
+            archive
+                .open_payload("run-forgotten", &gone.digest)
+                .await
+                .is_err(),
+            "a run the store has forgotten does not"
+        );
+        assert_eq!(
+            archive.payload_executions().await.expect("listing"),
+            vec!["run-live".to_owned()]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_process_with_no_execution_store_erases_nothing() {
+        // A process with no workflow store seals no payloads either, so `None`
+        // is "cannot answer" rather than "every run is gone" — reading it the
+        // other way would erase an archive another process is still writing to.
+        let archive = archive();
+        archive
+            .seal_payload("run-a", b"words")
+            .await
+            .expect("sealing");
+
+        forget_orphan_payloads(&archive, None).await;
+
+        assert_eq!(
+            archive.payload_executions().await.expect("listing"),
+            vec!["run-a".to_owned()]
+        );
     }
 }

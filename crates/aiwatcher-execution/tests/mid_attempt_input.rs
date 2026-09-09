@@ -629,3 +629,31 @@ fn a_lapsed_deadline_that_answers_an_authored_gate_still_completes_it() {
     assert_eq!(step.state.state_type, StateType::Completed);
     assert_eq!(step.current_attempt, 1);
 }
+
+#[test]
+fn a_hosted_run_records_the_answer_and_schedules_nothing() {
+    // A hosted run's worker chooses its own next node, so recording the answer
+    // is the whole of this engine's part in it. Scheduling one here would be
+    // the engine and the worker both deciding what runs next — what
+    // `dispatch_ready` returns early to prevent, reached through a second door.
+    let mut run = match parked().0 {
+        ExecutionState::Active(execution) => *execution,
+        ExecutionState::Empty => panic!("a run"),
+    };
+    run.mode = ExecutionMode::Hosted;
+    let state = ExecutionState::Active(Box::new(run));
+
+    let outputs = decide(
+        &state,
+        &answers("agent", 1, "approve"),
+        &cause("answered"),
+        now(),
+    )
+    .expect("an answer");
+
+    assert_eq!(
+        names(&outputs),
+        vec!["input_provided"],
+        "the history is kept and the next node is the worker's"
+    );
+}

@@ -834,6 +834,7 @@ pub async fn build(config: Config) -> Result<Runtime> {
             policy: config.execution_payloads,
             locked: config.execution_payloads_locked,
         },
+        answer_limits: config.answer_limits,
         auth: build_authenticator(&config).await?,
         health,
     };

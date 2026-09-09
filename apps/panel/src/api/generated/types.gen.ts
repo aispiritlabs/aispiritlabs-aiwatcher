@@ -6025,6 +6025,13 @@ export type Settled = {
      * worker whose only fault was being the version it was pinned at. The same
      * staged-removal discipline the schema keeps. `outcome` is the one a new
      * client asks; this is derived from it and never set independently.
+     *
+     * Marked deprecated in the contract rather than only in prose, so the
+     * removal is something every generated client can see coming instead of
+     * something somebody has to remember. It goes when no worker still reads
+     * it.
+     *
+     * @deprecated
      */
     succeeded: boolean;
 };
@@ -9628,6 +9635,10 @@ export type SealPayloadData = {
 export type SealPayloadErrors = {
     400: ErrorBody;
     403: ErrorBody;
+    /**
+     * No such execution
+     */
+    404: ErrorBody;
     /**
      * This instance has no conversation archive
      */

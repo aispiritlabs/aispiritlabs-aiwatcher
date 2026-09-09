@@ -718,6 +718,7 @@ pub struct PayloadSealed {
         (status = 200, body = PayloadSealed),
         (status = 400, body = crate::error::ErrorBody),
         (status = 403, body = crate::error::ErrorBody),
+        (status = 404, body = crate::error::ErrorBody, description = "No such execution"),
         (status = 501, body = crate::error::ErrorBody, description = "This instance has no conversation archive"),
         (status = 503, body = crate::error::ErrorBody),
     ),
@@ -736,6 +737,20 @@ async fn seal_payload(
         .conversations
         .as_ref()
         .ok_or(ApiError::ConversationArchiveDisabled)?;
+    // A payload's lifetime is its run's, and the sweep that keeps that promise
+    // reads "no projection" as "this run was forgotten". Sealing for a run that
+    // never existed would put content in the archive that nothing accounts for
+    // and the next sweep takes away — a 404 now says so at the moment it can be
+    // acted on.
+    if handler(&state)?
+        .store()
+        .projection(&ExecutionId::new(execution_id.clone()))
+        .await
+        .map_err(aiwatcher_execution::HandleError::Store)?
+        .is_none()
+    {
+        return Err(ApiError::NotFound(format!("execution {execution_id}")));
+    }
     let sealed = archive
         .seal_payload(&execution_id, &body)
         .await
@@ -1540,6 +1555,27 @@ async fn provide_input(
         {
             caller.require(needed)?;
         }
+        // What this deployment allows an answer to be. Checked here because
+        // this is the one door every answer comes through and the only place
+        // that holds both the configuration and the step's own history —
+        // `decide` reads no configuration and must not, or a replay would
+        // reach a different decision on an instance configured differently.
+        //
+        // A step's answers accumulate: a parked attempt is resumed by one that
+        // re-runs the work and reads all of them, so nothing takes any away.
+        // Unbounded, the only backstop is the store refusing a message that has
+        // grown too large — which arrives late, breaks the run, and names the
+        // wrong thing.
+        let given = run
+            .steps
+            .iter()
+            .find(|step| step.step_id == step_id)
+            .map_or(0, |step| step.answers.len());
+        let bytes = serde_json::to_vec(&body.response).map_or(0, |json| json.len());
+        state
+            .answer_limits
+            .admit(given, bytes)
+            .map_err(ApiError::BadRequest)?;
         // Who answered comes from the session, never from the body. A field a
         // caller could set would make the one record of a human decision say
         // whatever the caller preferred it to say.

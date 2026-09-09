@@ -53,6 +53,69 @@ impl PayloadDefault {
     }
 }
 
+/// How many times one step may be answered, and how big an answer may be.
+///
+/// A step's answers accumulate: a parked attempt is resumed by a new one that
+/// re-runs the work and reads them all, so a task that asks per tool call adds
+/// one per turn and nothing takes any away. Left unbounded, the only backstop
+/// is the store refusing a message that has grown too large — a failure that
+/// arrives late, breaks the run, and names the wrong thing.
+///
+/// Bounded here rather than in `decide`, which reads no configuration and must
+/// not: the answer route is the one door every answer comes through, and a
+/// refusal there names what is wrong while the run is still fine. A timeout's
+/// own answer does not pass this way and does not need to — its response was
+/// authored with the gate and is bounded by whatever accepted the definition.
+#[derive(Clone, Copy, Debug)]
+pub struct AnswerLimits {
+    /// `AIWATCHER_MAX_ANSWERS_PER_STEP`. `None` means no ceiling, which is a
+    /// deployment saying so rather than a default nobody chose.
+    pub per_step: Option<usize>,
+    /// `AIWATCHER_MAX_ANSWER_BYTES`, over the answer's JSON.
+    pub bytes: usize,
+}
+
+impl Default for AnswerLimits {
+    fn default() -> Self {
+        Self {
+            // High enough that an approval per tool call over a long turn is
+            // ordinary, low enough that a task looping on its own question
+            // stops before the stream does.
+            per_step: Some(256),
+            // The same ceiling a step's inline result gets, and for the same
+            // reason: an answer is a bounded control value, and anything that
+            // grows with the data belongs in an artifact.
+            bytes: aiwatcher_execution::message::MAX_INLINE_RESULT_BYTES,
+        }
+    }
+}
+
+impl AnswerLimits {
+    /// Whether one more answer of this size may be given, or why not.
+    ///
+    /// # Errors
+    ///
+    /// The refusal, as prose a person reads, naming the variable that sets it.
+    pub fn admit(self, given: usize, bytes: usize) -> Result<(), String> {
+        if bytes > self.bytes {
+            return Err(format!(
+                "that answer is {bytes} bytes and the limit is {} \
+                 (AIWATCHER_MAX_ANSWER_BYTES). An answer is a decision, not data: \
+                 hand rows to the step as an artifact instead",
+                self.bytes
+            ));
+        }
+        match self.per_step {
+            Some(ceiling) if given >= ceiling => Err(format!(
+                "this step has already been answered {given} times and the limit is {ceiling} \
+                 (AIWATCHER_MAX_ANSWERS_PER_STEP). A step that keeps asking is a task looping \
+                 on its own question rather than one waiting on a person"
+            )),
+            _ => Ok(()),
+        }
+    }
+}
+
 /// Shared application state.
 ///
 /// The bus is held behind trait objects so the same router runs over the
@@ -196,6 +259,8 @@ pub struct AppState {
     /// archive, no key and no flag, and a deployment that wants its words held
     /// here turns that on rather than finding it was already happening.
     pub execution_payloads: PayloadDefault,
+    /// What this deployment allows an answer to be. See [`AnswerLimits`].
+    pub answer_limits: AnswerLimits,
     /// `None` when no identity provider is configured, which is the default.
     /// Unlike `prompts` and `runner`, absence here is not a 501 on a few
     /// routes — it is every caller being [`aiwatcher_auth::Identity::anonymous`]
@@ -288,5 +353,58 @@ impl HealthState {
     #[must_use]
     pub fn is_ready(&self) -> bool {
         self.ready.load(std::sync::atomic::Ordering::Acquire)
+    }
+}
+
+#[cfg(test)]
+mod answer_limit_tests {
+    use super::AnswerLimits;
+
+    #[test]
+    fn a_step_that_keeps_asking_is_stopped_before_the_stream_is() {
+        // The number this exists for. Answers accumulate because a resumed
+        // attempt re-runs the work and reads all of them, so a task looping on
+        // its own question adds one per turn for ever — and unbounded, the
+        // first thing to say so is the store refusing an oversized message,
+        // which breaks the run and names the wrong thing.
+        let limits = AnswerLimits {
+            per_step: Some(2),
+            bytes: 1024,
+        };
+        assert!(limits.admit(1, 10).is_ok());
+        let refused = limits.admit(2, 10).expect_err("the third answer");
+        assert!(
+            refused.contains("AIWATCHER_MAX_ANSWERS_PER_STEP"),
+            "{refused}"
+        );
+    }
+
+    #[test]
+    fn an_answer_that_is_data_rather_than_a_decision_is_refused_by_name() {
+        let limits = AnswerLimits {
+            per_step: None,
+            bytes: 16,
+        };
+        let refused = limits.admit(0, 17).expect_err("too large");
+        assert!(refused.contains("AIWATCHER_MAX_ANSWER_BYTES"), "{refused}");
+        assert!(limits.admit(0, 16).is_ok(), "the limit itself is allowed");
+    }
+
+    #[test]
+    fn no_ceiling_is_a_deployment_saying_so_rather_than_a_default() {
+        // `0` reads as "no ceiling" and never as "answer nothing", the same way
+        // retention's zero keeps rather than deletes: one character must not be
+        // able to ask for a run nobody can ever answer.
+        let limits = AnswerLimits {
+            per_step: None,
+            bytes: 1024,
+        };
+        assert!(limits.admit(10_000, 10).is_ok());
+    }
+
+    #[test]
+    fn the_default_admits_an_approval_per_tool_call_over_a_long_turn() {
+        let limits = AnswerLimits::default();
+        assert!(limits.admit(200, 512).is_ok());
     }
 }

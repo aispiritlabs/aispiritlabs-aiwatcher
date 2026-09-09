@@ -4,6 +4,12 @@ One file per decision that would be expensive to reverse, written when the
 decision is made rather than reconstructed afterwards. The value is in the
 **Consequences** section: what this costs, and what would make it wrong.
 
+Twenty-seven of them is a lot to read cold. [`docs/decisions/`](../decisions/)
+groups them into four readings — the log, the registries, execution,
+deployment — with one line each and, unlike the table below, which ones later
+ADRs amended or partly took back. Those are reading guides; **these files are
+the record**, and they are what code comments cite.
+
 | ADR | Decision |
 |-----|----------|
 | [0001](ADR_0001_EVENT_ENVELOPE.md) | The event envelope, and the four correlation ids |
@@ -32,5 +38,7 @@ decision is made rather than reconstructed afterwards. The value is in the
 | [0024](ADR_0024_CURATION_BLOCKS.md) | A curation is a chain of blocks, each belonging to the engine that can run it |
 | [0025](ADR_0025_MANAGED_EXECUTION.md) | A managed execution is owned by the server, and the browser only asks for one |
 | [0026](ADR_0026_ENGINE_AS_PRODUCER.md) | The execution engine is a producer on its own log |
+| [0027](ADR_0027_LOCAL_INSTALL.md) | A local install is one binary, one database and one token |
 
-Use [template.md](template.md) for a new one.
+Use [template.md](template.md) for a new one, and add a line to the reading it
+belongs to in [`docs/decisions/`](../decisions/).

@@ -5484,6 +5484,16 @@
               }
             }
           },
+          "404": {
+            "description": "No such execution",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "501": {
             "description": "This instance has no conversation archive",
             "content": {
@@ -20096,7 +20106,8 @@
           },
           "succeeded": {
             "type": "boolean",
-            "description": "Whether the attempt finished its work successfully.\n\nKept beside [`Self::outcome`], which subsumes it, because an SDK rolls\nseparately from this server and every released one reads this field —\nremoving it in the release that adds the wider answer would break a\nworker whose only fault was being the version it was pinned at. The same\nstaged-removal discipline the schema keeps. `outcome` is the one a new\nclient asks; this is derived from it and never set independently."
+            "description": "Whether the attempt finished its work successfully.\n\nKept beside [`Self::outcome`], which subsumes it, because an SDK rolls\nseparately from this server and every released one reads this field —\nremoving it in the release that adds the wider answer would break a\nworker whose only fault was being the version it was pinned at. The same\nstaged-removal discipline the schema keeps. `outcome` is the one a new\nclient asks; this is derived from it and never set independently.\n\nMarked deprecated in the contract rather than only in prose, so the\nremoval is something every generated client can see coming instead of\nsomething somebody has to remember. It goes when no worker still reads\nit.",
+            "deprecated": true
           }
         }
       },

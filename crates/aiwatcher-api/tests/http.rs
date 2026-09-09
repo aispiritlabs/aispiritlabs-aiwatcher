@@ -194,6 +194,7 @@ impl Fixture {
         let live = Arc::new(LiveHub::default());
         let health = HealthState::new();
         let state = AppState {
+            answer_limits: Default::default(),
             read_model: Arc::clone(&read_model),
             live: Arc::clone(&live),
             source: Arc::clone(&bus) as _,

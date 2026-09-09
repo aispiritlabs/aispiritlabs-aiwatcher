@@ -1199,3 +1199,87 @@ async fn a_failing_job_releases_its_lease_rather_than_waiting_for_it_to_expire()
             .contains(&job.job_id)
     );
 }
+
+// ── Sealed execution payloads ────────────────────────────────────────────────
+//
+// A hosted run's words, and the one thing the module could not do until now:
+// be deleted. The key hashes the execution, so what makes these findable is the
+// plaintext head written beside each one.
+
+#[tokio::test]
+async fn a_sealed_payload_can_be_found_by_the_run_it_belongs_to() {
+    let archive = registry();
+    archive
+        .seal_payload("run-a", b"the first hop")
+        .await
+        .unwrap();
+    archive
+        .seal_payload("run-a", b"the second hop")
+        .await
+        .unwrap();
+    archive.seal_payload("run-b", b"another run").await.unwrap();
+
+    assert_eq!(
+        archive.payload_executions().await.unwrap(),
+        vec!["run-a".to_owned(), "run-b".to_owned()]
+    );
+}
+
+#[tokio::test]
+async fn a_payload_head_names_the_run_and_never_the_words() {
+    let objects = store();
+    let archive = registry_with(objects.clone(), ArchivePolicy::default());
+    archive
+        .seal_payload("run-a", b"the account number is 900412")
+        .await
+        .unwrap();
+
+    let heads: Vec<_> = objects
+        .list("conversations/executions/")
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|entry| entry.key.ends_with(".head.json"))
+        .collect();
+    assert_eq!(heads.len(), 1);
+
+    let body = objects.get(&heads[0].key).await.unwrap().expect("a head");
+    let text = String::from_utf8(body).expect("the head is plaintext");
+    assert!(text.contains("run-a"), "the head names its run: {text}");
+    assert!(
+        !text.contains("900412"),
+        "a head is plaintext, so it may hold no content: {text}"
+    );
+}
+
+#[tokio::test]
+async fn erasing_a_run_takes_its_payloads_and_leaves_every_other_run_alone() {
+    let archive = registry();
+    let kept = archive.seal_payload("run-b", b"another run").await.unwrap();
+    let gone = archive
+        .seal_payload("run-a", b"the first hop")
+        .await
+        .unwrap();
+
+    assert_eq!(archive.erase_payloads_of("run-a").await.unwrap(), 1);
+
+    assert!(matches!(
+        archive.open_payload("run-a", &gone.digest).await,
+        Err(Error::NotFound(_))
+    ));
+    assert_eq!(
+        archive.payload_executions().await.unwrap(),
+        vec!["run-b".to_owned()],
+        "an erased run is no longer listed, and the head went with the content"
+    );
+    assert!(archive.open_payload("run-b", &kept.digest).await.is_ok());
+}
+
+#[tokio::test]
+async fn erasing_a_run_that_sealed_nothing_is_a_no_op_rather_than_a_failure() {
+    // What lets a sweep call this without asking first, and what makes a second
+    // pass over the same run visibly nothing rather than silently nothing.
+    let archive = registry();
+
+    assert_eq!(archive.erase_payloads_of("run-never").await.unwrap(), 0);
+}

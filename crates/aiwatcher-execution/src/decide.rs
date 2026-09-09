@@ -1000,6 +1000,21 @@ fn answer_lands(
         continue_after(execution, step_id, emit, now);
         return;
     }
+    // A hosted run's worker chooses its own next node, so recording the answer
+    // is the whole of this engine's part in it. Scheduling one here would be
+    // the engine and the worker both deciding what runs next — the failure
+    // `dispatch_ready` returns early to prevent, arriving through a second
+    // door.
+    //
+    // Unreachable today and said anyway: nothing in a hosted run emits
+    // `StepScheduled`, so no step reaches an attempt to park, and an answer is
+    // refused as `NotWaiting` before it gets here. That is an accident of what
+    // is not built yet rather than a rule, and the day a hosted decider parks a
+    // turn this has to be a decision somebody made rather than one the code
+    // fell into.
+    if execution.mode == ExecutionMode::Hosted {
+        return;
+    }
     // Scheduled from the state the answer *reaches*, not the one it arrived at,
     // so the answer the new attempt will read is already in it. It re-runs the
     // work from the beginning and reads it out of the step's `answers` — the

@@ -1,30 +1,27 @@
 //! What this deployment is actually doing, as numbers somebody can graph.
 //!
-//! Two questions, and neither had an answer anywhere in the workspace. They are
-//! together because they are the same *kind* of question — how far behind is
-//! this, and how much is piling up — and because both are the gate for a design
-//! rather than a feature in themselves.
+//! Two readings, together because they are the same kind of question: how far
+//! behind is this, and how much is piling up.
 //!
-//! **How late is a scheduled run, and how many were due at once?** The tick
-//! rate is an operational choice and not a correctness one: `slots_between`
-//! returns the same slots however the span is cut. What it decides is how late
-//! a nine o'clock run may be, and until this there was no way to know. Lateness
-//! is measured from the slot to the moment the tick *found* it, not to the
-//! moment the run started — the second would fold the store's latency and the
-//! compiler's into a number about the clock.
+//! **How late is a scheduled run, and how many were due at once?** Lateness is
+//! measured from the slot to the moment the tick *found* it, never to the
+//! moment the run started — the second folds the store's latency and the
+//! compiler's into a number about the clock. It rides with the backlog from the
+//! same tick, because one slot four minutes behind and forty of them are the
+//! same lateness and very different news.
 //!
 //! **How much is in the object store that nothing will delete?** Workflow
-//! retention prunes executions; it does not follow their artifacts. An artifact
-//! is content-addressed with no head, no labels and no list, so two attempts
-//! that produced the same bytes share one object and nothing records how many
-//! runs point at it. A reference-aware collector is the answer to that, and
-//! whether it is worth building is a question about a number nobody had — so
-//! this reports the number first.
+//! retention prunes executions and does not follow their artifacts. Whether an
+//! object is still *reachable* is a question about streams retention has been
+//! deleting, so this counts what is there and says nothing about what should
+//! be; the curve over weeks is what decides whether a collector is worth
+//! building.
 //!
-//! What is **not** here is staging. A notebook's staged rows live in
+//! Staging is **not** here. A notebook's staged rows live in
 //! `services/ml_pipeline`, in that process's own scratch directory, keyed by a
-//! hash of the context; this crate cannot list them and reporting a zero would
-//! be worse than reporting nothing. That service answers for its own disk.
+//! hash of the context — this crate cannot list that disk, and a zero reported
+//! from here would be worse than no number. `GET /ml-pipeline/staging` answers
+//! for it.
 
 use std::sync::Arc;
 

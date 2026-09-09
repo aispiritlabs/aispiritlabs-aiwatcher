@@ -1,11 +1,10 @@
 # Pipeline and Workflow Execution Architecture
 
-- **Status:** implementation plan — revision 3.1. Managed Flow/marimo execution,
-  controls, retention, schedules and the chart exist; recovery, scheduler and
-  upgrade guarantees remain open after the 2026-09-08 review. Section 28 owns
-  the current delivery order and acceptance gates; `KICKOFF.md` is the entry
-  point. Section 43 records implementation history, qualified by 43.35.
-  Revision 2's cross-repository review remains in section 33.
+- **Status:** implementation plan — revision 4. Phases 0–7 and 10–13 are
+  delivered, as is Phase 14's authored gate. **Section 28 is the entry point**
+  and owns the delivery order and the acceptance gates; its *What is left* is
+  the current list. Section 43 records implementation history, qualified by
+  43.35. Revision 2's cross-repository review remains in section 33.
 - **Audience:** maintainers of the Rust API, event pipeline, curation services,
   panel, the Python SDK, and the planner and `ai_spirit_agent` integrations
 - **Last updated:** 2026-09-08
@@ -1577,7 +1576,10 @@ kept because ADRs, kickoff documents and code comments cite them by number —
 they name feature scope, not an order that requires every lower-numbered phase
 before a higher-numbered one.
 
-[KICKOFF.md](KICKOFF.md) is the short entry point.
+The kickoff documents for finished work are deleted rather than kept as
+closure notes; the two that remain — [join hardening](KICKOFF_JOIN_HARDENING.md)
+and [mid-attempt input](KICKOFF_MID_ATTEMPT_INPUT.md) — are the live ones, and
+they are named under *What is left*.
 [PIPELINE_REVIEW_2026-09-08.md](PIPELINE_REVIEW_2026-09-08.md) holds the findings
 works 1–5 close — `R1–R7` concern the changes that were pending then, `A1`
 predates them — and
@@ -1614,45 +1616,39 @@ Phase 12 earns.
 | Panel (Phase 7) | Managed run, controls, allowed actions, URL restoration, one reader for every server answer, a canvas that lights only at the revision it compiled |
 | Scheduler | Cadence, CRUD, transactional admission, per-slot outcomes, `next_run` computed on the server |
 | Worker (Phases 10, 11 Level 2) | The protocol, the Python `Runtime`, the authoring path, schedules for registered workflows, Planner on the boundary |
-| Hosted decider (Phase 13) | **Partial** — the append route, the decider lease and a worker target that mints `owner = worker, mode = hosted`. No event store, no timers, and the `sealed` refusal has no reader |
+| Hosted decider (Phase 13) | **Closed** — the append route, the decider lease, `AiwatcherEventStore`, the timer table and its tick, the `sealed` refusal, and a join on the stream rather than in process memory |
 | Human input (Phase 14) | **Partial** — both authored surfaces have a gate: a curation's `approval` block and a workflow step's `approval`, compiling to one `HumanInput` binding, answered through one route and one panel control, with the role each question names required on top of the editor floor, and a deadline the timer table delivers. No `await` from inside an attempt |
 
 ### What is left
 
-**Phase 13 — the hosted decider.** The one item being worked toward here.
-[KICKOFF_HOSTED_DECIDER.md](KICKOFF_HOSTED_DECIDER.md) is the session's entry
-point; it was written before the first two steps landed, so this list is what is
-actually missing.
+**Phase 13 is closed.** The append route, the decider lease,
+`AiwatcherEventStore`, the timers and the `sealed` refusal all landed, and the
+join moved out of process memory onto the stream — `StreamJoinLedger` beside
+`MemoryJoinLedger` behind one `JoinLedger` port. Its exit passes: a fan-out of
+three survives a worker restart between the second and third completion and
+fires the summarizer once. **Phase 14's authored gate is closed too**:
+`BlockSpec::Approval` compiles to the `HumanInput` binding that already existed,
+so a curation chain can stop and wait for a person.
 
-- ~~The append route.~~ **Done.** `POST /api/v1/executions/{id}/stream` with
-  `expected_version`, an `Idempotency-Key` that is the input's own message id,
-  and a 409 that says where the stream got to; the paged history reads beside it.
-  Section 20's separate read stream stays struck (43.21).
-- ~~One lease on the execution.~~ **Done.** `hosted::DeciderLease` over
-  `aiwatcher_jobs::LEASE_SECONDS`, proved by the contract suite on all three
-  adapters rather than by one adapter's test. It protects the *work* — an agent
-  turn is a model call somebody pays for twice — and never the history, which
-  `expected_version` already protects whether or not anybody holds a lease.
-- ~~`AiwatcherEventStore`.~~ **Done.** `aiwatcher_sdk.integrations.agentic`
-  satisfies `agentic.workflow.EventStore`, so `DurableWorkflowExecutor` runs
-  over a shared store.
-- ~~Timers.~~ **Done.** `execution_timers` (migration 0009), `TimerWrite`,
-  `fire_due_timers` and a ten-second tick that fires each row **once** — under
-  an id derived from the execution and the timer, retired in the transaction
-  that delivered it, so two replicas produce one delivery with no lease. Phase
-  14's deadline is the second thing that rides it (43.39).
-- ~~The `sealed` refusal has no reader.~~ **Done.** `PayloadPolicy::needs_archive`
-  is read where a run is started and again at start-up, so a definition choosing
-  `sealed` without the archive is refused rather than silently downgraded.
-- **`agentic_graph`'s join buckets as events in the stream**, in
-  `ai_spirit_agent` — `_expected_completion_counts`, `_completion_buckets` and
-  `_last_inputs` are three dictionaries in one process, and a fan-out whose
-  worker restarts loses them. **The only thing left on this list**, and the one
-  that Phase 13's exit is a test of.
+Two sessions are live, each with its own kickoff, and they **share four files** —
+`decide.rs`, `handler.rs`, `hosted.rs` and `message.rs`. Agree who holds them
+before either starts, and commit by path: a `git commit -a` has already once
+swept one session's work into another's.
 
-*Phase 13's own exit:* a searcher → summarizer graph with a fan-out of three
-survives a worker restart between the second and third completion and fires the
-summarizer **once**.
+**[Hardening the graph join](KICKOFF_JOIN_HARDENING.md)** — mostly in
+`ai_spirit_agent`. The join works; these three reduce what happens when it goes
+wrong. Scope the stream to a turn (`graph:<graph_id>:<turn_id>`) rather than to
+a graph; make the claim takeable over, taken before the work rather than after;
+put a deadline on the join, so a node that never arrives is a failure somebody
+sees instead of silence.
+
+**[An attempt that stops to ask](KICKOFF_MID_ATTEMPT_INPUT.md)** — the rest of
+Phase 14, in aiwatcher. The authored gate stops *between* steps; what is missing
+is a step that stops *inside* one and continues after the answer, which is the
+half of §41 that 43.8 recorded as absent. `WorkReport::Parked` carrying the
+question, `ProvideInput` against a parked attempt rather than a waiting step, the
+deadline riding Phase 13's timer row, and the way for `aiwatcher_sdk.worker` to
+ask.
 
 **In planner's repository, and now closed.** `docs/flyte-removal-kickoff.md` is
 done as of 2026-09-09: the timing defect work 6 left behind is one authored
@@ -1661,10 +1657,11 @@ end to end — which is what found `AIWATCHER_WORKFLOW_STORE` and
 `AIWATCHER_PROMPT_STORE` being wrong there — one pod per import is a recorded
 decision rather than a default (39.4), and `helm template` and `uv.lock` render
 and pin nothing from Flyte. What is left over from that session is planner's
-own: `just lint-ml` is red on a scratch file committed by accident, `mypy`
-reports five pre-existing errors in its test suite, and nothing validates
-`deploy/config.json` against `config.schema.json` — which is how `flyteEnabled`
-outlived its own removal in the schema.
+own: `just lint-ml` is red on a scratch file committed by accident, and `mypy`
+reports five pre-existing errors in its test suite. The third — nothing
+validating `deploy/config.json` against `config.schema.json`, which is how
+`flyteEnabled` outlived its own removal — is closed by
+`tests/test_deploy_config_schema.py`.
 
 **Phase 14 — human input.** Delivered except for one thing, which is why it is
 no longer behind a gate.
@@ -1745,9 +1742,8 @@ and the tick delivers it (43.39).
   personal assistant beside it emits full traces.
 - planner's own leftovers, none of which came from the work that found them:
   `just lint-ml` is red on a scratch file committed by accident, `mypy` reports
-  five pre-existing errors in its test suite, and nothing validates
-  `deploy/config.json` against `config.schema.json` — the omission that let
-  `flyteEnabled` outlive its own removal in the schema.
+  five pre-existing errors in its test suite. The schema gate that let
+  `flyteEnabled` outlive its own removal is closed.
 
 The original phase scopes follow, kept because other documents and the ADRs cite
 them by number. The delivered ones are one line each; the rest keep their scope
@@ -3365,7 +3361,7 @@ for it.
   the code needed and the plan had not stated.
 - **Revision 3.1** (2026-09-08): reordered remaining delivery after the review.
   Section 28 now owns a capability table, six open work items and their
-  acceptance gates; `KICKOFF.md` mirrors their order. Reopened file recovery,
+  acceptance gates, mirrored at the time by a kickoff file since deleted. Reopened file recovery,
   scheduler and migration guarantees; clarified historical notebook source,
   preview scope and current versus planned API behaviour. Extended section 29's
   failure/acceptance cases, added decisions 16–20 and the qualifications in

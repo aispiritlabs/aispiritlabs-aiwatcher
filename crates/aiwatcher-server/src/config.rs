@@ -503,6 +503,14 @@ pub struct Config {
     /// retention, because the log is what redelivers and the durable inbox goes
     /// with the stream. See [`aiwatcher_execution::store::prunable`].
     pub workflow_retention: Option<Duration>,
+    /// What this deployment allows an answer to a parked step to be.
+    ///
+    /// `AIWATCHER_MAX_ANSWERS_PER_STEP` and `AIWATCHER_MAX_ANSWER_BYTES`. A
+    /// step's answers accumulate, because a parked attempt is resumed by one
+    /// that re-runs the work and reads all of them — so nothing takes any away,
+    /// and unbounded the only backstop is the store refusing a message that has
+    /// grown too large.
+    pub answer_limits: aiwatcher_api::state::AnswerLimits,
     /// Whether this instance can list and start an orchestrator's work.
     pub engine: EngineKind,
     /// The control plane's base URL. Required when `engine = Flyte`, and the
@@ -620,6 +628,7 @@ impl Default for Config {
             execution_poll: Duration::from_secs(1),
             // Nothing is forgotten unless a deployment says so.
             workflow_retention: None,
+            answer_limits: aiwatcher_api::state::AnswerLimits::default(),
             engine: EngineKind::default(),
             flyte_endpoint: None,
             // Flyte's own defaults, so a sandbox needs one variable set.
@@ -882,6 +891,24 @@ impl Config {
             // wrong about. Deleting on the next sweep is not a thing one
             // character should ask for.
             config.workflow_retention = (days > 0).then(|| Duration::from_secs(days * 86_400));
+        }
+        if let Some(raw) = var("AIWATCHER_MAX_ANSWERS_PER_STEP") {
+            let ceiling: usize = raw.parse().map_err(|_| ConfigError::Invalid {
+                name: "AIWATCHER_MAX_ANSWERS_PER_STEP",
+                value: raw.clone(),
+                expected: "whole number of answers, or 0 for no ceiling",
+            })?;
+            // Zero is "no ceiling" rather than "answer nothing", the same
+            // reading retention's zero gets: one character must not be able to
+            // ask for a run that can never be answered.
+            config.answer_limits.per_step = (ceiling > 0).then_some(ceiling);
+        }
+        if let Some(raw) = var("AIWATCHER_MAX_ANSWER_BYTES") {
+            config.answer_limits.bytes = raw.parse().map_err(|_| ConfigError::Invalid {
+                name: "AIWATCHER_MAX_ANSWER_BYTES",
+                value: raw,
+                expected: "whole number of bytes",
+            })?;
         }
         if let Some(raw) = var("AIWATCHER_ENGINE") {
             config.engine = raw.parse()?;

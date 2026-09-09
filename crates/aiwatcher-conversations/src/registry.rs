@@ -213,6 +213,33 @@ impl Registry {
         crate::payload::open(&self.backend, execution, content_digest).await
     }
 
+    /// Every run this instance holds sealed payloads for.
+    ///
+    /// A payload's lifetime is its run's, and this crate cannot ask whether a
+    /// run is still there — it sits above `aiwatcher-execution` and may not
+    /// name it. So the pair of this and [`Self::erase_payloads_of`] is the half
+    /// of the answer the archive can give, and the server joins it to the
+    /// workflow store.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the object store could not do.
+    pub async fn payload_executions(&self) -> Result<Vec<String>> {
+        crate::payload::executions(&self.backend).await
+    }
+
+    /// Remove one run's sealed payloads, and answer how many went.
+    ///
+    /// Idempotent: a run with none is zero rather than an error, which is what
+    /// lets a sweep call it without asking first.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the object store could not do.
+    pub async fn erase_payloads_of(&self, execution: &str) -> Result<usize> {
+        crate::payload::erase_execution(&self.backend, execution).await
+    }
+
     pub async fn content(&self, conversation_id: &str, turn_id: &str) -> Result<TurnContent> {
         crate::archive::content(&self.backend, conversation_id, turn_id).await
     }
