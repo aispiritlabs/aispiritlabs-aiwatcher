@@ -1,4 +1,4 @@
-`#spec/AW-2` · `#step/investigation` · `#branch/main` · repo `aiwatcher`
+`#spec/AW-2` · `#step/investigation` · `#branch/feat-agent-sdk-merge` · repo `aiwatcher`
 
 # AW-2 — Investigation
 

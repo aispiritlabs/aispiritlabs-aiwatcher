@@ -3,19 +3,19 @@ id: AW-2
 title: Merge ai_spirit_agent into aiwatcher as the agent SDK
 step: spec
 status: doing
-branch: main
+branch: feat/agent-sdk-merge
 repo: aiwatcher
 created: 2026-09-10
 updated: 2026-09-10
-tags: [spec/AW-2, step/spec, branch/main, status/doing]
+tags: [spec/AW-2, step/spec, branch/feat-agent-sdk-merge, status/doing]
 ---
 <!-- spec-card -->
 
-`#spec/AW-2` · `#branch/main` · repo `aiwatcher`
+`#spec/AW-2` · `#branch/feat-agent-sdk-merge` · repo `aiwatcher`
 
 # AW-2 — Merge ai_spirit_agent into aiwatcher as the agent SDK
 
-> Branch `main`
+> Branch `feat/agent-sdk-merge`
 
 ## Phases
 - [x] [① Investigation](01-investigation.md)
@@ -41,3 +41,4 @@ workflow on its own.
 - 2026-09-10 08:27 — Phase A, in `ai_spirit_agent`: `agentic_graph.durable` closes the seam nothing had ever built — `build_compiled_graph_system(execution_id=…)` now resolves a hosted join. 71 graph tests, 1079 unit tests green. `declare_graph` still unwired.
 - 2026-09-10 08:39 — The SDK pin in `ai_spirit_agent` switched from rev `770eb97` to the sibling path, and the root now asks for `agentic-runtime[aiwatcher]` so it installs. The agent reads the working tree's SDK; the durable-join test that was skipping now runs. Costs CI until the repositories are one.
 - 2026-09-10 08:46 — Phase B complete: `evaluation.splits` groups a corpus by conversation (flows and prefill chains, as connected components), `evaluation.measurement` is the one way a golden is asked, and `optimize_and_record` searches on dev and reports both sides through ADR_0011. 21 new tests; 1101 unit tests green.
+- 2026-09-10 09:04 — Committed on `feat/agent-sdk-merge` in both repositories, three commits each, by path. Not pushed.

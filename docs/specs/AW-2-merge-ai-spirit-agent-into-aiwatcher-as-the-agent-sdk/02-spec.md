@@ -2,14 +2,14 @@
 id: AW-2
 step: spec
 status: doing
-branch: main
+branch: feat/agent-sdk-merge
 repo: aiwatcher
 created: 2026-09-10
 updated: 2026-09-10
-tags: [spec/AW-2, step/spec, branch/main, status/doing]
+tags: [spec/AW-2, step/spec, branch/feat-agent-sdk-merge, status/doing]
 ---
 
-`#spec/AW-2` · `#step/spec` · `#branch/main` · repo `aiwatcher`
+`#spec/AW-2` · `#step/spec` · `#branch/feat-agent-sdk-merge` · repo `aiwatcher`
 
 # ② Spec — AW-2
 
