@@ -28,11 +28,14 @@ and a version bump in DeepEval does not become a version bump here. A service
 that has deepeval installed passes its report; one that does not can pass any
 object with the same shape, which is also what makes this testable.
 
-**The held-out split is the caller's job.** DeepEval's optimiser reports the
-scores it searched against, and those are exactly the scores that must not
-decide anything: it selected the candidate by maximising them. So ``test=``
-takes numbers the caller measured on cases the optimiser never saw, and an
-optimisation recorded without them is refused a promotion by the server. See
+**The held-out split is the caller's, and it is not left to them.** DeepEval's
+optimiser reports the scores it searched against, and those are exactly the
+scores that must not decide anything: it selected the candidate by maximising
+them. So ``test=`` takes numbers the caller measured on cases the optimiser
+never saw, and an optimisation recorded without them is refused a promotion by
+the server. :func:`aiwatcher_sdk.optimization.split_cases` deals the two sides
+by *group*, so every phrasing of one question lands together and an empty side
+is a refusal rather than a score over nothing. See
 ``docs/ADR/ADR_0011_PROMPT_REGISTRY.md``.
 """
 
