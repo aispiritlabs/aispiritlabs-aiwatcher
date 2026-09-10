@@ -22,8 +22,8 @@ that survives a worker restart, a panel that draws a fan-out as it happens, and
 a promotion that rests on a held-out score rather than on the score an optimiser
 maximised.
 
-**In scope.** `agentic`, `agentic_runtime` and `providers` become
-aiwatcher's; agent-to-agent messaging moves onto the hosted execution stream; a
+**In scope.** `agentic`, `agentic_runtime` and the port `providers`
+implements become aiwatcher's (the adapters stay — see *Settled*); agent-to-agent messaging moves onto the hosted execution stream; a
 local outbox keeps an agent working while aiwatcher is unreachable; an agent is
 registrable and schedulable on its own; prompt optimisation reports through
 ADR_0011; `laser-sdk` and the MLflow prompt registry leave.
@@ -67,6 +67,12 @@ spec adds is the repository dimension §40 does not cover.
       runtime dependencies, `just agentic-check` green; `agentic.workflow` is
       the same modules under their old names; a record is written as the same
       bytes the engine wrote before it moved.)
+- [x] The agent core is in that distribution, an agent runs on any model
+      source, and importing it loads no model stack. (`Agent`, tools,
+      messages and prompt builders are `aiwatcher_agentic`'s, and `agentic`
+      hands back the same modules; `test_agent_port` runs an agent on a
+      one-method double and imports the core in a fresh interpreter with no
+      provider, MLflow, transformers or pydantic loaded.)
 
 ## Spec (delta)
 
@@ -261,6 +267,50 @@ module object, not a copy, for one release.
 - THEN they are one module, and a monkeypatch through the old name reaches the
   code that runs
 
+#### Requirement: the agent core names its ports and carries no model stack
+The agent core — `Agent`, its tools, messages, prompt builders, structured
+output and usage limits — SHALL ship in `aiwatcher-agentic` beside the engine,
+and SHALL reach a model, a tracer and a prompt named by `external_prompt_name`
+only through ports it declares: `ModelSource`, `LLMTracer` and
+`PromptSource`. Importing it SHALL NOT load a provider stack, MLflow,
+transformers or pydantic. `agentic`'s old names SHALL resolve to the same
+module objects for one release, and a builder named by `external_prompt_name`
+SHALL keep reading the MLflow registry there until that registry retires.
+
+##### Scenario: an agent runs on anything that lends it a model
+- GIVEN a double whose only method is `session()`, yielding a model
+- WHEN an `Agent` built on it runs a turn
+- THEN it answers, with the model's usage on the result
+
+##### Scenario: a model that did not load is refused with the reason
+- GIVEN a source whose session yields no model and whose `get_load_error`
+  says why
+- WHEN the agent runs a turn
+- THEN it raises with that reason in the message
+
+##### Scenario: importing the core loads no model stack
+- GIVEN a fresh interpreter
+- WHEN it imports `aiwatcher_agentic.agent`, `tools` and `prompts`
+- THEN none of `providers`, `mlflow`, `transformers`, `torch`, `mlx`,
+  `openai`, `httpx`, `pydantic` or `agentic` is loaded
+
+##### Scenario: a named prompt with nowhere to be read from is refused by name
+- GIVEN no source handed to the builder and none named by the application
+- WHEN a builder is given `external_prompt_name="sage"`
+- THEN it raises naming `'sage'` and `use_prompt_source`
+
+##### Scenario: the application's registry still answers
+- GIVEN `ai_spirit_agent`'s `agentic` imported
+- WHEN a `QwenPromptBuilder(external_prompt_name=…)` is built
+- THEN its text is what `registry.get_prompt` returned
+
+##### Scenario: what an agent returns is what the engine reads
+- GIVEN an `AgentResult`, a `ToolRunResult`, a `PromptSnapshot` and a
+  `RequestUsage`
+- WHEN each is assigned to the engine's `AgentRun`, `ToolRun`, `AgentPrompt`
+  and `ModelUsage`
+- THEN `mypy --strict` accepts all four
+
 ### MODIFIED Requirements
 
 #### Requirement: the Python floor
@@ -405,13 +455,37 @@ answers to "which version did this run use". MLflow keeps tracing, teed.)
   for the full form went with 3.11, the rule did not, so `UP043` is ignored and
   the spelling is a separate decision.
 
+- **The agent core moves; the model stack does not** (2026-09-10). `agent`,
+  `tools`, `message`, `prompts`, `capabilities`, `exceptions`, `history`,
+  `memory`, `usage`, `response_parser` and `structured_output` are
+  `aiwatcher_agentic`'s, under their old module names, and `agentic`
+  registers each as that module object. What builds a concrete
+  `providers.ModelProvider` stayed — `CoreAgentic`, `LLMCall`, `VLMCall`, and
+  with them the LLM reactors and `WorkflowBuilder` — as did the MLflow tracer,
+  the specialized agents (one reads Qdrant), the search integrations, voice
+  and the git tracer. `Agent` only ever called `session()` on its provider, so
+  that is the port: `ModelSource`, with `TextModel` and `ModelResponse` moved
+  outright and re-exported by `providers`.
+- **`providers` does not move whole** — the question this spec deferred to
+  here. The port moved with `Agent`; the adapters (MLX, vLLM, SGLang,
+  transformers, ONNX, the OpenAI-compatible client, the model server) stay with
+  the application that picks one, which also keeps `mlx-audio` out of a Linux
+  worker's install.
+- **A named prompt is read from a source the application names.** The builder
+  imported the MLflow `registry` itself, an application package. It now reads
+  `external_prompt_name` through `PromptSource` — handed to it, or set once
+  with `use_prompt_source`, which `agentic` does on import with the registry,
+  imported lazily as before. Retiring that registry is one line there.
+- **The core brings `structlog` and `orjson`.** Kept rather than rewritten onto
+  `logging` and `json`: a tool call parsed differently, or a log line shaped
+  differently, is a behaviour change, and a move is not the place for one. The
+  engine's modules still import nothing third-party.
+- **No wire name moved with the core.** Nothing in either repository writes a
+  core type as a record — what is registered is the engine's messages and the
+  applications' own events — so `WIRE_PREFIX` stays the engine's.
+
 ## Still open, deferred to the phase that can answer them
 
-- **Whether `providers` moves whole.** Not Phase C's question after all: the
-  engine imports nothing from it — only `LLMTracer.llm` named `ModelResponse`,
-  and the engine's tracer protocol has no `llm`. It belongs to the phase that
-  moves `Agent`, where `mlx-audio` being darwin-only still argues for moving
-  the port and leaving the MLX adapter.
 - **The licence.** `ai_spirit_agent` declares MIT; `aiwatcher-agentic` was
   given the Apache-2.0 of the distributions beside it. The owner's call.
 - **Which `evaluation` scorers move.** The DeepEval bridge is already
@@ -422,3 +496,4 @@ answers to "which version did this run use". MLflow keeps tracing, teed.)
 - 2026-09-10 08:07 — spec drafted on `main`; two open questions settled, two deferred
 - 2026-09-10 15:29 — messaging requirement rewritten for Phase F: a hop is a run of the target agent's workflow, a reply is a row in the client's mailbox; four scenarios added
 - 2026-09-10 16:07 — Phase C: two requirements added (the engine's wire names, the old import path for one release) over four scenarios; the engine's cut, its wire names, the one 3.14-only call and the `Generator` spelling settled; `providers` deferred to the phase that moves `Agent`
+- 2026-09-10 16:30 — agent core: one requirement added over six scenarios (33 in all); the core's cut, `providers` keeping its adapters, the prompt source, the core's two dependencies and why no wire name moved, settled; the deferred `providers` question closed
