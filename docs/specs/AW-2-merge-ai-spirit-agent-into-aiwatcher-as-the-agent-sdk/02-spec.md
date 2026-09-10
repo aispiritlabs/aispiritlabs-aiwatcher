@@ -82,6 +82,12 @@ spec adds is the repository dimension §40 does not cover.
       MLflow or pydantic loaded. `just agentic-check` 355, the agent
       repository 865; standalone 14/14, transport 11/11, join 8/8, outbox
       11/11.)
+- [x] A composed graph's turn is drawn against the shape it declared: a node
+      it never reached is `Pending` and its hand-offs are messages.
+      (`just e2e-agent-graph`, 8/8, on a server of its own: a routed graph's
+      two passed-over searchers stay `Pending`, the dispatch and the answer to
+      the join are messages between agents, and the searcher's span nests
+      under its node though its tracer publishes through a client of its own.)
 
 ## Spec (delta)
 
@@ -373,6 +379,55 @@ SHALL get what it got before the move.
 - THEN the bytes are the same, `agentic_runtime.distributed.contracts`
   included
 
+#### Requirement: a graph's turn is drawn against the shape it declared
+A compiled `agentic_graph`, when `AIWATCHER_URL` is set, SHALL declare the
+nodes a turn can reach — its agents and its outputs — and the connections
+between two of them before the turn's first node runs; SHALL publish every node
+it runs as a step of that turn's execution; and SHALL record every hand-off — a
+dispatch, and an answer handed to a join — as a message between the agents that
+made it. One turn SHALL be one execution, under the graph's own id. A span an
+agent's tracer opens inside a node SHALL be that node's child however the two
+are published, and the tracer SHALL open no run of its own there. Without
+`AIWATCHER_URL`, or without the SDK, the graph SHALL run as before and declare
+nothing.
+
+##### Scenario: a node the turn never reached is Pending
+- GIVEN a graph whose entry routes to one of three searchers
+- WHEN one turn runs
+- THEN its execution holds the six reachable nodes, all declared; the four it
+  reached succeeded, the two the router passed over are `Pending`, and the
+  execution succeeded with two nodes pending
+
+##### Scenario: a provider or an integration is not a stage
+- GIVEN a graph whose agents are wired to a model provider and search
+  integrations
+- WHEN its shape is declared
+- THEN neither is a node of it, and no connection touching one is an edge
+
+##### Scenario: the hand-offs are messages
+- GIVEN the same turn
+- WHEN it runs
+- THEN the entry's dispatch to the searcher and the searcher's answer to the
+  summarizer are two messages between those agents, and neither is a declared
+  edge
+
+##### Scenario: an agent's spans nest under its node
+- GIVEN an agent whose tracer publishes through a client of its own
+- WHEN it runs inside a node
+- THEN its span's parent is the node's step, and the tracer opens no run of its
+  own
+
+##### Scenario: a node that fails fails the turn
+- GIVEN a searcher that raises
+- WHEN the turn runs
+- THEN its step failed, the entry it ran inside failed, the turn's run failed,
+  and the error reaches the caller
+
+##### Scenario: without aiwatcher nothing is declared
+- GIVEN no `AIWATCHER_URL`
+- WHEN a turn runs
+- THEN nothing is published and the answer is what it was
+
 ### MODIFIED Requirements
 
 #### Requirement: the Python floor
@@ -582,6 +637,35 @@ answers to "which version did this run use". MLflow keeps tracing, teed.)
   `WIRE_PREFIX`'s promise to the runtime package, so `AgentRegistration` and
   `AgentHeartbeat` are written as before. Nothing has stored them since
   Phase F; the fixture keeps it true if something does again.
+- **A graph declares what a turn can reach** (Phase A's last piece). Agents
+  and outputs are nodes; a model provider and a search integration are what an
+  agent is configured with, and nothing hands a turn to one — declared, they
+  would sit `Pending` in every execution for ever. The connections between two
+  reachable nodes are the edges.
+- **A turn is its own execution, never the hosted one.** The turn id
+  `CompiledGraphSystem.run` mints is the `workflow_run_id`. The engine already
+  declares a hosted execution's shape as the definition that started it, so a
+  graph declared under that id would have every node flagged undeclared beside
+  it. Joining a graph's traversal to a hosted execution it ran inside waits for
+  a caller that runs one there: the join e2e's workers never call `run`, and a
+  summarizer a deadline fires outside `run` has no traversal open and says
+  nothing.
+- **A node names its own span.** The declaration and the agent's tracer
+  publish through two clients, which are two queues, so "the node is still
+  open" cannot be inferred from arrival order. `WorkflowContext.node` takes a
+  `span_id` and the scope it yields carries it as the parent;
+  `Scope.correlation` is what the tracer is handed through `current_attempt`,
+  which also keeps it from opening a root of its own. Minted once per node and
+  carried by every event of it, so a redelivered envelope lands on the span it
+  opened — the rule `AiwatcherTracer` already keeps.
+- **In process a hand-off nests.** The bus runs the handler that starts the
+  next node before the source's turn returns, so the target's step is inside
+  the source's, and a target that raises fails its source too. That is the
+  call stack, and the waterfall draws it rather than two stages side by side.
+- **Hand-offs are messages by alias, of two kinds.** `dispatch` for a node
+  starting another, `completion` for an answer handed to the join that waits
+  for it. The panel draws messages between agents and a node's step names its
+  alias as the agent, so the two meet on one name.
 
 ## Still open, deferred to the phase that can answer them
 
@@ -597,3 +681,4 @@ answers to "which version did this run use". MLflow keeps tracing, teed.)
 - 2026-09-10 16:07 — Phase C: two requirements added (the engine's wire names, the old import path for one release) over four scenarios; the engine's cut, its wire names, the one 3.14-only call and the `Generator` spelling settled; `providers` deferred to the phase that moves `Agent`
 - 2026-09-10 16:30 — agent core: one requirement added over six scenarios (33 in all); the core's cut, `providers` keeping its adapters, the prompt source, the core's two dependencies and why no wire name moved, settled; the deferred `providers` question closed
 - 2026-09-10 18:27 — agent runtime: one requirement added over six scenarios (39 in all); the runtime's cut, the tracer and settings ports with the application's subclass, `aiwatcher-sdk` as an extra, a store default found broken since Phase C, and the runtime's two wire names, settled
+- 2026-09-10 20:05 — Phase A finished: `declare_graph` wired. One requirement added over six scenarios (45 in all), one success criterion ticked; the shape a turn can reach, the turn as its own execution, a node's own span id, nesting in process and the two message kinds, settled
