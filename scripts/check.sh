@@ -105,8 +105,10 @@ fi
 # `uv` manages its own interpreter, so this needs nothing but uv on PATH.
 if have uv; then
   run "python sdk" just sdk-check
+  run "agentic engine" just agentic-check
 else
   skip "python sdk" "https://docs.astral.sh/uv/getting-started/installation/"
+  skip "agentic engine" "https://docs.astral.sh/uv/getting-started/installation/"
 fi
 
 # ── Kubernetes manifests ─────────────────────────────────────────────────────

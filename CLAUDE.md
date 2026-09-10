@@ -127,6 +127,8 @@ The Python SDK is a `uv` project of its own:
 ```bash
 just sdk-install   # uv sync --all-groups
 just sdk-check     # ruff format --check, ruff check, mypy --strict, pytest
+just agentic-install  # the workflow engine in sdk/agentic, likewise
+just agentic-check    # the same four checks, on the engine
 ```
 
 Run a single Rust test: `just test-one two_parallel`.
@@ -156,7 +158,7 @@ Crates, in dependency order. A crate may only depend on ones above it.
 | `aiwatcher-api` | axum router: REST, SSE, WebSocket, OpenAPI. `worker` is the one module whose caller is not a browser: the reactor's own loop with an HTTP seam where the work happens (Phase 10). |
 | `aiwatcher-server` | Config, wiring, graceful shutdown, and the **reactors** — the one place an executor's client lives, because an executor holds a socket and a credential. `execution/` is mostly the work role: `artifacts` (the object store's sixth prefix, and the receipt a lookup reads), `flow` (the Flow activity executor) and `publish` (the dataset version, which runs in `serve` because it executes nothing) — and `editor`, which runs in `serve` because opening a block on a step's rows is a person waiting on a request rather than an attempt somebody claimed. The only crate that knows every implementation exists. |
 
-Everything else: `apps/panel` (React), `sdk/python`, `sdk/typescript`,
+Everything else: `apps/panel` (React), `sdk/python`, `sdk/agentic`, `sdk/typescript`,
 `contracts/` (the OpenAPI document and the envelope JSON Schema), `deploy/`
 (the Dockerfiles, the docker compose stack, the kustomize test stack, and
 `helm/aiwatcher` + `helmfile.yaml.gotmpl` + `scripts/` — the install path),
@@ -553,6 +555,17 @@ one place. `uv.lock` is committed. `just sdk-check` runs `ruff format --check`,
 which is the floor `requires-python` claims. The lint set is the one `planner`
 selects, deliberately: the two repositories are worked on together, and a lint
 that fires in one and not the other is a lint people learn to ignore.
+
+`sdk/agentic` is the **third** distribution, `aiwatcher-agentic`: the workflow
+engine agents are built on — messages, deciders, event stores, sagas — moved
+from `ai_spirit_agent`'s `agentic.workflow` (AW-2). Its dependency list is
+empty and nothing in `aiwatcher-sdk` imports it, so importing telemetry never
+imports an engine and the engine never imports a provider stack; where it
+needs something from an agent it declares a protocol (`WorkflowTracer`,
+`AgentRun`) rather than importing the type. Its records keep the wire names
+they had before the move — `serialization.WIRE_PREFIX` — because stored rows
+carry them, and `tests/fixtures/records_before_the_move.jsonl` holds it to
+those bytes. `just agentic-check` runs the same four checks on its own lock.
 
 The telemetry client and the registry client have **opposite** failure
 policies, and that is the design: telemetry must never take an agent down, so

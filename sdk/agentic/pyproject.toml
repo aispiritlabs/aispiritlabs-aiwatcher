@@ -1,0 +1,73 @@
+[project]
+name = "aiwatcher-agentic"
+version = "0.1.0"
+description = "The durable workflow engine agents are built on: messages, deciders, event stores, sagas."
+readme = "README.md"
+requires-python = ">=3.13"
+license = "Apache-2.0"
+# None. The engine is messages, a decider, an event store and the loops that
+# drive them, and every one of those is the standard library — SQLite included.
+# That is the dependency profile of anything imported into an agent's process,
+# and a third distribution beside `aiwatcher-sdk` exists to keep it: the agent
+# layer that will join this one brings a provider stack, and neither the engine
+# nor telemetry should carry it. `aiwatcher-sdk` joins this list with the first
+# module here that imports it, not before.
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["aiwatcher_agentic"]
+# PEP 561, for the SDK's reason: without the marker every consumer sees `Any`.
+artifacts = ["aiwatcher_agentic/py.typed"]
+
+[dependency-groups]
+dev = [
+  "mypy>=1.18,<2",
+  "pytest>=8.4,<9",
+  "ruff>=0.16.5,<0.17",
+]
+
+[tool.uv]
+required-version = ">=0.12.7,<0.13"
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+
+[tool.ruff.lint]
+# The SDK's set, so a lint that fires in one distribution fires in the other.
+select = [
+  "E",
+  "F",
+  "I",
+  "UP",
+  "B",
+  "C4",
+  "SIM",
+  "RUF",
+  "ASYNC",
+  "PTH",
+  "BLE",
+  "N",
+  "S",
+]
+
+# `Generator[T, None, None]` is this repository's spelling for a
+# `@contextmanager` (CLAUDE.md). The floor that made it necessary was 3.11; at
+# 3.13 the one-argument form would also do, and changing the house spelling is
+# its own decision rather than a side effect of raising the floor.
+ignore = ["UP043"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+files = ["aiwatcher_agentic", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

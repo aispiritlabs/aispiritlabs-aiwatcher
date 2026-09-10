@@ -530,6 +530,23 @@ sdk-check:
     uv run mypy .
     uv run pytest -q
 
+# The workflow engine agents are built on (AW-2): a distribution of its own in
+# sdk/agentic, with no runtime dependencies and a lock of its own.
+sdk_agentic := "sdk/agentic"
+
+agentic-install:
+    cd {{sdk_agentic}} && uv sync --all-groups
+
+# Format, lint, type-check and test the workflow engine.
+agentic-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd {{sdk_agentic}}
+    uv run ruff format --check .
+    uv run ruff check .
+    uv run mypy .
+    uv run pytest -q
+
 # ── Flow query service (PHP) ─────────────────────────────────────────────────
 #
 # Optional. The panel's Query tab talks to it directly; without it that tab says
