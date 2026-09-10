@@ -42,7 +42,10 @@ spec adds is the repository dimension §40 does not cover.
 
 **Success criteria:**
 - [ ] A fan-out of three joins across a worker restart, with no broker running.
-- [ ] An agent starts from `POST /api/v1/executions` with no graph around it.
+- [x] An agent starts from `POST /api/v1/executions` with no graph around it.
+      (`just e2e-agent-standalone`, 11/11 — the call the panel's launcher makes,
+      and again from a schedule's `run_now`; the host never imports
+      `agentic_graph`.)
 - [x] aiwatcher stopped mid-conversation: the agent keeps answering and every
       hop arrives exactly once when it returns. (`just e2e-agent-outbox`, 11/11
       — through a proxy the script shuts, so the dev server itself is not
@@ -237,6 +240,12 @@ answers to "which version did this run use". MLflow keeps tracing, teed.)
   able to open the file while an agent runs, which the Rust store, one process
   owning its database, never needed.
 
+- **One composition root, two classes.** `AgenticRuntime` stays where an
+  application composes its agents; `hosted_runtime` hands it to the SDK's
+  `Runtime`, which registers each agent, hosts its turns and closes it through
+  `on_close`. Folding the classes together would put a router, SQLite stores
+  and a provider stack into the distribution telemetry imports.
+
 ## Still open, deferred to the phase that can answer them
 
 - **Whether `providers` moves whole.** `agentic` imports it directly and
@@ -246,6 +255,16 @@ answers to "which version did this run use". MLflow keeps tracing, teed.)
 - **Which `evaluation` scorers move.** The DeepEval bridge is already
   structural here; the MLflow scorers read completions, and this plan moves no
   content.
+- **Whether a hosted turn's message arrives by reference.** Today it is a run
+  parameter, because that is what the panel's form and a schedule can send, so
+  a message a person typed sits in the stream as any parameter does. The reply
+  is already external. Settled when an agent that answers people, not
+  instructions, is hosted.
+- **A hosted agent's own spans are a run of their own.** The tracer tee is built
+  once per `AgenticRuntime` and knows nothing of the attempt, so the agent's
+  LLM spans do not nest under the execution's step. The turn's records do carry
+  the attempt's context id; the spans are Phase C's, when the engine and its
+  tracer move.
 
 ## Log
 - 2026-09-10 08:07 — spec drafted on `main`; two open questions settled, two deferred
