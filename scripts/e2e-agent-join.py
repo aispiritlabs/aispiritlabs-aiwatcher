@@ -245,7 +245,15 @@ def orchestrate() -> int:
     )
 
     with tempfile.TemporaryDirectory(prefix="aiwatcher-e2e-payloads-") as payloads:
-        env = dict(os.environ, AIWATCHER_URL=BASE, AIWATCHER_PAYLOAD_ROOT=payloads)
+        # The outbox beside the payloads, in the scratch directory: left to its
+        # default it would land in this checkout's `.data`, which is the
+        # server's own write-ahead log directory under `just run`.
+        env = dict(
+            os.environ,
+            AIWATCHER_URL=BASE,
+            AIWATCHER_PAYLOAD_ROOT=payloads,
+            AIWATCHER_OUTBOX=str(Path(payloads) / "outbox.sqlite"),
+        )
 
         first = spawn("worker-a", execution, marker, env)
         if first.stdout is None:

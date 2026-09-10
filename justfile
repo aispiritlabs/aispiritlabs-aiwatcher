@@ -468,6 +468,13 @@ e2e-train:
 e2e-agent-join:
     "$(cd ../ai_spirit_agent && pwd)/.venv/bin/python" scripts/e2e-agent-join.py
 
+# The same agent through an outage: three hops written while the workers cannot
+# reach the server, a claim refused until they drain, and a hop whose answer was
+# lost re-sent by an operator and recognised. The server is not stopped — the
+# workers go through a proxy the script shuts.
+e2e-agent-outbox:
+    "$(cd ../ai_spirit_agent && pwd)/.venv/bin/python" scripts/e2e-agent-outbox.py
+
 # It watches the `production` label: moving it reads, verifies and warms the
 # new version while the old one keeps serving, and only then swaps.
 # `POST /v1/rollback` puts the previous one back with nothing to rebuild. Two
