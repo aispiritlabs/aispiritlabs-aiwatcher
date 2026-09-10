@@ -43,9 +43,12 @@ spec adds is the repository dimension §40 does not cover.
 **Success criteria:**
 - [ ] A fan-out of three joins across a worker restart, with no broker running.
 - [x] An agent starts from `POST /api/v1/executions` with no graph around it.
-      (`just e2e-agent-standalone`, 11/11 — the call the panel's launcher makes,
+      (`just e2e-agent-standalone`, 14/14 — the call the panel's launcher makes,
       and again from a schedule's `run_now`; the host never imports
-      `agentic_graph`.)
+      `agentic_graph`. It starts its own server with the archive on: a lost
+      first attempt is retried and its tool writes once, the agent's spans
+      nest under the run, and the exchange is archived once and exported as an
+      `sft` row.)
 - [x] aiwatcher stopped mid-conversation: the agent keeps answering and every
       hop arrives exactly once when it returns. (`just e2e-agent-outbox`, 11/11
       — through a proxy the script shuts, so the dev server itself is not
@@ -92,6 +95,23 @@ SHALL NOT introduce a third definition kind.
 - GIVEN an agent registered through the wrapper
 - WHEN `POST /api/v1/executions` names it with `target.kind = "workflow"`
 - THEN it runs, and the Workflows view draws it with no graph document anywhere
+
+##### Scenario: a turn is delivered at least once and its tool writes once
+- GIVEN a hosted agent whose tool keys its write by the message's idempotency key
+- WHEN its first attempt is lost after the tool wrote
+- THEN the server retries it, the run completes, and the write happened once
+
+##### Scenario: a turn becomes fine-tuning data
+- GIVEN an agent hosted with a conversation archive
+- WHEN a turn completes, on its first attempt or a later one
+- THEN the archive holds its exchange once, joined to the run's trace, and an
+  approved `sft` export holds a row whose completion is the reply
+
+##### Scenario: a hosted agent's spans belong to its run
+- GIVEN an agent runtime whose tracer was built before any attempt existed
+- WHEN a worker runs one of its turns
+- THEN its `agent.*` and `llm.*` spans carry the execution's run id under the
+  step's span, and no run of the agent's own is opened
 
 ##### Scenario: the schedule and the tick reach one compiler
 - GIVEN a schedule saved against that registered agent
@@ -246,6 +266,25 @@ answers to "which version did this run use". MLflow keeps tracing, teed.)
   `on_close`. Folding the classes together would put a router, SQLite stores
   and a provider stack into the distribution telemetry imports.
 
+- **A hosted agent prepares fine-tuning data** (the user, 2026-09-10). Its
+  message stays a run parameter — an instruction to an agent preparing data,
+  not somebody's turn — and each turn is recorded in the conversation archive
+  as one exchange joined to the run, for review and an `sft` or `dpo` export
+  (ADR_0021). It is recorded before the step reports; an archive that cannot be
+  reached fails the turn as `infrastructure`, which is retried, and one that
+  refuses it fails it as `policy`, which a person decides.
+- **A hosted agent's spans nest under its run** (the user, 2026-09-10). The
+  worker publishes the attempt in a context variable, and a tracer that was not
+  handed a run of its own defers to it: no root run per turn, `agent.*` under
+  the step's span.
+- **At least once, under control** (the user, 2026-09-10). A turn takes the
+  server's default budget for attempts that may not have finished. Everything
+  it records is filed under the step — `TaskContext.step_key`, the archive's
+  message ids, the message's idempotency key — so a retry overwrites rather
+  than duplicates and a keyed tool writes once. `retry=` sets the budget per
+  agent, and a failure in the agent's own code is `user_code`, which only a
+  person retries, from the panel.
+
 ## Still open, deferred to the phase that can answer them
 
 - **Whether `providers` moves whole.** `agentic` imports it directly and
@@ -255,16 +294,6 @@ answers to "which version did this run use". MLflow keeps tracing, teed.)
 - **Which `evaluation` scorers move.** The DeepEval bridge is already
   structural here; the MLflow scorers read completions, and this plan moves no
   content.
-- **Whether a hosted turn's message arrives by reference.** Today it is a run
-  parameter, because that is what the panel's form and a schedule can send, so
-  a message a person typed sits in the stream as any parameter does. The reply
-  is already external. Settled when an agent that answers people, not
-  instructions, is hosted.
-- **A hosted agent's own spans are a run of their own.** The tracer tee is built
-  once per `AgenticRuntime` and knows nothing of the attempt, so the agent's
-  LLM spans do not nest under the execution's step. The turn's records do carry
-  the attempt's context id; the spans are Phase C's, when the engine and its
-  tracer move.
 
 ## Log
 - 2026-09-10 08:07 — spec drafted on `main`; two open questions settled, two deferred
