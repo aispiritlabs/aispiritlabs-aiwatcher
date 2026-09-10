@@ -475,6 +475,13 @@ e2e-agent-join:
 e2e-agent-outbox:
     "$(cd ../ai_spirit_agent && pwd)/.venv/bin/python" scripts/e2e-agent-outbox.py
 
+# One agent registered as a workflow of its own and started the way the panel
+# starts one, with no graph anywhere — then again from a schedule saved against
+# it, answering the message it was registered with. The reply stays in the
+# host's payload store; aiwatcher holds its reference.
+e2e-agent-standalone:
+    "$(cd ../ai_spirit_agent && pwd)/.venv/bin/python" scripts/e2e-agent-standalone.py
+
 # It watches the `production` label: moving it reads, verifies and warms the
 # new version while the old one keeps serving, and only then swaps.
 # `POST /v1/rollback` puts the previous one back with nothing to rebuild. Two
