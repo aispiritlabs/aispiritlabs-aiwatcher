@@ -35,7 +35,7 @@ from aiwatcher_sdk.integrations.agentic import (
     event_store,
     stream_sender,
 )
-from aiwatcher_sdk.outbox import Delivery, MemoryOutbox, Outbox, SqliteOutbox, drain
+from aiwatcher_sdk.outbox import Delivery, DuckdbOutbox, MemoryOutbox, Outbox, drain
 
 EXECUTION = "graph-1"
 
@@ -770,14 +770,14 @@ def test_the_outbox_holds_references_and_never_the_words() -> None:
 
 
 def test_an_operator_s_drain_sends_what_a_dead_process_left(tmp_path: Path) -> None:
-    path = tmp_path / "outbox.db"
+    path = tmp_path / "outbox.duckdb"
     server = Server()
     server.down = True
-    with SqliteOutbox(path) as outbox:
+    with DuckdbOutbox(path) as outbox:
         store_on(server, outbox).append_to_stream(EXECUTION, (turn("m-1"),))
 
     server.down = False
-    with SqliteOutbox(path) as outbox:
+    with DuckdbOutbox(path) as outbox:
         report = drain(outbox, stream_sender(transport_to(server)))
 
     assert report.settled == 1

@@ -37,6 +37,10 @@ vision = ["numpy>=1.26", "pillow>=10.0"]
 # processes. A host that will never serve a graph registers no onnx loader and
 # never imports this.
 onnx = ["onnxruntime>=1.17", "numpy>=1.26"]
+# `outbox.DuckdbOutbox` is agent messaging's durable tier. Real, like the vision
+# extra — the file is DuckDB's — and imported only when one is constructed, so a
+# process that only publishes spans never installs a database it never opens.
+duckdb = ["duckdb>=1.5,<2"]
 
 [project.urls]
 Homepage = "https://github.com/ai-spirit/aiwatcher"
@@ -71,6 +75,9 @@ dev = [
   "pillow>=10.0",
   "jsonschema>=4,<5",
   "types-jsonschema>=4.26.0.20260518",
+  # The outbox's durable tier is tested against the real file format, for the
+  # rasteriser's reason: its lock is the one behaviour a double cannot show.
+  "duckdb>=1.5,<2",
 ]
 
 [tool.uv]

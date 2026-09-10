@@ -252,7 +252,7 @@ def orchestrate() -> int:
             os.environ,
             AIWATCHER_URL=BASE,
             AIWATCHER_PAYLOAD_ROOT=payloads,
-            AIWATCHER_OUTBOX=str(Path(payloads) / "outbox.sqlite"),
+            AIWATCHER_OUTBOX=str(Path(payloads) / "outbox.duckdb"),
         )
 
         first = spawn("worker-a", execution, marker, env)

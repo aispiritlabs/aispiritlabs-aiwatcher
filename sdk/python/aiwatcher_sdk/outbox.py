@@ -40,9 +40,9 @@ leaving the row where a person can read it.
 A queue nobody can inspect is a queue nobody trusts, so the durable store is
 readable and drainable from outside the process that wrote it::
 
-    python -m aiwatcher_sdk.outbox list  .data/aiwatcher-outbox.sqlite
-    python -m aiwatcher_sdk.outbox drain .data/aiwatcher-outbox.sqlite --url http://…
-    python -m aiwatcher_sdk.outbox requeue .data/aiwatcher-outbox.sqlite MESSAGE_ID
+    python -m aiwatcher_sdk.outbox list  .data/aiwatcher-outbox.duckdb
+    python -m aiwatcher_sdk.outbox drain .data/aiwatcher-outbox.duckdb --url http://…
+    python -m aiwatcher_sdk.outbox requeue .data/aiwatcher-outbox.duckdb MESSAGE_ID
 
 ``dead_letters`` is what a drain gave up on, and ``requeue`` puts one back —
 which is a person's decision and never a drain's, because the drain already
@@ -51,14 +51,13 @@ a hop somebody wants gone is a hop somebody should have to open the file for.
 
 ## Which store
 
-``MemoryOutbox`` is the default and is honest about what it is: it survives a
-failed request and not a failed process. ``SqliteOutbox`` survives both, and it
-is the durable tier here because ``sqlite3`` is in the standard library — this
-distribution's telemetry half depends on nothing, and a durable outbox that
-arrived as a wheel would be a dependency every agent pays for. A DuckDB adapter
-is the same protocol and a sensible addition for a deployment that already runs
-one; it is not the default, because an outbox is small transactional rows with
-single-row deletes, which is the shape a row store is for.
+The two of the Rust workflow store's four tiers that make sense on an agent's
+machine. ``MemoryOutbox`` survives a failed request and not a failed process,
+and says so. ``DuckdbOutbox`` survives both, and its file is one an operator can
+also open with any DuckDB client and ask in SQL. It needs the ``duckdb`` extra
+and imports it only when constructed: this distribution's telemetry half
+depends on nothing, and a process that only publishes spans must not pay for a
+database it never opens.
 """
 
 from __future__ import annotations
@@ -66,26 +65,30 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sqlite3
+import random
 import sys
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Generator, Sequence
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Final, Protocol, Self
+from typing import TYPE_CHECKING, Any, Final, Protocol, Self
+
+if TYPE_CHECKING:
+    import duckdb
 
 __all__ = [
     "BATCH",
     "Delivery",
     "DrainReport",
+    "DuckdbOutbox",
     "MemoryOutbox",
     "Outbox",
     "PendingDelivery",
     "RetryableError",
     "Sender",
-    "SqliteOutbox",
     "drain",
     "encode",
 ]
@@ -149,25 +152,6 @@ class DrainReport:
     def moved(self) -> int:
         """Rows that left the retry path, either accepted or dead-lettered."""
         return self.settled + self.rejected
-
-
-class Immediate:
-    """``BEGIN IMMEDIATE`` … ``COMMIT``, or ``ROLLBACK``."""
-
-    def __init__(self, db: sqlite3.Connection) -> None:
-        self._db = db
-
-    def __enter__(self) -> sqlite3.Connection:
-        self._db.execute("BEGIN IMMEDIATE")
-        return self._db
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> None:
-        self._db.execute("ROLLBACK" if exc_type is not None else "COMMIT")
 
 
 class Outbox(Protocol):
@@ -300,44 +284,65 @@ class MemoryOutbox:
             )
 
 
-class SqliteOutbox:
-    """An outbox that survives the process.
+class DuckdbOutbox:
+    """An outbox that survives the process, in one DuckDB file.
 
-    One table, one connection, and ``isolation_level=None`` with explicit
-    ``BEGIN IMMEDIATE`` — because the point of writing before sending is that
-    the write is **committed** before the request goes out. Python's implicit
-    transaction management would leave a ``put`` uncommitted until something
-    else happened to commit it, which is the whole ordering inverted by a
-    default nobody chose.
+    **A connection per operation**, which is the design rather than a
+    shortcut. DuckDB locks its file exclusively for as long as a connection is
+    open — another process is refused even read-only — so a connection held for
+    this object's life would make the file one process's. Two things need it to
+    be everybody's: an operator listing what is stuck *while the agent that
+    wrote it is still running*, and several workers on one machine sharing the
+    rows. The Rust `DuckdbWorkflowStore` holds one connection and says
+    `multi_process: false`, which is right for a server that owns its store; this
+    file has more than one reader on purpose. Measured, an operation costs about
+    7 ms opened and closed against 0.4 ms on a held connection — a hop is a
+    handful of them, beside a model call measured in seconds.
 
-    ``check_same_thread=False`` with a lock rather than a connection per thread:
-    a hop may be written by whichever thread is running the turn, and the rows
-    have to be one queue.
+    Every operation is one statement, so autocommit is the transaction, and a
+    ``put`` is on disk before the request it precedes goes out. Another
+    process's operation is waited out for up to :attr:`LOCK_WAIT` seconds
+    rather than failed on, because it holds the file for milliseconds.
     """
 
-    SCHEMA: Final = """
+    SCHEMA: Final = (
+        "CREATE SEQUENCE IF NOT EXISTS outbox_written",
+        # `written` is the order a drain takes rows in. Not `first_seen`: two
+        # hops in one tick of the clock would tie, and a tie broken arbitrarily
+        # reorders one stream's facts on their way out.
+        """
         CREATE TABLE IF NOT EXISTS outbox (
-            message_id   TEXT PRIMARY KEY,
-            execution_id TEXT NOT NULL,
-            kind         TEXT NOT NULL,
-            body         TEXT NOT NULL,
+            message_id   VARCHAR PRIMARY KEY,
+            written      BIGINT NOT NULL DEFAULT nextval('outbox_written'),
+            execution_id VARCHAR NOT NULL,
+            kind         VARCHAR NOT NULL,
+            body         VARCHAR NOT NULL,
             attempts     INTEGER NOT NULL DEFAULT 0,
-            first_seen    REAL NOT NULL,
-            last_error   TEXT,
-            rejected     INTEGER NOT NULL DEFAULT 0
-        );
-        CREATE INDEX IF NOT EXISTS outbox_waiting
-            ON outbox (rejected, first_seen);
-    """
+            first_seen   DOUBLE NOT NULL,
+            last_error   VARCHAR,
+            rejected     BOOLEAN NOT NULL DEFAULT false
+        )
+        """,
+    )
+
+    #: How long an operation waits for another process's to let go of the file.
+    LOCK_WAIT: Final = 10.0
 
     def __init__(self, path: str | Path) -> None:
+        try:
+            import duckdb
+        except ImportError as missing:
+            raise ImportError(
+                "the durable outbox needs DuckDB: install `aiwatcher-sdk[duckdb]`, or use "
+                "MemoryOutbox for a run that does not have to survive its process"
+            ) from missing
+        self._duckdb = duckdb
         self._path = Path(path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        self._db = sqlite3.connect(self._path, check_same_thread=False, isolation_level=None)
-        self._db.execute("PRAGMA journal_mode=WAL")
-        self._db.execute("PRAGMA synchronous=FULL")
-        self._db.executescript(self.SCHEMA)
+        with self._lock, self._connection() as db:
+            for statement in self.SCHEMA:
+                db.execute(statement)
 
     def __enter__(self) -> Self:
         return self
@@ -351,19 +356,13 @@ class SqliteOutbox:
         self.close()
 
     def close(self) -> None:
-        with self._lock:
-            self._db.close()
+        """Nothing to release: no connection outlives the operation that opened it."""
 
     def put(self, delivery: Delivery) -> bool:
-        with self._lock, Immediate(self._db) as db:
-            held = db.execute(
-                "SELECT 1 FROM outbox WHERE message_id = ?", (delivery.message_id,)
-            ).fetchone()
-            if held is not None:
-                return False
-            db.execute(
+        with self._lock, self._connection() as db:
+            inserted = db.execute(
                 "INSERT INTO outbox (message_id, execution_id, kind, body, first_seen) "
-                "VALUES (?, ?, ?, ?, ?)",
+                "VALUES (?, ?, ?, ?, ?) ON CONFLICT (message_id) DO NOTHING",
                 (
                     delivery.message_id,
                     delivery.execution_id,
@@ -371,45 +370,68 @@ class SqliteOutbox:
                     delivery.body,
                     time.time(),
                 ),
-            )
-            return True
+            ).fetchone()
+        return bool(inserted and inserted[0])
 
     def pending(
         self, limit: int | None = BATCH, *, execution_id: str | None = None
     ) -> Sequence[PendingDelivery]:
-        return self._select(rejected=0, limit=limit, execution_id=execution_id)
+        return self._select(rejected=False, limit=limit, execution_id=execution_id)
 
     def dead_letters(self, limit: int | None = BATCH) -> Sequence[PendingDelivery]:
-        return self._select(rejected=1, limit=limit, execution_id=None)
+        return self._select(rejected=True, limit=limit, execution_id=None)
 
     def requeue(self, message_id: str) -> bool:
-        with self._lock, Immediate(self._db) as db:
+        with self._lock, self._connection() as db:
             changed = db.execute(
-                "UPDATE outbox SET rejected = 0 WHERE message_id = ? AND rejected = 1",
+                "UPDATE outbox SET rejected = false WHERE message_id = ? AND rejected",
                 (message_id,),
-            ).rowcount
-        return changed == 1
+            ).fetchone()
+        return bool(changed and changed[0] == 1)
 
     def settle(self, message_id: str) -> None:
-        with self._lock, Immediate(self._db) as db:
+        with self._lock, self._connection() as db:
             db.execute("DELETE FROM outbox WHERE message_id = ?", (message_id,))
 
     def defer(self, message_id: str, reason: str) -> None:
-        self._mark(message_id, reason, rejected=0)
+        self._mark(message_id, reason, rejected=False)
 
     def reject(self, message_id: str, reason: str) -> None:
-        self._mark(message_id, reason, rejected=1)
+        self._mark(message_id, reason, rejected=True)
 
     def depth(self) -> tuple[int, int]:
-        with self._lock:
-            waiting, rejected = self._db.execute(
-                "SELECT SUM(CASE WHEN rejected = 0 THEN 1 ELSE 0 END), "
-                "       SUM(CASE WHEN rejected = 1 THEN 1 ELSE 0 END) FROM outbox"
+        with self._lock, self._connection() as db:
+            counted = db.execute(
+                "SELECT count(*) FILTER (WHERE NOT rejected), count(*) FILTER (WHERE rejected) "
+                "FROM outbox"
             ).fetchone()
-        return int(waiting or 0), int(rejected or 0)
+        waiting, rejected = counted if counted is not None else (0, 0)
+        return int(waiting), int(rejected)
 
-    def _mark(self, message_id: str, reason: str, *, rejected: int) -> None:
-        with self._lock, Immediate(self._db) as db:
+    @contextmanager
+    def _connection(self) -> Generator[duckdb.DuckDBPyConnection, None, None]:
+        deadline = time.monotonic() + self.LOCK_WAIT
+        pause = 0.005
+        while True:
+            try:
+                db = self._duckdb.connect(str(self._path))
+                break
+            except self._duckdb.IOException as failure:
+                # Only the lock is waited for. A file that is not a database, or
+                # a directory that is not writable, says the same thing in ten
+                # seconds as it does now.
+                if "lock" not in str(failure).lower() or time.monotonic() >= deadline:
+                    raise
+                # Jittered, so two workers that collided do not collide again.
+                time.sleep(pause * (0.5 + random.random()))  # noqa: S311 - a backoff, not a secret
+                pause = min(pause * 2, 0.1)
+        try:
+            yield db
+        finally:
+            db.close()
+
+    def _mark(self, message_id: str, reason: str, *, rejected: bool) -> None:
+        with self._lock, self._connection() as db:
             db.execute(
                 "UPDATE outbox SET attempts = attempts + 1, last_error = ?, rejected = ? "
                 "WHERE message_id = ?",
@@ -417,25 +439,27 @@ class SqliteOutbox:
             )
 
     def _select(
-        self, *, rejected: int, limit: int | None, execution_id: str | None
+        self, *, rejected: bool, limit: int | None, execution_id: str | None
     ) -> Sequence[PendingDelivery]:
-        # One fixed statement: `LIMIT -1` is SQLite's "no bound", and a NULL
-        # execution matches every row. `rowid` breaks a tie in `first_seen`, so
-        # two rows written in one clock tick still drain in the order written.
-        with self._lock:
-            rows = self._db.execute(
+        # One fixed statement: a NULL execution matches every row, and the limit
+        # is applied by fetching rather than by writing it into the SQL — an
+        # outbox is small, and a query assembled from strings is the thing a
+        # fixed one is here to avoid.
+        with self._lock, self._connection() as db:
+            cursor = db.execute(
                 "SELECT message_id, execution_id, kind, body, attempts, first_seen, last_error "
-                "FROM outbox WHERE rejected = ? AND (? IS NULL OR execution_id = ?) "
-                "ORDER BY first_seen, rowid LIMIT ?",
-                (rejected, execution_id, execution_id, -1 if limit is None else limit),
-            ).fetchall()
+                "FROM outbox WHERE rejected = ? "
+                "AND (CAST(? AS VARCHAR) IS NULL OR execution_id = ?) ORDER BY written",
+                (rejected, execution_id, execution_id),
+            )
+            rows = cursor.fetchall() if limit is None else cursor.fetchmany(limit)
         return tuple(
             PendingDelivery(
                 delivery=Delivery(message_id=row[0], execution_id=row[1], kind=row[2], body=row[3]),
                 attempts=row[4],
                 first_seen=row[5],
                 last_error=row[6],
-                rejected=bool(rejected),
+                rejected=rejected,
             )
             for row in rows
         )
@@ -527,7 +551,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     commands = parser.add_subparsers(dest="command", required=True)
     listing = commands.add_parser("list", help="every row, waiting and dead-lettered")
-    listing.add_argument("path", type=Path)
+    listing.add_argument("path", type=Path, help="the outbox's DuckDB file")
     listing.add_argument("--json", action="store_true", help="one JSON document, for a script")
     draining = commands.add_parser("drain", help="one pass over the waiting rows")
     draining.add_argument("path", type=Path)
@@ -539,11 +563,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if not args.path.exists():
-        # `SqliteOutbox` creates what it is pointed at, which is right for an
+        # `DuckdbOutbox` creates what it is pointed at, which is right for an
         # agent and wrong for somebody who mistyped the path to one.
         print(f"no outbox at {args.path}", file=sys.stderr)
         return 2
-    with SqliteOutbox(args.path) as outbox:
+    try:
+        opened = DuckdbOutbox(args.path)
+    except ImportError as missing:
+        print(missing, file=sys.stderr)
+        return 2
+    with opened as outbox:
         if args.command == "list":
             return _list(outbox, as_json=args.json)
         if args.command == "requeue":
@@ -571,7 +600,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
 
-def _list(outbox: SqliteOutbox, *, as_json: bool) -> int:
+def _list(outbox: DuckdbOutbox, *, as_json: bool) -> int:
     rows = [*outbox.pending(None), *outbox.dead_letters(None)]
     if as_json:
         print(

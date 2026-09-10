@@ -132,12 +132,12 @@ def agent(execution: str, marker: str) -> None:
 def lost_acknowledgement(execution: str, marker: str, base: str) -> None:
     from aiwatcher_sdk.api import Transport
     from aiwatcher_sdk.integrations.agentic import deliver
-    from aiwatcher_sdk.outbox import SqliteOutbox
+    from aiwatcher_sdk.outbox import DuckdbOutbox
 
     ledger = ledger_for(execution, "late")
     # The door is shut, so this waits in the outbox.
     ledger.record_completion(LATE_TURN, SUMMARIZER, arrival("search-4", marker))
-    with SqliteOutbox(os.environ["AIWATCHER_OUTBOX"]) as outbox:
+    with DuckdbOutbox(os.environ["AIWATCHER_OUTBOX"]) as outbox:
         [row] = outbox.pending(execution_id=execution)
     # Around the door, straight to aiwatcher, which accepts it…
     deliver(Transport(base), row.delivery)
@@ -373,7 +373,7 @@ def orchestrate() -> int:
     try:
         with tempfile.TemporaryDirectory(prefix="aiwatcher-e2e-outbox-") as scratch:
             root = Path(scratch)
-            outbox = root / "outbox.sqlite"
+            outbox = root / "outbox.duckdb"
             env = dict(
                 os.environ,
                 AIWATCHER_URL=door.url,
@@ -469,7 +469,7 @@ def orchestrate() -> int:
 
             words = [
                 path.name
-                for path in root.glob("outbox.sqlite*")
+                for path in root.glob("outbox.duckdb*")
                 if marker.encode() in path.read_bytes()
             ]
             stored = sorted(path.name for path in (root / "payloads").rglob("*.json"))

@@ -2,27 +2,31 @@
 
 Both stores are put through the same contract, because a memory adapter that
 disagrees with the durable one about when a row disappears is an adapter that
-passes its tests and loses a hop in production. `SqliteOutbox` then has three of
-its own, for the thing memory cannot be asked about: surviving the process.
+passes its tests and loses a hop in production. `DuckdbOutbox` then has tests of
+its own, for what memory cannot be asked about: surviving the process, and
+sharing its file with another one.
 """
 
 from __future__ import annotations
 
+import builtins
 import json
-import sqlite3
+import subprocess
+import sys
 import time
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from aiwatcher_sdk.outbox import (
     BATCH,
     Delivery,
+    DuckdbOutbox,
     MemoryOutbox,
     Outbox,
     RetryableError,
-    SqliteOutbox,
     drain,
     encode,
     main,
@@ -38,12 +42,12 @@ def hop(index: int, execution: str = "exec-1") -> Delivery:
     )
 
 
-@pytest.fixture(params=["memory", "sqlite"])
+@pytest.fixture(params=["memory", "duckdb"])
 def outbox(request: pytest.FixtureRequest, tmp_path: Path) -> Iterator[Outbox]:
     if request.param == "memory":
         yield MemoryOutbox()
         return
-    store = SqliteOutbox(tmp_path / "outbox.db")
+    store = DuckdbOutbox(tmp_path / "outbox.duckdb")
     try:
         yield store
     finally:
@@ -252,52 +256,113 @@ def test_only_a_dead_letter_can_be_requeued(outbox: Outbox) -> None:
 
 
 def test_a_hop_written_before_the_process_died_is_there_afterwards(tmp_path: Path) -> None:
-    path = tmp_path / "outbox.db"
-    with SqliteOutbox(path) as before:
+    path = tmp_path / "outbox.duckdb"
+    with DuckdbOutbox(path) as before:
         before.put(hop(1))
 
-    with SqliteOutbox(path) as after:
+    with DuckdbOutbox(path) as after:
         assert [row.delivery.message_id for row in after.pending()] == [hop(1).message_id]
 
 
 def test_a_send_whose_acknowledgement_was_lost_is_re_sent_under_the_same_id(
     tmp_path: Path,
 ) -> None:
-    path = tmp_path / "outbox.db"
-    with SqliteOutbox(path) as before:
+    path = tmp_path / "outbox.duckdb"
+    with DuckdbOutbox(path) as before:
         before.put(hop(1))
         # Sent, and the process dies before `settle`. Nothing distinguishes this
         # from a send that never arrived, which is why the id has to carry it.
         drain(before, lambda delivery: (_ for _ in ()).throw(RetryableError("timeout")))
 
     resent: list[str] = []
-    with SqliteOutbox(path) as after:
+    with DuckdbOutbox(path) as after:
         drain(after, lambda delivery: resent.append(delivery.message_id))
 
     assert resent == [hop(1).message_id]
 
 
-def test_the_row_is_committed_before_a_send_could_have_happened(tmp_path: Path) -> None:
-    # The whole ordering: a second connection sees the row with no cooperation
-    # from the one that wrote it, so the write is durable before the request
-    # that follows it goes out.
-    path = tmp_path / "outbox.db"
-    with SqliteOutbox(path) as store:
-        store.put(hop(1))
-        observer = sqlite3.connect(path)
-        try:
-            held = observer.execute("SELECT COUNT(*) FROM outbox").fetchone()[0]
-        finally:
-            observer.close()
+#: A second process — an operator, another worker — counting the rows.
+COUNT_ROWS = (
+    "import duckdb, sys\n"
+    "db = duckdb.connect(sys.argv[1])\n"
+    "print(db.execute('SELECT count(*) FROM outbox').fetchone()[0])\n"
+)
 
-    assert held == 1
+#: A second process holding the file for half a second.
+HOLD_THE_FILE = (
+    "import duckdb, sys, time\n"
+    "db = duckdb.connect(sys.argv[1])\n"
+    "print('held', flush=True)\n"
+    "time.sleep(0.5)\n"
+    "db.close()\n"
+)
+
+
+def count_from_another_process(path: Path) -> int:
+    # This interpreter, and a program this file wrote.
+    read = subprocess.run(  # noqa: S603
+        [sys.executable, "-c", COUNT_ROWS, str(path)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return int(read.stdout)
+
+
+def test_another_process_reads_a_row_while_the_outbox_that_wrote_it_is_open(
+    tmp_path: Path,
+) -> None:
+    # The whole ordering, and the reason for a connection per operation: the
+    # row is on disk before the request that follows it goes out, and the file
+    # is not held — somebody can list it while the agent that wrote it runs.
+    path = tmp_path / "outbox.duckdb"
+    with DuckdbOutbox(path) as store:
+        store.put(hop(1))
+
+        assert count_from_another_process(path) == 1
+
+
+def test_an_operation_waits_out_another_process_s_rather_than_failing(tmp_path: Path) -> None:
+    path = tmp_path / "outbox.duckdb"
+    store = DuckdbOutbox(path)
+    # This interpreter, and a program this file wrote.
+    holder = subprocess.Popen(  # noqa: S603
+        [sys.executable, "-c", HOLD_THE_FILE, str(path)],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert holder.stdout is not None
+        assert holder.stdout.readline().strip() == "held"
+
+        assert store.put(hop(1)) is True
+    finally:
+        holder.wait(timeout=30)
+
+    assert store.depth() == (1, 0)
+
+
+def test_without_the_extra_the_durable_outbox_says_which_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_import = builtins.__import__
+
+    def refuse(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name == "duckdb":
+            raise ImportError(name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", refuse)
+
+    with pytest.raises(ImportError, match=r"aiwatcher-sdk\[duckdb\]"):
+        DuckdbOutbox(tmp_path / "outbox.duckdb")
 
 
 def test_the_body_is_stored_as_the_bytes_that_will_be_sent(tmp_path: Path) -> None:
     # Not a mapping re-encoded at send time: a library upgrade that orders keys
     # differently would then make the digest aiwatcher recorded a digest of
     # bytes nobody has.
-    with SqliteOutbox(tmp_path / "outbox.db") as store:
+    with DuckdbOutbox(tmp_path / "outbox.duckdb") as store:
         store.put(hop(7))
         stored = store.pending()[0].delivery.body
 
@@ -314,7 +379,7 @@ def test_two_processes_encoding_one_message_produce_one_string() -> None:
 
 def stuck(path: Path) -> None:
     """One hop waiting after a refused connection, one dead-lettered."""
-    with SqliteOutbox(path) as store:
+    with DuckdbOutbox(path) as store:
         store.put(hop(1))
         store.defer(hop(1).message_id, "connection refused")
         store.put(hop(2))
@@ -324,7 +389,7 @@ def stuck(path: Path) -> None:
 def test_an_operator_sees_every_row_with_its_execution_message_and_attempts(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    path = tmp_path / "outbox.db"
+    path = tmp_path / "outbox.duckdb"
     stuck(path)
 
     assert main(["list", str(path), "--json"]) == 0
@@ -341,7 +406,7 @@ def test_an_operator_sees_every_row_with_its_execution_message_and_attempts(
 def test_the_plain_listing_names_the_same_things_and_what_they_last_said(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    path = tmp_path / "outbox.db"
+    path = tmp_path / "outbox.duckdb"
     stuck(path)
 
     assert main(["list", str(path)]) == 0
@@ -356,13 +421,13 @@ def test_the_plain_listing_names_the_same_things_and_what_they_last_said(
 def test_an_operator_requeues_a_dead_letter_by_its_id(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    path = tmp_path / "outbox.db"
+    path = tmp_path / "outbox.duckdb"
     stuck(path)
 
     assert main(["requeue", str(path), hop(2).message_id]) == 0
     assert main(["requeue", str(path), hop(2).message_id]) == 1, "it is no longer dead"
 
-    with SqliteOutbox(path) as store:
+    with DuckdbOutbox(path) as store:
         assert store.depth() == (2, 0)
 
 
