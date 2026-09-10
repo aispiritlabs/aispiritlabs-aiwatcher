@@ -35,6 +35,20 @@ ends in a discard is a silent loss of exactly the kind this module exists to
 prevent; what a budget may do is stop retrying, which ``reject`` does while
 leaving the row where a person can read it.
 
+## What a person can do
+
+A queue nobody can inspect is a queue nobody trusts, so the durable store is
+readable and drainable from outside the process that wrote it::
+
+    python -m aiwatcher_sdk.outbox list  .data/aiwatcher-outbox.sqlite
+    python -m aiwatcher_sdk.outbox drain .data/aiwatcher-outbox.sqlite --url http://…
+    python -m aiwatcher_sdk.outbox requeue .data/aiwatcher-outbox.sqlite MESSAGE_ID
+
+``dead_letters`` is what a drain gave up on, and ``requeue`` puts one back —
+which is a person's decision and never a drain's, because the drain already
+decided the answer would not change. Nothing here deletes a row by hand either:
+a hop somebody wants gone is a hop somebody should have to open the file for.
+
 ## Which store
 
 ``MemoryOutbox`` is the default and is honest about what it is: it survives a
@@ -49,12 +63,15 @@ single-row deletes, which is the shape a row store is for.
 
 from __future__ import annotations
 
+import argparse
 import json
+import os
 import sqlite3
+import sys
 import threading
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Final, Protocol, Self
@@ -158,16 +175,36 @@ class Outbox(Protocol):
 
     A protocol rather than a base class: a caller that already has a durable
     store — `agentic.workflow`'s SQLite, a Postgres a service owns — implements
-    these five methods against it rather than running a second database beside
-    the one it has.
+    these methods against it rather than running a second database beside the
+    one it has.
     """
 
     def put(self, delivery: Delivery) -> bool:
         """Write and commit. ``False`` when this ``message_id`` is already held."""
         ...
 
-    def pending(self, limit: int = BATCH) -> Sequence[PendingDelivery]:
-        """The oldest rows still worth sending, rejected ones excluded."""
+    def pending(
+        self, limit: int | None = BATCH, *, execution_id: str | None = None
+    ) -> Sequence[PendingDelivery]:
+        """The oldest rows still worth sending, rejected ones excluded.
+
+        ``execution_id`` narrows to one execution's rows, which is what a store
+        draining its own stream asks for: a row for another execution waiting
+        out somebody's lease must not hold this one's hops behind it.
+        ``limit=None`` is every row.
+        """
+        ...
+
+    def dead_letters(self, limit: int | None = BATCH) -> Sequence[PendingDelivery]:
+        """The rows taken out of the retry path, oldest first."""
+        ...
+
+    def requeue(self, message_id: str) -> bool:
+        """Put a dead-lettered row back in the retry path. ``False`` if none is.
+
+        The attempt count and the last error stay, so the record of why it was
+        taken out survives the decision to try it again.
+        """
         ...
 
     def settle(self, message_id: str) -> None:
@@ -206,11 +243,33 @@ class MemoryOutbox:
             self._rows[delivery.message_id] = PendingDelivery(delivery=delivery)
             return True
 
-    def pending(self, limit: int = BATCH) -> Sequence[PendingDelivery]:
+    def pending(
+        self, limit: int | None = BATCH, *, execution_id: str | None = None
+    ) -> Sequence[PendingDelivery]:
         with self._lock:
-            waiting = [row for row in self._rows.values() if not row.rejected]
+            waiting = [
+                row
+                for row in self._rows.values()
+                if not row.rejected
+                and (execution_id is None or row.delivery.execution_id == execution_id)
+            ]
+        # Stable, so two rows written in one clock tick keep insertion order.
         waiting.sort(key=lambda row: row.first_seen)
-        return tuple(waiting[:limit])
+        return tuple(waiting if limit is None else waiting[:limit])
+
+    def dead_letters(self, limit: int | None = BATCH) -> Sequence[PendingDelivery]:
+        with self._lock:
+            held = [row for row in self._rows.values() if row.rejected]
+        held.sort(key=lambda row: row.first_seen)
+        return tuple(held if limit is None else held[:limit])
+
+    def requeue(self, message_id: str) -> bool:
+        with self._lock:
+            row = self._rows.get(message_id)
+            if row is None or not row.rejected:
+                return False
+            self._rows[message_id] = replace(row, rejected=False)
+            return True
 
     def settle(self, message_id: str) -> None:
         with self._lock:
@@ -315,22 +374,21 @@ class SqliteOutbox:
             )
             return True
 
-    def pending(self, limit: int = BATCH) -> Sequence[PendingDelivery]:
-        with self._lock:
-            rows = self._db.execute(
-                "SELECT message_id, execution_id, kind, body, attempts, first_seen, last_error "
-                "FROM outbox WHERE rejected = 0 ORDER BY first_seen LIMIT ?",
-                (limit,),
-            ).fetchall()
-        return tuple(
-            PendingDelivery(
-                delivery=Delivery(message_id=row[0], execution_id=row[1], kind=row[2], body=row[3]),
-                attempts=row[4],
-                first_seen=row[5],
-                last_error=row[6],
-            )
-            for row in rows
-        )
+    def pending(
+        self, limit: int | None = BATCH, *, execution_id: str | None = None
+    ) -> Sequence[PendingDelivery]:
+        return self._select(rejected=0, limit=limit, execution_id=execution_id)
+
+    def dead_letters(self, limit: int | None = BATCH) -> Sequence[PendingDelivery]:
+        return self._select(rejected=1, limit=limit, execution_id=None)
+
+    def requeue(self, message_id: str) -> bool:
+        with self._lock, Immediate(self._db) as db:
+            changed = db.execute(
+                "UPDATE outbox SET rejected = 0 WHERE message_id = ? AND rejected = 1",
+                (message_id,),
+            ).rowcount
+        return changed == 1
 
     def settle(self, message_id: str) -> None:
         with self._lock, Immediate(self._db) as db:
@@ -358,6 +416,30 @@ class SqliteOutbox:
                 (reason, rejected, message_id),
             )
 
+    def _select(
+        self, *, rejected: int, limit: int | None, execution_id: str | None
+    ) -> Sequence[PendingDelivery]:
+        # One fixed statement: `LIMIT -1` is SQLite's "no bound", and a NULL
+        # execution matches every row. `rowid` breaks a tie in `first_seen`, so
+        # two rows written in one clock tick still drain in the order written.
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT message_id, execution_id, kind, body, attempts, first_seen, last_error "
+                "FROM outbox WHERE rejected = ? AND (? IS NULL OR execution_id = ?) "
+                "ORDER BY first_seen, rowid LIMIT ?",
+                (rejected, execution_id, execution_id, -1 if limit is None else limit),
+            ).fetchall()
+        return tuple(
+            PendingDelivery(
+                delivery=Delivery(message_id=row[0], execution_id=row[1], kind=row[2], body=row[3]),
+                attempts=row[4],
+                first_seen=row[5],
+                last_error=row[6],
+                rejected=bool(rejected),
+            )
+            for row in rows
+        )
+
 
 class Sender(Protocol):
     """What a drain calls, and the three things it may answer.
@@ -384,7 +466,13 @@ class RetryableError(Exception):
     """
 
 
-def drain(outbox: Outbox, send: Sender, *, limit: int = BATCH) -> DrainReport:
+def drain(
+    outbox: Outbox,
+    send: Sender,
+    *,
+    limit: int = BATCH,
+    execution_id: str | None = None,
+) -> DrainReport:
     """Try the waiting rows once, and report what moved.
 
     One pass, never a loop: how often to drain and whether to back off are the
@@ -392,9 +480,13 @@ def drain(outbox: Outbox, send: Sender, *, limit: int = BATCH) -> DrainReport:
     pretending to be a queue. It stops at the first :class:`RetryableError` — if
     aiwatcher is unreachable it is unreachable for the next row too, and the
     rows are ordered, so pressing on would spend the batch proving one fact.
+
+    ``execution_id`` drains one execution's rows only. The order that matters is
+    within one stream, and one stream's row waiting out a lease must not stop
+    another's from going.
     """
     settled = deferred = rejected = 0
-    for row in outbox.pending(limit):
+    for row in outbox.pending(limit, execution_id=execution_id):
         try:
             send(row.delivery)
         except RetryableError as failure:
@@ -417,3 +509,112 @@ def encode(payload: Any) -> str:
     which is what lets a digest of the body mean anything.
     """
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+# ── The operator's door ──────────────────────────────────────────────────────
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """``python -m aiwatcher_sdk.outbox``: list an outbox, drain it, requeue a row.
+
+    Only the durable store can be opened from outside the process that wrote
+    it, which is the case this exists for: the agent is gone, or stuck, and a
+    person wants to know what it did not manage to say.
+    """
+    parser = argparse.ArgumentParser(
+        prog="python -m aiwatcher_sdk.outbox",
+        description="Look at, drain or requeue an agent's local outbox.",
+    )
+    commands = parser.add_subparsers(dest="command", required=True)
+    listing = commands.add_parser("list", help="every row, waiting and dead-lettered")
+    listing.add_argument("path", type=Path)
+    listing.add_argument("--json", action="store_true", help="one JSON document, for a script")
+    draining = commands.add_parser("drain", help="one pass over the waiting rows")
+    draining.add_argument("path", type=Path)
+    draining.add_argument("--url", default=os.environ.get("AIWATCHER_URL"))
+    draining.add_argument("--execution", default=None, help="only this execution's rows")
+    requeueing = commands.add_parser("requeue", help="put a dead-lettered row back")
+    requeueing.add_argument("path", type=Path)
+    requeueing.add_argument("message_id")
+    args = parser.parse_args(argv)
+
+    if not args.path.exists():
+        # `SqliteOutbox` creates what it is pointed at, which is right for an
+        # agent and wrong for somebody who mistyped the path to one.
+        print(f"no outbox at {args.path}", file=sys.stderr)
+        return 2
+    with SqliteOutbox(args.path) as outbox:
+        if args.command == "list":
+            return _list(outbox, as_json=args.json)
+        if args.command == "requeue":
+            if outbox.requeue(args.message_id):
+                print(f"requeued {args.message_id}")
+                return 0
+            print(f"{args.message_id} is not dead-lettered here", file=sys.stderr)
+            return 1
+        if not args.url:
+            print("drain needs --url or AIWATCHER_URL", file=sys.stderr)
+            return 2
+        # Imported here rather than at the top: this module is the telemetry
+        # half's and depends on nothing, and only this one command needs a
+        # client — the same reason `as_torch_dataloader` imports torch inside.
+        from aiwatcher_sdk.api import Transport
+        from aiwatcher_sdk.integrations.agentic.event_store import stream_sender
+
+        with Transport(args.url, subject="aiwatcher") as transport:
+            report = drain(outbox, stream_sender(transport), execution_id=args.execution)
+        waiting, rejected = outbox.depth()
+        print(
+            f"settled={report.settled} deferred={report.deferred} rejected={report.rejected} "
+            f"waiting={waiting} dead_lettered={rejected}"
+        )
+        return 0
+
+
+def _list(outbox: SqliteOutbox, *, as_json: bool) -> int:
+    rows = [*outbox.pending(None), *outbox.dead_letters(None)]
+    if as_json:
+        print(
+            json.dumps(
+                [
+                    {
+                        **asdict(row.delivery),
+                        "attempts": row.attempts,
+                        "first_seen": row.first_seen,
+                        "last_error": row.last_error,
+                        "rejected": row.rejected,
+                    }
+                    for row in rows
+                ],
+                indent=2,
+            )
+        )
+        return 0
+    now = time.time()
+    for row in rows:
+        print(
+            "\t".join(
+                (
+                    "dead" if row.rejected else "waiting",
+                    row.delivery.execution_id,
+                    row.delivery.message_id,
+                    row.delivery.kind,
+                    f"attempts={row.attempts}",
+                    f"age={now - row.first_seen:.0f}s",
+                    row.last_error or "",
+                )
+            )
+        )
+    waiting, rejected = outbox.depth()
+    print(f"{waiting} waiting, {rejected} dead-lettered")
+    return 0
+
+
+if __name__ == "__main__":
+    # Run as `python -m`, this file is `__main__` and `aiwatcher_sdk.outbox` is a
+    # second copy of it. The sender raises that copy's `RetryableError`, which
+    # this copy's `drain` would not recognise — and would dead-letter a hop that
+    # only had to wait. So the importable module runs, not this one.
+    from aiwatcher_sdk.outbox import main as entry
+
+    sys.exit(entry())

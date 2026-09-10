@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 from aiwatcher_sdk.outbox import (
+    BATCH,
     Delivery,
     MemoryOutbox,
     Outbox,
@@ -23,6 +25,7 @@ from aiwatcher_sdk.outbox import (
     SqliteOutbox,
     drain,
     encode,
+    main,
 )
 
 
@@ -165,6 +168,86 @@ def test_a_delivery_without_the_three_things_that_identify_it_is_refused() -> No
             Delivery(**fields)
 
 
+def test_one_execution_s_rows_can_be_asked_for_without_the_others(outbox: Outbox) -> None:
+    outbox.put(hop(1, "exec-1"))
+    outbox.put(hop(1, "exec-2"))
+    outbox.put(hop(2, "exec-1"))
+
+    assert [row.delivery.message_id for row in outbox.pending(execution_id="exec-1")] == [
+        hop(1, "exec-1").message_id,
+        hop(2, "exec-1").message_id,
+    ]
+
+
+def test_a_drain_for_one_execution_is_not_held_behind_another_s(outbox: Outbox) -> None:
+    # exec-2's row is older and waiting out somebody's lease. Drained together,
+    # it stops the pass before exec-1's hop is tried; drained by execution, the
+    # stream that can move does.
+    outbox.put(hop(1, "exec-2"))
+    outbox.put(hop(1, "exec-1"))
+
+    def lease_held_on_exec_2(delivery: Delivery) -> None:
+        if delivery.execution_id == "exec-2":
+            raise RetryableError("409 lease_held")
+
+    assert drain(outbox, lease_held_on_exec_2).settled == 0
+    assert drain(outbox, lease_held_on_exec_2, execution_id="exec-1").settled == 1
+    assert [row.delivery.execution_id for row in outbox.pending()] == ["exec-2"]
+
+
+def test_no_limit_is_every_row_rather_than_a_batch(outbox: Outbox) -> None:
+    for index in range(BATCH + 5):
+        outbox.put(hop(index))
+
+    assert len(outbox.pending()) == BATCH
+    assert len(outbox.pending(None)) == BATCH + 5
+
+
+def test_rows_written_in_one_clock_tick_still_drain_in_the_order_written(
+    outbox: Outbox, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A burst of hops inside one tick of the clock is the ordinary case, and a
+    # tie broken arbitrarily would reorder one stream's facts on the way out.
+    monkeypatch.setattr(time, "time", lambda: 1_000.0)
+    for index in range(20):
+        outbox.put(hop(index))
+
+    assert [row.delivery.message_id for row in outbox.pending()] == [
+        hop(index).message_id for index in range(20)
+    ]
+
+
+def test_what_a_drain_gave_up_on_is_listed_for_a_person(outbox: Outbox) -> None:
+    outbox.put(hop(1))
+    outbox.put(hop(2))
+    outbox.reject(hop(2).message_id, "422: unknown execution")
+
+    [dead] = outbox.dead_letters()
+
+    assert dead.delivery.message_id == hop(2).message_id
+    assert (dead.rejected, dead.attempts, dead.last_error) == (True, 1, "422: unknown execution")
+
+
+def test_a_requeued_row_is_back_in_the_retry_path_with_its_history(outbox: Outbox) -> None:
+    outbox.put(hop(1))
+    outbox.reject(hop(1).message_id, "422: unknown execution")
+
+    assert outbox.requeue(hop(1).message_id) is True
+
+    [row] = outbox.pending()
+    # Why it was taken out survives the decision to try it again.
+    assert (row.attempts, row.last_error, row.rejected) == (1, "422: unknown execution", False)
+    assert outbox.dead_letters() == ()
+
+
+def test_only_a_dead_letter_can_be_requeued(outbox: Outbox) -> None:
+    outbox.put(hop(1))
+
+    assert outbox.requeue(hop(1).message_id) is False
+    assert outbox.requeue("never-written") is False
+    assert outbox.depth() == (1, 0)
+
+
 # ── What only the durable store can be asked ─────────────────────────────────
 
 
@@ -224,3 +307,71 @@ def test_the_body_is_stored_as_the_bytes_that_will_be_sent(tmp_path: Path) -> No
 
 def test_two_processes_encoding_one_message_produce_one_string() -> None:
     assert encode({"b": 1, "a": 2}) == encode({"a": 2, "b": 1})
+
+
+# ── The operator's door ──────────────────────────────────────────────────────
+
+
+def stuck(path: Path) -> None:
+    """One hop waiting after a refused connection, one dead-lettered."""
+    with SqliteOutbox(path) as store:
+        store.put(hop(1))
+        store.defer(hop(1).message_id, "connection refused")
+        store.put(hop(2))
+        store.reject(hop(2).message_id, "422: unknown execution")
+
+
+def test_an_operator_sees_every_row_with_its_execution_message_and_attempts(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "outbox.db"
+    stuck(path)
+
+    assert main(["list", str(path), "--json"]) == 0
+
+    rows = json.loads(capsys.readouterr().out)
+    assert [
+        (row["execution_id"], row["message_id"], row["attempts"], row["rejected"]) for row in rows
+    ] == [
+        ("exec-1", hop(1).message_id, 1, False),
+        ("exec-1", hop(2).message_id, 1, True),
+    ]
+
+
+def test_the_plain_listing_names_the_same_things_and_what_they_last_said(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "outbox.db"
+    stuck(path)
+
+    assert main(["list", str(path)]) == 0
+
+    out = capsys.readouterr().out
+    assert f"waiting\texec-1\t{hop(1).message_id}\tstream.append\tattempts=1" in out
+    assert "connection refused" in out
+    assert f"dead\texec-1\t{hop(2).message_id}" in out
+    assert out.rstrip().endswith("1 waiting, 1 dead-lettered")
+
+
+def test_an_operator_requeues_a_dead_letter_by_its_id(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    path = tmp_path / "outbox.db"
+    stuck(path)
+
+    assert main(["requeue", str(path), hop(2).message_id]) == 0
+    assert main(["requeue", str(path), hop(2).message_id]) == 1, "it is no longer dead"
+
+    with SqliteOutbox(path) as store:
+        assert store.depth() == (2, 0)
+
+
+def test_a_mistyped_path_is_not_quietly_made_into_an_empty_outbox(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    missing = tmp_path / "outbox-typo.db"
+
+    assert main(["list", str(missing)]) == 2
+
+    assert not missing.exists()
+    assert "no outbox at" in capsys.readouterr().err
