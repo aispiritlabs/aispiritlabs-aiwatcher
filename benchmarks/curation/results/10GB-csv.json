@@ -1,0 +1,271 @@
+{
+  "size": "10GB",
+  "format": "csv",
+  "finished_at": "2026-09-10T11:46:51+0200",
+  "machine": {
+    "os": "Darwin 25.6.0",
+    "python": "3.14.3",
+    "cpu": "Apple M1 Max",
+    "cores": "10",
+    "memory_gib": "64",
+    "php": "8.5.10",
+    "polars": "1.44.2",
+    "flow": "0.43.0"
+  },
+  "corpus": {
+    "seed": 20260910,
+    "rows": 56437497,
+    "parts": 57,
+    "csv_bytes": 10737419558,
+    "parquet_bytes": 1476609157,
+    "bytes_per_row": 190.3,
+    "runs": 4703125,
+    "generated_in_s": 39.5,
+    "polars": "1.44.2",
+    "numpy": "2.5.3"
+  },
+  "php_flags": [
+    "-d",
+    "memory_limit=32G",
+    "-d",
+    "opcache.enable_cli=1",
+    "-d",
+    "opcache.jit=tracing",
+    "-d",
+    "opcache.jit_buffer_size=128M"
+  ],
+  "runs": [
+    {
+      "engine": "polars",
+      "query": "q1",
+      "status": "ok",
+      "seconds": 2.925,
+      "wall": 3.086742542000138,
+      "cpu": 17.05,
+      "max_rss": 2108080128,
+      "result": {
+        "count": 645912
+      },
+      "error": null
+    },
+    {
+      "engine": "polars-1t",
+      "query": "q1",
+      "status": "ok",
+      "seconds": 14.095,
+      "wall": 14.212176792003447,
+      "cpu": 14.09,
+      "max_rss": 284459008,
+      "result": {
+        "count": 645912
+      },
+      "error": null
+    },
+    {
+      "engine": "polars",
+      "query": "q2",
+      "status": "ok",
+      "seconds": 3.165,
+      "wall": 3.304349167010514,
+      "cpu": 19.970000000000002,
+      "max_rss": 2288074752,
+      "result": [
+        {
+          "model": "claude-haiku-4-5",
+          "spans": 5079009,
+          "input_tokens": 10659187314,
+          "output_tokens": 1958057988,
+          "avg_duration_ms": 1652.2161882367209
+        },
+        {
+          "model": "claude-sonnet-5",
+          "spans": 6096302,
+          "input_tokens": 12801054011,
+          "output_tokens": 2352480961,
+          "avg_duration_ms": 1651.965635068604
+        },
+        {
+          "model": "gemini-3-pro",
+          "spans": 3052147,
+          "input_tokens": 6400941524,
+          "output_tokens": 1177008587,
+          "avg_duration_ms": 1652.3876130474712
+        },
+        {
+          "model": "gpt-5",
+          "spans": 4060390,
+          "input_tokens": 8524072593,
+          "output_tokens": 1565206207,
+          "avg_duration_ms": 1652.0218491327187
+        },
+        {
+          "model": "llama-4-70b",
+          "spans": 2538417,
+          "input_tokens": 5331030463,
+          "output_tokens": 979817870,
+          "avg_duration_ms": 1652.5352422395533
+        },
+        {
+          "model": "mistral-large-3",
+          "spans": 2032473,
+          "input_tokens": 4265099485,
+          "output_tokens": 783217450,
+          "avg_duration_ms": 1652.9657673189263
+        },
+        {
+          "model": "qwen-3-72b",
+          "spans": 1524873,
+          "input_tokens": 3200934830,
+          "output_tokens": 589001313,
+          "avg_duration_ms": 1650.9238087368587
+        },
+        {
+          "model": "text-embedding-3",
+          "spans": 1016014,
+          "input_tokens": 2133832506,
+          "output_tokens": 0,
+          "avg_duration_ms": 1651.5328381301833
+        }
+      ],
+      "error": null
+    },
+    {
+      "engine": "polars-1t",
+      "query": "q2",
+      "status": "ok",
+      "seconds": 16.767,
+      "wall": 16.88684729200031,
+      "cpu": 16.79,
+      "max_rss": 285933568,
+      "result": [
+        {
+          "model": "claude-haiku-4-5",
+          "spans": 5079009,
+          "input_tokens": 10659187314,
+          "output_tokens": 1958057988,
+          "avg_duration_ms": 1652.2161882367209
+        },
+        {
+          "model": "claude-sonnet-5",
+          "spans": 6096302,
+          "input_tokens": 12801054011,
+          "output_tokens": 2352480961,
+          "avg_duration_ms": 1651.965635068604
+        },
+        {
+          "model": "gemini-3-pro",
+          "spans": 3052147,
+          "input_tokens": 6400941524,
+          "output_tokens": 1177008587,
+          "avg_duration_ms": 1652.3876130474712
+        },
+        {
+          "model": "gpt-5",
+          "spans": 4060390,
+          "input_tokens": 8524072593,
+          "output_tokens": 1565206207,
+          "avg_duration_ms": 1652.0218491327187
+        },
+        {
+          "model": "llama-4-70b",
+          "spans": 2538417,
+          "input_tokens": 5331030463,
+          "output_tokens": 979817870,
+          "avg_duration_ms": 1652.5352422395533
+        },
+        {
+          "model": "mistral-large-3",
+          "spans": 2032473,
+          "input_tokens": 4265099485,
+          "output_tokens": 783217450,
+          "avg_duration_ms": 1652.9657673189263
+        },
+        {
+          "model": "qwen-3-72b",
+          "spans": 1524873,
+          "input_tokens": 3200934830,
+          "output_tokens": 589001313,
+          "avg_duration_ms": 1650.9238087368587
+        },
+        {
+          "model": "text-embedding-3",
+          "spans": 1016014,
+          "input_tokens": 2133832506,
+          "output_tokens": 0,
+          "avg_duration_ms": 1651.5328381301833
+        }
+      ],
+      "error": null
+    },
+    {
+      "engine": "polars",
+      "query": "q3",
+      "status": "ok",
+      "seconds": 4.118,
+      "wall": 4.345232082996517,
+      "cpu": 23.970000000000002,
+      "max_rss": 3435577344,
+      "result": {
+        "output": "/Users/mkubaszek/Projects/ai_spirit/aiwatcher/benchmarks/curation/results/outputs/10GB/csv/polars/q3.csv"
+      },
+      "error": null
+    },
+    {
+      "engine": "polars-1t",
+      "query": "q3",
+      "status": "ok",
+      "seconds": 18.787,
+      "wall": 18.949928625006578,
+      "cpu": 18.82,
+      "max_rss": 2765012992,
+      "result": {
+        "output": "/Users/mkubaszek/Projects/ai_spirit/aiwatcher/benchmarks/curation/results/outputs/10GB/csv/polars-1t/q3.csv"
+      },
+      "error": null
+    },
+    {
+      "engine": "polars",
+      "query": "q4",
+      "status": "ok",
+      "seconds": 5.531,
+      "wall": 5.709512792003807,
+      "cpu": 30.84,
+      "max_rss": 2618687488,
+      "result": {
+        "output": "/Users/mkubaszek/Projects/ai_spirit/aiwatcher/benchmarks/curation/results/outputs/10GB/csv/polars/q4.csv"
+      },
+      "error": null
+    },
+    {
+      "engine": "polars-1t",
+      "query": "q4",
+      "status": "ok",
+      "seconds": 28.513,
+      "wall": 28.637053832993843,
+      "cpu": 26.76,
+      "max_rss": 311803904,
+      "result": {
+        "output": "/Users/mkubaszek/Projects/ai_spirit/aiwatcher/benchmarks/curation/results/outputs/10GB/csv/polars-1t/q4.csv"
+      },
+      "error": null
+    }
+  ],
+  "verification": {
+    "q1": {
+      "polars": "reference",
+      "polars-1t": "agrees"
+    },
+    "q2": {
+      "polars": "reference",
+      "polars-1t": "agrees"
+    },
+    "q3": {
+      "polars": "reference",
+      "polars-1t": "agrees"
+    },
+    "q4": {
+      "polars": "reference",
+      "polars-1t": "agrees"
+    }
+  }
+}

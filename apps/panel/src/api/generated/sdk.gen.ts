@@ -733,7 +733,7 @@ export const ingest = <ThrowOnError extends boolean = false>(options: Options<In
  * from the WebSocket below: the panel only receives here, so EventSource can
  * own reconnects and `Last-Event-ID` resume without client-side machinery.
  */
-export const streamEvents = <ThrowOnError extends boolean = false>(options?: Options<StreamEventsData, ThrowOnError>): RequestResult<StreamEventsResponses, unknown, ThrowOnError> => (options?.client ?? client).get<StreamEventsResponses, unknown, ThrowOnError>({ url: '/api/v1/events/stream', ...options });
+export const streamEvents = <ThrowOnError extends boolean = false>(options: Options<StreamEventsData, ThrowOnError>): RequestResult<StreamEventsResponses, unknown, ThrowOnError> => (options.client ?? client).get<StreamEventsResponses, unknown, ThrowOnError>({ url: '/api/v1/events/stream', ...options });
 
 /**
  * Compile a definition and start running it.

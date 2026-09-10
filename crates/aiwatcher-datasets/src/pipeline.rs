@@ -33,8 +33,8 @@ use utoipa::ToSchema;
 use aiwatcher_core::human_input::OnTimeout;
 
 use crate::{
-    MAX_DESCRIPTION_BYTES, MAX_PIPELINE_BYTES, Registry, RegistryError, Result, digest,
-    validate_name,
+    MAX_DESCRIPTION_BYTES, MAX_PIPELINE_BYTES, QueryEngine, Registry, RegistryError, Result,
+    digest, validate_name,
 };
 
 /// A canvas holds a chain somebody can read at a glance, not a program.
@@ -62,12 +62,19 @@ pub enum BlockSpec {
         #[serde(default)]
         arguments: BTreeMap<String, String>,
     },
-    /// Flow PHP steps, appended to the source's `read()`. The tail of a
-    /// pipeline, without `data_frame()`, without the `read()` and without the
-    /// `write()`: those three are what the chain contributes.
+    /// One query's steps over the source's rows, in the language of the engine
+    /// they were written for. For Flow, the tail of a pipeline — without
+    /// `data_frame()`, without the `read()` and without the `write()`: those
+    /// three are what the chain contributes. For DataFusion and DuckDB, one
+    /// Python expression over `df`, the rows the chain has so far.
     Transform {
         #[serde(default)]
         steps: String,
+        /// The engine `steps` was written for. Absent is Flow, and stays absent
+        /// when saved, so a revision from before the field keeps its digest
+        /// and a plan compiled from it keeps its `plan_id`.
+        #[serde(default, skip_serializing_if = "QueryEngine::is_flow")]
+        engine: QueryEngine,
     },
     /// A marimo notebook, run over the rows by the marimo service.
     ///
@@ -444,6 +451,31 @@ fn chain_problems(chain: &[&PipelineBlock]) -> Vec<String> {
         }
     }
 
+    // One query, one engine. The transforms before the first notebook compile
+    // to a single step and a step runs on one engine, so text written for two
+    // of them has nowhere to run, whatever the deployment is. Named by the
+    // first block of each, which is where somebody would start looking.
+    // Whether the chain's engine is the *deployment's* is the compiler's
+    // question: this crate knows nothing about a deployment.
+    let mut engines: BTreeMap<QueryEngine, &str> = BTreeMap::new();
+    for block in chain {
+        if let BlockSpec::Transform { engine, .. } = &block.spec {
+            engines.entry(*engine).or_insert(block.id.as_str());
+        }
+    }
+    if engines.len() > 1 {
+        let written = engines
+            .iter()
+            .map(|(engine, id)| format!("{id} for {}", engine.label()))
+            .collect::<Vec<_>>()
+            .join(" and ");
+        problems.push(format!(
+            "the transforms are written for {} engines — {written}; they compile to one query, \
+             which runs on one engine",
+            engines.len()
+        ));
+    }
+
     // What a Flow step cannot read past. Flow reads its rows by naming a
     // dataset in the query service's catalog, so the one query a chain
     // compiles to ends at the first block that is neither a source nor a
@@ -475,13 +507,18 @@ fn chain_problems(chain: &[&PipelineBlock]) -> Vec<String> {
     problems
 }
 
-/// A Flow PHP block that cannot reach its rows, and what is in the way.
+/// A transform that cannot reach its rows, and what is in the way.
 ///
 /// One rule with two endings, because what stands between the transform and
 /// its rows is a different thing in each case and a reader needs to know
-/// which. Both say the same reason first: a Flow step names a dataset in the
-/// query service's catalog and cannot be handed rows.
+/// which. Both say the same reason first: a query step names a dataset in the
+/// query engine's catalog and cannot be handed rows. The same for every
+/// engine, because every engine reads its rows through `read()`.
 fn flow_after(block: &PipelineBlock, before: &PipelineBlock) -> String {
+    let engine = match &block.spec {
+        BlockSpec::Transform { engine, .. } => *engine,
+        _ => QueryEngine::Flow,
+    };
     let ending = match before.spec {
         BlockSpec::Approval { .. } => {
             "an approval is a step of its own, so the query this would belong to has already \
@@ -493,8 +530,9 @@ fn flow_after(block: &PipelineBlock, before: &PipelineBlock) -> String {
         }
     };
     format!(
-        "{} is a Flow PHP block after the {} {}. A Flow step reads its rows from the query service's catalog, so {ending}",
+        "{} is a {} block after the {} {}. A query step reads its rows from the query engine's catalog, so {ending}",
         block.id,
+        engine.label(),
         before.spec.kind(),
         before.id
     )
@@ -523,11 +561,12 @@ pub(crate) fn block_problems(block: &PipelineBlock) -> Vec<String> {
                 ));
             }
         }
-        BlockSpec::Transform { steps } => {
+        BlockSpec::Transform { steps, engine } => {
             if steps.len() > MAX_PIPELINE_BYTES {
                 problems.push(format!(
-                    "{}'s Flow PHP steps are {} bytes; the limit is {MAX_PIPELINE_BYTES}",
+                    "{}'s {} steps are {} bytes; the limit is {MAX_PIPELINE_BYTES}",
                     block.id,
+                    engine.label(),
                     steps.len()
                 ));
             }
@@ -653,6 +692,7 @@ mod tests {
             "shape",
             BlockSpec::Transform {
                 steps: "->limit(50)".to_owned(),
+                engine: QueryEngine::Flow,
             },
         )
     }
@@ -750,6 +790,7 @@ mod tests {
             "orphan",
             BlockSpec::Transform {
                 steps: "->limit(1)".to_owned(),
+                engine: QueryEngine::Flow,
             },
         ));
 
@@ -884,6 +925,64 @@ mod tests {
                 .iter()
                 .any(|problem| problem
                     .contains("shape is a Flow PHP block after the approval sign-off")),
+            "{refusals:?}"
+        );
+    }
+
+    #[test]
+    fn a_transform_saved_before_the_engine_field_is_flow_and_serialises_as_it_did() {
+        // Absent is Flow and Flow is written as absent: a stored revision is the
+        // digest of these bytes, so the field must not appear in them.
+        let stored = r#"{"kind":"transform","steps":"->limit(50)"}"#;
+        let spec: BlockSpec = serde_json::from_str(stored).expect("a stored transform");
+        assert!(matches!(
+            spec,
+            BlockSpec::Transform {
+                engine: QueryEngine::Flow,
+                ..
+            }
+        ));
+        assert_eq!(serde_json::to_string(&spec).expect("serialises"), stored);
+
+        let datafusion = BlockSpec::Transform {
+            steps: "df.limit(50)".to_owned(),
+            engine: QueryEngine::DataFusion,
+        };
+        assert_eq!(
+            serde_json::to_string(&datafusion).expect("serialises"),
+            r#"{"kind":"transform","steps":"df.limit(50)","engine":"datafusion"}"#
+        );
+    }
+
+    #[test]
+    fn transforms_written_for_two_engines_are_refused_naming_one_block_of_each() {
+        let request = SavePipelineRequest {
+            blocks: vec![
+                source(),
+                transform(),
+                block(
+                    "narrow",
+                    BlockSpec::Transform {
+                        steps: "df.limit(10)".to_owned(),
+                        engine: QueryEngine::DataFusion,
+                    },
+                ),
+                view(),
+            ],
+            edges: vec![
+                edge("corpus", "shape"),
+                edge("shape", "narrow"),
+                edge("narrow", "result"),
+            ],
+            ..demo()
+        };
+
+        let refusals = problems(&request);
+
+        assert!(
+            refusals
+                .iter()
+                .any(|problem| problem.contains("shape for Flow PHP and narrow for DataFusion")),
             "{refusals:?}"
         );
     }

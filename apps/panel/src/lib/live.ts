@@ -23,6 +23,9 @@ export const liveEventSchema = z.object({
   conversation_id: z.string().optional(),
   workflow_id: z.string().optional(),
   workflow_run_id: z.string().optional(),
+  agent_id: z.string().optional(),
+  /** The producing service — the explorer's `runtime` pivot. */
+  service: z.string().default('unknown'),
   trace_id: z.string(),
   span_id: z.string(),
   event_type: z.string(),
@@ -110,10 +113,76 @@ export function openSystemStream(handlers: LiveHandlers): () => void {
   return open('/api/v1/events/stream', undefined, handlers);
 }
 
+/**
+ * What a live view is watching: or within a dimension, and across them.
+ *
+ * The same shape the server's `Selection` has, and deliberately not a superset
+ * of it. Model and tool are absent because an event does not carry one — they
+ * are span-level facts assembled from several events (ADR_0003), so a filter
+ * offering them here would quietly drop everything but the LLM call itself.
+ * The explorer offers those pivots over the read model, where the span exists.
+ */
+export interface LiveSelection {
+  agents?: string[];
+  runtimes?: string[];
+  workflows?: string[];
+  sessions?: string[];
+  eventTypes?: string[];
+}
+
+const SELECTION_PARAMS: Array<[keyof LiveSelection, string]> = [
+  ['agents', 'agent'],
+  ['runtimes', 'runtime'],
+  ['workflows', 'workflow'],
+  ['sessions', 'session'],
+  ['eventTypes', 'event_type'],
+];
+
+/**
+ * The query string a selection is, as repeated parameters.
+ *
+ * Exported because it is also what makes the subscription's identity: React
+ * has to know when a selection changed, and comparing two objects by reference
+ * would reopen the stream on every render.
+ */
+export function selectionQuery(selection: LiveSelection): string {
+  const params = new URLSearchParams();
+  for (const [field, name] of SELECTION_PARAMS) {
+    for (const value of selection[field] ?? []) {
+      // An empty value is a cleared control, not "the agent whose id is the
+      // empty string" — the server drops it too, and sending it anyway would
+      // make the URL in the address bar disagree with the stream.
+      if (value) params.append(name, value);
+    }
+  }
+  return params.toString();
+}
+
+/**
+ * Follow the events matching a selection. Returns a function that closes it.
+ *
+ * **Filtered by the server, not here.** Subscribing to everything and
+ * discarding most of it in the browser is the same mistake as filtering a list
+ * after downloading it: on a busy instance the interesting events are a
+ * fraction of a percent of the traffic, and the browser would pay for all of
+ * it — including the `llm.chunk` storm that is most of the log by volume.
+ */
+export function openSelectionStream(
+  selection: LiveSelection,
+  from: string | undefined,
+  handlers: LiveHandlers,
+): () => void {
+  const query = selectionQuery(selection);
+  return open(`/api/v1/events/stream${query ? `?${query}` : ''}`, from, handlers);
+}
+
 /** The mechanics both streams share. Only the path differs. */
 function open(path: string, from: string | undefined, handlers: LiveHandlers): () => void {
-  const query = from ? `?from=${encodeURIComponent(from)}` : '';
-  const source = new EventSource(`${import.meta.env.VITE_API_BASE_URL ?? ''}${path}${query}`);
+  // `path` may already carry a selection, so the separator is decided rather
+  // than assumed: a second `?` produces a URL whose `from` is part of the last
+  // parameter's value, and the resume silently starts from the beginning.
+  const resume = from ? `${path.includes('?') ? '&' : '?'}from=${encodeURIComponent(from)}` : '';
+  const source = new EventSource(`${import.meta.env.VITE_API_BASE_URL ?? ''}${path}${resume}`);
 
   handlers.onPhase('catching-up');
 

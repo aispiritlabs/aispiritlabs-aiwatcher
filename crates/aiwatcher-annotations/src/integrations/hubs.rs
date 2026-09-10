@@ -1163,7 +1163,7 @@ fn strings(value: &Value, key: &str) -> Vec<String> {
 
 /// One hub row, flattened into the columns a Flow query reads.
 ///
-/// The bridge between this module and `services/flow`: the panel's import
+/// The bridge between this module and `services/query/flow`: the panel's import
 /// pipeline is written against these names, so they are defined once, here,
 /// beside the struct they come from. A column list that lived only in PHP
 /// would drift from the struct the first time a field was renamed.

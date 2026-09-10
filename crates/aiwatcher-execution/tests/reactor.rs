@@ -20,7 +20,7 @@ use aiwatcher_execution::store::memory::MemoryWorkflowStore;
 use aiwatcher_execution::{
     ArtifactCatalog, ExecutionHandler, ExecutionId, ExecutionMode, ExecutionOwner, ExecutionPlan,
     FailureClass, MemoryArtifactCatalog, Now, Performed, Reactor, RuntimeKind, StateType,
-    WorkflowCommand, WorkflowMessage, WorkflowStore, replay,
+    WorkflowCommand, WorkflowEvent, WorkflowMessage, WorkflowStore, replay,
 };
 use async_trait::async_trait;
 use time::OffsetDateTime;
@@ -785,6 +785,63 @@ async fn a_reactor_that_lost_its_lease_stops_rather_than_writing_beside_its_repl
             .state
             .state_type,
         StateType::Running
+    );
+}
+
+#[tokio::test]
+async fn a_step_that_took_time_reports_its_outcome_when_it_finished_rather_than_when_it_began() {
+    // The workflow fold measures a node from `step.started` to
+    // `step.completed`. With both stamped by the clock the pass began on, every
+    // managed step drew as 0 ms in the waterfall — a ninety-second Flow query
+    // over a gigabyte included — while the run's own total was right.
+    #[derive(Debug)]
+    struct Slow;
+
+    #[async_trait]
+    impl ActivityExecutor for Slow {
+        fn runtime(&self) -> RuntimeKind {
+            RuntimeKind::FlowPhp
+        }
+
+        async fn execute(
+            &self,
+            _command: &ActivityCommand,
+            _context: &ActivityContext,
+        ) -> Result<ActivityResult, ActivityError> {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            Ok(ActivityResult::default())
+        }
+    }
+
+    let store = MemoryWorkflowStore::new();
+    started(&store).await;
+    let reactor = Reactor::new(
+        ExecutionHandler::new(store.clone()),
+        ExecutorRegistry::new().with(Arc::new(Slow)),
+        "reactor-1".to_owned(),
+    );
+    reactor.poll_once(at(0)).await.expect("a poll");
+
+    let slice = store.load(&execution()).await.expect("a load");
+    let stamp = |wanted: fn(&WorkflowEvent) -> bool| {
+        slice
+            .messages
+            .iter()
+            .find(|recorded| recorded.message.event().is_some_and(wanted))
+            .map(|recorded| recorded.metadata.occurred_at)
+            .expect("the report")
+    };
+    let began = stamp(|event| matches!(event, WorkflowEvent::StepStarted { .. }));
+    let finished = stamp(|event| matches!(event, WorkflowEvent::StepCompleted { .. }));
+
+    assert_eq!(
+        began,
+        at(0),
+        "a start is stamped by the pass that claimed it"
+    );
+    assert!(
+        finished - began >= time::Duration::milliseconds(50),
+        "the outcome carries when the work ended: {began} → {finished}"
     );
 }
 

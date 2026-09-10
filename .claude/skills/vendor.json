@@ -1,5 +1,8 @@
 {
-  "comment": "Upstream agent skills vendored into this repository. Pinned by commit, refreshed with `just skills`. See README.md beside this file for why each one is here.",
+  "comment": "Agent skills under .claude/skills. Two kinds: skills vendored from upstream, pinned by commit and refreshed with `just skills`; and skills this repository authored, listed under `authored` — `just skills` never writes into those and `--check` expects them rather than reporting them as strays. A name may not appear in both. See README.md beside this file for why each one is here.",
+  "authored": [
+    "spec-flow"
+  ],
   "sources": [
     {
       "repo": "https://github.com/dash0hq/agent-skills",

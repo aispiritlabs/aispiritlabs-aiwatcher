@@ -1,0 +1,7 @@
+.data/
+vendor/
+.venv/
+results/outputs/
+rust/target/
+rust-datafusion/target/
+mojo/q2

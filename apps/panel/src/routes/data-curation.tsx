@@ -1,4 +1,4 @@
-import { Link, Outlet, createFileRoute } from '@tanstack/react-router';
+import { Outlet, createFileRoute } from '@tanstack/react-router';
 
 /**
  * Turning retained data into a dataset something can be trained or judged on.
@@ -13,35 +13,17 @@ import { Link, Outlet, createFileRoute } from '@tanstack/react-router';
  * The period carries across the two and nothing else does: "this transformation
  * over the last day" is one thought, and a tab switch that dropped the window
  * would make it two.
+ *
+ * Its views are listed in `lib/navigation.ts` and drawn by the sidebar, so
+ * this layout is a pass-through: a second tab row here would be the same
+ * four links, one level in, disagreeing with the first one the day somebody
+ * adds a page to only one of them.
  */
 
 export const Route = createFileRoute('/data-curation')({
   component: DataCurationLayout,
 });
 
-const VIEWS = [
-  { to: '/data-curation/pipeline', label: 'Pipeline' },
-  { to: '/data-curation/recipe', label: 'Recipe' },
-] as const;
-
 function DataCurationLayout() {
-  return (
-    <div className="flex flex-col gap-4">
-      <nav className="flex items-center gap-1 border-b border-border">
-        {VIEWS.map(({ to, label }) => (
-          <Link
-            key={to}
-            to={to}
-            search={(previous: { window?: number }) =>
-              previous.window === undefined ? {} : { window: previous.window }
-            }
-            className="-mb-px border-b-2 border-transparent px-3 py-2 text-sm text-muted-foreground transition-colors hover:text-foreground [&.active]:border-primary [&.active]:text-foreground"
-          >
-            {label}
-          </Link>
-        ))}
-      </nav>
-      <Outlet />
-    </div>
-  );
+  return <Outlet />;
 }

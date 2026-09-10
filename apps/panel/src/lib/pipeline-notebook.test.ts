@@ -1,10 +1,10 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import type { PipelineBlock } from '@/api/generated/types.gen';
-import { runQuery, simulateQuery } from './flow';
+import { runQuery, simulateQuery } from './query';
 import { getNotebook, runNotebook } from './ml-pipeline';
 import { runPipeline, withPinnedNotebooks } from './pipeline';
 
-vi.mock('./flow', () => ({ runQuery: vi.fn(), simulateQuery: vi.fn() }));
+vi.mock('./query', () => ({ runQuery: vi.fn(), simulateQuery: vi.fn() }));
 vi.mock('./ml-pipeline', () => ({ getNotebook: vi.fn(), runNotebook: vi.fn() }));
 
 const chain: PipelineBlock[] = [

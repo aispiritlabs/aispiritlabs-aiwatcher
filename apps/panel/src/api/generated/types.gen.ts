@@ -517,6 +517,12 @@ export type BlockSpec = {
     dataset: string;
     kind: 'source';
 } | {
+    /**
+     * The engine `steps` was written for. Absent is Flow, and stays absent
+     * when saved, so a revision from before the field keeps its digest
+     * and a plan compiled from it keeps its `plan_id`.
+     */
+    engine?: QueryEngine;
     kind: 'transform';
     steps?: string;
 } | {
@@ -1111,10 +1117,15 @@ export type CurationPipeline = {
 };
 
 /**
- * A saved Flow PHP transformation.
+ * A saved query, in the language of the engine it names.
  */
 export type CurationRecipe = {
     description?: string;
+    /**
+     * The engine `pipeline` was written for. Absent is Flow, and stays absent
+     * when saved, so a revision from before the field keeps its digest.
+     */
+    engine?: QueryEngine;
     name: string;
     pipeline: string;
     /**
@@ -1143,6 +1154,10 @@ export type DatasetRow = {
  */
 export type DatasetRowsPage = {
     description?: string;
+    /**
+     * The engine `pipeline` is written for; absent is Flow.
+     */
+    engine?: QueryEngine;
     limit: number;
     /**
      * Rows matching the current search across all pages.
@@ -1223,6 +1238,10 @@ export type DatasetSummary = {
 
 export type DatasetVersion = DatasetVersionSummary & {
     description?: string;
+    /**
+     * The engine `pipeline` is written for; absent is Flow.
+     */
+    engine?: QueryEngine;
     items: Array<{
         [key: string]: unknown;
     }>;
@@ -2583,19 +2602,6 @@ export type FlowSourceRef = {
     window?: null | ResolvedWindow;
 };
 
-export type FlowStepSpec = {
-    /**
-     * The authored block ids this one step covers, in order. The panel lights
-     * them together from one `step.started`.
-     */
-    blocks?: Array<string>;
-    /**
-     * The complete query, compiled here rather than in the browser.
-     */
-    script: string;
-    source: FlowSourceRef;
-};
-
 /**
  * What was drawn.
  */
@@ -3641,6 +3647,18 @@ export type LinkDef = {
  * back as `Last-Event-ID`.
  */
 export type LiveEvent = {
+    /**
+     * Which agent produced it, and which service ran that agent.
+     *
+     * Carried for the reason above, one dimension further: watching two
+     * agents work is a question about a *selection* rather than about one
+     * run, and it cannot be resolved to run ids when the subscriber connects
+     * — the interesting run is usually the one that starts next. Resolving it
+     * in the browser instead would mean receiving every event in the system
+     * to discard most of them, which is the same mistake as filtering a list
+     * after downloading it.
+     */
+    agent_id?: string | null;
     checkpoint: Checkpoint;
     conversation_id?: string | null;
     data: {
@@ -3650,6 +3668,7 @@ export type LiveEvent = {
     occurred_at: string;
     run_id: string;
     sequence?: number | null;
+    service: string;
     span_id: SpanId;
     trace_id: TraceId;
     /**
@@ -4725,11 +4744,18 @@ export type PublicAuthConfig = {
 };
 
 /**
- * What one completed Flow execution contributes to the registry.
+ * What one completed query execution contributes to the registry.
  */
 export type PublishDatasetRequest = {
     columns?: Array<string>;
     description?: string;
+    /**
+     * The engine `pipeline` is written for; absent is Flow. Without it a
+     * DataFusion script read months later is text in an unnamed language.
+     * Part of the version's identity only when it is not Flow, so every
+     * version published before the field keeps its id.
+     */
+    engine?: QueryEngine;
     /**
      * The managed execution that produced these rows, when one did.
      *
@@ -4853,6 +4879,42 @@ export type PythonTaskSpec = {
      * must match before it may claim an attempt.
      */
     task_ref: string;
+};
+
+/**
+ * One of the query engines a deployment may run.
+ */
+export const QueryEngine = {
+    FLOW: 'flow',
+    DATAFUSION: 'datafusion',
+    DUCKDB: 'duckdb'
+} as const;
+
+/**
+ * One of the query engines a deployment may run.
+ */
+export type QueryEngine = typeof QueryEngine[keyof typeof QueryEngine];
+
+/**
+ * One query step, whichever engine runs it.
+ *
+ * The same three fields for Flow, DataFusion and DuckDB, because every engine
+ * is asked the same question over the same catalog (AW-3); what differs is
+ * the language `script` is written in, and that is the binding's variant.
+ * Serde never sees this struct's name, so renaming it from `FlowStepSpec`
+ * moved no stored plan and no `plan_id`.
+ */
+export type QueryStepSpec = {
+    /**
+     * The authored block ids this one step covers, in order. The panel lights
+     * them together from one `step.started`.
+     */
+    blocks?: Array<string>;
+    /**
+     * The complete query, compiled here rather than in the browser.
+     */
+    script: string;
+    source: FlowSourceRef;
 };
 
 export type RecipePage = {
@@ -5703,7 +5765,7 @@ export type Runtime = typeof Runtime[keyof typeof Runtime];
  * unchanged. A plan naming its own endpoint would be a request-forgery
  * primitive posted by anything that can reach the API.
  */
-export type RuntimeBinding = (FlowStepSpec & {
+export type RuntimeBinding = (QueryStepSpec & {
     runtime: 'flow_php';
 }) | (MarimoStepSpec & {
     runtime: 'marimo';
@@ -5783,6 +5845,11 @@ export type SaveProjectRequest = {
 
 export type SaveRecipeRequest = {
     description?: string;
+    /**
+     * The engine `pipeline` was written for; absent is Flow. Part of the
+     * revision only when it is not Flow — see [`QueryEngine`].
+     */
+    engine?: QueryEngine;
     name: string;
     pipeline: string;
 };
@@ -9321,12 +9388,32 @@ export type IngestResponse2 = IngestResponses[keyof IngestResponses];
 export type StreamEventsData = {
     body?: never;
     path?: never;
-    query?: {
+    query: {
         /**
          * Resume point. Usually unnecessary for SSE — the browser sends
          * `Last-Event-ID` on its own — but explicit here for non-browser clients.
          */
         from?: string | null;
+        /**
+         * Events produced by any of these agents.
+         */
+        agent: Array<string>;
+        /**
+         * Events produced by any of these services — the explorer's `runtime`.
+         */
+        runtime: Array<string>;
+        /**
+         * Events belonging to any of these workflows.
+         */
+        workflow: Array<string>;
+        /**
+         * Events belonging to any of these sessions.
+         */
+        session: Array<string>;
+        /**
+         * Only these event types — `llm.completed`, `tool.failed`, and so on.
+         */
+        event_type: Array<string>;
     };
     url: '/api/v1/events/stream';
 };

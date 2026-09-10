@@ -94,6 +94,9 @@ impl ActivityExecutor for PublishExecutor {
                 description: String::new(),
                 recipe: None,
                 pipeline: script_of(&context.plan, &command.key.step_id),
+                // The only query binding `script_of` reads today is Flow's; the
+                // other two engines' steps name theirs when they compile.
+                engine: aiwatcher_datasets::QueryEngine::Flow,
                 columns,
                 items: rows,
                 // Where the rows came from, in the words a reader of the

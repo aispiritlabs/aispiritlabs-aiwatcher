@@ -5,7 +5,7 @@ import type {
   StepBlocks,
   StepState,
 } from '@/api/generated/types.gen';
-import { runQuery, simulateQuery, type FlowResult } from '@/lib/flow';
+import { runQuery, simulateQuery, type QueryResult } from '@/lib/query';
 import { getNotebook, runNotebook, type NotebookRun } from '@/lib/ml-pipeline';
 import { formatCount } from '@/lib/utils';
 
@@ -190,7 +190,7 @@ export type BlockResult = {
 
 export type PipelineResult = {
   script: string;
-  flow: FlowResult;
+  flow: QueryResult;
   notebooks: NotebookRun[];
   rows: Row[];
   columns: string[];
@@ -229,11 +229,11 @@ export async function runPipeline(options: {
     for (const block of flowBlocks) report(block.id, { status: 'running' });
   }
 
-  let flow: FlowResult;
+  let flow: QueryResult;
   try {
     const query = mode === 'preview' ? simulateQuery : runQuery;
     if (options.inspectBlocks) {
-      let latest: FlowResult | undefined;
+      let latest: QueryResult | undefined;
       for (let index = 0; index < flowBlocks.length; index++) {
         const block = flowBlocks[index]!;
         report(block.id, { status: 'running' });

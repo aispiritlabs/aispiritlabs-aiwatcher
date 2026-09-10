@@ -122,6 +122,11 @@ services:
       AIWATCHER_PROMPT_S3_BUCKET: aiwatcher-prompts
       AIWATCHER_PROMPT_S3_ACCESS_KEY: rustfsadmin
       AIWATCHER_PROMPT_S3_SECRET_KEY: rustfsadmin
+      # The query engine managed query steps run against — the `query` service
+      # below. One variable picks both: which engine that service builds, and
+      # which engine the server compiles plans for.
+      AIWATCHER_QUERY_ENGINE: ${AIWATCHER_QUERY_ENGINE:-flow}
+      AIWATCHER_QUERY_URL: 'http://query:8081'
     volumes:
       - aiwatcher-data:/var/lib/aiwatcher
     ports:
@@ -143,6 +148,19 @@ services:
       interval: 10s
       timeout: 3s
       retries: 6
+
+  # The query engine (services/query, AW-3): Flow PHP, DataFusion or DuckDB,
+  # whichever AIWATCHER_QUERY_ENGINE names — one Dockerfile, one target each.
+  # Not published on the host: no engine has authentication of its own, and its
+  # client here is the server.
+  query:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.query
+      target: ${AIWATCHER_QUERY_ENGINE:-flow}
+    environment:
+      AIWATCHER_URL: 'http://aiwatcher:8080'
+      AIWATCHER_QUERY_ADMISSION: ${AIWATCHER_QUERY_ADMISSION:-open}
 
   perses:
     # Anonymous and writable — see deploy/perses/config.yaml. The Jaeger and

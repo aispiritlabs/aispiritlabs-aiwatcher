@@ -38,7 +38,7 @@ import { Badge, Button, Card, EmptyState, Spinner } from '@/components/ui/primit
 import { rejectionDetails } from '@/lib/annotations';
 import { BlockLibrary } from '@/components/block-library';
 import { exportBundle, importBundle, MAX_BUNDLE_BYTES } from '@/lib/pipeline-bundle';
-import { isFlowAvailable } from '@/lib/flow';
+import { isQueryEngineAvailable } from '@/lib/query';
 import { createNotebook, isMlPipelineAvailable } from '@/lib/ml-pipeline';
 import {
   compileFlow,
@@ -166,7 +166,7 @@ function PipelinePage() {
 
   const flowReady = useQuery({
     queryKey: ['flow', 'available'],
-    queryFn: isFlowAvailable,
+    queryFn: isQueryEngineAvailable,
     refetchInterval: 15_000,
   });
   const notebooksReady = useQuery({

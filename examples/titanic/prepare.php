@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 // Run the authored FlowPHP graph over a local CSV using the same paginated catalog contract.
-require __DIR__ . '/../../services/flow/vendor/autoload.php';
+require __DIR__ . '/../../services/query/flow/vendor/autoload.php';
 
 use Aiwatcher\Flow\Dataset\Catalog;
 use Aiwatcher\Flow\Dsl\Parser;

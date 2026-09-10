@@ -8,7 +8,7 @@ use std::convert::Infallible;
 use std::time::Duration;
 
 use axum::Router;
-use axum::extract::{Path, Query, State, WebSocketUpgrade, ws};
+use axum::extract::{Path, Query, RawQuery, State, WebSocketUpgrade, ws};
 use axum::http::HeaderMap;
 use axum::response::Response;
 use axum::response::sse::{KeepAlive, Sse};
@@ -19,10 +19,11 @@ use utoipa::OpenApi;
 
 use aiwatcher_core::Checkpoint;
 use aiwatcher_core::ports::LiveEvent;
+use url::form_urlencoded;
 
 use crate::error::ApiResult;
 use crate::state::AppState;
-use crate::stream::{LiveFrame, Scope, as_sse, catch_up, live_tail};
+use crate::stream::{LiveFrame, Scope, Selection, as_sse, catch_up, live_tail};
 
 /// The `Last-Event-ID` header a browser resends after an SSE drop.
 const LAST_EVENT_ID: &str = "last-event-id";
@@ -54,6 +55,84 @@ pub struct StreamQuery {
     pub from: Option<String>,
 }
 
+/// What the system stream was narrowed to, as repeated query parameters:
+/// `?agent=planner&agent=estimator`.
+///
+/// Repeated rather than comma-joined because an agent id, a workflow name and
+/// a session id are all caller-chosen strings, and a separator this document
+/// picked would be one somebody's identifier eventually contains.
+///
+/// **Read off the raw query string rather than through [`axum::extract::Query`].**
+/// That extractor is `serde_urlencoded`, which has no sequence support: a
+/// `Vec<String>` field does not collect `a=1&a=2`, it fails to deserialize at
+/// all. So this parses the query itself, and keeps `IntoParams` only for the
+/// contract — the panel's generated client is built from this document, and a
+/// parameter that is documented but not extracted would be a filter the panel
+/// sends and the server ignores.
+///
+/// Every dimension is optional and an absent one is not a filter, so the
+/// unfiltered stream is still `GET /api/v1/events/stream` with nothing on it.
+#[derive(Debug, Default, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub struct SelectionQuery {
+    /// Events produced by any of these agents.
+    #[param(rename = "agent")]
+    pub agents: Vec<String>,
+    /// Events produced by any of these services — the explorer's `runtime`.
+    #[param(rename = "runtime")]
+    pub services: Vec<String>,
+    /// Events belonging to any of these workflows.
+    #[param(rename = "workflow")]
+    pub workflows: Vec<String>,
+    /// Events belonging to any of these sessions.
+    #[param(rename = "session")]
+    pub conversations: Vec<String>,
+    /// Only these event types — `llm.completed`, `tool.failed`, and so on.
+    #[param(rename = "event_type")]
+    pub event_types: Vec<String>,
+}
+
+impl SelectionQuery {
+    /// Collect the repeats out of a raw query string.
+    ///
+    /// Unknown parameters are ignored rather than refused, because this reads
+    /// the *same* string [`StreamQuery`] does and `from` is in it.
+    #[must_use]
+    pub fn from_query(raw: Option<&str>) -> Self {
+        let mut selection = Self::default();
+        let Some(raw) = raw else { return selection };
+
+        for (key, value) in form_urlencoded::parse(raw.as_bytes()) {
+            if value.is_empty() {
+                continue;
+            }
+            let field = match key.as_ref() {
+                "agent" => &mut selection.agents,
+                "runtime" => &mut selection.services,
+                "workflow" => &mut selection.workflows,
+                "session" => &mut selection.conversations,
+                "event_type" => &mut selection.event_types,
+                _ => continue,
+            };
+            field.push(value.into_owned());
+        }
+
+        selection
+    }
+}
+
+impl From<SelectionQuery> for Selection {
+    fn from(query: SelectionQuery) -> Self {
+        Self {
+            agents: query.agents,
+            services: query.services,
+            workflows: query.workflows,
+            conversations: query.conversations,
+            event_types: query.event_types,
+        }
+    }
+}
+
 /// Server-sent events for the whole system: a catch-up marker, then live.
 ///
 /// This is the panel's Observability transport. It is deliberately separate
@@ -62,17 +141,18 @@ pub struct StreamQuery {
 #[utoipa::path(
     get,
     path = "/api/v1/events/stream",
-    params(StreamQuery),
+    params(StreamQuery, SelectionQuery),
     responses((status = 200, description = "text/event-stream of LiveFrame")),
     tag = "live",
 )]
 async fn stream_events(
     State(state): State<AppState>,
     Query(query): Query<StreamQuery>,
+    RawQuery(raw): RawQuery,
     headers: HeaderMap,
 ) -> ApiResult<Sse<impl Stream<Item = Result<axum::response::sse::Event, Infallible>>>> {
     let from = resume_point(&headers, query.from.as_deref())?;
-    let scope = Scope::Everything;
+    let scope = Selection::from(SelectionQuery::from_query(raw.as_deref())).scope();
     let (history, boundary) = catch_up(&state, from.as_ref(), &scope).await?;
     let tail = live_tail(&state.live, boundary, scope);
     let frames = futures::stream::iter(history).chain(tail);

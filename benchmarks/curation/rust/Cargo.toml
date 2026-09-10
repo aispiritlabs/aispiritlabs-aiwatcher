@@ -1,0 +1,26 @@
+[package]
+name = "polars-bench"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "The curation benchmark's q2 in a Rust process, on the polars crate."
+
+# Standalone: not a member of the aiwatcher workspace above it, so it neither
+# joins that build nor takes the polars crate into anybody else's.
+[workspace]
+
+# Built the way the Python wheel is: fat LTO, one codegen unit, and mimalloc
+# as the allocator (main.rs). The default release profile measured ten times
+# slower than the wheel on the same query, which is a build and not an engine.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+
+[dependencies]
+mimalloc = "0.1.52"
+polars = { version = "0.55.2", default-features = false, features = [
+  "lazy",
+  "csv",
+  "fmt",
+  "performant",
+] }

@@ -19,7 +19,7 @@ schedule.
 ## The arc, in the order it happened
 
 **0008 drew the line at dispatch.** A name from a query may select a key; it may
-never become a callable. There is no `eval` in `services/flow` and no name from
+never become a callable. There is no `eval` in `services/query/flow` and no name from
 a query ever reaches a method.
 
 **0014 said a curation is one script**, versioned by an authenticated registry —

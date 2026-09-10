@@ -22,6 +22,10 @@ async-trait.workspace = true
 axum.workspace = true
 futures.workspace = true
 serde.workspace = true
+# For the repeated query parameters of the live selection: axum's `Query` uses
+# `serde_urlencoded`, which has no sequence support at all, so `?agent=a&agent=b`
+# has to be read off the raw query string.
+url.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 time.workspace = true

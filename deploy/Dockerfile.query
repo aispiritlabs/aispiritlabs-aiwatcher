@@ -1,0 +1,167 @@
+# The query engines, as containers: one Dockerfile, one target per engine.
+#
+#   docker build -f deploy/Dockerfile.query --target flow -t aiwatcher-flow:dev .
+#
+# A deployment runs one engine, named by AIWATCHER_QUERY_ENGINE (AW-3), and the
+# target is named the same way, so Docker Compose picks the image with the same
+# variable the server reads. `flow` is here; `datafusion` and `duckdb` arrive
+# with their engines.
+#
+# An image of its own rather than a stage of the panel's: the two are deployed
+# together but they are not the same lifecycle. The panel is static files and
+# ships on every UI change; this ships when `services/query` changes, which by
+# ADR_0008 is rarely and for different reasons.
+#
+# Build context is the repo root, to match the other two.
+#
+# ## The Flow target, and where its shape comes from
+#
+# Four stages over **one shared base**, which is the structure Flow PHP's own
+# image uses (flow-php/flow, `1.x/Dockerfile`) and is not a stylistic choice. A
+# PHP extension is a `.so` compiled against the exact interpreter that will load
+# it — its ABI, its debug flag and its thread-safety flag — and FrankenPHP is a
+# ZTS build, so its extension directory is `no-debug-zts-<api>` where a stock
+# `php:cli` image would produce `no-debug-non-zts-<api>`. Building extensions on
+# a *different* base and copying them in is how you get an image that starts,
+# logs "unable to load dynamic library", and then runs anyway on the slow path
+# with nobody the wiser. Sharing the base is what makes the copy sound, and the
+# `RUN php -r` gate at the end is what makes it checked.
+#
+# Where this deliberately departs from upstream: the base stays Alpine.
+# Upstream needs Debian because it builds Rust extensions through `pie` —
+# `arrow-ext`, `pg-query-ext`, `flow-php-ext` — and those want glibc and a
+# toolchain. This service installs two extensions that compile anywhere, so the
+# Debian base was measured and rejected: it produced a 666 MB image against
+# this one's 192 MB, for byte-identical behaviour. The day a query needs Arrow,
+# the base moves and this paragraph is the reason it may.
+
+ARG FLOW_PHP_VERSION=8.4
+ARG FLOW_BASE_IMAGE=dunglas/frankenphp:1-php${FLOW_PHP_VERSION}-alpine
+
+# ── Flow 1: the base every other Flow stage resolves against ─────────────────
+FROM ${FLOW_BASE_IMAGE} AS flow-base
+
+# ── Flow 2: the extensions ───────────────────────────────────────────────────
+#
+# Flow's arithmetic runs through `brick/math`, which picks a backend at runtime
+# in one order and says so in `CalculatorRegistry::detect`: `gmp`, then
+# `bcmath`, then a pure-PHP implementation. An image with neither is an image
+# where every `divide()` — and every `median`, `stddev`, `variance` and
+# `percentile` this service implements — runs on the fallback: measurably
+# slower, and silent, which is the combination worth spending a stage on.
+# `gmp` is the one that gets chosen; `bcmath` sits behind it so that a `gmp`
+# that ever fails to load degrades to the fast-enough path rather than the slow
+# one, and it costs nothing because it is built into the interpreter.
+#
+# What upstream installs and this does not, named rather than silently absent:
+# `pdo_mysql`, `pdo_pgsql`, `pdo_sqlite`, `pgsql` and `pg-query-ext` (this
+# service opens no database — ADR_0008's catalog reads the aiwatcher API over
+# HTTP and nothing else), `protobuf` and `arrow-ext` (it writes no columnar
+# format; there is no export, ADR_0008 again), and the `brotli`/`lz4`/`snappy`/
+# `zstd` codecs (they matter for compressed file adapters, and the one adapter
+# here is `etl-adapter-http`). Each is a line to add back the day a query needs
+# it, and none is a line to carry now.
+FROM flow-base AS flow-extensions
+
+RUN set -eux; \
+    apk add --no-cache --virtual .build-deps $PHPIZE_DEPS gmp-dev; \
+    docker-php-ext-install -j"$(nproc)" bcmath gmp; \
+    apk del .build-deps
+
+# ── Flow 3: the vendor tree ──────────────────────────────────────────────────
+#
+# On the same base, so `composer install` resolves against the interpreter that
+# will run it: `composer.json` pins `platform.php` to the declared floor, and a
+# stage on a different PHP would write a tree the runtime disagrees with.
+FROM flow-base AS flow-vendor
+
+# Composer unpacks a `--prefer-dist` package with the `zip` extension or with
+# `unzip`, and this base has neither. Worth a line, because the failure is a
+# usage dump from the `install` command rather than a sentence naming the
+# missing tool. `git` is the fallback for a package with no distributable
+# archive.
+RUN apk add --no-cache git unzip
+
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+WORKDIR /src
+
+# Manifests first, so a source-only change reuses the install layer.
+COPY services/query/flow/composer.json services/query/flow/composer.lock ./
+
+# `--no-dev` leaves Mago out, and ADR_0008 names that a supported state: the
+# parser still catches syntax errors, `/query/check` reports its diagnostics
+# alone and `/query/healthz` says `linter: none`. Build with
+# `--build-arg COMPOSER_DEV=` to ship the linter's wording instead.
+ARG COMPOSER_DEV=--no-dev
+RUN composer install ${COMPOSER_DEV} --no-scripts --no-interaction --no-progress --prefer-dist
+
+COPY services/query/flow/src ./src
+COPY services/query/flow/public ./public
+RUN composer dump-autoload ${COMPOSER_DEV} --optimize --no-interaction
+
+# ── Flow 4: what ships ───────────────────────────────────────────────────────
+FROM flow-base AS flow
+
+# Not `php -S`, which is what `just flow-serve` runs and which PHP's own manual
+# says is not a production server: it is single-threaded, so a `/query/check`
+# fired while someone types would queue behind a 30-second `/query/query` on the
+# same tab. Caddy in front of PHP handles both at once.
+
+# The shared library `gmp` links against. `bcmath` is built into the
+# interpreter and needs nothing at runtime.
+RUN apk add --no-cache gmp
+
+COPY --from=flow-extensions /usr/local/lib/php/extensions /usr/local/lib/php/extensions
+COPY --from=flow-extensions /usr/local/etc/php/conf.d /usr/local/etc/php/conf.d
+
+WORKDIR /app
+COPY --from=flow-vendor /src/vendor ./vendor
+COPY --from=flow-vendor /src/src ./src
+COPY --from=flow-vendor /src/public ./public
+# The catalog every query engine serves (AW-3), where `CatalogFile::defaultPath`
+# looks for it: beside the service in the repository, at /contract here.
+COPY services/query/contract/catalog.json /contract/catalog.json
+
+RUN set -eux; \
+    mv "$PHP_INI_DIR/php.ini-production" "$PHP_INI_DIR/php.ini"; \
+    # QueryRunner::TIMEOUT_SECONDS is 30 and reports a timeout as a query error
+    # with a message. php.ini-production's own 30 would land on the same second
+    # as a fatal, so the service's limit is the one that fires.
+    printf 'max_execution_time = 60\nexpose_php = Off\n' > "$PHP_INI_DIR/conf.d/99-aiwatcher.ini"; \
+    # The image ships the binary with cap_net_bind_service, for binding :80 as a
+    # non-root user. This one binds 8081, so it never needed it — and keeping it
+    # makes the container unstartable under the pod's security context: with
+    # `allowPrivilegeEscalation: false` the kernel sets no_new_privs, and an
+    # execve of a file whose capabilities are not already in the process's
+    # permitted set is refused. With `capabilities: drop: ["ALL"]` that set is
+    # empty, so the exec fails with a bare "Operation not permitted" from the
+    # entrypoint and no other explanation.
+    /usr/sbin/setcap -r /usr/local/bin/frankenphp; \
+    # Caddy's data and config directories. Named here so the chart knows which
+    # two paths need an emptyDir under a read-only root filesystem.
+    mkdir -p /data /config; \
+    adduser -D -u 10001 -H flow; \
+    chown -R 10001:10001 /data /config
+
+# The gate this image's second stage exists to hold. An extension that did not
+# load leaves every aggregation on the pure-PHP path — slower, and silent — so
+# it is checked here, where somebody is watching, rather than inferred later
+# from a latency graph. The second line prints which backend `brick/math`
+# actually chose, so the build log carries the answer rather than an assertion
+# about it.
+RUN set -eux; \
+    php -r 'exit(extension_loaded("gmp") && extension_loaded("bcmath") ? 0 : 1);'; \
+    php -r 'require "/app/vendor/autoload.php"; \
+      echo "brick/math backend: ", \
+        get_class(Brick\Math\Internal\CalculatorRegistry::get()), PHP_EOL;'
+
+# 8081 to match `just flow-serve`, and above 1024 so an unprivileged user can
+# bind it. A bare port means no hostname, so Caddy serves plain HTTP and does
+# not try to provision a certificate — TLS terminates at the ingress.
+ENV SERVER_NAME=:8081 \
+    XDG_DATA_HOME=/data \
+    XDG_CONFIG_HOME=/config \
+    AIWATCHER_URL=http://aiwatcher-server:8080
+
+USER 10001
+EXPOSE 8081

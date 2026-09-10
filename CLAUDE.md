@@ -47,7 +47,8 @@ just run           # server on :8080, write-ahead log in ./.data
 just run-execution # the same, with managed Flow execution wired to :8081
 just run-postgres  # the same, with the workflow store on PostgreSQL
 just run-hubs      # the same, with Kaggle/Hugging Face dataset search on
-just dev           # server (in-memory bus) + panel dev server on :5173
+just dev           # server (in-memory bus) + panel on :5173, seeded with data to click around in
+just seed-dev      # the same seed into a running server (`--live` keeps runs arriving)
 just pii-demo      # the whole curation chain: API + Flow PHP + notebooks + panel
 just seed          # publish a demo run into a running server
 just seed-evaluation  # publish two comparable evaluation reports
@@ -64,6 +65,7 @@ just ml-pipeline-serve # the marimo notebook runtime on :8082, for notebook bloc
 just ml-pipeline-check # ruff, mypy --strict and pytest for that service
 just stack-up      # docker compose: VictoriaTraces, VictoriaMetrics, Collector, Perses
 just tilt-up       # the same stack on a local Kubernetes, rebuilt on save
+just skills        # re-vendor .claude/skills at their pinned commits
 ```
 
 Installing into a cluster that is not a scratch one:
@@ -163,7 +165,7 @@ Everything else: `apps/panel` (React), `sdk/python`, `sdk/agentic`, `sdk/typescr
 (the Dockerfiles, the docker compose stack, the kustomize test stack, and
 `helm/aiwatcher` + `helmfile.yaml.gotmpl` + `scripts/` — the install path),
 `docs/ADR/`, and two **optional** services outside the Cargo workspace that the
-Rust binary does not know exist. `services/flow` is the PHP query surface behind
+Rust binary does not know exist. `services/query/flow` is the PHP query surface behind
 the panel's Query tab and its curation transforms (`just flow-check`).
 `services/ml_pipeline` is the Python 3.14 notebook runtime behind a pipeline's
 marimo blocks: it runs one as a step through marimo's own `App.run(defs=…)` — in
@@ -265,7 +267,7 @@ area.
 
 10. **A Flow PHP query is parsed, never executed**
    ([ADR_0008](docs/ADR/ADR_0008_FLOW_QUERY_SURFACE.md)). The Query tab accepts
-   a `data_frame()->…` pipeline, which `services/flow` lexes with
+   a `data_frame()->…` pipeline, which `services/query/flow` lexes with
    `token_get_all()`, admits through `Dsl\Registry` — Flow's own signatures,
    by return-type namespace and by refusing any parameter that takes a
    callable — and turns into Flow objects through an explicit `match`: no
@@ -656,10 +658,35 @@ what runs a real graph.
 - Filters live in the URL, not in component state, so a link to a filtered view
   lands the reader on the same view. That includes the search boxes: the input
   holds a draft, a 250 ms debounce commits it to the search params.
-- Routes are grouped by product area. `observability.*` is a layout route with
-  its own sub-navigation; `evaluation`, `prompts`, `datasets` and `experiments`
-  are the other four areas. `/` and `/observability` redirect rather than
-  render, so old links keep working.
+- Routes are grouped by product area, and the areas are grouped into **three
+  sections** — Feature, Training, Inference — described once in
+  `src/lib/navigation.ts` and drawn by the root layout as a header of sections
+  and a sidebar of that section's areas and their pages. The split is the
+  lifecycle: Feature is what a model learns from and reads an object store,
+  Training is fitting it and judging it, Inference is what is running now and
+  folds the event log. `/` and `/observability` redirect rather than render, so
+  old links keep working. Which section is lit comes from the pathname, never
+  from a click, so a run detail reached from a pasted link lights the same tab
+  as one reached by pressing it; a path in no section lights nothing rather
+  than the first. An area layout route holds only what its views *share* — the
+  stream, in `observability.tsx` — because a tab row there would be the
+  sidebar's links a second time, free to disagree the day a page is added to
+  one of them. What survives a move between an area's views is that area's own
+  `NavArea.carries`: the period in Observability, the project in Annotations.
+- `observability/live` is the one view that reads the log rather than a fold of
+  it. Its filter is applied by the server — `Scope::Selection` and the repeated
+  `?agent=&runtime=&workflow=&session=` parameters — because `llm.chunk` is
+  most of the log by volume and narrowing in the browser would mean receiving
+  all of it to discard it. What it *cannot* filter on is model and tool: those
+  are span-level facts assembled from several events (ADR_0003), so the page
+  says which parts of a selection it is not following rather than going quiet.
+  Its feed is bounded and Pause freezes the rendering, never the subscription.
+- The Query view has a **Build** mode that compiles clicked attributes into the
+  Flow text, and the move to **Write** is one-way. `src/lib/query-builder.ts`
+  generates; `services/query/flow/src/Dsl` decides. Parsing text back into chips
+  would be a second grammar in TypeScript for a language whose real one is in
+  PHP, and the day they disagreed opening a hand-written query in the builder
+  would silently rewrite it.
 - `training` is the one area that reads nothing folded from the log at all. It
   polls while a run is `running` and stops when none is — an epoch is minutes,
   so five seconds costs one request and answers the same question a live
@@ -740,6 +767,21 @@ what runs a real graph.
   those need it. It goes in with the first dialog or select, and TanStack Form
   with the first form, which will be the WebSocket control path (cancel a run,
   approve a tool call).
+
+### Agent skills
+
+`.claude/skills/` holds reference material an agent loads on demand, vendored
+at pinned commits rather than fetched — `.claude/skills/README.md` says which
+nine are there and what each one earns its place with. Four are
+OpenTelemetry (instrumentation, semantic conventions, the Collector, OTTL),
+one is Rust, two are the panel's TanStack Query and Router, and two are the
+Hugging Face hub this repository already searches.
+
+None of them is about *this* repository. This file and the ADRs under
+`docs/ADR/` are that, and a skill restating either would be a second copy free
+to disagree with the first. `just skills-check` says whether the tree still
+matches `vendor.json`; `just skills-update` moves the pins, and the diff is
+the review.
 
 ## Guardrails
 
@@ -1335,7 +1377,7 @@ what runs a real graph.
   read has failed, because the alternative is writing this component's own
   defaults over a schedule nobody has seen.
 - **Never read a body from aiwatcher without checking the status first.** In
-  `services/flow` the pipeline is lazy, so by the time `array_get(__body,
+  `services/query/flow` the pipeline is lazy, so by the time `array_get(__body,
   'rows')` runs there is no status left to branch on — a 501 naming an unset
   variable arrives as `Path "rows" does not exists`. `CheckedClient` throws at
   the seam, carrying aiwatcher's own message, and a permanent answer is relayed
@@ -1866,7 +1908,7 @@ what runs a real graph.
   The `agentic` integration sent the workflow name in the payload before
   `workflow_id` existed. Dropping the fallback empties the workflow dimension
   for every log written before the field, including on replay.
-- **Never let query text reach a callable in `services/flow`.** The name selects
+- **Never let query text reach a callable in `services/query/flow`.** The name selects
   a `match` branch, is never called by string, and there is no `eval` anywhere in
   the service. `tests/Dsl/ParserRejectionTest.php` is the list of things that
   must keep failing; adding to it is cheap and is the point.
@@ -1879,7 +1921,7 @@ what runs a real graph.
   is named rather than hidden — a second query engine reads `FlowSourceRef` and
   re-authors the transforms.
 - **Never let a statistic answer zero for a group it has no answer for.**
-  `median`, `stddev`, `variance` and `percentile` are `services/flow`'s own
+  `median`, `stddev`, `variance` and `percentile` are `services/query/flow`'s own
   aggregations over hi-folks/statistics — Flow ships nothing that says how a
   column is distributed — and each is undefined below some number of values:
   one for a median, two for the rest. Below it the column is **null**. Flow's
@@ -1974,6 +2016,25 @@ what runs a real graph.
 - **Never expose the Flow service without authentication.** It has none. The
   parser bounds what a query can say, not who may ask, and `just flow-serve`
   binds it to localhost.
+- **Never filter a live stream in the browser.** `Scope::Selection` narrows
+  `/api/v1/events/stream` server-side, which is why `LiveEvent` carries
+  `agent_id` and `service` at all — the same reason it already carried
+  `conversation_id` and `workflow_id`, one dimension further. A subscriber
+  watching two agents cannot be resolved to a set of run ids when it connects,
+  because the interesting run is usually the one that starts next; and
+  subscribing to everything to discard most of it is the list-filtered-after-
+  downloading mistake with `llm.chunk` volumes behind it. Or within a
+  dimension, and across them — and an event with no value for a dimension
+  somebody filtered on is not a match, or narrowing to one agent would put its
+  whole run back in the stream.
+- **Never let the query builder refuse anything.** It generates Flow text and
+  the query service decides whether that text runs, exactly as it does for
+  typed text — the split the annotation canvas and the pipeline canvas already
+  make. It follows that the builder must *drop* an attribute the chosen grain
+  cannot express rather than emit a column that is not there: a refusal for a
+  chip the builder itself offered reads as the reader's mistake. The shapes it
+  emits are pinned by `services/query/flow/tests/Dsl/BuilderShapesTest.php`, which
+  guards the language features it leans on rather than copying its output.
 - **Never let the projector decide a run has died.** A run with no end event
   stays `Running`: the producer may have been killed, or may be thinking for
   twenty minutes, and nothing in the log distinguishes them. What the read

@@ -1,4 +1,4 @@
-import { Link, Outlet, createFileRoute } from '@tanstack/react-router';
+import { Outlet, createFileRoute } from '@tanstack/react-router';
 
 /**
  * Training: the one area here that reads nothing folded from the event log.
@@ -12,32 +12,17 @@ import { Link, Outlet, createFileRoute } from '@tanstack/react-router';
  * Launching a training job is still Experiments' business. Starting work and
  * watching it are different jobs done at different times, which is the same
  * split Workflows and Data Curation already make.
+ *
+ * Its views are listed in `lib/navigation.ts` and drawn by the sidebar, so
+ * this layout is a pass-through: a second tab row here would be the same
+ * four links, one level in, disagreeing with the first one the day somebody
+ * adds a page to only one of them.
  */
 
 export const Route = createFileRoute('/training')({
   component: TrainingLayout,
 });
 
-const VIEWS = [
-  { to: '/training/runs', label: 'Runs' },
-  { to: '/training/models', label: 'Models' },
-] as const;
-
 function TrainingLayout() {
-  return (
-    <div className="flex flex-col gap-4">
-      <nav className="flex items-center gap-1 border-b border-border">
-        {VIEWS.map(({ to, label }) => (
-          <Link
-            key={to}
-            to={to}
-            className="-mb-px border-b-2 border-transparent px-3 py-2 text-sm text-muted-foreground transition-colors hover:text-foreground [&.active]:border-primary [&.active]:text-foreground"
-          >
-            {label}
-          </Link>
-        ))}
-      </nav>
-      <Outlet />
-    </div>
-  );
+  return <Outlet />;
 }

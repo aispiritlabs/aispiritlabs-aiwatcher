@@ -4651,6 +4651,66 @@
                 "null"
               ]
             }
+          },
+          {
+            "name": "agent",
+            "in": "query",
+            "description": "Events produced by any of these agents.",
+            "required": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "runtime",
+            "in": "query",
+            "description": "Events produced by any of these services — the explorer's `runtime`.",
+            "required": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "workflow",
+            "in": "query",
+            "description": "Events belonging to any of these workflows.",
+            "required": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "session",
+            "in": "query",
+            "description": "Events belonging to any of these sessions.",
+            "required": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "name": "event_type",
+            "in": "query",
+            "description": "Only these event types — `llm.completed`, `tool.failed`, and so on.",
+            "required": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
           }
         ],
         "responses": {
@@ -10034,11 +10094,15 @@
           },
           {
             "type": "object",
-            "description": "Flow PHP steps, appended to the source's `read()`. The tail of a\npipeline, without `data_frame()`, without the `read()` and without the\n`write()`: those three are what the chain contributes.",
+            "description": "One query's steps over the source's rows, in the language of the engine\nthey were written for. For Flow, the tail of a pipeline — without\n`data_frame()`, without the `read()` and without the `write()`: those\nthree are what the chain contributes. For DataFusion and DuckDB, one\nPython expression over `df`, the rows the chain has so far.",
             "required": [
               "kind"
             ],
             "properties": {
+              "engine": {
+                "$ref": "#/components/schemas/QueryEngine",
+                "description": "The engine `steps` was written for. Absent is Flow, and stays absent\nwhen saved, so a revision from before the field keeps its digest\nand a plan compiled from it keeps its `plan_id`."
+              },
               "kind": {
                 "type": "string",
                 "enum": [
@@ -11276,7 +11340,7 @@
       },
       "CurationRecipe": {
         "type": "object",
-        "description": "A saved Flow PHP transformation.",
+        "description": "A saved query, in the language of the engine it names.",
         "required": [
           "name",
           "pipeline",
@@ -11286,6 +11350,10 @@
         "properties": {
           "description": {
             "type": "string"
+          },
+          "engine": {
+            "$ref": "#/components/schemas/QueryEngine",
+            "description": "The engine `pipeline` was written for. Absent is Flow, and stays absent\nwhen saved, so a revision from before the field keeps its digest."
           },
           "name": {
             "type": "string"
@@ -11351,6 +11419,10 @@
         "properties": {
           "description": {
             "type": "string"
+          },
+          "engine": {
+            "$ref": "#/components/schemas/QueryEngine",
+            "description": "The engine `pipeline` is written for; absent is Flow."
           },
           "limit": {
             "type": "integer",
@@ -11542,6 +11614,10 @@
             "properties": {
               "description": {
                 "type": "string"
+              },
+              "engine": {
+                "$ref": "#/components/schemas/QueryEngine",
+                "description": "The engine `pipeline` is written for; absent is Flow."
               },
               "items": {
                 "type": "array",
@@ -14120,29 +14196,6 @@
           }
         }
       },
-      "FlowStepSpec": {
-        "type": "object",
-        "required": [
-          "script",
-          "source"
-        ],
-        "properties": {
-          "blocks": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "The authored block ids this one step covers, in order. The panel lights\nthem together from one `step.started`."
-          },
-          "script": {
-            "type": "string",
-            "description": "The complete query, compiled here rather than in the browser."
-          },
-          "source": {
-            "$ref": "#/components/schemas/FlowSourceRef"
-          }
-        }
-      },
       "Geometry": {
         "oneOf": [
           {
@@ -15894,6 +15947,7 @@
         "required": [
           "checkpoint",
           "run_id",
+          "service",
           "trace_id",
           "span_id",
           "event_type",
@@ -15901,6 +15955,13 @@
           "data"
         ],
         "properties": {
+          "agent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Which agent produced it, and which service ran that agent.\n\nCarried for the reason above, one dimension further: watching two\nagents work is a question about a *selection* rather than about one\nrun, and it cannot be resolved to run ids when the subscriber connects\n— the interesting run is usually the one that starts next. Resolving it\nin the browser instead would mean receiving every event in the system\nto discard most of them, which is the same mistake as filtering a list\nafter downloading it."
+          },
           "checkpoint": {
             "$ref": "#/components/schemas/Checkpoint"
           },
@@ -15930,6 +15991,9 @@
             ],
             "format": "int64",
             "minimum": 0
+          },
+          "service": {
+            "type": "string"
           },
           "span_id": {
             "$ref": "#/components/schemas/SpanId"
@@ -17932,7 +17996,7 @@
       },
       "PublishDatasetRequest": {
         "type": "object",
-        "description": "What one completed Flow execution contributes to the registry.",
+        "description": "What one completed query execution contributes to the registry.",
         "required": [
           "name",
           "pipeline",
@@ -17948,6 +18012,10 @@
           },
           "description": {
             "type": "string"
+          },
+          "engine": {
+            "$ref": "#/components/schemas/QueryEngine",
+            "description": "The engine `pipeline` is written for; absent is Flow. Without it a\nDataFusion script read months later is text in an unnamed language.\nPart of the version's identity only when it is not Flow, so every\nversion published before the field keeps its id."
           },
           "execution_id": {
             "type": [
@@ -18155,6 +18223,39 @@
           "task_ref": {
             "type": "string",
             "description": "`name@version`: the registered name and the pinned code version a worker\nmust match before it may claim an attempt."
+          }
+        }
+      },
+      "QueryEngine": {
+        "type": "string",
+        "description": "One of the query engines a deployment may run.",
+        "enum": [
+          "flow",
+          "datafusion",
+          "duckdb"
+        ]
+      },
+      "QueryStepSpec": {
+        "type": "object",
+        "description": "One query step, whichever engine runs it.\n\nThe same three fields for Flow, DataFusion and DuckDB, because every engine\nis asked the same question over the same catalog (AW-3); what differs is\nthe language `script` is written in, and that is the binding's variant.\nSerde never sees this struct's name, so renaming it from `FlowStepSpec`\nmoved no stored plan and no `plan_id`.",
+        "required": [
+          "script",
+          "source"
+        ],
+        "properties": {
+          "blocks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The authored block ids this one step covers, in order. The panel lights\nthem together from one `step.started`."
+          },
+          "script": {
+            "type": "string",
+            "description": "The complete query, compiled here rather than in the browser."
+          },
+          "source": {
+            "$ref": "#/components/schemas/FlowSourceRef"
           }
         }
       },
@@ -19439,7 +19540,7 @@
           {
             "allOf": [
               {
-                "$ref": "#/components/schemas/FlowStepSpec",
+                "$ref": "#/components/schemas/QueryStepSpec",
                 "description": "One Flow PHP query. Its `blocks` is what makes three boxes on the canvas\nlight up together: Flow executes one pipeline, so a source and its\ntransforms compile to one step."
               },
               {
@@ -19751,6 +19852,10 @@
         "properties": {
           "description": {
             "type": "string"
+          },
+          "engine": {
+            "$ref": "#/components/schemas/QueryEngine",
+            "description": "The engine `pipeline` was written for; absent is Flow. Part of the\nrevision only when it is not Flow — see [`QueryEngine`]."
           },
           "name": {
             "type": "string"

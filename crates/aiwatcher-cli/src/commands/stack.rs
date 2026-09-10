@@ -272,7 +272,7 @@ fn server_config(plan: &Plan, paths: &Paths, secret: &str) -> Result<ServerConfi
         config.workflow_store = aiwatcher_server::config::WorkflowStoreKind::Duckdb;
     }
     if plan.flow {
-        config.flow_url = Some("http://127.0.0.1:8081".to_owned());
+        config.query_url = Some("http://127.0.0.1:8081".to_owned());
     }
 
     config.auth.mode = AuthMode::Local;
@@ -396,7 +396,7 @@ fn start_iggy() -> Result<bool, CliError> {
 /// and a missing optional service must not be the reason a local instance does
 /// not come up.
 fn start_flow() -> Result<Option<Child>, CliError> {
-    let root = PathBuf::from("services/flow");
+    let root = PathBuf::from("services/query/flow");
     if !root.join("public").is_dir() {
         return Ok(None);
     }

@@ -31,7 +31,7 @@ The Software depends on third-party components that remain under their own
 licences. Those licences govern those components and nothing in this file
 restricts rights granted by them. The dependency manifests are the record:
 Cargo.toml and Cargo.lock, apps/panel/package.json, sdk/typescript/package.json,
-sdk/python/pyproject.toml, and services/flow/composer.json.
+sdk/python/pyproject.toml, and services/query/flow/composer.json.
 
 NO WARRANTY
 

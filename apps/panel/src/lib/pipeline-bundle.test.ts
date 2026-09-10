@@ -12,7 +12,7 @@ import {
 } from './pipeline-bundle';
 import { runPipeline } from './pipeline';
 import { runNotebook } from './ml-pipeline';
-import { simulateQuery } from './flow';
+import { simulateQuery } from './query';
 
 vi.mock('./ml-pipeline', async (original) => ({
   ...(await original<typeof import('./ml-pipeline')>()),
@@ -21,7 +21,7 @@ vi.mock('./ml-pipeline', async (original) => ({
   saveNotebook: vi.fn(),
   runNotebook: vi.fn(),
 }));
-vi.mock('./flow', async (original) => ({
+vi.mock('./query', async (original) => ({
   ...(await original<typeof import('./flow')>()),
   simulateQuery: vi.fn(),
 }));

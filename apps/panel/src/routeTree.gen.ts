@@ -32,6 +32,7 @@ import { Route as DataCurationPipelineRouteImport } from './routes/data-curation
 import { Route as DataCurationRecipeRouteImport } from './routes/data-curation.recipe'
 import { Route as ObservabilityIndexRouteImport } from './routes/observability.index'
 import { Route as ObservabilityExploreRouteImport } from './routes/observability.explore'
+import { Route as ObservabilityLiveRouteImport } from './routes/observability.live'
 import { Route as ObservabilityMetricsRouteImport } from './routes/observability.metrics'
 import { Route as ObservabilityQueryRouteImport } from './routes/observability.query'
 import { Route as ObservabilityRunsRouteImport } from './routes/observability.runs'
@@ -157,6 +158,11 @@ const ObservabilityExploreRoute = ObservabilityExploreRouteImport.update({
   path: '/explore',
   getParentRoute: () => ObservabilityRoute,
 } as any)
+const ObservabilityLiveRoute = ObservabilityLiveRouteImport.update({
+  id: '/live',
+  path: '/live',
+  getParentRoute: () => ObservabilityRoute,
+} as any)
 const ObservabilityMetricsRoute = ObservabilityMetricsRouteImport.update({
   id: '/metrics',
   path: '/metrics',
@@ -223,6 +229,7 @@ export interface FileRoutesByFullPath {
   '/data-curation/pipeline': typeof DataCurationPipelineRoute
   '/data-curation/recipe': typeof DataCurationRecipeRoute
   '/observability/explore': typeof ObservabilityExploreRoute
+  '/observability/live': typeof ObservabilityLiveRoute
   '/observability/metrics': typeof ObservabilityMetricsRoute
   '/observability/query': typeof ObservabilityQueryRoute
   '/observability/runs': typeof ObservabilityRunsRoute
@@ -252,6 +259,7 @@ export interface FileRoutesByTo {
   '/data-curation/pipeline': typeof DataCurationPipelineRoute
   '/data-curation/recipe': typeof DataCurationRecipeRoute
   '/observability/explore': typeof ObservabilityExploreRoute
+  '/observability/live': typeof ObservabilityLiveRoute
   '/observability/metrics': typeof ObservabilityMetricsRoute
   '/observability/query': typeof ObservabilityQueryRoute
   '/observability/runs': typeof ObservabilityRunsRoute
@@ -287,6 +295,7 @@ export interface FileRoutesById {
   '/data-curation/pipeline': typeof DataCurationPipelineRoute
   '/data-curation/recipe': typeof DataCurationRecipeRoute
   '/observability/explore': typeof ObservabilityExploreRoute
+  '/observability/live': typeof ObservabilityLiveRoute
   '/observability/metrics': typeof ObservabilityMetricsRoute
   '/observability/query': typeof ObservabilityQueryRoute
   '/observability/runs': typeof ObservabilityRunsRoute
@@ -323,6 +332,7 @@ export interface FileRouteTypes {
     | '/data-curation/pipeline'
     | '/data-curation/recipe'
     | '/observability/explore'
+    | '/observability/live'
     | '/observability/metrics'
     | '/observability/query'
     | '/observability/runs'
@@ -352,6 +362,7 @@ export interface FileRouteTypes {
     | '/data-curation/pipeline'
     | '/data-curation/recipe'
     | '/observability/explore'
+    | '/observability/live'
     | '/observability/metrics'
     | '/observability/query'
     | '/observability/runs'
@@ -386,6 +397,7 @@ export interface FileRouteTypes {
     | '/data-curation/pipeline'
     | '/data-curation/recipe'
     | '/observability/explore'
+    | '/observability/live'
     | '/observability/metrics'
     | '/observability/query'
     | '/observability/runs'
@@ -580,6 +592,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ObservabilityExploreRouteImport
       parentRoute: typeof ObservabilityRoute
     }
+    '/observability/live': {
+      id: '/observability/live'
+      path: '/live'
+      fullPath: '/observability/live'
+      preLoaderRoute: typeof ObservabilityLiveRouteImport
+      parentRoute: typeof ObservabilityRoute
+    }
     '/observability/metrics': {
       id: '/observability/metrics'
       path: '/metrics'
@@ -700,6 +719,7 @@ const DataCurationRouteWithChildren = DataCurationRoute._addFileChildren(
 
 interface ObservabilityRouteChildren {
   ObservabilityExploreRoute: typeof ObservabilityExploreRoute
+  ObservabilityLiveRoute: typeof ObservabilityLiveRoute
   ObservabilityMetricsRoute: typeof ObservabilityMetricsRoute
   ObservabilityQueryRoute: typeof ObservabilityQueryRoute
   ObservabilityRunsRoute: typeof ObservabilityRunsRoute
@@ -708,6 +728,7 @@ interface ObservabilityRouteChildren {
 
 const ObservabilityRouteChildren: ObservabilityRouteChildren = {
   ObservabilityExploreRoute: ObservabilityExploreRoute,
+  ObservabilityLiveRoute: ObservabilityLiveRoute,
   ObservabilityMetricsRoute: ObservabilityMetricsRoute,
   ObservabilityQueryRoute: ObservabilityQueryRoute,
   ObservabilityRunsRoute: ObservabilityRunsRoute,

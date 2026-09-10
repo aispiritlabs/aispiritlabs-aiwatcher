@@ -1,0 +1,382 @@
+{
+  "size": "100MB",
+  "format": "csv",
+  "finished_at": "2026-09-10T11:35:46+0200",
+  "machine": {
+    "os": "Darwin 25.6.0",
+    "python": "3.14.3",
+    "cpu": "Apple M1 Max",
+    "cores": "10",
+    "memory_gib": "64",
+    "php": "8.5.10",
+    "polars": "1.44.2",
+    "flow": "0.43.0"
+  },
+  "corpus": {
+    "seed": 20260910,
+    "rows": 551210,
+    "parts": 2,
+    "csv_bytes": 104859210,
+    "parquet_bytes": 14471628,
+    "bytes_per_row": 190.2,
+    "runs": 45935,
+    "generated_in_s": 2.0,
+    "polars": "1.44.2",
+    "numpy": "2.5.3"
+  },
+  "php_flags": [
+    "-d",
+    "memory_limit=32G",
+    "-d",
+    "opcache.enable_cli=1",
+    "-d",
+    "opcache.jit=tracing",
+    "-d",
+    "opcache.jit_buffer_size=128M"
+  ],
+  "runs": [
+    {
+      "engine": "polars",
+      "query": "q1",
+      "status": "ok",
+      "seconds": 0.051,
+      "wall": 0.17019725000136532,
+      "cpu": 0.28,
+      "max_rss": 250150912,
+      "result": {
+        "count": 6377
+      },
+      "error": null
+    },
+    {
+      "engine": "polars-1t",
+      "query": "q1",
+      "status": "ok",
+      "seconds": 0.142,
+      "wall": 0.2598712500039255,
+      "cpu": 0.24,
+      "max_rss": 177848320,
+      "result": {
+        "count": 6377
+      },
+      "error": null
+    },
+    {
+      "engine": "flow",
+      "query": "q1",
+      "status": "ok",
+      "seconds": 6.885,
+      "wall": 6.982068666999112,
+      "cpu": 6.87,
+      "max_rss": 54935552,
+      "result": {
+        "count": 6377
+      },
+      "error": null
+    },
+    {
+      "engine": "polars",
+      "query": "q2",
+      "status": "ok",
+      "seconds": 0.049,
+      "wall": 0.17012354100006633,
+      "cpu": 0.33,
+      "max_rss": 263028736,
+      "result": [
+        {
+          "model": "claude-haiku-4-5",
+          "spans": 49588,
+          "input_tokens": 105244523,
+          "output_tokens": 19082327,
+          "avg_duration_ms": 1640.73261676212
+        },
+        {
+          "model": "claude-sonnet-5",
+          "spans": 59113,
+          "input_tokens": 123549468,
+          "output_tokens": 22731016,
+          "avg_duration_ms": 1653.150186930117
+        },
+        {
+          "model": "gemini-3-pro",
+          "spans": 29744,
+          "input_tokens": 62493584,
+          "output_tokens": 11414711,
+          "avg_duration_ms": 1637.770138515331
+        },
+        {
+          "model": "gpt-5",
+          "spans": 39747,
+          "input_tokens": 83641164,
+          "output_tokens": 15181162,
+          "avg_duration_ms": 1648.7929906659622
+        },
+        {
+          "model": "llama-4-70b",
+          "spans": 24907,
+          "input_tokens": 52393708,
+          "output_tokens": 9621533,
+          "avg_duration_ms": 1662.6967117677762
+        },
+        {
+          "model": "mistral-large-3",
+          "spans": 20092,
+          "input_tokens": 42792398,
+          "output_tokens": 7756534,
+          "avg_duration_ms": 1633.1743479992037
+        },
+        {
+          "model": "qwen-3-72b",
+          "spans": 14867,
+          "input_tokens": 31897117,
+          "output_tokens": 5852163,
+          "avg_duration_ms": 1648.4475011771037
+        },
+        {
+          "model": "text-embedding-3",
+          "spans": 9859,
+          "input_tokens": 21151444,
+          "output_tokens": 0,
+          "avg_duration_ms": 1658.3610913885789
+        }
+      ],
+      "error": null
+    },
+    {
+      "engine": "polars-1t",
+      "query": "q2",
+      "status": "ok",
+      "seconds": 0.169,
+      "wall": 0.29065866699966136,
+      "cpu": 0.28,
+      "max_rss": 179978240,
+      "result": [
+        {
+          "model": "claude-haiku-4-5",
+          "spans": 49588,
+          "input_tokens": 105244523,
+          "output_tokens": 19082327,
+          "avg_duration_ms": 1640.73261676212
+        },
+        {
+          "model": "claude-sonnet-5",
+          "spans": 59113,
+          "input_tokens": 123549468,
+          "output_tokens": 22731016,
+          "avg_duration_ms": 1653.150186930117
+        },
+        {
+          "model": "gemini-3-pro",
+          "spans": 29744,
+          "input_tokens": 62493584,
+          "output_tokens": 11414711,
+          "avg_duration_ms": 1637.770138515331
+        },
+        {
+          "model": "gpt-5",
+          "spans": 39747,
+          "input_tokens": 83641164,
+          "output_tokens": 15181162,
+          "avg_duration_ms": 1648.7929906659622
+        },
+        {
+          "model": "llama-4-70b",
+          "spans": 24907,
+          "input_tokens": 52393708,
+          "output_tokens": 9621533,
+          "avg_duration_ms": 1662.6967117677762
+        },
+        {
+          "model": "mistral-large-3",
+          "spans": 20092,
+          "input_tokens": 42792398,
+          "output_tokens": 7756534,
+          "avg_duration_ms": 1633.1743479992037
+        },
+        {
+          "model": "qwen-3-72b",
+          "spans": 14867,
+          "input_tokens": 31897117,
+          "output_tokens": 5852163,
+          "avg_duration_ms": 1648.4475011771037
+        },
+        {
+          "model": "text-embedding-3",
+          "spans": 9859,
+          "input_tokens": 21151444,
+          "output_tokens": 0,
+          "avg_duration_ms": 1658.3610913885789
+        }
+      ],
+      "error": null
+    },
+    {
+      "engine": "flow",
+      "query": "q2",
+      "status": "ok",
+      "seconds": 10.04,
+      "wall": 10.111791457995423,
+      "cpu": 9.95,
+      "max_rss": 61980672,
+      "result": [
+        {
+          "model": "gemini-3-pro",
+          "spans": 29744,
+          "input_tokens": 62493584,
+          "output_tokens": 11414711,
+          "avg_duration_ms": 1637.770139
+        },
+        {
+          "model": "llama-4-70b",
+          "spans": 24907,
+          "input_tokens": 52393708,
+          "output_tokens": 9621533,
+          "avg_duration_ms": 1662.696712
+        },
+        {
+          "model": "gpt-5",
+          "spans": 39747,
+          "input_tokens": 83641164,
+          "output_tokens": 15181162,
+          "avg_duration_ms": 1648.792991
+        },
+        {
+          "model": "claude-sonnet-5",
+          "spans": 59113,
+          "input_tokens": 123549468,
+          "output_tokens": 22731016,
+          "avg_duration_ms": 1653.150187
+        },
+        {
+          "model": "claude-haiku-4-5",
+          "spans": 49588,
+          "input_tokens": 105244523,
+          "output_tokens": 19082327,
+          "avg_duration_ms": 1640.732617
+        },
+        {
+          "model": "text-embedding-3",
+          "spans": 9859,
+          "input_tokens": 21151444,
+          "output_tokens": 0,
+          "avg_duration_ms": 1658.361091
+        },
+        {
+          "model": "qwen-3-72b",
+          "spans": 14867,
+          "input_tokens": 31897117,
+          "output_tokens": 5852163,
+          "avg_duration_ms": 1648.447501
+        },
+        {
+          "model": "mistral-large-3",
+          "spans": 20092,
+          "input_tokens": 42792398,
+          "output_tokens": 7756534,
+          "avg_duration_ms": 1633.174348
+        }
+      ],
+      "error": null
+    },
+    {
+      "engine": "polars",
+      "query": "q3",
+      "status": "ok",
+      "seconds": 0.046,
+      "wall": 0.17206300000543706,
+      "cpu": 0.35,
+      "max_rss": 254558208,
+      "result": {
+        "output": "/Users/mkubaszek/Projects/ai_spirit/aiwatcher/benchmarks/curation/results/outputs/100MB/csv/polars/q3.csv"
+      },
+      "error": null
+    },
+    {
+      "engine": "polars-1t",
+      "query": "q3",
+      "status": "ok",
+      "seconds": 0.183,
+      "wall": 0.29939020800520666,
+      "cpu": 0.28,
+      "max_rss": 189054976,
+      "result": {
+        "output": "/Users/mkubaszek/Projects/ai_spirit/aiwatcher/benchmarks/curation/results/outputs/100MB/csv/polars-1t/q3.csv"
+      },
+      "error": null
+    },
+    {
+      "engine": "flow",
+      "query": "q3",
+      "status": "ok",
+      "seconds": 12.255,
+      "wall": 12.328527082994697,
+      "cpu": 12.21,
+      "max_rss": 66256896,
+      "result": {
+        "output": "/Users/mkubaszek/Projects/ai_spirit/aiwatcher/benchmarks/curation/results/outputs/100MB/csv/flow/q3.csv"
+      },
+      "error": null
+    },
+    {
+      "engine": "polars",
+      "query": "q4",
+      "status": "ok",
+      "seconds": 0.164,
+      "wall": 0.28622149999137037,
+      "cpu": 0.48,
+      "max_rss": 317898752,
+      "result": {
+        "output": "/Users/mkubaszek/Projects/ai_spirit/aiwatcher/benchmarks/curation/results/outputs/100MB/csv/polars/q4.csv"
+      },
+      "error": null
+    },
+    {
+      "engine": "polars-1t",
+      "query": "q4",
+      "status": "ok",
+      "seconds": 0.249,
+      "wall": 0.36677937500644475,
+      "cpu": 0.36,
+      "max_rss": 191676416,
+      "result": {
+        "output": "/Users/mkubaszek/Projects/ai_spirit/aiwatcher/benchmarks/curation/results/outputs/100MB/csv/polars-1t/q4.csv"
+      },
+      "error": null
+    },
+    {
+      "engine": "flow",
+      "query": "q4",
+      "status": "ok",
+      "seconds": 19.301,
+      "wall": 19.3729062499915,
+      "cpu": 19.119999999999997,
+      "max_rss": 71811072,
+      "result": {
+        "output": "/Users/mkubaszek/Projects/ai_spirit/aiwatcher/benchmarks/curation/results/outputs/100MB/csv/flow/q4.csv"
+      },
+      "error": null
+    }
+  ],
+  "verification": {
+    "q1": {
+      "polars": "reference",
+      "polars-1t": "agrees",
+      "flow": "agrees"
+    },
+    "q2": {
+      "polars": "reference",
+      "polars-1t": "agrees",
+      "flow": "agrees"
+    },
+    "q3": {
+      "polars": "reference",
+      "polars-1t": "agrees",
+      "flow": "agrees"
+    },
+    "q4": {
+      "polars": "reference",
+      "polars-1t": "agrees",
+      "flow": "agrees"
+    }
+  }
+}

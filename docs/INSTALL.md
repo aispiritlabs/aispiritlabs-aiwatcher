@@ -477,7 +477,7 @@ AIWATCHER_FLOW=true AIWATCHER_FLOW_IMAGE=ghcr.io/you/aiwatcher-flow \
   deploy/scripts/install.sh -e planner
 ```
 
-What that gets you is `services/flow` — a PHP service that answers the questions
+What that gets you is `services/query/flow` — a PHP service that answers the questions
 the explorer tree was not built for, by parsing a Flow DataFrame pipeline and
 running it against the API's own routes. ADR_0008 has the reasoning and the
 measurements; what matters at install time is three things.

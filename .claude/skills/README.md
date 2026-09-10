@@ -4,13 +4,19 @@ Reference material an agent loads on demand while working in this repository.
 Each directory is one skill: a `SKILL.md` whose frontmatter is always in
 context, and `rules/` beneath it that is read only when the work calls for it.
 
-Everything here is **vendored** — copied in at a pinned commit rather than
+Two kinds of directory live here, and the difference is whether this repository
+may edit it. **Vendored** skills come from upstream and may not; **authored**
+ones are this repository's own files. `vendor.json` names both, which is what
+lets `--check` tell either from a directory nobody declared.
+
+Almost everything here is **vendored** — copied in at a pinned commit rather than
 fetched when it is needed. Same reason the prompt registry is an object store
 rather than a fold: what an agent read has to stay readable later, and a
 network dependency in the middle of a review is a review that behaves
 differently depending on the day. `vendor.json` holds the pins,
-`licenses/` the upstream licences, and every skill carries a `PROVENANCE.md`
-naming its repository, path and commit.
+`licenses/` the upstream licences, and every vendored skill carries a
+`PROVENANCE.md` naming its repository, path and commit. An authored skill has
+none — there is no upstream to name.
 
 ```bash
 just skills          # re-vendor at the pinned commits
@@ -36,6 +42,17 @@ CI would make it a build failure on a machine with no reason to care.
 | `hf-cli` | `aiwatcher-annotations`' hub integration searches Hugging Face. The CLI is how a corpus is inspected before `integrations::fetch` is pointed at it. |
 | `huggingface-datasets` | The Dataset Viewer API — subsets, splits, row pagination, parquet URLs. What a staged import (ADR_0022) reads before it is staged. |
 
+## What this repository authored
+
+| Skill | Earns its place because |
+|-------|-------------------------|
+| `spec-flow` | The flow the work here runs through: investigation → spec → job → tests → review → deploy, one folder per change under [`docs/specs/`](../../docs/specs), one committed board. It ships with the repository so a clone can drive its own flow, and so the rules a phase runs under land in the pull request that changes them. The eight `/spec-*` commands beside it are in [`.claude/commands/`](../commands), which nothing vendors. |
+
+`just skills` never writes into an authored directory, and `--check` expects it
+rather than reporting it. A name may not be both, and the script refuses a
+manifest that claims one twice rather than vendoring over a file with no
+upstream to restore it from.
+
 Two upstream skills were **left out** deliberately.
 `tanstack-start-best-practices` and `tanstack-integration-best-practices` are
 about TanStack Start, and the panel is a Vite SPA against a Rust API: advice
@@ -46,9 +63,14 @@ subject, the wrong platform.
 
 ## What is not here
 
-**Nothing project-specific.** `CLAUDE.md` is this repository's own guide and
-the ADRs under `docs/ADR/` are its reasoning; a skill restating either would be
-a second copy free to disagree with the first.
+**No reference material about this repository.** `CLAUDE.md` is its own guide
+and the ADRs under `docs/ADR/` are its reasoning; a skill restating either would
+be a second copy free to disagree with the first. `spec-flow` is not that
+exception being bent: it is *process*, it restates neither, and every fact about
+this repository that a phase needs — the verification command, where a decision
+graduates to, which file holds the guardrails — is in
+[`docs/specs/README.md`](../../docs/specs/README.md)'s project hook, which
+points rather than copies.
 
 **Nothing already installed globally.** The `python-*` family
 (`~/.claude/skills/`) covers `sdk/python` and `services/ml_pipeline` —
@@ -57,12 +79,24 @@ types — and `archify` is what `just diagrams` renders with. Those are the
 machine's, not the repository's, and vendoring a copy would be two versions of
 one skill with nothing saying which is current.
 
+`spec-flow` is the one place that rule is paid rather than kept: the same skill
+is installed globally, because the flow is used in other repositories too. Here
+the project-scoped copy is the one that loads, so this file is what runs — and
+the two will drift. That is the cost of the flow travelling with the code, and
+it is recorded in [`docs/specs/AW-1`](../../docs/specs/AW-1-ship-the-spec-flow-with-the-repository/01-investigation.md).
+
 **Nothing for Go.** There is none in this workspace.
 
 ## Adding one
 
-Add it to `vendor.json` and run `just skills`. A destination name must match
-the skill's own `name:` frontmatter, which is why the two TanStack skills are
-vendored under their `-best-practices` names. Never edit a vendored file: an
-edited copy drifts from upstream with nothing to say so, and `just skills`
-overwrites it. Fork it under a different name instead.
+**From upstream:** add it to `vendor.json`'s `sources` and run `just skills`. A
+destination name must match the skill's own `name:` frontmatter, which is why
+the two TanStack skills are vendored under their `-best-practices` names. Never
+edit a vendored file: an edited copy drifts from upstream with nothing to say
+so, and `just skills` overwrites it. Fork it under a different name instead.
+
+**Authored here:** write the directory and add its name to `vendor.json`'s
+`authored`. Undeclared, it is a stray and `--check` says so; declared with no
+directory behind it, the check says that too. The bar is the one above — a
+skill about *this repository's reasoning* belongs in `CLAUDE.md` or an ADR, not
+here.

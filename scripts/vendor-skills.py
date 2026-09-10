@@ -7,6 +7,11 @@ readable later. A pin is a commit, so `--check` can say whether the working
 tree still is what the manifest claims — and `--update` is the only thing that
 moves a pin, so a refresh is a reviewable diff rather than a surprise.
 
+The manifest also names the skills this repository *authored*. They are not
+pinned to anything, `vendor()` never writes into one, and `--check` expects
+them — but they are declared, so a directory nobody declared is still the stray
+the check exists to catch.
+
     ./scripts/vendor-skills.py            # re-vendor at the pinned commits
     ./scripts/vendor-skills.py --check    # is the tree what the manifest says?
     ./scripts/vendor-skills.py --update   # move every pin to upstream HEAD
@@ -27,8 +32,27 @@ SKILLS = ROOT / ".claude" / "skills"
 MANIFEST = SKILLS / "vendor.json"
 LICENSES = SKILLS / "licenses"
 
-# Everything under .claude/skills that this script does not own.
+# Everything under .claude/skills that this script does not own. The skills this
+# repository authored are the manifest's business, not this constant's — see
+# `authored_of`.
 NOT_VENDORED = {"vendor.json", "README.md", "licenses"}
+
+
+def authored_of(manifest: dict) -> list[str]:
+    """The skill directories this repository wrote rather than pinned upstream.
+
+    A name claimed as both would be vendored over on the next refresh, losing a
+    file with no upstream to restore it from, so it is refused here rather than
+    discovered afterwards.
+    """
+    authored = list(manifest.get("authored", []))
+    pinned = {
+        name for source in manifest["sources"] for name in source["skills"].values()
+    }
+    both = sorted(set(authored) & pinned)
+    if both:
+        raise SystemExit(f"named as both pinned and authored: {', '.join(both)}")
+    return authored
 
 
 def run(*args: str, cwd: Path | None = None) -> str:
@@ -113,6 +137,7 @@ def main() -> int:
     args = parser.parse_args()
 
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    authored = authored_of(manifest)
 
     if args.update:
         for source in manifest["sources"]:
@@ -143,21 +168,27 @@ def main() -> int:
         stray = sorted(
             item.name
             for item in SKILLS.iterdir()
-            if item.name not in NOT_VENDORED and item.name not in names
+            if item.name not in NOT_VENDORED
+            and item.name not in names
+            and item.name not in authored
         )
+        missing = [name for name in authored if not (SKILLS / name).is_dir()]
         for name in drifted:
             print(f"drifted from its pin: {name}", file=sys.stderr)
         for name in stray:
             print(f"not in the manifest: {name}", file=sys.stderr)
+        for name in missing:
+            print(f"authored in the manifest, absent from the tree: {name}", file=sys.stderr)
         if drifted or stray:
             print("run `just skills` to restore", file=sys.stderr)
+        if drifted or stray or missing:
             return 1
-        print(f"{len(names)} skills match their pins")
+        print(f"{len(names)} skills match their pins, {len(authored)} authored here")
         return 0
 
     print("vendoring into .claude/skills")
     names = vendor(manifest, SKILLS)
-    print(f"{len(names)} skills vendored")
+    print(f"{len(names)} skills vendored, {len(authored)} authored here and left alone")
     return 0
 
 

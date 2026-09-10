@@ -1,0 +1,20 @@
+[package]
+name = "datafusion-bench"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "The curation benchmark's q2 in a Rust process, on the datafusion crate."
+
+# Standalone, like ../rust: not a member of the aiwatcher workspace above it.
+[workspace]
+
+# Built the way ../rust's Polars binary is — fat LTO, one codegen unit, mimalloc
+# (main.rs) — so the two Rust engines are compared on the same footing.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+
+[dependencies]
+datafusion = "55.0.0"
+mimalloc = "0.1.52"
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros"] }

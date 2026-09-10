@@ -29,6 +29,10 @@ dependencies = [
   "scikit-learn>=1.8,<1.9",
   "matplotlib>=3.10,<4",
   "pandas>=2.2,<4",
+  # For `flow_vs_polars`, the notebook half of the curation benchmark: it reads
+  # the same corpus the Flow block does. Pinned to the minor line
+  # `benchmarks/curation` measures, so the two report the same engine.
+  "polars>=1.44,<1.45",
 ]
 
 [project.scripts]

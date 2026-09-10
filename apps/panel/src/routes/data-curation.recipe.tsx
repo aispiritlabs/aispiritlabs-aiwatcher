@@ -10,15 +10,8 @@ import { EngineLauncher } from '@/components/engine-launcher';
 import { FlowDiagnostics, FlowResultView } from '@/components/flow-preview';
 import { DEFAULT_WINDOW_SECONDS, TimeRange, windowParam } from '@/components/time-range';
 import { Badge, Button, Card, EmptyState, Spinner } from '@/components/ui/primitives';
-import {
-  QUERY_EXAMPLES,
-  STARTER_CURATION,
-  checkQuery,
-  isFlowAvailable,
-  runQuery,
-  simulateQuery,
-  type QueryExample,
-} from '@/lib/flow';
+import { QUERY_EXAMPLES, STARTER_CURATION, type QueryExample } from '@/lib/flow';
+import { checkQuery, isQueryEngineAvailable, runQuery, simulateQuery } from '@/lib/query';
 import { answerOf } from '@/lib/result';
 
 const searchSchema = z.object({
@@ -102,7 +95,7 @@ function DataCurationPage() {
 
   const available = useQuery({
     queryKey: ['flow', 'available'],
-    queryFn: isFlowAvailable,
+    queryFn: isQueryEngineAvailable,
     refetchInterval: 10_000,
   });
   const recipes = useQuery({

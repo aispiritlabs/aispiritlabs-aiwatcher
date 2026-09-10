@@ -36,9 +36,15 @@ laser_connection := env_var_or_default("AIWATCHER_LASER_CONNECTION_STRING", "igg
 # project database.
 workflow_postgres_url := env_var_or_default("AIWATCHER_WORKFLOW_POSTGRES_URL", "postgres://aiwatcher:aiwatcher@127.0.0.1:5433/aiwatcher")
 
-# Where a managed Flow step is sent. The only address a `flow_php` step ever
-# runs against: a plan names a binding and its parameters, never a host.
-flow_url := env_var_or_default("AIWATCHER_FLOW_URL", "http://127.0.0.1:8081")
+# Where a managed query step is sent: the one engine this deployment runs, and
+# the only address a query step ever runs against — a plan names a binding and
+# its parameters, never a host. `AIWATCHER_FLOW_URL` is its older name, read for
+# one release.
+query_url := env_var_or_default("AIWATCHER_QUERY_URL", env_var_or_default("AIWATCHER_FLOW_URL", "http://127.0.0.1:8081"))
+
+# Which query engine `query-serve`, `query-install` and `query-check` mean:
+# flow, datafusion or duckdb (AW-3).
+query_engine := env_var_or_default("AIWATCHER_QUERY_ENGINE", "flow")
 
 # The control plane `just run-flyte` browses. `flytectl demo start` serves one
 # on :30080; a cluster's is the flyteadmin Service. There is no `flyte-up` here
@@ -260,24 +266,6 @@ run-conversations:
     AIWATCHER_LOG=info,aiwatcher=debug \
     cargo run --bin aiwatcher
 
-# Points at whatever control plane AIWATCHER_FLYTE_ENDPOINT names — `flytectl
-# demo start` serves one on :30080. With none running the engine routes answer
-# 503 rather than 501: "configured and unreachable" against "not configured",
-# and the panel says which.
-
-# Server on :8080 with the Flyte engine wired, and reruns going through it.
-run-flyte:
-    AIWATCHER_BUS=wal \
-    AIWATCHER_INGEST_ENABLED=true \
-    AIWATCHER_ENGINE=flyte \
-    AIWATCHER_FLYTE_ENDPOINT={{flyte_endpoint}} \
-    AIWATCHER_FLYTE_PROJECT={{flyte_project}} \
-    AIWATCHER_FLYTE_DOMAIN={{flyte_domain}} \
-    AIWATCHER_FLYTE_CONSOLE_URL={{flyte_endpoint}} \
-    AIWATCHER_WORKFLOW_RUNNER=engine \
-    AIWATCHER_LOG=info,aiwatcher=debug \
-    cargo run --bin aiwatcher
-
 # Nothing needs to be running: both suites stand a control plane up on a
 # loopback socket. The second one is the end-to-end pass — a real instance built
 # by `wiring::build`, served on another socket, driven over HTTP — and it is
@@ -295,11 +283,11 @@ test-pipeline:
 # what `just dev` and `just run` run, and it is the refusal in `Config::validate`
 # rather than a lock file somebody has to interpret.
 
-# Server on :8080 with managed Flow execution wired. Run `just flow-serve` beside it.
+# Server on :8080 with managed query execution wired. Run `just query-serve` beside it.
 run-execution:
     AIWATCHER_BUS=wal \
     AIWATCHER_INGEST_ENABLED=true \
-    AIWATCHER_FLOW_URL={{flow_url}} \
+    AIWATCHER_QUERY_URL={{query_url}} \
     AIWATCHER_LOG=info,aiwatcher=debug \
     cargo run --bin aiwatcher
 
@@ -309,7 +297,7 @@ run-postgres:
     AIWATCHER_INGEST_ENABLED=true \
     AIWATCHER_WORKFLOW_STORE=postgres \
     AIWATCHER_WORKFLOW_POSTGRES_URL={{workflow_postgres_url}} \
-    AIWATCHER_FLOW_URL={{flow_url}} \
+    AIWATCHER_QUERY_URL={{query_url}} \
     AIWATCHER_LOG=info,aiwatcher=debug \
     cargo run --bin aiwatcher --features postgres
 
@@ -331,7 +319,7 @@ run-work:
     AIWATCHER_PROMPT_S3_ENDPOINT={{rustfs_endpoint}} \
     AIWATCHER_PROMPT_S3_ACCESS_KEY=rustfsadmin \
     AIWATCHER_PROMPT_S3_SECRET_KEY=rustfsadmin \
-    AIWATCHER_FLOW_URL={{flow_url}} \
+    AIWATCHER_QUERY_URL={{query_url}} \
     AIWATCHER_LOG=info,aiwatcher=debug \
     cargo run --bin aiwatcher --features postgres,laser -- work
 
@@ -389,14 +377,35 @@ run-laser:
 panel:
     cd {{panel}} && npm run dev
 
-# Server, one SDK worker and the panel. Development stores are ephemeral.
+# The seed is `scripts/seed-dev.py`, its output in ./.data/dev-seed.log. The log
+# is in memory and re-seeded on every start; the registries under ./.data are
+# seeded once. AIWATCHER_DEV_SEED=0 starts it empty.
+#
+# Server, one SDK worker, the panel — and enough seeded data to click around in.
 dev:
     #!/usr/bin/env bash
     set -euo pipefail
-    AIWATCHER_BUS=memory AIWATCHER_WORKFLOW_STORE=memory AIWATCHER_INGEST_ENABLED=true cargo run --bin aiwatcher &
+    # A server left on :8080 answers the health check below on this one's
+    # behalf, and the seed would then land in whichever instance that is.
+    if curl -fsS --max-time 1 http://127.0.0.1:8080/livez >/dev/null 2>&1; then
+      echo "✗ something already answers on :8080 — stop it first (lsof -nP -iTCP:8080 -sTCP:LISTEN)" >&2
+      exit 1
+    fi
+    # The conversation archive is on so Conversations has something to show,
+    # keyed exactly as `just run-conversations` keys it.
+    mkdir -p ./.data
+    key_file=./.data/conversation-key
+    if [ ! -f "$key_file" ]; then
+      python3 -c "import base64,os;print('dev:'+base64.urlsafe_b64encode(os.urandom(32)).decode().rstrip('='))" > "$key_file"
+      chmod 600 "$key_file"
+    fi
+    # The whole process group, not the pids: `cargo run` does not pass a signal
+    # on, and killing it alone is how an aiwatcher is left holding :8080.
+    trap 'trap - EXIT INT TERM; kill 0 2>/dev/null || true' EXIT INT TERM
+    AIWATCHER_BUS=memory AIWATCHER_WORKFLOW_STORE=memory AIWATCHER_INGEST_ENABLED=true \
+      AIWATCHER_CONVERSATION_ARCHIVE=on AIWATCHER_CONVERSATION_KEYS="$(cat "$key_file")" \
+      cargo run --bin aiwatcher &
     server=$!
-    worker=""
-    trap 'kill $server ${worker:-} 2>/dev/null || true' EXIT INT TERM
     for attempt in $(seq 1 120); do
         curl -fsS http://127.0.0.1:8080/healthz >/dev/null && break
         kill -0 "$server"
@@ -404,8 +413,14 @@ dev:
     done
     curl -fsS http://127.0.0.1:8080/healthz >/dev/null
     (cd sdk/python && PYTHONPATH=examples uv run aiwatcher-runtime --factory worker_workflow:build_runtime) &
-    worker=$!
+    if [ "${AIWATCHER_DEV_SEED:-1}" != 0 ]; then
+      ./scripts/seed-dev.py --live &
+    fi
     cd {{panel}} && npm run dev
+
+# Varied demo data into a running server — what `just dev` seeds, for `just run`.
+seed-dev *args:
+    ./scripts/seed-dev.py {{args}}
 
 # Real PostgreSQL, Rust restart and SIGKILL of a Python worker; waits for the real lease.
 test-worker-runtime:
@@ -547,12 +562,45 @@ agentic-check:
     uv run mypy .
     uv run pytest -q
 
-# ── Flow query service (PHP) ─────────────────────────────────────────────────
+# ── Query engines: Flow PHP, DataFusion, DuckDB ──────────────────────────────
 #
-# Optional. The panel's Query tab talks to it directly; without it that tab says
-# so and the rest of the panel is unaffected.
+# Optional. The panel's Query tab talks to the engine directly; without it that
+# tab says so and the rest of the panel is unaffected. A deployment runs one
+# engine, named by AIWATCHER_QUERY_ENGINE (AW-3): the `query-*` recipes serve,
+# install and check that one, and the `flow-*` recipes below are Flow's own.
 
-flow := "services/flow"
+query := "services/query"
+flow := query + "/flow"
+
+# Install the engine AIWATCHER_QUERY_ENGINE names.
+query-install:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{query_engine}}" in
+        flow) just flow-install ;;
+        datafusion|duckdb) echo "the {{query_engine}} engine arrives in AW-3 phase 2; only flow is here yet" >&2; exit 1 ;;
+        *) echo "AIWATCHER_QUERY_ENGINE is '{{query_engine}}'; the engines are flow, datafusion, duckdb" >&2; exit 1 ;;
+    esac
+
+# The engine AIWATCHER_QUERY_ENGINE names, on :8081 against the API on :8080.
+query-serve port="8081":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{query_engine}}" in
+        flow) just flow-serve {{port}} ;;
+        datafusion|duckdb) echo "the {{query_engine}} engine arrives in AW-3 phase 2; only flow is here yet" >&2; exit 1 ;;
+        *) echo "AIWATCHER_QUERY_ENGINE is '{{query_engine}}'; the engines are flow, datafusion, duckdb" >&2; exit 1 ;;
+    esac
+
+# Everything the engine AIWATCHER_QUERY_ENGINE names has to pass.
+query-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "{{query_engine}}" in
+        flow) just flow-check ;;
+        datafusion|duckdb) echo "the {{query_engine}} engine arrives in AW-3 phase 2; only flow is here yet" >&2; exit 1 ;;
+        *) echo "AIWATCHER_QUERY_ENGINE is '{{query_engine}}'; the engines are flow, datafusion, duckdb" >&2; exit 1 ;;
+    esac
 
 # Install the PHP dependencies.
 flow-install:
@@ -595,7 +643,7 @@ flow-query pipeline:
     #!/usr/bin/env bash
     set -euo pipefail
     python3 -c 'import json,sys;print(json.dumps({"pipeline":sys.argv[1]}))' {{quote(pipeline)}} \
-      | curl -sS -X POST http://127.0.0.1:8081/flow/query -H 'content-type: application/json' -d @- \
+      | curl -sS -X POST http://127.0.0.1:8081/query/query -H 'content-type: application/json' -d @- \
       | python3 -m json.tool
 
 # ── ML pipeline notebook runtime (Python) ────────────────────────────────────
@@ -984,6 +1032,66 @@ load-test runs="5000":
 bench-mlflow runs="14000":
     ./scripts/bench-mlflow.sh {{runs}}
 
+# ── Curation benchmark: Flow PHP and Polars over one corpus ─────────────────
+#
+# `benchmarks/curation`: a synthetic spans corpus of a chosen size, the same
+# four queries in both engines, and every answer checked against the other
+# before a time is reported. Flow is one PHP process streaming at tens of MB/s,
+# so 10GB of Flow is over an hour — measure it at 1GB and scale, or leave the
+# 10GB run to itself. Results land in benchmarks/curation/results/.
+
+bench := "benchmarks/curation"
+
+# Write the corpus both engines read: CSV of the given size, the same rows as Parquet.
+bench-curation-generate size="1GB":
+    cd {{bench}} && uv run python generate.py --size {{size}}
+
+# Both engines, every query, each in its own process, e.g. `just bench-curation 10GB --engines polars`.
+bench-curation size="1GB" *args:
+    cd {{bench}} && composer install --no-interaction --quiet && uv run python bench.py run --size {{size}} {{args}}
+
+# The same comparison inside aiwatcher, as a managed curation pipeline.
+#
+# API, Flow service, notebook runtime and panel, wired so a managed run reaches
+# both engines and the corpus. Open `curation/flow-vs-polars` in Data curation
+# → Pipeline and press Run on the server, or `just bench-curation-run` from
+# another terminal; the two steps' times are in the Workflows waterfall. Both
+# limits are raised together, the query service's above the step's: PHP
+# stopping first is a 500, which a reactor reads as an outage and retries.
+bench-curation-serve size="1GB":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    corpus="$(pwd)/{{bench}}/.data/{{size}}"
+    if [ ! -f "$corpus/manifest.json" ]; then
+        echo "no corpus at $corpus — run: just bench-curation-generate {{size}}" >&2
+        exit 1
+    fi
+    (cd {{flow}} && composer install --no-interaction --quiet)
+    # Beside a `just dev` that already holds 8080 and 5173, move these two; set
+    # AIWATCHER_DATA_DIR too, so a benchmark run lands in a store of its own.
+    api_port="${AIWATCHER_BENCH_API_PORT:-8080}"
+    panel_port="${AIWATCHER_BENCH_PANEL_PORT:-5173}"
+    trap 'kill 0' EXIT INT TERM
+    AIWATCHER_BUS=wal AIWATCHER_INGEST_ENABLED=true AIWATCHER_LISTEN="127.0.0.1:$api_port" \
+      AIWATCHER_QUERY_URL={{query_url}} AIWATCHER_ML_PIPELINE_URL=http://127.0.0.1:8082 \
+      AIWATCHER_QUERY_STEP_TIMEOUT_SECONDS=7200 \
+      cargo run --bin aiwatcher &
+    # JIT on, as the standalone benchmark measures it: a quarter faster, and
+    # AArch64 refuses a buffer above 128M.
+    (cd {{flow}} && AIWATCHER_URL="http://127.0.0.1:$api_port" AIWATCHER_CORPUS_DIR="$corpus" \
+      AIWATCHER_QUERY_TIMEOUT_SECONDS=7500 PHP_CLI_SERVER_WORKERS=4 \
+      php -d memory_limit=2G -d opcache.enable=1 -d opcache.enable_cli=1 \
+        -d opcache.jit=tracing -d opcache.jit_buffer_size=128M \
+        -S 127.0.0.1:8081 -t public) &
+    (cd {{ml_pipeline}} && AIWATCHER_CORPUS_DIR="$corpus" AIWATCHER_ML_PIPELINE_TIMEOUT=900 \
+      uv run python -m ml_pipeline) &
+    (cd {{panel}} && AIWATCHER_API_URL="http://127.0.0.1:$api_port" \
+      npm run dev -- --port "$panel_port" --strictPort)
+
+# Start `curation/flow-vs-polars` on a running `bench-curation-serve`, wait, and print both steps' times.
+bench-curation-run *args:
+    cd {{bench}} && uv run python in_aiwatcher.py {{args}}
+
 # Render docs/diagrams/*.json into docs/diagrams/out/ with the archify skill.
 #
 # Not part of `just check`. The renderer is an agent skill rather than a
@@ -1005,12 +1113,12 @@ diagrams:
         node "$archify" deliver "${name##*.}" "$source" "docs/diagrams/out/$name.html" --quality showcase
     done
 
-# Re-vendor the agent skills in .claude/skills at their pinned commits.
-#
 # Not part of `just check`, for the same reason `just diagrams` is not: a stale
 # skill is a documentation problem, and wiring it into CI would make it a build
 # failure on a machine with no reason to care. `just skills-check` is there for
 # a machine that does.
+#
+# Re-vendor the agent skills in .claude/skills at their pinned commits.
 skills:
     ./scripts/vendor-skills.py
 

@@ -23,7 +23,7 @@ projection, splitting, imputation, feature engineering and both encoders run in
 PHP. Only visualization and Random Forest training use Python.
 
 ```sh
-composer install --working-dir=services/flow
+composer install --working-dir=services/query/flow
 uv sync --project services/ml_pipeline --locked
 uv run --project services/ml_pipeline python examples/titanic/run.py --php --download
 # Reuse Kaggle train.csv without network access:
@@ -38,7 +38,7 @@ The full PHP query is in [`preparation.flow`](preparation.flow); the canonical
 graph is [`pipeline-php.json`](pipeline-php.json). Encoders preserve their fitted
 state in `feature_encoder` and `label_encoder`, and the local runner saves both
 as separate JSON files. Inline PHP code is included in the portable bundle.
-Install the current `services/flow` on the receiving instance: importing a flow
+Install the current `services/query/flow` on the receiving instance: importing a flow
 does not install its PHP or Python libraries.
 
 Native PHP classes also work independently of the editor:
@@ -120,7 +120,7 @@ DataFrame between those boundaries. `OneHotEncoder.fit_frame` and
 Canonical JSON conversion of individual category values is a narrow adapter
 needed for the portable PHP/Python vocabulary, not a row-level feature UDF.
 The exported state format is unchanged. Repository rules in
-`services/flow/AGENTS.md` and `services/ml_pipeline/AGENTS.md` preserve this style
+`services/query/flow/AGENTS.md` and `services/ml_pipeline/AGENTS.md` preserve this style
 for subsequent work.
 
 From the repository root:

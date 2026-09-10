@@ -141,22 +141,69 @@ name: {{ include "aiwatcher.fullname" . }}-rustfs
 {{- end -}}
 
 {{/*
-What the panel's nginx proxies /flow to, or empty for "there is none".
+The query engine this release runs, as one dict — enabled, engine, image,
+resources, replicas, admission and scheduling — for every template that needs
+it, so no two of them can come to disagree about which engine that is.
+
+`query.*` is the way in. `flow.*` is what it was called while Flow was the only
+engine, read for one release: `flow.enabled` with `query.enabled` off is a Flow
+engine from `flow`'s own values, rendered as it was before. With both on,
+`query` wins — an explicit new value is not one to ignore silently.
+
+The engine is checked here, at render time, for the reason the server refuses an
+unknown one at start-up: `query.engine: polars` is a release whose values name
+an engine no image implements.
+*/}}
+{{- define "aiwatcher.query" -}}
+{{- $q := .Values.query -}}
+{{- if not (has $q.engine (list "flow" "datafusion" "duckdb")) -}}
+{{- fail (printf "query.engine is %q; the engines are flow, datafusion, duckdb." $q.engine) -}}
+{{- end -}}
+{{- if $q.enabled -}}
+enabled: true
+engine: {{ $q.engine }}
+image: {{ get $q.images $q.engine | toJson }}
+resources: {{ get $q.resources $q.engine | toJson }}
+replicas: {{ $q.replicas }}
+admission: {{ $q.admission }}
+nodeSelector: {{ $q.nodeSelector | toJson }}
+tolerations: {{ $q.tolerations | toJson }}
+affinity: {{ $q.affinity | toJson }}
+{{- else if .Values.flow.enabled -}}
+{{- $f := .Values.flow -}}
+enabled: true
+engine: flow
+image: {{ $f.image | toJson }}
+resources: {{ $f.resources | toJson }}
+replicas: {{ $f.replicas }}
+admission: {{ $q.admission }}
+nodeSelector: {{ $f.nodeSelector | toJson }}
+tolerations: {{ $f.tolerations | toJson }}
+affinity: {{ $f.affinity | toJson }}
+{{- else -}}
+enabled: false
+engine: {{ $q.engine }}
+{{- end -}}
+{{- end -}}
+
+{{/*
+What the panel's nginx proxies the query engine to, or empty for "there is none".
 
 Empty is a first-class answer, not a missing value: nginx returns 503 there and
-the Query tab reads that as "the service is not running" and says so, which is
+the Query tab reads that as "the engine is not running" and says so, which is
 the degradation ADR_0008 designed for.
 
-`flow.enabled` is the normal way in and needs no URL — the Service is this
-release's. `panel.flowUpstream` stays for the other case: a Flow service running
-somewhere this chart does not manage. It wins when both are set, because an
-explicit URL is not something to silently ignore.
+`query.enabled` is the normal way in and needs no URL — the Service is this
+release's. `panel.queryUpstream` (or `panel.flowUpstream`, its older name) is for
+the other case: an engine running somewhere this chart does not manage. It wins
+when both are set, because an explicit URL is not something to silently ignore.
 */}}
-{{- define "aiwatcher.flowUpstream" -}}
-{{- if .Values.panel.flowUpstream -}}
-{{- .Values.panel.flowUpstream | trimSuffix "/" -}}
-{{- else if .Values.flow.enabled -}}
-http://{{ include "aiwatcher.fullname" . }}-flow:8081
+{{- define "aiwatcher.queryUpstream" -}}
+{{- $upstream := .Values.panel.queryUpstream | default .Values.panel.flowUpstream -}}
+{{- if $upstream -}}
+{{- $upstream | trimSuffix "/" -}}
+{{- else if (include "aiwatcher.query" . | fromYaml).enabled -}}
+http://{{ include "aiwatcher.fullname" . }}-query:8081
 {{- end -}}
 {{- end -}}
 
@@ -202,18 +249,19 @@ name: {{ include "aiwatcher.fullname" . }}-postgres
 {{- end -}}
 
 {{/*
-Where a managed `flow_php` step runs, or empty for "this deployment runs none".
+Where a managed query step runs, or empty for "this deployment runs none".
 
 Empty is a first-class answer here as it is for the panel's upstream, and it
-means something sharper: a process with no address registers no Flow executor,
-so it never *claims* a `flow_php` attempt. A process that cannot do the work
-takes none of it, rather than failing every attempt it takes.
+means something sharper: a process with no address registers no query executor,
+so it never *claims* a query attempt. A process that cannot do the work takes
+none of it, rather than failing every attempt it takes.
 */}}
-{{- define "aiwatcher.executionFlowUrl" -}}
-{{- if .Values.execution.flowUrl -}}
-{{- .Values.execution.flowUrl | trimSuffix "/" -}}
-{{- else if .Values.flow.enabled -}}
-http://{{ include "aiwatcher.fullname" . }}-flow:8081
+{{- define "aiwatcher.executionQueryUrl" -}}
+{{- $url := .Values.execution.queryUrl | default .Values.execution.flowUrl -}}
+{{- if $url -}}
+{{- $url | trimSuffix "/" -}}
+{{- else if (include "aiwatcher.query" . | fromYaml).enabled -}}
+http://{{ include "aiwatcher.fullname" . }}-query:8081
 {{- end -}}
 {{- end -}}
 
@@ -398,9 +446,13 @@ later as "holds no object".
   value: "postgres://{{ .Values.postgresql.username }}:$(AIWATCHER_WORKFLOW_POSTGRES_PASSWORD)@{{ include "aiwatcher.workflowPostgresEndpoint" . }}/{{ .Values.postgresql.database }}"
 - { name: AIWATCHER_WORKFLOW_POSTGRES_MAX_CONNECTIONS, value: {{ .Values.postgresql.maxConnections | quote }} }
 {{- end }}
-{{- with include "aiwatcher.executionFlowUrl" . }}
-- { name: AIWATCHER_FLOW_URL, value: {{ . | quote }} }
+{{- with include "aiwatcher.executionQueryUrl" . }}
+- { name: AIWATCHER_QUERY_URL, value: {{ . | quote }} }
 {{- end }}
+# The engine a plan has to be written for to start here, which is the engine
+# `query.engine` runs — so switching a release is one value, and the server
+# follows it.
+- { name: AIWATCHER_QUERY_ENGINE, value: {{ (include "aiwatcher.query" . | fromYaml).engine | quote }} }
 {{- with .Values.execution.mlPipelineUrl }}
 - { name: AIWATCHER_ML_PIPELINE_URL, value: {{ . | quote }} }
 {{- end }}

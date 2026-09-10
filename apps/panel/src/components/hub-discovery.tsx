@@ -23,7 +23,7 @@ import {
 import type { HubColumn, HubDataset, HubKind, UsageRights } from '@/api/generated/types.gen';
 import { FlowResultView } from '@/components/flow-preview';
 import { Badge, Button, Card, EmptyState, Spinner } from '@/components/ui/primitives';
-import { runQuery, simulateQuery, type FlowResult } from '@/lib/flow';
+import { runQuery, simulateQuery, type QueryResult } from '@/lib/query';
 import { cn } from '@/lib/utils';
 
 /**
@@ -478,7 +478,7 @@ export function HubDiscovery({
  * is capped by the Flow service — the ceiling this grid needs is one somebody
  * else already enforces.
  */
-function ImageStrip({ result }: { result: FlowResult }) {
+function ImageStrip({ result }: { result: QueryResult }) {
   // Only failure is tracked. A placeholder sits *behind* every tile and the
   // image paints over it when it arrives, so nothing has to observe a `load`
   // event to show a picture — a state machine gated on one renders a permanent

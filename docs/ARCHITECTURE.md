@@ -59,7 +59,7 @@ Around them: `apps/panel` (React), `sdk/python`, `sdk/typescript`, `contracts/`
 Two optional services sit outside the Cargo workspace and the Rust binary does not
 know they exist:
 
-- `services/flow` — the PHP query surface behind the panel's Query tab and a
+- `services/query/flow` — the PHP query surface behind the panel's Query tab and a
   pipeline's transforms. `just flow-check`.
 - `services/ml_pipeline` — the Python notebook runtime behind a pipeline's marimo
   blocks. `just ml-pipeline-check`.

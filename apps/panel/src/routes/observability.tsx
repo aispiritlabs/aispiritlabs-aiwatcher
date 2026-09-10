@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Link, Outlet, createFileRoute } from '@tanstack/react-router';
+import { Outlet, createFileRoute } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 
 import { StreamBadge } from '@/components/status-badge';
@@ -10,22 +10,21 @@ import { publishObservabilityRevision } from '@/lib/observability-revision';
  * The observability area: everything about runs that already happened or are
  * happening now.
  *
- * Four views of one dataset rather than four features. The explorer is the
- * default because it is the one you arrive at with a question; metrics is the
- * one you arrive at without one; the runs table is the flat fallback when you
- * already know the run id.
+ * Its views are listed in `lib/navigation.ts` and drawn by the sidebar; what
+ * this layout owns is the thing they share, which is the stream. One
+ * subscription for the whole area rather than one per view: every tab under it
+ * reads the same read model, and a connection opened and dropped on each tab
+ * switch would replay history every time.
+ *
+ * The Live view opens a *second*, filtered stream of its own. That is not a
+ * duplicate of this one — this one exists to invalidate queries and carries
+ * every event in the system for that purpose, and narrowing it to whatever the
+ * Live view is watching would stop the other four tabs refreshing.
  */
 
 export const Route = createFileRoute('/observability')({
   component: ObservabilityLayout,
 });
-
-const VIEWS = [
-  { to: '/observability/explore', label: 'Explore' },
-  { to: '/observability/metrics', label: 'Metrics' },
-  { to: '/observability/runs', label: 'Runs' },
-  { to: '/observability/query', label: 'Query' },
-] as const;
 
 function ObservabilityLayout() {
   const queryClient = useQueryClient();
@@ -73,29 +72,12 @@ function ObservabilityLayout() {
 
   return (
     <div className="flex flex-col gap-4">
-      <nav className="flex items-center justify-between gap-3 border-b border-border">
-        <div className="flex items-center gap-1">
-          {VIEWS.map(({ to, label }) => (
-            <Link
-              key={to}
-              to={to}
-              // The period carries across the sub-navigation; nothing else does.
-              // Having narrowed to the last fifteen minutes, "now show me the
-              // metrics for it" is the next question, and a tab switch that
-              // silently reset the window would answer a different one. The rest
-              // of the search — the pivot, the open run, a query — belongs to the
-              // view that owns it.
-              search={(previous: { window?: number }) =>
-                previous.window === undefined ? {} : { window: previous.window }
-              }
-              className="-mb-px border-b-2 border-transparent px-3 py-2 text-sm text-muted-foreground transition-colors hover:text-foreground [&.active]:border-primary [&.active]:text-foreground"
-            >
-              {label}
-            </Link>
-          ))}
-        </div>
+      {/* The badge alone, right-aligned: it is the one thing the sidebar
+          cannot say, because whether the connection is live is not a property
+          of which page you are on. */}
+      <div className="flex justify-end">
         <StreamBadge phase={phase} />
-      </nav>
+      </div>
       <Outlet />
     </div>
   );

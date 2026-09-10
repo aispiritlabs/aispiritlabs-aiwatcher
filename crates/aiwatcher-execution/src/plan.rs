@@ -246,8 +246,15 @@ pub struct ResolvedWindow {
     pub to: i64,
 }
 
+/// One query step, whichever engine runs it.
+///
+/// The same three fields for Flow, DataFusion and DuckDB, because every engine
+/// is asked the same question over the same catalog (AW-3); what differs is
+/// the language `script` is written in, and that is the binding's variant.
+/// Serde never sees this struct's name, so renaming it from `FlowStepSpec`
+/// moved no stored plan and no `plan_id`.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
-pub struct FlowStepSpec {
+pub struct QueryStepSpec {
     /// The complete query, compiled here rather than in the browser.
     pub script: String,
     pub source: FlowSourceRef,
@@ -256,6 +263,10 @@ pub struct FlowStepSpec {
     #[serde(default)]
     pub blocks: Vec<String>,
 }
+
+/// The name [`QueryStepSpec`] had while Flow was the only engine, kept so a
+/// Flow step reads as one where it is built.
+pub type FlowStepSpec = QueryStepSpec;
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize, ToSchema)]
 pub struct MarimoStepSpec {

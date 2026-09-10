@@ -2,6 +2,81 @@
   "version": 1,
   "pipelines": [
     {
+      "name": "curation/flow-vs-polars",
+      "description": "One aggregation over the benchmark corpus in Flow PHP, the same one in Polars over the same files, and whether they agree. Needs the corpus: run it under `just bench-curation-serve`, on the server, and read the two steps' times in the Workflows waterfall.",
+      "blocks": [
+        {
+          "id": "corpus",
+          "title": "Benchmark corpus",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "spec": {
+            "kind": "source",
+            "dataset": "corpus_spans",
+            "arguments": {
+              "format": "csv"
+            }
+          }
+        },
+        {
+          "id": "flow",
+          "title": "Flow PHP: per model",
+          "position": {
+            "x": 300,
+            "y": 0
+          },
+          "spec": {
+            "kind": "transform",
+            "steps": "->filter(ref('kind')->same(lit('llm')))\n->groupBy(ref('model'))\n->aggregate(count(ref('span_id')->as('spans')), sum(ref('input_tokens')->as('input_tokens')), sum(ref('output_tokens')->as('output_tokens')), average(ref('duration_ms')->as('avg_duration_ms')))\n->sortBy(ref('model')->asc())"
+          }
+        },
+        {
+          "id": "polars",
+          "title": "Polars: the same query",
+          "position": {
+            "x": 600,
+            "y": 0
+          },
+          "spec": {
+            "kind": "notebook",
+            "notebook": "flow_vs_polars",
+            "params": {
+              "format": "csv"
+            },
+            "revision": "e7312f5e2098512e9cc8001fb812cfd2cb265cd9ac5a06cfa064594d4033b5d5"
+          }
+        },
+        {
+          "id": "result",
+          "title": "View",
+          "position": {
+            "x": 900,
+            "y": 0
+          },
+          "spec": {
+            "kind": "view",
+            "dataset": "curation/flow-vs-polars"
+          }
+        }
+      ],
+      "edges": [
+        {
+          "from": "corpus",
+          "to": "flow"
+        },
+        {
+          "from": "flow",
+          "to": "polars"
+        },
+        {
+          "from": "polars",
+          "to": "result"
+        }
+      ]
+    },
+    {
       "name": "curation/pii-detection",
       "description": "Read a public PII corpus, keep the English rows, mask what a shape detector finds, publish what is left.",
       "blocks": [

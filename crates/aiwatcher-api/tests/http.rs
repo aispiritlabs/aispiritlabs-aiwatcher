@@ -195,6 +195,8 @@ impl Fixture {
         let health = HealthState::new();
         let state = AppState {
             answer_limits: Default::default(),
+            query_engine: aiwatcher_datasets::QueryEngine::Flow,
+            query_step_timeout_seconds: None,
             read_model: Arc::clone(&read_model),
             live: Arc::clone(&live),
             source: Arc::clone(&bus) as _,

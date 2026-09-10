@@ -156,7 +156,35 @@
         }
       }
     },
+    "query": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "engine": {
+          "description": "Which query engine this release runs (AW-3). One per release; switching is this value.",
+          "enum": [
+            "flow",
+            "datafusion",
+            "duckdb"
+          ]
+        },
+        "admission": {
+          "description": "What a DataFusion or DuckDB query may do before it runs. Flow reads neither.",
+          "enum": [
+            "open",
+            "strict"
+          ]
+        },
+        "replicas": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
     "flow": {
+      "description": "The name `query` had while Flow was the only engine, read for one release.",
       "type": "object",
       "properties": {
         "enabled": {

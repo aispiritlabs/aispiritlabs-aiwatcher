@@ -172,6 +172,8 @@ mod tests {
             conversation_id: None,
             workflow_id: None,
             workflow_run_id: None,
+            agent_id: None,
+            service: "planner".to_owned(),
             trace_id,
             span_id: SpanId::derive(trace_id, "run"),
             event_type: EventType::LlmChunk,

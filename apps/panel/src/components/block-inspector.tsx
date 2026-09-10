@@ -5,7 +5,7 @@ import { ExternalLink, RefreshCw, Save, Trash2 } from 'lucide-react';
 import type { BlockSpec, PipelineBlock } from '@/api/generated/types.gen';
 import { Badge, Button, Card, Spinner } from '@/components/ui/primitives';
 import { blockLabel } from '@/components/pipeline-canvas';
-import { fetchDatasets, type FlowDataset } from '@/lib/flow';
+import { fetchDatasets, type QueryDataset } from '@/lib/query';
 import {
   createNotebook,
   getNotebook,
@@ -110,7 +110,7 @@ function SourceSettings({
   onChange: (spec: BlockSpec) => void;
 }) {
   const catalog = useQuery({ queryKey: ['flow', 'datasets'], queryFn: fetchDatasets });
-  const dataset: FlowDataset | undefined = catalog.data?.datasets.find(
+  const dataset: QueryDataset | undefined = catalog.data?.datasets.find(
     (candidate) => candidate.name === spec.dataset,
   );
 
