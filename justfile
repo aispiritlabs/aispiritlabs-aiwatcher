@@ -461,6 +461,13 @@ import-conversation conversation subject basis reference:
 e2e-train:
     ./scripts/e2e-mini-train.py
 
+# A graph's join against a running server: three worker processes, the first
+# killed with SIGKILL between the second completion and the third, and the join
+# fires once from the stream. Under `ai_spirit_agent`'s environment, because the
+# ledger is its code — the sibling path is the coupling AW-2 exists to remove.
+e2e-agent-join:
+    "$(cd ../ai_spirit_agent && pwd)/.venv/bin/python" scripts/e2e-agent-join.py
+
 # It watches the `production` label: moving it reads, verifies and warms the
 # new version while the old one keeps serving, and only then swaps.
 # `POST /v1/rollback` puts the previous one back with nothing to rebuild. Two
