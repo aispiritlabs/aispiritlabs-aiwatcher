@@ -556,13 +556,18 @@ which is the floor `requires-python` claims. The lint set is the one `planner`
 selects, deliberately: the two repositories are worked on together, and a lint
 that fires in one and not the other is a lint people learn to ignore.
 
-`sdk/agentic` is the **third** distribution, `aiwatcher-agentic`: the workflow
-engine agents are built on — messages, deciders, event stores, sagas — moved
-from `ai_spirit_agent`'s `agentic.workflow` (AW-2). Its dependency list is
-empty and nothing in `aiwatcher-sdk` imports it, so importing telemetry never
-imports an engine and the engine never imports a provider stack; where it
-needs something from an agent it declares a protocol (`WorkflowTracer`,
-`AgentRun`) rather than importing the type. Its records keep the wire names
+`sdk/agentic` is the **third** distribution, `aiwatcher-agentic`: what agents
+are built from, moved from `ai_spirit_agent` (AW-2) — the workflow engine
+(`aiwatcher_agentic.workflow`: messages, deciders, event stores, sagas) and the
+agent core beside it (`Agent`, tools, messages, prompt builders). Nothing in
+`aiwatcher-sdk` imports it, so importing telemetry never imports an agent. The
+engine is the standard library alone and the core adds `structlog` and
+`orjson`; what neither may bring is a model stack, so where they need one they
+declare a port — `model.ModelSource` for a model, `tracer.LLMTracer` for a
+tracer, `prompts.PromptSource` for a prompt read by name, `AgentRun` for what
+the engine reads off a turn — and the adapters (`providers`, the MLflow tracer
+and registry) stay with the application. `test_agent_port` fails if importing
+the core pulls a stack in. Its records keep the wire names
 they had before the move — `serialization.WIRE_PREFIX` — because stored rows
 carry them, and `tests/fixtures/records_before_the_move.jsonl` holds it to
 those bytes. `just agentic-check` runs the same four checks on its own lock.

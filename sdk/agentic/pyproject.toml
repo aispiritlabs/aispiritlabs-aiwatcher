@@ -5,14 +5,22 @@ description = "The durable workflow engine agents are built on: messages, decide
 readme = "README.md"
 requires-python = ">=3.13"
 license = "Apache-2.0"
-# None. The engine is messages, a decider, an event store and the loops that
-# drive them, and every one of those is the standard library — SQLite included.
-# That is the dependency profile of anything imported into an agent's process,
-# and a third distribution beside `aiwatcher-sdk` exists to keep it: the agent
-# layer that will join this one brings a provider stack, and neither the engine
-# nor telemetry should carry it. `aiwatcher-sdk` joins this list with the first
-# module here that imports it, not before.
-dependencies = []
+# The engine — `aiwatcher_agentic.workflow` — is the standard library and
+# nothing else, SQLite included. The agent layer beside it (AW-2) adds these
+# two, which it logged and parsed tool calls with before it moved: small,
+# pure, and no model stack. A model stack is what this distribution refuses —
+# an agent reaches one through `model.ModelSource`, whose adapters stay with
+# the application — and `aiwatcher-sdk` joins this list with the first module
+# here that imports it, not before.
+dependencies = [
+  "orjson>=3.11",
+  "structlog>=25.5",
+]
+
+[project.optional-dependencies]
+# `PydanticOutput` imports pydantic when it is used, so an agent whose answers
+# are dataclasses or plain text carries none of it.
+pydantic = ["pydantic>=2.12"]
 
 [build-system]
 requires = ["hatchling"]
@@ -26,6 +34,7 @@ artifacts = ["aiwatcher_agentic/py.typed"]
 [dependency-groups]
 dev = [
   "mypy>=1.18,<2",
+  "pydantic>=2.12,<3",
   "pytest>=8.4,<9",
   "ruff>=0.16.5,<0.17",
 ]
@@ -68,6 +77,12 @@ ignore = ["UP043"]
 python_version = "3.13"
 strict = true
 files = ["aiwatcher_agentic", "tests"]
+
+# `tools.build_hf_json_repairer` imports transformers when it is called, and
+# never at import; a model stack is not something this distribution installs.
+[[tool.mypy.overrides]]
+module = ["transformers", "transformers.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

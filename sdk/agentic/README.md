@@ -1,43 +1,63 @@
 # aiwatcher-agentic
 
-The workflow engine agents are built on: messages, deciders, event stores,
-processors, sagas, and the consumer and turn loops that drive them. It moved
-here from `ai_spirit_agent`'s `agentic.workflow` (AW-2, Phase C), and
-`ai_spirit_agent` re-exports it under that name for one release.
+What an agent is built from, in two layers, both moved here from
+`ai_spirit_agent` (AW-2):
+
+- **`aiwatcher_agentic.workflow`** — the durable workflow engine: messages,
+  deciders, event stores, processors, sagas, and the consumer and turn loops
+  that drive them. It was `agentic.workflow` (Phase C).
+- **the agent core** — `Agent`, tools and toolsets, chat messages, prompt
+  builders, structured output, usage limits and the retry policy. It was the
+  rest of `agentic`'s top level.
+
+`ai_spirit_agent` re-exports both under their old names for one release, as
+the same module objects rather than copies.
 
 ```python
+from aiwatcher_agentic.agent import Agent
 from aiwatcher_agentic.workflow import Decider, InMemoryEventStore, handle_command
 ```
 
-## A distribution of its own, depending on nothing
+## A distribution of its own, carrying no model stack
 
 `aiwatcher-sdk` holds two failure policies — telemetry swallows and counts,
-the registry clients raise — and imports into an agent's process. The engine
-is the third thing an agent imports, and its dependency list is **empty**:
-every module here is the standard library, SQLite included. That is why it is
-not folded into `aiwatcher-sdk` (whose registry half brings `httpx`) and why
-the agent layer that will join it later — a provider stack, MLX on a Mac — is
-not allowed to make it heavier. Nothing in `aiwatcher-sdk` imports this.
-`aiwatcher_sdk.integrations.agentic.AiwatcherEventStore` implements this
+the registry clients raise — and imports into an agent's process. This is the
+third thing an agent imports. The engine is the standard library and nothing
+else, SQLite included; the core adds `structlog` and `orjson`, which it logged
+and parsed tool calls with before it moved. What neither brings is a model:
+`test_agent_port` imports the core in a fresh interpreter and fails if
+`providers`, MLflow, torch, transformers, `httpx` or pydantic came with it.
+Nothing in `aiwatcher-sdk` imports this.
+`aiwatcher_sdk.integrations.agentic.AiwatcherEventStore` implements the
 engine's `EventStore` structurally and names its conflict error by module
 path, so each side still installs without the other.
 
-## What stayed in `agentic`
+## Ports, and what stayed in `ai_spirit_agent`
 
-`agentic.workflow.builder` and the two LLM reactors in
-`agentic.workflow.reactor` wrap a concrete `CoreAgentic`, its `ToolMessage`
-and its usage limits, so they stayed with the agent they wrap. Where the
-engine needs something from an agent it declares what it reads instead of
-importing the type:
+Where this code needs something that would bring a stack with it, it declares
+what it calls instead of importing the thing:
 
-| Protocol | Module | Satisfied by |
+| Port | Module | Satisfied by |
 |---|---|---|
-| `WorkflowTracer` — a workflow span and a step span, nothing that calls a model | `tracer` | `agentic.observability.LLMTracer`, and `NoopWorkflowTracer` |
-| `AgentRun`, `ToolRun`, `AgentPrompt`, `ModelUsage` — the fields a turn's result becomes messages from | `agent_run` | `agentic`'s `AgentResult`, `ToolRunResult`, `PromptSnapshot`, `RequestUsage` |
+| `ModelSource` lends a model for one unit of work; `TextModel` answers a prompt with a `ModelResponse` | `model` | `providers.ModelProvider` and its adapters — MLX, vLLM, SGLang, OpenAI-compatible, ONNX |
+| `LLMTracer` — workflow, agent and step spans, and a model call | `tracer` | `agentic.observability.MlflowLLMTracer`, `aiwatcher_sdk.integrations.agentic.AiwatcherTracer`, `NoopLLMTracer` |
+| `PromptSource` — a prompt's text by name, for `external_prompt_name` | `prompts` | the MLflow prompt registry, which `agentic` names with `use_prompt_source` when it is imported |
+| `WorkflowTracer` — the engine's half of `LLMTracer` | `workflow.tracer` | any `LLMTracer` |
+| `AgentRun`, `ToolRun`, `AgentPrompt`, `ModelUsage` — what the engine reads off a turn | `workflow.agent_run` | `AgentResult`, `ToolRunResult`, `PromptSnapshot`, `RequestUsage` |
 
-`Description`, `TraceSnapshot`, `TracingContext` and `build_trace_snapshot`
-are plain values rather than protocols, so they moved outright and
-`agentic.metadata` / `agentic.observability` re-export the same objects.
+The last row was written while the engine could not import the types it
+describes; with both layers here, `test_agent_port` holds it to `mypy`.
+
+What wraps a concrete model stack stayed with the application that chooses
+one: `CoreAgentic`, `LLMCall` and `VLMCall` build a `providers.ModelProvider`,
+the LLM reactors and `WorkflowBuilder` wrap `CoreAgentic`, and
+`agentic.observability` keeps the MLflow tracer. The application's own agents,
+search integrations, voice and git tracer stay too. `ModelResponse` and
+`TextModel` moved outright, and `providers` re-exports the same objects for
+the adapters that build them.
+
+`tools.build_hf_json_repairer` is the one place that reaches for a model. It
+imports transformers when it is called, never at import, and installs nothing.
 
 ## A wire name does not follow the code
 
@@ -52,8 +72,8 @@ A type an application defines is named by its own module path, as before.
 
 ## Python 3.13
 
-The floor every distribution here shares. The engine ran only on 3.14 before
-it moved, and it called `uuid.uuid7`, which 3.13 does not have — `ids.uuid7`
+The floor every distribution here shares. Both layers ran only on 3.14 before
+they moved. The engine called `uuid.uuid7`, which 3.13 does not have — `ids.uuid7`
 is the standard library's where there is one and RFC 9562's layout where there
 is not. `mypy` runs with `python_version = "3.13"`, which is what found it.
 
