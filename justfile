@@ -476,6 +476,13 @@ import-conversation conversation subject basis reference:
 e2e-train:
     ./scripts/e2e-mini-train.py
 
+# One turn of a composed graph, drawn against the shape it declared: the two
+# searchers the router passed over stay `Pending`, the hand-offs are messages
+# between agents, and an agent's span nests under its node though its tracer
+# publishes through a client of its own. Starts a server of its own.
+e2e-agent-graph:
+    "$(cd ../ai_spirit_agent && pwd)/.venv/bin/python" scripts/e2e-agent-graph.py
+
 # A graph's join against a running server: three worker processes, the first
 # killed with SIGKILL between the second completion and the third, and the join
 # fires once from the stream. Under `ai_spirit_agent`'s environment, because the

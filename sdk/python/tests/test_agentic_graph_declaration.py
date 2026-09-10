@@ -10,8 +10,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+import pytest
+
 from aiwatcher_sdk import AiwatcherClient, NullTransport
-from aiwatcher_sdk.integrations.agentic import as_topology, declare_graph
+from aiwatcher_sdk.integrations.agentic import AiwatcherTracer, as_topology, declare_graph
+from aiwatcher_sdk.integrations.agentic.tracer import current_attempt
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,3 +167,74 @@ def test_a_client_with_no_transport_declares_nothing_and_raises_nothing() -> Non
     client = AiwatcherClient(service="test", transport=NullTransport())
     with declare_graph(client, fan_out(), turn_id="turn-1") as flow, flow.node("planner"):
         pass
+
+
+def of_type(recorder: Recorder, event_type: str) -> list[dict[str, Any]]:
+    return [envelope for envelope in recorder.sent if envelope["event_type"] == event_type]
+
+
+def test_a_span_a_tracer_opens_inside_a_node_names_that_node_as_its_parent() -> None:
+    # Two clients, as a real graph has: the declaration publishes through one
+    # and the agent's tracer through its own. Two queues, so the server cannot
+    # tell from arrival order that the node is still open — the child has to
+    # name its parent, and this is the only thing that makes the waterfall show
+    # a searcher's model call inside the searcher.
+    declared, traced = Recorder(), Recorder()
+    client = AiwatcherClient(service="test", transport=declared)
+    tracer = AiwatcherTracer(client=AiwatcherClient(service="tracer", transport=traced))
+    with (
+        declare_graph(client, fan_out(), turn_id="turn-7") as traversal,
+        traversal.node("search-a", agent_id="search_a"),
+        tracer.workflow(name="search_a", session_id="session"),
+        tracer.agent(name="search_a"),
+    ):
+        pass
+
+    (step,) = of_type(declared, "step.started")
+    (agent,) = of_type(traced, "agent.started")
+    assert agent["parent_span_id"] == step["span_id"]
+    assert agent["run_id"] == step["run_id"]
+    assert agent["workflow_run_id"] == "turn-7"
+    # No root of the tracer's own: the traversal owns the run, as an attempt
+    # does, and a second `run.started` per node would be a trace per agent.
+    assert of_type(traced, "run.started") == []
+
+
+def test_leaving_a_node_hands_the_tracer_its_own_runs_back() -> None:
+    client = AiwatcherClient(service="test", transport=Recorder())
+    with declare_graph(client, fan_out(), turn_id="turn-7") as traversal:
+        with traversal.node("planner"):
+            assert current_attempt.get() is not None
+        assert current_attempt.get() is None
+
+
+def test_a_node_that_raises_fails_its_one_span_and_still_releases_the_tracer() -> None:
+    recorder = Recorder()
+    client = AiwatcherClient(service="test", transport=recorder)
+    with (
+        pytest.raises(RuntimeError, match="no plan"),
+        declare_graph(client, fan_out(), turn_id="turn-7") as traversal,
+        traversal.node("planner"),
+    ):
+        raise RuntimeError("no plan")
+
+    assert current_attempt.get() is None
+    (started,) = of_type(recorder, "step.started")
+    (failed,) = of_type(recorder, "step.failed")
+    assert failed["span_id"] == started["span_id"], "one span, opened and closed"
+    assert recorder.sent[-1]["event_type"] == "run.failed"
+
+
+def test_a_hand_off_is_a_message_from_one_agent_to_the_other_on_the_traversal() -> None:
+    # Between agents, never as an edge of the shape: the edge is what the
+    # composition allowed, the message is what was actually handed on.
+    recorder = Recorder()
+    client = AiwatcherClient(service="test", transport=recorder)
+    with declare_graph(client, fan_out(), turn_id="turn-7") as traversal:
+        traversal.message("planner", "search_a")
+
+    (message,) = of_type(recorder, "agent.message")
+    assert message["data"] == {"from": "planner", "to": "search_a", "kind": "dispatch"}
+    assert message["agent_id"] == "planner"
+    assert message["workflow_id"] == "g-1"
+    assert message["workflow_run_id"] == "turn-7"

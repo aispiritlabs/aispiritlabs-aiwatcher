@@ -30,7 +30,7 @@ import urllib.error
 import urllib.request
 import uuid
 from collections.abc import Generator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -811,6 +811,16 @@ class Scope:
         self._client = client
         self._context = context
 
+    @property
+    def correlation(self) -> Correlation:
+        """The ids whatever opens inside this scope is attributed to.
+
+        A copy, for something that publishes through a client of its own — a
+        tracer, most often — so that what it opens lands inside this scope
+        rather than beside it.
+        """
+        return replace(self._context)
+
 
 class RunContext(Scope):
     @contextlib.contextmanager
@@ -846,6 +856,7 @@ class WorkflowContext(Scope):
         agent_id: str | None = None,
         kind: str = "chain",
         attempt: str | None = None,
+        span_id: str | None = None,
         **payload: Any,
     ) -> Generator[NodeContext, None, None]:
         """One stage. Becomes a span, and a node's status on the graph.
@@ -858,6 +869,13 @@ class WorkflowContext(Scope):
         different values or they fold into one — the projection counts attempts
         by span key, which is derived from this. Generated when omitted, which
         is right for a stage that runs once.
+
+        `span_id` names the stage's span instead of leaving it to the server,
+        and the scope this yields carries it as the parent of whatever opens
+        inside. Only needed when something with a client of its own opens spans
+        in the stage — a tracer: two clients are two queues, so the server
+        cannot tell from arrival order that the stage is still open, and a
+        child has to name its parent.
         """
         context = Correlation(
             run_id=self._context.run_id,
@@ -875,8 +893,12 @@ class WorkflowContext(Scope):
             **payload,
         }
         started = time.monotonic()
-        self._client.emit("step.started", context, base)
-        node = NodeContext(self._client, context, node_id)
+        self._client.emit("step.started", context, base, span_id=span_id)
+        node = NodeContext(
+            self._client,
+            replace(context, parent_span_id=span_id) if span_id else context,
+            node_id,
+        )
         try:
             yield node
         except BaseException as error:
@@ -884,6 +906,7 @@ class WorkflowContext(Scope):
                 "step.failed",
                 context,
                 {**base, "error": str(error), "duration_ms": (time.monotonic() - started) * 1000},
+                span_id=span_id,
             )
             raise
         else:
@@ -891,6 +914,7 @@ class WorkflowContext(Scope):
                 "step.completed",
                 context,
                 {**base, "duration_ms": (time.monotonic() - started) * 1000},
+                span_id=span_id,
             )
 
     @contextlib.contextmanager

@@ -35,7 +35,7 @@ from .event_store import (
     deliver,
     stream_sender,
 )
-from .graph import as_topology, declare_graph
+from .graph import GraphTraversal, as_topology, declare_graph
 from .payloads import (
     FilePayloadStore,
     MemoryPayloadStore,
@@ -56,6 +56,7 @@ __all__ = [
     "AppendResult",
     "ConcurrencyConflictError",
     "FilePayloadStore",
+    "GraphTraversal",
     "JoinTimers",
     "MemoryPayloadStore",
     "MessageCodec",
