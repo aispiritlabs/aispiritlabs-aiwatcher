@@ -62,6 +62,11 @@ spec adds is the repository dimension §40 does not cover.
       1127. `laser-sdk` is gone from `agentic_runtime` and from `uv.lock`, and
       `just e2e-agent-transport`, 11/11, runs lab 6 with it uninstalled: a lost
       hand-off, an agent with no worker, a refused hop and SIGTERM on the way.)
+- [x] The engine is a distribution of its own, on the 3.13 floor, and every
+      stored record still reads. (`aiwatcher-agentic` in `sdk/agentic`, no
+      runtime dependencies, `just agentic-check` green; `agentic.workflow` is
+      the same modules under their old names; a record is written as the same
+      bytes the engine wrote before it moved.)
 
 ## Spec (delta)
 
@@ -223,6 +228,39 @@ durability and the Rust side has one outbox rule with two callers.
 - WHEN it installs and imports `aiwatcher_sdk`
 - THEN neither the provider stack nor an agent dependency is installed
 
+#### Requirement: the engine's records keep their wire names
+A record SHALL be written under the same type name it was written under before
+the engine moved, and a record written then SHALL read back as the engine's
+type. A type an application defines SHALL keep being named by its own module
+path.
+
+##### Scenario: the same record, the same bytes
+- GIVEN a `UserMessage`, an `Event` and an `LLMResponse` serialised by the
+  engine at `ai_spirit_agent`'s last commit with the engine in it
+- WHEN the moved engine serialises the same three records
+- THEN it writes exactly those bytes, `agentic.workflow.messages:UserMessage`
+  included
+
+##### Scenario: an old row reads back
+- GIVEN a row that pre-move engine wrote
+- WHEN the moved engine reads it
+- THEN it is the engine's own type, and writing it again gives the same bytes
+
+##### Scenario: an application's type is its own
+- GIVEN an event type defined outside the engine
+- WHEN it is registered, written and read
+- THEN its wire name is its own module path, not the engine's old prefix
+
+#### Requirement: the old import path is the same code for one release
+`agentic.workflow` SHALL resolve every submodule that moved to the engine's own
+module object, not a copy, for one release.
+
+##### Scenario: one class, whichever path imported it
+- GIVEN `agentic.workflow.messages` and `aiwatcher_agentic.workflow.messages`
+- WHEN both are imported
+- THEN they are one module, and a monkeypatch through the old name reaches the
+  code that runs
+
 ### MODIFIED Requirements
 
 #### Requirement: the Python floor
@@ -339,12 +377,43 @@ answers to "which version did this run use". MLflow keeps tracing, teed.)
   capabilities in the step's parameters; a hop to an agent with no worker waits
   in its queue instead of being refused, which is what liveness was for.
 
+- **The engine is a distribution of its own, and depends on nothing** (Phase C,
+  2026-09-10). `aiwatcher-agentic` in `sdk/agentic`, imported as
+  `aiwatcher_agentic.workflow` — named like `aiwatcher_sdk`, and not `agentic`,
+  because `ai_spirit_agent` still has an `agentic` and has to re-export from
+  it. All 26 files of `agentic.workflow` were read for what they import; what
+  wraps a concrete agent — `builder` and the two LLM reactors, which build a
+  `ToolMessage` and enforce `UsageLimits` — stayed in `agentic`. Where the
+  engine reads an agent it now declares a protocol instead: `WorkflowTracer`
+  (a workflow and a step span, nothing that calls a model) and `AgentRun`,
+  `ToolRun`, `AgentPrompt`, `ModelUsage`. `Description`, `TraceSnapshot`,
+  `TracingContext` and `build_trace_snapshot` are plain values and moved
+  outright. The distribution requirement's "depending on `aiwatcher-sdk`" is
+  deliberately not true yet: nothing in the engine imports it, and the
+  dependency arrives with the first module that does.
+- **A wire name is not an import path** (Phase C). `serialize_record` names a
+  record's type by its module path, and stored rows say `agentic.workflow.…`;
+  moving the module would have changed every record written afterwards and the
+  `contract_name` column. `serialization.WIRE_PREFIX` keeps the engine's own
+  types under the old prefix.
+- **One 3.14-only call** (Phase C). The investigation found nothing 3.14-only;
+  `mypy` at `python_version = "3.13"` found `uuid.uuid7` in `WorkflowRuntime`,
+  which would have raised on 3.13 the first time a runtime minted an id.
+  `ids.uuid7` is the standard library's on 3.14 and RFC 9562's layout below it.
+- **`Generator[T, None, None]` stays the house spelling.** At 3.13 the
+  one-argument form works and ruff's `UP043` would rewrite 22 sites; the reason
+  for the full form went with 3.11, the rule did not, so `UP043` is ignored and
+  the spelling is a separate decision.
+
 ## Still open, deferred to the phase that can answer them
 
-- **Whether `providers` moves whole.** `agentic` imports it directly and
-  `mlx-audio` is darwin-only, which has no business in a Linux worker image.
-  Phase C decides against the real import graph; the likely shape is that the
-  port moves and the MLX adapter stays.
+- **Whether `providers` moves whole.** Not Phase C's question after all: the
+  engine imports nothing from it — only `LLMTracer.llm` named `ModelResponse`,
+  and the engine's tracer protocol has no `llm`. It belongs to the phase that
+  moves `Agent`, where `mlx-audio` being darwin-only still argues for moving
+  the port and leaving the MLX adapter.
+- **The licence.** `ai_spirit_agent` declares MIT; `aiwatcher-agentic` was
+  given the Apache-2.0 of the distributions beside it. The owner's call.
 - **Which `evaluation` scorers move.** The DeepEval bridge is already
   structural here; the MLflow scorers read completions, and this plan moves no
   content.
@@ -352,3 +421,4 @@ answers to "which version did this run use". MLflow keeps tracing, teed.)
 ## Log
 - 2026-09-10 08:07 — spec drafted on `main`; two open questions settled, two deferred
 - 2026-09-10 15:29 — messaging requirement rewritten for Phase F: a hop is a run of the target agent's workflow, a reply is a row in the client's mailbox; four scenarios added
+- 2026-09-10 16:07 — Phase C: two requirements added (the engine's wire names, the old import path for one release) over four scenarios; the engine's cut, its wire names, the one 3.14-only call and the `Generator` spelling settled; `providers` deferred to the phase that moves `Agent`
