@@ -483,6 +483,14 @@ e2e-agent-outbox:
 e2e-agent-standalone:
     "$(cd ../ai_spirit_agent && pwd)/.venv/bin/python" scripts/e2e-agent-standalone.py
 
+# Lab 6's three agents as separate worker processes, talking through aiwatcher
+# with no broker: a hop is a run of the target agent's workflow claimed from its
+# own queue, and the chat's answer comes back through a mailbox. A lost hand-off,
+# an agent with no worker, a refused hop and SIGTERM on the way. It starts a
+# server of its own.
+e2e-agent-transport:
+    "$(cd ../ai_spirit_agent && pwd)/.venv/bin/python" scripts/e2e-agent-transport.py
+
 # It watches the `production` label: moving it reads, verifies and warms the
 # new version while the old one keeps serving, and only then swaps.
 # `POST /v1/rollback` puts the previous one back with nothing to rebuild. Two
