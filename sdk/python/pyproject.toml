@@ -3,7 +3,7 @@ name = "aiwatcher-sdk"
 version = "0.1.0"
 description = "Publish agent-run telemetry to aiwatcher, and read its prompt registry."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 license = "Apache-2.0"
 # Two, and the split is the design. The **telemetry** half — `aiwatcher_sdk`
 # itself, which is what an instrumented agent imports — reaches for neither:
@@ -89,7 +89,7 @@ required-version = ">=0.12.7,<0.13"
 [tool.ruff]
 # The floor of `requires-python`, not the version this happens to be developed
 # on: `UP` rewrites to syntax the oldest supported interpreter must accept.
-target-version = "py311"
+target-version = "py313"
 line-length = 100
 
 [tool.ruff.lint]
@@ -114,12 +114,18 @@ select = [
 # what a thing *is* rather than what it does, which pydocstyle's imperative
 # mood check would turn into a file of "Return the version.".
 
+# `Generator[T, None, None]` is this repository's spelling for a
+# `@contextmanager` (CLAUDE.md). The floor that made it necessary was 3.11; at
+# 3.13 the one-argument form would also do, and changing the house spelling is
+# its own decision rather than a side effect of raising the floor.
+ignore = ["UP043"]
+
 [tool.ruff.lint.per-file-ignores]
 # Tests assert, hard-code throwaway secrets, and bind to localhost.
 "tests/*" = ["S101", "S105", "S106", "S104"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.13"
 strict = true
 files = ["aiwatcher_sdk", "tests"]
 

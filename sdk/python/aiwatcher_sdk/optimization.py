@@ -40,16 +40,11 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Final, Generic, TypeVar
+from typing import Final
 
 from aiwatcher_sdk.prompts import RegistryError
 
 __all__ = ["HELD_OUT_PERCENT", "CaseSplit", "held_out_for", "split_cases"]
-
-#: A ``TypeVar`` rather than PEP 695's ``class CaseSplit[Case]``:
-#: ``requires-python`` is 3.11 and CI runs the floor, the same reason a
-#: ``@contextmanager`` here is annotated ``Generator[T, None, None]``.
-Case = TypeVar("Case")
 
 #: What :func:`split_cases` holds out when the caller names no share.
 #:
@@ -60,7 +55,7 @@ HELD_OUT_PERCENT: Final = 30
 
 
 @dataclass(frozen=True, slots=True)
-class CaseSplit(Generic[Case]):
+class CaseSplit[Case]:
     """The two sides, named for the arguments they are about to become.
 
     ``dev`` and ``test``, spelled exactly as ``record_optimization`` spells
@@ -95,7 +90,7 @@ def held_out_for(group: str, salt: str, held_out: int = HELD_OUT_PERCENT) -> boo
     return int.from_bytes(digest[:8], "big") % 100 >= 100 - held_out
 
 
-def split_cases(
+def split_cases[Case](
     cases: Sequence[Case],
     *,
     key: Callable[[Case], str],

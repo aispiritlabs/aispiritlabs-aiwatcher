@@ -5,15 +5,12 @@ from __future__ import annotations
 import inspect
 from collections.abc import Callable, Mapping
 from functools import update_wrapper
-from typing import Generic, ParamSpec, TypeVar, cast
+from typing import cast
 
 from aiwatcher_sdk.task_errors import TaskError
 
-P = ParamSpec("P")
-R = TypeVar("R")
 
-
-class Task(Generic[P, R]):
+class Task[**P, R]:
     """A named, versioned function. Calling it directly is an ordinary local call.
 
     Only a worker invocation adds execution context, persistence and heartbeats.
@@ -53,7 +50,9 @@ class Task(Generic[P, R]):
         return cast(Callable[..., R], self.fn)(**parameters)
 
 
-def task(name: str | None = None, *, version: str) -> Callable[[Callable[P, R]], Task[P, R]]:
+def task[**P, R](
+    name: str | None = None, *, version: str
+) -> Callable[[Callable[P, R]], Task[P, R]]:
     """Declare a task without adding it to any process-global registry."""
 
     def declare(function: Callable[P, R]) -> Task[P, R]:

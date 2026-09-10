@@ -549,7 +549,7 @@ clients depend on `httpx` and `tenacity`, because they run in training jobs and
 deploy steps rather than in a request path, every method raises, and the retry
 policy is the thing most worth writing once — `aiwatcher_sdk/api.py` is that
 one place. `uv.lock` is committed. `just sdk-check` runs `ruff format --check`,
-`ruff check`, `mypy --strict` and `pytest`; CI runs the same on Python 3.11,
+`ruff check`, `mypy --strict` and `pytest`; CI runs the same on Python 3.13,
 which is the floor `requires-python` claims. The lint set is the one `planner`
 selects, deliberately: the two repositories are worked on together, and a lint
 that fires in one and not the other is a lint people learn to ignore.
@@ -595,8 +595,9 @@ annotation that mentions it (`list[_Context]` in a neighbouring module is a
 private name crossing a module boundary in public). And **a `@contextmanager`
 is annotated `Generator[T, None, None]`, never `Iterator[T]`**: the decorated
 function is a generator, `contextlib` throws exceptions back into it at the
-`yield`, and the three-argument spelling is written out because `Generator[T]`
-needs PEP 696 defaults while `requires-python` is 3.11.
+`yield`, and the three-argument spelling is written out: `Generator[T]` needed
+PEP 696 defaults while the floor was 3.11, and the full form stayed the house
+spelling when it rose to 3.13, which is why ruff's `UP043` is ignored.
 
 `aiwatcher_sdk/annotations` is a **package sliced by noun**, and the slicing
 rule is the Rust one above: a change to what one thing *is* touches one file.

@@ -281,7 +281,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
-      # No `setup-python`: uv installs the interpreter, and `--python 3.11`
+      # No `setup-python`: uv installs the interpreter, and `--python 3.13`
       # below runs the suite on the floor `requires-python` claims rather than
       # on whatever the runner ships.
       # Pinned to an exact version, not a floating major: setup-uv stopped
@@ -301,7 +301,7 @@ jobs:
       - name: python sdk
         working-directory: sdk/python
         run: |
-          uv sync --all-groups --frozen --python 3.11
+          uv sync --all-groups --frozen --python 3.13
           uv run ruff format --check .
           uv run ruff check .
           uv run mypy .

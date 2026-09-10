@@ -59,13 +59,14 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
+import importlib
 import json
 import logging
 import threading
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, Final, Literal, Protocol, TypeAlias
+from typing import Any, Final, Literal, Protocol
 
 from aiwatcher_sdk.api import ApiError, Transport
 from aiwatcher_sdk.outbox import BATCH, Delivery, Outbox, RetryableError, Sender, drain, encode
@@ -100,13 +101,8 @@ STREAM_APPEND: Final = "stream.append"
 #: drain, which is an attempt counted on a row rather than a spin.
 CONFLICT_RETRIES: Final = 3
 
-#: An assignment rather than PEP 695's `type` statement: `requires-python` is
-#: 3.11 and CI runs the floor, the same reason a `@contextmanager` here is
-#: annotated `Generator[T, None, None]`.
-Expectation: TypeAlias = Literal["STREAM_EXISTS", "STREAM_DOES_NOT_EXIST", "NO_CONCURRENCY_CHECK"]
-# A string, so the alias needs no runtime union of a `Literal` and stays
-# readable on the 3.11 floor.
-ExpectedVersion: TypeAlias = "int | Expectation"
+type Expectation = Literal["STREAM_EXISTS", "STREAM_DOES_NOT_EXIST", "NO_CONCURRENCY_CHECK"]
+type ExpectedVersion = int | Expectation
 
 #: What `agentic` spells the three non-numeric expectations. Matched by value
 #: rather than imported, which is what makes this module free of the dependency
@@ -147,15 +143,21 @@ class UndeliveredHopsError(ApiError):
 
 
 def _conflict(stream_name: str, expected: object, current: object) -> Exception:
-    """`agentic`'s conflict error when it is there, and this module's when it is not."""
-    try:  # pragma: no cover - exercised by whichever half is installed
-        from agentic.workflow.errors import (  # type: ignore[import-not-found]
-            ConcurrencyConflictError as Agentic,
-        )
-    except ImportError:
-        return ConcurrencyConflictError(stream_name, expected, current)
-    theirs: Exception = Agentic(stream_name, expected, current)
-    return theirs
+    """The engine's conflict error when it is installed, and this module's when it is not.
+
+    `aiwatcher_agentic` first, which is where the engine lives now;
+    `agentic.workflow.errors` is that same module under the name it had in
+    `ai_spirit_agent`, and is tried second for an agent still on the release
+    before the move. Imported by name, so this module still depends on neither.
+    """
+    for module in ("aiwatcher_agentic.workflow.errors", "agentic.workflow.errors"):
+        try:  # pragma: no cover - exercised by whichever half is installed
+            errors = importlib.import_module(module)
+        except ImportError:
+            continue
+        theirs: Exception = errors.ConcurrencyConflictError(stream_name, expected, current)
+        return theirs
+    return ConcurrencyConflictError(stream_name, expected, current)
 
 
 @dataclass(frozen=True, slots=True)
