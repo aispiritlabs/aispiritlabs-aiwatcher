@@ -476,9 +476,10 @@ e2e-agent-outbox:
     "$(cd ../ai_spirit_agent && pwd)/.venv/bin/python" scripts/e2e-agent-outbox.py
 
 # One agent registered as a workflow of its own and started the way the panel
-# starts one, with no graph anywhere — then again from a schedule saved against
-# it, answering the message it was registered with. The reply stays in the
-# host's payload store; aiwatcher holds its reference.
+# starts one, with no graph anywhere. Its first attempt is lost after its tool
+# wrote, and the retry does not write again; its spans nest under the run; its
+# exchange is archived once, approved and exported as a fine-tuning row. Starts
+# its own server with the archive on, so the one on :8080 is not touched.
 e2e-agent-standalone:
     "$(cd ../ai_spirit_agent && pwd)/.venv/bin/python" scripts/e2e-agent-standalone.py
 
