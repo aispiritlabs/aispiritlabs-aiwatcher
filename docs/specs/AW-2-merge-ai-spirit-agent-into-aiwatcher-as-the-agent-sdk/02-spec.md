@@ -43,8 +43,10 @@ spec adds is the repository dimension §40 does not cover.
 **Success criteria:**
 - [ ] A fan-out of three joins across a worker restart, with no broker running.
 - [ ] An agent starts from `POST /api/v1/executions` with no graph around it.
-- [ ] aiwatcher stopped mid-conversation: the agent keeps answering and every
-      hop arrives exactly once when it returns.
+- [x] aiwatcher stopped mid-conversation: the agent keeps answering and every
+      hop arrives exactly once when it returns. (`just e2e-agent-outbox`, 11/11
+      — through a proxy the script shuts, so the dev server itself is not
+      stopped; a claim is the one thing that waits for it.)
 - [ ] A prompt candidate admitted on a held-out score, and one refused by name.
 - [ ] `just sdk-check` and `make test-agentic` both green; `laser-sdk` is
       absent from the agent SDK's dependencies.
