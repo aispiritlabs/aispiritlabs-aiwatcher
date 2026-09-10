@@ -51,6 +51,9 @@ pub enum Scope {
     Everything,
     Run(String),
     WorkflowRun(String),
+    /// A set of attributes rather than one identifier: what somebody watching
+    /// two agents work is subscribed to. See [`Selection`].
+    Selection(Selection),
 }
 
 impl Scope {
@@ -59,8 +62,75 @@ impl Scope {
             Self::Everything => true,
             Self::Run(run_id) => &event.run_id == run_id,
             Self::WorkflowRun(execution_id) => event.workflow_run_id.as_ref() == Some(execution_id),
+            Self::Selection(selection) => selection.admits(event),
         }
     }
+}
+
+/// The attributes a live subscriber narrowed to.
+///
+/// **Or within a dimension, and across them.** Two agents named is "either of
+/// these two"; an agent and a workflow named is "this agent, in this
+/// workflow". That is the reading somebody building a filter out of chips
+/// expects, and it is the one the explorer's own pivots already imply.
+///
+/// An empty dimension is *absent* rather than "matches nothing" — a filter
+/// nobody set must not empty the stream. An entirely empty selection therefore
+/// admits everything, which is why [`Selection::scope`] hands back
+/// [`Scope::Everything`] instead: the two behave identically and the simpler
+/// one is what the existing subscribers already are.
+///
+/// What is deliberately *not* here is model and tool. Those are span-level
+/// facts assembled from several events (ADR_0003), so an event does not carry
+/// one and a filter promising it would quietly drop everything but the LLM
+/// call itself. The explorer offers those pivots over the read model, where
+/// the span exists; the live channel offers what an event actually knows.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Selection {
+    pub agents: Vec<String>,
+    /// The producing service — the explorer's `runtime` pivot.
+    pub services: Vec<String>,
+    pub workflows: Vec<String>,
+    pub conversations: Vec<String>,
+    pub event_types: Vec<String>,
+}
+
+impl Selection {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.agents.is_empty()
+            && self.services.is_empty()
+            && self.workflows.is_empty()
+            && self.conversations.is_empty()
+            && self.event_types.is_empty()
+    }
+
+    /// The scope this selection is, collapsing the empty one.
+    #[must_use]
+    pub fn scope(self) -> Scope {
+        if self.is_empty() {
+            Scope::Everything
+        } else {
+            Scope::Selection(self)
+        }
+    }
+
+    fn admits(&self, event: &LiveEvent) -> bool {
+        holds(&self.agents, event.agent_id.as_deref())
+            && holds(&self.services, Some(event.service.as_str()))
+            && holds(&self.workflows, event.workflow_id.as_deref())
+            && holds(&self.conversations, event.conversation_id.as_deref())
+            && holds(&self.event_types, Some(event.event_type.as_str()))
+    }
+}
+
+/// One dimension's verdict: unset admits everything, and an event with no
+/// value for a dimension somebody filtered on is not a match.
+fn holds(wanted: &[String], actual: Option<&str>) -> bool {
+    if wanted.is_empty() {
+        return true;
+    }
+    actual.is_some_and(|value| wanted.iter().any(|candidate| candidate == value))
 }
 
 /// A frame in the live stream.
@@ -276,6 +346,8 @@ mod tests {
             conversation_id: None,
             workflow_id: execution.map(|_| "house-import".to_owned()),
             workflow_run_id: execution.map(ToOwned::to_owned),
+            agent_id: None,
+            service: "planner".to_owned(),
             trace_id,
             span_id: SpanId::derive(trace_id, "run"),
             event_type: EventType::LlmChunk,
@@ -404,5 +476,82 @@ mod tests {
             vec!["run-acquire", "run-normalize"],
             "two different runs, one execution"
         );
+    }
+
+    /// The selection fixture: one event, with every dimension set.
+    fn by(agent: &str, service: &str, event_type: EventType) -> LiveEvent {
+        let mut event = live_event(1, "run-1");
+        event.agent_id = Some(agent.to_owned());
+        event.service = service.to_owned();
+        event.event_type = event_type;
+        event
+    }
+
+    #[test]
+    fn an_empty_selection_is_the_unfiltered_stream() {
+        assert_eq!(Selection::default().scope(), Scope::Everything);
+    }
+
+    #[test]
+    fn two_agents_named_admits_either_of_them() {
+        let scope = Selection {
+            agents: vec!["planner".to_owned(), "estimator".to_owned()],
+            ..Selection::default()
+        }
+        .scope();
+
+        assert!(scope.admits(&by("planner", "planner-web", EventType::LlmChunk)));
+        assert!(scope.admits(&by("estimator", "planner-web", EventType::LlmChunk)));
+        assert!(!scope.admits(&by("importer", "planner-web", EventType::LlmChunk)));
+    }
+
+    #[test]
+    fn two_dimensions_named_admits_only_what_matches_both() {
+        // The reading a filter built out of chips implies: "this agent, in
+        // this runtime" — not "either of these two facts".
+        let scope = Selection {
+            agents: vec!["planner".to_owned()],
+            services: vec!["planner-web".to_owned()],
+            ..Selection::default()
+        }
+        .scope();
+
+        assert!(scope.admits(&by("planner", "planner-web", EventType::LlmChunk)));
+        assert!(!scope.admits(&by("planner", "planner-worker", EventType::LlmChunk)));
+        assert!(!scope.admits(&by("estimator", "planner-web", EventType::LlmChunk)));
+    }
+
+    #[test]
+    fn an_event_with_no_agent_is_not_a_match_for_an_agent_filter() {
+        // A run-level event carries no agent. Admitting it because the field
+        // is absent would put the whole run back into a stream somebody
+        // narrowed to one of its agents.
+        let scope = Selection {
+            agents: vec!["planner".to_owned()],
+            ..Selection::default()
+        }
+        .scope();
+
+        assert!(!scope.admits(&live_event(1, "run-1")));
+    }
+
+    #[test]
+    fn a_selection_repeats_a_parameter_rather_than_splitting_one() {
+        let selection = crate::live::SelectionQuery::from_query(Some(
+            "from=7&agent=planner&agent=cost%20estimator&event_type=llm.completed",
+        ));
+
+        assert_eq!(selection.agents, ["planner", "cost estimator"]);
+        assert_eq!(selection.event_types, ["llm.completed"]);
+        assert!(selection.services.is_empty());
+    }
+
+    #[test]
+    fn an_empty_parameter_value_does_not_become_a_filter_nothing_matches() {
+        // `?agent=` is what a cleared control sends, and reading it as "the
+        // agent whose id is the empty string" empties the stream instead.
+        let selection = crate::live::SelectionQuery::from_query(Some("agent="));
+
+        assert!(Selection::from(selection).is_empty());
     }
 }

@@ -1,6 +1,6 @@
 """The service: six control routes, and marimo's own app host under them.
 
-Shaped after `services/flow`, deliberately. Both are optional, both are talked
+Shaped after `services/query/flow`, deliberately. Both are optional, both are talked
 to by the panel directly rather than through the Rust API, and neither is known
 to the aiwatcher binary — so a deployment that runs neither loses two blocks
 from one screen and nothing else (ADR_0008, ADR_0024).

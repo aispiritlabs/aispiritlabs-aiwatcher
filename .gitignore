@@ -26,6 +26,8 @@ __pycache__/
 # toolchain, and pinning that is the point.
 sdk/python/.venv/
 sdk/python/dist/
+sdk/agentic/.venv/
+sdk/agentic/dist/
 .DS_Store
 
 # Runtime state. The write-ahead log and the dead-letter queue from `just run`.

@@ -16,7 +16,7 @@ import { FlowResultView } from '@/components/flow-preview';
 import { HubDiscovery } from '@/components/hub-discovery';
 import { DEFAULT_WINDOW_SECONDS, TimeRange, windowParam } from '@/components/time-range';
 import { Badge, Button, Card, EmptyState, Spinner } from '@/components/ui/primitives';
-import { isFlowAvailable, runQuery, simulateQuery } from '@/lib/flow';
+import { isQueryEngineAvailable, runQuery, simulateQuery } from '@/lib/query';
 import { cn } from '@/lib/utils';
 import { answerOf } from '@/lib/result';
 
@@ -51,7 +51,7 @@ function DatasetsPage() {
 
   const available = useQuery({
     queryKey: ['flow', 'available'],
-    queryFn: isFlowAvailable,
+    queryFn: isQueryEngineAvailable,
     refetchInterval: 10_000,
   });
   const catalog = useQuery({

@@ -27,7 +27,7 @@ just ml-pipeline-edit pii_detection   # marimo's own editor, for a big change
 
 The panel proxies `/ml-pipeline` to it in development
 (`apps/panel/vite.config.ts`). Without it running, the Pipeline view says so and
-every other block still works — the same posture as `services/flow` (ADR_0008).
+every other block still works — the same posture as `services/query/flow` (ADR_0008).
 
 Python 3.14, `uv`-managed. `orjson` carries every staged row and every log line;
 `structlog` writes the console when a person is watching and JSON when nothing

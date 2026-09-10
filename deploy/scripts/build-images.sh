@@ -11,9 +11,10 @@
 # a PHP service that changes on its own schedule. They are deployed together and
 # versioned together, which is what TAG is for.
 #
-# The flow image is the Query tab's backend and the chart leaves it off by
-# default (`flow.enabled`), so --no-flow is there for builds that will not
-# deploy it.
+# The flow image is the Query tab's backend when the release runs Flow, and the
+# chart leaves the engine off by default (`query.enabled`), so --no-flow is
+# there for builds that will not deploy it. It is the `flow` target of
+# deploy/Dockerfile.query, which holds a target per engine (AW-3).
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -70,7 +71,8 @@ docker build "${args[@]+"${args[@]}"}" \
 if $flow; then
   printf '\n▶ %s\n' "$flow_image"
   docker build "${args[@]+"${args[@]}"}" \
-    --file "$ROOT/deploy/Dockerfile.flow" \
+    --file "$ROOT/deploy/Dockerfile.query" \
+    --target flow \
     --tag "$flow_image" \
     "$ROOT"
 fi
@@ -88,5 +90,5 @@ if $flow; then printf '  %s\n' "$flow_image"; fi
 printf '\nInstall with them:\n  AIWATCHER_IMAGE=%saiwatcher AIWATCHER_PANEL_IMAGE=%saiwatcher-panel \\\n    AIWATCHER_FLOW_IMAGE=%saiwatcher-flow AIWATCHER_IMAGE_TAG=%s \\\n    deploy/scripts/install.sh\n' \
   "$prefix" "$prefix" "$prefix" "$TAG"
 if $flow; then
-  printf '\nThe query service is off in the chart until you ask for it:\n  --set flow.enabled=true\n'
+  printf '\nThe query engine is off in the chart until you ask for it:\n  --set query.enabled=true\n'
 fi

@@ -81,7 +81,13 @@ def tracked_files() -> list[Path]:
     out = subprocess.run(
         ["git", "ls-files", *globs], capture_output=True, text=True, check=True
     ).stdout
-    return [Path(p) for p in out.split() if not any(s in p for s in SKIP)]
+    # `ls-files` lists the index, which still holds a file deleted or moved in
+    # the working tree until the change is staged. There is nothing left of one
+    # to lint, and crashing on it would fail every run of `just check` between a
+    # `mv` and a commit.
+    return [
+        Path(p) for p in out.split() if not any(s in p for s in SKIP) and Path(p).exists()
+    ]
 
 
 def main() -> int:

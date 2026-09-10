@@ -253,8 +253,9 @@ pub trait ActivityExecutor: Send + Sync + std::fmt::Debug {
 /// Every executor this process holds, by the runtime it runs.
 ///
 /// A registry rather than a `match`, because which runtimes a process can run
-/// is *configuration*: the work role holds a Flow client only when
-/// `AIWATCHER_FLOW_URL` is set, and a claim filter built from what is actually
+/// is *configuration*: the work role holds a query client only when
+/// `AIWATCHER_QUERY_URL` is set — and only for the engine
+/// `AIWATCHER_QUERY_ENGINE` names — and a claim filter built from what is actually
 /// registered is what stops it claiming work it cannot perform.
 #[derive(Debug, Default)]
 pub struct ExecutorRegistry {

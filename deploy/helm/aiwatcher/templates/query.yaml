@@ -1,0 +1,132 @@
+{{- $q := include "aiwatcher.query" . | fromYaml -}}
+{{- if $q.enabled }}
+{{- $fullname := include "aiwatcher.fullname" . -}}
+{{- if not .Values.panel.enabled -}}
+{{- fail "query.enabled is true but panel.enabled is false. The panel's nginx is the only way a person reaches the engine and the only thing that puts it behind authentication; on its own it would be an unauthenticated query endpoint with nothing calling it." -}}
+{{- end -}}
+# The query engine (services/query, AW-3): Flow PHP, DataFusion or DuckDB —
+# whichever `query.engine` names, one per release.
+#
+# ClusterIP and no ingress path, deliberately. No engine has authentication of
+# its own — Flow's parser bounds what a query can *say*, a Python engine's
+# admission what it may *do*, and neither decides who may ask — so the only
+# things that reach it are the panel's nginx, behind whatever guards the panel's
+# host, and the server's reactor.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-query
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+    app.kubernetes.io/component: query
+    aiwatcher.dev/query-engine: {{ $q.engine }}
+spec:
+  selector:
+    {{- include "aiwatcher.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: query
+  ports:
+    - { name: http, port: 8081, targetPort: http, protocol: TCP }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-query
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+    app.kubernetes.io/component: query
+    aiwatcher.dev/query-engine: {{ $q.engine }}
+spec:
+  replicas: {{ $q.replicas }}
+  selector:
+    matchLabels:
+      {{- include "aiwatcher.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: query
+  template:
+    metadata:
+      labels:
+        {{- include "aiwatcher.selectorLabels" . | nindent 8 }}
+        # Not in the selector — the selector is immutable, and this is here so
+        # deploy/scripts/detect-stack.py can tell aiwatcher's own pods from the
+        # ones it is looking for. See that script.
+        app.kubernetes.io/part-of: aiwatcher
+        app.kubernetes.io/component: query
+        # Also not in the selector, for the same reason: switching engines is a
+        # rollout of this Deployment, not a new one.
+        aiwatcher.dev/query-engine: {{ $q.engine }}
+    spec:
+      automountServiceAccountToken: false
+      {{- include "aiwatcher.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        runAsNonRoot: true
+        # 10001 is the user deploy/Dockerfile.query creates in every engine's
+        # target. fsGroup so the emptyDirs below are writable by it.
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: query
+          image: "{{ $q.image.repository }}:{{ $q.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ $q.image.pullPolicy }}
+          ports:
+            - { name: http, containerPort: 8081, protocol: TCP }
+          env:
+            # Which API a query reads. A dataset is a named route on this
+            # server, not a copy of the data.
+            - { name: AIWATCHER_URL, value: "http://{{ $fullname }}-server:8080" }
+            {{- if ne $q.engine "flow" }}
+            # What a Python query may do before it runs: `open` or `strict`.
+            - { name: AIWATCHER_QUERY_ADMISSION, value: {{ $q.admission | quote }} }
+            {{- end }}
+          # healthz answers 200 whether or not the engine can reach the server,
+          # and says which in the body: the engine is up or down on its own
+          # terms, and a server restart should not take the Query tab's pods out
+          # of rotation. Flow is probed under `/flow`, which every Flow build
+          # serves, for the release in which `/query` is new to it.
+          {{- $healthz := ternary "/flow/healthz" "/query/healthz" (eq $q.engine "flow") }}
+          readinessProbe:
+            httpGet: { path: {{ $healthz }}, port: http }
+            initialDelaySeconds: 3
+            periodSeconds: 20
+          livenessProbe:
+            httpGet: { path: {{ $healthz }}, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            {{- toYaml $q.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            {{- if eq $q.engine "flow" }}
+            # Caddy writes its local CA and its config on startup, and with a
+            # read-only root filesystem these two are the only places it can.
+            - { name: caddy-data, mountPath: /data }
+            - { name: caddy-config, mountPath: /config }
+            {{- end }}
+            # Scratch: a Python engine's `open` admission runs each query in a
+            # directory of its own under here.
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        {{- if eq $q.engine "flow" }}
+        - name: caddy-data
+          emptyDir: {}
+        - name: caddy-config
+          emptyDir: {}
+        {{- end }}
+        - name: tmp
+          emptyDir: {}
+      {{- with $q.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $q.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $q.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

@@ -215,6 +215,18 @@ pub struct LiveEvent {
     pub workflow_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow_run_id: Option<String>,
+    /// Which agent produced it, and which service ran that agent.
+    ///
+    /// Carried for the reason above, one dimension further: watching two
+    /// agents work is a question about a *selection* rather than about one
+    /// run, and it cannot be resolved to run ids when the subscriber connects
+    /// — the interesting run is usually the one that starts next. Resolving it
+    /// in the browser instead would mean receiving every event in the system
+    /// to discard most of them, which is the same mistake as filtering a list
+    /// after downloading it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+    pub service: String,
     pub trace_id: TraceId,
     pub span_id: SpanId,
     pub event_type: EventType,
@@ -234,6 +246,8 @@ impl From<&RecordedEvent> for LiveEvent {
             conversation_id: event.metadata.conversation_id.clone(),
             workflow_id: event.metadata.workflow_id.clone(),
             workflow_run_id: event.metadata.workflow_run_id.clone(),
+            agent_id: event.metadata.agent_id.clone(),
+            service: event.metadata.source.service.clone(),
             trace_id: event.metadata.trace_id,
             span_id: event.metadata.span_id,
             event_type: event.event_type.clone(),

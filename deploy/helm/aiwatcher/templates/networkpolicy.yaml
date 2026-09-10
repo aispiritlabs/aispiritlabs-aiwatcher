@@ -1,4 +1,5 @@
 {{- $fullname := include "aiwatcher.fullname" . -}}
+{{- $q := include "aiwatcher.query" . | fromYaml -}}
 {{- if .Values.networkPolicy.enabled }}
 # Coarse by design. The server's ingest route is how every SDK publishes, and
 # the pods that call it are not known to this chart — they are whatever the
@@ -50,23 +51,24 @@ spec:
         - { protocol: TCP, port: 4318 }
         - { protocol: TCP, port: 4317 }
 {{- end }}
-{{- if .Values.flow.enabled }}
+{{- if $q.enabled }}
 ---
 # Narrow, like RustFS's rule below and unlike the server's. It can be, and it
-# has to be: the query service has one client — the panel's nginx — and no
-# authentication of its own, so "any pod in the namespace" would be a namespace
-# in which anything can query the read model without passing the ingress.
+# has to be: the query engine has one client a person reaches — the panel's
+# nginx — and no authentication of its own, so "any pod in the namespace" would
+# be a namespace in which anything can query the read model without passing the
+# ingress.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ $fullname }}-flow-ingress
+  name: {{ $fullname }}-query-ingress
   labels:
     {{- include "aiwatcher.labels" . | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
       {{- include "aiwatcher.selectorLabels" . | nindent 6 }}
-      app.kubernetes.io/component: flow
+      app.kubernetes.io/component: query
   policyTypes: ["Ingress"]
   ingress:
     - from:
@@ -75,15 +77,15 @@ spec:
               {{- include "aiwatcher.selectorLabels" . | nindent 14 }}
               app.kubernetes.io/component: panel
         {{- if ne .Values.execution.store "none" }}
-        # The other client, and the one that is easy to forget: a managed
-        # `flow_php` step is aiwatcher reaching this service directly, not the
-        # panel proxying a person's query. Without this the reactor's every
-        # attempt is a refused connection, which the retry budget reads as a
-        # transient outage and spends ten attempts on.
+        # The other client, and the one that is easy to forget: a managed query
+        # step is aiwatcher reaching this engine directly, not the panel
+        # proxying a person's query. Without this the reactor's every attempt
+        # is a refused connection, which the retry budget reads as a transient
+        # outage and spends ten attempts on.
         #
         # Which pod that is depends on the role split, so both are listed: the
-        # combined process reaches Flow from `server`, and a split one reaches
-        # it only from `worker` — the whole point of splitting.
+        # combined process reaches the engine from `server`, and a split one
+        # reaches it only from `worker` — the whole point of splitting.
         - podSelector:
             matchLabels:
               {{- include "aiwatcher.selectorLabels" . | nindent 14 }}
@@ -97,6 +99,38 @@ spec:
         {{- end }}
       ports:
         - { protocol: TCP, port: 8081 }
+---
+# The other direction, and new with AW-3. Flow reads the aiwatcher API and
+# nothing else, and its parser is what keeps it that way. A DataFusion or DuckDB
+# query under `open` admission is Python that runs — a notebook's posture — so
+# in a cluster the one place an engine may reach is the server it reads, and
+# DNS to find it. Outside a cluster there is no such fence, which is the cost of
+# `open` ADR_0028 names; `strict` is what closes it there.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-query-egress
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "aiwatcher.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: query
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "aiwatcher.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: server
+      ports:
+        - { protocol: TCP, port: 8080 }
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
 {{- end }}
 {{- if eq .Values.promptStore.mode "install" }}
 ---

@@ -15,10 +15,13 @@ use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 use utoipa::ToSchema;
 
+/// Which query engine a piece of authored text was written for.
+mod engine;
 mod library;
 /// A curation assembled out of blocks rather than written as one script.
 mod pipeline;
 
+pub use engine::{QueryEngine, UnknownEngine};
 pub use library::{BlockTemplate, BlockTemplatePage, SaveBlockTemplateRequest};
 
 pub use pipeline::{
@@ -62,13 +65,17 @@ pub enum RegistryError {
 
 pub type Result<T> = std::result::Result<T, RegistryError>;
 
-/// A saved Flow PHP transformation.
+/// A saved query, in the language of the engine it names.
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct CurationRecipe {
     pub name: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
     pub pipeline: String,
+    /// The engine `pipeline` was written for. Absent is Flow, and stays absent
+    /// when saved, so a revision from before the field keeps its digest.
+    #[serde(default, skip_serializing_if = "QueryEngine::is_flow")]
+    pub engine: QueryEngine,
     /// SHA-256 of the authored fields. The stable identity of this revision.
     pub revision: String,
     #[serde(with = "time::serde::rfc3339")]
@@ -81,6 +88,10 @@ pub struct SaveRecipeRequest {
     #[serde(default)]
     pub description: String,
     pub pipeline: String,
+    /// The engine `pipeline` was written for; absent is Flow. Part of the
+    /// revision only when it is not Flow — see [`QueryEngine`].
+    #[serde(default, skip_serializing_if = "QueryEngine::is_flow")]
+    pub engine: QueryEngine,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
@@ -95,7 +106,7 @@ pub struct RecipePage {
     pub recipes: Vec<CurationRecipe>,
 }
 
-/// What one completed Flow execution contributes to the registry.
+/// What one completed query execution contributes to the registry.
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct PublishDatasetRequest {
     pub name: String,
@@ -106,6 +117,12 @@ pub struct PublishDatasetRequest {
     pub recipe: Option<String>,
     /// The exact script that produced `items`, even when it was not saved first.
     pub pipeline: String,
+    /// The engine `pipeline` is written for; absent is Flow. Without it a
+    /// DataFusion script read months later is text in an unnamed language.
+    /// Part of the version's identity only when it is not Flow, so every
+    /// version published before the field keeps its id.
+    #[serde(default, skip_serializing_if = "QueryEngine::is_flow")]
+    pub engine: QueryEngine,
     #[serde(default)]
     pub columns: Vec<String>,
     pub items: Vec<BTreeMap<String, Value>>,
@@ -166,6 +183,9 @@ pub struct DatasetVersion {
     #[serde(flatten)]
     pub summary: DatasetVersionSummary,
     pub pipeline: String,
+    /// The engine `pipeline` is written for; absent is Flow.
+    #[serde(default, skip_serializing_if = "QueryEngine::is_flow")]
+    pub engine: QueryEngine,
     pub items: Vec<BTreeMap<String, Value>>,
     pub source: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -203,6 +223,9 @@ pub struct DatasetRowsPage {
     pub description: String,
     pub version: DatasetVersionSummary,
     pub pipeline: String,
+    /// The engine `pipeline` is written for; absent is Flow.
+    #[serde(default, skip_serializing_if = "QueryEngine::is_flow")]
+    pub engine: QueryEngine,
     pub source: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window_seconds: Option<u64>,
@@ -255,6 +278,7 @@ impl Registry {
                 name: request.name,
                 description: request.description,
                 pipeline: request.pipeline,
+                engine: request.engine,
                 revision,
                 saved_at: OffsetDateTime::now_utc(),
             },
@@ -288,7 +312,7 @@ impl Registry {
         Ok(RecipePage { recipes })
     }
 
-    /// Store the exact output of one Flow run as a content-addressed version.
+    /// Store the exact output of one query run as a content-addressed version.
     pub async fn publish(&self, request: PublishDatasetRequest) -> Result<PublishedDataset> {
         validate_name(&request.name, "dataset")?;
         if let Some(recipe) = &request.recipe {
@@ -343,6 +367,7 @@ impl Registry {
                     description: request.description.clone(),
                     summary,
                     pipeline: request.pipeline,
+                    engine: request.engine,
                     items: request.items,
                     source: request.source,
                     window_seconds: request.window_seconds,
@@ -467,6 +492,7 @@ impl Registry {
             description: head.description,
             version: summary,
             pipeline: artifact.pipeline,
+            engine: artifact.engine,
             source: artifact.source,
             window_seconds: artifact.window_seconds,
             rows,
@@ -580,13 +606,22 @@ fn dataset_identity(request: &PublishDatasetRequest) -> Result<Vec<u8>> {
     // source window. Two runs of one plan over unchanged rows are therefore
     // one version — which is what makes a rerun idempotent rather than a
     // version history about *when*.
-    serde_json::to_vec(&(
+    //
+    // The engine joins it only when it is not Flow: the same text is a
+    // different execution in another language, and every version published
+    // before the field was Flow and must keep the id it was published under.
+    let executed = (
         &request.pipeline,
         &request.columns,
         &request.items,
         &request.source,
         request.window_seconds,
-    ))
+    );
+    if request.engine.is_flow() {
+        serde_json::to_vec(&executed)
+    } else {
+        serde_json::to_vec(&(executed, request.engine))
+    }
     .map_err(|error| RegistryError::Invalid(error.to_string()))
 }
 
@@ -637,6 +672,7 @@ mod tests {
             name: "production/failed-runs".to_owned(),
             description: "Regression candidates".to_owned(),
             pipeline: pipeline.to_owned(),
+            engine: QueryEngine::Flow,
         }
     }
 
@@ -646,6 +682,7 @@ mod tests {
             description: "Production conversations".to_owned(),
             recipe: Some("production/failed-runs".to_owned()),
             pipeline: pipeline.to_owned(),
+            engine: QueryEngine::Flow,
             columns: vec!["run_id".to_owned()],
             items: vec![BTreeMap::from([(
                 "run_id".to_owned(),
@@ -656,6 +693,63 @@ mod tests {
             produced_by: None,
             execution_id: None,
         }
+    }
+
+    #[tokio::test]
+    async fn a_recipe_saved_before_the_engine_field_keeps_its_revision() {
+        // The bytes the request serialised to before AW-3, written out rather
+        // than rebuilt, so the test cannot agree with a change by construction.
+        let before = digest(
+            br#"{"name":"production/failed-runs","description":"Regression candidates","pipeline":"data_frame()->read(default)"}"#,
+        );
+        let registry = registry();
+
+        let saved = registry
+            .save_recipe(recipe("data_frame()->read(default)"))
+            .await
+            .unwrap();
+        assert_eq!(saved.recipe.revision, before);
+
+        // The same text for another engine is another recipe, not a rename.
+        let other = registry
+            .save_recipe(SaveRecipeRequest {
+                engine: QueryEngine::DataFusion,
+                ..recipe("data_frame()->read(default)")
+            })
+            .await
+            .unwrap();
+        assert_ne!(other.recipe.revision, before);
+        assert_eq!(other.recipe.engine, QueryEngine::DataFusion);
+    }
+
+    #[tokio::test]
+    async fn a_version_published_before_the_engine_field_keeps_its_id() {
+        let request = dataset("data_frame()->read(default)");
+        let before = digest(
+            &serde_json::to_vec(&(
+                &request.pipeline,
+                &request.columns,
+                &request.items,
+                &request.source,
+                request.window_seconds,
+            ))
+            .unwrap(),
+        );
+        let registry = registry();
+
+        let flow = registry.publish(request.clone()).await.unwrap();
+        assert_eq!(flow.dataset.latest.version, before);
+
+        // The same text and the same rows from another engine are a different
+        // execution, and the version says which one it was.
+        let datafusion = registry
+            .publish(PublishDatasetRequest {
+                engine: QueryEngine::DataFusion,
+                ..request
+            })
+            .await
+            .unwrap();
+        assert_ne!(datafusion.dataset.latest.version, before);
     }
 
     #[tokio::test]

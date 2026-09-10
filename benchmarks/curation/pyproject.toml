@@ -1,0 +1,59 @@
+[project]
+name = "aiwatcher-curation-benchmark"
+version = "0.1.0"
+description = "Polars' half of the curation engine benchmark, the generator both halves read, and the harness that checks they agree."
+requires-python = ">=3.14"
+license = "Apache-2.0"
+# Polars is the engine under comparison, so it is pinned to a minor line: a
+# benchmark whose baseline moves on `uv sync` measures two things at once.
+# numpy for the generator only: its PCG64 stream is stable across releases, so
+# a seed names the same 10 GB on every machine.
+dependencies = [
+  # DataFusion and Daft are measured beside Polars (engines_5gb.py): two more
+  # Rust engines behind a Python API, pinned to their minor lines for the same
+  # reason as Polars.
+  "daft>=0.7.24,<0.8",
+  "datafusion>=54,<55",
+  # DuckDB through its relational Python API, no SQL (engines_5gb.py); pandas
+  # only for the example from DuckDB's own documentation. Minor lines, again.
+  "duckdb>=1.5,<1.6",
+  "numpy>=2.3,<3",
+  "pandas>=3,<4",
+  "polars>=1.44,<1.45",
+  # PyArrow as an engine beside Polars and as the format a step hands on
+  # (arrow_exchange.py); pinned to its minor line for the same reason.
+  "pyarrow>=25,<26",
+]
+
+[dependency-groups]
+dev = ["mypy>=1.18,<2", "ruff>=0.16.5,<0.17"]
+
+[tool.uv]
+required-version = ">=0.12.7,<0.13"
+package = false
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "C4", "SIM", "RUF", "PTH", "BLE", "N", "S"]
+# S603/S607: the harness exists to start `php` and `python` subprocesses.
+# RUF001/RUF003: the report it renders is prose, and prose has × and –.
+ignore = ["S603", "S607", "RUF001", "RUF003"]
+
+[tool.ruff.lint.per-file-ignores]
+# The long lines are table-printing f-strings and small Python programs kept as
+# strings, run in their own processes; split, both read worse than they measure.
+"compare_5gb.py" = ["E501"]
+"faster_python.py" = ["E501"]
+"arrow_exchange.py" = ["E501"]
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+# The harness — what generates the corpus, runs the engines and checks their
+# answers — is typed. The one-off comparisons beside it (compare_5gb, faster_python,
+# arrow_exchange, engines_5gb) are measurement drivers whose results live in the
+# README, checked by ruff; mojo/marrow_q2.py runs in marrow's own environment.
+files = ["bench.py", "corpus.py", "generate.py", "polars_bench.py", "in_aiwatcher.py"]

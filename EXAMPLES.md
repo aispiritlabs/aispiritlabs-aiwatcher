@@ -94,7 +94,7 @@ The `extract-agent` row carries the failed run, which is why it is marked.
 ![The Flow PHP query tab](docs/screenshots/query.png)
 
 An optional tab. The pipeline is a Flow PHP `data_frame()` expression over the
-same runs the explorer shows, answered by `services/flow` — a service that is
+same runs the explorer shows, answered by `services/query/flow` — a service that is
 outside the Cargo workspace and that the Rust binary does not know exists.
 
 The query is **parsed, never executed**: `token_get_all()` lexes it, a
@@ -314,7 +314,7 @@ and it needs four names Flow does not have:
 
 Flow ships `count`, `sum`, `average`, `min`, `max` and the collectors — "how
 many" and "how much", and nothing about how a column is *spread*. `median`,
-`stddev`, `variance` and `percentile` are `services/flow`'s own, over
+`stddev`, `variance` and `percentile` are `services/query/flow`'s own, over
 [hi-folks/statistics](https://github.com/Hi-Folks/statistics). What admits them
 is the enum that also implements them, rather than the registry that derives
 Flow's own vocabulary from its signatures — these four are this repository's —

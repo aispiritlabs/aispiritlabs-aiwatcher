@@ -4,7 +4,9 @@
 `event_store` is `agentic.workflow.EventStore` over one hosted execution —
 the shared history a fan-out needs when every agent worker holds its own
 SQLite. `payloads` is where the words go while aiwatcher holds only the
-reference.
+reference. Handed an outbox, the store writes a hop down before it sends it,
+and `deliver` / `stream_sender` are what drains one. `standalone` registers
+one agent as a workflow of its own, with no graph around it.
 
 Neither imports the agent's packages. The tracer matches a protocol
 structurally; the event store is handed its message type through a codec, and
@@ -15,6 +17,7 @@ because that one class is caught by name rather than by shape.
 from __future__ import annotations
 
 from .event_store import (
+    STREAM_APPEND,
     AggregateStreamResult,
     AiwatcherEventStore,
     AppendResult,
@@ -27,7 +30,10 @@ from .event_store import (
     SagaTimers,
     TimerPolicy,
     TimerRequest,
+    UndeliveredHopsError,
     dataclass_codec,
+    deliver,
+    stream_sender,
 )
 from .graph import as_topology, declare_graph
 from .payloads import (
@@ -38,9 +44,12 @@ from .payloads import (
     digest_of,
     encode_payload,
 )
+from .standalone import TURN, Respond, agent_workflow
 from .tracer import AiwatcherTracer, TeeTracer, aiwatcher_tracer, tee
 
 __all__ = [
+    "STREAM_APPEND",
+    "TURN",
     "AggregateStreamResult",
     "AiwatcherEventStore",
     "AiwatcherTracer",
@@ -54,16 +63,21 @@ __all__ = [
     "PayloadStore",
     "ReadAllResult",
     "ReadStreamResult",
+    "Respond",
     "SagaTimers",
     "SealedPayloadStore",
     "TeeTracer",
     "TimerPolicy",
     "TimerRequest",
+    "UndeliveredHopsError",
+    "agent_workflow",
     "aiwatcher_tracer",
     "as_topology",
     "dataclass_codec",
     "declare_graph",
+    "deliver",
     "digest_of",
     "encode_payload",
+    "stream_sender",
     "tee",
 ]

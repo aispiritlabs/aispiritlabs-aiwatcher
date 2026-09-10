@@ -1,6 +1,10 @@
 {{- if .Values.panel.enabled }}
 {{- $fullname := include "aiwatcher.fullname" . -}}
-{{- $flowUpstream := include "aiwatcher.flowUpstream" . -}}
+{{- $queryUpstream := include "aiwatcher.queryUpstream" . -}}
+{{- $q := include "aiwatcher.query" . | fromYaml -}}
+{{- /* The prefix this engine's own routes are under: Flow answers /flow/* in every
+build and /query/* only from AW-3 on; a Python engine answers /query/* alone. */ -}}
+{{- $routes := ternary "/flow/" "/query/" (eq $q.engine "flow") -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -40,22 +44,27 @@ data:
         proxy_set_header Upgrade $http_upgrade;
       }
 
-      location /flow {
-      {{- if $flowUpstream }}
-        # No trailing URI on proxy_pass, so the whole path is passed through:
-        # the service routes on /flow/* itself.
-        proxy_pass {{ $flowUpstream }};
+      {{- /* `/query/` is where the panel asks; `/flow/` is where it asked while Flow
+      was the only engine, kept for one release. */}}
+      {{- range $location := list "/query/" "/flow/" }}
+      location {{ $location }} {
+      {{- if $queryUpstream }}
+        # Rewritten to the prefix the engine serves, so a panel and an engine
+        # from either side of the rename still meet: Flow is asked under /flow/,
+        # which every Flow build serves, and a Python engine under /query/.
+        proxy_pass {{ $queryUpstream }}{{ $routes }};
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         # Above the 30s a query is allowed to take, so a query that hits its own
-        # limit answers with the service's message rather than nginx's 504.
+        # limit answers with the engine's message rather than nginx's 504.
         proxy_read_timeout 120s;
       {{- else }}
-        # No Flow service in this deployment. 503 is what the Query tab reads as
+        # No query engine in this deployment. 503 is what the Query tab reads as
         # "not running"; a 404 would surface as a failed query instead.
         return 503;
       {{- end }}
       }
+      {{- end }}
 
       location / {
         try_files $uri $uri/ /index.html;
@@ -109,7 +118,7 @@ spec:
       annotations:
         # nginx does not watch its own config, and a ConfigMap edit restarts
         # nothing on its own.
-        checksum/config: {{ printf "%s|%s" (toYaml .Values.panel) $flowUpstream | sha256sum | trunc 32 }}
+        checksum/config: {{ printf "%s|%s|%s" (toYaml .Values.panel) $queryUpstream $routes | sha256sum | trunc 32 }}
       labels:
         {{- include "aiwatcher.selectorLabels" . | nindent 8 }}
         # Not in the selector — the selector is immutable, and this is here so

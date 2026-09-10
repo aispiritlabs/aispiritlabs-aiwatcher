@@ -77,3 +77,64 @@ def test_managed_task_tracer_attaches_child_spans_without_a_second_run_lifecycle
     llm = next(event for event in events if event["event_type"] == "llm.started")
     assert agent["parent_span_id"] == "cd" * 8
     assert llm["parent_span_id"] == agent["span_id"]
+
+
+class Recording:
+    def __init__(self) -> None:
+        self.events: list[dict[str, Any]] = []
+
+    def send(self, batch: list[dict[str, Any]]) -> None:
+        self.events.extend(batch)
+
+    def close(self) -> None:
+        pass
+
+
+def test_a_tracer_built_before_any_attempt_nests_what_it_records_under_the_attempt() -> None:
+    # An agent runtime builds its tracer once, long before a worker hands it an
+    # attempt. It used to open a root run of its own for every turn.
+    from aiwatcher_sdk import AiwatcherClient, Correlation
+    from aiwatcher_sdk.integrations.agentic import AiwatcherTracer
+    from aiwatcher_sdk.integrations.agentic.tracer import current_attempt
+
+    transport = Recording()
+    client = AiwatcherClient(service="agent", transport=transport)
+    tracer = AiwatcherTracer(client=client)
+    token = current_attempt.set(
+        Correlation(
+            run_id="exec-1",
+            workflow_id="digest",
+            workflow_run_id="exec-1",
+            correlation_id="exec-1",
+            parent_span_id="cd" * 8,
+        )
+    )
+    try:
+        with tracer.workflow(name="digest", session_id="session"), tracer.agent(name="digest"):
+            tracer.llm(name="model", model="m", messages=[], invoke=lambda: ModelResponse())
+    finally:
+        current_attempt.reset(token)
+    client.close()
+
+    events = transport.events
+    assert not any(event["event_type"].startswith("run.") for event in events)
+    assert {event["run_id"] for event in events} == {"exec-1"}
+    agent = next(event for event in events if event["event_type"] == "agent.started")
+    llm = next(event for event in events if event["event_type"] == "llm.started")
+    assert agent["parent_span_id"] == "cd" * 8
+    assert llm["parent_span_id"] == agent["span_id"]
+
+
+def test_outside_an_attempt_a_tracer_opens_a_run_of_its_own_as_it_always_did() -> None:
+    from aiwatcher_sdk import AiwatcherClient
+    from aiwatcher_sdk.integrations.agentic import AiwatcherTracer
+
+    transport = Recording()
+    client = AiwatcherClient(service="agent", transport=transport)
+    tracer = AiwatcherTracer(client=client)
+    with tracer.workflow(name="digest", session_id="session"), tracer.agent(name="digest"):
+        pass
+    client.close()
+
+    [run] = [event for event in transport.events if event["event_type"] == "run.started"]
+    assert run["run_id"].startswith("session-")

@@ -79,14 +79,16 @@ jobs:
           cache-from: type=gha,scope=panel
           cache-to: type=gha,scope=panel,mode=max
 
-      # The optional query service. Published unconditionally even though the
-      # chart leaves it off (`flow.enabled`): a deployment that turns it on
+      # The optional query engine. Published unconditionally even though the
+      # chart leaves it off (`query.enabled`): a deployment that turns it on
       # should not need a build first, and the image is only pulled where it is.
+      # One Dockerfile, a target per engine (AW-3).
       - name: aiwatcher flow
         uses: docker/build-push-action@v7
         with:
           context: .
-          file: deploy/Dockerfile.flow
+          file: deploy/Dockerfile.query
+          target: flow
           platforms: ${{ env.PLATFORM }}
           push: true
           tags: ${{ steps.meta.outputs.flow }}:${{ steps.meta.outputs.tag }}

@@ -137,7 +137,7 @@ use utoipa::OpenApi;
         aiwatcher_execution::plan::DefinitionKind,
         aiwatcher_execution::plan::DefinitionRevision,
         aiwatcher_execution::plan::RuntimeBinding,
-        aiwatcher_execution::plan::FlowStepSpec,
+        aiwatcher_execution::plan::QueryStepSpec,
         aiwatcher_execution::plan::FlowSourceRef,
         aiwatcher_execution::plan::ResolvedWindow,
         aiwatcher_execution::plan::MarimoStepSpec,

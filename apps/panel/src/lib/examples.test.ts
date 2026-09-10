@@ -107,7 +107,7 @@ describe('the shipped query examples', () => {
   });
 
   it('asks for a distribution with the aggregations this service adds to Flow', () => {
-    // `median`, `stddev` and `percentile` are `services/flow`'s own — Flow
+    // `median`, `stddev` and `percentile` are `services/query/flow`'s own — Flow
     // ships no distribution aggregation at all — so an example naming them is
     // also the thing that would break if that whitelist entry were dropped.
     const spread = QUERY_EXAMPLES.find((example) => example.name === 'titanic/age-and-fare');

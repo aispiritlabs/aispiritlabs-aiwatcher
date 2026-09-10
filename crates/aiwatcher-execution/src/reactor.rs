@@ -151,6 +151,11 @@ impl<S: WorkflowStore> Reactor<S> {
     /// Whatever the store could not do. An executor's failure is not an error
     /// here — it is a `StepFailed` the decider acts on.
     pub async fn poll_once(&self, now: OffsetDateTime) -> Result<Performed, HandleError> {
+        // The one instant this pass has to read *after* the work rather than be
+        // handed before it: when the attempt finished. Measured from `now` on a
+        // monotonic clock, so a test that hands in `at(0)` still gets `at(0)`
+        // plus however long the executor took.
+        let pass = std::time::Instant::now();
         if self.executors.is_empty() {
             return Ok(Performed::Idle);
         }
@@ -180,7 +185,9 @@ impl<S: WorkflowStore> Reactor<S> {
         let outcome = self
             .perform(executor, &claimed.command, &claimed.context, &claimed.row)
             .await;
-        self.settle(*claimed, outcome, now).await
+        let finished_at =
+            now + time::Duration::try_from(pass.elapsed()).unwrap_or(time::Duration::ZERO);
+        self.settle_at(*claimed, outcome, now, finished_at).await
     }
 
     /// Steps 1 and 2: claim an attempt, and get it as far as somebody can
@@ -391,6 +398,26 @@ impl<S: WorkflowStore> Reactor<S> {
         outcome: Result<ActivityResult, StepError>,
         now: OffsetDateTime,
     ) -> Result<Performed, HandleError> {
+        // A worker's result arrives when the work ended, so its request's
+        // instant is both the lease check's and the report's.
+        self.settle_at(claimed, outcome, now, now).await
+    }
+
+    /// [`Self::settle`], with the moment the work ended apart from `now`.
+    ///
+    /// `now` is the instant the lease is re-checked against, unchanged: the
+    /// pass that claimed the attempt renews nothing while it waits, so moving
+    /// that check to a later clock would turn every step longer than the lease
+    /// into `LeaseLost`. `finished_at` is what the outcome is stamped with, and
+    /// through it `step.completed` — the half of a node's duration the fold was
+    /// reading as its start.
+    async fn settle_at(
+        &self,
+        claimed: Claimed,
+        outcome: Result<ActivityResult, StepError>,
+        now: OffsetDateTime,
+        finished_at: OffsetDateTime,
+    ) -> Result<Performed, HandleError> {
         let Claimed {
             row,
             command,
@@ -442,7 +469,7 @@ impl<S: WorkflowStore> Reactor<S> {
         // 7–8: the fact goes into the workflow, and the outbox that publishes
         // it to the log is written in the same transaction. Nothing here
         // publishes; the ordering is ADR_0026's.
-        self.report(&row.key, event, now, "outcome").await?;
+        self.report(&row.key, event, finished_at, "outcome").await?;
 
         Ok(Performed::Reported {
             step_id: row.key.step_id,

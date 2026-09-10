@@ -1,0 +1,17 @@
+{
+  "name": "aiwatcher/curation-benchmark",
+  "description": "Flow PHP's half of the curation engine benchmark: the same queries as polars_bench.py, over the same files.",
+  "type": "project",
+  "license": "MIT",
+  "require": {
+    "php": "~8.3.0 || ~8.4.0 || ~8.5.0",
+    "flow-php/etl": "0.43.*",
+    "flow-php/etl-adapter-csv": "0.43.*",
+    "flow-php/etl-adapter-parquet": "0.43.*"
+  },
+  "config": {
+    "sort-packages": true,
+    "allow-plugins": { "*": false },
+    "platform": { "php": "8.3.0" }
+  }
+}

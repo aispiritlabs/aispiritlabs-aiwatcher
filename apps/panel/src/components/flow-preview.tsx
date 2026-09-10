@@ -2,14 +2,19 @@ import * as React from 'react';
 
 import { Badge, Card, EmptyState } from '@/components/ui/primitives';
 import { VirtualList } from '@/components/virtual-list';
-import { FlowQueryError, FlowUnavailableError, type FlowCheck, type FlowResult } from '@/lib/flow';
+import {
+  QueryError,
+  QueryEngineUnavailableError,
+  type QueryCheck,
+  type QueryResult,
+} from '@/lib/query';
 import { cn, formatCount } from '@/lib/utils';
 
 export function FlowDiagnostics({
   check,
   pending = false,
 }: {
-  check?: FlowCheck;
+  check?: QueryCheck;
   pending?: boolean;
 }) {
   if (!check) return null;
@@ -44,7 +49,7 @@ export function FlowResultView({
   emptyTitle = 'Nothing simulated yet',
   previewImages = false,
 }: {
-  result?: FlowResult;
+  result?: QueryResult;
   error?: Error | null;
   emptyTitle?: string;
   /**
@@ -57,7 +62,7 @@ export function FlowResultView({
    */
   previewImages?: boolean;
 }) {
-  if (error instanceof FlowUnavailableError) {
+  if (error instanceof QueryEngineUnavailableError) {
     return (
       <EmptyState
         title="The Flow service stopped responding"
@@ -65,7 +70,7 @@ export function FlowResultView({
       />
     );
   }
-  if (error instanceof FlowQueryError) {
+  if (error instanceof QueryError) {
     return (
       <Card className="border-danger/40 p-4">
         <p className="text-xs font-medium text-danger">The pipeline was refused</p>

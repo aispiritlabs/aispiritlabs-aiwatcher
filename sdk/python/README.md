@@ -298,8 +298,9 @@ were `_Context`, `_Buffer`, `_Scope`, `_Tick` and `_FlushRequest`.
 A **`@contextmanager` is annotated `Generator`**, never `Iterator`. The
 decorated function really is a generator — `contextlib` throws exceptions back
 into it at the `yield`, which is the half `Iterator` cannot express — and
-`Generator[Foo, None, None]` is written out in full because the one-argument
-spelling needs PEP 696 defaults and `requires-python` here is 3.11.
+`Generator[Foo, None, None]` is written out in full. The one-argument spelling
+needed PEP 696 defaults while the floor was 3.11; it is 3.13 now, and the full
+form stayed the house spelling rather than moving with the floor.
 
 ## Prompt optimisation, with DeepEval
 

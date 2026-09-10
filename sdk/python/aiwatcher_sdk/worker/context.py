@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 
 from aiwatcher_sdk import AiwatcherClient, Correlation, RunContext
 from aiwatcher_sdk.integrations.agentic import AiwatcherTracer
+from aiwatcher_sdk.integrations.agentic.tracer import current_attempt
 from aiwatcher_sdk.worker.assignment import Assignment
 from aiwatcher_sdk.worker.attempt import AttemptAPI
 from aiwatcher_sdk.worker.contract import ArtifactRef, JsonObject, JsonValue, OnTimeout
@@ -58,6 +59,7 @@ class TaskContext:
             correlation_id=assignment.execution_id,
             parent_span_id=assignment.parent_span_id or None,
         )
+        self.correlation = correlation
         self.run = RunContext(client, correlation)
         self.tracer = AiwatcherTracer(client=client, context=correlation)
         self._monotonic = monotonic
@@ -79,15 +81,28 @@ class TaskContext:
         )
 
     @property
+    def step_key(self) -> str:
+        """The same on every attempt of this step, where ``context_id`` is not.
+
+        What a write keyed by it does once however many attempts the step takes:
+        the key a task hands its tools when a retry must not repeat them, and
+        the one a record of the step's outcome is filed under so a retry lands
+        on it rather than beside it.
+        """
+        return f"{self.assignment.execution_id}/{self.assignment.step_id}"
+
+    @property
     def outputs(self) -> list[ArtifactRef]:
         return list(self._outputs.values())
 
     @contextmanager
     def activate(self) -> Generator[TaskContext, None, None]:
         token = current_context.set(self)
+        attempt = current_attempt.set(self.correlation)
         try:
             yield self
         finally:
+            current_attempt.reset(attempt)
             current_context.reset(token)
 
     @property

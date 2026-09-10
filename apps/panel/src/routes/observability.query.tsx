@@ -1,21 +1,21 @@
 import * as React from 'react';
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, Link } from '@tanstack/react-router';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { ChevronDown, ChevronRight, Play } from 'lucide-react';
+import { ChevronDown, ChevronRight, MousePointerClick, Pencil, Play, Radio } from 'lucide-react';
 import { z } from 'zod';
 
+import { STARTER_QUERY } from '@/lib/flow';
 import {
-  FlowQueryError,
-  FlowUnavailableError,
-  STARTER_QUERY,
+  QueryError,
+  QueryEngineUnavailableError,
   checkQuery,
   fetchDatasets,
-  isFlowAvailable,
+  isQueryEngineAvailable,
   runQuery,
-  type FlowCheck,
-  type FlowDataset,
-  type FlowResult,
-} from '@/lib/flow';
+  type QueryCheck,
+  type QueryDataset,
+  type QueryResult,
+} from '@/lib/query';
 import { Badge, Button, Card, EmptyState, Spinner } from '@/components/ui/primitives';
 import {
   DEFAULT_WINDOW_SECONDS,
@@ -25,47 +25,105 @@ import {
   windowSearchSchema,
 } from '@/components/time-range';
 import { VirtualList } from '@/components/virtual-list';
+import { AttributePicker } from '@/components/attribute-picker';
+import {
+  attributeSearchSchema,
+  selectionFromSearch,
+  selectionToSearch,
+} from '@/lib/selection-params';
+import {
+  ATTRIBUTES,
+  EMPTY_DRAFT,
+  METRICS,
+  compile,
+  countMetric,
+  isBlank,
+  sortableColumns,
+  type AttributeId,
+  type Grain,
+  type QueryDraft,
+} from '@/lib/query-builder';
 import { cn, formatCount } from '@/lib/utils';
 import { useObservabilityRevision } from '@/lib/observability-revision';
 
 /**
- * Queries over the same runs the explorer shows, written as a Flow pipeline.
+ * Questions asked of the same runs the explorer shows — clicked, or written.
  *
- * The explorer answers the questions someone thought of when it was built —
- * group by agent, by workflow, by span. This answers the ones nobody thought
- * of, at the cost of writing them out.
+ * **Build** is the one somebody arrives at: attributes come from what has
+ * actually run, the numbers are a checkbox each, and the Flow text is compiled
+ * and shown as it goes. It exists because the price of the editor was three
+ * pieces of trivia — that a run carries `agents` as a list, that a span calls
+ * the same thing `agent_id`, that every column is nullable so the comparison
+ * has to be `same` — none of which is the question anybody came with.
+ * **Write** is the one somebody graduates to, unchanged.
  *
- * ## Why the whole page degrades rather than breaks
+ * The move between them is **one-way**, and the button says so. Build compiles
+ * to text; text does not parse back into chips, because the parser for this
+ * language lives in `services/query/flow/src/Dsl` and a second one here would be
+ * free to rewrite a hand-written query. So the two are never both the truth at
+ * once: in Build the draft is and the text is derived, in Write the reverse.
  *
- * The Flow service is optional and lives outside the Rust binary, so "not
- * running" is a normal state, not a failure. It gets a first-class screen
- * naming the command to start it, and the other three observability views are
- * unaffected either way.
+ * The builder **generates and refuses nothing**. Everything compiled here goes
+ * through `/flow/check` exactly as typed text does, and the diagnostics are the
+ * service's own — the same split the annotation and pipeline canvases make.
  *
- * ## Why the query is in the URL
- *
- * Same reason every filter in this panel is: a query worth running twice is
- * worth sending to someone, and a link that carries the shape but not the query
- * lands the reader somewhere else.
+ * The Flow service is optional, so "not running" is a normal state with a
+ * screen of its own rather than a failure.
  */
 
-const searchSchema = z.object({ ...windowSearchSchema, q: z.string().optional() });
+const searchSchema = z.object({
+  ...windowSearchSchema,
+  ...attributeSearchSchema,
+  mode: z.enum(['build', 'write']).optional(),
+  /** The pipeline, in `write` mode. */
+  q: z.string().optional(),
+  grain: z.enum(['runs', 'spans']).optional(),
+  group: z.array(z.string()).optional(),
+  metric: z.array(z.string()).optional(),
+  /** `runs:desc`. One parameter, because the two halves are never useful apart. */
+  sort: z.string().optional(),
+  limit: z.number().optional(),
+});
 
 export const Route = createFileRoute('/observability/query')({
   validateSearch: searchSchema,
   component: QueryPage,
 });
 
+type Search = z.infer<typeof searchSchema>;
+
+/** The draft the URL is. Reading it here is what makes a builder link work. */
+function draftFromSearch(search: Search): QueryDraft {
+  const [by, direction] = (search.sort ?? '').split(':');
+  return {
+    grain: (search.grain ?? EMPTY_DRAFT.grain) as Grain,
+    filters: selectionFromSearch(search),
+    groupBy: (search.group ?? []) as AttributeId[],
+    metrics: search.metric ?? [],
+    sort: by && (direction === 'asc' || direction === 'desc') ? { by, direction } : undefined,
+    limit: search.limit,
+  };
+}
+
 function QueryPage() {
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
   const windowSeconds = search.window ?? DEFAULT_WINDOW_SECONDS;
-  const [draft, setDraft] = React.useState(search.q ?? STARTER_QUERY);
   const liveRevision = useObservabilityRevision();
+
+  const mode = search.mode ?? (search.q ? 'write' : 'build');
+  const draft = React.useMemo(() => draftFromSearch(search), [search]);
+  const built = React.useMemo(() => compile(draft), [draft]);
+
+  // In `build` the text is derived and the editor is a preview; in `write` the
+  // editor holds the truth. One state either way, so Run never has to ask
+  // which of two things it is running.
+  const [written, setWritten] = React.useState(search.q ?? STARTER_QUERY);
+  const pipeline = mode === 'build' ? built : written;
 
   const available = useQuery({
     queryKey: ['flow', 'available'],
-    queryFn: isFlowAvailable,
+    queryFn: isQueryEngineAvailable,
     // Cheap, and it is how the page recovers once the service is started.
     refetchInterval: 10_000,
   });
@@ -79,14 +137,18 @@ function QueryPage() {
   // The window scopes the datasets the query reads, not the query itself: the
   // service forwards it to the aiwatcher routes that take one and leaves the
   // per-run `events` route alone. The first run is explicit; after that the
-  // executed pipeline follows backend events just like the other tabs. Edits
-  // in the textarea do not take effect until Run is pressed again.
+  // executed pipeline follows backend events just like the other tabs.
   const lastPipeline = React.useRef<string | null>(null);
   const query = useMutation({
-    mutationFn: (pipeline: string) => runQuery(pipeline, windowParam(windowSeconds)),
-    onSuccess: (_, pipeline) => {
-      lastPipeline.current = pipeline;
-      void navigate({ search: (previous) => ({ ...previous, q: pipeline }), replace: true });
+    mutationFn: (text: string) => runQuery(text, windowParam(windowSeconds)),
+    onSuccess: (_, text) => {
+      lastPipeline.current = text;
+      // Only `write` mode writes the text back: in `build` the URL already
+      // holds the draft that produced it, and storing both would be two
+      // representations of one query, free to disagree on the next reload.
+      if (mode === 'write') {
+        void navigate({ search: (previous) => ({ ...previous, q: text }), replace: true });
+      }
     },
   });
 
@@ -106,13 +168,14 @@ function QueryPage() {
   }, [liveRevision, query.isPending, query.mutate]);
 
   // Checking is cheap — it parses and validates columns without calling
-  // aiwatcher at all — so it runs as you type rather than only on Run. The
-  // debounce is what keeps it from firing per keystroke.
-  const [settled, setSettled] = React.useState(draft);
+  // aiwatcher at all — so it runs as the query changes rather than only on
+  // Run. The debounce is what keeps it from firing per keystroke, and it
+  // covers the builder too: dragging a limit is as chatty as typing.
+  const [settled, setSettled] = React.useState(pipeline);
   React.useEffect(() => {
-    const timer = setTimeout(() => setSettled(draft), 400);
+    const timer = setTimeout(() => setSettled(pipeline), 400);
     return () => clearTimeout(timer);
-  }, [draft]);
+  }, [pipeline]);
 
   const check = useQuery({
     queryKey: ['flow', 'check', settled],
@@ -123,7 +186,7 @@ function QueryPage() {
     retry: false,
   });
 
-  const submit = React.useCallback(() => query.mutate(draft), [query, draft]);
+  const submit = React.useCallback(() => query.mutate(pipeline), [query, pipeline]);
 
   // Cmd/Ctrl+Enter runs it. A Run button alone makes iterating on a query feel
   // like filling in a form.
@@ -133,6 +196,24 @@ function QueryPage() {
       submit();
     }
   };
+
+  const patch = React.useCallback(
+    (next: Partial<Search>) => void navigate({ search: (previous) => ({ ...previous, ...next }) }),
+    [navigate],
+  );
+
+  const editDraft = React.useCallback(
+    (next: QueryDraft) =>
+      patch({
+        ...selectionToSearch(next.filters),
+        grain: next.grain,
+        group: next.groupBy.length > 0 ? next.groupBy : undefined,
+        metric: next.metrics.length > 0 ? next.metrics : undefined,
+        sort: next.sort ? `${next.sort.by}:${next.sort.direction}` : undefined,
+        limit: next.limit,
+      }),
+    [patch],
+  );
 
   if (available.isLoading) {
     return <p className="text-sm text-muted-foreground">Looking for the query service…</p>;
@@ -154,12 +235,7 @@ function QueryPage() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          <TimeRange
-            value={windowSeconds}
-            onChange={(seconds) =>
-              void navigate({ search: (previous) => ({ ...previous, window: seconds }) })
-            }
-          />
+          <TimeRange value={windowSeconds} onChange={(seconds) => patch({ window: seconds })} />
           <Button onClick={submit} disabled={query.isPending} className="gap-2">
             {query.isPending ? <Spinner /> : <Play className="h-3.5 w-3.5" />}
             Run
@@ -168,29 +244,316 @@ function QueryPage() {
         </div>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[1fr_minmax(16rem,22rem)]">
+      <div className="grid gap-4 lg:grid-cols-[minmax(15rem,19rem)_1fr]">
         <div className="flex flex-col gap-4">
           <Card className="overflow-hidden">
-            <textarea
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              onKeyDown={onKeyDown}
-              spellCheck={false}
-              rows={12}
-              className="id w-full resize-y bg-transparent p-3 outline-none"
+            <div className="border-b border-border p-2 text-xs font-medium">Attributes</div>
+            <GrainToggle
+              grain={draft.grain}
+              onChange={(grain) => editDraft({ ...draft, grain })}
+              disabled={mode === 'write'}
             />
+            <div className={cn('max-h-[24rem] overflow-y-auto', mode === 'write' && 'opacity-50')}>
+              <AttributePicker
+                attributes={ATTRIBUTES}
+                value={draft.filters}
+                onChange={(filters) => editDraft({ ...draft, filters })}
+                windowSeconds={windowSeconds}
+                unavailable={(attribute) =>
+                  attribute.reach[draft.grain] ? undefined : attribute.unavailable
+                }
+              />
+            </div>
           </Card>
 
-          <Diagnostics check={check.data} pending={check.isFetching} stale={settled !== draft} />
-
-          <Result state={query} />
+          <Card className="overflow-hidden">
+            <Schemas datasets={datasets.data?.datasets ?? []} maxRows={datasets.data?.max_rows} />
+          </Card>
         </div>
 
-        <Card className="overflow-hidden">
-          <Schemas datasets={datasets.data?.datasets ?? []} maxRows={datasets.data?.max_rows} />
-        </Card>
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <ModeToggle
+              mode={mode}
+              onBuild={() => patch({ mode: 'build', q: undefined })}
+              onWrite={() => {
+                // The compiled text becomes the written one, so nothing is
+                // lost crossing over — and `mode` is what makes it one-way.
+                setWritten(built);
+                patch({ mode: 'write', q: built });
+              }}
+            />
+            <WatchLive draft={draft} windowSeconds={windowSeconds} />
+          </div>
+
+          {mode === 'build' ? <Shape draft={draft} onChange={editDraft} /> : null}
+
+          <Card className="overflow-hidden">
+            {mode === 'build' ? (
+              <>
+                <div className="flex items-center justify-between border-b border-border px-3 py-1.5 text-xs text-muted-foreground">
+                  <span>The pipeline this builds</span>
+                  <span>read-only until you take it into the editor</span>
+                </div>
+                <pre className="id max-h-[22rem] overflow-auto p-3 text-muted-foreground">
+                  {built}
+                </pre>
+              </>
+            ) : (
+              <textarea
+                value={written}
+                onChange={(event) => setWritten(event.target.value)}
+                onKeyDown={onKeyDown}
+                spellCheck={false}
+                rows={14}
+                className="id w-full resize-y bg-transparent p-3 outline-none"
+              />
+            )}
+          </Card>
+
+          <Diagnostics check={check.data} pending={check.isFetching} stale={settled !== pipeline} />
+
+          <Result state={query} blank={mode === 'build' && isBlank(draft)} />
+        </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * Runs or spans.
+ *
+ * Named "grain" rather than "dataset" because that is the word the query
+ * service's own catalog uses for it, and because what it decides is what one
+ * row *is* — which is the thing that makes model and tool reachable and
+ * runtime and session not.
+ */
+function GrainToggle({
+  grain,
+  onChange,
+  disabled,
+}: {
+  grain: Grain;
+  onChange: (grain: Grain) => void;
+  disabled: boolean;
+}) {
+  return (
+    <div className="flex items-center gap-1 border-b border-border px-2 py-1.5">
+      <span className="mr-1 text-[11px] text-muted-foreground">One row per</span>
+      {(['runs', 'spans'] as const).map((candidate) => (
+        <button
+          key={candidate}
+          type="button"
+          disabled={disabled}
+          onClick={() => onChange(candidate)}
+          className={cn(
+            'rounded-full border px-2 py-0.5 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+            grain === candidate
+              ? 'border-primary bg-primary/10 text-foreground'
+              : 'border-border text-muted-foreground hover:text-foreground',
+          )}
+        >
+          {candidate === 'runs' ? 'run' : 'span'}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function ModeToggle({
+  mode,
+  onBuild,
+  onWrite,
+}: {
+  mode: 'build' | 'write';
+  onBuild: () => void;
+  onWrite: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-1">
+      <button
+        type="button"
+        onClick={onBuild}
+        className={cn(
+          'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-sm transition-colors',
+          mode === 'build'
+            ? 'bg-accent text-foreground'
+            : 'text-muted-foreground hover:text-foreground',
+        )}
+      >
+        <MousePointerClick className="h-3.5 w-3.5" />
+        Build
+      </button>
+      <button
+        type="button"
+        onClick={onWrite}
+        title={
+          mode === 'build'
+            ? 'Takes the compiled pipeline into the editor. There is no way back — the builder cannot read a query it did not write.'
+            : undefined
+        }
+        className={cn(
+          'flex items-center gap-1.5 rounded-md px-2.5 py-1 text-sm transition-colors',
+          mode === 'write'
+            ? 'bg-accent text-foreground'
+            : 'text-muted-foreground hover:text-foreground',
+        )}
+      >
+        <Pencil className="h-3.5 w-3.5" />
+        Write
+      </button>
+    </div>
+  );
+}
+
+/**
+ * The same filter, followed as it happens.
+ *
+ * A link rather than a mode on this page: the two answer different questions —
+ * this one aggregates what the read model retains, that one tails the log —
+ * and a toggle would imply the table refreshes into the feed.
+ */
+function WatchLive({ draft, windowSeconds }: { draft: QueryDraft; windowSeconds: number }) {
+  return (
+    <Link
+      to="/observability/live"
+      search={{ ...selectionToSearch(draft.filters), window: windowSeconds }}
+      className="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
+    >
+      <Radio className="h-3.5 w-3.5" />
+      Watch live
+    </Link>
+  );
+}
+
+/** What the rows are grouped into, and what is counted for each group. */
+function Shape({ draft, onChange }: { draft: QueryDraft; onChange: (next: QueryDraft) => void }) {
+  const groupable = ATTRIBUTES.filter((attribute) => attribute.reach[draft.grain]);
+  const metrics = METRICS.filter((metric) => metric.grains.includes(draft.grain));
+  const count = countMetric(draft.grain);
+  const columns = sortableColumns(draft);
+  const sort = draft.sort ?? { by: columns[0] ?? '', direction: 'desc' as const };
+
+  const toggle = <T,>(list: T[], item: T) =>
+    list.includes(item) ? list.filter((candidate) => candidate !== item) : [...list, item];
+
+  return (
+    <Card className="flex flex-col gap-3 p-3">
+      <Row label="Group by">
+        {groupable.map((attribute) => (
+          <Chip
+            key={attribute.id}
+            label={attribute.label}
+            on={draft.groupBy.includes(attribute.id)}
+            onClick={() => onChange({ ...draft, groupBy: toggle(draft.groupBy, attribute.id) })}
+          />
+        ))}
+        {draft.groupBy.length === 0 ? (
+          <span className="text-[11px] text-muted-foreground">
+            nothing grouped — the rows come back as they are
+          </span>
+        ) : null}
+      </Row>
+
+      {draft.groupBy.length > 0 ? (
+        <Row label="Report">
+          {/* The grain's count is on and cannot come off: `aggregate()` with
+              nothing in it is a refusal, and a list of group keys with no
+              number beside it is a second question. */}
+          <Chip label={count.label} on locked />
+          {metrics
+            .filter((metric) => metric.id !== count.id)
+            .map((metric) => (
+              <Chip
+                key={metric.id}
+                label={metric.label}
+                on={draft.metrics.includes(metric.id)}
+                onClick={() => onChange({ ...draft, metrics: toggle(draft.metrics, metric.id) })}
+              />
+            ))}
+        </Row>
+      ) : null}
+
+      <Row label="Sort by">
+        <select
+          value={sort.by}
+          onChange={(event) =>
+            onChange({ ...draft, sort: { by: event.target.value, direction: sort.direction } })
+          }
+          className="rounded-md border border-border bg-transparent px-2 py-0.5 text-xs"
+        >
+          {columns.map((column) => (
+            <option key={column} value={column}>
+              {column}
+            </option>
+          ))}
+        </select>
+        <Chip
+          label={sort.direction === 'desc' ? 'descending' : 'ascending'}
+          on
+          onClick={() =>
+            onChange({
+              ...draft,
+              sort: { by: sort.by, direction: sort.direction === 'desc' ? 'asc' : 'desc' },
+            })
+          }
+        />
+        <span className="ml-2 text-[11px] text-muted-foreground">at most</span>
+        <input
+          type="number"
+          min={1}
+          max={10_000}
+          value={draft.limit ?? ''}
+          placeholder="all"
+          onChange={(event) =>
+            onChange({
+              ...draft,
+              limit: event.target.value ? Number(event.target.value) : undefined,
+            })
+          }
+          className="w-20 rounded-md border border-border bg-transparent px-2 py-0.5 text-xs"
+        />
+        <span className="text-[11px] text-muted-foreground">rows</span>
+      </Row>
+    </Card>
+  );
+}
+
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="w-[4.5rem] shrink-0 text-[11px] text-muted-foreground">{label}</span>
+      {children}
+    </div>
+  );
+}
+
+function Chip({
+  label,
+  on,
+  locked,
+  onClick,
+}: {
+  label: string;
+  on: boolean;
+  locked?: boolean;
+  onClick?: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={locked}
+      onClick={onClick}
+      className={cn(
+        'rounded-full border px-2 py-0.5 text-xs transition-colors',
+        on
+          ? 'border-primary bg-primary/10 text-foreground'
+          : 'border-border text-muted-foreground hover:text-foreground',
+        locked && 'cursor-default opacity-70',
+      )}
+    >
+      {label}
+    </button>
   );
 }
 
@@ -210,7 +573,7 @@ function Diagnostics({
   pending,
   stale,
 }: {
-  check: FlowCheck | undefined;
+  check: QueryCheck | undefined;
   pending: boolean;
   stale: boolean;
 }) {
@@ -286,14 +649,17 @@ function ServiceMissing() {
 
 function Result({
   state,
+  blank,
 }: {
   state: {
     isPending: boolean;
     error: Error | null;
-    data: FlowResult | undefined;
+    data: QueryResult | undefined;
   };
+  /** Nothing has been narrowed yet, so the empty state can say what to click. */
+  blank: boolean;
 }) {
-  if (state.error instanceof FlowUnavailableError) {
+  if (state.error instanceof QueryEngineUnavailableError) {
     return (
       <EmptyState
         title="The query service stopped responding"
@@ -302,7 +668,7 @@ function Result({
     );
   }
 
-  if (state.error instanceof FlowQueryError) {
+  if (state.error instanceof QueryError) {
     return (
       <Card className="border-danger/40 p-4">
         <p className="text-xs font-medium text-danger">The query was refused</p>
@@ -322,7 +688,11 @@ function Result({
     return (
       <EmptyState
         title="Nothing run yet"
-        hint="Edit the pipeline and press Run. The starter query groups runs by agent."
+        hint={
+          blank
+            ? 'Pick an attribute on the left, or something to group by, then press Run.'
+            : 'Press Run. The pipeline below is what will be sent.'
+        }
       />
     );
   }
@@ -330,7 +700,7 @@ function Result({
   return <ResultTable result={state.data} />;
 }
 
-function ResultTable({ result }: { result: FlowResult }) {
+function ResultTable({ result }: { result: QueryResult }) {
   if (result.rows.length === 0) {
     return <EmptyState title="No rows" hint="The pipeline ran and matched nothing." />;
   }
@@ -417,7 +787,7 @@ function Cell({ value }: { value: unknown }) {
 }
 
 /** The columns each dataset has. Writing a query against an undocumented shape is guesswork. */
-function Schemas({ datasets, maxRows }: { datasets: FlowDataset[]; maxRows?: number }) {
+function Schemas({ datasets, maxRows }: { datasets: QueryDataset[]; maxRows?: number }) {
   return (
     <div className="flex max-h-[38rem] flex-col">
       <div className="border-b border-border p-2 text-xs font-medium">Datasets</div>
@@ -438,7 +808,7 @@ function Schemas({ datasets, maxRows }: { datasets: FlowDataset[]; maxRows?: num
   );
 }
 
-function DatasetSchema({ dataset }: { dataset: FlowDataset }) {
+function DatasetSchema({ dataset }: { dataset: QueryDataset }) {
   const [open, setOpen] = React.useState(dataset.name === 'runs');
 
   return (

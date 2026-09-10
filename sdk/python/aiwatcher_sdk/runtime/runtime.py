@@ -37,6 +37,13 @@ class Runtime:
     ``placement`` maps workflow refs to pool names. Capacity is local to this
     runtime process; it is not a global workflow limit or a Kubernetes replica
     count. Workflow factories receive shared services once during setup.
+
+    ``on_close`` is what the application's own composition root releases: the
+    agent runtime whose stores flush on close, say. The runtime owns it from the
+    moment it is handed over — it is called after the workers have stopped, so
+    no task is still inside it, and before telemetry closes, so what it reports
+    on the way out is still sent. It is called once, and also when this
+    constructor refuses, because the caller has already handed it over.
     """
 
     def __init__(
@@ -51,7 +58,9 @@ class Runtime:
         telemetry: AiwatcherClient | None = None,
         client: httpx.Client | None = None,
         poll_interval: float = 1.0,
+        on_close: Callable[[], None] | None = None,
     ) -> None:
+        self._on_close = on_close
         if not name.strip():
             raise ValueError("a runtime needs a name")
         if poll_interval <= 0:
@@ -87,6 +96,7 @@ class Runtime:
             if any(not tasks for tasks in self._tasks.values()):
                 raise ValueError("every execution pool must host at least one workflow")
         except BaseException:
+            self._release()
             if self._owns_telemetry:
                 self.services.telemetry.close()
             raise
@@ -312,6 +322,10 @@ class Runtime:
             if self._closed:
                 return
             self._closed = True
+            try:
+                self._release()
+            except BaseException as error:  # noqa: BLE001 — cleanup every owned resource
+                self._errors.append(error)
             if self._control is not None:
                 try:
                     self._control.close()
@@ -324,6 +338,11 @@ class Runtime:
                     self._errors.append(error)
             if self._errors:
                 raise BaseExceptionGroup("runtime workers failed", self._errors)
+
+    def _release(self) -> None:
+        release, self._on_close = self._on_close, None
+        if release is not None:
+            release()
 
     def __enter__(self) -> Self:
         return self

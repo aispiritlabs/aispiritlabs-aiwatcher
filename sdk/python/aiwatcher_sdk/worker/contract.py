@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Literal, NotRequired, TypeAlias, TypedDict, cast
+from typing import Literal, NotRequired, TypedDict, cast
 
 from aiwatcher_sdk.task_errors import FailureClass
 
-JsonValue: TypeAlias = "bool | int | float | str | list[JsonValue] | dict[str, JsonValue] | None"
-JsonObject: TypeAlias = dict[str, JsonValue]
+type JsonValue = bool | int | float | str | list[JsonValue] | dict[str, JsonValue] | None
+type JsonObject = dict[str, JsonValue]
 ArtifactKind = Literal["rows", "code", "preview", "log", "model", "report", "blob"]
 
 
@@ -118,7 +118,7 @@ class Failed:
         return {"outcome": "failed", "class": self.classification, "message": self.message}
 
 
-OnTimeout: TypeAlias = "Fail | Skip | Answer"
+type OnTimeout = Fail | Skip | Answer
 
 
 @dataclass(frozen=True)
@@ -194,4 +194,4 @@ class InputAnswer:
         )
 
 
-Report: TypeAlias = Completed | Failed | Parked
+type Report = Completed | Failed | Parked

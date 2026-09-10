@@ -281,7 +281,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
-      # No `setup-python`: uv installs the interpreter, and `--python 3.11`
+      # No `setup-python`: uv installs the interpreter, and `--python 3.13`
       # below runs the suite on the floor `requires-python` claims rather than
       # on whatever the runner ships.
       # Pinned to an exact version, not a floating major: setup-uv stopped
@@ -290,7 +290,9 @@ jobs:
         with:
           version: '0.12.7'
           enable-cache: true
-          cache-dependency-glob: sdk/python/uv.lock
+          cache-dependency-glob: |
+            sdk/python/uv.lock
+            sdk/agentic/uv.lock
 
       - name: typescript sdk typecheck
         working-directory: sdk/typescript
@@ -301,7 +303,18 @@ jobs:
       - name: python sdk
         working-directory: sdk/python
         run: |
-          uv sync --all-groups --frozen --python 3.11
+          uv sync --all-groups --frozen --python 3.13
+          uv run ruff format --check .
+          uv run ruff check .
+          uv run mypy .
+          uv run pytest -q
+
+      # The workflow engine agents are built on (AW-2). A distribution of its
+      # own with no runtime dependencies, so it is checked on its own lock.
+      - name: agentic engine
+        working-directory: sdk/agentic
+        run: |
+          uv sync --all-groups --frozen --python 3.13
           uv run ruff format --check .
           uv run ruff check .
           uv run mypy .

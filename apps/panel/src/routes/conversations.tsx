@@ -1,4 +1,4 @@
-import { Link, Outlet, createFileRoute } from '@tanstack/react-router';
+import { Outlet, createFileRoute } from '@tanstack/react-router';
 
 /**
  * The conversation archive: the only area here that shows content, and the
@@ -15,32 +15,17 @@ import { Link, Outlet, createFileRoute } from '@tanstack/react-router';
  * both reviewed before they are frozen; what differs is that this one holds
  * somebody's words, which is why it is encrypted and why it expires. See
  * ADR_0021.
+ *
+ * Its views are listed in `lib/navigation.ts` and drawn by the sidebar, so
+ * this layout is a pass-through: a second tab row here would be the same
+ * four links, one level in, disagreeing with the first one the day somebody
+ * adds a page to only one of them.
  */
 
 export const Route = createFileRoute('/conversations')({
   component: ConversationsLayout,
 });
 
-const VIEWS = [
-  { to: '/conversations/review', label: 'Review' },
-  { to: '/conversations/corpora', label: 'Corpora' },
-] as const;
-
 function ConversationsLayout() {
-  return (
-    <div className="flex flex-col gap-4">
-      <nav className="flex items-center gap-1 border-b border-border">
-        {VIEWS.map(({ to, label }) => (
-          <Link
-            key={to}
-            to={to}
-            className="-mb-px border-b-2 border-transparent px-3 py-2 text-sm text-muted-foreground transition-colors hover:text-foreground [&.active]:border-primary [&.active]:text-foreground"
-          >
-            {label}
-          </Link>
-        ))}
-      </nav>
-      <Outlet />
-    </div>
-  );
+  return <Outlet />;
 }

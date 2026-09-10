@@ -179,11 +179,16 @@ async fn block_context(
     // Compiled with no window, because a revision has no run and therefore no
     // resolved bounds. The consequence is stated on `ContextSnapshot::plan_id`:
     // this is the plan the definition compiles to, not the one a run pinned.
-    let plan = compile_curation(&pipeline, CompileOptions::default()).map_err(|error| {
-        ApiError::PlanRefused {
-            summary: format!("{name} at {revision} does not compile"),
-            problems: error.problems().to_vec(),
-        }
+    // The step timeout is configuration rather than a run's, so it is carried:
+    // left at the default it would name a different plan from every run.
+    let options = CompileOptions {
+        engine: state.query_engine,
+        query_timeout_seconds: state.query_step_timeout_seconds,
+        ..CompileOptions::default()
+    };
+    let plan = compile_curation(&pipeline, options).map_err(|error| ApiError::PlanRefused {
+        summary: format!("{name} at {revision} does not compile"),
+        problems: error.problems().to_vec(),
     })?;
 
     ContextSnapshot::of_block(&plan, &block_id)

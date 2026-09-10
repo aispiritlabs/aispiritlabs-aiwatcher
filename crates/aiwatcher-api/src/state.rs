@@ -152,6 +152,15 @@ pub struct AppState {
     pub schedules: Option<Arc<aiwatcher_execution::ScheduleStore>>,
     /// Authored Python workflows, versioned outside execution retention.
     pub workflow_definitions: Option<Arc<aiwatcher_execution::definition::DefinitionRegistry>>,
+    /// The query engine this deployment runs (`AIWATCHER_QUERY_ENGINE`). Read
+    /// by the compile that starts runs, so a plan written for another engine
+    /// is refused when it is started rather than left for nothing to claim.
+    pub query_engine: aiwatcher_datasets::QueryEngine,
+    /// The query step timeout a compiled plan carries, when configuration
+    /// sets one (`AIWATCHER_QUERY_STEP_TIMEOUT_SECONDS`). `None` is the
+    /// compiler's own five minutes. Read by the one compile that starts runs,
+    /// so a scheduled run and a clicked one carry the same limit.
+    pub query_step_timeout_seconds: Option<u64>,
     /// Vector image annotations and the training exports built from them.
     /// Same store, third prefix, and the same reason all three are here rather
     /// than on the log: a training label has to outlive every run that used

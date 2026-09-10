@@ -95,9 +95,7 @@ class ApprovalStep:
         return tuple(dict.fromkeys((*self.after, *(item.step for item in self.inputs))))
 
 
-# A plain alias rather than a `type` statement: that is 3.12, and
-# `requires-python` is 3.11.
-Step = WorkflowStep | ApprovalStep
+type Step = WorkflowStep | ApprovalStep
 
 
 @dataclass(frozen=True)

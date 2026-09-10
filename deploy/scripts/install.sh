@@ -101,8 +101,11 @@ Environment:
   AIWATCHER_IMAGE, AIWATCHER_IMAGE_TAG      override the server image
                                             (tag defaults to the checkout's commit)
   AIWATCHER_PANEL_IMAGE                     override the panel image
-  AIWATCHER_FLOW_IMAGE                      override the query service image
-  AIWATCHER_FLOW=true                       install the optional query service
+  AIWATCHER_QUERY=true                      install the optional query engine
+  AIWATCHER_QUERY_ENGINE                    which one: flow (default), datafusion, duckdb
+  AIWATCHER_QUERY_IMAGE                     override that engine's image
+  AIWATCHER_FLOW=true, AIWATCHER_FLOW_IMAGE the older names of the two above, for Flow;
+                                            read for one release
   AIWATCHER_IMAGE_PULL_SECRET               pull Secret for private images
   IMAGE_PULL_SECRET                         planner-compatible fallback
   AIWATCHER_DOMAIN                          publish an ingress on this host;
@@ -238,21 +241,40 @@ fi
 if [[ -n ${AIWATCHER_IMAGE:-} ]]; then
   sets+=(--set "image.repository=$AIWATCHER_IMAGE")
 fi
+# Every engine's image carries the commit's tag, and `flow.image` too, for an
+# environment file still on the older name: whichever engine a release runs, it
+# runs the build this checkout produced.
 if [[ -n ${AIWATCHER_IMAGE_TAG:-} ]]; then
   sets+=(--set "image.tag=$AIWATCHER_IMAGE_TAG" --set "panel.image.tag=$AIWATCHER_IMAGE_TAG" \
+    --set "query.images.flow.tag=$AIWATCHER_IMAGE_TAG" \
+    --set "query.images.datafusion.tag=$AIWATCHER_IMAGE_TAG" \
+    --set "query.images.duckdb.tag=$AIWATCHER_IMAGE_TAG" \
     --set "flow.image.tag=$AIWATCHER_IMAGE_TAG")
 fi
 if [[ -n ${AIWATCHER_PANEL_IMAGE:-} ]]; then
   sets+=(--set "panel.image.repository=$AIWATCHER_PANEL_IMAGE")
 fi
-if [[ -n ${AIWATCHER_FLOW_IMAGE:-} ]]; then
-  sets+=(--set "flow.image.repository=$AIWATCHER_FLOW_IMAGE")
+query_engine="${AIWATCHER_QUERY_ENGINE:-}"
+if [[ -n $query_engine ]]; then
+  [[ $query_engine =~ ^(flow|datafusion|duckdb)$ ]] \
+    || fail "AIWATCHER_QUERY_ENGINE is '$query_engine'; the engines are flow, datafusion, duckdb"
+  sets+=(--set "query.engine=$query_engine")
 fi
-# Naming the image is not the same as asking for the service: a build script
+# `AIWATCHER_FLOW_IMAGE` is Flow's image under its older name; it names nothing
+# for another engine, so it is applied to Flow's and never to the one chosen.
+query_image="${AIWATCHER_QUERY_IMAGE:-}"
+if [[ -n $query_image ]]; then
+  sets+=(--set "query.images.${query_engine:-flow}.repository=$query_image")
+fi
+if [[ -n ${AIWATCHER_FLOW_IMAGE:-} ]]; then
+  sets+=(--set "query.images.flow.repository=$AIWATCHER_FLOW_IMAGE" \
+    --set "flow.image.repository=$AIWATCHER_FLOW_IMAGE")
+fi
+# Naming the image is not the same as asking for the engine: a build script
 # that exports all three should not turn the Query tab on by itself. The chart
-# defaults to off and this is the one switch.
-if [[ ${AIWATCHER_FLOW:-} == "true" ]]; then
-  sets+=(--set "flow.enabled=true")
+# defaults to off and this is the one switch, under either name.
+if [[ ${AIWATCHER_QUERY:-} == "true" || ${AIWATCHER_FLOW:-} == "true" ]]; then
+  sets+=(--set "query.enabled=true")
 fi
 image_pull_secret="${AIWATCHER_IMAGE_PULL_SECRET:-${IMAGE_PULL_SECRET:-}}"
 if [[ -n $image_pull_secret ]]; then

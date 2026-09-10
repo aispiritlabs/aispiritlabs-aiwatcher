@@ -1,0 +1,88 @@
+[project]
+name = "aiwatcher-agentic"
+version = "0.1.0"
+description = "The durable workflow engine agents are built on: messages, deciders, event stores, sagas."
+readme = "README.md"
+requires-python = ">=3.13"
+license = "Apache-2.0"
+# The engine — `aiwatcher_agentic.workflow` — is the standard library and
+# nothing else, SQLite included. The agent layer beside it (AW-2) adds these
+# two, which it logged and parsed tool calls with before it moved: small,
+# pure, and no model stack. A model stack is what this distribution refuses —
+# an agent reaches one through `model.ModelSource`, whose adapters stay with
+# the application — and `aiwatcher-sdk` joins this list with the first module
+# here that imports it, not before.
+dependencies = [
+  "orjson>=3.11",
+  "structlog>=25.5",
+]
+
+[project.optional-dependencies]
+# `PydanticOutput` imports pydantic when it is used, so an agent whose answers
+# are dataclasses or plain text carries none of it.
+pydantic = ["pydantic>=2.12"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["aiwatcher_agentic"]
+# PEP 561, for the SDK's reason: without the marker every consumer sees `Any`.
+artifacts = ["aiwatcher_agentic/py.typed"]
+
+[dependency-groups]
+dev = [
+  "mypy>=1.18,<2",
+  "pydantic>=2.12,<3",
+  "pytest>=8.4,<9",
+  "ruff>=0.16.5,<0.17",
+]
+
+[tool.uv]
+required-version = ">=0.12.7,<0.13"
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+
+[tool.ruff.lint]
+# The SDK's set, so a lint that fires in one distribution fires in the other.
+select = [
+  "E",
+  "F",
+  "I",
+  "UP",
+  "B",
+  "C4",
+  "SIM",
+  "RUF",
+  "ASYNC",
+  "PTH",
+  "BLE",
+  "N",
+  "S",
+]
+
+# `Generator[T, None, None]` is this repository's spelling for a
+# `@contextmanager` (CLAUDE.md). The floor that made it necessary was 3.11; at
+# 3.13 the one-argument form would also do, and changing the house spelling is
+# its own decision rather than a side effect of raising the floor.
+ignore = ["UP043"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+files = ["aiwatcher_agentic", "tests"]
+
+# `tools.build_hf_json_repairer` imports transformers when it is called, and
+# never at import; a model stack is not something this distribution installs.
+[[tool.mypy.overrides]]
+module = ["transformers", "transformers.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

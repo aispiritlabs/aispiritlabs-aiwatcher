@@ -27,6 +27,7 @@ pub mod flow;
 pub mod marimo;
 pub mod measure;
 pub mod publish;
+pub mod query;
 pub mod scheduler;
 pub mod timers;
 
@@ -232,13 +233,14 @@ pub fn spawn(
 
         // One registry per address, merged: each executor's "no address is a
         // working state" stays local to it, and a deployment may run managed
-        // Flow steps and no notebooks or the other way round.
+        // query steps and no notebooks or the other way round. The query half
+        // is the one engine `AIWATCHER_QUERY_ENGINE` names.
         let executors =
-            flow::executors(config, artifacts).merge(marimo::executors(config, artifacts));
+            query::executors(config, artifacts).merge(marimo::executors(config, artifacts));
         if executors.is_empty() {
             tracing::info!(
                 "the work role holds no runtime executor; nothing is claimed \
-                 (AIWATCHER_FLOW_URL, AIWATCHER_ML_PIPELINE_URL)"
+                 (AIWATCHER_QUERY_URL, AIWATCHER_ML_PIPELINE_URL)"
             );
         } else {
             tasks.reactors.push((

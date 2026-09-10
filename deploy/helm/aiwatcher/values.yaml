@@ -212,15 +212,17 @@ panel:
     tag: ""
     pullPolicy: IfNotPresent
 
-  # Where nginx proxies /flow. Leave it empty and set `flow.enabled` below to
-  # run the query service in this release — the upstream is then this release's
-  # own Service. This field is for the other case: a Flow service that already
-  # runs somewhere this chart does not manage. It wins over `flow.enabled` when
-  # both are set.
+  # Where nginx proxies the query engine — `/query/`, and `/flow/` for one
+  # release. Leave it empty and set `query.enabled` below to run the engine in
+  # this release — the upstream is then this release's own Service. This field
+  # is for the other case: an engine that already runs somewhere this chart does
+  # not manage. It wins over `query.enabled` when both are set.
   #
-  # Empty with `flow.enabled` false means nginx answers 503 there, which the
-  # Query tab reads as "the service is not running" rather than as a failed
-  # query.
+  # Empty with no engine enabled means nginx answers 503 there, which the Query
+  # tab reads as "the engine is not running" rather than as a failed query.
+  queryUpstream: ""
+  # The name `queryUpstream` had while Flow was the only engine. Read for one
+  # release; `queryUpstream` wins when both are set.
   flowUpstream: ""
 
   resources:
@@ -230,47 +232,92 @@ panel:
     limits:
       memory: 128Mi
 
-# ── Flow query service ───────────────────────────────────────────────────────
+# ── Query engine ─────────────────────────────────────────────────────────────
 #
-# The PHP service behind the panel's Query tab (services/flow, ADR_0008). Off
-# by default, and separate from the binary on purpose: aiwatcher has no idea it
-# exists, so a deployment without it answers 503 on /flow — which that tab reads
-# as "the service is not running" — while the other three observability views
-# are unaffected.
+# The engine behind the panel's Query tab, its recipes and its curation
+# transforms, and what a managed query step runs against (services/query,
+# ADR_0008, AW-3). One per release: `engine` is `flow` (Flow PHP, the default),
+# `datafusion` or `duckdb`, and switching is this one value — the server's
+# AIWATCHER_QUERY_ENGINE follows it, so a plan written for another engine is
+# refused when it is started rather than left for nothing to claim.
 #
-# It has no authentication of its own; the parser bounds what a query may *say*,
-# not who may ask. So the panel's nginx is the only thing that reaches it, which
-# is what puts it behind whatever guards the panel's host. The Service is
-# ClusterIP, it gets no ingress path, and with networkPolicy.enabled the only
-# pod allowed in is the panel's.
+# Off by default, and separate from the binary on purpose: aiwatcher has no idea
+# it exists, so a deployment without it answers 503 on /query — which that tab
+# reads as "the engine is not running" — while every other view is unaffected.
 #
-# Turning this on is enough — the panel derives the upstream from it, and
-# panel.flowUpstream stays for the case where the service runs somewhere this
-# chart does not manage.
-flow:
+# No engine has authentication of its own. So the panel's nginx and the server's
+# reactor are the only things that reach it: the Service is ClusterIP, it gets
+# no ingress path, and with networkPolicy.enabled those two are the pods let in
+# — and the server is the only place it may reach, because a DataFusion or
+# DuckDB query under `open` admission is Python that runs.
+query:
   enabled: false
 
-  image:
-    repository: ghcr.io/example/aiwatcher-flow
-    # Empty means .Chart.AppVersion.
-    tag: ""
-    pullPolicy: IfNotPresent
+  # flow | datafusion | duckdb
+  engine: flow
 
-  # A second replica would work — the service keeps nothing between requests —
-  # but this backs one tab that a person opens now and then, and each replica is
-  # a PHP runtime sitting idle the rest of the time.
+  # open | strict, read by the two Python engines. `open` runs a query the way a
+  # notebook runs, in a child process with ceilings and no credentials; `strict`
+  # admits only the engine's own vocabulary before anything runs. Flow is always
+  # parsed rather than executed, and reads neither.
+  admission: open
+
+  images:
+    flow:
+      repository: ghcr.io/example/aiwatcher-flow
+      # Empty means .Chart.AppVersion.
+      tag: ""
+      pullPolicy: IfNotPresent
+    datafusion:
+      repository: ghcr.io/example/aiwatcher-query-datafusion
+      tag: ""
+      pullPolicy: IfNotPresent
+    duckdb:
+      repository: ghcr.io/example/aiwatcher-query-duckdb
+      tag: ""
+      pullPolicy: IfNotPresent
+
+  # A second replica would work — no engine keeps anything between requests —
+  # but this backs a tab a person opens now and then, and each replica is a
+  # runtime sitting idle the rest of the time.
   replicas: 1
 
-  # ADR_0008 measured a query at 17 MB peak and ~210 ms. The requests are the
-  # runtime's floor rather than the query's cost; the limit is headroom for the
-  # 1000-row ceiling the service enforces.
+  # Per engine, because what a query costs is the engine's. Flow: ADR_0008
+  # measured 17 MB peak and ~210 ms, and its limit is headroom for the 1000-row
+  # ceiling. DataFusion and DuckDB: measured over a 5 GB corpus at 280 MiB and
+  # 677 MiB peak (benchmarks/curation), and AW-3 holds that neither passes
+  # 1 GiB — so that is their limit.
+  resources:
+    flow:
+      requests: { cpu: 50m, memory: 96Mi }
+      limits: { memory: 384Mi }
+    datafusion:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits: { memory: 1Gi }
+    duckdb:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits: { memory: 1Gi }
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# The name `query` had while Flow was the only engine, read for one release.
+# `flow.enabled` with `query.enabled` off renders the Flow engine from these
+# values exactly as it rendered before; with both on, `query` wins.
+flow:
+  enabled: false
+  image:
+    repository: ghcr.io/example/aiwatcher-flow
+    tag: ""
+    pullPolicy: IfNotPresent
+  replicas: 1
   resources:
     requests:
       cpu: 50m
       memory: 96Mi
     limits:
       memory: 384Mi
-
   nodeSelector: {}
   tolerations: []
   affinity: {}
@@ -308,12 +355,32 @@ execution:
   # and the inbox that recognises a redelivery goes with the stream.
   retentionDays: 0
 
-  # Where a `flow_php` step runs. Empty derives it from `flow.enabled`, the same
-  # way the panel's upstream is derived; set it when the service runs somewhere
-  # this chart does not manage.
+  # What an answer to a parked step may be.
   #
-  # A process with no address here registers no Flow executor and therefore
-  # claims no `flow_php` attempt — absence is a working state, not a failure.
+  # A step that stops to ask is resumed by a *new* attempt which re-runs the
+  # work and reads every answer given so far, so they accumulate and nothing
+  # takes any away. An agent approving each tool call adds one per turn.
+  #
+  # `maxAnswersPerStep` is the ceiling; 0 means none, which is a deployment
+  # saying so rather than a default nobody chose. The point of a ceiling is not
+  # the disk — it is that a task looping on its own question is stopped while
+  # the refusal can still name what is wrong, instead of surfacing later as the
+  # store refusing a message that has grown too large.
+  #
+  # `maxAnswerBytes` bounds one answer. An answer is a decision, not data: rows
+  # reach a step as an artifact.
+  maxAnswersPerStep: 256
+  maxAnswerBytes: 65536
+
+  # Where a query step runs: the engine `query.engine` names. Empty derives it
+  # from `query.enabled`, the same way the panel's upstream is derived; set it
+  # when the engine runs somewhere this chart does not manage.
+  #
+  # A process with no address here registers no query executor and therefore
+  # claims no query attempt — absence is a working state, not a failure.
+  queryUrl: ""
+  # The name `queryUrl` had while Flow was the only engine. Read for one
+  # release; `queryUrl` wins when both are set.
   flowUrl: ""
 
   # Whether to run the API and the worker as two Deployments (section 27).

@@ -59,7 +59,7 @@ Around them: `apps/panel` (React), `sdk/python`, `sdk/typescript`, `contracts/`
 Two optional services sit outside the Cargo workspace and the Rust binary does not
 know they exist:
 
-- `services/flow` — the PHP query surface behind the panel's Query tab and a
+- `services/query/flow` — the PHP query surface behind the panel's Query tab and a
   pipeline's transforms. `just flow-check`.
 - `services/ml_pipeline` — the Python notebook runtime behind a pipeline's marimo
   blocks. `just ml-pipeline-check`.
@@ -103,6 +103,27 @@ contract:
 | `file` | one process, development. Refuses a second process by name. |
 | `postgres` | production. `just postgres-up`, `just test-postgres`. |
 | `duckdb` | a local instance you can query while it runs: `aiwatcher sql`. |
+
+`AIWATCHER_WORKFLOW_RETENTION_DAYS` is unset by default and `0` keeps rather
+than deletes: the stream is a run's *explanation* and the one thing the event
+log does not carry, so this is the only copy. Set it longer than the log's own
+retention — the inbox that recognises a redelivery goes with the stream.
+
+A step may stop to ask somebody something, and the answer schedules a **new**
+attempt that re-runs the work and reads every answer given so far. They
+accumulate and nothing takes any away, so an agent approving each tool call adds
+one per turn:
+
+| Variable | Default | What it bounds |
+|---|---|---|
+| `AIWATCHER_MAX_ANSWERS_PER_STEP` | 256 | How many times one step may be answered. `0` is no ceiling. |
+| `AIWATCHER_MAX_ANSWER_BYTES` | 65536 | One answer's JSON. An answer is a decision; rows reach a step as an artifact. |
+
+Both are checked on the answer route rather than in `decide`, which reads no
+configuration — a replay on an instance configured differently would otherwise
+reach a different decision. The ceiling is not about disk: it stops a task
+looping on its own question while the refusal can still name what is wrong,
+instead of surfacing later as the store refusing an oversized message.
 
 ## Authentication
 

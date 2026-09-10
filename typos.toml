@@ -14,7 +14,7 @@ extend-exclude = [
   # nothing to correct: the renderer writes these files, so a fix here is
   # reverted by the next `just diagrams`.
   "docs/diagrams/out/",
-  # Composer dependencies for services/flow, same reasoning as node_modules.
+  # Composer dependencies for services/query/flow, same reasoning as node_modules.
   "vendor/",
   # A base64url modulus and a PEM key. Base64 of anything eventually contains
   # four letters that spell something the dictionary has an opinion about.

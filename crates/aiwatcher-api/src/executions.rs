@@ -1130,7 +1130,12 @@ pub async fn compile_curation_named(
             None => ApiError::NotFound(format!("pipeline {name}")),
         })?;
 
-    compile_curation(&pipeline, CompileOptions { window }).map_err(|error| ApiError::PlanRefused {
+    let options = CompileOptions {
+        window,
+        engine: state.query_engine,
+        query_timeout_seconds: state.query_step_timeout_seconds,
+    };
+    compile_curation(&pipeline, options).map_err(|error| ApiError::PlanRefused {
         summary: format!("{name} does not compile to something that can be run"),
         problems: error.problems().to_vec(),
     })

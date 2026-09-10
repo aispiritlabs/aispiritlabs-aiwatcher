@@ -1576,15 +1576,13 @@ kept because ADRs, kickoff documents and code comments cite them by number —
 they name feature scope, not an order that requires every lower-numbered phase
 before a higher-numbered one.
 
-The kickoff documents for finished work are deleted rather than kept as
-closure notes; the two that remain — [join hardening](KICKOFF_JOIN_HARDENING.md)
-and [mid-attempt input](KICKOFF_MID_ATTEMPT_INPUT.md) — are the live ones, and
-they are named under *What is left*.
-[PIPELINE_REVIEW_2026-09-08.md](PIPELINE_REVIEW_2026-09-08.md) holds the findings
-works 1–5 close — `R1–R7` concern the changes that were pending then, `A1`
-predates them — and
-[WORKER_PROTOCOL_REVIEW_2026-09-09.md](WORKER_PROTOCOL_REVIEW_2026-09-09.md)
-holds work 6's.
+A document for finished work is deleted rather than kept as a closure note —
+the kickoffs for works 1–6, and the two reviews whose findings they closed. The
+two kickoffs that remain, [join hardening](KICKOFF_JOIN_HARDENING.md) and
+[mid-attempt input](KICKOFF_MID_ATTEMPT_INPUT.md), are the live ones and are
+named under *What is left*. What survives a review is its **findings**, kept in
+43.35, and the tests each work item names below: a test that runs is better
+evidence than a document that says it passed.
 
 ### Delivered, in one line each
 
@@ -1650,8 +1648,8 @@ question, `ProvideInput` against a parked attempt rather than a waiting step, th
 deadline riding Phase 13's timer row, and the way for `aiwatcher_sdk.worker` to
 ask.
 
-**In planner's repository, and now closed.** `docs/flyte-removal-kickoff.md` is
-done as of 2026-09-09: the timing defect work 6 left behind is one authored
+**In planner's repository, and now closed** — its kickoff deleted with the work.
+As of 2026-09-09: the timing defect work 6 left behind is one authored
 table (`STAGE_BUDGET_SECONDS`) with two readers, the Tilt profile ran the import
 end to end — which is what found `AIWATCHER_WORKFLOW_STORE` and
 `AIWATCHER_PROMPT_STORE` being wrong there — one pod per import is a recorded
@@ -2195,7 +2193,7 @@ not open its own `node()` scope.
 
 | Binding | Executes in | Reached by | Owner of retries | In → out | Cacheable | May carry content |
 |---|---|---|---|---|---|---|
-| `FlowPhp` | `services/flow` | the work role, HTTP, `AIWATCHER_FLOW_URL` | Rust | compiled script + resolved source → rows artifact | with a pinned source revision or a resolved window | no beyond what retention already holds |
+| `FlowPhp` | `services/query/flow` | the work role, HTTP, `AIWATCHER_FLOW_URL` | Rust | compiled script + resolved source → rows artifact | with a pinned source revision or a resolved window | no beyond what retention already holds |
 | `Marimo` | `services/ml_pipeline`, a subprocess per run | the work role, HTTP, `AIWATCHER_ML_PIPELINE_URL` | Rust | input artifact + params → output artifact | with a pinned notebook digest | yes — a PII notebook by definition; a development-profile binding until Phase 4 (16.4) |
 | `PublishDataset` | the serve role — the registry | in-process | Rust; idempotent by content | artifact → dataset version with `produced_by` and `execution_id` | n/a | rows as today |
 | `PythonTask` | a worker process | pulled by the worker (36) | Rust for the attempt | JSON ≤ 64 KiB inline, else `ArtifactRef` | with `task_ref` version + input digests | what the task writes is the task's own storage; it reports refs |
@@ -3057,7 +3055,7 @@ reads it as `UserCode` rather than retrying a flag that is still off.
 
 ### 43.29 CI proved nothing about the store a deployment uses
 
-Seven jobs, and none ran the PostgreSQL adapter, `services/flow` or
+Seven jobs, and none ran the PostgreSQL adapter, `services/query/flow` or
 `services/ml_pipeline`. The word "postgres" did not appear in the workflow file,
 while `postgres` is behind a cargo feature precisely so it is not built by
 accident — which also means it is not tested by accident.
@@ -3104,16 +3102,21 @@ ending.
 
 ### 43.35 The review reopened guarantees, not the implemented feature set
 
-The 2026-09-08 [review](PIPELINE_REVIEW_2026-09-08.md) ran the suites green and
-then reproduced three cases they did not cover: a deleted schedule restored by a
-stale writer, different DST slots for one interval versus many ticks, and a file
-commit whose retry and reopen left no outbox row and no attempt. That narrowed
-the acceptance claims the notes above had made; it erased none of the features
-that worked. Works 1–5 close all of it, and the
-[worker review](WORKER_PROTOCOL_REVIEW_2026-09-09.md) did the same for work 6 —
-a committed report whose reply was lost, an attempt nobody could target, a
-declared output nobody checked, and a workflow fold inferring success from one
-completed child.
+A review on 2026-09-08 ran every suite green and then reproduced three cases
+none of them covered: a deleted schedule restored by a stale writer, different
+DST slots for one interval versus many ticks, and a file commit whose retry and
+reopen left no outbox row and no attempt. That narrowed the acceptance claims
+the notes above had made; it erased none of the features that worked. A second
+review, on 2026-09-09, did the same for the worker protocol — a committed report
+whose reply was lost, an attempt nobody could target, a declared output nobody
+checked, and a workflow fold inferring success from one completed child.
+
+Works 1–6 close all of it, and the findings are recorded here rather than in the
+review documents, which are deleted: a finding that produced a test belongs
+beside the rule it produced, and one that produced nothing was not a finding.
+**The lesson is the one worth keeping** — a green suite is evidence about what
+it covers and says nothing about the rest, and every case above was reachable by
+a reproduction nobody had written.
 
 ### 43.36 A gate is in the chain and not in the data
 

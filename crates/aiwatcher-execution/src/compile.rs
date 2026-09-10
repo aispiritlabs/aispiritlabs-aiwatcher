@@ -22,7 +22,7 @@
 use std::collections::BTreeMap;
 
 use aiwatcher_core::ArtifactKind;
-use aiwatcher_datasets::{BlockSpec, CurationPipeline, PipelineBlock, order_of};
+use aiwatcher_datasets::{BlockSpec, CurationPipeline, PipelineBlock, QueryEngine, order_of};
 
 use crate::error::CompileError;
 use crate::plan::{
@@ -53,6 +53,21 @@ pub struct CompileOptions {
     /// retry three hours later read the same rows — and what makes the step
     /// cacheable at all.
     pub window: Option<ResolvedWindow>,
+    /// The query engine this deployment runs. A chain whose transforms were
+    /// written for another one is refused rather than compiled to a step no
+    /// process here would claim.
+    pub engine: QueryEngine,
+    /// How long a query step may run, when a deployment says so.
+    ///
+    /// Five minutes is right for a query over the API's read model, which
+    /// retention bounds. A query over a corpus on disk is bounded by the
+    /// corpus instead — ten gigabytes of CSV through Flow is tens of minutes —
+    /// and a step that times out is retried from the beginning, so a limit
+    /// set too low costs three times the work and then fails. Configuration
+    /// rather than a block field: what decides it is the deployment's data,
+    /// not the pipeline's author. The query engine has a ceiling of its own
+    /// (`AIWATCHER_QUERY_TIMEOUT_SECONDS`), and it must not be the lower one.
+    pub query_timeout_seconds: Option<u64>,
 }
 
 /// Compile a saved curation pipeline into the plan that runs it.
@@ -124,7 +139,9 @@ pub fn compile_curation(
                 schema_ref: None,
             }],
             retry: RetryPolicy::default(),
-            timeout_seconds: FLOW_TIMEOUT_SECONDS,
+            timeout_seconds: options
+                .query_timeout_seconds
+                .unwrap_or(FLOW_TIMEOUT_SECONDS),
             // A query over a resolved window is a pure function of things that
             // are addressed. Over a moving one it is not, and `cache_key`
             // refuses to produce a key rather than trusting this flag.
@@ -297,7 +314,7 @@ pub fn flow_script(source: &BlockSpec, chain: &[&PipelineBlock]) -> String {
     let steps: Vec<String> = chain
         .iter()
         .filter_map(|block| match &block.spec {
-            BlockSpec::Transform { steps } => Some(steps.clone()),
+            BlockSpec::Transform { steps, .. } => Some(steps.clone()),
             _ => None,
         })
         .collect();
@@ -425,12 +442,14 @@ mod tests {
                     "clean",
                     BlockSpec::Transform {
                         steps: "->filter(ref('text')->isNotNull())".to_owned(),
+                        engine: aiwatcher_datasets::QueryEngine::Flow,
                     },
                 ),
                 block(
                     "trim",
                     BlockSpec::Transform {
                         steps: "->limit(100)".to_owned(),
+                        engine: aiwatcher_datasets::QueryEngine::Flow,
                     },
                 ),
             ]),
@@ -445,6 +464,30 @@ mod tests {
         assert_eq!(spec.blocks, vec!["read", "clean", "trim"]);
         assert!(spec.script.contains("->filter(ref('text')->isNotNull())"));
         assert!(spec.script.contains("->limit(100)"));
+    }
+
+    #[test]
+    fn a_configured_flow_timeout_reaches_the_flow_step_and_an_unset_one_stays_five_minutes() {
+        // A corpus on disk is tens of minutes through Flow, and a step that
+        // times out is retried from the beginning — so the limit has to be one
+        // a deployment can raise, and one nobody raised has to stay what it was.
+        let chain = || pipeline(vec![block("read", source())]);
+        let unset = compile_curation(&chain(), CompileOptions::default()).expect("a source");
+        let raised = compile_curation(
+            &chain(),
+            CompileOptions {
+                query_timeout_seconds: Some(7200),
+                ..CompileOptions::default()
+            },
+        )
+        .expect("a source");
+
+        assert_eq!(unset.steps[0].timeout_seconds, FLOW_TIMEOUT_SECONDS);
+        assert_eq!(raised.steps[0].timeout_seconds, 7200);
+        assert_ne!(
+            unset.plan_id, raised.plan_id,
+            "a limit is part of what runs, so it is part of the plan's address"
+        );
     }
 
     #[test]
@@ -505,6 +548,7 @@ mod tests {
                     "clean",
                     BlockSpec::Transform {
                         steps: "->limit(500)".to_owned(),
+                        engine: aiwatcher_datasets::QueryEngine::Flow,
                     },
                 ),
                 block(

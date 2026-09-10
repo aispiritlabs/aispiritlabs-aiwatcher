@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -26,10 +28,14 @@ from aiwatcher_sdk.integrations.agentic import (
     JoinTimers,
     MemoryPayloadStore,
     SagaTimers,
+    UndeliveredHopsError,
     dataclass_codec,
+    deliver,
     digest_of,
     event_store,
+    stream_sender,
 )
+from aiwatcher_sdk.outbox import Delivery, DuckdbOutbox, MemoryOutbox, Outbox, drain
 
 EXECUTION = "graph-1"
 
@@ -73,12 +79,35 @@ class Server:
         self.requests: list[httpx.Request] = []
         #: Who holds the decider lease, when anybody does.
         self.lease_holder: str | None = None
+        #: The four ways a hop can fail to arrive, for the outbox's tests:
+        #: nothing listening, an append that applied and whose answer was lost,
+        #: a refusal about the message itself, and another writer getting in
+        #: between a read of the version and the append that named it.
+        self.down = False
+        self.lose_next_answer = False
+        self.refusal: tuple[int, str] | None = None
+        self.conflicts = 0
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
+        if self.down:
+            raise httpx.ConnectError("connection refused", request=request)
         if request.method == "GET":
             return self._history(request)
-        return self._append(request)
+        if self.refusal is not None:
+            status, code = self.refusal
+            return httpx.Response(status, json={"code": code, "message": "refused"})
+        if self.conflicts:
+            self.conflicts -= 1
+            self._record({"kind": "hosted", "message_type": "HostedAppend", "metadata": {}})
+            return httpx.Response(
+                409, json={"code": "version_conflict", "message": "somebody else appended first"}
+            )
+        answer = self._append(request)
+        if self.lose_next_answer:
+            self.lose_next_answer = False
+            raise httpx.ReadTimeout("the answer never came", request=request)
+        return answer
 
     def _history(self, request: httpx.Request) -> httpx.Response:
         after = int(request.url.params.get("after", 0))
@@ -525,3 +554,238 @@ def test_a_deadline_with_no_turn_asks_for_no_row_rather_than_a_guessed_one() -> 
         expected_version=0,
     )
     assert "timers" not in json.loads(server.requests[-1].content)
+
+
+# ── With an outbox: a hop is written down before it is sent ──────────────────
+
+
+def transport_to(server: Server) -> Transport:
+    # One attempt: the drain is the retry, and a transport retrying beneath it
+    # would be the same work retried in two places — and a slow test.
+    return Transport(
+        "http://aiwatcher.invalid",
+        error=ApiError,
+        attempts=1,
+        client=httpx.Client(transport=httpx.MockTransport(server.handle)),
+    )
+
+
+def store_on(server: Server, outbox: Outbox | None) -> AiwatcherEventStore:
+    return AiwatcherEventStore(
+        transport_to(server),
+        EXECUTION,
+        payloads=MemoryPayloadStore(),
+        codec=dataclass_codec(Message, Metadata),
+        holder="worker-a",
+        outbox=outbox,
+    )
+
+
+def hops_on(server: Server) -> list[str]:
+    """What reached the stream, by message id, markers left out."""
+    return [
+        row["message"]["metadata"].get("message_id", "")
+        for row in server.rows
+        if row["message"]["message_type"] != "HostedAppend"
+    ]
+
+
+def ids(read: Any) -> list[str]:
+    return [event.metadata.message_id for event in read.events]
+
+
+def claim(message_id: str) -> Message:
+    return turn(message_id, type_="SummaryClaimed")
+
+
+def test_a_hop_written_while_aiwatcher_is_unreachable_waits_rather_than_raising() -> None:
+    server = Server()
+    server.down = True
+    outbox = MemoryOutbox()
+
+    result = store_on(server, outbox).append_to_stream(EXECUTION, (turn("m-1"),))
+
+    assert result.delivered is False
+    assert outbox.depth() == (1, 0)
+    assert server.rows == []
+
+
+def test_waiting_hops_reach_the_stream_once_each_and_in_order_when_aiwatcher_returns() -> None:
+    server = Server()
+    outbox = MemoryOutbox()
+    subject = store_on(server, outbox)
+    server.down = True
+    for index in range(3):
+        subject.append_to_stream(EXECUTION, (turn(f"m-{index}"),))
+
+    server.down = False
+    read = subject.read_stream(EXECUTION)
+
+    assert ids(read) == ["m-0", "m-1", "m-2"]
+    assert hops_on(server) == ["m-0", "m-1", "m-2"]
+    assert outbox.depth() == (0, 0)
+
+
+def test_a_read_while_unreachable_answers_from_what_was_seen_and_the_hops_waiting() -> None:
+    # The agent keeps answering: its own facts are visible to it through an
+    # outage, and the version it reports is the one it last saw — which the
+    # waiting hop is not in, so a decision taken against it is still arbitrated.
+    server = Server()
+    outbox = MemoryOutbox()
+    subject = store_on(server, outbox)
+    subject.append_to_stream(EXECUTION, (turn("m-1"),))
+    subject.read_stream(EXECUTION)
+
+    server.down = True
+    subject.append_to_stream(EXECUTION, (turn("m-2"),))
+    read = subject.read_stream(EXECUTION)
+
+    assert ids(read) == ["m-1", "m-2"]
+    assert read.current_version == 2
+
+
+def test_a_hop_delivered_since_the_last_read_is_not_lost_from_the_offline_view() -> None:
+    # Delivered, so it has left the outbox; not yet read back, so it is not in
+    # what was seen. Without its own place it would vanish from this process's
+    # view in exactly the window between an answer and the next read.
+    server = Server()
+    subject = store_on(server, MemoryOutbox())
+    subject.read_stream(EXECUTION)
+    subject.append_to_stream(EXECUTION, (turn("m-1"),))
+
+    server.down = True
+
+    assert ids(subject.read_stream(EXECUTION)) == ["m-1"]
+
+
+def test_a_decision_is_refused_while_this_process_s_own_hops_are_waiting() -> None:
+    server = Server()
+    server.down = True
+    subject = store_on(server, MemoryOutbox())
+    subject.append_to_stream(EXECUTION, (turn("m-1"),))
+
+    with pytest.raises(UndeliveredHopsError, match="1 hop"):
+        subject.append_to_stream(EXECUTION, (claim("c-1"),), expected_version=0)
+
+    assert server.rows == []
+
+
+def test_a_decision_drains_the_hops_before_it_and_is_arbitrated_against_them() -> None:
+    # The hop goes first, so the version the caller read before the outage is
+    # stale by the time the claim is posted — and aiwatcher says so, which is
+    # the executor's cue to read again and decide again.
+    server = Server()
+    server.down = True
+    subject = store_on(server, MemoryOutbox())
+    subject.append_to_stream(EXECUTION, (turn("m-1"),))
+    server.down = False
+
+    with pytest.raises(ConcurrencyConflictError):
+        subject.append_to_stream(EXECUTION, (claim("c-1"),), expected_version=0)
+    assert hops_on(server) == ["m-1"]
+
+    version = subject.read_stream(EXECUTION).current_version
+    subject.append_to_stream(EXECUTION, (claim("c-1"),), expected_version=version)
+
+    assert hops_on(server) == ["m-1", "c-1"]
+
+
+def test_a_hop_whose_answer_was_lost_is_recognised_rather_than_appended_twice() -> None:
+    server = Server()
+    outbox = MemoryOutbox()
+    subject = store_on(server, outbox)
+    server.lose_next_answer = True
+
+    first = subject.append_to_stream(EXECUTION, (turn("m-1"),))
+
+    assert first.delivered is False, "it applied, and nobody heard"
+    assert hops_on(server) == ["m-1"]
+
+    subject.read_stream(EXECUTION)
+
+    assert hops_on(server) == ["m-1"]
+    assert outbox.depth() == (0, 0)
+
+
+def test_a_hop_aiwatcher_refuses_is_dead_lettered_and_the_turn_goes_on(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    server = Server()
+    server.refusal = (422, "payload_policy")
+    outbox = MemoryOutbox()
+
+    with caplog.at_level(logging.WARNING, logger=event_store.__name__):
+        result = store_on(server, outbox).append_to_stream(EXECUTION, (turn("m-1"),))
+
+    assert result.delivered is False
+    assert outbox.depth() == (0, 1)
+    assert "dead-lettered" in caplog.text
+
+
+def test_a_lease_somebody_else_holds_keeps_a_hop_waiting_rather_than_losing_it() -> None:
+    # A lease runs out, and a hop is a fact that is still true when it does.
+    server = Server()
+    server.lease_holder = "worker-b"
+    outbox = MemoryOutbox()
+    subject = store_on(server, outbox)
+
+    assert subject.append_to_stream(EXECUTION, (turn("m-1"),)).delivered is False
+    assert outbox.depth() == (1, 0)
+
+    server.lease_holder = None
+    subject.read_stream(EXECUTION)
+
+    assert hops_on(server) == ["m-1"]
+
+
+def test_a_hop_that_lost_the_race_reads_the_version_again_rather_than_waiting() -> None:
+    server = Server()
+    server.conflicts = 1
+
+    result = store_on(server, MemoryOutbox()).append_to_stream(EXECUTION, (turn("m-1"),))
+
+    assert result.delivered is True
+    assert hops_on(server) == ["m-1"]
+
+
+def test_without_an_outbox_a_failure_is_the_caller_s_to_see() -> None:
+    server = Server()
+    server.down = True
+
+    with pytest.raises(ApiError, match="unreachable"):
+        store_on(server, None).append_to_stream(EXECUTION, (turn("m-1"),))
+
+
+def test_the_outbox_holds_references_and_never_the_words() -> None:
+    server = Server()
+    server.down = True
+    outbox = MemoryOutbox()
+    sent = turn("m-1", text="the model said something private")
+
+    store_on(server, outbox).append_to_stream(EXECUTION, (sent,))
+
+    body = outbox.pending()[0].delivery.body
+    assert "something private" not in body
+    assert json.loads(body)["messages"][0]["payload"]["digest"] == digest_of(sent.data)
+
+
+def test_an_operator_s_drain_sends_what_a_dead_process_left(tmp_path: Path) -> None:
+    path = tmp_path / "outbox.duckdb"
+    server = Server()
+    server.down = True
+    with DuckdbOutbox(path) as outbox:
+        store_on(server, outbox).append_to_stream(EXECUTION, (turn("m-1"),))
+
+    server.down = False
+    with DuckdbOutbox(path) as outbox:
+        report = drain(outbox, stream_sender(transport_to(server)))
+
+    assert report.settled == 1
+    assert hops_on(server) == ["m-1"]
+
+
+def test_a_row_this_sender_does_not_know_is_refused_by_name() -> None:
+    row = Delivery(message_id="m-1", execution_id=EXECUTION, kind="email", body="{}")
+
+    with pytest.raises(ValueError, match="not a stream append"):
+        deliver(transport_to(Server()), row)

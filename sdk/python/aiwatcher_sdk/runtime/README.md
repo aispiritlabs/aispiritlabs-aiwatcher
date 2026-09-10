@@ -129,3 +129,28 @@ Message-driven workflows with `decide/evolve/initial_state`, as in the linked
 Emmett proposal, fit the same runtime ownership model but need the hosted
 decider protocol. They are not replaced by a Python loop over these static
 steps. See the [design decisions](../../../../docs/PYTHON_SDK_DESIGN.md).
+
+## Hosting agents
+
+An agent that is not composed with anything is a workflow of one step.
+`aiwatcher_sdk.integrations.agentic.agent_workflow(name, respond, version=…,
+payloads=…, archive=…)` builds it from a text-in, text-out turn: the reply goes
+to the payload store and the step's result carries its reference, digest and
+size, because a reply is a completion. Given a `ConversationArchive`, every turn
+is also recorded there as one exchange, for review and export as fine-tuning
+data.
+
+A turn is delivered at least once — the server retries an attempt that may not
+have finished — and everything it records is filed under the step rather than
+the attempt. `TaskContext.step_key` is the same on every attempt; a tool that
+keys its writes by it writes once, and the archive's message ids are built from
+it, so a retry overwrites the exchange instead of adding one. `retry=` sets the
+budget per agent. An agent's tracer, built before any attempt, finds the one it
+is running in and nests its spans under the step.
+
+`on_close=` hands the runtime what the application's own composition root has
+to release, such as an agent runtime whose stores flush on close. It is called
+once, after the workers stop and before telemetry closes, and also when the
+constructor refuses. `ai_spirit_agent`'s `agentic_runtime.hosted.hosted_runtime`
+is the caller: it registers every agent of an `AgenticRuntime` this way and
+hands the runtime over. `just e2e-agent-standalone` runs it against a server.

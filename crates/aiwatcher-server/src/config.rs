@@ -10,6 +10,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use aiwatcher_auth::{AuthConfig, AuthMode, IngestToken, ProxyHeaders, Role, RoleMapping};
+use aiwatcher_datasets::QueryEngine;
 use aiwatcher_execution::message::PayloadPolicy;
 use thiserror::Error;
 
@@ -32,6 +33,21 @@ pub enum ConfigError {
     Required {
         name: &'static str,
         because: &'static str,
+    },
+
+    /// Two variables that name one thing, set to different values.
+    ///
+    /// The older name is read for one release so an installation upgrades
+    /// without touching its configuration; both set to two answers is a
+    /// question this process cannot settle, and a guess would send somebody's
+    /// work to the wrong service.
+    #[error(
+        "{current} and {older} are both set, to different values; {older} is the older name \
+         for {current}, so set one of them"
+    )]
+    Conflict {
+        current: &'static str,
+        older: &'static str,
     },
 
     /// A configuration the authentication crate itself refused. Its own
@@ -457,22 +473,37 @@ pub struct Config {
     /// the only place it may come from — a plan never names a host.
     pub workflow_postgres_url: Option<String>,
     pub workflow_postgres_max_connections: u32,
-    /// The Flow query service, for a managed `flow_php` step.
+    /// Which query engine this deployment runs (`AIWATCHER_QUERY_ENGINE`).
     ///
-    /// `None` means this process runs no Flow executor, which means it claims
-    /// no `flow_php` attempt — the claim filter is built from what is
-    /// registered, so a process never takes work it cannot perform. It is also
-    /// the only address a Flow step ever runs against: a plan names a binding
-    /// and its parameters, never a host.
-    pub flow_url: Option<String>,
+    /// One per deployment (AW-3). It decides which executor `query_url` is
+    /// wired to — and therefore which one kind of query step this process may
+    /// claim — and which engine a plan has to have been written for to start.
+    /// Flow unless a deployment says otherwise, which is today's deployment.
+    pub query_engine: QueryEngine,
+    /// The query engine, for a managed query step.
+    ///
+    /// `None` means this process runs no query executor, which means it claims
+    /// no query attempt — the claim filter is built from what is registered,
+    /// so a process never takes work it cannot perform. It is also the only
+    /// address a query step ever runs against: a plan names a binding and its
+    /// parameters, never a host. Read from `AIWATCHER_QUERY_URL`, or from
+    /// `AIWATCHER_FLOW_URL` for one release.
+    pub query_url: Option<String>,
     /// The notebook runtime, for a managed `marimo` step.
     ///
-    /// The same shape and the same reasoning as `flow_url`: absent, this
+    /// The same shape and the same reasoning as `query_url`: absent, this
     /// process registers no notebook executor and therefore claims no `marimo`
     /// attempt. The two are independent — a deployment may run managed Flow
     /// steps and no notebooks — which is why they are two variables rather
     /// than one "curation services" switch.
     pub ml_pipeline_url: Option<String>,
+    /// How long a managed query step may run, in seconds, whichever engine
+    /// runs it. `None` keeps the compiler's five minutes, which fits a query
+    /// over the read model and not one over a corpus on disk. Raise it with
+    /// the engine's own `AIWATCHER_QUERY_TIMEOUT_SECONDS`, never above it: Flow
+    /// stopping first is a 500, which a reactor reads as an outage and
+    /// retries ten times.
+    pub query_step_timeout_seconds: Option<u64>,
     /// The name this process holds its leases under.
     ///
     /// Unique per process, or two reactors each believe they hold the other's
@@ -619,8 +650,10 @@ impl Default for Config {
             // API replica's share of one pool. sqlx's own default is ten,
             // which is a lot of idle connections per pod.
             workflow_postgres_max_connections: 5,
-            flow_url: None,
+            query_engine: QueryEngine::Flow,
+            query_url: None,
             ml_pipeline_url: None,
+            query_step_timeout_seconds: None,
             reactor_owner: None,
             // A second. Shorter than the conversation and import queues'
             // fifteen because a step's latency is a person watching a canvas,
@@ -865,9 +898,10 @@ impl Config {
                     expected: "whole number of connections",
                 })?;
         }
-        if let Some(raw) = var("AIWATCHER_FLOW_URL") {
-            config.flow_url = Some(raw.trim_end_matches('/').to_owned());
+        if let Some(raw) = var("AIWATCHER_QUERY_ENGINE") {
+            config.query_engine = query_engine_of(raw)?;
         }
+        config.query_url = query_address(var("AIWATCHER_QUERY_URL"), var("AIWATCHER_FLOW_URL"))?;
         if let Some(raw) = var("AIWATCHER_ML_PIPELINE_URL") {
             config.ml_pipeline_url = Some(raw.trim_end_matches('/').to_owned());
         }
@@ -879,6 +913,25 @@ impl Config {
                     value: raw,
                     expected: "whole number of seconds",
                 })?);
+        }
+        if let Some(raw) = var("AIWATCHER_QUERY_STEP_TIMEOUT_SECONDS") {
+            let seconds: u64 = raw.parse().map_err(|_| ConfigError::Invalid {
+                name: "AIWATCHER_QUERY_STEP_TIMEOUT_SECONDS",
+                value: raw.clone(),
+                expected: "whole number of seconds, at least 1",
+            })?;
+            // Zero would arm a timer that has already fired, so every query
+            // step would fail before its request was sent. Refused by name
+            // rather than read as "no limit", which is not a thing a plan can
+            // say.
+            if seconds == 0 {
+                return Err(ConfigError::Invalid {
+                    name: "AIWATCHER_QUERY_STEP_TIMEOUT_SECONDS",
+                    value: raw,
+                    expected: "whole number of seconds, at least 1",
+                });
+            }
+            config.query_step_timeout_seconds = Some(seconds);
         }
         if let Some(raw) = var("AIWATCHER_WORKFLOW_RETENTION_DAYS") {
             let days: u64 = raw.parse().map_err(|_| ConfigError::Invalid {
@@ -1322,6 +1375,43 @@ fn list(raw: &str) -> Vec<String> {
         .collect()
 }
 
+/// What a refusal of `AIWATCHER_QUERY_ENGINE` says it takes.
+///
+/// A literal because [`ConfigError::Invalid`] holds a `&'static str`; a test
+/// keeps it equal to [`QueryEngine::offered`], so an engine added there cannot
+/// go unnamed here.
+const QUERY_ENGINES: &str = "query engine: flow, datafusion, duckdb";
+
+/// `AIWATCHER_QUERY_ENGINE`, or the refusal naming the variable and the engines.
+fn query_engine_of(raw: String) -> Result<QueryEngine, ConfigError> {
+    raw.parse().map_err(|_| ConfigError::Invalid {
+        name: "AIWATCHER_QUERY_ENGINE",
+        value: raw,
+        expected: QUERY_ENGINES,
+    })
+}
+
+/// The query engine's address, from its name or the name it had before.
+///
+/// `AIWATCHER_FLOW_URL` is read for one release, so an installation that set
+/// it upgrades running Flow at that address exactly as before. Both set to one
+/// address is the same installation half-way through renaming it; both set to
+/// two is refused naming both.
+fn query_address(
+    current: Option<String>,
+    older: Option<String>,
+) -> Result<Option<String>, ConfigError> {
+    let trim = |raw: String| raw.trim_end_matches('/').to_owned();
+    match (current.map(trim), older.map(trim)) {
+        (Some(current), Some(older)) if current != older => Err(ConfigError::Conflict {
+            current: "AIWATCHER_QUERY_URL",
+            older: "AIWATCHER_FLOW_URL",
+        }),
+        (Some(url), _) | (None, Some(url)) => Ok(Some(url)),
+        (None, None) => Ok(None),
+    }
+}
+
 fn var(name: &str) -> Option<String> {
     std::env::var(name)
         .ok()
@@ -1377,8 +1467,63 @@ mod tests {
         assert_eq!(config.workflow_dir(), "./.data/workflow");
         assert_eq!(config.role, ProcessRole::Both);
         assert!(
-            config.flow_url.is_none(),
-            "a process with no Flow address runs no Flow executor and claims no Flow attempt"
+            config.query_url.is_none(),
+            "a process with no query address runs no query executor and claims no query attempt"
+        );
+        assert_eq!(
+            config.query_engine,
+            QueryEngine::Flow,
+            "nothing set is today's deployment"
+        );
+    }
+
+    #[test]
+    fn an_engine_that_is_not_offered_is_refused_naming_the_variable_and_the_engines() {
+        let refused = query_engine_of("polars".to_owned()).expect_err("polars is not offered");
+        let message = refused.to_string();
+        assert!(
+            message.contains("AIWATCHER_QUERY_ENGINE")
+                && message.contains("flow, datafusion, duckdb"),
+            "{message}"
+        );
+        // The literal the refusal carries is the list the engines themselves
+        // are chosen from, so an engine added to one is named by the other.
+        assert!(QUERY_ENGINES.ends_with(&QueryEngine::offered()));
+        assert_eq!(
+            query_engine_of("datafusion".to_owned()).expect("offered"),
+            QueryEngine::DataFusion
+        );
+    }
+
+    #[test]
+    fn an_installation_that_set_only_the_flow_address_upgrades_unchanged() {
+        assert_eq!(
+            query_address(None, Some("http://flow:8081/".to_owned())).expect("the alias"),
+            Some("http://flow:8081".to_owned())
+        );
+        // Both, naming one address: an installation half-way through renaming.
+        assert_eq!(
+            query_address(
+                Some("http://query:8081".to_owned()),
+                Some("http://query:8081/".to_owned())
+            )
+            .expect("one address"),
+            Some("http://query:8081".to_owned())
+        );
+        assert_eq!(query_address(None, None).expect("none"), None);
+    }
+
+    #[test]
+    fn two_addresses_for_one_engine_are_refused_naming_both() {
+        let message = query_address(
+            Some("http://datafusion:8081".to_owned()),
+            Some("http://flow:8081".to_owned()),
+        )
+        .expect_err("two answers to one question")
+        .to_string();
+        assert!(
+            message.contains("AIWATCHER_QUERY_URL") && message.contains("AIWATCHER_FLOW_URL"),
+            "{message}"
         );
     }
 
