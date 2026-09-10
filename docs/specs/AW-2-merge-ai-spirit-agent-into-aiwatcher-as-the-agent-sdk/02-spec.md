@@ -121,6 +121,13 @@ list and drain the store by hand.
 - THEN every row shows its execution, its message id and how many attempts it
   has had
 
+##### Scenario: a claim waits for aiwatcher
+- GIVEN a fan-in whose last completion was written while aiwatcher was
+  unreachable
+- WHEN the summarizer's claim is asked for
+- THEN it is refused while those completions wait, and granted once they have
+  drained — a claim is never queued and never decided offline
+
 #### Requirement: agent messaging runs on the execution stream
 Publishing SHALL be an append to one hosted execution's stream under
 `expected_version`; consuming SHALL be a worker claim whose queue is the
@@ -219,6 +226,16 @@ answers to "which version did this run use". MLflow keeps tracing, teed.)
   schedule and its tick reach different compilers" guardrail names.
 - **Where the outbox lives.** `aiwatcher-sdk`, not the agent distribution —
   see the distribution requirement above.
+- **A claim waits for aiwatcher** (the user, 2026-09-10). A fan-in reached
+  during an outage keeps its completions and fires its summarizer when
+  aiwatcher is back. Deciding offline was the alternative and it risks two
+  workers firing one summarizer.
+- **The durable tier is DuckDB** (the user, 2026-09-10), as Phase D first said —
+  replacing the SQLite adapter this spec's first implementation shipped. Its
+  file lock is exclusive for a connection's life, so the outbox opens one per
+  operation (≈7 ms against 0.4 ms held): an operator and several workers must be
+  able to open the file while an agent runs, which the Rust store, one process
+  owning its database, never needed.
 
 ## Still open, deferred to the phase that can answer them
 
