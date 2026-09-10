@@ -73,10 +73,10 @@ def use_prompt_source(source: PromptSource | None) -> None:
     """Name where a builder given ``external_prompt_name`` and no source reads.
 
     The application's call, made once where it starts. A builder used to import
-    the MLflow prompt registry itself, which is an application package; the
-    application names it here instead — `ai_spirit_agent`'s `agentic` does, on
-    import — and the same hook takes ADR_0011's registry when that replaces it.
-    ``None`` forgets the source.
+    the application's prompt registry itself, which is an application package;
+    the application names it here instead — `ai_spirit_agent`'s `agentic` does,
+    on import, with a source that reads ADR_0011's registry. ``None`` forgets
+    the source.
     """
     global _prompt_source  # one process default, set where the application starts
     _prompt_source = source

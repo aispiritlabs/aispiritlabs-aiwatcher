@@ -88,6 +88,12 @@ spec adds is the repository dimension §40 does not cover.
       two passed-over searchers stay `Pending`, the dispatch and the answer to
       the join are messages between agents, and the searcher's span nests
       under its node though its tracer publishes through a client of its own.)
+- [x] The MLflow prompt registry is gone: an agent's named prompt is what
+      ADR_0011's registry resolves — an admitted, promoted candidate once there
+      is one — and nothing asks MLflow for a prompt. (Against a server of its
+      own, 9/9: `make registry` publishes six, a real builder reads the
+      admitted candidate, a dev-only win is refused, a republish moves no
+      label.)
 
 ## Spec (delta)
 
@@ -290,7 +296,8 @@ only through ports it declares: `ModelSource`, `LLMTracer` and
 `PromptSource`. Importing it SHALL NOT load a provider stack, MLflow,
 transformers or pydantic. `agentic`'s old names SHALL resolve to the same
 module objects for one release, and a builder named by `external_prompt_name`
-SHALL keep reading the MLflow registry there until that registry retires.
+SHALL read the application's prompts there — from ADR_0011's registry when one
+is configured.
 
 ##### Scenario: an agent runs on anything that lends it a model
 - GIVEN a double whose only method is `session()`, yielding a model
@@ -314,7 +321,7 @@ SHALL keep reading the MLflow registry there until that registry retires.
 - WHEN a builder is given `external_prompt_name="sage"`
 - THEN it raises naming `'sage'` and `use_prompt_source`
 
-##### Scenario: the application's registry still answers
+##### Scenario: the application's registry answers
 - GIVEN `ai_spirit_agent`'s `agentic` imported
 - WHEN a `QwenPromptBuilder(external_prompt_name=…)` is built
 - THEN its text is what `registry.get_prompt` returned
@@ -427,6 +434,55 @@ nothing.
 - GIVEN no `AIWATCHER_URL`
 - WHEN a turn runs
 - THEN nothing is published and the answer is what it was
+
+#### Requirement: an agent's named prompt is ADR_0011's current version
+An application's prompt named by `external_prompt_name` SHALL be read from
+aiwatcher's prompt registry when `AIWATCHER_URL` names one — the version
+`production` points at, or the newest when none has been promoted — and SHALL
+be the text the application authored when it names none. With a registry
+configured, a read that cannot be answered SHALL raise and SHALL NOT fall back
+to the authored text. Publishing the authored prompts SHALL be idempotent on
+their text and SHALL move no label. Nothing SHALL ask MLflow for a prompt.
+
+##### Scenario: an admitted optimisation is what an agent runs
+- GIVEN a prompt published to aiwatcher, and an optimisation of it admitted on
+  its held-out score and promoted
+- WHEN an agent's builder names that prompt
+- THEN its text is the candidate's, even with a newer draft stored beside it
+
+##### Scenario: with nothing promoted, the newest version is read
+- GIVEN two versions of a prompt and no `production` label
+- WHEN a builder names it
+- THEN its text is the newer one's
+
+##### Scenario: without aiwatcher, the authored text
+- GIVEN `AIWATCHER_URL` unset
+- WHEN a builder names `sage`
+- THEN its text is `SAGE_PROMPT`, and a name nobody authored is refused by name
+
+##### Scenario: a configured registry that cannot answer is never replaced
+- GIVEN `AIWATCHER_URL` set, and aiwatcher unreachable or started without a
+  prompt store
+- WHEN a builder names a prompt
+- THEN it raises — `registry_disabled` for the second — and no authored text is
+  served in the registry's place
+
+##### Scenario: a prompt the registry was never given names the fix
+- GIVEN `AIWATCHER_URL` set and nothing published
+- WHEN a builder names `sage`
+- THEN it raises naming aiwatcher's address and `make registry`
+
+##### Scenario: publishing twice is one version each, and deploys nothing
+- GIVEN `production` on a candidate of `sage`
+- WHEN `make registry` runs twice
+- THEN each prompt has one authored version, `sage` keeps its first author, and
+  `production` still names the candidate
+
+##### Scenario: nothing imports MLflow for a prompt
+- GIVEN a fresh interpreter
+- WHEN it imports `registry`
+- THEN neither `mlflow` nor an HTTP client is loaded, and `registry` declares no
+  MLflow dependency
 
 ### MODIFIED Requirements
 
@@ -666,9 +722,33 @@ answers to "which version did this run use". MLflow keeps tracing, teed.)
   starting another, `completion` for an answer handed to the join that waits
   for it. The panel draws messages between agents and a node's step names its
   alias as the agent, so the two meet on one name.
+- **The catalogue stays with the application; only MLflow left it.**
+  `registry` keeps its name, its `Prompts` and its texts, now `CATALOGUE`,
+  because what an agent is told is the application's. `get_prompt` reads
+  ADR_0011's registry when `AIWATCHER_URL` names one, so the builders' source
+  in `agentic` is unchanged — the one line the agent-core bullet above
+  anticipated turned out to be none.
+- **Without aiwatcher, the authored text; with it, never.** Unset, there is no
+  registry to disagree with and the authored text is the only answer. Set, a
+  registry that cannot answer raises: serving the authored text in its place
+  would run a version the registry may already have replaced, with nothing in
+  the trace to say so — the failure the removed requirement names.
+- **Publishing is not deploying.** `make registry` stores drafts and moves no
+  label, so a promoted candidate survives every republish, and an edited text
+  runs while nothing is promoted over it or once somebody moves `production`.
+- **A prompt nobody published names the fix.** A 404 is raised as
+  `UnknownPromptError` naming aiwatcher's address and `make registry`, rather
+  than published on read: a read that writes would attribute a version to
+  whichever process happened to ask first.
 
 ## Still open, deferred to the phase that can answer them
 
+- **A turn's prompt version.** An agent names its prompt on its LLM call only
+  as the attribute `agentic.prompt_name`, which `AiwatcherTracer.llm` drops, so
+  a trace cannot link a turn to the version it ran — `prompt_name` and
+  `prompt_version` are what `PromptRef::from_data` reads. The builder can
+  derive the version from the text it read (`sha256`, as the registry does);
+  that is a change to the core and the tracer, not to the registry.
 - **The licence.** `ai_spirit_agent` declares MIT; `aiwatcher-agentic` was
   given the Apache-2.0 of the distributions beside it. The owner's call.
 - **Which `evaluation` scorers move.** The DeepEval bridge is already
@@ -682,3 +762,4 @@ answers to "which version did this run use". MLflow keeps tracing, teed.)
 - 2026-09-10 16:30 — agent core: one requirement added over six scenarios (33 in all); the core's cut, `providers` keeping its adapters, the prompt source, the core's two dependencies and why no wire name moved, settled; the deferred `providers` question closed
 - 2026-09-10 18:27 — agent runtime: one requirement added over six scenarios (39 in all); the runtime's cut, the tracer and settings ports with the application's subclass, `aiwatcher-sdk` as an extra, a store default found broken since Phase C, and the runtime's two wire names, settled
 - 2026-09-10 20:05 — Phase A finished: `declare_graph` wired. One requirement added over six scenarios (45 in all), one success criterion ticked; the shape a turn can reach, the turn as its own execution, a node's own span id, nesting in process and the two message kinds, settled
+- 2026-09-10 20:04 — the MLflow prompt registry retired: one requirement added over seven scenarios (52 in all), the agent core's prompt clause reworded, one success criterion ticked; the catalogue staying with the application, the authored text without aiwatcher and never with it, publishing not deploying, and a 404 naming the fix, settled; a turn's prompt version left open
