@@ -560,19 +560,26 @@ that fires in one and not the other is a lint people learn to ignore.
 
 `sdk/agentic` is the **third** distribution, `aiwatcher-agentic`: what agents
 are built from, moved from `ai_spirit_agent` (AW-2) — the workflow engine
-(`aiwatcher_agentic.workflow`: messages, deciders, event stores, sagas) and the
-agent core beside it (`Agent`, tools, messages, prompt builders). Nothing in
-`aiwatcher-sdk` imports it, so importing telemetry never imports an agent. The
-engine is the standard library alone and the core adds `structlog` and
-`orjson`; what neither may bring is a model stack, so where they need one they
-declare a port — `model.ModelSource` for a model, `tracer.LLMTracer` for a
-tracer, `prompts.PromptSource` for a prompt read by name, `AgentRun` for what
-the engine reads off a turn — and the adapters (`providers`, the MLflow tracer
-and registry) stay with the application. `test_agent_port` fails if importing
-the core pulls a stack in. Its records keep the wire names
-they had before the move — `serialization.WIRE_PREFIX` — because stored rows
-carry them, and `tests/fixtures/records_before_the_move.jsonl` holds it to
-those bytes. `just agentic-check` runs the same four checks on its own lock.
+(`aiwatcher_agentic.workflow`: messages, deciders, event stores, sagas), the
+agent core beside it (`Agent`, tools, messages, prompt builders), and the
+runtime that composes and hosts them (`aiwatcher_agentic.runtime`:
+`AgenticRuntime`, its stores, `hosted`, and the transport on which a hop
+between two agents is a run of the target's workflow). Nothing in
+`aiwatcher-sdk` imports it, so importing telemetry never imports an agent; the
+runtime reaches aiwatcher through `aiwatcher-sdk`, imported only when used —
+the `[aiwatcher]` extra. The engine is the standard library alone and the core
+adds `structlog` and `orjson`; what none of them may bring is a model stack, so
+where they need one they declare a port — `model.ModelSource` for a model,
+`tracer.LLMTracer` for a tracer, `prompts.PromptSource` for a prompt read by
+name, `runtime.config.RuntimeSettings` for settings, `AgentRun` for what the
+engine reads off a turn — and the adapters (`providers`, the MLflow tracer and
+registry, the `.env` settings) stay with the application. `test_agent_port` and
+`test_runtime_port` fail if importing either pulls a stack in. A store handed
+no path goes under the working directory, never beside the code — derived from
+its own file, it named this checkout. Its records keep the wire names they had
+before the move — `serialization.WIRE_PREFIX` — because stored rows carry them,
+and `tests/fixtures/` holds them to those bytes. `just agentic-check` runs the
+same four checks on its own lock.
 
 The telemetry client and the registry client have **opposite** failure
 policies, and that is the design: telemetry must never take an agent down, so

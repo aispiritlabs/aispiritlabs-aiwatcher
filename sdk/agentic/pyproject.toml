@@ -1,7 +1,7 @@
 [project]
 name = "aiwatcher-agentic"
 version = "0.1.0"
-description = "The durable workflow engine agents are built on: messages, deciders, event stores, sagas."
+description = "What agents are built from: the durable workflow engine, the agent core, and the runtime that hosts agents on aiwatcher."
 readme = "README.md"
 requires-python = ">=3.13"
 license = "Apache-2.0"
@@ -10,8 +10,10 @@ license = "Apache-2.0"
 # two, which it logged and parsed tool calls with before it moved: small,
 # pure, and no model stack. A model stack is what this distribution refuses —
 # an agent reaches one through `model.ModelSource`, whose adapters stay with
-# the application — and `aiwatcher-sdk` joins this list with the first module
-# here that imports it, not before.
+# the application. `aiwatcher-sdk` is an extra rather than a dependency: the two
+# runtime modules that reach aiwatcher — `hosted` and `distributed.aiwatcher` —
+# import it when they are used, so an application whose agents all run in one
+# process installs nothing to talk to a server it never starts.
 dependencies = [
   "orjson>=3.11",
   "structlog>=25.5",
@@ -21,6 +23,10 @@ dependencies = [
 # `PydanticOutput` imports pydantic when it is used, so an agent whose answers
 # are dataclasses or plain text carries none of it.
 pydantic = ["pydantic>=2.12"]
+# Agents hosted on aiwatcher, and a hop between two of them as a run of the
+# target's workflow. Nothing in `aiwatcher-sdk` imports this distribution, so
+# importing telemetry never imports an agent.
+aiwatcher = ["aiwatcher-sdk"]
 
 [build-system]
 requires = ["hatchling"]
@@ -33,6 +39,9 @@ artifacts = ["aiwatcher_agentic/py.typed"]
 
 [dependency-groups]
 dev = [
+  # `hosted` and the aiwatcher transport are checked and tested against the
+  # SDK beside this one in the repository, never a released copy of it.
+  "aiwatcher-sdk",
   "mypy>=1.18,<2",
   "pydantic>=2.12,<3",
   "pytest>=8.4,<9",
@@ -41,6 +50,9 @@ dev = [
 
 [tool.uv]
 required-version = ">=0.12.7,<0.13"
+
+[tool.uv.sources]
+aiwatcher-sdk = { path = "../python", editable = true }
 
 [tool.ruff]
 target-version = "py313"

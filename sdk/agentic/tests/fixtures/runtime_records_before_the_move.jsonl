@@ -1,0 +1,2 @@
+{"agent_name":"search","capabilities":["web"],"role":"worker","consumer_group":"search","created_at_ns":1,"__type__":"agentic_runtime.distributed.contracts:AgentRegistration","__record_contract__":"agentic_runtime.distributed.contracts:AgentRegistration","__schema_version__":1}
+{"agent_name":"search","status":"alive","emitted_at_ns":1,"__type__":"agentic_runtime.distributed.contracts:AgentHeartbeat","__record_contract__":"agentic_runtime.distributed.contracts:AgentHeartbeat","__schema_version__":1}

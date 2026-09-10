@@ -91,6 +91,7 @@ def work(agent: str) -> None:
     from aiwatcher_sdk.worker import get_task_context
 
     from agentic_runtime.distributed import AgenticServiceDiscovery, PermanentMessageError
+    from agentic_runtime.settings import settings
     from workshops.lab6.runtime import PlannerHandler, SearchHandler, SummaryHandler
 
     class Planner:
@@ -132,7 +133,7 @@ def work(agent: str) -> None:
         print(f"HANDLED {agent} {message.metadata.turn_id} {attempt} {context.run_id}", flush=True)
         return handler(message, discovery)
 
-    discovery = AgenticServiceDiscovery.from_settings()
+    discovery = AgenticServiceDiscovery.from_settings(settings)
     if agent == "search":
         transport: Any = discovery.transport
         publish = transport.publish_message

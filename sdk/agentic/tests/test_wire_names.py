@@ -4,6 +4,10 @@
 these three records in `ai_spirit_agent`, at the last commit with the engine in
 it. Rows like them are already stored, so the engine that moved has to write
 the same bytes and read those back.
+
+`fixtures/runtime_records_before_the_move.jsonl` is the same promise for the
+runtime's two records, written by `ai_spirit_agent` at `c7cf305`, the last
+commit with the runtime in it.
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from aiwatcher_agentic.runtime.distributed import AgentHeartbeat, AgentRegistration
 from aiwatcher_agentic.workflow.messages import (
     ConversationData,
     Event,
@@ -29,8 +34,10 @@ from aiwatcher_agentic.workflow.serialization import (
     serialize_record,
 )
 
-BEFORE_THE_MOVE = (
-    (Path(__file__).parent / "fixtures" / "records_before_the_move.jsonl").read_text().splitlines()
+FIXTURES = Path(__file__).parent / "fixtures"
+BEFORE_THE_MOVE = (FIXTURES / "records_before_the_move.jsonl").read_text().splitlines()
+RUNTIME_BEFORE_THE_MOVE = (
+    (FIXTURES / "runtime_records_before_the_move.jsonl").read_text().splitlines()
 )
 
 METADATA = RecordedMessageMetadata(
@@ -80,3 +87,29 @@ def test_only_the_engine_types_keep_the_old_prefix() -> None:
     assert name == f"{OrderShipped.__module__}:OrderShipped"
     assert not name.startswith(f"{WIRE_PREFIX}.")
     assert type(deserialize_record(written)) is OrderShipped
+
+
+RUNTIME_RECORDS: tuple[object, ...] = (
+    AgentRegistration(
+        agent_name="search",
+        capabilities=("web",),
+        role="worker",
+        consumer_group="search",
+        created_at_ns=1,
+    ),
+    AgentHeartbeat(agent_name="search", status="alive", emitted_at_ns=1),
+)
+
+
+@pytest.mark.parametrize(
+    ("record", "before"), zip(RUNTIME_RECORDS, RUNTIME_BEFORE_THE_MOVE, strict=True)
+)
+def test_the_runtime_s_records_are_written_and_read_as_before_it_moved(
+    record: object, before: str
+) -> None:
+    assert serialize_record(record) == before
+
+    read = deserialize_record(before)
+
+    assert type(read) is type(record)
+    assert serialize_record(read) == before

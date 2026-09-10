@@ -118,13 +118,19 @@ class EventPayloadCodec(Protocol):
 
 
 def _default_path() -> Path:
-    return Path(__file__).resolve().parents[4] / "data" / "workflow_event_store.sqlite3"
+    # Under the working directory, never beside this file. Derived from where the
+    # module is installed, this named site-packages in a wheel and the root of
+    # the aiwatcher checkout in a source tree — not the application's `data/`
+    # it named before the engine moved (AW-2).
+    return Path.cwd() / ".data" / "workflow_event_store.sqlite3"
 
 
 def _resolve_path(path: str | Path | None) -> Path:
     if path is not None:
         return Path(path).expanduser()
-    return _default_path()
+    default = _default_path()
+    default.parent.mkdir(parents=True, exist_ok=True)
+    return default
 
 
 def _connect(path: Path) -> sqlite3.Connection:

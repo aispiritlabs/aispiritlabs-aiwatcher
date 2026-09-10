@@ -55,12 +55,21 @@ _BASE_SERIALIZABLE_TYPES = (
 #: An import path is where code lives; a persisted name is a promise.
 WIRE_PREFIX = "agentic.workflow"
 _PACKAGE = __name__.rpartition(".")[0]
+#: The same promise for every package of this distribution that moved, by the
+#: name its records were written under: the runtime beside the engine was
+#: `agentic_runtime`, and registers two records of its own.
+_WIRE_NAMES = {
+    _PACKAGE: WIRE_PREFIX,
+    f"{_PACKAGE.rpartition('.')[0]}.runtime": "agentic_runtime",
+}
 
 
 def _type_key(record_type: type[object]) -> str:
     module = record_type.__module__
-    if module == _PACKAGE or module.startswith(f"{_PACKAGE}."):
-        module = WIRE_PREFIX + module.removeprefix(_PACKAGE)
+    for package, wire_name in _WIRE_NAMES.items():
+        if module == package or module.startswith(f"{package}."):
+            module = wire_name + module.removeprefix(package)
+            break
     return f"{module}:{record_type.__qualname__}"
 
 
