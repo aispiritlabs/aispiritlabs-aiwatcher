@@ -1,0 +1,419 @@
+"""What an agent writes down before it tries to send, and deletes after.
+
+This package already has two failure policies and says so. Telemetry swallows
+and counts — a full queue drops events, because a telemetry library must never
+take an agent down. The registry clients raise — reading the prompt a service is
+about to run on *is* the work, so a failure there is the caller's to see.
+
+A hop between two agents is neither. Dropped, it is work lost with nothing to
+say so; raised, it takes down the agent whose message it was. It has to be
+**written down, then sent, then forgotten** — which is the outbox the Rust side
+already runs on the other end of the same wire, and this is that rule in a
+second language rather than a new one.
+
+## Four operations, and what each one is for
+
+``put`` writes locally and commits. It is idempotent in ``message_id``: a caller
+that retries its own write does not queue the hop twice.
+
+``settle`` **deletes**. `CLAUDE.md`: *never keep an outbox row the log has
+accepted*. The fact is on aiwatcher's stream, which is the durable copy and the
+one every fold reads; a second copy answers no question and grows with every hop
+of every conversation.
+
+``defer`` keeps the row and counts the attempt. It is for the answer that will
+be different next time — a refused connection, a 503, a timeout.
+
+``reject`` keeps the row too, and moves it out of the retry path. It is for the
+answer that will be the same next time — a 4xx about the message itself.
+`CLAUDE.md`'s adapter rule, from the other side: *`Unavailable` is retried,
+`Rejected` is dead-lettered. Getting this backwards either spins forever or
+discards good data.*
+
+**Nothing here deletes on failure**, at any attempt count. A retry budget that
+ends in a discard is a silent loss of exactly the kind this module exists to
+prevent; what a budget may do is stop retrying, which ``reject`` does while
+leaving the row where a person can read it.
+
+## Which store
+
+``MemoryOutbox`` is the default and is honest about what it is: it survives a
+failed request and not a failed process. ``SqliteOutbox`` survives both, and it
+is the durable tier here because ``sqlite3`` is in the standard library — this
+distribution's telemetry half depends on nothing, and a durable outbox that
+arrived as a wheel would be a dependency every agent pays for. A DuckDB adapter
+is the same protocol and a sensible addition for a deployment that already runs
+one; it is not the default, because an outbox is small transactional rows with
+single-row deletes, which is the shape a row store is for.
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+import threading
+import time
+from collections.abc import Sequence
+from dataclasses import dataclass, field
+from pathlib import Path
+from types import TracebackType
+from typing import Any, Final, Protocol, Self
+
+__all__ = [
+    "BATCH",
+    "Delivery",
+    "DrainReport",
+    "MemoryOutbox",
+    "Outbox",
+    "PendingDelivery",
+    "RetryableError",
+    "Sender",
+    "SqliteOutbox",
+    "drain",
+    "encode",
+]
+
+#: How many rows a drain takes in one pass when the caller names no bound.
+BATCH: Final = 128
+
+
+@dataclass(frozen=True, slots=True)
+class Delivery:
+    """One thing that has to reach aiwatcher, and the id that makes it once.
+
+    ``message_id`` is aiwatcher's inbox key, so it must name everything it
+    identifies — `CLAUDE.md`'s rule, and the failure it names is precise: an id
+    derived from the execution and the event name alone is unique for a one-step
+    plan and collides for a two-step one, after which the second step reads as a
+    redelivery of the first and the run sits behind a lease nothing releases.
+
+    ``body`` is already-encoded JSON rather than a mapping, because what is
+    stored has to be the bytes that will be sent: a mapping re-encoded at send
+    time can encode differently after a library upgrade, and then the digest
+    aiwatcher recorded is not of the bytes anybody has.
+    """
+
+    message_id: str
+    execution_id: str
+    kind: str
+    body: str
+
+    def __post_init__(self) -> None:
+        for name in ("message_id", "execution_id", "kind"):
+            if not getattr(self, name):
+                raise ValueError(f"a delivery needs a {name}")
+
+
+@dataclass(frozen=True, slots=True)
+class PendingDelivery:
+    """A row that has not been accepted yet, and its history of trying.
+
+    What an operator reads. ``attempts`` and ``last_error`` are here because a
+    queue nobody can inspect is a queue nobody trusts, and "how long has this
+    been stuck and what did it say" is the only question anybody asks of one.
+    """
+
+    delivery: Delivery
+    attempts: int = 0
+    first_seen: float = field(default_factory=time.time)
+    last_error: str | None = None
+    rejected: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class DrainReport:
+    """What one pass did. Counts, never an opinion about what to do next."""
+
+    settled: int = 0
+    deferred: int = 0
+    rejected: int = 0
+
+    @property
+    def moved(self) -> int:
+        """Rows that left the retry path, either accepted or dead-lettered."""
+        return self.settled + self.rejected
+
+
+class Immediate:
+    """``BEGIN IMMEDIATE`` … ``COMMIT``, or ``ROLLBACK``."""
+
+    def __init__(self, db: sqlite3.Connection) -> None:
+        self._db = db
+
+    def __enter__(self) -> sqlite3.Connection:
+        self._db.execute("BEGIN IMMEDIATE")
+        return self._db
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self._db.execute("ROLLBACK" if exc_type is not None else "COMMIT")
+
+
+class Outbox(Protocol):
+    """The four operations, and a way to look at what is stuck.
+
+    A protocol rather than a base class: a caller that already has a durable
+    store — `agentic.workflow`'s SQLite, a Postgres a service owns — implements
+    these five methods against it rather than running a second database beside
+    the one it has.
+    """
+
+    def put(self, delivery: Delivery) -> bool:
+        """Write and commit. ``False`` when this ``message_id`` is already held."""
+        ...
+
+    def pending(self, limit: int = BATCH) -> Sequence[PendingDelivery]:
+        """The oldest rows still worth sending, rejected ones excluded."""
+        ...
+
+    def settle(self, message_id: str) -> None:
+        """aiwatcher accepted it. Delete the row."""
+        ...
+
+    def defer(self, message_id: str, reason: str) -> None:
+        """The answer may differ next time. Keep the row, count the attempt."""
+        ...
+
+    def reject(self, message_id: str, reason: str) -> None:
+        """The answer will not differ. Keep the row, out of the retry path."""
+        ...
+
+    def depth(self) -> tuple[int, int]:
+        """How many rows are waiting, and how many are dead-lettered."""
+        ...
+
+
+class MemoryOutbox:
+    """An outbox that survives a failed request and not a failed process.
+
+    The default, and the honest one for a single-process run: a preview that
+    runs once in one process needs nothing else, and paying for durability there
+    would be paying for a restart that cannot happen.
+    """
+
+    def __init__(self) -> None:
+        self._rows: dict[str, PendingDelivery] = {}
+        self._lock = threading.Lock()
+
+    def put(self, delivery: Delivery) -> bool:
+        with self._lock:
+            if delivery.message_id in self._rows:
+                return False
+            self._rows[delivery.message_id] = PendingDelivery(delivery=delivery)
+            return True
+
+    def pending(self, limit: int = BATCH) -> Sequence[PendingDelivery]:
+        with self._lock:
+            waiting = [row for row in self._rows.values() if not row.rejected]
+        waiting.sort(key=lambda row: row.first_seen)
+        return tuple(waiting[:limit])
+
+    def settle(self, message_id: str) -> None:
+        with self._lock:
+            self._rows.pop(message_id, None)
+
+    def defer(self, message_id: str, reason: str) -> None:
+        self._mark(message_id, reason, rejected=False)
+
+    def reject(self, message_id: str, reason: str) -> None:
+        self._mark(message_id, reason, rejected=True)
+
+    def depth(self) -> tuple[int, int]:
+        with self._lock:
+            rejected = sum(1 for row in self._rows.values() if row.rejected)
+            return len(self._rows) - rejected, rejected
+
+    def _mark(self, message_id: str, reason: str, *, rejected: bool) -> None:
+        with self._lock:
+            row = self._rows.get(message_id)
+            if row is None:
+                return
+            self._rows[message_id] = PendingDelivery(
+                delivery=row.delivery,
+                attempts=row.attempts + 1,
+                first_seen=row.first_seen,
+                last_error=reason,
+                rejected=rejected,
+            )
+
+
+class SqliteOutbox:
+    """An outbox that survives the process.
+
+    One table, one connection, and ``isolation_level=None`` with explicit
+    ``BEGIN IMMEDIATE`` — because the point of writing before sending is that
+    the write is **committed** before the request goes out. Python's implicit
+    transaction management would leave a ``put`` uncommitted until something
+    else happened to commit it, which is the whole ordering inverted by a
+    default nobody chose.
+
+    ``check_same_thread=False`` with a lock rather than a connection per thread:
+    a hop may be written by whichever thread is running the turn, and the rows
+    have to be one queue.
+    """
+
+    SCHEMA: Final = """
+        CREATE TABLE IF NOT EXISTS outbox (
+            message_id   TEXT PRIMARY KEY,
+            execution_id TEXT NOT NULL,
+            kind         TEXT NOT NULL,
+            body         TEXT NOT NULL,
+            attempts     INTEGER NOT NULL DEFAULT 0,
+            first_seen    REAL NOT NULL,
+            last_error   TEXT,
+            rejected     INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS outbox_waiting
+            ON outbox (rejected, first_seen);
+    """
+
+    def __init__(self, path: str | Path) -> None:
+        self._path = Path(path)
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.Lock()
+        self._db = sqlite3.connect(self._path, check_same_thread=False, isolation_level=None)
+        self._db.execute("PRAGMA journal_mode=WAL")
+        self._db.execute("PRAGMA synchronous=FULL")
+        self._db.executescript(self.SCHEMA)
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self.close()
+
+    def close(self) -> None:
+        with self._lock:
+            self._db.close()
+
+    def put(self, delivery: Delivery) -> bool:
+        with self._lock, Immediate(self._db) as db:
+            held = db.execute(
+                "SELECT 1 FROM outbox WHERE message_id = ?", (delivery.message_id,)
+            ).fetchone()
+            if held is not None:
+                return False
+            db.execute(
+                "INSERT INTO outbox (message_id, execution_id, kind, body, first_seen) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    delivery.message_id,
+                    delivery.execution_id,
+                    delivery.kind,
+                    delivery.body,
+                    time.time(),
+                ),
+            )
+            return True
+
+    def pending(self, limit: int = BATCH) -> Sequence[PendingDelivery]:
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT message_id, execution_id, kind, body, attempts, first_seen, last_error "
+                "FROM outbox WHERE rejected = 0 ORDER BY first_seen LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return tuple(
+            PendingDelivery(
+                delivery=Delivery(message_id=row[0], execution_id=row[1], kind=row[2], body=row[3]),
+                attempts=row[4],
+                first_seen=row[5],
+                last_error=row[6],
+            )
+            for row in rows
+        )
+
+    def settle(self, message_id: str) -> None:
+        with self._lock, Immediate(self._db) as db:
+            db.execute("DELETE FROM outbox WHERE message_id = ?", (message_id,))
+
+    def defer(self, message_id: str, reason: str) -> None:
+        self._mark(message_id, reason, rejected=0)
+
+    def reject(self, message_id: str, reason: str) -> None:
+        self._mark(message_id, reason, rejected=1)
+
+    def depth(self) -> tuple[int, int]:
+        with self._lock:
+            waiting, rejected = self._db.execute(
+                "SELECT SUM(CASE WHEN rejected = 0 THEN 1 ELSE 0 END), "
+                "       SUM(CASE WHEN rejected = 1 THEN 1 ELSE 0 END) FROM outbox"
+            ).fetchone()
+        return int(waiting or 0), int(rejected or 0)
+
+    def _mark(self, message_id: str, reason: str, *, rejected: int) -> None:
+        with self._lock, Immediate(self._db) as db:
+            db.execute(
+                "UPDATE outbox SET attempts = attempts + 1, last_error = ?, rejected = ? "
+                "WHERE message_id = ?",
+                (reason, rejected, message_id),
+            )
+
+
+class Sender(Protocol):
+    """What a drain calls, and the three things it may answer.
+
+    ``None`` is acceptance. A :class:`RetryableError` is the answer that may differ
+    next time; anything else raised is the answer that will not. That split is
+    the caller's to make, because only the thing holding the socket knows
+    whether a 409 was a redelivery it should treat as accepted or a conflict it
+    should not.
+    """
+
+    #: Positional-only, so any one-argument callable satisfies this whatever it
+    #: called its parameter. A named parameter in a callback protocol makes
+    #: every plain function a type error at the call site and teaches people to
+    #: silence it, which is the opposite of what the protocol is for.
+    def __call__(self, delivery: Delivery, /) -> None: ...
+
+
+class RetryableError(Exception):
+    """The send failed in a way that may not fail next time.
+
+    Raised by a sender for a refused connection, a 503, a timeout — anything
+    where nothing about the message itself was wrong.
+    """
+
+
+def drain(outbox: Outbox, send: Sender, *, limit: int = BATCH) -> DrainReport:
+    """Try the waiting rows once, and report what moved.
+
+    One pass, never a loop: how often to drain and whether to back off are the
+    caller's, and a function that decided them here would be a scheduler
+    pretending to be a queue. It stops at the first :class:`RetryableError` — if
+    aiwatcher is unreachable it is unreachable for the next row too, and the
+    rows are ordered, so pressing on would spend the batch proving one fact.
+    """
+    settled = deferred = rejected = 0
+    for row in outbox.pending(limit):
+        try:
+            send(row.delivery)
+        except RetryableError as failure:
+            outbox.defer(row.delivery.message_id, str(failure) or failure.__class__.__name__)
+            deferred += 1
+            break
+        except Exception as failure:  # noqa: BLE001 — the sender classifies; this records
+            outbox.reject(row.delivery.message_id, f"{failure.__class__.__name__}: {failure}")
+            rejected += 1
+        else:
+            outbox.settle(row.delivery.message_id)
+            settled += 1
+    return DrainReport(settled=settled, deferred=deferred, rejected=rejected)
+
+
+def encode(payload: Any) -> str:
+    """The one encoding a delivery's body is written with.
+
+    ``sort_keys`` so that two processes encoding one message produce one string,
+    which is what lets a digest of the body mean anything.
+    """
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
