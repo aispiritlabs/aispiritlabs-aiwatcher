@@ -41,7 +41,10 @@ replace the transport. §40 is the design and is unchanged by this; what this
 spec adds is the repository dimension §40 does not cover.
 
 **Success criteria:**
-- [ ] A fan-out of three joins across a worker restart, with no broker running.
+- [x] A fan-out of three joins across a worker restart, with no broker running.
+      (`just e2e-agent-join`: three processes, the first SIGKILLed after two
+      completions, the join fires once from the stream. Since Phase F there is
+      no broker left in the agent SDK to run.)
 - [x] An agent starts from `POST /api/v1/executions` with no graph around it.
       (`just e2e-agent-standalone`, 14/14 — the call the panel's launcher makes,
       and again from a schedule's `run_now`; the host never imports
@@ -54,8 +57,11 @@ spec adds is the repository dimension §40 does not cover.
       — through a proxy the script shuts, so the dev server itself is not
       stopped; a claim is the one thing that waits for it.)
 - [ ] A prompt candidate admitted on a held-out score, and one refused by name.
-- [ ] `just sdk-check` and `make test-agentic` both green; `laser-sdk` is
-      absent from the agent SDK's dependencies.
+- [x] `just sdk-check` and `make test-agentic` both green; `laser-sdk` is
+      absent from the agent SDK's dependencies. (SDK 418, the agent repository
+      1127. `laser-sdk` is gone from `agentic_runtime` and from `uv.lock`, and
+      `just e2e-agent-transport`, 11/11, runs lab 6 with it uninstalled: a lost
+      hand-off, an agent with no worker, a refused hop and SIGTERM on the way.)
 
 ## Spec (delta)
 
@@ -151,13 +157,23 @@ list and drain the store by hand.
 - THEN it is refused while those completions wait, and granted once they have
   drained — a claim is never queued and never decided offline
 
-#### Requirement: agent messaging runs on the execution stream
-Publishing SHALL be an append to one hosted execution's stream under
-`expected_version`; consuming SHALL be a worker claim whose queue is the
-target agent; acknowledgement SHALL be the claim's result; a lost claimant SHALL
-be recovered by lease expiry. A hop's text SHALL NOT reach the event log — the
-fact carries sender, recipient, kind, digest and size, and the content follows
+#### Requirement: agent messaging runs on aiwatcher's claims
+A hop SHALL be a run of the target agent's one-step workflow. Publishing SHALL
+start that run with the message id as its `Idempotency-Key`; consuming SHALL be
+a worker claim whose queue is the target agent; acknowledgement SHALL be the
+claim's result; a lost claimant SHALL be recovered by lease expiry; a dead
+letter SHALL be the step's failure. A reply to a client that is not an agent
+SHALL be an append to that client's **mailbox** — one hosted execution per reply
+address — read from a cursor, as the Iggy topic was. A hop's text SHALL NOT
+reach the event log, a run's parameters or a stream row: each carries sender,
+recipient, kind, a reference, a digest and a size, and the content follows
 §40.4's `external` policy.
+
+This replaces the first draft of this requirement, which made publishing an
+append to one hosted execution's stream. A hosted run never schedules an
+attempt — `dispatch_ready` returns before it, so that no reactor claims what the
+worker is also deciding — which leaves a hosted stream with nothing a queue can
+claim. See *A hop is a run* below.
 
 ##### Scenario: three workers share one history
 - GIVEN three agent workers and no broker
@@ -167,9 +183,33 @@ fact carries sender, recipient, kind, digest and size, and the content follows
 
 ##### Scenario: the log carries the fact and never the words
 - GIVEN a hop whose text is a user's message
-- WHEN the fact reaches the event log
-- THEN it carries `from`, `to`, `kind`, a digest and a size, and the text
-  is not in it
+- WHEN it is published, claimed and answered
+- THEN no run's parameters, history or projection holds the text — each holds
+  the sender, the recipient, the kind, a reference, a digest and a size
+
+##### Scenario: a hop waits for its agent
+- GIVEN no worker running for the summary agent, and no broker
+- WHEN the search agent hands off to it
+- THEN the hop waits in the summary's queue, and is answered when a summary
+  worker starts
+
+##### Scenario: a hop whose acknowledgement was lost is recognised
+- GIVEN a worker whose start of the next hop reached aiwatcher and whose answer
+  did not
+- WHEN the server retries that worker's attempt
+- THEN the next hop is started again under the same message id, is one run, and
+  is handled once
+
+##### Scenario: a hop that cannot be handled reaches the sink
+- GIVEN a handler that raises `PermanentMessageError`
+- WHEN its hop is claimed
+- THEN the step fails and is not retried, and the client is answered with the
+  failure rather than waiting out its timeout
+
+##### Scenario: the registry is what was registered
+- GIVEN three agents registered with their capabilities
+- WHEN a fresh process asks for `web-search`
+- THEN it is the search agent, read from the definition aiwatcher holds
 
 #### Requirement: one distribution per failure policy
 The agent SDK SHALL ship as a distribution of its own, depending on
@@ -285,6 +325,20 @@ answers to "which version did this run use". MLflow keeps tracing, teed.)
   agent, and a failure in the agent's own code is `user_code`, which only a
   person retries, from the panel.
 
+- **A hop is a run, not a row** (Phase F, 2026-09-10). §40.6 maps consume to a
+  worker claim on the target's queue, and only a compiled step reaches the claim
+  table: a hosted run's `dispatch_ready` returns before scheduling anything, on
+  purpose. Phase E had already made an agent a one-step workflow, so a hop is a
+  start of that workflow — the message id is the `Idempotency-Key`, which makes
+  a re-sent hop the same run — and the server's claims, leases, retry budget and
+  failed-step sink are the consumer group, `XAUTOCLAIM` and the dead-letter
+  stream, with no change on the Rust side. A reply to a client has no agent to
+  claim it and every client tails it, so it goes to a mailbox: one hosted
+  execution per reply address, found by a fixed `Idempotency-Key`, appended to
+  and read from a cursor. The registry is the definitions aiwatcher holds, with
+  capabilities in the step's parameters; a hop to an agent with no worker waits
+  in its queue instead of being refused, which is what liveness was for.
+
 ## Still open, deferred to the phase that can answer them
 
 - **Whether `providers` moves whole.** `agentic` imports it directly and
@@ -297,3 +351,4 @@ answers to "which version did this run use". MLflow keeps tracing, teed.)
 
 ## Log
 - 2026-09-10 08:07 — spec drafted on `main`; two open questions settled, two deferred
+- 2026-09-10 15:29 — messaging requirement rewritten for Phase F: a hop is a run of the target agent's workflow, a reply is a row in the client's mailbox; four scenarios added
