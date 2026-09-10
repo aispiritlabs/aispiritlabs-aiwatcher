@@ -73,6 +73,15 @@ spec adds is the repository dimension §40 does not cover.
       hands back the same modules; `test_agent_port` runs an agent on a
       one-method double and imports the core in a fresh interpreter with no
       provider, MLflow, transformers or pydantic loaded.)
+- [x] The runtime is in that distribution too, handed its tracer and settings,
+      and the application's agents run on it unchanged. (`AgenticRuntime`, its
+      stores, `hosted` and the distributed transport are
+      `aiwatcher_agentic.runtime`'s; `agentic_runtime` hands back the same
+      modules and composes the SDK's runtime with MLflow, `.env`, its model
+      client and its `data/`. `test_runtime_port` imports it with no SDK,
+      MLflow or pydantic loaded. `just agentic-check` 355, the agent
+      repository 865; standalone 14/14, transport 11/11, join 8/8, outbox
+      11/11.)
 
 ## Spec (delta)
 
@@ -311,6 +320,59 @@ SHALL keep reading the MLflow registry there until that registry retires.
   and `ModelUsage`
 - THEN `mypy --strict` accepts all four
 
+#### Requirement: the runtime is handed what it read from the application
+`AgenticRuntime`, its stores, the hosted runtime and the distributed transport
+SHALL be `aiwatcher_agentic.runtime`'s, handed their tracer and settings
+through ports rather than reading an application's, and SHALL import no
+backend — no `aiwatcher-sdk` until `hosted` or the transport is used. A store
+handed no path SHALL go under the working directory, never beside the code.
+The application's composition — its tracer, settings, model client and data
+directory — SHALL stay the application's, and a caller that builds its runtime
+SHALL get what it got before the move.
+
+##### Scenario: a runtime answers a turn on what it was handed
+- GIVEN an `AgenticRuntime` with one workflow, a router, `RuntimeConfig`
+  stores and `NoopLLMTracer`
+- WHEN a message targeted at that workflow is handled
+- THEN the workflow's reply comes back, and nothing reached MLflow or a model
+  client
+
+##### Scenario: importing the runtime loads no backend
+- GIVEN a fresh interpreter
+- WHEN it imports `aiwatcher_agentic.runtime`, `hosted` and `distributed`
+- THEN none of `aiwatcher_sdk`, `httpx`, MLflow, `providers`, pydantic or
+  pydantic-settings is loaded
+
+##### Scenario: an application's settings are the port
+- GIVEN an application's settings object, with plain attributes of the same
+  names
+- WHEN it is handed to the runtime or to discovery
+- THEN it type-checks as `RuntimeSettings` and `DistributedSettings`, and
+  every service that discovery creates is held to its delivery budget
+
+##### Scenario: a store nobody placed stays out of the code's directory
+- GIVEN a runtime handed no store paths
+- WHEN it opens its stores
+- THEN both are under the working directory's `.data/`, and nothing is
+  written beside the installed modules
+
+##### Scenario: the application's runtime is composed as before
+- GIVEN `agentic_runtime.runtime.AgenticRuntime` built with the application's
+  `Settings`
+- WHEN it starts
+- THEN it is the SDK's runtime, with the tracer `create_tracer` returned, the
+  OpenAI-compatible client configured from `Settings`, its stores in the
+  application's `data/` when `.env` names none — and a patch of
+  `init_tracing`, `create_tracer` or `SQLiteMessageStore` through that module
+  reaches the code that runs
+
+##### Scenario: the runtime's records keep their wire names
+- GIVEN `AgentRegistration` and `AgentHeartbeat` as `ai_spirit_agent` wrote
+  them before the move
+- WHEN the moved runtime writes and reads them
+- THEN the bytes are the same, `agentic_runtime.distributed.contracts`
+  included
+
 ### MODIFIED Requirements
 
 #### Requirement: the Python floor
@@ -484,6 +546,43 @@ answers to "which version did this run use". MLflow keeps tracing, teed.)
   core type as a record — what is registered is the engine's messages and the
   applications' own events — so `WIRE_PREFIX` stays the engine's.
 
+- **The runtime moves; the application's composition does not** (2026-09-10).
+  `AgenticRuntime`, the conversation store, the fine-tuning export, `hosted`
+  and nine of the ten `distributed` modules are `aiwatcher_agentic.runtime`'s,
+  under their old names, and `agentic_runtime` registers each as that module
+  object. The investigation left `distributed/` behind because it was the Iggy
+  transport; since Phase F it is the aiwatcher one, which is what this spec is
+  about. What stayed names this application: `settings` (pydantic-settings,
+  `.env`, its model names), `trace` (MLflow), `users`, `workspaces` and
+  `slugs` (`~/.aispiritagent`), `deciders` (a third `passthrough_decider`),
+  and `DistributedAgenticRuntime`, which answers in Polish and names chat and
+  image modes.
+- **The runtime is handed a tracer and settings; the application subclasses
+  it.** `AgenticRuntime(tracer=, settings=)`, where `RuntimeSettings` is a
+  protocol the application's pydantic `Settings` satisfies by having the
+  fields, and `_configure_providers` is a hook. `agentic_runtime.runtime`'s
+  `AgenticRuntime` is that subclass — MLflow, `.env`, the OpenAI-compatible
+  client, its `data/` — rather than a re-export, so the places that patch
+  `init_tracing`, `create_tracer` or `SQLiteMessageStore` through it still
+  reach the code that runs. `AgenticServiceDiscovery.from_settings` takes the
+  settings it used to import, and its two callers pass them.
+- **`aiwatcher-sdk` arrives, as an extra.** The dependency the distribution
+  requirement names: `hosted` and `distributed.aiwatcher` import the SDK when
+  they are used, so `aiwatcher-agentic[aiwatcher]` installs it and an
+  application whose agents share one process installs nothing.
+- **A store's default was the checkout** (found here; broken since Phase C).
+  `SQLiteEventStore` took its default directory from its own file,
+  `parents[4] / "data"`, which after the engine moved named the root of the
+  aiwatcher checkout — an agent run with no `EVENT_STORE_PATH` wrote
+  `workflow_event_store.sqlite3` there, and the moved message store would have
+  written into `sdk/`. Both default to the working directory's `.data/`, and
+  `ai_spirit_agent` names its own `data/`, which is where both were before
+  either moved. The stray file is deleted.
+- **Two record types keep `agentic_runtime`.** `_WIRE_NAMES` extends
+  `WIRE_PREFIX`'s promise to the runtime package, so `AgentRegistration` and
+  `AgentHeartbeat` are written as before. Nothing has stored them since
+  Phase F; the fixture keeps it true if something does again.
+
 ## Still open, deferred to the phase that can answer them
 
 - **The licence.** `ai_spirit_agent` declares MIT; `aiwatcher-agentic` was
@@ -497,3 +596,4 @@ answers to "which version did this run use". MLflow keeps tracing, teed.)
 - 2026-09-10 15:29 — messaging requirement rewritten for Phase F: a hop is a run of the target agent's workflow, a reply is a row in the client's mailbox; four scenarios added
 - 2026-09-10 16:07 — Phase C: two requirements added (the engine's wire names, the old import path for one release) over four scenarios; the engine's cut, its wire names, the one 3.14-only call and the `Generator` spelling settled; `providers` deferred to the phase that moves `Agent`
 - 2026-09-10 16:30 — agent core: one requirement added over six scenarios (33 in all); the core's cut, `providers` keeping its adapters, the prompt source, the core's two dependencies and why no wire name moved, settled; the deferred `providers` question closed
+- 2026-09-10 18:27 — agent runtime: one requirement added over six scenarios (39 in all); the runtime's cut, the tracer and settings ports with the application's subclass, `aiwatcher-sdk` as an extra, a store default found broken since Phase C, and the runtime's two wire names, settled
