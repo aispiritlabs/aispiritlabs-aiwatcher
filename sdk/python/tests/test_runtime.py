@@ -535,3 +535,69 @@ def test_runtime_registers_and_starts_a_pinned_definition_with_an_idempotency_ke
         assert handle.wait(timeout=0)["execution"] == {"state": {"state_type": "completed"}}
         handle.retry("stage")
     assert requests[-1].url.path == "/api/v1/executions/run-1/steps/stage/commands/retry"
+
+
+def hosting(placement: dict[str, str] | None = None, **changes: Any) -> Runtime:
+    @task("stage", version="1")
+    def stage() -> None:
+        pass
+
+    return Runtime(
+        name="host",
+        url="http://aiwatcher.invalid",
+        workflows=[Workflow("house", "1", (WorkflowStep("acquire", stage),))],
+        pools=[ExecutionPool("local", "planner-import")],
+        placement={"house@1": "local"} if placement is None else placement,
+        telemetry=AiwatcherClient(service="test", transport=NullTransport()),
+        **changes,
+    )
+
+
+def test_a_runtime_releases_what_it_was_handed_once_when_it_closes() -> None:
+    released: list[bool] = []
+    runtime = hosting(on_close=lambda: released.append(True))
+
+    assert released == []
+    runtime.close()
+    runtime.close()
+    assert released == [True]
+
+
+def test_what_a_runtime_was_handed_is_released_after_its_workers_have_stopped() -> None:
+    # An agent runtime's stores are what a running task writes into; closing
+    # them under a task still inside one loses the turn it was writing.
+    from test_worker import WorkerApi
+
+    running: list[int] = []
+    hosted: list[Runtime] = []
+
+    def count_running() -> None:
+        running.append(sum(pool.running for pool in hosted[0].get_status()))
+
+    api = WorkerApi()
+    with httpx.Client(transport=httpx.MockTransport(api.handle)) as client:
+        hosted.append(hosting(client=client, poll_interval=0.01, on_close=count_running))
+        hosted[0].start()
+        hosted[0].close()
+
+    assert running == [0]
+
+
+def test_a_runtime_that_refuses_its_arguments_still_releases_what_it_was_handed() -> None:
+    released: list[bool] = []
+
+    with pytest.raises(ValueError, match="placement"):
+        hosting(placement={}, on_close=lambda: released.append(True))
+
+    assert released == [True]
+
+
+def test_a_failure_to_release_what_it_was_handed_is_reported_rather_than_swallowed() -> None:
+    def refuse() -> None:
+        raise OSError("the message store would not flush")
+
+    runtime = hosting(on_close=refuse)
+
+    with pytest.raises(BaseExceptionGroup) as raised:
+        runtime.close()
+    assert [type(error) for error in raised.value.exceptions] == [OSError]
