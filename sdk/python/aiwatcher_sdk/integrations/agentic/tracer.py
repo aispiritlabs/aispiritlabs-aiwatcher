@@ -74,9 +74,20 @@ import sys
 import time
 import uuid
 from collections.abc import Callable, Generator, Mapping
+from contextvars import ContextVar
 from typing import Any
 
 from aiwatcher_sdk import AiwatcherClient, Correlation, NullTransport, Transport
+
+#: The attempt a worker is running in this context, if there is one.
+#:
+#: Set by the worker around a task and read by every tracer that was not handed
+#: a run of its own. An agent runtime builds its tracer once, long before any
+#: attempt exists, so the attempt reaches it through the context rather than the
+#: constructor. Without it an agent hosted as a workflow opened a root run of its
+#: own for every turn, beside the execution that ran it, and nothing it did
+#: nested under the step that did it.
+current_attempt: ContextVar[Correlation | None] = ContextVar("aiwatcher_attempt", default=None)
 
 __all__ = ["AiwatcherTracer", "TeeTracer", "aiwatcher_tracer", "tee"]
 
@@ -138,7 +149,7 @@ class AiwatcherTracer:
 
     @property
     def _run(self) -> Correlation | None:
-        return self._runs[-1] if self._runs else None
+        return self._runs[-1] if self._runs else current_attempt.get()
 
     def _scope(self, agent_id: str | None = None) -> Correlation | None:
         """The context an event should be attributed to.
@@ -197,7 +208,11 @@ class AiwatcherTracer:
         id on the stack, or every later span in the run would nest under a span
         that already closed.
         """
-        parent = self._spans[-1] if self._spans else None
+        if self._spans:
+            parent: str | None = self._spans[-1]
+        else:
+            attempt = current_attempt.get()
+            parent = attempt.parent_span_id if attempt is not None else None
         span_id = self._new_span_id()
         self._spans.append(span_id)
         try:
@@ -221,9 +236,10 @@ class AiwatcherTracer:
         tracing_context: Any | None = None,
     ) -> Generator[NoopSpan, None, None]:
         del input, tracing_context
-        if self._managed:
+        if self._managed or current_attempt.get() is not None:
             # The engine owns this run's lifecycle. Agentic's workflow scope
-            # uses its assigned parent rather than emitting a second root.
+            # uses its assigned parent rather than emitting a second root —
+            # whether this tracer was handed the run or found an attempt open.
             yield NoopSpan()
             return
         # A fresh run per workflow, grouped by session. One chat session runs

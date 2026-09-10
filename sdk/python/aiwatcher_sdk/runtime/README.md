@@ -134,10 +134,19 @@ steps. See the [design decisions](../../../../docs/PYTHON_SDK_DESIGN.md).
 
 An agent that is not composed with anything is a workflow of one step.
 `aiwatcher_sdk.integrations.agentic.agent_workflow(name, respond, version=…,
-payloads=…)` builds it from a text-in, text-out turn: the reply goes to the
-payload store and the step's result carries its reference, digest and size,
-because a reply is a completion. A turn is tried once by default — its tools
-write, and a retry would write again.
+payloads=…, archive=…)` builds it from a text-in, text-out turn: the reply goes
+to the payload store and the step's result carries its reference, digest and
+size, because a reply is a completion. Given a `ConversationArchive`, every turn
+is also recorded there as one exchange, for review and export as fine-tuning
+data.
+
+A turn is delivered at least once — the server retries an attempt that may not
+have finished — and everything it records is filed under the step rather than
+the attempt. `TaskContext.step_key` is the same on every attempt; a tool that
+keys its writes by it writes once, and the archive's message ids are built from
+it, so a retry overwrites the exchange instead of adding one. `retry=` sets the
+budget per agent. An agent's tracer, built before any attempt, finds the one it
+is running in and nests its spans under the step.
 
 `on_close=` hands the runtime what the application's own composition root has
 to release, such as an agent runtime whose stores flush on close. It is called
