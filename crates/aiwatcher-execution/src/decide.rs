@@ -260,7 +260,7 @@ fn apply(execution: &mut Execution, event: &WorkflowEvent) {
         }
         WorkflowEvent::ExecutionCancelling { reason } => {
             execution.cancelling = true;
-            execution.state = RunState::named(StateType::Running, "Cancelling");
+            execution.state = RunState::cancelling();
             let _ = reason;
         }
         WorkflowEvent::ExecutionCancelled => {

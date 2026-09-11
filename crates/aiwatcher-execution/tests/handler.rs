@@ -829,3 +829,53 @@ async fn a_scheduled_retry_is_not_claimable_until_its_delay_has_passed() {
         .expect("the retry is claimable now");
     assert_eq!(taken.key.attempt, 2);
 }
+
+#[tokio::test]
+async fn a_cancel_takes_a_dispatched_attempt_out_of_the_claim_table() {
+    // A cancel is cooperative: what is running is asked to stop, and what was
+    // only dispatched is skipped. The skip has to settle the row, or the
+    // attempt stays claimable for ever — a reactor takes a cancelled run's
+    // work and does it, and a pod's row is read by every launcher pass
+    // (ADR_0029). `StepSkipped` names no attempt, so the number comes from the
+    // run; read as attempt `0` this retired a key that had never existed.
+    let store = MemoryWorkflowStore::new();
+    let handler = ExecutionHandler::new(store.clone());
+    handler
+        .handle(&execution(), start(), metadata("m-1"), Now::at(at(0)))
+        .await
+        .expect("a start");
+    let key = AttemptKey::new(execution(), "extract", 1);
+    assert!(
+        store.attempt(&key).await.expect("a read").is_some(),
+        "the start dispatched it"
+    );
+
+    handler
+        .handle(
+            &execution(),
+            WorkflowMessage::Command(WorkflowCommand::CancelExecution {
+                reason: "somebody pressed cancel".to_owned(),
+            }),
+            metadata("m-2"),
+            Now::at(at(5)),
+        )
+        .await
+        .expect("the cancel was accepted");
+
+    assert!(
+        store.attempt(&key).await.expect("a read").is_none(),
+        "the skip settled the row"
+    );
+    assert!(
+        store
+            .claim_attempt(
+                &ClaimFilter::for_queues(&["default".to_owned()], &["stage@1".to_owned()]),
+                "worker-1",
+                at(aiwatcher_jobs::LEASE_SECONDS + 1),
+            )
+            .await
+            .expect("a claim attempt")
+            .is_none(),
+        "and nothing claims a cancelled run's work, at any hour"
+    );
+}

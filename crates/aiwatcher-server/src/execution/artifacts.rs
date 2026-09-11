@@ -112,6 +112,34 @@ impl Artifacts {
         })
     }
 
+    /// Store what a pod printed and hand back the pointer to it.
+    ///
+    /// Named by its own hash like every other artifact here, which is what
+    /// makes reading one pod's log twice store it once — the launcher keeps
+    /// the Job when a store fails, so the next pass reads the same bytes
+    /// (ADR_0029).
+    ///
+    /// # Errors
+    ///
+    /// [`ActivityError`] when the store refused the bytes.
+    pub async fn put_log(&self, body: &[u8]) -> Result<ArtifactRef, ActivityError> {
+        let digest = aiwatcher_jobs::digest(body);
+        let key = data_key(ArtifactKind::Log, &digest);
+        self.store
+            .put(&key, body.to_vec())
+            .await
+            .map_err(store_error)?;
+        Ok(ArtifactRef {
+            name: "log".to_owned(),
+            uri: format!("{SCHEME}{key}"),
+            digest,
+            size_bytes: Some(body.len() as u64),
+            content_type: "text/plain; charset=utf-8".to_owned(),
+            kind: ArtifactKind::Log,
+            schema_ref: None,
+        })
+    }
+
     /// Read rows back, and check that they are the ones the pointer names.
     ///
     /// Verified rather than trusted, on the way out as well as in: this is the

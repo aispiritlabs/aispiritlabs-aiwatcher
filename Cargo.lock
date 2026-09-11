@@ -375,6 +375,7 @@ dependencies = [
  "async-trait",
  "axum",
  "duckdb",
+ "futures",
  "hex",
  "k8s-openapi",
  "kube",

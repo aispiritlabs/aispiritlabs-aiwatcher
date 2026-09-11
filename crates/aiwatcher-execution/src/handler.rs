@@ -669,6 +669,26 @@ pub fn attempt_rows(
                     *attempt,
                 )));
             }
+            // Nothing ran, so nothing is claimable: retiring the row is what
+            // takes a dispatched attempt out of every claimant's view when a
+            // cancel or an upstream failure overtook it.
+            //
+            // The number comes from the run, because `StepSkipped` carries
+            // none — it is a fact about a step rather than about an attempt.
+            // Read as attempt `0` it retired a key that had never existed, and
+            // left the row claimable for ever: a reactor took a cancelled
+            // run's pending attempt and did the work, and a pod's row sat in
+            // the claim table being read by every launcher pass. Found while
+            // building AW-4's 2.4.
+            WorkflowMessage::Event(WorkflowEvent::StepSkipped { step_id, .. }) => {
+                if let Some(attempt) = dispatched_attempt(run, step_id) {
+                    rows.push(AttemptWrite::Retire(AttemptKey::new(
+                        execution.clone(),
+                        step_id,
+                        attempt,
+                    )));
+                }
+            }
             WorkflowMessage::Event(event) => {
                 if let Some((step_id, attempt)) = settled(event) {
                     rows.push(AttemptWrite::Retire(AttemptKey::new(
@@ -747,10 +767,24 @@ fn settled(event: &WorkflowEvent) -> Option<(&str, u32)> {
         WorkflowEvent::StepFailed {
             step_id, attempt, ..
         } => Some((step_id, *attempt)),
-        // Nothing ran, so nothing is claimable. Settling the row is what takes
-        // a dispatched attempt out of every claimant's view when a cancel or an
-        // upstream failure overtook it.
-        WorkflowEvent::StepSkipped { step_id, .. } => Some((step_id, 0)),
+        // `StepSkipped` is not here: it names no attempt, so its row is
+        // resolved from the run in [`attempt_rows`] instead.
         _ => None,
     }
+}
+
+/// The attempt of this step that has a row in the claim table, if any.
+///
+/// Two ways not to have one, and both are ordinary: a `HumanInput` step is
+/// never dispatched at all ([`dispatched`]), and a step the plan scheduled but
+/// nothing has dispatched yet is at attempt `0`. A retire for either would be
+/// a write per skipped step per transaction, which the `file` adapter pays for
+/// by rewriting its table.
+fn dispatched_attempt(run: &crate::state::Execution, step_id: &str) -> Option<u32> {
+    if !dispatched(run, step_id) {
+        return None;
+    }
+    run.step(step_id)
+        .map(|step| step.current_attempt)
+        .filter(|attempt| *attempt > 0)
 }

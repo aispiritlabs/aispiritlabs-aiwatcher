@@ -248,8 +248,16 @@ pub fn spawn(
         tasks.timers = Some(timers::spawn(state, Arc::clone(store), shutdown.clone()));
 
         // The role that holds the reactors starts the pods, and claims none of
-        // their attempts: each pod does, by key (ADR_0029).
-        tasks.launcher = launcher(state, config, store, shutdown);
+        // their attempts: each pod does, by key (ADR_0029). It keeps their
+        // logs through the same object store and catalog its reactors record
+        // results in, and keeps none where there is neither.
+        tasks.launcher = launcher(
+            state,
+            config,
+            store,
+            pods::log::Keeper::of(artifacts, catalog.as_ref()),
+            shutdown,
+        );
 
         tasks.outbox = Some(spawn_outbox(
             Arc::clone(store),
@@ -326,6 +334,7 @@ fn launcher(
     state: &AppState,
     config: &Config,
     store: &Arc<dyn WorkflowStore>,
+    keeper: Option<pods::log::Keeper>,
     shutdown: &CancellationToken,
 ) -> Option<JoinHandle<()>> {
     let templates = state.pod_templates.as_ref()?;
@@ -336,6 +345,7 @@ fn launcher(
         Arc::clone(templates),
         pods::Settings { api_url },
         config.pod_namespace.clone(),
+        keeper,
         shutdown.clone(),
     ))
 }
@@ -343,10 +353,11 @@ fn launcher(
 /// No launcher in a build without `kube`. `Config::validate` refuses
 /// templates in this role here, so there is nothing to launch.
 #[cfg(not(feature = "kube"))]
-const fn launcher(
+fn launcher(
     _state: &AppState,
     _config: &Config,
     _store: &Arc<dyn WorkflowStore>,
+    _keeper: Option<pods::log::Keeper>,
     _shutdown: &CancellationToken,
 ) -> Option<JoinHandle<()>> {
     None

@@ -37,7 +37,11 @@ pub const OWNED_ENV: [&str; 3] = [
 /// Five minutes from the Job's creation to the pod's claim, unless the
 /// template says otherwise — an image pull and a scheduling decision, which is
 /// minutes on a cold node and seconds on a warm one.
-const DEFAULT_START_ALLOWANCE_SECONDS: u64 = 300;
+///
+/// Public because the watch reads an allowance for a Job whose template is no
+/// longer configured, and the allowance is what decides that a pod never got
+/// going: absent, it would decide "never" (ADR_0029).
+pub const DEFAULT_START_ALLOWANCE_SECONDS: u64 = 300;
 
 /// What a step asks for when it wants a pod of its own.
 ///

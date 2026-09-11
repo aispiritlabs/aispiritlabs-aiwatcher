@@ -152,6 +152,29 @@ impl RunState {
         }
     }
 
+    /// A run whose cancel was accepted and whose running steps have not all
+    /// stopped.
+    ///
+    /// [`StateType`] has no `Cancelling`, because a cancel is cooperative: the
+    /// run is still `Running`, and what is different about it is the reason.
+    /// This is that reason, written once — the pod launcher reads it back to
+    /// stop a cancelling run's pods (ADR_0029), and a reader asking for a fact
+    /// must not have to match a string somebody chose for a badge.
+    #[must_use]
+    pub fn cancelling() -> Self {
+        Self::named(StateType::Running, Self::CANCELLING)
+    }
+
+    /// The name [`Self::cancelling`] carries. Public because a test that
+    /// asserts what the panel shows should not spell it a second time.
+    pub const CANCELLING: &'static str = "Cancelling";
+
+    /// Whether this is [`Self::cancelling`].
+    #[must_use]
+    pub fn is_cancelling(&self) -> bool {
+        self.state_type == StateType::Running && self.name == Self::CANCELLING
+    }
+
     /// What the panel shows.
     #[must_use]
     pub fn label(&self) -> &str {

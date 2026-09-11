@@ -12,10 +12,12 @@
 //! written — and the template was refused at start if it set any of the
 //! former, so nothing here overwrites a choice somebody made.
 
+use std::collections::BTreeMap;
+
 use serde_json::{Map, Value, json};
 
-use aiwatcher_execution::AttemptKey;
 use aiwatcher_execution::pods::{PodRequest, PodTemplate, ResourceValues, job_name};
+use aiwatcher_execution::{AttemptKey, ExecutionId};
 
 /// How long a finished Job stays when no launcher is left to delete it.
 ///
@@ -34,8 +36,17 @@ pub const LABELS: [(&str, &str); 2] = [
 /// Which template a Job was started from.
 pub const TEMPLATE_LABEL: &str = "aiwatcher.dev/template";
 
-/// The attempt a Job is for, spelled out. An annotation rather than a label,
-/// because an execution id and a step id are not label values.
+/// Which attempt a Job is for — annotations rather than labels, because an
+/// execution id and a step id are not label values.
+///
+/// Three of them rather than one `<execution>/<step>/<attempt>`, because the
+/// watch reads this back off the cluster to say which attempt a dead pod held
+/// (ADR_0029). An execution id comes from a request and a step id from a
+/// canvas, and neither is checked against a path grammar anywhere: the joined
+/// key is a string to write and not one to parse. An annotation's value is
+/// arbitrary text, so each part rides whole.
+pub const EXECUTION_ANNOTATION: &str = "aiwatcher.dev/execution";
+pub const STEP_ANNOTATION: &str = "aiwatcher.dev/step";
 pub const ATTEMPT_ANNOTATION: &str = "aiwatcher.dev/attempt";
 
 /// The container's name when the template's pod names none.
@@ -64,7 +75,7 @@ pub fn job(request: &JobRequest<'_>) -> Value {
         labels.insert(name.to_owned(), value.into());
     }
     labels.insert(TEMPLATE_LABEL.to_owned(), request.template_name.into());
-    let annotations = json!({ ATTEMPT_ANNOTATION: request.key.idempotency_key() });
+    let annotations = annotations(request.key);
 
     json!({
         "apiVersion": "batch/v1",
@@ -90,6 +101,29 @@ pub fn job(request: &JobRequest<'_>) -> Value {
             },
         },
     })
+}
+
+/// The three annotations one attempt is named by, and the only place that
+/// decides how a Job carries it. [`attempt_of`] is the inverse, beside it.
+fn annotations(key: &AttemptKey) -> Value {
+    json!({
+        EXECUTION_ANNOTATION: key.execution_id.as_str(),
+        STEP_ANNOTATION: key.step_id,
+        ATTEMPT_ANNOTATION: key.attempt.to_string(),
+    })
+}
+
+/// The attempt a Job's annotations name.
+///
+/// `None` for a Job that does not carry all three — something else's, whatever
+/// label selector found it — which the watch skips rather than guesses at.
+#[must_use]
+pub fn attempt_of(annotations: &BTreeMap<String, String>) -> Option<AttemptKey> {
+    Some(AttemptKey::new(
+        ExecutionId::new(annotations.get(EXECUTION_ANNOTATION)?.clone()),
+        annotations.get(STEP_ANNOTATION)?.clone(),
+        annotations.get(ATTEMPT_ANNOTATION)?.parse().ok()?,
+    ))
 }
 
 /// The operator's pod, with aiwatcher's fields filled in.
@@ -325,10 +359,36 @@ mod tests {
                 assert_eq!(metadata["labels"][name], value);
             }
             assert_eq!(metadata["labels"][TEMPLATE_LABEL], "planner-import");
-            assert_eq!(
-                metadata["annotations"][ATTEMPT_ANNOTATION],
-                "import-7/parse/2"
-            );
+            assert_eq!(metadata["annotations"][EXECUTION_ANNOTATION], "import-7");
+            assert_eq!(metadata["annotations"][STEP_ANNOTATION], "parse");
+            assert_eq!(metadata["annotations"][ATTEMPT_ANNOTATION], "2");
         }
+    }
+
+    #[test]
+    fn the_attempt_a_job_is_for_is_read_back_off_its_annotations() {
+        let job = built(&template(planner_pod()), None);
+        let carried: BTreeMap<String, String> = job["metadata"]["annotations"]
+            .as_object()
+            .expect("annotations")
+            .iter()
+            .map(|(name, value)| {
+                (
+                    name.clone(),
+                    value.as_str().expect("an annotation is text").to_owned(),
+                )
+            })
+            .collect();
+        assert_eq!(attempt_of(&carried), Some(key()));
+
+        // A step id with a separator in it survives the round trip, which is
+        // the reason the key is not one annotation.
+        let slashed = AttemptKey::new(ExecutionId::new("import/7"), "parse/rows", 2);
+        let written: BTreeMap<String, String> =
+            serde_json::from_value(annotations(&slashed)).expect("annotations are a map of text");
+        assert_eq!(attempt_of(&written), Some(slashed));
+
+        // And a Job that carries none of this is nobody's attempt.
+        assert_eq!(attempt_of(&BTreeMap::new()), None);
     }
 }
