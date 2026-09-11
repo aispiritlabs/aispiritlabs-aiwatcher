@@ -95,3 +95,4 @@ tags: [spec/AW-3, step/deploy, branch/main, status/done]
 - 2026-09-11 12:45 — release images red on the push: the Flow image's vendor stage lacked bcmath for flow-php/parquet, so no query image published; fixed in the working tree, the flow target builds locally
 - 2026-09-11 13:00 — both fixes pushed (68775f6, b37c7de; origin/main at 5f9996b): CI run 34591223332 green, release-images run 34591223340 green with all five images published; post-deploy checks ticked
 - 2026-09-11 14:33 — the Flow-era aliases the Archive lists are removed in the working tree, each old name refused by name (server, chart, install.sh, vite, recipes folded into query-*, Flow's /flow/ routes); not yet committed
+- 2026-09-11 14:42 — the alias removal pushed as 8534d07 with the three review follow-ups (8669854, 9569abb, 6677742; origin/main at 6677742): CI run 34599766041 and release-images run 34599766045 green
