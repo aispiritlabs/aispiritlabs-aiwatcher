@@ -458,6 +458,13 @@ import-conversation conversation subject basis reference:
 e2e-train:
     ./scripts/e2e-mini-train.py
 
+# One managed run that evaluates a prompt, optimises it, evaluates the
+# candidate on held-out cases, records the server's verdict and asks an admin —
+# three times: approved, kept back, and rejected before anybody is asked. Starts
+# its own server from `target/debug/aiwatcher`; `cargo build --bin aiwatcher`.
+e2e-optimise:
+    ./scripts/e2e-optimise-prompt.py
+
 # One turn of a composed graph, drawn against the shape it declared: the two
 # searchers the router passed over stay `Pending`, the hand-offs are messages
 # between agents, and an agent's span nests under its node though its tracer
