@@ -1,6 +1,7 @@
 # ADR_0029: A step that needs a pod names an operator's template, and the pod is a worker for one attempt
 
-- **Status**: accepted; reopens Phase 12, which ADR_0016's supersession left unbuilt
+- **Status**: accepted; reopens Phase 12, which ADR_0016's supersession left unbuilt.
+  One amendment below, from building the watch
 - **Date**: 2026-09-11
 
 The change is AW-4's Part 2
@@ -284,3 +285,45 @@ a template, not a second engine.
 - A step that needs a GPU, a second container or fan-out. The first is the next
   field — `gpu` is refused as unknown until then, and adding it is additive — and
   the other two are outside this decision.
+
+## Amendment, 2026-09-12: what the watch turned out to be
+
+Four things in the decision above are not what the watch was built as (AW-4's
+2.4), and each is worth correcting where somebody will read it.
+
+**A pod's ending goes through `handle`, not `deliver`.** The decision says the
+ending is "delivered as the engine's own input through `ExecutionHandler::deliver`,
+never through the caller's door". The door it names guards *effect commands* —
+`ExecuteStep`, `RequestInput`, `TimeoutInput` — and what the launcher sends is a
+`StepFailed`, which is a report: the same message a reactor and a worker send
+through `handle`, under an id derived from the attempt so a pass that failed
+after the append lands on the inbox entry rather than beside it. `deliver` is
+crate-private and has one caller, the timer table, and widening it for this
+would have made a launcher's report reachable from nowhere it needed to be.
+
+**A cancel's attempt is ended by the launcher and the run's outcome is still
+the decider's.** The decision says "the attempt's state comes from the
+decider's cancel, not from the deletion" — but a cancel is cooperative and
+*waits* for what is running, so something has to say the pod has stopped. The
+launcher says it, as `FailureClass::Policy` — the class whose own words are
+"cancelled", and the one thing this depends on is that nothing retries it,
+because a retry would be a second pod for a run that is stopping. What the run
+then ends as is `decide`'s: a failure while cancelling is an
+`ExecutionCancelled`, so the run reaches `cancelled` in seconds rather than
+waiting out a lease. Deleting the Job and reporting nothing would have left the
+row claimable, and the next pass would have started another pod.
+
+**A run that has already ended stops its pods too.** A step that failed for the
+last time skips what is downstream of it and ends the run while a sibling's pod
+is still working. That pod's work is nobody's, and its row would sit in the
+claim table for ever being read by every pass — so the same branch covers both,
+and "is this run still taking work" is one keyed projection read per execution
+per pass, memoised, because a fan-out is many pods of one run. It reads
+`RunState::is_cancelling`, which exists so that a reader asking for the fact
+does not match the string a badge is drawn from.
+
+**The attempt rides as three annotations.** `aiwatcher.dev/execution`,
+`aiwatcher.dev/step` and `aiwatcher.dev/attempt`, because the watch reads it
+*back* off the cluster: an execution id comes from a request and a step id from
+a canvas, and neither is checked against a path grammar anywhere, so
+`<execution>/<step>/<attempt>` is a string to write and not one to parse.

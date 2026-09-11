@@ -6,7 +6,7 @@ status: doing
 branch: main
 repo: aiwatcher
 created: 2026-09-11
-updated: 2026-09-11
+updated: 2026-09-12
 tags: [spec/AW-4, step/job, branch/main, status/doing]
 ---
 <!-- spec-card -->
@@ -42,3 +42,4 @@ planner something aiwatcher now has.
 - 2026-09-11 14:45 — Part 2 designed: ADR_0029 accepted — templates, images, the pod as a worker for one attempt, the lease deciding and the Job explaining; 2.2 is next
 - 2026-09-11 15:13 — 2.2 built (`c4fc124`): a step may ask for a pod, and registration refuses what its template does not allow; nothing launches one yet, and 2.3 is next
 - 2026-09-12 00:32 — 2.3 built (inside another session's `26be55e`): the work role starts one Job per pod's attempt and claims none of them, a pod claims its own attempt by key and no long-lived worker can take it, and the chart grants the launcher Jobs and pod logs in one namespace; 2.4 is next — a cancel deleting the Job, the watch ending a dead pod's attempt, and the log
+- 2026-09-12 01:10 — 2.4 built (`c713a1e`): the launcher watches what it started — a pod that died holding its attempt ends it now, with the cluster's own reason rather than a lapsed lease's silence; a Job no pod claimed in time is ended and deleted; a cancel deletes a running pod's Job and the run reaches `cancelled` in seconds; and a pod's last 256 KiB is kept against its attempt in the catalog before its Job goes. A cancel that had been leaving dispatched attempts in the claim table for ever is fixed with it. 2.5 is next — planner's four stages on a local cluster, byte-identical

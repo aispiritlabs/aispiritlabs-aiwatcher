@@ -166,6 +166,78 @@ outline below is what the spec already fixes.
   again, the launcher is told the Job already exists, and the attempt waits.
   2.4's watch ends it with the pod's reason; until then only the Job's
   one-hour TTL and a restart of the launcher start a second pod, as a retake.
+- **The watch is a second half of the same pass, and the cluster is its
+  record** (2.4). A launcher that restarted still has to end the attempt of a
+  pod that died while it was away, so what exists is read back from the
+  cluster — one Jobs listing and one pods listing per pass, never a read per
+  Job — rather than remembered here. A listing that could not be read leaves
+  the watch for the next pass and does not stop the launch: a create is
+  idempotent by name, and an attempt with no pod is the one thing waiting on
+  the loop.
+- **The attempt rides as three annotations rather than one key** (2.4).
+  `aiwatcher.dev/execution`, `aiwatcher.dev/step` and `aiwatcher.dev/attempt`,
+  because the watch reads it *back*: an execution id comes from a request and a
+  step id from a canvas, and neither is checked against a path grammar
+  anywhere, so `<execution>/<step>/<attempt>` is a string to write and not one
+  to parse. `manifest::attempt_of` is the inverse, beside the writer.
+- **The Job says whether a pod ended; the pod says why** (2.4). A pod may be
+  deleted after its Job finished, and then the Job is the only thing left that
+  knows it did — so `status.succeeded`/`failed` decides `Ended`, and the pod's
+  own word (`OOMKilled`, `Evicted`, `DeadlineExceeded`, a terminated reason
+  with its exit code) fills in the reason. A dead pod's attempt fails as
+  `Infrastructure`, which is the class whose words are "a killed pod" and whose
+  budget is the tighter one.
+- **A start allowance is read off the Job's template label** (2.4), not off the
+  plan: the plan would be a stream read per Job. A template no longer
+  configured falls back to `DEFAULT_START_ALLOWANCE_SECONDS`, because this is
+  the clock that decides a pod never got going and an absent one would decide
+  "never". The Job's own `activeDeadlineSeconds` cannot answer it — that is the
+  allowance *plus* the step's timeout.
+- **A cancel is `Policy`, and the launcher asks the run rather than the row**
+  (2.4). `StateType` has no `Cancelling`: a cancel is `Running` with a reason,
+  so the reason became `RunState::cancelling()` and `is_cancelling()` — the
+  launcher reads a fact instead of matching the string a badge is drawn from,
+  and nothing had to be migrated into the projection. One keyed projection read
+  per execution per pass, memoised, because a fan-out is many pods of one run.
+  The class is `Policy` — whose own words are "cancelled" — and the one thing
+  the loop depends on is that nothing retries it: a retry would be a second pod
+  for a run that is stopping. What the *run* ends as stays the decider's, since
+  a failure while cancelling is an `ExecutionCancelled`.
+- **A run that already ended stops its pods too** (2.4), by the same branch. A
+  step that failed for the last time skips what is downstream of it and ends
+  the run while a sibling's pod is still working, and that pod's work is
+  nobody's. Left alone its row would also sit in the claim table for ever,
+  read by every pass.
+- **A parked attempt's pod ending is not an ending** (2.4). A question keeps its
+  row and the answer dispatches attempt *n+1*, so the watch ends an attempt
+  only when its row is neither terminal nor `awaiting_input`.
+- **The log is bytes, kept after the attempt, and the Job goes once it is
+  stored** (2.4). 256 KiB of the *end*, because a traceback is printed last and
+  one line of a structured logger can be megabytes; the stored object's first
+  line says how many bytes came before. `Tail` is the ring buffer and compiles
+  in every build, because the cluster can only bound the *first* bytes of a log
+  stream. The attempt ends first and is read after — a settlement never waits
+  for its log — and a log that could not be read or stored leaves the Job for
+  the next pass, where the same bytes store once because an artifact is named
+  by its own hash. `ttlSecondsAfterFinished` is the backstop, and a deployment
+  with no object store keeps no log and deletes the Job anyway.
+- **Found while building: a cancel left a dispatched attempt in the claim
+  table** (2.4). `StepSkipped` names no attempt, so the handler retired
+  attempt `0` — a key that had never existed. The row stayed claimable for
+  ever: a reactor took a cancelled run's pending attempt and did the work, and
+  a pod's row was read by every launcher pass. The number now comes from the
+  run (`dispatched_attempt`), which is where `dispatched` was already read
+  from, and `StepSkipped` leaves `settled()`.
+- **Left to a later pass: the step's view links its log.** The catalog holds it
+  against the attempt, and what is missing is a route that lists what an
+  execution produced. That is a contract change, and the log's own requirement
+  — kept, bounded, against the attempt — is met without it.
+- **The chart needed nothing for 2.4** (2.4): 2.3's Role already carries jobs
+  `delete`, pods `get/list/watch` and `pods/log` `get`, because the ADR named
+  them. The one thing the client had to say out loud is
+  `DeleteParams::background()` — without a propagation policy the pod is
+  orphaned by the delete and keeps running, which is the one thing a cancel is
+  for.
 - **The chart** (2.3):
   - one ConfigMap of templates, mounted by the server and the worker;
   - a `-launcher` ServiceAccount on the pod that holds the reactors, the only
@@ -222,7 +294,7 @@ outline below is what the spec already fixes.
       `backoffLimit: 0`, the key-only claim rule; the chart's RBAC, templates
       and network rule, and `kube` in the release image — *a step may ask for a
       pod*, *the engine owns a pod's retries*
-- [ ] 2.4 Cancel deletes the Job; the watch ends a dead pod's attempt with its
+- [x] 2.4 Cancel deletes the Job; the watch ends a dead pod's attempt with its
       reason; the log is read back into the catalog — *a cancel reaches a
       running pod*, *a pod's log is kept*
 - [ ] 2.5 planner's four stages on a local cluster, byte-identical
@@ -236,3 +308,4 @@ outline below is what the spec already fixes.
 - 2026-09-11 14:45 — 2.1 done: ADR_0029 — a step opts in with `pod` and compiles to `container_job`; templates and per-template image lists are chart values, matched by exact repository; the launcher reads claimable rows and creates one Job per attempt by a derived name, never claiming; the pod claims its attempt by key under its template's queue token (a one-attempt credential deferred as the strict mode); the lease decides, the watch explains; the log is the last 256 KiB in the catalog. Answers the spec's three open questions; 2.2–2.4 reworded to match
 - 2026-09-11 15:13 — 2.2 built (`c4fc124`): `RuntimeBinding::ContainerJob` under `container_job`; the step`s `pod` field, absent from every older digest; `aiwatcher_execution::pods` with the templates file, the exact-repository image match, Kubernetes quantities and the refusals of fields aiwatcher fills in; a 422 at registration naming step, value and template; `AIWATCHER_POD_TEMPLATES` read by the serve role and refused where no launcher exists; the SDK `PodRequest`. Clippy -Dwarnings and the three crates suites green, `just sdk-check` 423, the panel build green, the contract regenerated
 - 2026-09-12 00:32 — 2.3 built, and swept into another session's `26be55e` before it could be committed on its own: the key-only claim rule in `ClaimFilter` and in the PostgreSQL claim, `claimable_attempts` in four adapters with a contract property, the launcher and its Job manifest in `aiwatcher-server/src/execution/pods` — the loop and the manifest in every build, kube-rs behind `kube` — a refused launch reported as a `StepFailed` the way a reactor reports, `PERFORMABLE` and `recorded_result` widened so a pod's report is acknowledged, the chart's templates file, launcher RBAC, mounts and network rule, `AIWATCHER_POD_API_URL` and `AIWATCHER_POD_NAMESPACE`, the SDK reading `AIWATCHER_ATTEMPT` and `AIWATCHER_WORKER_NAME`, and `aiwatcher-server/kube` in the release image. Clippy -Dwarnings with every feature, the execution, API and server suites, `just sdk-check` 424, `just chart-check` plus renders with templates set, the postgres and duckdb store contracts, `cargo deny` and `just openapi-check` green
+- 2026-09-12 01:10 — 2.4 built (`c713a1e`): the launcher's pass gained a watch — the cluster's own Jobs and pods listing, read once each per pass — which ends a dead pod's attempt as `Infrastructure` with the cluster's own reason (`OOMKilled`, `DeadlineExceeded`, an exit code), ends and deletes a Job no pod claimed within its template's start allowance, and stops a cancelling or already-ended run's pods as `Policy` so the cancel completes rather than waiting out a lease; the attempt rides as three annotations so it can be read back; the log is the last 256 KiB through a `Tail` that compiles in every build, stored under the artifacts prefix and recorded in the catalog against the attempt, after which the Job is deleted (`DeleteParams::background()`, or the pod outlives it); a log that could not be read or stored leaves the Job for the next pass. `RunState::cancelling()`/`is_cancelling()` replace matching a badge's string, and the cancel that left a dispatched attempt in the claim table for ever — `StepSkipped` retiring attempt `0` — is fixed in the handler. Clippy `-Dwarnings --all-features`, execution 160 + 13 + 23 + 14 + 15 + 12, server 93 + 38 and 93 with `kube`, API 156 + 24, the postgres (5 + 7) and duckdb (4) store contracts, `just chart-check`, `cargo deny` and `just openapi-check` green

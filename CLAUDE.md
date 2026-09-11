@@ -324,14 +324,20 @@ area.
    that still sets `AIWATCHER_ENGINE` is refused at start by name. A step that
    needs a pod of its own is to get one from the engine itself — Phase 12's
    `ContainerJob`, reopened by AW-4, decided in
-   [ADR_0029](docs/ADR/ADR_0029_POD_PER_STEP.md) and built through AW-4's 2.3:
+   [ADR_0029](docs/ADR/ADR_0029_POD_PER_STEP.md) and built through AW-4's 2.4:
    a step names an operator's template and an image on that template's list,
    the work role starts one Job per attempt behind the `kube` feature and
    claims none of them, and the pod is a worker that claims its one attempt by
    key — `ClaimFilter` gives a `container_job` row to no claim that did not
-   name it, and the Job's derived name is what makes it exactly one. 2.4 is the
-   other direction: a cancel that deletes the Job, the watch that ends a dead
-   pod's attempt with its own reason, and the log.
+   name it, and the Job's derived name is what makes it exactly one. The same
+   loop watches what it started, and correctness needs none of it: a pod that
+   vanished is a lease that lapses, and what the watch adds is *sooner* and
+   *why* — a dead pod's attempt ended as `Infrastructure` with the cluster's
+   own reason, a Job no pod claimed within its start allowance ended and
+   deleted, a cancelling or already-ended run's pods stopped as `Policy` so a
+   cancel completes in seconds rather than in a lease, and the pod's last
+   256 KiB kept against its attempt in the catalog before its Job goes. 2.5 is
+   what is left: planner's four stages on a local cluster, byte-identical.
 
 14. **An annotation is authored, vector-first, and split by family**
    ([ADR_0017](docs/ADR/ADR_0017_IMAGE_ANNOTATION.md),
@@ -916,6 +922,16 @@ the review.
   which is the claim table growing with the history that rule exists to prevent,
   and the `file` adapter pays for it on every claim and every heartbeat.
   Section 43.40.
+- **Never retire an attempt by a number the event does not carry.**
+  `StepSkipped` is a fact about a *step* — a cancel or an upstream failure
+  overtook it — and names no attempt, so the handler read one as attempt `0`
+  and retired a key that had never existed. Its row stayed claimable for ever:
+  a reactor took a cancelled run's pending attempt and did the work, and a
+  pod's row was read by every launcher pass. The number comes from the run,
+  where `dispatched` was already read from, and a step at attempt `0` or one
+  the plan never dispatched gets no write at all — a retire per skipped step
+  is a write per step per transaction that the `file` adapter pays for by
+  rewriting its table. AW-4's 2.4.
 - **Never ask the plan what only the question knows.** A gate has two authors —
   the plan for one it declared, a running attempt for one it chose to ask — and
   a `PythonTask` spec has no `on_timeout` to read. So the policy rides on
