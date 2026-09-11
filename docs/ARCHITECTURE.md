@@ -46,7 +46,6 @@ In dependency order. A crate may only depend on ones above it.
 | `aiwatcher-datasets` | Curation recipes, dataset versions, and the block pipelines behind the curation canvas. |
 | `aiwatcher-execution` | Managed execution: the compiled plan, the states, the attempts, the pure decider, the outbox. |
 | `aiwatcher-runner` | The rerun dispatcher: one HTTP POST to one configured endpoint. |
-| `aiwatcher-pipeline` | Pipeline engines behind a `WorkflowEngine` port. Flyte 2 over its `/api/v1/` gateway. |
 | `aiwatcher-auth` | OIDC discovery, JWKS cache, authorization-code flow with PKCE, signed session cookies, group-to-role mapping. |
 | `aiwatcher-projector` | The pipeline, live hub, read model, dimension and span folds, dedup, retry, dead letters. |
 | `aiwatcher-api` | axum router: REST, SSE, WebSocket, OpenAPI. |

@@ -28,9 +28,9 @@ Execution engines remain separate:
   entry point, an agent turn or an evaluation suite (sections 36–37). This is
   how planner's stages and an `ai_spirit_agent` graph run without an HTTP
   service in front of them;
-- Flyte 2 may execute externally registered workflows through the existing
-  `WorkflowEngine` port, and stays the answer for what a worker cannot do
-  (section 39.5);
+- an external orchestrator is no longer one of them: the Flyte engine and its
+  port were removed by AW-4 (2026-09-11), and a step that needs a pod of its
+  own is to get one from this engine (section 37);
 - the Rust API coordinates aiwatcher-managed executions and preserves their
   history and context.
 
@@ -65,14 +65,14 @@ The design borrows four compatible ideas:
    enables recovery.
 3. **Prefect:** only runs have states; steps have independent attempts, retries,
    and persisted results; a cache hit is an explicit execution state.
-4. **Flyte 2:** runtime environments belong to tasks, tasks exchange typed
-   references to artifacts, and an external engine can own an execution without
-   changing the product-facing API.
+4. **Flyte 2:** runtime environments belong to tasks, and tasks exchange typed
+   references to artifacts. Flyte itself left aiwatcher with AW-4; the ideas
+   stay.
 
 Revision 2 adds what checking the plan against three codebases showed
 (section 33). The durable-job rules already exist in `aiwatcher-jobs` and are
-called, not copied. The engine port `WorkflowEngine` and its Flyte adapter
-already exist and are kept; the `ExecutionBackend` trait of revision 1 is
+called, not copied. The engine port and its Flyte adapter already existed and
+were kept — until AW-4 removed both; the `ExecutionBackend` trait of revision 1 is
 dropped for an `ExecutionOwner` on the run (section 24). The object store
 cannot serve as the workflow stream, which is what settles PostgreSQL
 (section 7.1). And two of the three things this engine is for — planner's
@@ -104,7 +104,8 @@ Section 33.5 lists every decision it touches.
 - Run, retry, resume, cancel, and inspect a pipeline after the originating panel
   tab has closed.
 - Reuse the execution model for agent, search, and ML workflows.
-- Connect Planner and Flyte later without changing the panel contract.
+- ~~Connect Planner and an external engine later without changing the panel
+  contract.~~ Withdrawn: planner removed Flyte, and AW-4 removed the engine.
 - Link every execution and step attempt to aiwatcher observability.
 - Keep large data outside the event log and PostgreSQL rows.
 - Run planner's four-stage house import unattended, one pod per stage, with no
@@ -124,7 +125,7 @@ Section 33.5 lists every decision it touches.
 - Deterministic, testable workflow decisions.
 - Content-addressed artifacts and cache keys.
 - Rebuildable asynchronous projections.
-- A local development path that does not require Flyte, RustFS or PostgreSQL.
+- A local development path that does not require RustFS or PostgreSQL.
 - One lease, one retry rule and one content address, shared with
   `aiwatcher-jobs` rather than re-derived.
 - A worker that needs no inbound address, no bucket credential and no role
@@ -134,9 +135,8 @@ Section 33.5 lists every decision it touches.
 
 - Reimplement Temporal, Prefect, or Flyte inside aiwatcher.
 - Reimplement Flyte's typed literal system, map tasks, dynamic sub-workflows
-  or its console. What planner uses of Flyte is smaller than that (section
-  39.1); what it might need later keeps the `Engine` owner alive (section
-  39.5).
+  or its console. What planner used of Flyte was smaller than that (section
+  39.1). The `Engine` owner kept for the rest went with AW-4 (section 39.5).
 - Execute arbitrary PHP or Python code inside the Rust API process — nor an
   LLM call, an agent turn or a notebook.
 - Turn the panel into a workflow worker.
@@ -168,9 +168,9 @@ things. The implementation should use these names consistently:
 | `WorkflowStream` | Ordered inbox and outbox messages for one execution |
 | `ArtifactRef` | Immutable reference to data or code stored outside the message |
 | `ContextSnapshot` | Exact code, source, parameters, and upstream artifacts seen by a step |
-| `RuntimeBinding` | Adapter and execution configuration for one step: Flow, marimo, a worker task, a container job, an agent turn, a human input, an engine — section 35 |
+| `RuntimeBinding` | Adapter and execution configuration for one step: Flow, marimo, a worker task, a container job, an agent turn, a human input — section 35 |
 | `ObservedWorkflow` | Graph reconstructed from external telemetry, not necessarily launchable |
-| `ExecutionOwner` | Who decides for an execution: `local` (the Rust decider), `engine:<name>` (an external engine read through `WorkflowEngine`), `worker` (a hosted decider — section 40.3) |
+| `ExecutionOwner` | Who decides for an execution: `local` (the Rust decider) or `worker` (a hosted decider — section 40.3). Any other owner read back is kept as written — shown, never scheduled or decided (section 24) |
 | `ExecutionMode` | `compiled` — a static plan the Rust decider schedules; `hosted` — a worker runs `decide` and this system keeps the history |
 | `Worker` | A process holding a worker token that claims step attempts by pulling, runs one task or agent turn per attempt, and reports facts — `aiwatcher_sdk.worker` (section 36) |
 | `TaskRef` | `name@version`: the registered name and pinned code version a worker must match to claim a `PythonTask` attempt |
@@ -232,7 +232,7 @@ pub trait Workflow {
 Time, ids, resolved revisions, and policies needed by a decision arrive in the
 input. This makes replay and scenario testing straightforward.
 
-Flow calls, marimo calls, RustFS writes, Flyte launches, and dataset publication
+Flow calls, marimo calls, RustFS writes, and dataset publication
 are effects. Dedicated reactors execute them and report facts back to the
 workflow.
 
@@ -259,19 +259,13 @@ Small control values may stay inline. The default limits should be:
 ### 5.5 The owner of an execution owns its retries
 
 - For a local aiwatcher execution, Rust owns step scheduling and retries.
-- For an execution delegated as a whole to an engine (Flyte, through
-  `WorkflowEngine`), that engine owns its internal task retries and
-  scheduling. aiwatcher records the external execution id and shows the
-  engine's phase **beside** the status folded from the log, never merged into
-  it — the existing guardrail, unchanged.
+- An execution delegated as a whole to an external engine, which that engine
+  would have retried, is gone with the engine (AW-4, 2026-09-11).
 - For a hosted decider (section 40.3), the worker owns its decisions and this
   system owns the lease, the redelivery and the retry of the *attempt*. One
   attempt is retried by the store, never by the worker's own loop as well.
 - A `ContainerJob` sets `backoffLimit: 0` for the same reason: the store counts
   attempts, and a Job that retried on its own would be a second orchestrator.
-- aiwatcher may retry the initial engine launch only while it cannot know
-  whether the engine accepted it, using an idempotency key or lookup by
-  external execution name.
 
 This prevents two nested orchestrators from independently retrying the same
 work.
@@ -300,7 +294,6 @@ flowchart LR
 
     REACTORS --> FLOW
     REACTORS --> MARIMO
-    REACTORS -->|WorkflowEngine| FLYTE["Flyte 2, optional"]
     REACTORS -->|Kubernetes Job running a worker| KUBE["cluster, optional"]
     REACTORS --> STORE[ObjectStore port]
     STORE --> RUSTFS[(RustFS)]
@@ -315,8 +308,8 @@ queries, editing, validation, and explicit developer tests. Durable `run`,
 `retry`, `resume`, `cancel`, and `publish` commands always go through Rust.
 
 Two process roles share one binary (section 27): **serve** holds the API, the
-store and the object store, and opens no socket to Flow, marimo, an engine or
-the cluster; **work** holds the consumers, the workflow processor and the
+store and the object store, and opens no socket to Flow, marimo or the
+cluster; **work** holds the consumers, the workflow processor and the
 reactors, and is the only role that reaches those. A worker pod holds neither
 the store nor a bucket credential — it reads and writes artifacts through
 URLs its claim carried. The projectors still read the log directly, as today:
@@ -384,10 +377,11 @@ If it later exposes a proven atomic per-stream append with expected revision
 and an inbox/outbox boundary, this decision can be revisited behind the port.
 
 PostgreSQL does all six steps in one transaction, and one already runs in the
-`planner` namespace this system is installed into — Flyte's `flyte-binary`
-points at `planner-postgres`. ADR 0009's `install | external | none` applies to
-it as to every other backend: `detect-stack.py` reports one, and a second
-PostgreSQL beside an existing one is the mistake that ADR exists to prevent.
+`planner` namespace this system is installed into — `planner-postgres`, which
+Flyte's `flyte-binary` also used until planner removed it. ADR 0009's
+`install | external | none` applies to it as to every other backend:
+`detect-stack.py` reports one, and a second PostgreSQL beside an existing one
+is the mistake that ADR exists to prevent.
 
 Behind the port, three adapters, in the pattern `memory | wal | laser` and
 `none | memory | file | s3` already set: `memory` for tests; `file` — a
@@ -524,14 +518,14 @@ in the same stream makes every decision explainable and replayable.
 create table execution_runs (
     execution_id uuid primary key,
     plan_id text not null references execution_plans,
-    owner text not null,          -- local | engine:<name> | worker
+    owner text not null,          -- local | worker; other text reads back as unknown
     mode text not null,           -- compiled | hosted
     state_type text not null,
     state_name text not null,
     requested_by text not null,
     input jsonb not null,
     external_execution_id text,
-    owner_state jsonb,            -- the engine's or the worker's own phase; shown beside, never merged
+    owner_state jsonb,            -- the worker's own phase; shown beside, never merged
     lease_owner text,             -- hosted mode: the one decider at a time
     lease_expires_at timestamptz,
     run_id text,
@@ -740,8 +734,7 @@ checks that against the token (section 36.2).
 ### 11.2 Partition keys
 
 - telemetry: `run:<run_id>`;
-- workflow control: `workflow:<workflow_run_id>`;
-- an external Flyte execution: `workflow:<aiwatcher_execution_id>`.
+- workflow control: `workflow:<workflow_run_id>`.
 
 This preserves the ordering needed within one decision scope without requiring
 global ordering.
@@ -820,9 +813,11 @@ pub enum RuntimeBinding {
     ContainerJob(ContainerJobSpec),         // a PythonTask in a Kubernetes Job — section 37
     AgentTurn(AgentTurnSpec),               // a worker runs one agent turn — section 40
     HumanInput(HumanInputSpec),             // waits for a command — section 41
-    ExternalWorkflow(ExternalWorkflowSpec), // WorkflowEngine::launch — Flyte
 }
 ```
+
+A variant that launched a workflow whole on an external engine was declared,
+never produced, and removed with the engine by AW-4 (2026-09-11).
 
 Section 35 is the table: where each executes, who owns its retries, what it
 may carry. Each `*Spec` names a binding and its parameters and never a host;
@@ -1261,12 +1256,10 @@ POST /api/v1/worker/attempts/{ref}/fail
 POST /api/v1/worker/attempts/{ref}/await
 ```
 
-`POST /api/v1/engine/launches` becomes `POST /executions` with an engine
-target and stays as an alias for one release (Phase 9). `/api/v1/engine` and
-its catalog stay what ADR 0016 made them — what an *engine* could start — and
-`/definitions` is what *this system* could start; the panel's picker shows
-both, each row naming its source, and never merges them into one list that
-cannot say which is which.
+The engine routes ADR 0016 added — a catalogue of what an external engine could
+start, and its launches — were removed by AW-4 (2026-09-11), and Phase 9's
+alias with them. `/definitions` is what this system could start, and there is
+no second list beside it.
 
 Start request for the current compiled curation path:
 
@@ -1323,7 +1316,7 @@ The panel must not:
 - publish a managed run's dataset itself;
 - infer source context from the currently visible draft;
 - assume a runtime URL or deployment topology;
-- decide whether Flyte or the local engine owns a run.
+- decide who owns a run.
 
 A useful mechanical acceptance check is that the pipeline route no longer
 imports or calls browser-side `orderOf`, `compileFlow`, `runQuery`,
@@ -1338,8 +1331,7 @@ Every managed execution has:
 - `run_id`: one runtime/process execution; several run ids may belong to one
   workflow run;
 - `step_id` and `attempt`;
-- `trace_id` and span context where applicable;
-- `external_execution_id` for Flyte or another engine.
+- `trace_id` and span context where applicable.
 
 The initiating HTTP command seeds correlation. Every output event inherits that
 correlation and names the input message as causation.
@@ -1382,6 +1374,10 @@ Do not truncate the serving projection while rebuilding it in production.
 
 ## 24. Planner and Flyte 2
 
+**Superseded in part by AW-4 (2026-09-11).** Flyte left aiwatcher, and the
+`Engine` owner with it; the owner itself stands. The first paragraph below is
+kept as the history of why there is an owner at all.
+
 Revision 1 introduced an `ExecutionBackend` trait here, with a local and a
 Flyte implementation. Revision 2 drops it. Checking the code found
 `core::engine::WorkflowEngine` already doing the external half — catalog,
@@ -1396,8 +1392,8 @@ So an execution has an **owner**, and the owner decides which code path runs:
 ```rust
 pub enum ExecutionOwner {
     Local,               // the Rust decider schedules; reactors and workers execute the steps
-    Engine(EngineRef),   // WorkflowEngine::launch; the engine schedules and retries its own tasks
-    Worker(TaskRef),     // a hosted decider — the worker decides, this system keeps the history
+    Worker,              // a hosted decider — the worker decides, this system keeps the history
+    Unknown(String),     // an owner this build does not know, kept as written
 }
 ```
 
@@ -1405,26 +1401,19 @@ pub enum ExecutionOwner {
   steps are any binding in section 35.
 - A `Worker` execution has one lease — the decider's — and a stream the
   worker appends to under expected version; section 40.3.
-- An `Engine` execution has one record, the external id, and `owner_state`
-  refreshed by `WorkflowEngine::execution` on request. It is shown beside the
-  status the workflow fold derives from what the engine's pods published, and
-  the two are allowed to disagree, because a disagreement is a producer nobody
-  instrumented. aiwatcher records the metadata and the artifact lineage the
-  engine reports and never reschedules the engine's internal tasks. Engine
-  artifact references are linked when accessible and copied to RustFS only for
-  retention, governance or locality.
+- An `Unknown` owner is text this build does not recognise, kept exactly as it
+  was written. It is listed and shown, and nothing claims, schedules or decides
+  for it. An `engine:<name>` owner from before AW-4 would read back this way,
+  though nothing ever wrote one.
 
 Cancel goes to the owner: the store for `Local`, the worker's lease and a
-`CancelRequested` in the stream for `Worker`, `WorkflowEngine` gains a
-`cancel` — its sixth method, the one it lacks — for `Engine`.
+`CancelRequested` in the stream for `Worker`.
 
-What planner runs today, the four levels at which it can integrate, and the
-path by which a `Local` execution takes Flyte's place in its cluster are
-sections 38 and 39. The short version: planner uses one launch-plan-free
-`TaskEnvironment`, no retries, no caching, no schedules and no typed IO beyond
-`str`; the in-process path is the default profile and is tested byte-identical;
-and the console is the part that cost the most fix commits. `Engine` stays for
-what a worker cannot do.
+What planner ran, the four levels at which it could integrate, and the path by
+which a `Local` execution took Flyte's place in its cluster are sections 38 and
+39. planner removed Flyte on 2026-09-09 and runs its four stages through the
+worker boundary. What it gave up — a pod per stage — comes back through
+`ContainerJob` (section 37, Phase 12, reopened by AW-4), not through an engine.
 
 ## 25. Security and tenancy
 
@@ -1468,9 +1457,9 @@ Recommended defaults:
 
 ## 27. Crate and module plan
 
-Keep `aiwatcher-pipeline` as the external workflow-engine integration boundary.
-Add a separate crate for owned execution semantics rather than turning the
-Flyte adapter crate into the entire application orchestrator.
+Owned execution semantics get a crate of their own rather than growing inside
+the Flyte adapter crate, `aiwatcher-pipeline` — which AW-4 then removed with
+the engine (2026-09-11).
 
 Recommended dependency direction:
 
@@ -1491,19 +1480,19 @@ aiwatcher-execution              NEW
   the memory, file and postgres WorkflowStore adapters
   — postgres behind a `postgres` cargo feature, sqlx optional
 
-aiwatcher-kube                   NEW, behind a `kube` cargo feature
-  the ContainerJob reactor: creates one Job per attempt from a named pod
-  template, watches it, deletes it on cancel (section 37)
-
-aiwatcher-pipeline
-  WorkflowEngine adapters, initially Flyte — unchanged in role; gains cancel
-
 aiwatcher-api
   definitions, commands, reads, context, SSE, the worker routes
 
 aiwatcher-server
-  PostgreSQL, the log, ObjectStore, reactors, roles, shutdown wiring
+  PostgreSQL, the log, ObjectStore, reactors, roles, shutdown wiring;
+  behind a `kube` cargo feature, the ContainerJob reactor: one Job per
+  attempt from a named pod template, deleted on cancel (section 37)
 ```
+
+The Kubernetes client was drawn here as an `aiwatcher-kube` crate. AW-4
+corrects it to a feature of `aiwatcher-server`, where executors live — the
+shape `laser` and `postgres` already have, and the finding below that the
+argument for a crate was untrue.
 
 And in `sdk/python`:
 
@@ -1512,8 +1501,6 @@ aiwatcher_sdk/worker/            NEW — a registry client (httpx, tenacity, rai
   claim, heartbeat, complete, fail, await; the @task registry; run-attempt
 aiwatcher_sdk/integrations/agentic.py
   gains declare_graph, the hosted-decider EventStore and the transport (section 40)
-aiwatcher_sdk/integrations/flyte.py
-  unchanged
 ```
 
 The worker half is never imported by the telemetry half: `aiwatcher_sdk`
@@ -1545,13 +1532,12 @@ Runtime-specific compilation should not leak into the panel:
 - compilation from curation blocks to `ExecutionPlan` belongs in
   `aiwatcher-execution`;
 - Flow script generation belongs in a Flow runtime compiler module;
-- Flow/marimo HTTP clients implement activity-executor ports;
-- Flyte remains a `WorkflowEngine` adapter.
+- Flow/marimo HTTP clients implement activity-executor ports.
 
 **Process roles.** One binary, two roles: `aiwatcher serve` holds the API, the
 read model, the store and the object store; `aiwatcher work` holds the outbox
 publisher and the reactors, and is the only role that opens a socket to Flow,
-marimo, an engine or the cluster. `just dev` runs both **in one process** with
+marimo or the cluster. `just dev` runs both **in one process** with
 the `file` store; a deployment runs them as two Deployments with different
 network policies, and the one that holds cluster credentials is the one that
 holds no ingress. This is how ADR 0008's "the binary does not know the optional
@@ -1765,6 +1751,10 @@ nothing here builds it.
 
 ### Phase 9 — engine-owned executions — **withdrawn** (AW-4)
 
+Withdrawn with the engine: AW-4 removed the engine port and its routes on
+2026-09-11, so nothing below will be built. The scope is kept because other
+documents cite Phase 9 by number.
+
 - `ExecutionOwner::Engine` over the existing `WorkflowEngine`; no new trait.
 - `WorkflowEngine::cancel`.
 - An execution record for a launched engine run, with `owner_state` refreshed
@@ -1778,16 +1768,19 @@ disagreement.
 
 ### Phase 12 — container jobs, and Flyte out of planner's chart — **reopened** (AW-4)
 
-- `aiwatcher-kube` behind the `kube` feature; named pod templates in
-  configuration; image allowlist.
-- `ContainerJob` binding; a worker started per attempt; lease by heartbeat.
-- planner's `kubernetes` profile on `ContainerJob` in Tilt against real k3s
-  (no Devbox); `flyteEnabled` readable for one release as the fallback.
-- Section 39.4's removal list.
+- A `kube` feature of `aiwatcher-server` (AW-4 corrects the crate of section
+  27); named pod templates as chart values, each with its own image allowlist.
+- `ContainerJob` binding, opt-in per step; a worker started per attempt; lease
+  by heartbeat; a cancel that deletes the pod, and the pod's log kept.
+- planner's `kubernetes` profile naming a template on its four stages, in Tilt
+  against real k3s (no Devbox) — planner's own commit.
+- GPU later. ~~`flyteEnabled` readable for one release as the fallback~~ and
+  ~~section 39.4's removal list~~ are done: planner removed Flyte on
+  2026-09-09, before this phase.
 
-**Exit:** the house import runs one pod per stage on k3s with no Flyte
-component installed, byte-identical, and the chart is smaller by the list in
-39.2.
+**Exit:** the house import runs one pod per stage on k3s, byte-identical to the
+one-pod path, and an out-of-memory stage fails its own attempt and nothing
+else.
 
 ### Phase 13 — the hosted decider
 
@@ -1923,12 +1916,13 @@ may leave a silently stuck run.
 6. Rebuild a PostgreSQL projection next to the serving version and switch only
    after it catches up.
 7. Run Observability Flow queries with the managed pipeline worker disabled.
-8. Run local curation with Flyte absent.
-9. Delegate an external workflow to Flyte and prove aiwatcher does not retry its
-   internal tasks.
+8. ~~Run local curation with Flyte absent.~~ Moot since AW-4: no build carries
+   Flyte.
+9. ~~Delegate an external workflow and prove aiwatcher does not retry its
+   internal tasks.~~ Withdrawn with the engine (AW-4).
 10. Run planner's four stages as worker tasks and diff the `ReviewRecord`
     against the `direct` path — the assertion `test_house_stage_artifacts.py`
-    already makes for Flyte, made for this.
+    made for Flyte, made for this.
 11. Kill a worker mid-attempt; prove the lease expires, the attempt is
     `Crashed`, and the next attempt writes byte-identical artifacts.
 12. Run two workers on one queue; prove every attempt is claimed exactly once
@@ -1980,8 +1974,7 @@ reusing the review's baseline test counts as proof.
 
 Neither integration is verified in aiwatcher's CI, and neither should be:
 they pin an SDK revision and run their own suites. What aiwatcher owes them is
-a stand-in at the boundary they call — the loopback admin `aiwatcher-pipeline`
-already has for Flyte, and its equivalent for the worker routes: a stand-in
+a stand-in at the boundary they call — for the worker routes, a stand-in
 engine that hands out claims from a fixture and records completions, so
 planner's `test_house_stage_artifacts.py` and `agentic`'s durable tests run
 with no aiwatcher process. planner's `fake_services/` is the same pattern
@@ -1994,9 +1987,9 @@ pointed the other way.
 - Give each processor a stable id, consumer group, checkpoint, lag metric, and
   dead-letter count.
 - Expose readiness separately for PostgreSQL, the log, ObjectStore, Flow,
-  marimo, the engine and the cluster. Optional runtime failure must not make
-  unrelated APIs unready; the serve role's readiness never includes Flow,
-  marimo, the engine or the cluster, because it never reaches them.
+  marimo and the cluster. Optional runtime failure must not make unrelated
+  APIs unready; the serve role's readiness never includes Flow, marimo or the
+  cluster, because it never reaches them.
 - Count claims per queue, claim latency, attempts per step, lease expiries and
   workers seen in the last lease; a queue with claimable attempts and no
   worker in a lease is the alert that replaces "the pod is pending".
@@ -2014,7 +2007,7 @@ pointed the other way.
 
 | Risk | Mitigation |
 |---|---|
-| Two orchestrators retry the same work | Store explicit backend owner; local and Flyte paths are exclusive |
+| Two orchestrators retry the same work | Store an explicit owner — `local` or `worker` — and let exactly one party retry an attempt (5.5) |
 | Log/PostgreSQL dual-write loss | Transactional PostgreSQL outbox with idempotent publication to the log |
 | Runtime completed after client timeout | Runtime lookup by stable idempotency key before retry |
 | Browser logic diverges from server | API returns compiled context, states, and valid actions |
@@ -2055,9 +2048,10 @@ pointed the other way.
 8. Key marimo data staging by immutable execution context, not notebook name.
 9. Compile authored UI definitions to a server-owned `ExecutionPlan`; keep the
    definitions themselves in the registry's object store.
-10. Keep Flyte as an optional execution owner through the existing
-    `WorkflowEngine`, never duplicate its internal orchestration, and add no
-    second engine trait.
+10. ~~Keep an external engine as an optional execution owner through the
+    existing port, never duplicate its internal orchestration, and add no
+    second engine trait.~~ Withdrawn by AW-4 (2026-09-11): the engine and its
+    port are removed, and nothing replaces them.
 11. Start with one Iggy partition; require vector checkpoints before scaling it
     out.
 12. Do not add Redis until measured PostgreSQL/ObjectStore metadata access
@@ -2074,7 +2068,8 @@ pointed the other way.
 17. planner instruments its stages first (Level 0), then runs them on a
     worker in the `local` profile, then on container jobs in Tilt, and Flyte
     leaves its chart only when the review is byte-identical at every step
-    (section 39.4).
+    (section 39.4). In the event Flyte left planner's chart on 2026-09-09,
+    before container jobs existed, with the four stages in one pod (39.4).
 18. An agent graph runs as a hosted decider: the worker decides, this system
     keeps the history, and nothing in `agentic` is rewritten (section 40.3).
 19. A hosted execution's payloads follow a policy the definition chooses:
@@ -2104,9 +2099,9 @@ migration, `ExecutionBackend` was dropped for `ExecutionOwner` (§24), the
 **What existed and the plan had not used.** `aiwatcher-jobs` already held the
 lease, the retry decision, `version_of` and `ORDERING`, which §9.3, §14 and §36
 now call rather than re-derive. The write-ahead log — not Iggy — is the default
-backend, which is why the topology says "the log". And `WorkflowEngine` with its
-Flyte gateway was already there, so `ExecutionOwner` sits beside it rather than
-replacing it.
+backend, which is why the topology says "the log". And the engine port with its
+Flyte gateway was already there, so `ExecutionOwner` sat beside it rather than
+replacing it — until AW-4 removed the port and left the owner.
 
 **What planner and `ai_spirit_agent` actually run** is §38 and §40, both current.
 planner's four stages now run on the worker boundary behind a `PipelineRunner`
@@ -2122,7 +2117,7 @@ across OCC retries — and its in-process join is the gap Phase 13 fills.
 | 0008 Flow is parsed, never executed | Unchanged. "The binary does not know the optional services exist" is narrowed to the serve role (section 27). |
 | 0012 The graph comes from the declaration | Unchanged, and relied on: the engine declares its plan (section 34). |
 | 0014 The browser coordinates execution and persistence | Superseded for managed runs; its "what would make this wrong" is this plan. Ad-hoc mode keeps it. |
-| 0016 Inventory, never history; no launch on the log | Rule 1 unchanged. The deferred question — recording a launch on the log — is decided in favour (section 34). `ExecutionBackend` never replaces `WorkflowEngine`. |
+| 0016 Inventory, never history; no launch on the log | Superseded by AW-4 (2026-09-11): the engine is removed. Its deferred question — recording a launch on the log — was decided in favour first (section 34), and that stands, because the producer is aiwatcher's own engine. |
 | 0018 A training run is a record | Unchanged; a `TrainingRun` is a worker task that writes those records (38, Level 3). |
 | 0021 Content is encrypted, retained separately, erasable | Unchanged for the log and the archive. A hosted execution's payloads stay out of aiwatcher by default and go through the archive's crypt when a definition chooses `sealed` (40.4). |
 | 0022 One job primitive | Unchanged, and called rather than copied. |
@@ -2201,14 +2196,16 @@ not open its own `node()` scope.
 | `ContainerJob` | a Kubernetes Job the reactor creates, running a worker for one attempt (37) | the work role, the cluster API, a named template | Rust; `backoffLimit: 0` | as `PythonTask` | as `PythonTask` | as `PythonTask` |
 | `AgentTurn` | a worker running `agentic` | pulled | Rust for the attempt; the tool loop is inside one attempt | refs (40.4) | never | yes — by policy: references by default, sealed on request |
 | `HumanInput` | nobody — it waits | a command on the execution API (41) | n/a; a timeout is a policy | a request document → a decision, or a response ref | never | when the answer is words, under the same policy |
-| `ExternalWorkflow` | the engine's pods | `WorkflowEngine::launch` | the engine | bound to the declared interface | the engine's | the engine's |
+
+A row for a workflow launched whole on an external engine was declared and
+never produced; AW-4 removed it with the engine (2026-09-11).
 
 Rules that hold across the table:
 
 1. Every executor's address is configuration — `AIWATCHER_FLOW_URL`,
-   `AIWATCHER_ML_PIPELINE_URL`, `AIWATCHER_FLYTE_ENDPOINT`, the pod's service
-   account for the cluster. A `PlanStep` names a binding and its parameters,
-   never a host. The reasoning is ADR 0012's and ADR 0016's, unchanged.
+   `AIWATCHER_ML_PIPELINE_URL`, the pod's service account for the cluster. A
+   `PlanStep` names a binding and its parameters, never a host. The reasoning
+   is ADR 0012's, unchanged.
 2. No binding executes code in the serve role. `PublishDataset` runs there
    and executes none: it writes a content-addressed version.
 3. A binding that can hold content declares it. Under the default policy
@@ -2236,7 +2233,8 @@ on the PVC with the RustFS copy's digest, and a `review` output on the last.
 
 Two of the three things this engine is for run Python that nobody wants behind
 an HTTP service. planner's stages are functions taking `(payload, JsonStore)`
-that an RQ worker already runs; an agent turn is a `DurableWorkflowExecutor`
+that planner's own job queue already runs — an RQ worker when this was
+written, an Iggy job queue since planner removed RQ; an agent turn is a `DurableWorkflowExecutor`
 call that a Redis Streams service already runs. The worker protocol is what
 that process speaks to this engine, and it changes nothing about what the
 process does between a claim and a completion.
@@ -2266,7 +2264,7 @@ ingress and no inbound port — the same reason every producer *publishes* here
 and nothing calls it back. The engine never learns a worker's address, which
 is the property ADR 0012 and ADR 0016 spent two decisions keeping for the
 runner and the engine endpoints. It also means a worker can be a thread in a
-process that exists for another reason: planner's RQ worker, a notebook.
+process that exists for another reason: planner's import worker, a notebook.
 
 Why long-poll rather than a queue client: a claim is `SELECT … FOR UPDATE SKIP
 LOCKED` on `step_attempts` in state `claimable` for the worker's queues and
@@ -2354,7 +2352,14 @@ exactly one attempt, claimed by reference rather than from a queue: what a
 
 ## 37. Container jobs on Kubernetes
 
-Flyte's one load-bearing feature in planner is a pod per stage: an image,
+**Reopened by AW-4 (2026-09-11), and not built.** This is Phase 12's design,
+and it gets an ADR before its first line of code. Where AW-4's spec differs,
+the spec wins: templates and their image allowlists are chart values, one
+allowlist per template; the client is a `kube` feature of `aiwatcher-server`;
+a step sets CPU and memory within the template's ceilings and never names a
+namespace, a node, a service account or a secret; and GPU is later.
+
+Flyte's one load-bearing feature in planner was a pod per stage: an image,
 resources, and a pod template with a PVC, a ConfigMap and five secrets. A
 `ContainerJob` is a `PythonTask` whose worker is started for it.
 
@@ -2392,8 +2397,7 @@ resources, and a pod template with a PVC, a ConfigMap and five secrets. A
   and nothing else.
 - GPU and queueing: a `gpu` override becomes a resource request and, when
   `AIWATCHER_KUBE_QUEUE` names one, a Kueue `LocalQueue` label. Queueing is
-  Kueue's job, not this reactor's — which is the line past which Flyte is the
-  better answer again (39.5).
+  Kueue's job, not this reactor's.
 
 ## 38. planner: four integration levels
 
@@ -2420,20 +2424,20 @@ What is left of Level 0 is one item: the market-research harness's
 `app/agents/_app/_harness.py` still names no tracer. Needs nothing from this
 plan.
 
-**Level 1 — launch through the engine.** Blocked by planner, not aiwatcher:
-`/api/v1/engine` lists launch plans and planner registers nothing — it calls
-`flyte.run` per request. Either planner registers `house_import_flow` with a
-`workflow_run_id` input, or `aiwatcher-pipeline` adds the task path
-ADR 0016 foresaw. Worth doing only if Flyte stays. **Recommendation: skip.**
+**Level 1 — launch through the engine.** **Moot.** planner removed Flyte on
+2026-09-09 and AW-4 removed aiwatcher's engine on 2026-09-11, so there is
+nothing to launch through. It had been skipped (section 42, decision 10).
 
 **Level 2 — the stages as worker tasks.** ~~The path this plan builds.~~
-**Delivered 2026-09-09**, as a hybrid of the two shapes below: the RQ worker
-*is* the aiwatcher worker — `AiwatcherRunner` serves the pool in the process
-that started the execution — while the FastAPI handler still enqueues to RQ
-rather than starting an execution itself. Keeping RQ in front costs one hop and
-buys the `JobRecord` lifecycle the Go API and the SPA already poll; moving the
-start into the handler is a separate change with its own reason. Two shapes,
-and what was built takes the worker half of the second:
+**Delivered 2026-09-09**, as a hybrid of the two shapes below: the queue's
+worker *is* the aiwatcher worker — `AiwatcherRunner` serves the pool in the
+process that started the execution — while the FastAPI handler still enqueued
+a job rather than starting an execution itself. The queue was RQ then; planner
+has since moved to an Iggy job queue and removed RQ. Keeping a queue in front
+costs one hop and buys the `JobRecord` lifecycle the Go API and the SPA already
+poll; moving the start into the handler is a separate change with its own
+reason. Two shapes, as they were written, and what was built takes the worker
+half of the second:
 
 - planner's RQ job stops calling `flyte.run` and does
   `POST /api/v1/executions {target: {kind: "workflow", name:
@@ -2448,17 +2452,19 @@ and what was built takes the worker half of the second:
 In the `local` profile each stage is a `PythonTask`; in `kubernetes`, a
 `ContainerJob`. That choice is a *profile* on the definition, configuration
 on the aiwatcher side — the `flyte_enabled` branch, replaced. **What shipped
-replaced that branch with `importOrchestrator: direct | flyte | aiwatcher` on
-the runtime profile, defaulting to `aiwatcher`; `ContainerJob` does not exist
-yet, so `kubernetes` currently runs four `PythonTask` attempts inside the one
-import-worker pod rather than four pods.** That pod already carries Flyte's own
-task envelope — `cpu 250m–4`, `memory 1Gi–6Gi`, one replica — and the stages run
-one at a time, so the sizing holds; what is gone is the isolation, and section
-37 is where it comes back. Both orchestrator strings survive:
-`artifact_manifest["orchestrator"]` is `"aiwatcher" | "flyte" | "direct" |
-"cache"`. planner's own `_progress(20/45/70/90)` and
-`JobRecord.progress` stay, because the SPA polls the Go API for them; the step
-events are in addition, not instead. Needs Phases 1–3 and 10–12.
+replaced that branch with `importOrchestrator` on the runtime profile,
+defaulting to `aiwatcher` — `direct | flyte | aiwatcher` when it shipped,
+`direct | aiwatcher` since planner removed Flyte (39.4, step 5). `ContainerJob`
+does not exist yet, so `kubernetes` runs four `PythonTask` attempts inside the
+one import-worker pod rather than four pods.** That pod carries the envelope
+Flyte's task had — `cpu 250m–4`, `memory 1Gi–6Gi`, one replica — and the
+stages run one at a time, so the sizing holds; what is gone is the isolation,
+and section 37 is where it comes back. `artifact_manifest["orchestrator"]` was
+`"aiwatcher" | "flyte" | "direct" | "cache"` when this was written; a run
+started since Flyte's removal cannot say `"flyte"`. planner's own
+`_progress(20/45/70/90)` and `JobRecord.progress` stay, because the SPA polls
+the Go API for them; the step events are in addition, not instead. Needs
+Phases 1–3 and 10–12.
 
 **Level 3 — the cycle as one definition.** `curate (annotation export) →
 train (ContainerJob, a GPU template) → evaluate (a task recording a report) → promote
@@ -2472,6 +2478,12 @@ human decides what may. Needs Phases 13–15.
 
 ## 39. Replacing Flyte 2 in planner
 
+**Done in planner on 2026-09-09; kept as the record.** planner removed Flyte
+and runs its four stages through aiwatcher's worker boundary, all four in one
+pod (39.4); AW-4 then removed aiwatcher's own engine (2026-09-11). The one
+piece of 39.1's right-hand column still unbuilt is `ContainerJob` — Phase 12,
+reopened by AW-4. The tables below describe planner as it was.
+
 ### 39.1 What planner uses of Flyte, honestly
 
 | Feature | Used? | Where it goes |
@@ -2483,7 +2495,7 @@ human decides what may. Needs Phases 13–15.
 | Caching | disabled; planner caches itself at two levels Flyte never sees | the step cache stays opt-in and off |
 | Typed interfaces | `str` in, `str` out, `max_inline_io_bytes = 50 MiB` | JSON ≤ 64 KiB inline, else `ArtifactRef` |
 | Artifacts and lineage | not used; the PVC and `manifest.json` are the hand-off | `artifact.produced` with a digest; a gain |
-| Launch plans, schedules | not used; every run is an RQ job | none; a Kubernetes CronJob posting `/executions`, if ever |
+| Launch plans, schedules | not used; every run was an RQ job (an Iggy job queue since planner removed RQ) | none; a Kubernetes CronJob posting `/executions`, if ever |
 | The console | used, and paid for: a second Deployment, an ingress, three middlewares, an Authentik provider, three fix commits | the panel's execution view, behind aiwatcher's own SSO |
 | Secrets | plain `secretKeyRef`s written into the template | the same, in the template |
 | Code bundling per run | used, with the `include=` workaround | the image *is* the code; `task_ref` version = image digest; nothing uploaded |
@@ -2497,10 +2509,10 @@ block; the `planner-flyte-bootstrap` Helm hook Job; the `verify-rustfs-flyte`
 init container; the `planner-flyte` RustFS bucket; the Flyte entry in
 `planner-postgres-ingress`; three Traefik ingress objects and the Authentik
 proxy provider; the privileged `flyte-devbox` container in Tilt; and the
-`flyte>=2.6.10` and `kubernetes>=34` dependencies. What arrives: the aiwatcher
-work role with a `kube` feature and a service account that may create Jobs in
-`planner`, and one named pod template that is today's `_task_pod_template()`
-written as YAML.
+`flyte>=2.6.10` and `kubernetes>=34` dependencies — all gone as of 2026-09-09.
+What is to arrive, with Phase 12: the aiwatcher work role with a `kube` feature
+and a service account that may create Jobs in `planner`, and one named pod
+template that is the `_task_pod_template()` planner had, written as YAML.
 
 ### 39.3 What must not leave
 
@@ -2512,8 +2524,9 @@ orchestrated path are one product is what this plan is built to keep.
 
 ### 39.4 The migration, in the order that keeps the test green
 
-1. Level 0 instrumentation. No engine involved. **Open for `direct` and
-   `cache`; the `aiwatcher` branch publishes its own facts.**
+1. Level 0 instrumentation. No engine involved. **Done** — the `aiwatcher`
+   branch publishes its own facts, and `direct` and `cache` declare their
+   shape (38, Level 0).
 2. ~~`PythonTask` workers in the `local` profile beside `direct`~~ **done.** The
    assertion landed in `tests/test_house_orchestrator_parity.py` rather than in
    `test_house_stage_artifacts.py`, because it needed a fixture of its own: two
@@ -2521,15 +2534,15 @@ orchestrated path are one product is what this plan is built to keep.
    extraction cache and executes no stage at all.
 3. `ContainerJob` in Tilt against real k3s, no Devbox;
    `orchestrator = "aiwatcher"`; the same assertion. **Deferred, and step 4
-   went ahead of it — see the decision below.**
+   went ahead of it — see the decision below. Reopened by AW-4 as Phase 12.**
 4. ~~Flip the `kubernetes` profile.~~ **Done, and out of order.** Every shipped
    profile except `local` now names `aiwatcher`, with `ContainerJob` still
    unwritten — so `kubernetes` runs the four stages in the import worker rather
    than in four pods. The fallback switch is **not** `flyteEnabled`, which was
    removed rather than kept: two fields describing one choice are two answers
-   that may disagree, and a boolean could not say "aiwatcher" anyway. Flyte is
-   reachable by naming it — `PLANNER_IMPORT_ORCHESTRATOR=flyte` — which is what
-   a fallback for one release should look like.
+   that may disagree, and a boolean could not say "aiwatcher" anyway. Flyte
+   stayed reachable by naming it — `PLANNER_IMPORT_ORCHESTRATOR=flyte` — for
+   the one release a fallback should last, and step 5 closed it.
 5. ~~Remove 39.2's list.~~ **Done.** `app/flyte_pipelines.py` is gone whole
    rather than halved — everything in it was the adapter or a re-export shim,
    and the three test files that imported `run_house_import_flow` through the
@@ -2569,6 +2582,11 @@ the `kube` feature. That is Rust work and a phase of its own.
 Deciding the other way today would mean writing §37 to buy an isolation nothing
 has asked for yet, against a workload whose peak is one OpenCV pass.
 
+**Reopened by the owner on 2026-09-11 (AW-4).** The need named is the isolation
+above, which one pod for four stages does not give. §37 goes in as Phase 12,
+opt-in per step; planner's change to name a template on its four stages is
+planner's own commit.
+
 **What the Tilt run found, which the laptop could not.** Step 1's gate — the
 same import in the `tilt` profile rather than in a `tmp_path` — failed on the
 first attempt, and it failed correctly: `just run` leaves
@@ -2601,9 +2619,9 @@ It becomes wrong when planner needs what a `ContainerJob` does not do: a map
 over hundreds of floors as hundreds of pods with backpressure; dynamic
 sub-workflows generated at run time by task code; GPU scheduling across nodes
 with a queue. Kueue under a `ContainerJob` covers the third; the first two are
-an orchestrator's job, and `ExecutionOwner::Engine` is kept alive precisely so
-that door stays open. It also becomes wrong if a second team on the same
-cluster registers real launch plans — then Level 1 pays for itself.
+an orchestrator's job. `ExecutionOwner::Engine` was kept alive to leave that
+door open, and AW-4 closed it: reopening it is a new decision with an ADR of its
+own, not a variant waiting to be used. Level 1 went with the engine.
 
 ## 40. Agent workflows: `ai_spirit_agent`
 
@@ -2838,9 +2856,10 @@ answer and where the reasoning lives.
 | 7 | The hosted decider | Built: Phase 13 is closed, and `agentic_graph`'s join was its first user (§28) |
 | 8 | Hosted payloads | A per-definition policy, `external` by default and `sealed` as the private option; no `plain` (40.4). The refusal is built: a `sealed` run without the conversation archive is refused at start and in configuration |
 | 9 | Layout in the revision | Keep ADR_0024's revision, digesting the whole authored request; `plan_id` digests the executable fields only (9.1) |
-| 10 | Level 1 for planner | Skip (38) |
+| 10 | Level 1 for planner | Skip (38); moot since AW-4 removed the engine |
 | 11 | Where `app/training/run.py` is written | As a worker task from the start (38, Level 3) |
 | 12 | `execution_id` on a dataset version | A separate provenance field beside `produced_by`, never a change to its format |
+| 13 | Who owns the pod templates | The aiwatcher chart, as values, because the work role reads them — each template with its own image allowlist; planner supplies its own under a documented key. Settled by the owner in AW-4 |
 | 14 | Absolute bounds on the windowed list routes | One optional `as_of` on the two routes Flow reads with a window, not `from`/`to` replacing the relative window (43.18) |
 | 15 | A second query engine, run locally | A transform stays **Flow DSL text**; a second engine reads `FlowSourceRef` and re-authors the transforms. Structure beside the text was rejected as two authored representations free to drift (43.22, and CLAUDE.md's guardrail) |
 | 16 | Upgrade compatibility (work 1) | Staged removal over two releases; an applied migration is never edited (work 1, [INSTALL.md](INSTALL.md#upgrading-its-schema)) |
@@ -2856,12 +2875,10 @@ answer and where the reasoning lives.
 3. **A `commands` topic.** Deferred (11.1); commands are store rows and
    `MessageKind::Command` stays constructed nowhere. Settled by measured claim
    latency or a consumer that must not hold PostgreSQL credentials.
-6. **Jobs, Kueue, or Flyte for GPU work.** Build `ContainerJob`; add a Kueue
-   label when queueing is needed; keep `Engine` for map tasks and dynamic
-   graphs (39.5). Nothing builds it until Phase 12 has its use case.
-13. **Who owns the pod templates.** The aiwatcher chart, as values, because the
-    work role reads them; planner's chart supplies its own under a documented
-    key. Settled by whoever writes the second template, which is Phase 12.
+6. **Jobs or Kueue for GPU work.** Build `ContainerJob`; add a Kueue label when
+   queueing is needed. An external engine is no longer an option — AW-4
+   removed it, and map tasks and dynamic graphs are out of its scope (39.5).
+   GPU is later: Phase 12, reopened by AW-4, starts without it.
 
 ## 43. What building it changed
 
@@ -3410,6 +3427,12 @@ for it.
   store, timers, `sealed` refusal and graph join do not; Flyte's removal from
   planner's chart, in planner's repository; and phases 8, 9, 12, 14 and 15
   behind their own gates.
+- **Revision 4.1** (2026-09-11): AW-4 — Flyte removed from aiwatcher, and
+  ADR 0016 superseded. Phase 9 withdrawn and Phase 12 reopened; the `Engine`
+  owner replaced by an unknown owner that nothing schedules; the external
+  workflow binding removed. Revised in place: 1, 2.1, 2.2, 3, 4, 5.2, 5.5, 6,
+  7.1, 9.3, 11.2, 12, 20, 21, 22, 24, 27, 28, 29.4, 29.5, 30, 31, 32, 33, 33.5,
+  35, 36, 37, 38, 39, 42 (decision 13 settled).
 
 ## 45. References
 

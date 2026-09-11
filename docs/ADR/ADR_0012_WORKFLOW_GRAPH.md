@@ -1,6 +1,10 @@
 # ADR_0012: A workflow graph is declared on the log and folded like everything else
 
-- **Status**: accepted
+- **Status**: accepted. The context below is planner as it was: planner
+  removed Flyte on 2026-09-09, and ADR_0016 is superseded by
+  [AW-4](../specs/AW-4-retire-flyte-and-run-steps-in-pods-of-our-own/_index.md).
+  The decision stands — a declaration is still the source that is right on
+  every path.
 - **Date**: 2026-08-29
 
 ## Context

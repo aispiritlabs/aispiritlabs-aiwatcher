@@ -1,6 +1,11 @@
 # ADR_0025: A managed execution is owned by the server, and the browser only asks for one
 
-- **Status**: accepted
+- **Status**: accepted. The `engine:<name>` owner and the Flyte port it
+  delegated through were removed by
+  [AW-4](../specs/AW-4-retire-flyte-and-run-steps-in-pods-of-our-own/_index.md)
+  (2026-09-11), with ADR_0016 superseded: the owners are `local` and `worker`,
+  and any other owner read back is kept as unknown, never scheduled or decided.
+  The decision stands.
 - **Date**: 2026-09-04
 - **Supersedes**: the execution half of ADR_0024, and ADR_0014's
   browser-mediated persistence for managed runs

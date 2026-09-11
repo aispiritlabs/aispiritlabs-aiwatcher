@@ -166,4 +166,5 @@ cancellation calls `get_task_context()` explicitly.
 The real two-stage PostgreSQL recovery run passed on 2026-09-09, including a
 worker kill and Rust restart before lease expiry. Planner's byte-for-byte
 artifact parity against its direct path remains the next admission gate.
-This does not finish replacing Flyte in Planner.
+Planner has since removed Flyte (2026-09-09), and aiwatcher removed its
+pipeline engine with AW-4 (2026-09-11).

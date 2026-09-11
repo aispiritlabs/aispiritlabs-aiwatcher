@@ -1,7 +1,9 @@
 # ADR_0024: A curation is a chain of blocks, each belonging to the engine that can run it
 
 - **Status**: accepted; the execution half superseded by ADR_0025; the block
-  vocabulary amended 2026-09-09, and the transform's engine by ADR_0028 (below)
+  vocabulary amended 2026-09-09, and the transform's engine by ADR_0028 (below).
+  ADR_0016, cited below as where unattended execution belongs, is superseded by
+  AW-4; managed execution (ADR_0025) is that place now.
 - **Date**: 2026-09-04
 
 The block vocabulary, the chain validation and the content-addressed revision

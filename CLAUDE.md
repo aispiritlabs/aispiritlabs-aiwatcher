@@ -190,7 +190,7 @@ step runs through them and a break there is a break in the execution path.
 | `WorkflowStream` | One execution's ordered inputs and outputs, in the `WorkflowStore` |
 | `ArtifactRef` | `aiwatcher-core`'s pointer to bytes stored outside the message |
 | `RuntimeBinding` | Where a step runs and what that runtime needs — never a host |
-| `ExecutionOwner` | Who decides: `local`, `engine:<name>`, or `worker` |
+| `ExecutionOwner` | Who decides: `local` or `worker`. Any other text read back is kept as unknown — shown, never scheduled or decided |
 | `ExecutionMode` | `compiled` — the Rust decider schedules a static plan; `hosted` — a worker decides and this keeps the history |
 | `ObservedWorkflow` | A graph folded from telemetry (ADR_0012). Not necessarily launchable, and not an `ExecutionPlan` |
 
@@ -300,9 +300,11 @@ area.
    network rather than a signature.
 
 12. **A workflow graph is declared, not discovered**
-   ([ADR_0012](docs/ADR/ADR_0012_WORKFLOW_GRAPH.md)). planner runs its house
-   import as four Flyte stages *and* as the same four functions in-process,
-   depending on `settings.flyte_enabled`. So aiwatcher never asks an
+   ([ADR_0012](docs/ADR/ADR_0012_WORKFLOW_GRAPH.md)). planner once ran its
+   house import as four Flyte stages *or* as the same four functions
+   in-process, and only a declaration was right on both paths. It has since
+   removed Flyte, and the rule stands: a declaration is right on every path.
+   So aiwatcher never asks an
    orchestrator anything: `workflow.declared` carries the topology on the log,
    `step.*` with `data.node` executes a node of it, `artifact.produced` points
    at what a node handed on, and `agent.message` records one agent addressing
@@ -312,18 +314,15 @@ area.
    whole reason the declaration exists, and rerun is a dispatch to one endpoint
    from *configuration* — `aiwatcher-runner`, 501 when unset.
 
-13. **The orchestrator is read for its inventory, never for its history**
-   ([ADR_0016](docs/ADR/ADR_0016_PIPELINE_ENGINE.md)). Nothing publishes an
-   event about a workflow nobody has run, and no event carries an input
-   interface — so `/api/v1/engine` asks Flyte what it *could* start, while
-   `/api/v1/workflows` still folds what *has* run from the log. ADR_0012 is
-   unchanged by this: the shape of a graph is still the declaration, because
-   that is the source that is right when the orchestrator is bypassed. A
-   launch binds inputs to the types the engine declares *at launch time*,
-   always pins a version, and carries a `workflow_run_id` aiwatcher mints — as
-   a Flyte label and, when the entity declares one, as an input — which is what
-   lets the panel stream an execution that has not started. `AIWATCHER_ENGINE`
-   defaults to `none` and every route answers 501 naming it.
+13. **Superseded: there is no external pipeline engine**
+   ([ADR_0016](docs/ADR/ADR_0016_PIPELINE_ENGINE.md), superseded by
+   [AW-4](docs/specs/AW-4-retire-flyte-and-run-steps-in-pods-of-our-own/_index.md)).
+   aiwatcher once read Flyte for what it *could* start and launched one entry of
+   it. Its one user moved onto aiwatcher's own workflow engine, so the Flyte
+   engine, its routes and the panel's launcher are removed, and a deployment
+   that still sets `AIWATCHER_ENGINE` is refused at start by name. A step that
+   needs a pod of its own is to get one from the engine itself — Phase 12's
+   `ContainerJob`, reopened by AW-4 and not built yet.
 
 14. **An annotation is authored, vector-first, and split by family**
    ([ADR_0017](docs/ADR/ADR_0017_IMAGE_ANNOTATION.md),
@@ -464,7 +463,8 @@ area.
 
 22. **The execution engine is a producer on its own log**
    ([ADR_0026](docs/ADR/ADR_0026_ENGINE_AS_PRODUCER.md)). The question ADR_0016
-   deferred, decided in favour. `execution.*` and `Subject::Execution` join the
+   deferred, decided in favour — and it stands with ADR_0016 superseded, since
+   "the engine" here is aiwatcher's own. `execution.*` and `Subject::Execution` join the
    catalog with `forms_span = false`; a started plan publishes
    `workflow.declared`, an attempt publishes `step.*` with `data.published_by`,
    a result publishes `artifact.produced` with a digest. The workflow fold, the
@@ -1148,8 +1148,7 @@ the review.
   commands, retries scheduled, leases and heartbeats stay in the store. An
   engine that published per decision would flood the log it observes.
 - **Never let two parties publish one attempt's `step.*`.** A `local`
-  execution's reactor publishes for what it ran, a worker for what it ran, an
-  `engine:` execution's pods for theirs and the engine for none.
+  execution's reactor publishes for what it ran and a worker for what it ran.
   `data.published_by` makes a second publisher visible; the resolution is that
   a managed step's producer code does not open its own `node()` scope.
 - **Never run a managed execution that needs two processes on the `file`
@@ -1190,14 +1189,12 @@ the review.
   beside its `output`; absent means true, because a curation block normally is
   one and the other default would make every chain pay for the exceptions.
 - **Never let a plan name its own executor's address.** `AIWATCHER_FLOW_URL`,
-  `AIWATCHER_ML_PIPELINE_URL`, `AIWATCHER_FLYTE_ENDPOINT`, the pod's service
-  account. A `PlanStep` names a binding and its parameters, never a host —
-  ADR_0012's and ADR_0016's reasoning, unchanged, and for the same reason the
-  rerun target is configuration.
+  `AIWATCHER_ML_PIPELINE_URL`, the pod's service account. A `PlanStep` names a
+  binding and its parameters, never a host — ADR_0012's reasoning, unchanged,
+  and for the same reason the rerun target is configuration.
 - **Never retry the same work in two places.** The owner of an execution owns
-  its retries: Rust for a `local` run's steps, the engine for what it was handed
-  whole, the store for a hosted decider's *attempt* and never the worker's own
-  loop as well. A `ContainerJob` sets `backoffLimit: 0` for the same reason.
+  its retries: Rust for a `local` run's steps, the store for a hosted decider's
+  *attempt* and never the worker's own loop as well. A `ContainerJob` sets `backoffLimit: 0` for the same reason.
 - **Never make `plan_id` depend on where a block sits.** The authored revision
   digests the whole request, positions included, because that is what somebody
   saved and what `produced_by` names; `plan_id` digests the executable fields
@@ -1574,36 +1571,6 @@ the review.
   ordering in `pipeline.rs::flush` is the at-least-once contract; reversing it
   turns a crash into silent data loss.
 - **Never store `llm.chunk` as a trace record.** See ADR_0003.
-- **Never let an engine's address come from anywhere but configuration.**
-  `AIWATCHER_FLYTE_ENDPOINT`, exactly like the rerun target and for exactly the
-  same reason. `LaunchBody` is `deny_unknown_fields`, so a body naming its own
-  endpoint is a 400 rather than a field that is ignored and reads as accepted.
-  Every part of an `EngineRef` is checked against `[A-Za-z0-9._-]` before it is
-  interpolated into the orchestrator's URLs — a launch plan name holding `../`
-  would be a path traversal aimed at a system aiwatcher authenticates to.
-- **Never let a launch carry an input the entity does not declare.**
-  `Interface::bind` refuses it. An orchestrator that ignores unknown fields
-  turns a typo in a filter into a run over everything, and the panel's form is
-  rendered from an interface that may already be stale — which is why binding
-  re-reads the interface from the engine rather than trusting what the caller
-  was shown. A blank *optional* input is omitted rather than sent empty, so the
-  launch plan's own default survives.
-- **Never launch without pinning a version.** A reference with no version
-  resolves to the newest registered one and that is what goes on the wire. An
-  execution recorded against "whatever was current" is not something anybody
-  can repeat, which is the entire point of recording it.
-- **Never let `stage_hint` decide anything but what a picker shows first.** It
-  is guessed from an entity's name — the name first, the description only as a
-  tie-break, because "fine-tune on a **curated** dataset" would otherwise file
-  a training job under curation. Presentation may depend on it; nothing else
-  may.
-- **Never poll the engine to fill in a run's status.** The engine's phase is a
-  second opinion shown on a launch acknowledgement, never merged into
-  `RunStatus`. When they disagree the disagreement is the finding: an execution
-  the engine calls succeeded that published no events is a producer nobody
-  instrumented, and a status column that quietly took the engine's word would
-  hide exactly that. See also the guardrail below about the projector never
-  deciding a run has died.
 - **Never let a rerun target come from the log.** `AIWATCHER_WORKFLOW_RUNNER_URL`
   is configuration. A `workflow.declared` naming its own callback URL would be a
   request-forgery primitive posted by anything that can reach ingest — aiwatcher

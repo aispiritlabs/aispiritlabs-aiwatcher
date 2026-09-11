@@ -58,7 +58,22 @@ outline below is what the spec already fixes.
   tests stay until 1b removes the routes they cover.
 - **An unknown owner is `Unknown(String)`** (1c): kept for display, matched by
   nothing that schedules or decides. No stored row holds anything but `local`
-  or `worker`, so this changes no read of existing data.
+  or `worker`, so this changes no read of existing data. It keeps the text
+  verbatim, so `engine:flyte` still reads `engine:flyte`. Nothing needed to
+  change beyond the type: no scheduling or deciding code ever read the owner.
+- **A runtime kind the postgres adapter cannot name is refused** (1c, decided
+  while building). It used to fall back to `external_workflow`, "the binding
+  this process never runs". With that binding gone there is no honest
+  fallback. The kind is now decoded through `RuntimeKind`'s own serde spelling,
+  and an unknown one is `StoreError::Encoding`, which is what the `memory`,
+  `file` and `duckdb` adapters already do when they decode. A claim never
+  meets one, because its SQL selects only the claimant's kinds. What does meet
+  one is a lookup by key.
+- **The Experiments page keeps only its Comparison placeholder** (1b). The
+  stage buttons and the period control fed nothing but the launcher, and a
+  control that changes nothing is a button that does not work. The `stage`,
+  `engine` and `engineFind` search parameters go with them. Nothing linked in
+  with them.
 
 ## Tasks
 
@@ -83,12 +98,12 @@ outline below is what the spec already fixes.
 - [x] 1.7 Verify: `just check`, `just sdk-check`, `just chart-check`.
 
 ### Part 1b — after the panel rebuild
-- [ ] 1.8 API routes, error variants, `AppState.engine`, `core::engine`; the
+- [x] 1.8 API routes, error variants, `AppState.engine`, `core::engine`; the
       contract and the generated client regenerated; the launcher and its call
       sites removed. — *no build carries Flyte*
 
 ### Part 1c — after AW-3
-- [ ] 1.9 `ExecutionOwner::Unknown`; `RuntimeBinding::ExternalWorkflow` and its
+- [x] 1.9 `ExecutionOwner::Unknown`; `RuntimeBinding::ExternalWorkflow` and its
       spec and kind removed; the contract regenerated. — *an unknown owner is not
       an engine*
 - [ ] 1.10 The documents that describe the engine as a design. — *no build
@@ -109,3 +124,4 @@ outline below is what the spec already fixes.
 - 2026-09-11 12:50 — job planned: Part 1 in three passes cut where other sessions' work sits, five decisions, ten tasks; Part 2 outlined
 - 2026-09-11 13:40 — Part 1a built: the server refuses the engine by name (`ConfigError::Removed`, two tests), the crate and its end-to-end test are gone, the chart refuses `engine`, the SDK integration and the recipes are gone, ADR_0016 superseded; `cargo clippy -Dwarnings` and the config tests green, `just chart-check` and `just sdk-check` (419) green
 - 2026-09-11 13:55 — verified: `just check` 19/19 on the working tree, other sessions' work included
+- 2026-09-11 12:47 — Parts 1b and 1c built (`8154041`): the five routes, `core::engine`, `AppState.engine`, the three error variants, the launcher on the recipe and Experiments pages, `ExecutionOwner::Unknown`, `ExternalWorkflow` and its spec and kind; the contract and the panel's client regenerated with no engine left in them; clippy clean, every touched crate's tests and the panel's 178 green

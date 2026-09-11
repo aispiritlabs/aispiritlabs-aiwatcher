@@ -147,7 +147,8 @@ is a rename with a deprecation window rather than a decision.
 divergence — if people re-run with sampling turned up more often than not — the
 default is wrong, and step-grain buffering with a retention of its own is the
 answer rather than a lower default interval. If training moves onto the same
-orchestrator as ADR_0016's pipelines, `workflow_run_id` should become the
+orchestrator as ADR_0016's pipelines — since AW-4 superseded that ADR, aiwatcher's
+own workflow engine — `workflow_run_id` should become the
 primary key of the join rather than an optional field. And if a second thing
 ever needs a durable, mutable, growing record on this stack, the accumulate-in-
 place write here should become a shared primitive instead of being copied.

@@ -194,7 +194,7 @@ width of a lunch break is noise in every trace it lands in. Its *attempts* are
 | `workflow_id` | the definition this execution is of |
 | `workflow_run_id` | the execution id — the same one `step.*` carries |
 | `plan_id` | the compiled plan, which is what `workflow.declared` carries as `version` |
-| `owner` | `local`, `engine:<name>` or `worker` — who decides for this run |
+| `owner` | `local` or `worker` — who decides for this run. Any other value is kept as written, shown, and never scheduled or decided for |
 | `published_by` | on `step.*`, which party ran the attempt: `engine` or `worker` |
 
 ### `workflow.declared`, `artifact.produced`, `agent.message`

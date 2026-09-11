@@ -11,7 +11,7 @@ were made wrong on schedule.
 |---|---|---|
 | [0008](../ADR/ADR_0008_FLOW_QUERY_SURFACE.md) | Flow PHP is a query surface over the API, parsed rather than executed | Accepted, **three amendments**; **amended by [0028](../ADR/ADR_0028_QUERY_ENGINES.md)** — one of three engines |
 | [0014](../ADR/ADR_0014_DATA_CURATION.md) | Flow executes curation; the Rust registry versions its scripts and outputs | Accepted; **browser-mediated persistence superseded by [0025](../ADR/ADR_0025_MANAGED_EXECUTION.md)** for managed runs; the engine is the deployment's since 0028 |
-| [0016](../ADR/ADR_0016_PIPELINE_ENGINE.md) | The orchestrator is read for its inventory and asked to start one entry; the graph still comes from the log | Accepted, unchanged |
+| [0016](../ADR/ADR_0016_PIPELINE_ENGINE.md) | The orchestrator is read for its inventory and asked to start one entry; the graph still comes from the log | **Superseded by [AW-4](../specs/AW-4-retire-flyte-and-run-steps-in-pods-of-our-own/_index.md)**, 2026-09-11 — the engine removed; its one user moved onto aiwatcher's own |
 | [0024](../ADR/ADR_0024_CURATION_BLOCKS.md) | A curation is a chain of blocks, each belonging to the engine that can run it | Accepted; **the execution half superseded by 0025**, the blocks stand; a transform names its engine since 0028 |
 | [0025](../ADR/ADR_0025_MANAGED_EXECUTION.md) | A managed execution is owned by the server, and the browser only asks for one | Accepted |
 | [0026](../ADR/ADR_0026_ENGINE_AS_PRODUCER.md) | The execution engine is a producer on its own log | Accepted |
@@ -73,8 +73,9 @@ locked to its corpus root under both.
 
 ## What would reopen one
 
-0016's is a consumer that needs one launch API for local and engine work —
-nothing has needed it, and planner removed its orchestrator entirely. 0024's is
+0016 is past reopening: nothing needed one launch API for local and engine work,
+planner removed its orchestrator, and AW-4 removed the engine. A step that needs
+a pod of its own is to get one from this engine instead (Phase 12). 0024's is
 a fourth engine, which would test whether "each block belongs to the engine that
 can run it" is a principle or a description of three cases. 0025's own trigger
 has already fired once and produced 0026; the next would be an execution whose

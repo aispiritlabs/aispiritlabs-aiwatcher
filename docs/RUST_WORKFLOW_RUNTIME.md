@@ -145,4 +145,5 @@ event sourcing and observability intrinsic to every run. Hosted agent deciders
 (`ExecutionOwner::Worker`, dynamic messages and durable joins) remain Phase 13;
 this static compiler does not execute agent decisions in Rust. Container jobs,
 cluster autoscaling and Planner's four-stage parity gate remain their separate
-plan steps. The Flyte integration is not removed by this change.
+plan steps. The Flyte integration was removed later, by AW-4 (2026-09-11), and
+container jobs are Phase 12, which AW-4 reopened.

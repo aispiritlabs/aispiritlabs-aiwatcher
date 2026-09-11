@@ -222,8 +222,8 @@ absence is a working state, not a failure.
 
 `execution.splitRoles: true` renders a second Deployment. `serve` holds the API,
 the read model and the object store; `work` holds the outbox and the reactors
-and is the only role that opens a socket to the query engine, a notebook runtime or an
-orchestrator — so the pod behind the ingress stops holding those addresses and
+and is the only role that opens a socket to the query engine or a notebook
+runtime — so the pod behind the ingress stops holding those addresses and
 those credentials. It has no Service, no ingress path and no probes, because it
 opens no listener at all.
 
@@ -534,50 +534,26 @@ read for one release, and the new name wins where both are set.
 
 ## The pipeline engine
 
-Off by default, and for a sharper reason than the Query tab: this is what lets
-somebody in the panel start work in another system. Everything else aiwatcher
-does is a read.
+**Removed** on 2026-09-11 ([AW-4](specs/AW-4-retire-flyte-and-run-steps-in-pods-of-our-own/_index.md),
+superseding [ADR_0016](ADR/ADR_0016_PIPELINE_ENGINE.md)). aiwatcher used to read
+an external orchestrator for its registered launch plans and start one from the
+panel. Its one user, planner, moved onto aiwatcher's own workflow engine, so
+the engine, its routes and the panel's launcher are gone.
 
-```bash
-helm upgrade aiwatcher deploy/helm/aiwatcher -n planner \
-  -f deploy/environments/planner.yaml \
-  --set engine.mode=flyte \
-  --set engine.flyte.endpoint=http://flyteadmin.flyte:80 \
-  --set engine.flyte.project=planner \
-  --set engine.flyte.domain=production \
-  --set engine.flyte.consoleUrl=https://flyte.example.com
-```
+An installation that still configures it is refused rather than quietly
+upgraded into one without it:
 
-What that gets you is a picker over Flyte's registered launch plans in Data
-Curation and Experiments, a form built from each one's declared inputs, and
-`POST /api/v1/engine/launches`. Four things matter at install time.
+- a values file that still sets `engine` fails to render, naming `engine` —
+  delete the block;
+- a server started with `AIWATCHER_ENGINE` set to anything but `none`, or with
+  `AIWATCHER_WORKFLOW_RUNNER` set to `engine` or `flyte`, refuses to start and
+  says the engine was removed. `none`, and an empty variable, still start.
 
-**The endpoint is in-cluster; the console is not.** `engine.flyte.endpoint` is
-the flyteadmin Service, which is what aiwatcher's pod can reach.
-`engine.flyte.consoleUrl` is the host a browser can reach, used only to build
-links. They are usually different addresses and setting one to the other is the
-common mistake — the symptom is either a catalog that cannot load or links that
-404.
-
-**Launching is `admin`.** The only other route with that requirement is the
-rerun. An ingest token is capped at editor precisely so that a leaked agent
-environment cannot start a training run, so do not hand out admin to producers.
-
-**Credentials are all-or-nothing.** Either a pre-issued bearer under the
-secret's `token` key, or a service account — `clientId`, `tokenUrl` and the
-secret's `clientSecret` together. Half a credential fails the render rather
-than the first request. The token endpoint is configured rather than
-discovered: taking it from a document the control plane serves would hand the
-choice of who mints aiwatcher's credentials to whoever answered.
-
-**No NetworkPolicy rule is added for it.** Same reasoning as the object store's:
-a policy attached to pods nothing already fences narrows them from "accepts
-everything" to "accepts aiwatcher only", and for a control plane that would cut
-off everybody. If egress is restricted in your namespace, add the rule where
-the rest of that policy lives.
-
-Set `engine.rerun=engine` to send the Workflows tab's rerun through the same
-connection instead of a webhook.
+The `AIWATCHER_FLYTE_*` variables configure nothing now and may be left or
+removed. The Workflows tab's rerun still goes to the webhook
+`AIWATCHER_WORKFLOW_RUNNER=http` names. Work that used to be launched in the
+orchestrator is registered as a workflow and started through
+[managed execution](#managed-execution).
 
 ## Replacing MLflow
 

@@ -1,6 +1,8 @@
 # ADR_0026: The execution engine is a producer on its own log
 
-- **Status**: accepted
+- **Status**: accepted. It stands with ADR_0016 superseded by AW-4: "the
+  engine" here is aiwatcher's own. The `engine:<name>` execution in its
+  publishing rule went with the removed engine (2026-09-11).
 - **Date**: 2026-09-04
 - **Decides**: the question ADR_0016 deferred
 
