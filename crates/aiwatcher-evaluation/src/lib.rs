@@ -9,7 +9,9 @@ mod registry;
 mod result;
 mod store;
 
-pub use registry::{Registry, RegistryConfig, SourceAuthority, SourceEvidence};
+pub use registry::{
+    PUBLICATION_GRACE_SECONDS, Registry, RegistryConfig, SourceAuthority, SourceEvidence,
+};
 pub use result::*;
 
 pub use context::{

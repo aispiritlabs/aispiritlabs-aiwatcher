@@ -1,6 +1,6 @@
 # FTI — rekomendacja zakresu i plan rozwoju
 
-Data: 2026-09-11. Status: A1–A4 i AR1 zaimplementowane; B1 zweryfikowane, trwały wycinek B2 dostarczony; B2/AR2 pozostają otwarte dla adapterów natywnych i orphan GC (sekcje 9–10). Wyniki odbioru A, ograniczenia i incydent seeda w sekcji 8.
+Data: 2026-09-11. Status: A1–A4 i AR1 zaimplementowane; B1 zweryfikowane, trwały wycinek B2 i atomowe orphan GC nowych publikacji dostarczone; dodano weryfikowane adaptery Curation, promptów i modeli; B2/AR2 pozostają otwarte dla pozostałych źródeł (sekcje 9–14). Wyniki odbioru A, ograniczenia i incydent seeda w sekcji 8.
 
 Podstawa: [katalog funkcji](FTI_FEATURE_CATALOG.md), [analiza braków](FTI_FEATURE_GAPS.md), [plan UX](FTI_UX_WANDB_PLAN.md), [przegląd dokumentacji Langfuse i MLflow](FTI_LANGFUSE_MLFLOW_ANALYSIS.md), [ocena architektury](FTI_ARCHITECTURE_REVIEW.md) oraz aktualny kod. Ocena dotyczy obecności i kontraktów implementacji; nie potwierdza działania konkretnego wdrożenia. Katalog opisuje zakres docelowy, więc liczba jego pozycji nie jest miarą ukończenia produktu.
 
@@ -298,3 +298,77 @@ Pierwszy adapter jest wyłącznie syntetyczny: nie zastępuje zgód ani polityk 
 Registry nie emituje jeszcze powiadomienia na log po commicie. Nowy trwały katalog jest osobnym endpointem; pełny ekran i porównania pozostają B3. Stary SDK telemetryczny nie został zmieniony. Nie wykonano commita ani wdrożenia; istniejące dane :8080/:18080 nie były modyfikowane. Własną instancję testową :19080 i kontener RustFS :19010 zatrzymano po odbiorze. Końcowo PASS: 10 testów rejestru (w tym real S3), 4 wybrane testy HTTP `durable_` oraz clippy zmienionych crate’ów.
 
 **B2/AR2 nie są zamknięte w pełnym zakresie:** następne są adaptery źródeł przez publiczne fasady właścicieli i współbieżnie bezpieczne orphan GC. Przed zamknięciem rozszerz ten sam zestaw testów o ich rzeczywiste polityki usunięcia/retencji/uprawnień. Nie powtarzaj implementacji B1 ani A.
+
+## 11. Kontynuacja — B2: zbieranie osieroconych artefaktów
+
+Przegląd startowy: czysty checkout na `d2aed6d` (`feat: extend evaluation`), zawierający wcześniejsze B1/B2. Nie przywracano historycznych wersji plików ani danych demonstracyjnych. Zakres tej paczki to protokół sprzątania Evaluation; adaptery źródeł natywnych pozostają otwarte.
+
+Przed pierwszym artefaktem publikacja zapisuje niezmienną intencję: ID i termin zbiórki, domyślnie po godzinie, skracany znaną retencją źródła/wyniku. Retry nie odnawia terminu. Po jego przekroczeniu kolektor konkuruje z publikacją o **ten sam** atomowy klucz claim. Wygrana publikacji chroni metadane i wszystkie wskazane shardy; można usuwać tylko niewskazane artefakty przegranych wersji. Wygrana kolektora trwale blokuje commit tego ID, pozwala usunąć treści i zwraca HTTP 410 na odczycie/retry. Spóźniony zapis może dokończyć pojedyncze operacje storage, ale nie zatwierdzi wyniku; kolejne przejście usuwa jego bajty.
+
+Wspólny worker retencji uruchamia zbiórkę co 60 s przez `Registry::sweep`; osobna fasada `collect_orphans` zwraca liczbę usuniętych obiektów. Abandoned claim nie udaje zatwierdzonego wyniku i nie zawiera manifestu ani odpowiedzi. Stare receipt i wersje wyników zachowują format. Stare listy/suite/baseline wykluczają także zebrane ID; szczegóły nie wracają do telemetrycznego fallbacku.
+
+**Weryfikacja:** 13 testów rejestru PASS, w tym deterministyczne przeploty na memory/file/real RustFS: crash po shardzie, wygrana każdej strony tuż przy commicie, późny zapis po zbiórce, współdzielone shardy konfliktu, utracona odpowiedź kolektora, ponowienie po odtworzeniu registry, zachowanie starego receipt oraz brak zgadywania referencji przy brakujących metadanych. Odbiór S3 używa tylko własnego kontenera `aiwatcher-fti-gc-rustfs` na :19010. Dodano test HTTP 410 oraz wykluczania z legacy odczytów. **PASS pełnego `rtk proxy just check`**: fmt, clippy wszystkich features/targetów, testy workspace (w tym nowy HTTP), granice architektury, aktualność OpenAPI i manifestu, panel, oba SDK, agentic, walidacja deploy oraz pozostałe linters. Log `/tmp/fti-b2-gc-just-check.log`. Osobno PASS kontroli komentarzy nowego nieśledzonego pliku i `git diff --check`. Własny kontener RustFS zatrzymano; instancji :8080/:18080 i ich danych nie zmieniano. Bez commita ani wdrożenia.
+
+**Ograniczenia:** wcześniejsze niezatwierdzone prefiksy bez intencji są zachowane; sam hash nazwy i wiek obiektu nie potwierdzają tożsamości ani zakończenia starego writera. Ponowienie oryginalnej publikacji zapisuje intencję i obejmuje ID nowym protokołem. Uzgodnienie pozostałych takich prefiksów przy wdrożeniu oraz pliki stagingowe adaptera `.tmp` wymagają osobnej obsługi. Brak/uszkodzenie metadanych zatwierdzonego wyniku zatrzymuje usuwanie jego niewskazanych artefaktów; retencja nadal może usunąć całą treść. Kolektor nie zastępuje zgód, praw i retencji natywnych źródeł. Następny zakres implementacji: ich adaptery przez publiczne fasady właścicieli i testy rzeczywistych polityk. B2/AR2 nie są oznaczone jako zamknięte.
+
+Przegląd pod kolejny adapter: Curation udostępnia `Registry::rows` z jawną wersją, Annotations `export_manifest`/`coco`, Conversations `export`/`export_rows` (odczyt odrzuca wycofany korpus), Prompts `version`, Training `model` z jawną wersją. Sam odczyt deklarowanego digestu nie dowodzi integralności: weryfikacja tożsamości artefaktu powinna wejść do fasady jego właściciela. Dla Conversations trzeba ponadto utrzymać szyfrowanie i wymaganą rolę odczytu, których obecny syntetyczny adapter oraz zwykły storage Evaluation nie zapewniają. Te ścieżki nadal odmawiają publikacji; nie dodano częściowego obejścia przez prywatne klucze ani publiczne URI.
+
+
+## 12. Kontynuacja — B2: przypięte wersje Curation
+
+Stan wejściowy: HEAD `d2aed6d`, zachowano cały niezacommitowany wycinek GC z sekcji 11. Nie zmieniano danych istniejących instancji ani modelu demonstracyjnego. Ta paczka dostarcza adapter Curation dla krótkich odpowiedzi; nie zamyka całego B2/AR2.
+
+- Datasets udostępnia `Registry::verified_version(name, version)`. Prywatny moduł `version` odczytuje dokładną wersję obecną w katalogu i przelicza tożsamość treści wspólną z publikacją (z zachowaniem historycznej semantyki Flow i pozostałych silników). Sprawdza nazwę, digest, liczbę wierszy i budżet. Nie rozwiązuje etykiet ani `latest`; metadane katalogowe nadal nie zmieniają tożsamości treści.
+- Server składa ten sam registry Curation z `LocalSource::with_curation`. Zatwierdzony przez operatora bundle nadal przypina kod/scorer/schematy i przypadki. Każdy odczyt/publikacja dodatkowo potwierdza natywną wersję i równość kolejności, ID, pytań i oczekiwań. Sama deklaracja digestu lub zgodność odpowiedzi nie wystarcza.
+- Zmiana bieżącej wersji nie podmienia przypiętych danych. Usunięcie natywnego artefaktu/katalogu powoduje `deleted_source` i trwałe usunięcie kopii; cofnięcie zgody operatora ukrywa treść bez przedłużania retencji; uszkodzenie daje `corrupt_artifact` bez udawania usunięcia. API zachowuje swój kontrakt: trwałe odczyty zwracają 200 ze stanem i bez treści, legacy detail 403/410; odmowa roli przy publikacji to 403, brak uwierzytelnienia 401.
+- Curation ma obecnie wspólny odczyt instancji, bez per-dataset ACL i własnej daty retencji; obowiązuje zatwierdzenie operatora i 30-dniowy limit Evaluation. Własne limity Curation (1000 wierszy, 4 MiB treści) pozostają wiążące. Adapter obsługuje wyłącznie jawny format krótkich odpowiedzi; instrukcja użycia jest w README Evaluation. Nie dodano nowej zależności domenowej ani publicznego kontraktu HTTP.
+
+**Odbiór PASS:**
+
+- Dwa testy fasady obejmują wszystkie trzy silniki, zachowanie starszej przypiętej wersji po zmianie head, odmowę aliasów, mutacje pól tożsamości i usunięcie wersji/katalogu.
+- Cztery testy adaptera obejmują rekonstrukcję registry, paginację, dokładne retry, cofnięcie/przywrócenie zgody, usunięcie natywnego źródła przez sweep, brak odtworzenia po tombstone, uszkodzenie/naprawę bajtów, retencję i odmowę zmienionych pytań mimo identycznych odpowiedzi. Test rzeczywistego wiring i HTTP na losowym porcie localhost publikuje Curation przez API i potwierdza role oraz stany bez ujawniania treści. Własny listener kończy się z testem.
+- Pełne `rtk proxy just check` PASS, log `/tmp/fti-curation-just-check.log`: fmt, clippy workspace/all-targets/all-features, testy Rust, bramki architektury i negatywne testy zależności, aktualność OpenAPI/manifestu, build/typecheck i 203 testy panelu, SDK Python (440), TypeScript, agentic (361), K8s/Helm/Tilt, comments/typos/taplo/cargo-deny. Zestaw server/evaluation: 16 PASS, 1 pominięty test wymagający osobnego RustFS; w tej kontynuacji nie uruchamiano RustFS ani nie powtarzano wcześniejszego odbioru S3 dla niezmienionego storage.
+- Dodatkowo sprawdzono komentarze nowych nieśledzonych plików (standardowy linter czyta indeks Git) i `git diff --check`. Zmieniony kod nie wymaga regeneracji kontraktów HTTP.
+
+
+**Następny zakres:** adaptery model/prompt, Annotations i Conversations przez właścicieli oraz judge. Conversations wymaga dodatkowo szyfrowania kopii dowodów, odpowiedniej roli i powiązania z retencją/usunięciem; aktualna ścieżka nadal je odrzuca. B3, powiadomienie po commicie oraz migracja starych orphanów bez intencji pozostają bez zmian. Bez commita i wdrożenia.
+
+
+## 13. Kontynuacja — B2: przypięte wersje promptów
+
+Stan wejściowy: HEAD `d2aed6d`, zachowano niezacommitowane GC i Curation z sekcji 11–12. Bez zmian danych istniejących instancji i bez commita. Ta paczka dodaje natywny adapter promptów; model, Annotations, Conversations i judge pozostają dalszym zakresem B2/AR2.
+
+- Prompts udostępnia `Registry::verified_version` przez prywatny moduł `version`: sprawdza nazwę, dokładny digest tekstu, zapisane ID i wyliczane zmienne. Osobny błąd integralności nie jest mylony z brakiem źródła; API mapuje go na istniejącą kategorię `registry_corrupt`. Weryfikowany odczyt ma limit tekstu z konfiguracji (domyślnie 256 KiB), uwzględnia escaping JSON i 256 KiB metadanych. Stare `version`, `resolve` i zasady promocji pozostają bez zmian.
+- Head promptu jest indeksem pochodnym, z limitem liczby wpisów. Przesunięcie `production`, wypadnięcie z indeksu lub jego utrata nie usuwa wersji. Brak obiektu wersji oznacza `deleted_source` i wycofanie kopii dowodów; uszkodzenie to `corrupt_artifact`, bez fałszywego tombstone. Prompt nie ma własnej retencji — nadal działa limit Evaluation. Metadane promptu, zwłaszcza pole `model`, nie są dowodem wersji modelu.
+- Server przekazuje ten sam registry do API i `LocalSource::with_prompts`. Adapter akceptuje `variant.prompt` dla external i Curation, również bez workflow. Operator musi zatwierdzić dokładną referencję w bundle; pozostałe przypięcia kodu/scorera/schematów nadal są weryfikowane. Każda publikacja i odczyt wywołuje właściciela, bez odczytywania jego prywatnych kluczy przez adapter. Tekst promptu nie jest kopiowany do shardów Evaluation.
+- Testowy bundle wydzielono do wspólnego fixture dla adapterów Curation/promptów; dotychczasowe scenariusze Curation pozostają zachowane. Nie dodano zależności między domenami ani nowych kontraktów HTTP.
+
+**Odbiór PASS:**
+
+- Trzy nowe testy Prompts: przesunięcie etykiety/wyparcie wersji z indeksu/utrata head, manipulacje nazwą/ID/tekstem/zmiennymi, metadane poza tożsamością, niepoprawny JSON oraz granice tekstu i serializacji. Cały crate: 47 PASS.
+- Cztery nowe scenariusze integracyjne: ponowne utworzenie registry i idempotentny odczyt starego przypięcia, usunięcie wersji przez sweep i brak odtworzenia po tombstone, uszkodzenie/naprawa, cofnięcie zgody, retencja, brak właściciela lub przypiętej wersji, kompozycja z Curation i external. Rzeczywisty wiring/router HTTP na losowym porcie localhost potwierdza role, brak anonimowego odczytu i legacy 410 po usunięciu promptu. Zestaw server/evaluation: 20 PASS, 1 pominięty test wymagający osobnego RustFS. Listener testowy zakończono; nie uruchamiano ani nie modyfikowano istniejących instancji.
+- Pełne `rtk proxy just check` PASS: fmt, clippy workspace/all-targets/all-features, testy Rust, bramki architektury i ich testy negatywne, aktualność OpenAPI/manifestu, build/typecheck/testy panelu, SDK Python/TypeScript, agentic, K8s/Helm/Tilt, comments/typos/taplo/cargo-deny. Log `/tmp/fti-prompt-just-check.log`. Dodatkowo sprawdzono komentarze nowych nieśledzonych plików i `git diff --check`. Nie regenerowano niezmienionych kontraktów i nie powtarzano wcześniejszego odbioru S3 dla niezmienionego storage.
+
+
+**Następny zakres:** model przez fasadę Training i rzeczywistą weryfikację przypiętych artefaktów; dalej Annotations, Conversations i judge. Same deklarowane hashe modelu nie dowodzą integralności bajtów. Conversations nadal wymaga szyfrowania kopii, odpowiedniej roli i wiążącego usunięcia/retencji. B2/AR2 pozostają otwarte; B3 oraz migracja starszych orphanów bez intencji bez zmian.
+
+
+## 14. Kontynuacja — B2: przypięte modele Training
+
+Stan wejściowy: HEAD `d2aed6d`, zachowano niezacommitowane GC, Curation i prompty. Ta paczka dodaje adapter modeli Training; nie zmienia istniejących danych demonstracyjnych ani etykiet. Bez commita i wdrożenia.
+
+- Training udostępnia `Registry::verified_version` przez prywatny moduł `registry/version`. Wspólny z rejestracją algorytm zachowuje historyczne ID. Fasada odrzuca aliasy i niepoprawne nazwy, sprawdza nazwę/ID/treść tożsamości, waliduje pakiet i ogranicza rekord do 1 MiB. Obiekt wersji jest źródłem prawdy; utrata head lub bieżącego runu nie usuwa przypięcia.
+- Server przekazuje ten sam Training do API i `LocalSource::with_training`. Operator zatwierdza referencję w manifeście, cały pakiet w `model-package.json` oraz pliki `model-artifacts/<artifact.name>`. Adapter porównuje pełny pakiet i sprawdza bajty wszystkich artefaktów, w tym plików pomocniczych, z digestem i opcjonalną długością. Pakiet ma limit 1 MiB, pliki wspólny budżet 100 MiB. URI nigdy nie wybiera źródła odczytu; adapter nie uruchamia loadera ani modelu.
+- Wersje bez pakietu nadal są czytelne w dotychczasowym API, ale nie wystarczają do publikacji nowych dowodów. Brak held-out score nie blokuje samej ewaluacji i nie nadaje prawa do promocji. Role Viewer/Editor, retencja Evaluation i zatwierdzenie operatora pozostają wiążące; Training nie ma niezależnego terminu retencji lub per-model ACL.
+- Przesunięcie etykiety nie podmienia modelu. Brak natywnej wersji lub lokalnego artefaktu wycofuje dowody; podmiana bajtów/tożsamości daje `corrupt_artifact`, a niezatwierdzona zmiana opisu pakietu `forbidden`. Naprawa uszkodzenia może odblokować odczyt, odtworzenie usuniętego źródła nie cofa tombstone. Wagi nie są kopiowane do shardów Evaluation.
+
+**Istotna granica kontraktu:** historyczny ID modelu zawiera run/checkpoint/dataset/metriki i uporządkowane digests artefaktów, ale nie runtime/entry point/kształty/adresy i pozostałe metadane pakietu. Zapis pełnego pakietu przez operatora jest bieżącym zatwierdzeniem, nie dodatkowym niezmiennym fingerprintem w wersji wyniku. Nie zmieniono identyfikatorów już zarejestrowanych modeli. Dowód historycznego środowiska wymaga jawnego rozszerzenia kontraktu; weryfikacja dostępnych bajtów nie dowodzi faktycznego wykonania modelu przez producenta.
+
+**Odbiór PASS:**
+
+- Test fasady Training potwierdza zgodność historycznego ID z utrwaloną wartością, odczyt bez head/runu, mutacje pól tożsamości, metadane poza digestem, brak/niepoprawny JSON, limit rekordu i odmowę aliasów.
+- Pięć scenariuszy adaptera obejmuje zmianę etykiety, rekonstrukcję registry, dokładne retry i strony, usunięcie wersji przez sweep, trwały tombstone, podmianę obu plików pakietu, zmianę runtime/digestu, cofnięcie zgody i retencję. Dodatkowo sprawdzono błędny/brakujący pakiet, brak właściciela, długości/budżet, odmowę symlinka poza katalog oraz kompozycję z external i Curation. Rzeczywisty wiring/HTTP na losowym porcie localhost potwierdza Editor/Viewer/anonymous, odczyt trzech przypadków i legacy 410 po usunięciu pliku pomocniczego. Listener zakończono w teście.
+- Pełne `rtk proxy just check` PASS, log `/tmp/fti-model-just-check.log`: Rust fmt/clippy wszystkich features/targetów/testy workspace, bramki architektury z testami negatywnymi, aktualność OpenAPI/manifestu, panel build/typecheck/testy, oba SDK, agentic, K8s/Helm/Tilt, comments/typos/taplo/cargo-deny. Zestaw server/evaluation: 25 PASS, 1 pominięty test wymagający osobnego RustFS. Nie powtarzano wcześniejszego odbioru S3 dla niezmienionego storage.
+- Osobno PASS komentarzy nowych nieśledzonych plików i `git diff --check`. Publiczny kształt HTTP nie zmienił się. Nie uruchamiano seedów ani nie modyfikowano istniejących instancji.
+
+**Następny zakres:** Annotations przez fasadę właściciela, z integralnością eksportu i polityką dostępu/licencji; potem Conversations z szyfrowaniem kopii, rolą i wiążącym usunięciem/retencją oraz judge. B2/AR2 nadal otwarte, B3 i migracja starych orphanów bez intencji pozostają dalszym zakresem.

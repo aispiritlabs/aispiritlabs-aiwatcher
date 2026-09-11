@@ -11,6 +11,18 @@ use std::sync::{
     atomic::{AtomicU8, Ordering},
 };
 
+#[path = "evaluation/gc.rs"]
+mod gc;
+
+#[path = "evaluation/curation.rs"]
+mod curation;
+
+#[path = "evaluation/fixture.rs"]
+mod fixture;
+
+#[path = "evaluation/prompts.rs"]
+mod prompts;
+
 #[derive(Debug, Default)]
 struct Source {
     mode: AtomicU8,
@@ -332,7 +344,7 @@ impl ObjectStore for LostResponse {
     }
     async fn create(&self, k: &str, v: Vec<u8>) -> PortResult<bool> {
         let result = self.inner.create(k, v).await?;
-        if k.ends_with("claim.json") && self.lost.swap(1, Ordering::SeqCst) == 0 {
+        if result && k.ends_with("claim.json") && self.lost.swap(1, Ordering::SeqCst) == 0 {
             return Err(PortError::Unavailable {
                 target: "lost-response",
                 message: "committed, response lost".into(),
@@ -429,6 +441,10 @@ async fn real_s3_conditional_writes_enforce_the_same_publication_contract() {
             .state,
         EvidenceState::DeletedSource
     );
+    for entry in store.list("").await.unwrap() {
+        store.delete(&entry.key).await.unwrap();
+    }
+    gc::contract(store.clone()).await;
     for entry in store.list("").await.unwrap() {
         store.delete(&entry.key).await.unwrap();
     }
@@ -532,3 +548,6 @@ async fn the_full_byte_budget_is_rejected_before_any_artifact_is_written() {
     ));
     assert!(store.list("evaluations/").await.unwrap().is_empty());
 }
+
+#[path = "evaluation/models.rs"]
+mod models;

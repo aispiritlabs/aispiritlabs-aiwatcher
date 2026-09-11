@@ -1,4 +1,4 @@
-//! Operator-approved synthetic evidence and the independent retention worker.
+//! Operator-approved evidence, source owner adapters and the retention worker.
 use aiwatcher_evaluation::{
     DatasetKind, Evaluation, EvaluationError, EvaluationManifest, EvidenceState, Result,
     SourceAuthority, SourceEvidence,
@@ -8,18 +8,46 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tokio::io::AsyncReadExt;
 
-/// The first supported source owner: one operator-selected synthetic bundle.
-/// A missing adapter for native governed data is a refusal, never public access.
+/// One operator-selected bundle, with optional Curation, prompt and model owners.
+/// API authentication enforces the shared instance's Viewer/Editor roles;
+/// the approved bundle further restricts which source pins may be retained.
 #[derive(Debug)]
 pub struct LocalSource {
     directory: Option<String>,
+    datasets: Option<Arc<aiwatcher_datasets::Registry>>,
+    prompts: Option<Arc<aiwatcher_prompts::Registry>>,
+    training: Option<Arc<aiwatcher_training::Registry>>,
 }
 impl LocalSource {
     #[must_use]
     pub fn new(directory: Option<String>) -> Self {
-        Self { directory }
+        Self {
+            directory,
+            datasets: None,
+            prompts: None,
+            training: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_curation(mut self, datasets: Arc<aiwatcher_datasets::Registry>) -> Self {
+        self.datasets = Some(datasets);
+        self
+    }
+
+    #[must_use]
+    pub fn with_training(mut self, training: Arc<aiwatcher_training::Registry>) -> Self {
+        self.training = Some(training);
+        self
+    }
+
+    #[must_use]
+    pub fn with_prompts(mut self, prompts: Arc<aiwatcher_prompts::Registry>) -> Self {
+        self.prompts = Some(prompts);
+        self
     }
 }
 
@@ -69,19 +97,19 @@ struct Cases {
     schema_version: u32,
     cases: Vec<SourceCase>,
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct SourceCase {
     case_id: String,
     input: Question,
     expected: Answer,
 }
-#[derive(Deserialize)]
+#[derive(Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct Question {
     question: String,
 }
-#[derive(Deserialize, serde::Serialize)]
+#[derive(Deserialize, serde::Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct Answer {
     answer: String,
@@ -98,10 +126,10 @@ impl SourceAuthority for LocalSource {
             .directory
             .as_ref()
             .ok_or_else(|| unavailable(EvidenceState::Forbidden))?;
-        if manifest.context.dataset.kind != DatasetKind::External
-            || manifest.variant.model.is_some()
-            || manifest.variant.prompt.is_some()
-            || manifest.context.judge.is_some()
+        if !matches!(
+            manifest.context.dataset.kind,
+            DatasetKind::External | DatasetKind::Curation
+        ) || manifest.context.judge.is_some()
         {
             return Err(unavailable(EvidenceState::Forbidden));
         }
@@ -123,6 +151,67 @@ impl SourceAuthority for LocalSource {
         }
         let v = &manifest.variant;
         let c = &manifest.context;
+        if let Some(model) = &v.model {
+            let owner = self
+                .training
+                .as_ref()
+                .ok_or_else(|| unavailable(EvidenceState::Forbidden))?;
+            let version = owner
+                .verified_version(&model.name, &model.version)
+                .await
+                .map_err(training_error)?;
+            let package = version
+                .package
+                .ok_or_else(|| unavailable(EvidenceState::Forbidden))?;
+            // Historical model IDs bind artifact digests, not the whole package.
+            // The operator approves its full declaration separately; no URI is fetched.
+            let approved: aiwatcher_training::ModelPackage =
+                serde_json::from_slice(&bytes(&root, "model-package.json", 1024 * 1024).await?)
+                    .map_err(|_| unavailable(EvidenceState::CorruptArtifact))?;
+            if serde_json::to_value(&approved)? != serde_json::to_value(&package)? {
+                return Err(unavailable(EvidenceState::Forbidden));
+            }
+            let artifacts = tokio::fs::canonicalize(root.join("model-artifacts"))
+                .await
+                .map_err(io_error)?;
+            if !artifacts.starts_with(&root) {
+                return Err(unavailable(EvidenceState::Forbidden));
+            }
+            let mut remaining = 100 * 1024 * 1024;
+            for artifact in &package.artifacts {
+                if artifact
+                    .size_bytes
+                    .is_some_and(|size| size > remaining as u64)
+                {
+                    return Err(unavailable(EvidenceState::CorruptArtifact));
+                }
+                let found = bytes(&artifacts, &artifact.name, remaining).await?;
+                if hex::encode(Sha256::digest(&found)) != artifact.digest
+                    || artifact
+                        .size_bytes
+                        .is_some_and(|size| size != found.len() as u64)
+                {
+                    return Err(unavailable(EvidenceState::CorruptArtifact));
+                }
+                remaining -= found.len();
+            }
+        }
+        if let Some(prompt) = &v.prompt {
+            use aiwatcher_core::prompts::{PromptName, PromptVersionId};
+            let owner = self
+                .prompts
+                .as_ref()
+                .ok_or_else(|| unavailable(EvidenceState::Forbidden))?;
+            let name = PromptName::parse(&prompt.name)
+                .map_err(|_| unavailable(EvidenceState::Forbidden))?;
+            let version = PromptVersionId::parse(&prompt.version)
+                .map_err(|_| unavailable(EvidenceState::Forbidden))?;
+            owner
+                .verified_version(&name, &version)
+                .await
+                .map_err(prompt_error)?
+                .ok_or_else(|| unavailable(EvidenceState::DeletedSource))?;
+        }
         for artifact in [
             Some(&v.code),
             Some(&v.generation_config),
@@ -144,7 +233,7 @@ impl SourceAuthority for LocalSource {
         if let Some(workflow) = &v.workflow {
             verified(&root, "workflow.json", &workflow.version, None).await?;
         }
-        if c.dataset.version != c.case_manifest.digest {
+        if c.dataset.kind == DatasetKind::External && c.dataset.version != c.case_manifest.digest {
             return Err(unavailable(EvidenceState::CorruptArtifact));
         }
         let cases: Cases = serde_json::from_slice(
@@ -158,6 +247,27 @@ impl SourceAuthority for LocalSource {
         )?;
         if cases.schema_version != 1 || cases.cases.len() as u64 != c.case_count {
             return Err(unavailable(EvidenceState::CorruptArtifact));
+        }
+        if c.dataset.kind == DatasetKind::Curation {
+            let owner = self
+                .datasets
+                .as_ref()
+                .ok_or_else(|| unavailable(EvidenceState::Forbidden))?;
+            let snapshot = owner
+                .verified_version(&c.dataset.name, &c.dataset.version)
+                .await
+                .map_err(dataset_error)?;
+            let rows: Vec<SourceCase> = snapshot
+                .items
+                .into_iter()
+                .map(|row| serde_json::from_value(serde_json::to_value(row)?))
+                .collect::<std::result::Result<_, _>>()
+                .map_err(|_| unavailable(EvidenceState::CorruptArtifact))?;
+            // Order, IDs, inputs and expectations must agree with the pinned
+            // case manifest. Matching only answers would admit different work.
+            if rows != cases.cases {
+                return Err(unavailable(EvidenceState::CorruptArtifact));
+            }
         }
         let mut expected = BTreeMap::new();
         for case in cases.cases {
@@ -174,6 +284,49 @@ impl SourceAuthority for LocalSource {
             expected,
             expires_at: None,
         })
+    }
+}
+
+fn dataset_error(error: aiwatcher_datasets::RegistryError) -> EvaluationError {
+    use aiwatcher_datasets::RegistryError;
+    match error {
+        RegistryError::NotFound(_) => unavailable(EvidenceState::DeletedSource),
+        RegistryError::Corrupt { .. } | RegistryError::TooLarge { .. } => {
+            unavailable(EvidenceState::CorruptArtifact)
+        }
+        RegistryError::Store(error) => EvaluationError::Storage(error),
+        RegistryError::Invalid(_) | RegistryError::Rejected(_) => {
+            unavailable(EvidenceState::Forbidden)
+        }
+    }
+}
+
+fn training_error(error: aiwatcher_training::Error) -> EvaluationError {
+    use aiwatcher_training::Error;
+    match error {
+        Error::NotFound(_) => unavailable(EvidenceState::DeletedSource),
+        Error::Corrupt { .. } | Error::TooLarge { .. } => {
+            unavailable(EvidenceState::CorruptArtifact)
+        }
+        Error::Store(error) => EvaluationError::Storage(error),
+        Error::Invalid(_) | Error::Refused(_) => unavailable(EvidenceState::Forbidden),
+    }
+}
+
+fn prompt_error(error: aiwatcher_prompts::RegistryError) -> EvaluationError {
+    use aiwatcher_prompts::RegistryError;
+    match error {
+        RegistryError::UnknownPrompt(_) | RegistryError::UnknownVersion { .. } => {
+            unavailable(EvidenceState::DeletedSource)
+        }
+        RegistryError::Corrupt { .. }
+        | RegistryError::Integrity { .. }
+        | RegistryError::TooLarge { .. } => unavailable(EvidenceState::CorruptArtifact),
+        RegistryError::Store(error) => EvaluationError::Storage(error),
+        RegistryError::Invalid(_)
+        | RegistryError::InvalidIdentifier { .. }
+        | RegistryError::NotAdmitted { .. }
+        | RegistryError::UnknownOptimization { .. } => unavailable(EvidenceState::Forbidden),
     }
 }
 

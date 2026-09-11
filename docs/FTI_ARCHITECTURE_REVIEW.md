@@ -176,3 +176,30 @@ Evaluation zachowuje wyłącznie zależność do Core; prywatny `store` jest jed
 API składa registry i starszy czytnik. Projector otrzymał tylko filtrowanie wykluczonych ID, bez importu Evaluation lub polityki dostępu. Odczyt znanego trwałego ID jest autorytatywny, również dla tombstone, forbidden i uszkodzonego artefaktu. Stare suite i automatyczny baseline nie używają wykluczonych raportów. Nowy klient registry Python importuje transport dopiero przez osobny moduł; same kontrakty oraz root telemetry pozostają lekkie. TypeScript ma osobny eksport i testy runtime.
 
 Potwierdzono współbieżny commit i utraconą odpowiedź na memory/file/real RustFS, odczyt po restarcie procesu i utracie projekcji, paginację, usunięcie źródła i stany uszkodzenia. Pełne check przeszło. **AR2 pozostaje otwarte** dla adapterów natywnych źródeł oraz bezpiecznej zbiórki niezatwierdzonych artefaktów; działający syntetyczny adapter nie dowodzi polityk Conversations/Annotations/Curation. Szczegóły i następny krok w sekcji 10 planu.
+
+## 11. B2 — atomowe rozstrzygnięcie publikacji i GC
+
+Zbiórka pozostaje we właścicielu Evaluation, przez neutralne `ObjectStore::create`; nie dodano zależności domenowych ani reguł do Core, Execution lub Projector. Minimalna intencja poprzedza artefakty. Publikacja i kolektor konkurują o jeden niezmienny claim, dlatego kolektor nie może wycofać właśnie zatwierdzanego wyniku. Przy zatwierdzonym ID usuwa tylko bajty spoza pełnego zestawu referencji zwycięzcy. Odmowa po zebraniu ID jest rozpoznawana przez istniejący mostek API, bez tworzenia fikcyjnego receipt.
+
+Deterministyczne testy obu kolejności i wznowionego zapisu przeszły na memory/file/real RustFS. Stare zatwierdzone formaty są czytelne; starsze osierocone prefiksy bez intencji są zachowane do uzgodnienia przy wdrożeniu. Nie oznaczamy całego AR2/B2 jako ukończonego: polityki natywnych źródeł nadal wymagają adapterów właścicieli. Stan pełnego check i szczegóły odbioru opisuje sekcja 11 planu.
+
+
+## 12. B2 — źródło Curation przez fasadę właściciela
+
+Weryfikacja tożsamości wersji jest w Datasets (`verified_version` i prywatny moduł `version`), współdzieli algorytm z publikacją. Server wywołuje publiczną fasadę i porównuje jej wiersze z zatwierdzonym manifestem przypadków. Evaluation nadal importuje tylko Core; nie poznaje układu storage ani języka Curation. Wiring przekazuje ten sam registry do API i adaptera.
+
+Wspólny odczyt instancji i role HTTP pozostają zgodne z Curation; dodatkowo operator zatwierdza dokładne przypięcia w lokalnym bundle. Nie wymyślono per-dataset ACL lub daty retencji, których właściciel nie posiada. Usunięcie źródła wycofuje kopie, nowa bieżąca wersja nie retargetuje starych dowodów. Odbiór i pozostałe ograniczenia opisuje sekcja 12 planu. Pozostałe źródła, zwłaszcza szyfrowane Conversations, nie są uznane za obsłużone; AR2 pozostaje otwarte.
+
+
+## 13. B2 — prompt weryfikowany przez właściciela
+
+Prompts posiada weryfikację treści przypiętej wersji i rozstrzyga różnicę między brakiem obiektu a utratą pochodnego indeksu. Server składa publiczne fasady Prompts/Curation z Evaluation, które nadal zależy wyłącznie od Core. Adapter nie czyta kluczy promptów ani nie nadaje ich metadanym statusu dowodu modelu. Zwykły odczyt i promocja promptów pozostają bez zmian.
+
+Zatwierdzenie operatora i wspólne role instancji obowiązują na istniejącej ścieżce HTTP; treść promptu nie trafia do shardów Evaluation. Testy obejmują ruch etykiety, wyparcie/utratę indeksu, usunięcie wersji, integralność, retencję i brak fallbacku. Dokładny odbiór jest w sekcji 13 planu. AR2 nadal nie jest zamknięte dla modeli, Annotations, Conversations i judge.
+
+
+## 14. B2 — model przez Training i zatwierdzony pakiet
+
+Training posiada algorytm tożsamości modelu; `verified_version` współdzieli go z rejestracją. Server czyta wyłącznie publiczną fasadę i zatwierdzone lokalne pliki, bez prywatnych kluczy Training. Evaluation nadal zależy tylko od Core. Historyczne ID, zwykłe odczyty oraz promocje pozostają kompatybilne.
+
+Historyczny model ID przypina uporządkowane digests plików, lecz nie cały opis pakietu. Dodatkowe zatwierdzenie operatora obejmuje runtime, entry point, kształty i referencje; każdy plik podlega weryfikacji bajtów. Ten sidecar nie jest nowym historycznym fingerprintem ani dowodem wykonania. Przyszłe przypięcie pełnego pakietu wymaga rozszerzenia kontraktu, nie cichej zmiany algorytmu Training. Wspólne role instancji i retencja Evaluation obowiązują bez nowej polityki w Core. Odbiór i ograniczenia: sekcja 14 planu. Annotations, Conversations i judge pozostają otwartym zakresem AR2.

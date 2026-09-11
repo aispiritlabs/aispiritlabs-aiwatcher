@@ -386,7 +386,9 @@ fn registry_parts(error: &aiwatcher_prompts::RegistryError) -> (StatusCode, &'st
         RegistryError::Store(_) => (StatusCode::BAD_GATEWAY, "registry_rejected"),
         // A stored object that will not parse is this system's fault, not the
         // caller's, and it is not going to fix itself on a retry.
-        RegistryError::Corrupt { .. } => (StatusCode::INTERNAL_SERVER_ERROR, "registry_corrupt"),
+        RegistryError::Corrupt { .. } | RegistryError::Integrity { .. } => {
+            (StatusCode::INTERNAL_SERVER_ERROR, "registry_corrupt")
+        }
     }
 }
 

@@ -1,6 +1,8 @@
 //! The object-store side: key layout, the accumulate-in-place write, and the
 //! two caps that keep a six-hour run one readable object.
 
+mod version;
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -284,21 +286,14 @@ impl Registry {
         // The package's digest joins the identity: two versions differing
         // only in which weights they name are two versions, and collapsing
         // them would let a promotion point at bytes nobody measured.
-        let identity = serde_json::to_vec(&(
+        let version_id = crate::model::version_id(
             &request.name,
             &request.run_id,
             &request.checkpoint_uri,
             &run.dataset,
-            &metrics.validation,
-            &metrics.test,
-            request
-                .package
-                .as_ref()
-                .map(super::package::ModelPackage::digest),
-        ))
-        .map_err(|error| Error::Invalid(format!("the version could not be encoded: {error}")))?;
-
-        let version_id = digest(&identity);
+            &metrics,
+            request.package.as_ref(),
+        )?;
         let key = self.model_version_key(&request.name, &version_id);
         let existing: Option<ModelVersion> = self.read_json(&key).await?;
         let created = existing.is_none();

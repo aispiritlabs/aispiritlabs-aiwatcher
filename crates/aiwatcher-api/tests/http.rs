@@ -6677,6 +6677,79 @@ fn durable_request(id: &str) -> Value {
         "case_id": id, "repetition_id": "measurement-1", "actual": {"answer": ""}, "metrics": {"accuracy": 1.0}
     })).collect::<Vec<_>>())})
 }
+
+#[derive(Debug, Default)]
+struct InterruptedEvaluation(std::sync::atomic::AtomicU8);
+#[async_trait::async_trait]
+impl aiwatcher_evaluation::SourceAuthority for InterruptedEvaluation {
+    async fn resolve(
+        &self,
+        manifest: &aiwatcher_evaluation::EvaluationManifest,
+        subject: &str,
+    ) -> aiwatcher_evaluation::Result<aiwatcher_evaluation::SourceEvidence> {
+        if self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 1 {
+            return Err(aiwatcher_evaluation::EvaluationError::Unavailable(
+                aiwatcher_evaluation::EvidenceState::Forbidden,
+            ));
+        }
+        EvaluationSource::default().resolve(manifest, subject).await
+    }
+}
+
+#[tokio::test]
+async fn durable_abandoned_uploads_are_gone_and_cannot_reappear_through_legacy_routes() {
+    let mut fixture = Fixture::new(false);
+    fixture
+        .seed_evaluation("abandoned", "suite", "data", json!({"accuracy": 0.9}))
+        .await;
+    fixture
+        .seed_evaluation("legacy", "suite", "data", json!({"accuracy": 0.5}))
+        .await;
+    let registry = Arc::new(
+        aiwatcher_evaluation::Registry::new(
+            Arc::new(MemoryObjectStore::new()),
+            Arc::new(InterruptedEvaluation::default()),
+            Default::default(),
+        )
+        .unwrap(),
+    );
+    fixture.state.evaluations = Some(registry.clone());
+    assert_eq!(
+        fixture
+            .post("/api/v1/evaluation-results", durable_request("abandoned"))
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    let later = time::OffsetDateTime::now_utc().unix_timestamp()
+        + aiwatcher_evaluation::PUBLICATION_GRACE_SECONDS
+        + 1;
+    assert_eq!(registry.sweep("retention-worker", later).await.unwrap(), 0);
+    for path in [
+        "/api/v1/evaluation-results/abandoned",
+        "/api/v1/evaluation-results/abandoned/cases?version=missing",
+        "/api/v1/evaluations/abandoned",
+        "/api/v1/evaluations/legacy?baseline_id=abandoned",
+    ] {
+        assert_eq!(fixture.get(path).await.0, StatusCode::GONE, "{path}");
+    }
+    assert_eq!(
+        fixture
+            .post("/api/v1/evaluation-results", durable_request("abandoned"))
+            .await
+            .0,
+        StatusCode::GONE
+    );
+    let (_, legacy) = fixture.get("/api/v1/evaluations").await;
+    assert_eq!(legacy["evaluations"].as_array().unwrap().len(), 1);
+    let (_, detail) = fixture.get("/api/v1/evaluations/legacy").await;
+    assert!(detail.get("comparison").is_none());
+    let (_, suites) = fixture.get("/api/v1/evaluation-suites").await;
+    assert_eq!(suites["suites"][0]["evaluations"], 1);
+    let (_, durable) = fixture.get("/api/v1/evaluation-results").await;
+    assert!(durable["evaluations"].as_array().unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn durable_reports_override_legacy_ids_and_erasure_never_falls_back() {
     let mut fixture = Fixture::new(false);

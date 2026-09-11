@@ -21,6 +21,7 @@
 
 pub mod adapters;
 pub mod sigv4;
+mod version;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -99,6 +100,9 @@ pub enum RegistryError {
         #[source]
         source: serde_json::Error,
     },
+
+    #[error("the stored prompt version {key} failed verification: {reason}")]
+    Integrity { key: String, reason: &'static str },
 }
 
 impl RegistryError {
@@ -338,6 +342,17 @@ impl Registry {
     ) -> Result<Option<PromptVersion>> {
         let key = self.version_key(name, version);
         self.read_json(&key).await
+    }
+
+    /// Verify the exact version's name, text digest and derived variables.
+    /// The head is only an index; absence from it does not invalidate a pin.
+    /// Other metadata, including the model hint, is outside the text identity.
+    pub async fn verified_version(
+        &self,
+        name: &PromptName,
+        version: &PromptVersionId,
+    ) -> Result<Option<PromptVersion>> {
+        version::read(self, name, version).await
     }
 
     /// The version a label points at, resolving `production` through

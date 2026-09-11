@@ -3,7 +3,7 @@ use crate::{
     Aggregation, CaseMeasurement, CasePage, DurableEvaluation, DurablePage, Evaluation,
     EvaluationError, EvaluationManifest, EvaluationReceipt, EvidenceCase, EvidenceState,
     PublishEvaluation, Result, ResultCounts, ResultStatus, canonical, require,
-    store::{self, Store},
+    store::{self, Claim, Pending, Store},
     text,
 };
 use aiwatcher_core::storage::ObjectStore;
@@ -11,6 +11,10 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+
+/// An incomplete upload can reserve its ID for one hour. After collection wins
+/// the commit gate, a fresh measurement must use a fresh ID.
+pub const PUBLICATION_GRACE_SECONDS: i64 = 3600;
 
 /// A deployment adapter resolves every pin through its owner and verifies bytes.
 /// It must recheck deletion, retention and the caller's rights on every call.
@@ -172,6 +176,15 @@ impl Registry {
         )?;
         // Validate the entire byte budget before the first write. Serialize one
         // shard at a time again, avoiding a second full report kept in memory.
+        self.store
+            .begin(
+                Pending {
+                    evaluation_id: id.clone(),
+                    expires_at: expires_at.min(now.saturating_add(PUBLICATION_GRACE_SECONDS)),
+                },
+                now,
+            )
+            .await?;
         for cases in request.cases.chunks(200) {
             let expected: Vec<_> = cases
                 .iter()
@@ -198,11 +211,12 @@ impl Registry {
             return Err(EvaluationError::Unavailable(EvidenceState::Expired));
         }
         self.store.create(&store::claim(id), &receipt).await?;
-        let winner: EvaluationReceipt = self
+        let winner = self
             .store
-            .read(&store::claim(id))
+            .read::<Claim>(&store::claim(id))
             .await?
-            .ok_or(EvaluationError::Unavailable(EvidenceState::MissingArtifact))?;
+            .ok_or(EvaluationError::Unavailable(EvidenceState::MissingArtifact))?
+            .receipt()?;
         if winner.version != receipt.version {
             return Err(EvaluationError::Conflict);
         }
@@ -228,13 +242,10 @@ impl Registry {
         subject: &str,
         now: i64,
     ) -> Result<Option<DurableEvaluation>> {
-        let Some(receipt) = self
-            .store
-            .read::<EvaluationReceipt>(&store::claim(id))
-            .await?
-        else {
+        let Some(claim) = self.store.read::<Claim>(&store::claim(id)).await? else {
             return Ok(None);
         };
+        let receipt = claim.receipt()?;
         let mut result = DurableEvaluation {
             receipt,
             state: EvidenceState::Complete,
@@ -391,9 +402,9 @@ impl Registry {
         let mut ids = BTreeSet::new();
         for entry in self.store.0.list("evaluations/").await? {
             if entry.key.ends_with("/claim.json")
-                && let Some(receipt) = self.store.read::<EvaluationReceipt>(&entry.key).await?
+                && let Some(claim) = self.store.read::<Claim>(&entry.key).await?
             {
-                ids.insert(receipt.evaluation_id);
+                ids.insert(claim.id().into());
             }
         }
         Ok(ids)
@@ -425,7 +436,7 @@ impl Registry {
         let next_cursor = (selected.len() > limit).then(|| selected[limit - 1].key.clone());
         let mut evaluations = Vec::new();
         for entry in selected.iter().take(limit) {
-            if let Some(receipt) = self.store.read::<EvaluationReceipt>(&entry.key).await?
+            if let Some(Claim::Committed(receipt)) = self.store.read::<Claim>(&entry.key).await?
                 && let Some(detail) = self.get(&receipt.evaluation_id, subject, now).await?
             {
                 evaluations.push(detail);
@@ -447,12 +458,13 @@ impl Registry {
     /// An operator sweep enforces expiry and owner-wide deletion without a read.
     /// The authority must distinguish global deletion from caller-specific denial.
     pub async fn sweep(&self, subject: &str, now: i64) -> Result<usize> {
+        self.collect_orphans(now).await?;
         let mut retired = 0;
         for entry in self.store.0.list("evaluations/").await? {
             if !entry.key.ends_with("/claim.json") {
                 continue;
             }
-            if let Some(receipt) = self.store.read::<EvaluationReceipt>(&entry.key).await?
+            if let Some(Claim::Committed(receipt)) = self.store.read::<Claim>(&entry.key).await?
                 && let Some(detail) = self.get(&receipt.evaluation_id, subject, now).await?
                 && matches!(
                     detail.state,
@@ -463,6 +475,70 @@ impl Registry {
             }
         }
         Ok(retired)
+    }
+
+    /// Collect uncommitted uploads and losing versions without source access.
+    /// An immutable claim decides whether an ID can ever publish. We may delete
+    /// unclaimed content ONLY after abandonment wins that same atomic gate.
+    pub async fn collect_orphans(&self, now: i64) -> Result<usize> {
+        let entries = self.store.0.list("evaluations/").await?;
+        for entry in &entries {
+            if !entry.key.ends_with("/pending.json") {
+                continue;
+            }
+            if let Some(pending) = self.store.read::<Pending>(&entry.key).await? {
+                require(
+                    entry.key == store::pending(&pending.evaluation_id),
+                    "pending",
+                    "identity mismatch",
+                )?;
+                if pending.expires_at <= now {
+                    self.store
+                        .create(
+                            &store::claim(&pending.evaluation_id),
+                            &Claim::Abandoned {
+                                abandoned: pending.clone(),
+                            },
+                        )
+                        .await?;
+                }
+            }
+        }
+        let mut removed = 0;
+        // Relist so this pass also sees claims created above. Claims are never
+        // replaced/deleted; concurrent collectors therefore choose the same set.
+        for entry in self.store.0.list("evaluations/").await? {
+            if !entry.key.ends_with("/claim.json") {
+                continue;
+            }
+            let Some(claim) = self.store.read::<Claim>(&entry.key).await? else {
+                continue;
+            };
+            let id = claim.id();
+            require(entry.key == store::claim(id), "claim", "identity mismatch")?;
+            let mut keep = BTreeSet::new();
+            if let Claim::Committed(receipt) = &claim {
+                // Retention owns removal of winning bytes. Preserve everything
+                // if metadata is unavailable: absence is not evidence of waste.
+                let metadata: Metadata = match self.store.verified(id, &receipt.version).await {
+                    Ok(metadata) => metadata,
+                    Err(EvaluationError::Unavailable(_)) => continue,
+                    Err(error) => return Err(error),
+                };
+                keep.insert(format!("{}{}.json", store::content(id), receipt.version));
+                for shard in metadata.shards {
+                    keep.insert(format!("{}{}.json", store::content(id), shard.actual));
+                    keep.insert(format!("{}{}.json", store::content(id), shard.expected));
+                }
+            }
+            for artifact in self.store.0.list(&store::content(id)).await? {
+                if !keep.contains(&artifact.key) {
+                    self.store.0.delete(&artifact.key).await?;
+                    removed += 1;
+                }
+            }
+        }
+        Ok(removed)
     }
 }
 

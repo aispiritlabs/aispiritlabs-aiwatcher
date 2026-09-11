@@ -20,6 +20,7 @@ mod engine;
 mod library;
 /// A curation assembled out of blocks rather than written as one script.
 mod pipeline;
+mod version;
 
 pub use engine::{QueryEngine, UnknownEngine};
 pub use library::{BlockTemplate, BlockTemplatePage, SaveBlockTemplateRequest};
@@ -255,6 +256,12 @@ pub struct Registry {
 }
 
 impl Registry {
+    /// Read an exact published version and verify its content identity.
+    /// Catalogue metadata is not part of that identity; aliases are refused.
+    pub async fn verified_version(&self, name: &str, version: &str) -> Result<DatasetVersion> {
+        version::read(self, name, version).await
+    }
+
     #[must_use]
     pub fn new(store: Arc<dyn ObjectStore>, prefix: impl Into<String>) -> Self {
         Self {
@@ -610,17 +617,29 @@ fn dataset_identity(request: &PublishDatasetRequest) -> Result<Vec<u8>> {
     // The engine joins it only when it is not Flow: the same text is a
     // different execution in another language, and every version published
     // before the field was Flow and must keep the id it was published under.
-    let executed = (
+    content_identity(
         &request.pipeline,
+        request.engine,
         &request.columns,
         &request.items,
         &request.source,
         request.window_seconds,
-    );
-    if request.engine.is_flow() {
+    )
+}
+
+fn content_identity(
+    pipeline: &str,
+    engine: QueryEngine,
+    columns: &[String],
+    items: &[BTreeMap<String, Value>],
+    source: &str,
+    window_seconds: Option<u64>,
+) -> Result<Vec<u8>> {
+    let executed = (pipeline, columns, items, source, window_seconds);
+    if engine.is_flow() {
         serde_json::to_vec(&executed)
     } else {
-        serde_json::to_vec(&(executed, request.engine))
+        serde_json::to_vec(&(executed, engine))
     }
     .map_err(|error| RegistryError::Invalid(error.to_string()))
 }

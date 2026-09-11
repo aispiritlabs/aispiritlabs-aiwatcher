@@ -263,3 +263,26 @@ pub struct RegisteredModel {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub promotion_blocked: Option<String>,
 }
+
+/// The historical identity, shared by registration and verified reads.
+/// Package runtime and other metadata were never included in this digest.
+pub(crate) fn version_id(
+    name: &str,
+    run_id: &str,
+    checkpoint_uri: &str,
+    dataset: &str,
+    metrics: &ModelMetrics,
+    package: Option<&ModelPackage>,
+) -> Result<String> {
+    let identity = serde_json::to_vec(&(
+        name,
+        run_id,
+        checkpoint_uri,
+        dataset,
+        &metrics.validation,
+        &metrics.test,
+        package.map(ModelPackage::digest),
+    ))
+    .map_err(|error| Error::Invalid(format!("the version could not be encoded: {error}")))?;
+    Ok(crate::digest(&identity))
+}

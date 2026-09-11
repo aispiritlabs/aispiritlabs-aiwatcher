@@ -85,7 +85,9 @@ object-store adapters provide bytes; private Evaluation storage operations own
 commit, read and tombstone semantics. This must not become evaluation CRUD in
 `WorkflowStore`, nor writes into another registry's private keys.
 
-1. Store and verify bounded result shards first, including digests, lengths,
+1. Validate the entire payload and byte budget before writing. Record an immutable
+   pending intent (ID and collection deadline only), then store and verify bounded
+   result shards, including digests, lengths,
    schema versions, case IDs and repetition IDs. Expected responses and actual
    responses are separate references. A case may link actual-response bytes to
    existing trace/span IDs; unavailable telemetry does not invent a new span.
@@ -114,6 +116,35 @@ This protocol is implemented by `Registry` and its private `store`. Acceptance
 covers restart, projection loss, large reports, missing/corrupt shards, concurrent
 publication, lost responses and source revocation. The backend source capability
 is deliberately narrower than the manifest vocabulary; see the scope below.
+
+### Collection and concurrent publication
+
+An incomplete publication becomes eligible for collection one hour after its
+first intent, or earlier when source/result retention expires. Retrying does not
+extend this window. The collector creates an **abandoned claim at the same key**
+that publication uses for its receipt. Atomic create admits only one of them:
+
+- A committed receipt wins: the collector verifies its immutable metadata and
+  keeps the metadata plus every actual/expected shard it references. Other
+  versions under that ID can never become winners and can be removed. Missing or
+  corrupt metadata prevents pruning, since the live reference set is unknown.
+- Abandonment wins: no current or future writer can commit that ID. The collector
+  erases its artifact prefix. An in-flight object write may finish after erasure;
+  the durable abandoned claim remains, so later sweeps erase late bytes as well.
+
+Claims are never replaced or deleted. Concurrent collectors have the same live
+reference set. An ambiguous conditional-write response is retried/read back; it
+does not authorize deletion based on an assumed outcome. Abandoned claims retain
+only the logical ID and deadline, never a fabricated result receipt. They are
+excluded from result discovery and block legacy detail/list/suite/baseline reuse;
+HTTP reads/retries return 410. A subsequent publication needs a fresh logical ID.
+
+Committed receipt JSON and content-addressed versions retain their previous shape.
+Pre-intent, unclaimed artifact prefixes are deliberately not reclaimed from age
+alone: a one-way hashed path cannot recover their logical identity or prove an
+older writer stopped. Retrying the original publication enrolls that ID in the
+new protocol. Deployment-specific reconciliation of remaining old prefixes and
+adapter-local staging files is separate from this object-level collector.
 
 ### Retention, source rights and working defaults
 
@@ -198,21 +229,68 @@ not trusted from a separate aggregate payload. Retries preserve the first claim'
 clock. Partial measurements cannot claim success, and a new terminal result
 requires a new logical ID.
 
-The first `SourceAuthority` adapter is an operator-approved local **synthetic**
-short-answer bundle, configured by `AIWATCHER_EVALUATION_SOURCE_DIR`. Every read
-rechecks the approved context/variant and actual file digests. It has no outbound
-URL fetch. Unknown or native governed references are refused. Supporting native
-curation/annotation/conversation datasets, model/prompt references and judges
-requires owner-specific authorization adapters; these are still outstanding.
-A local path is not a general replacement for their consent/retention policies.
+The `SourceAuthority` adapter uses an operator-approved local short-answer
+bundle, configured by `AIWATCHER_EVALUATION_SOURCE_DIR`. Every read rechecks
+approved context/variant and file digests, without outbound URL fetches.
+External synthetic fixtures remain supported. Curation additionally calls the
+owner's public `Registry::verified_version(name, version)`: only that owner
+knows its private storage and historical content identity. It verifies exact
+catalogue membership, digest, name, count and publication bounds. No new domain
+dependency is introduced; Server composes the existing registries.
+
+Curation rows must match the approved case manifest in order, IDs, inputs and
+expectations. Its native version is not the case-manifest digest. Shared-instance
+API authentication/Viewer reads/Editor publication and operator approval define
+the current access policy; no per-dataset ACL or independent Curation retention
+is inferred. Removal of native content or catalogue withdraws dependent evidence.
+A changed head leaves exact older versions readable. This short-answer slice is
+bounded by Curation's existing 1,000 rows/4 MiB limit.
+
+Prompt pins now resolve through `Prompts::Registry::verified_version`, composed
+by Server with the same registry used by the API. The owner verifies the exact
+name/ID/text digest and derived variables; neither mutable labels nor the
+bounded head index determine whether that immutable version exists. A missing
+head is recoverable index loss, not a source deletion. A missing version
+withdraws dependent evidence; corruption hides it without a false deletion.
+The current prompt read policy is shared-instance access, further restricted
+for Evaluation by the operator-approved bundle. Prompts do not expire by
+themselves; Evaluation retention still applies. Prompt text is not copied into
+result shards. Model hints and other prompt metadata are not content-addressed
+and cannot prove a model version or promotion quality. Existing prompt read and
+promotion operations are unchanged.
+
+Model pins now call Training's `Registry::verified_version`. The owner shares
+its historical identity algorithm with registration and verifies exact name/ID,
+provenance, metrics and package artifact digests. Its immutable version is the
+source of truth; the mutable head or live run is not required. No promotion
+policy or existing read API changes. The owner refuses malformed packages and
+records over 1 MiB; missing versions withdraw dependent evidence.
+
+Training's historical ID does not cover the full package metadata. Server thus
+requires an operator-approved `model-package.json` equal to the current package,
+plus all actual files under `model-artifacts/<name>`. It checks every digest and
+optional length within a shared 100 MiB budget. No producer URI is fetched and
+no model loader executes. The package approval has a 1 MiB limit and follows
+the same operator trust policy as the manifest. It is current approval, not a
+new immutable package fingerprint; historical runtime/shape attestation would
+need an explicit contract extension. These checks establish accessible bytes,
+not that the producer executed them or deserves promotion. Shared Viewer/Editor
+roles and Evaluation retention apply; artifact loss retires evidence, corruption
+hides it, and approval mismatch returns forbidden. Weights are not copied into
+Evaluation shards.
+
+Annotations/Conversations and judges remain refused.
+A local path is not a replacement for their consent/retention policies, and the
+plaintext bundle and result storage do not admit governed conversation content.
 
 A 60-second server task enforces expiry and global source deletion, independently
 of API reads. The marker is stored before erasing content. Caller-specific
 forbidden access suppresses content without globally deleting it. Removing the
 approved source files yields `deleted_source`; removing source configuration
 fails closed as `forbidden`. File/S3 retain data across restart; the memory
-adapter deliberately does not. Unclaimed artifacts from a crashed/conflicting
-publication remain private orphans; collection of those orphans is outstanding.
+adapter deliberately does not. The same sweep collects abandoned intent-backed
+uploads and losing versions using the atomic protocol above. Legacy unclaimed
+prefixes without an intent remain a migration limitation.
 
 The old detail route resolves a known durable ID first and never falls back on
 an unavailable result. It exposes the legacy shape's bounded first page; the

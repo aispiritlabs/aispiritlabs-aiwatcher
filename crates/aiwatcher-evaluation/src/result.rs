@@ -46,7 +46,7 @@ pub struct PublishEvaluation {
     pub cases: Vec<CaseMeasurement>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct EvaluationReceipt {
     pub evaluation_id: String,
     pub version: String,
