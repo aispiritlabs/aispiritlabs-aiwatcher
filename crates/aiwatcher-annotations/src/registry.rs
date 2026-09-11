@@ -11,6 +11,8 @@
 //! `NotFound`, in one place, in the same words, and an import of six hundred
 //! rows resolving it once rather than six hundred times.
 
+mod verified;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 

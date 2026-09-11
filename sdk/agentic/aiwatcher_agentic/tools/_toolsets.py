@@ -238,7 +238,11 @@ class Toolsets(Sequence[Toolset]):
                         error_text = str(retry_error)
                         if capability is not None and hook_context is not None:
                             capability.on_error(retry_error, hook_context)
-                        span.update(level="WARNING", output={"retry": error_text})
+                        span.update(
+                            level="WARNING",
+                            output={"retry": error_text},
+                            metadata={"agentic.tool_status": ToolRunStatus.RETRY.value},
+                        )
                         return ToolRunResult(
                             tool_call=tool_call_tuple,
                             output=f"Error: {error_text}",
@@ -250,7 +254,11 @@ class Toolsets(Sequence[Toolset]):
                         error_text = str(error)
                         if capability is not None and hook_context is not None:
                             capability.on_error(error, hook_context)
-                        span.update(level="ERROR", output={"error": error_text})
+                        span.update(
+                            level="ERROR",
+                            output={"error": error_text},
+                            metadata={"agentic.tool_status": ToolRunStatus.ERROR.value},
+                        )
                         trace = resolved_tracer.current_trace
                         if self.is_tool_error(error_text):
                             return ToolRunResult(
@@ -274,24 +282,35 @@ class Toolsets(Sequence[Toolset]):
                         except Exception as error:
                             capability.on_error(error, hook_context)
                             raise
-                    span.update(output={"output": output[:500]})
+                    status = (
+                        ToolRunStatus.ERROR if self.is_tool_error(output) else ToolRunStatus.SUCCESS
+                    )
+                    span.update(
+                        level="ERROR" if status == ToolRunStatus.ERROR else None,
+                        output={
+                            "error" if status == ToolRunStatus.ERROR else "output": output[:500]
+                        },
+                        metadata={"agentic.tool_status": status.value},
+                    )
                     return ToolRunResult(
                         tool_call=tool_call_tuple,
                         output=output,
                         trace=resolved_tracer.current_trace,
-                        status=(
-                            ToolRunStatus.ERROR
-                            if self.is_tool_error(output)
-                            else ToolRunStatus.SUCCESS
-                        ),
+                        status=status,
                     )
 
-        return ToolRunResult(
-            tool_call=tool_call_tuple,
-            output=f"Error: tool '{function_name}' does not exist.",
-            trace=resolved_tracer.current_trace,
-            status=ToolRunStatus.ERROR,
-        )
+            output = f"Error: tool '{function_name}' does not exist."
+            span.update(
+                level="ERROR",
+                output={"error": output},
+                metadata={"agentic.tool_status": ToolRunStatus.ERROR.value},
+            )
+            return ToolRunResult(
+                tool_call=tool_call_tuple,
+                output=output,
+                trace=resolved_tracer.current_trace,
+                status=ToolRunStatus.ERROR,
+            )
 
     def run_tool(
         self,

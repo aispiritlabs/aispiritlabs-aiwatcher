@@ -18,7 +18,14 @@ from aiwatcher_agentic.workflow.trace import TraceSnapshot, TracingContext
 
 
 class SpanHandle(Protocol):
-    """What a span context yields, so the code inside can annotate it."""
+    """What a span context yields, so the code inside can annotate it.
+
+    Tool execution supplies ``metadata["agentic.tool_status"]`` as
+    ``success``, ``error`` or ``retry`` before returning a ToolRunResult.
+    ERROR carries ``output["error"]``; RETRY carries ``output["retry"]``
+    with level WARNING. A plain WARNING is not a failed tool result.
+    Annotation failures must not escape into tool execution.
+    """
 
     def update(
         self,

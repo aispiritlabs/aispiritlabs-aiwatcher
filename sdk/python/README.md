@@ -87,6 +87,74 @@ two attempts sharing a value fold into one.
 Artifacts are **references**. The bytes stay where you put them; aiwatcher
 keeps the `uri` because a pointer is bounded and a floor-plan PDF is not.
 
+## Agent SDK tool outcomes
+
+Pass the tracer directly to `Agent.run_tool(payload, tracer=tracer)` inside
+the existing workflow/agent scopes. Each tool span emits one terminal event:
+
+| Tool outcome | Event | Meaning |
+|---|---|---|
+| SUCCESS | `tool.completed` | The attempt succeeded. |
+| ERROR, including a caught exception or `is_tool_error(output)` | `tool.failed` | `error` carries the reason; `tool_status="error"`, `retryable=false`. |
+| RETRY (`ModelRetry` or `ToolValidationError`) | `tool.failed` | This attempt failed; `tool_status="retry"`, `retryable=true`. Retrying opens a new span. |
+| WARNING without a retry outcome | `tool.completed` | A warning alone does not indicate failure. |
+| Exception leaving the scope | `tool.failed` | The escaping exception is recorded and re-raised unchanged. |
+
+Agent SDK supplies `metadata["agentic.tool_status"]` through `span.update`.
+The tracer also understands legacy `level="ERROR", output={"error": ...}`
+and `level="WARNING", output={"retry": ...}` updates. Failure remains set
+until the attempt closes; subsequent ordinary updates do not clear it.
+Updates are forwarded to every tool span when composing tracers with `tee`.
+
+Caught failures still return `ToolRunResult`; telemetry does not turn them into
+exceptions. Start and terminal events share the span ID, parent ID and workflow
+correlation, and terminal events include elapsed milliseconds. Only an error
+reason (at most 500 characters) is retained from updates. Arguments, prompts,
+successful outputs and arbitrary update metadata are not captured.
+
+### Updating Planner Scout
+
+Update **both** `aiwatcher-sdk` (`sdk/python`) and `aiwatcher-agentic`
+(`sdk/agentic`) from the revision containing this fix. Updating only the tracer
+fixes legacy caught exceptions, but the returned-error path also needs the
+Agent SDK change. Both packages still declare `0.1.0`; an unchanged version
+number alone does not identify a build containing the fix.
+
+For local validation, point Planner's existing `[tool.uv.sources]` entries at
+these directories (using paths relative to Planner), then run `uv sync`:
+
+```toml
+[tool.uv.sources]
+aiwatcher-sdk = { path = "/path/to/aiwatcher/sdk/python", editable = true }
+aiwatcher-agentic = { path = "/path/to/aiwatcher/sdk/agentic", editable = true }
+```
+
+For a Git-based dependency, pin both entries to the same reviewed commit and
+their respective subdirectories, regenerate Planner's `uv.lock` with `uv lock`,
+and install with `uv sync --locked`. If Planner uses a package index, update both
+pins and the lock after separately publishing versions that contain the fix.
+No release or deployment is needed for local validation.
+
+Remove the temporary outer **tool** `AiwatcherTracer.step` scope and the
+telemetry-only error signaling before it closes. Restore the direct call:
+
+```python
+found = agent.run_tool(payload, tracer=tracer)
+if found is None:
+    ...  # Existing invalid-call handling.
+elif not found.success:
+    ...  # Existing business handling: error/retry/fallback.
+else:
+    ...  # Existing success path.
+```
+
+Keep workflow/agent scopes and the business check of `found.success`; no
+exception is required solely to mark telemetry as failed. Run Scout's tests
+against the updated lock, checking one `tool.failed` for failed search and one
+`tool.completed` for success. Cross-package regression tests live in
+`sdk/agentic/tests/test_tool_telemetry.py` and run under `just agentic-check`;
+`just sdk-check` also checks the standalone tracer contract.
+
 ## Recording an evaluation
 
 ```python

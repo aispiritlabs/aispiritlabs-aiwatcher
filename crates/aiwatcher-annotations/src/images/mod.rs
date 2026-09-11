@@ -348,3 +348,15 @@ pub struct ImageDetail {
     /// test case, which changes how carefully they draw it.
     pub split: Split,
 }
+
+/// The historical revision identity, shared by writes and verified reads.
+pub(crate) fn revision_identity(
+    project: &str,
+    image: &str,
+    schema: &str,
+    annotations: &[Annotation],
+) -> crate::Result<Vec<u8>> {
+    serde_json::to_vec(&(project, image, schema, annotations)).map_err(|error| {
+        crate::Error::Invalid(format!("the revision could not be encoded: {error}"))
+    })
+}

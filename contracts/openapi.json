@@ -13866,7 +13866,7 @@
           },
           "export": {
             "type": "string",
-            "description": "SHA-256 of everything below except `created_at` and `note`. Two exports\nof an unchanged project are one export."
+            "description": "SHA-256 of the selection and pins; time, note and derived counts are excluded.\nTwo exports\nof an unchanged project are one export."
           },
           "note": {
             "type": "string"

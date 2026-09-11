@@ -63,7 +63,7 @@ Retrying the original publication creates its intent; do not remove those prefix
 using an age-only script. Adapter staging files (`.tmp`) are outside the object
 collection protocol.
 
-The server accepts one operator-approved short-answer bundle. It compares the
+The server accepts one operator-approved short-answer or annotation bundle. It compares the
 manifest pins, verifies all local files and rechecks them on each read. It never
 fetches producer URLs. `external` uses the original synthetic fixture;
 `curation` additionally resolves the exact dataset version through
@@ -150,8 +150,62 @@ corruption hides content as `corrupt_artifact`; an unapproved package change is
 retention; Evaluation's retention and operator approval still apply. Model bytes
 are verified locally and are not copied into Evaluation result shards.
 
-Annotations, Conversations and judges still require
-owner adapters and remain refused. The current bundle and Evaluation artifacts
+For `dataset.kind: "annotations"`, both dataset references name an Annotations
+project and exact export digest. `context.split` must be `train`, `validation`
+or `test`. The approved case manifest contains **every image in that split**,
+in the COCO export order, with this mapping:
+
+```python
+cases = [
+    {
+        "case_id": image["file_name"],
+        "input": image,
+        "expected": {
+            "categories": coco["categories"],
+            "annotations": [a for a in coco["annotations"] if a["image_id"] == image["id"]],
+        },
+    }
+    for image in coco["images"]
+]
+case_manifest = {"schema_version": 1, "cases": cases}
+```
+
+Get COCO for the exact export and split through Annotations, then pin the JSON
+case file's actual digest/length and count. Copy the schemas, suite and scorer
+from `contracts/fixtures/evaluation-annotations-v1`, updating their artifact
+pins in the operator and producer manifests. Keep the usual code, generation
+configuration and prompt/model/workflow pins. That fixture uses exact equality
+of full COCO targets, not a detection mAP scorer. A complete native setup and
+publication example is exercised in `aiwatcher-server/tests/evaluation/annotations.rs`.
+The existing seed remains specific to external short answers.
+
+Server calls `Annotations::Registry::verified_coco`, which checks the export
+identity, schema digest, selected revision digests, shape validity and actual
+stored image bytes. It rechecks selected images' current rights and review;
+`commercial` and `research` use the owner's existing rights rules, while `any`
+is refused. These checks use recorded rights, not a new legal determination.
+Only native `aiwatcher-blob:` images are supported; external URLs are not fetched.
+The entire input and target must equal the verified COCO result, including
+categories, image IDs, geometry, attributes and order. Missing revisions cannot
+silently become empty ground truth.
+
+Changing the accepted revision or losing the export index does not retarget a
+pin. Changes to current image dimensions or grouping also require re-approval
+through a new matching export. Missing project, selected image head, revision, image bytes or export retires
+evidence. Rights/review revocation hides content as `forbidden`; damaged content
+is `corrupt_artifact`. Annotations does not retain historical schemas separately,
+so a legitimate project schema change makes old evidence `forbidden` until the
+matching schema is available again. The ordinary COCO API is unchanged.
+The verified facade limits an export to 1,000 samples, each image to 16 MiB,
+and all read source objects to 100 MiB. Export/project/head JSON has a 4 MiB
+limit; revisions retain their 4 MiB identity limit with 256 KiB metadata allowance.
+Derived manifest counts are outside its historical digest and do not select cases.
+Shared Viewer/Editor roles, operator approval and Evaluation retention apply;
+there is no independent Annotations expiry or per-project ACL. Images are checked
+in their owner's store, not copied into Evaluation shards; vector expectations
+are retained as evidence.
+
+Conversations and judges still require owner adapters and remain refused. The current bundle and Evaluation artifacts
 are plaintext: do not use sensitive or conversation-derived content here.
 Native Conversations requires its own encryption, erasure and role handling.
 

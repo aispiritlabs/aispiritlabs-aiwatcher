@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "id",
+    "file_name",
+    "coco_url",
+    "width",
+    "height",
+    "aiwatcher"
+  ],
+  "properties": {
+    "id": {
+      "type": "integer"
+    },
+    "file_name": {
+      "type": "string"
+    },
+    "coco_url": {
+      "type": "string"
+    },
+    "width": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "height": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "aiwatcher": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": false
+}

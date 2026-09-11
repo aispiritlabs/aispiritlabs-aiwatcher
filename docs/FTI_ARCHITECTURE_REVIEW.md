@@ -203,3 +203,10 @@ Zatwierdzenie operatora i wspólne role instancji obowiązują na istniejącej �
 Training posiada algorytm tożsamości modelu; `verified_version` współdzieli go z rejestracją. Server czyta wyłącznie publiczną fasadę i zatwierdzone lokalne pliki, bez prywatnych kluczy Training. Evaluation nadal zależy tylko od Core. Historyczne ID, zwykłe odczyty oraz promocje pozostają kompatybilne.
 
 Historyczny model ID przypina uporządkowane digests plików, lecz nie cały opis pakietu. Dodatkowe zatwierdzenie operatora obejmuje runtime, entry point, kształty i referencje; każdy plik podlega weryfikacji bajtów. Ten sidecar nie jest nowym historycznym fingerprintem ani dowodem wykonania. Przyszłe przypięcie pełnego pakietu wymaga rozszerzenia kontraktu, nie cichej zmiany algorytmu Training. Wspólne role instancji i retencja Evaluation obowiązują bez nowej polityki w Core. Odbiór i ograniczenia: sekcja 14 planu. Annotations, Conversations i judge pozostają otwartym zakresem AR2.
+
+
+## 15. B2 — eksport Annotations przez właściciela
+
+Annotations posiada weryfikację eksportu, schematu, rewizji i bajtów oraz interpretację aktualnych praw/review. Server składa tę fasadę z Evaluation i porównuje pełne przypadki COCO z zatwierdzonym bundle. Tożsamości eksportu/rewizji zachowują historyczny format. Evaluation nadal zależy tylko od Core; Server nie zna kluczy storage Annotations. Zwykły odczyt COCO nie zmienia się.
+
+Prawa commercial/research są sprawdzane u właściciela przy każdym odczycie; nie dodano per-project ACL ani wymyślonej retencji. Utrata źródła wycofuje kopie wektorowych oczekiwań, a revocation ukrywa je. Brak historycznego schematu jest jawnie odmawiany, zamiast relabelingu według nowej klasy. Obrazy pozostają w Annotations i nie są pobierane z URL. Limity, testy i dalszy zakres są w sekcji 15 planu; Conversations i judge nadal wymagają domknięcia AR2.

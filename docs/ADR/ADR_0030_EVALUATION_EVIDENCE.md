@@ -279,7 +279,26 @@ roles and Evaluation retention apply; artifact loss retires evidence, corruption
 hides it, and approval mismatch returns forbidden. Weights are not copied into
 Evaluation shards.
 
-Annotations/Conversations and judges remain refused.
+Annotations now uses `Registry::verified_coco` through Server. The owner shares
+export/revision identity algorithms with their writers and verifies the selected
+split's schema, pinned revisions, shapes and native image bytes. It reads current
+rights/review decisions and refuses revoked access; `commercial` and `research`
+follow existing owner policy, `any` and external image URLs are refused. These
+are checks of recorded rights. Server compares every approved case to the full
+COCO image and its annotations/categories, with exact order and split coverage.
+Missing revisions are unavailable rather than empty expected answers. Image bytes
+stay in Annotations; vector expectations enter Evaluation's normal evidence store.
+
+Verified reads have limits of 1,000 export samples and 100 MiB total source bytes,
+with the existing per-image/revision bounds. A moved accepted revision or missing
+export index does not change the pin; source deletion erases evidence, while
+review/rights withdrawal hides it without resetting retention. Annotations has
+no historical schema store, so a legitimate schema change refuses the old export
+until that schema is available again. Ordinary export/COCO APIs retain behavior.
+No domain dependency or public HTTP shape was added. Shared roles and operator
+approval still apply; no per-project ACL or independent retention is invented.
+
+Conversations and judges remain refused.
 A local path is not a replacement for their consent/retention policies, and the
 plaintext bundle and result storage do not admit governed conversation content.
 

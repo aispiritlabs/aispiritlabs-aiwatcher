@@ -149,7 +149,8 @@ pub struct ExportRequest {
 /// The immutable result.
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct ExportManifest {
-    /// SHA-256 of everything below except `created_at` and `note`. Two exports
+    /// SHA-256 of the selection and pins; time, note and derived counts are excluded.
+    /// Two exports
     /// of an unchanged project are one export.
     pub export: String,
     pub project: String,
@@ -173,6 +174,24 @@ pub struct ExportManifest {
 }
 
 impl ExportManifest {
+    pub(crate) fn content_digest(&self) -> Result<String> {
+        let identity = serde_json::to_vec(&json!({
+            "project": self.project,
+            "schema_version": self.schema_version,
+            "rights_policy": self.rights_policy,
+            "require_human_review": self.require_human_review,
+            "views": self.views,
+            "splits": self.splits,
+            "split_salt": self.split_salt,
+            "classes": self.classes,
+            "samples": self.samples,
+            "excluded": self.excluded,
+        }))
+        .map_err(|error| Error::Invalid(format!("the export could not be encoded: {error}")))?;
+
+        Ok(digest(&identity))
+    }
+
     /// `project@export`, the string a training run records.
     #[must_use]
     pub fn reference(&self) -> String {
@@ -443,22 +462,8 @@ pub fn build(
             .or_default() += 1;
     }
 
-    let identity = serde_json::to_vec(&json!({
-        "project": request.project,
-        "schema_version": project.schema.version,
-        "rights_policy": request.rights_policy,
-        "require_human_review": request.require_human_review,
-        "views": request.views,
-        "splits": ratios,
-        "split_salt": salt,
-        "classes": classes,
-        "samples": samples,
-        "excluded": excluded,
-    }))
-    .map_err(|error| Error::Invalid(format!("the export could not be encoded: {error}")))?;
-
-    Ok(ExportManifest {
-        export: digest(&identity),
+    let mut manifest = ExportManifest {
+        export: String::new(),
         project: request.project.clone(),
         schema_version: project.schema.version.clone(),
         created_at,
@@ -472,7 +477,9 @@ pub fn build(
         samples,
         excluded,
         counts,
-    })
+    };
+    manifest.export = manifest.content_digest()?;
+    Ok(manifest)
 }
 
 /// A cheap view over a revision's origins, so `build` does not have to compute

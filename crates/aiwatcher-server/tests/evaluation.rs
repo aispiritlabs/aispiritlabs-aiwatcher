@@ -551,3 +551,6 @@ async fn the_full_byte_budget_is_rejected_before_any_artifact_is_written() {
 
 #[path = "evaluation/models.rs"]
 mod models;
+
+#[path = "evaluation/annotations.rs"]
+mod annotations;

@@ -1,0 +1,5 @@
+{
+  "name": "annotation-exact-fixture",
+  "description": "Exact equality of complete COCO expectations. Regression fixture, not detection mAP.",
+  "metric": "accuracy"
+}

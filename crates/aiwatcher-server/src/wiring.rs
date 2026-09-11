@@ -178,7 +178,7 @@ async fn build_registries(
     Ok(Registries {
         prompts: Some(Arc::clone(&prompts)),
         datasets: Some(Arc::clone(&datasets)),
-        annotations: Some(annotations),
+        annotations: Some(Arc::clone(&annotations)),
         training: Some(Arc::clone(&training)),
         evaluations: Some(Arc::new(aiwatcher_evaluation::Registry::new(
             Arc::clone(&store),
@@ -186,7 +186,8 @@ async fn build_registries(
                 crate::evaluation::LocalSource::new(config.evaluation_source_dir.clone())
                     .with_curation(datasets)
                     .with_prompts(prompts)
-                    .with_training(training),
+                    .with_training(training)
+                    .with_annotations(annotations),
             ),
             config.evaluation_limits.clone(),
         )?)),

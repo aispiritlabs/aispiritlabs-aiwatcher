@@ -1,4 +1,5 @@
 //! Operator-approved evidence, source owner adapters and the retention worker.
+mod annotations;
 use aiwatcher_evaluation::{
     DatasetKind, Evaluation, EvaluationError, EvaluationManifest, EvidenceState, Result,
     SourceAuthority, SourceEvidence,
@@ -11,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::io::AsyncReadExt;
 
-/// One operator-selected bundle, with optional Curation, prompt and model owners.
+/// One operator-selected bundle, with native source owners.
 /// API authentication enforces the shared instance's Viewer/Editor roles;
 /// the approved bundle further restricts which source pins may be retained.
 #[derive(Debug)]
@@ -20,6 +21,7 @@ pub struct LocalSource {
     datasets: Option<Arc<aiwatcher_datasets::Registry>>,
     prompts: Option<Arc<aiwatcher_prompts::Registry>>,
     training: Option<Arc<aiwatcher_training::Registry>>,
+    annotations: Option<Arc<aiwatcher_annotations::Registry>>,
 }
 impl LocalSource {
     #[must_use]
@@ -29,7 +31,14 @@ impl LocalSource {
             datasets: None,
             prompts: None,
             training: None,
+            annotations: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_annotations(mut self, annotations: Arc<aiwatcher_annotations::Registry>) -> Self {
+        self.annotations = Some(annotations);
+        self
     }
 
     #[must_use]
@@ -128,7 +137,7 @@ impl SourceAuthority for LocalSource {
             .ok_or_else(|| unavailable(EvidenceState::Forbidden))?;
         if !matches!(
             manifest.context.dataset.kind,
-            DatasetKind::External | DatasetKind::Curation
+            DatasetKind::External | DatasetKind::Curation | DatasetKind::Annotations
         ) || manifest.context.judge.is_some()
         {
             return Err(unavailable(EvidenceState::Forbidden));
@@ -235,6 +244,9 @@ impl SourceAuthority for LocalSource {
         }
         if c.dataset.kind == DatasetKind::External && c.dataset.version != c.case_manifest.digest {
             return Err(unavailable(EvidenceState::CorruptArtifact));
+        }
+        if c.dataset.kind == DatasetKind::Annotations {
+            return self.annotation_cases(&root, c).await;
         }
         let cases: Cases = serde_json::from_slice(
             &verified(

@@ -355,13 +355,12 @@ pub(crate) async fn save_revision(
     // Author, notes and time are outside the identity: the same drawing by
     // two people is one revision, exactly as the same prompt text is one
     // version.
-    let identity = serde_json::to_vec(&(
+    let identity = super::revision_identity(
         &project.name,
         &request.image_id,
         &project.schema.version,
         &request.annotations,
-    ))
-    .map_err(|error| Error::Invalid(format!("the revision could not be encoded: {error}")))?;
+    )?;
     if identity.len() > MAX_REVISION_BYTES {
         return Err(Error::TooLarge {
             what: "the encoded revision",

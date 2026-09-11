@@ -2390,7 +2390,8 @@ export type ExportManifest = {
     created_at: string;
     excluded: Array<ExportExclusion>;
     /**
-     * SHA-256 of everything below except `created_at` and `note`. Two exports
+     * SHA-256 of the selection and pins; time, note and derived counts are excluded.
+     * Two exports
      * of an unchanged project are one export.
      */
     export: string;

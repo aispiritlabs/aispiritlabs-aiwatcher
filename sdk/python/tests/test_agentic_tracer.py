@@ -182,3 +182,100 @@ def test_a_call_that_names_no_prompt_carries_no_reference(
 
     assert events
     assert not any({"prompt_name", "prompt_version"} & event["data"].keys() for event in events)
+
+
+@pytest.mark.parametrize(
+    ("updates", "terminal", "reason", "retryable"),
+    [
+        ([{"level": "WARNING"}], "completed", None, None),
+        ([{"output": {"error": "data, not status"}}], "completed", None, None),
+        (
+            [{"level": "ERROR", "output": {"error": "legacy failure"}}],
+            "failed",
+            "legacy failure",
+            False,
+        ),
+        (
+            [{"level": "WARNING", "output": {"retry": "legacy retry"}}],
+            "failed",
+            "legacy retry",
+            True,
+        ),
+        ([{"metadata": {"agentic.tool_status": "error"}}], "failed", "Tool reported error", False),
+        ([{"metadata": {"agentic.tool_status": "retry"}}], "failed", "Tool reported retry", True),
+        (
+            [
+                {"level": "ERROR", "output": {"error": "first"}},
+                {"level": "WARNING"},
+                {"output": {"output": "private result"}},
+            ],
+            "failed",
+            "first",
+            False,
+        ),
+        ([{"level": "ERROR", "output": {"error": "x" * 1000}}], "failed", "x" * 500, False),
+    ],
+)
+def test_tool_updates_are_outcomes_not_payload_capture(
+    updates: list[dict[str, Any]], terminal: str, reason: str | None, retryable: bool | None
+) -> None:
+    from aiwatcher_sdk import AiwatcherClient
+    from aiwatcher_sdk.integrations.agentic import AiwatcherTracer
+
+    recording = Recording()
+    client = AiwatcherClient(service="test", transport=recording)
+    tracer = AiwatcherTracer(client=client)
+    with tracer.workflow(name="scout", session_id="session"):
+        with tracer.step(name="search", span_type="TOOL", input={"secret": "argument"}) as span:
+            for update in updates:
+                span.update(**update)
+        with tracer.step(name="next", span_type="TOOL"):
+            pass
+    client.close()
+    events = [e for e in recording.events if e["event_type"].startswith("tool.")]
+    assert [e["event_type"] for e in events] == [
+        "tool.started",
+        f"tool.{terminal}",
+        "tool.started",
+        "tool.completed",
+    ]
+    assert events[1]["data"].get("error") == reason
+    assert events[1]["data"].get("retryable") is retryable
+    assert events[0]["span_id"] == events[1]["span_id"]
+    assert events[0]["span_id"] != events[2]["span_id"]
+    assert "argument" not in str(events)
+    assert "private result" not in str(events)
+
+
+def test_exception_after_error_update_emits_one_failure_with_escaping_cause() -> None:
+    from aiwatcher_sdk import AiwatcherClient
+    from aiwatcher_sdk.integrations.agentic import AiwatcherTracer
+
+    recording = Recording()
+    client = AiwatcherClient(service="test", transport=recording)
+    tracer = AiwatcherTracer(client=client)
+    error = ValueError("escaping failure")
+    with tracer.workflow(name="scout", session_id="session"):
+        with (
+            pytest.raises(ValueError) as raised,
+            tracer.step(name="search", span_type="TOOL") as span,
+        ):
+            span.update(level="ERROR", output={"error": "earlier failure"})
+            raise error
+        assert raised.value is error
+    client.close()
+    events = [e for e in recording.events if e["event_type"].startswith("tool.")]
+    assert [e["event_type"] for e in events] == ["tool.started", "tool.failed"]
+    assert events[1]["data"]["error"] == "escaping failure"
+
+
+def test_tee_updates_other_handles_when_one_annotation_fails() -> None:
+    from aiwatcher_sdk.integrations.agentic.tracer import TeeSpan, ToolSpan
+
+    class BrokenSpan:
+        def update(self, **kwargs: Any) -> None:
+            raise RuntimeError("backend unavailable")
+
+    watcher = ToolSpan()
+    TeeSpan([BrokenSpan(), watcher]).update(level="ERROR", output={"error": "tool failure"})
+    assert watcher.outcome()["error"] == "tool failure"

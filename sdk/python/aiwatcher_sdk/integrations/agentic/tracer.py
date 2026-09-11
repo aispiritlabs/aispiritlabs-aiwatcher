@@ -97,12 +97,7 @@ _TOOL_SPAN_TYPE = "TOOL"
 
 
 class NoopSpan:
-    """What every context manager here yields.
-
-    The interface lets a caller annotate a span after the fact. aiwatcher builds
-    its spans from start/end events, so there is nothing to annotate — but the
-    method has to exist or callers that use it would break.
-    """
+    """Handle for scopes that do not consume span updates."""
 
     def update(
         self,
@@ -112,6 +107,49 @@ class NoopSpan:
         level: str | None = None,
     ) -> None:
         del output, metadata, level
+
+
+class ToolSpan(NoopSpan):
+    """Keep only the attempt outcome, never arguments or successful output.
+
+    ERROR is sticky until this attempt closes. RETRY is a failed, retryable
+    attempt; WARNING alone is not a failure. The metadata key carries the
+    Agent SDK's result status without coupling the two distributions.
+    """
+
+    def __init__(self) -> None:
+        self.status = "success"
+        self.error: str | None = None
+
+    def update(
+        self,
+        *,
+        output: Mapping[str, Any] | None = None,
+        metadata: Mapping[str, Any] | None = None,
+        level: str | None = None,
+    ) -> None:
+        # Custom mappings may themselves raise. Annotation is telemetry too.
+        with contextlib.suppress(Exception):
+            status = (metadata or {}).get("agentic.tool_status")
+            if level == "ERROR" or status == "error":
+                self.status = "error"
+            elif self.status != "error" and (
+                status == "retry" or (level == "WARNING" and "retry" in (output or {}))
+            ):
+                self.status = "retry"
+            if self.status != "success":
+                reason = (output or {}).get("error") or (output or {}).get("retry")
+                if isinstance(reason, str) and reason:
+                    self.error = reason[:500]
+
+    def outcome(self) -> dict[str, Any]:
+        if self.status == "success":
+            return {}
+        return {
+            "tool_status": self.status,
+            "retryable": self.status == "retry",
+            "error": self.error or "Tool reported " + self.status,
+        }
 
 
 def _int_or_zero(value: Any) -> int:
@@ -378,6 +416,7 @@ class AiwatcherTracer:
         context = self._scope()
         started = time.monotonic()
 
+        handle = ToolSpan() if kind == _TOOL_SPAN_TYPE else NoopSpan()
         with self._scoped_span() as (span_id, parent_span):
             self._emit(
                 f"{event_prefix}.started",
@@ -387,21 +426,25 @@ class AiwatcherTracer:
                 parent_span_id=parent_span,
             )
             try:
-                yield NoopSpan()
+                yield handle
             except BaseException as error:
                 self._emit(
                     f"{event_prefix}.failed",
                     context,
-                    {**payload, "error": str(error), "duration_ms": _elapsed_ms(started)},
+                    {**payload, "error": str(error)[:500], "duration_ms": _elapsed_ms(started)},
                     span_id=span_id,
+                    parent_span_id=parent_span,
                 )
                 raise
             else:
+                outcome = handle.outcome() if isinstance(handle, ToolSpan) else {}
+                terminal = "failed" if outcome else "completed"
                 self._emit(
-                    f"{event_prefix}.completed",
+                    f"{event_prefix}.{terminal}",
                     context,
-                    {**payload, "duration_ms": _elapsed_ms(started)},
+                    {**payload, **outcome, "duration_ms": _elapsed_ms(started)},
                     span_id=span_id,
+                    parent_span_id=parent_span,
                 )
 
     def llm(
@@ -526,6 +569,18 @@ def _prompt_reference(attributes: Any) -> dict[str, str]:
     return fields
 
 
+class TeeSpan(NoopSpan):
+    """Forward updates even when aiwatcher is not the first tracer."""
+
+    def __init__(self, handles: list[Any]) -> None:
+        self._handles = handles
+
+    def update(self, **kwargs: Any) -> None:
+        for handle in self._handles:
+            with contextlib.suppress(Exception):
+                handle.update(**kwargs)
+
+
 class TeeTracer:
     """Fans every hook out to several tracers.
 
@@ -556,7 +611,7 @@ class TeeTracer:
     def step(self, **kwargs: Any) -> Generator[Any, None, None]:
         with contextlib.ExitStack() as stack:
             handles = [stack.enter_context(t.step(**kwargs)) for t in self._tracers]
-            yield handles[0] if handles else NoopSpan()
+            yield TeeSpan(handles)
 
     def llm(self, *, invoke: Callable[..., Any], **kwargs: Any) -> Any:
         def nest(index: int) -> Callable[..., Any]:
