@@ -58,9 +58,15 @@ cargo clippy -p aiwatcher-{core,prompts,projector,api} --all-targets --all-featu
 ./scripts/e2e-optimise-prompt.py   (just e2e-optimise)
   — approved 7/7, kept 7/7, rejected 7/7: "all three runs hold"
 just check
-  — PENDING
+  — 18 of 19 PASS (cargo fmt, clippy, cargo test, openapi contract is current,
+    panel build + typecheck, panel tests, python sdk, agentic engine, helm
+    chart, cargo deny, …); FAIL comments: five comment blocks over 25 lines in
+    apps/panel (search.ts, navigation.ts, query-builder.ts, workflow-layout.ts,
+    attribute-picker.tsx), every one last touched by ea2dfe7, the panel
+    rebuild's commit — AW-5 changed nothing in apps/panel but the generated
+    client
 just sdk-check
-  — PENDING
+  — ruff format and check clean, mypy --strict clean over 72 files, 422 passed
 ```
 
 ## Issues found & resolutions
@@ -82,7 +88,11 @@ just sdk-check
   `181c47c` on its own names a keyword the SDK did not yet have.
 
 ## Quality checks
-- [ ] The project's verification command passes — see `just check` above
+- [ ] The project's verification command passes — **not fully**: 18 of 19,
+      and the one red step (`comments`) is five panel files from `ea2dfe7`,
+      which this change did not touch. Left to the session that owns the panel
+      rather than rewritten from here; every step this change could move is
+      green.
 - [x] Every spec scenario has a test that fails without the change — except
       three regression guards over behaviour that held before and must keep
       holding: the report that starts no workflow execution (the `eval.*`
@@ -92,4 +102,4 @@ just sdk-check
       every new field is optional and absent from what stored records hold
 
 ## Log
-- 2026-09-11 12:55 — verification run on `main`: every scenario covered; `just check` and `just sdk-check` pending at the time of writing
+- 2026-09-11 12:33 — `just check` 18/19 — `comments` red on five panel files from `ea2dfe7`, not this change; `just sdk-check` green, 422 passed

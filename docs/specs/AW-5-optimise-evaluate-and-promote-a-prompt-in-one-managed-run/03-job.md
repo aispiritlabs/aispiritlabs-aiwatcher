@@ -152,7 +152,8 @@ around another session's work any more.
 - [x] 5.1 The plan's §12, §28, §35 and §40.6, the ADR_0010 and ADR_0011
       amendments, and `CLAUDE.md`'s guardrail. — *Phase 15's scope in the
       plan*, and the removed `EvaluationSuite` binding
-- [ ] 5.2 Verify: `just check`, `just sdk-check`, `just e2e-optimise`.
+- [x] 5.2 Verify: `just check`, `just sdk-check`, `just e2e-optimise`. — `just check`
+      18/19, `comments` red on panel files from `ea2dfe7`; the rest green
 
 ## Log
 - 2026-09-11 12:20 — job planned on `main`: nine design decisions and twelve tasks; the three open questions settled — `data.step_id`, 422 `promotion_refused`, the verdict read from `record`'s artifact

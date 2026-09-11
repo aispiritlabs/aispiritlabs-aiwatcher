@@ -15,8 +15,6 @@ means it is sitting on that column waiting for something.
 
 ## Job
 
-- [ ] [AW-5 · Optimise, evaluate and promote a prompt in one managed run](AW-5-optimise-evaluate-and-promote-a-prompt-in-one-managed-run/_index.md)
-
 - [ ] [AW-4 · Retire Flyte, and run workflow steps in pods of our own](AW-4-retire-flyte-and-run-steps-in-pods-of-our-own/_index.md)
 
 ## Tests
@@ -26,6 +24,8 @@ means it is sitting on that column waiting for something.
 ## Deploy
 
 ## Done
+
+- [x] [AW-5 · Optimise, evaluate and promote a prompt in one managed run](AW-5-optimise-evaluate-and-promote-a-prompt-in-one-managed-run/_index.md)
 
 - [x] [AW-3 · DataFusion and DuckDB as query and curation engines](AW-3-datafusion-and-duckdb-as-query-and-curation-engines/_index.md)
 
