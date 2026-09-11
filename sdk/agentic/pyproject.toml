@@ -14,10 +14,7 @@ license = "PolyForm-Noncommercial-1.0.0"
 # runtime modules that reach aiwatcher — `hosted` and `distributed.aiwatcher` —
 # import it when they are used, so an application whose agents all run in one
 # process installs nothing to talk to a server it never starts.
-dependencies = [
-  "orjson>=3.11",
-  "structlog>=25.5",
-]
+dependencies = ["orjson>=3.11", "structlog>=25.5"]
 
 [project.optional-dependencies]
 # `PydanticOutput` imports pydantic when it is used, so an agent whose answers
@@ -60,21 +57,7 @@ line-length = 100
 
 [tool.ruff.lint]
 # The SDK's set, so a lint that fires in one distribution fires in the other.
-select = [
-  "E",
-  "F",
-  "I",
-  "UP",
-  "B",
-  "C4",
-  "SIM",
-  "RUF",
-  "ASYNC",
-  "PTH",
-  "BLE",
-  "N",
-  "S",
-]
+select = ["E", "F", "I", "UP", "B", "C4", "SIM", "RUF", "ASYNC", "PTH", "BLE", "N", "S"]
 
 # `Generator[T, None, None]` is this repository's spelling for a
 # `@contextmanager` (CLAUDE.md). The floor that made it necessary was 3.11; at
