@@ -74,8 +74,7 @@ status_of() {
 
 for surface in \
   "managed execution|/api/v1/executions/_probe|execution.store" \
-  "prompt registry|/api/v1/prompts|promptStore.mode" \
-  "pipeline engine|/api/v1/engine|engine.mode"
+  "prompt registry|/api/v1/prompts|promptStore.mode"
 do
   IFS='|' read -r label path setting <<<"$surface"
   code=$(status_of "$path")

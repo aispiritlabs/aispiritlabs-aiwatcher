@@ -1,6 +1,9 @@
 {{- $fullname := include "aiwatcher.fullname" . -}}
 {{- $otlp := include "aiwatcher.otlpEndpoint" . -}}
 {{- $promptStore := include "aiwatcher.promptStoreEndpoint" . -}}
+{{- if hasKey .Values "engine" -}}
+{{- fail "engine is set, but the Flyte pipeline engine has been removed from aiwatcher and every value under engine went with it. Delete the engine block from your values. A rerun sent to an HTTP endpoint is AIWATCHER_WORKFLOW_RUNNER=http in server.extraEnv." -}}
+{{- end -}}
 {{- if and (eq .Values.auth.mode "proxy") (not .Values.networkPolicy.enabled) -}}
 {{- fail "auth.mode is \"proxy\" but networkPolicy.enabled is false. That mode takes the caller's identity from request headers, which is only sound while nothing but the authenticating proxy can reach the server. With no policy, any pod in the namespace can claim to be an admin. Turn the policy on, or use auth.mode \"oidc\", where the identity is proved to this process rather than asserted to it." -}}
 {{- end -}}
