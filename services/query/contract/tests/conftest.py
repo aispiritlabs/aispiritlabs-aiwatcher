@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -11,8 +12,12 @@ import pyarrow.csv as pv
 import pyarrow.parquet as pq
 import pytest
 
+from aiwatcher_query.admission import Vocabulary, admit
 from aiwatcher_query.catalog import Catalog
+from aiwatcher_query.check import check
 from aiwatcher_query.config import DEFAULT_CATALOG
+from aiwatcher_query.errors import QueryRefusedError
+from aiwatcher_query.evaluate import parse
 
 CORPUS_ROWS = 60
 KINDS = ["llm", "tool", "agent"]
@@ -111,3 +116,82 @@ class FakeApi:
 @pytest.fixture
 def api() -> FakeApi:
     return FakeApi()
+
+
+#: What the panel ships for each Python engine, in the one copy it is built from.
+#: This file is services/query/contract/tests/conftest.py.
+PANEL_CONTENT = Path(__file__).resolve().parents[4] / "apps/panel/src/shared/lib/content"
+
+#: The rows a placeholder stands for: what `compilePython` reads when a chain has no source.
+PLACEHOLDER_ROWS = 'read("default")'
+
+#: The names a cheat-sheet line uses without binding them: the chain it is a step of, and
+#: the second relation a join names.
+PLACEHOLDERS = ("df", "other")
+
+
+@dataclass(frozen=True)
+class Piece:
+    """One text the panel ships, as its engine is handed it."""
+
+    #: Which piece of the file it is, which is what a failure names.
+    name: str
+    text: str
+    #: A query or a transform, rather than a cheat-sheet line.
+    whole: bool
+
+
+def pieces(engine: str) -> list[Piece]:
+    """Every text `content/<engine>.json` holds, each as it is used (AW-3).
+
+    Read from the file the panel reads rather than copied, so the engine's own tests and
+    the panel's screens hold the same bytes. A text of several lines is its lines, joined
+    as the panel joins them, and the starter curation is one of the examples by name, so
+    it is checked as that example. Each piece is checked as what it is to somebody using
+    it:
+
+    - a query stands alone, checked as `/query/check` checks one under `strict`;
+    - a transform is handed `df`, so it is checked inside the script `compilePython`
+      writes around it: `df = read("default")`, then `df = (<transform>)`, then `df`;
+    - a cheat-sheet line is a step, not a query. One that starts with `.` continues a
+      chain on `df`, and a join's `other` is the relation it joins; both placeholders are
+      bound by a read before the line. It is admitted and not held to ending in a frame,
+      because the window's line assigns the half it joins back.
+    """
+    content: dict[str, Any] = json.loads((PANEL_CONTENT / f"{engine}.json").read_text("utf-8"))
+    examples = [
+        Piece(f"example {example['name']}", "\n".join(example["query"]), whole=True)
+        for example in content["examples"]
+    ]
+    lines = [
+        Piece(f"cheat sheet {line['label']}", _step(line["code"]), whole=False)
+        for line in content["transformations"]
+    ]
+    return [
+        Piece("starter query", "\n".join(content["starterQuery"]), whole=True),
+        *examples,
+        Piece("new transform", _transform(content["newTransform"]), whole=True),
+        Piece("transform help", _transform(content["transformExample"]), whole=True),
+        *lines,
+    ]
+
+
+def refusals(piece: Piece, catalog: Catalog, vocabulary: Vocabulary) -> list[str]:
+    """Every reason the engine gives for not running this piece, each at its line."""
+    if piece.whole:
+        diagnostics = check(piece.text, catalog, vocabulary)["diagnostics"]
+        return [f"line {found['line']}: {found['message']}" for found in diagnostics]
+    try:
+        tree = parse(piece.text)
+    except QueryRefusedError as refused:
+        return [f"line {refused.line}: {refused.message}"]
+    return [f"line {refused.line}: {refused.message}" for refused in admit(tree, vocabulary)]
+
+
+def _transform(text: str) -> str:
+    return f"df = {PLACEHOLDER_ROWS}\ndf = (\n{text.strip()}\n)\ndf"
+
+
+def _step(code: str) -> str:
+    bound = [f"{name} = {PLACEHOLDER_ROWS}" for name in PLACEHOLDERS]
+    return "\n".join([*bound, f"df{code}" if code.startswith(".") else code])
