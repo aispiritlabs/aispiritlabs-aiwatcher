@@ -263,11 +263,13 @@ run-conversations:
 # what `just dev` and `just run` run, and it is the refusal in `Config::validate`
 # rather than a lock file somebody has to interpret.
 
-# Server on :8080 with managed query execution wired. Run `just query-serve` beside it.
+# Server on :8080 with managed query execution wired. Run `just query-serve` beside it,
+# which sets the engine's ceiling a minute above this step timeout.
 run-execution:
     AIWATCHER_BUS=wal \
     AIWATCHER_INGEST_ENABLED=true \
     AIWATCHER_QUERY_URL={{query_url}} \
+    AIWATCHER_QUERY_STEP_TIMEOUT_SECONDS=${AIWATCHER_QUERY_STEP_TIMEOUT_SECONDS:-300} \
     AIWATCHER_LOG=info,aiwatcher=debug \
     cargo run --bin aiwatcher
 
@@ -566,13 +568,14 @@ agentic-check:
 query := "services/query"
 flow := query + "/flow"
 
-# Install the engine AIWATCHER_QUERY_ENGINE names.
+# Install the engine AIWATCHER_QUERY_ENGINE names. The Python engines share one
+# uv workspace, and uv fetches the interpreter.
 query-install:
     #!/usr/bin/env bash
     set -euo pipefail
     case "{{query_engine}}" in
         flow) just flow-install ;;
-        datafusion|duckdb) echo "the {{query_engine}} engine arrives in AW-3 phase 2; only flow is here yet" >&2; exit 1 ;;
+        datafusion|duckdb) just _query-engine-exists && cd {{query}} && uv sync --all-packages --all-groups ;;
         *) echo "AIWATCHER_QUERY_ENGINE is '{{query_engine}}'; the engines are flow, datafusion, duckdb" >&2; exit 1 ;;
     esac
 
@@ -580,9 +583,15 @@ query-install:
 query-serve port="8081":
     #!/usr/bin/env bash
     set -euo pipefail
+    # The engine's ceiling a minute above a managed step's timeout unless one is
+    # set, so a long step is stopped by its own clock rather than refused (AW-3).
+    export AIWATCHER_QUERY_TIMEOUT_SECONDS="${AIWATCHER_QUERY_TIMEOUT_SECONDS:-$(( ${AIWATCHER_QUERY_STEP_TIMEOUT_SECONDS:-300} + 60 ))}"
     case "{{query_engine}}" in
         flow) just flow-serve {{port}} ;;
-        datafusion|duckdb) echo "the {{query_engine}} engine arrives in AW-3 phase 2; only flow is here yet" >&2; exit 1 ;;
+        datafusion|duckdb)
+            just _query-engine-exists
+            cd {{query}} && AIWATCHER_URL="${AIWATCHER_URL:-http://127.0.0.1:8080}" \
+              AIWATCHER_QUERY_PORT={{port}} exec uv run python -m query_{{query_engine}} ;;
         *) echo "AIWATCHER_QUERY_ENGINE is '{{query_engine}}'; the engines are flow, datafusion, duckdb" >&2; exit 1 ;;
     esac
 
@@ -592,9 +601,69 @@ query-check:
     set -euo pipefail
     case "{{query_engine}}" in
         flow) just flow-check ;;
-        datafusion|duckdb) echo "the {{query_engine}} engine arrives in AW-3 phase 2; only flow is here yet" >&2; exit 1 ;;
+        datafusion|duckdb) just _query-engine-exists && just query-contract-check ;;
         *) echo "AIWATCHER_QUERY_ENGINE is '{{query_engine}}'; the engines are flow, datafusion, duckdb" >&2; exit 1 ;;
     esac
+
+# The Python engines' shared contract and every workspace member: ruff format
+# --check, ruff check, mypy --strict and pytest, on one lock.
+query-contract-check:
+    cd {{query}} && uv run ruff format --check .
+    cd {{query}} && uv run ruff check .
+    cd {{query}} && uv run mypy
+    cd {{query}} && uv run pytest -q
+
+_query-engine-exists:
+    #!/usr/bin/env bash
+    if [ ! -d "{{query}}/{{query_engine}}" ]; then
+        echo "there is no {{query_engine}} engine under {{query}}" >&2
+        exit 1
+    fi
+
+query_conformance := query + "/contract/conformance"
+
+# The conformance corpus: the benchmark's generator at its fixed seed, one megabyte —
+# small enough for CI, and only polars and numpy, not the whole benchmark project.
+query-conformance-corpus:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ ! -f "{{query_conformance}}/.data/1MB/manifest.json" ]; then
+        uv run --no-project --with 'polars>=1.44,<1.45' --with 'numpy>=2.3,<3' \
+          python {{bench}}/generate.py --size 1MB --data-dir {{query_conformance}}/.data
+    fi
+
+# Ask the engine AIWATCHER_QUERY_ENGINE names the four conformance questions and
+# compare its rows with Flow's. `just query-conformance --record` rewrites Flow's.
+query-conformance *args: query-conformance-corpus
+    #!/usr/bin/env bash
+    set -euo pipefail
+    corpus="$(pwd)/{{query_conformance}}/.data/1MB"
+    port="${AIWATCHER_CONFORMANCE_PORT:-8091}"
+    url="http://127.0.0.1:$port"
+    if curl -sf "$url/query/healthz" >/dev/null 2>&1; then
+        echo "something already answers on :$port; set AIWATCHER_CONFORMANCE_PORT" >&2
+        exit 1
+    fi
+    # Nothing listens on :9 — the questions read the corpus, never the API.
+    case "{{query_engine}}" in
+        flow)
+            (cd {{flow}} && AIWATCHER_CORPUS_DIR="$corpus" AIWATCHER_URL=http://127.0.0.1:9 \
+              PHP_CLI_SERVER_WORKERS=2 exec php -S "127.0.0.1:$port" -t public >/dev/null 2>&1) & ;;
+        datafusion|duckdb)
+            just _query-engine-exists
+            (cd {{query}} && AIWATCHER_CORPUS_DIR="$corpus" AIWATCHER_URL=http://127.0.0.1:9 \
+              AIWATCHER_QUERY_PORT="$port" exec uv run python -m query_{{query_engine}}) & ;;
+        *) echo "AIWATCHER_QUERY_ENGINE is '{{query_engine}}'; the engines are flow, datafusion, duckdb" >&2; exit 1 ;;
+    esac
+    server=$!
+    # The server's children too: `php -S` with workers forks processes that hold the
+    # port after the parent is gone, and a Python engine's fork server is a child.
+    trap 'pkill -P "$server" 2>/dev/null; kill "$server" 2>/dev/null || true' EXIT
+    for _ in $(seq 1 100); do
+        curl -sf "$url/query/healthz" >/dev/null 2>&1 && break
+        sleep 0.2
+    done
+    cd {{query}} && uv run python -m aiwatcher_query.conformance --url "$url" {{args}}
 
 # Install the PHP dependencies.
 flow-install:
@@ -1060,23 +1129,38 @@ bench-curation-serve size="1GB":
         echo "no corpus at $corpus — run: just bench-curation-generate {{size}}" >&2
         exit 1
     fi
-    (cd {{flow}} && composer install --no-interaction --quiet)
+    # The query engine is AIWATCHER_QUERY_ENGINE's, as everywhere (AW-3): the
+    # server compiles the variant written for it, and `bench-curation-run` asks
+    # the engine which variant that is.
+    case "{{query_engine}}" in
+        flow) (cd {{flow}} && composer install --no-interaction --quiet) ;;
+        datafusion|duckdb) just _query-engine-exists && (cd {{query}} && uv sync --all-packages --quiet) ;;
+        *) echo "AIWATCHER_QUERY_ENGINE is '{{query_engine}}'; the benchmark has variants for flow, datafusion and duckdb" >&2; exit 1 ;;
+    esac
     # Beside a `just dev` that already holds 8080 and 5173, move these two; set
     # AIWATCHER_DATA_DIR too, so a benchmark run lands in a store of its own.
     api_port="${AIWATCHER_BENCH_API_PORT:-8080}"
     panel_port="${AIWATCHER_BENCH_PANEL_PORT:-5173}"
     trap 'kill 0' EXIT INT TERM
     AIWATCHER_BUS=wal AIWATCHER_INGEST_ENABLED=true AIWATCHER_LISTEN="127.0.0.1:$api_port" \
-      AIWATCHER_QUERY_URL={{query_url}} AIWATCHER_ML_PIPELINE_URL=http://127.0.0.1:8082 \
-      AIWATCHER_QUERY_STEP_TIMEOUT_SECONDS=7200 \
+      AIWATCHER_QUERY_ENGINE={{query_engine}} AIWATCHER_QUERY_URL={{query_url}} \
+      AIWATCHER_ML_PIPELINE_URL=http://127.0.0.1:8082 AIWATCHER_QUERY_STEP_TIMEOUT_SECONDS=7200 \
       cargo run --bin aiwatcher &
-    # JIT on, as the standalone benchmark measures it: a quarter faster, and
-    # AArch64 refuses a buffer above 128M.
-    (cd {{flow}} && AIWATCHER_URL="http://127.0.0.1:$api_port" AIWATCHER_CORPUS_DIR="$corpus" \
-      AIWATCHER_QUERY_TIMEOUT_SECONDS=7500 PHP_CLI_SERVER_WORKERS=4 \
-      php -d memory_limit=2G -d opcache.enable=1 -d opcache.enable_cli=1 \
-        -d opcache.jit=tracing -d opcache.jit_buffer_size=128M \
-        -S 127.0.0.1:8081 -t public) &
+    case "{{query_engine}}" in
+        # JIT on, as the standalone benchmark measures it: a quarter faster, and
+        # AArch64 refuses a buffer above 128M.
+        flow)
+            (cd {{flow}} && AIWATCHER_URL="http://127.0.0.1:$api_port" AIWATCHER_CORPUS_DIR="$corpus" \
+              AIWATCHER_QUERY_TIMEOUT_SECONDS=7500 PHP_CLI_SERVER_WORKERS=4 \
+              php -d memory_limit=2G -d opcache.enable=1 -d opcache.enable_cli=1 \
+                -d opcache.jit=tracing -d opcache.jit_buffer_size=128M \
+                -S 127.0.0.1:8081 -t public) & ;;
+        # A Python engine's module is `query_<engine>`.
+        datafusion|duckdb)
+            (cd {{query}} && AIWATCHER_URL="http://127.0.0.1:$api_port" AIWATCHER_CORPUS_DIR="$corpus" \
+              AIWATCHER_QUERY_TIMEOUT_SECONDS=7500 AIWATCHER_QUERY_PORT=8081 \
+              exec uv run python -m query_{{query_engine}}) & ;;
+    esac
     (cd {{ml_pipeline}} && AIWATCHER_CORPUS_DIR="$corpus" AIWATCHER_ML_PIPELINE_TIMEOUT=900 \
       uv run python -m ml_pipeline) &
     (cd {{panel}} && AIWATCHER_API_URL="http://127.0.0.1:$api_port" \
