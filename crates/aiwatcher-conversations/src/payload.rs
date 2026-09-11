@@ -1,48 +1,29 @@
 //! A hosted execution's words, sealed under the archive's own keys.
 //!
-//! An agent graph's every hop carries text, and the workflow stream carries a
-//! *reference* to it rather than the text. Where that text lives is the run's
-//! choice: `external` leaves it wherever the worker keeps it and this crate
-//! never sees it, and `sealed` brings it here — which is what a deployment
-//! under a retention obligation picks, because a reference into somebody's
-//! laptop is not something an erasure can reach.
+//! An agent graph's hops carry text, and the workflow stream carries a
+//! *reference* to it. `external` leaves the text wherever the worker keeps it;
+//! `sealed` brings it here, which is what a deployment under a retention
+//! obligation picks — an erasure cannot reach a reference into a laptop. It
+//! lives in this crate because the keys do, and the key path is the AEAD's
+//! associated data as it is for a turn, so a ciphertext copied from one
+//! execution to another does not open.
 //!
-//! It is in this crate rather than beside the workflow store for one reason:
-//! this is where the keys are, and a second place that encrypted content would
-//! be a second key layout to get right. The key path is the AEAD's associated
-//! data here as it is for a turn, so a ciphertext copied from one execution to
-//! another does not open.
+//! A payload lives as long as its run. Each has a plaintext `PayloadHead`
+//! naming the run, because the key hashes the execution and a hash does not
+//! walk back. `aiwatcher-server`'s archive sweep reads the heads and erases the
+//! payloads whose run the workflow store has forgotten — the join is there
+//! because this crate may not name `aiwatcher-execution`. The two orderings run
+//! opposite ways for one reason, that content a sweep cannot find is content
+//! nothing can erase:
 //!
-//! ## How one of these is deleted
+//! - **Sealing** writes the head before the content.
+//! - **Erasing** deletes the content before the head; a crash leaves a head
+//!   naming nothing, which the next pass finishes.
 //!
-//! A payload's lifetime is its run's, and that is now kept rather than
-//! promised. Every sealed payload has a plaintext `PayloadHead` beside it
-//! naming the run, because the key hashes the execution and a hash does
-//! not walk back — without the head, a listing of a bucket full of sealed
-//! payloads can say how many there are and never whose. `aiwatcher-server`'s
-//! archive sweep reads those heads, asks the workflow store whether each run
-//! still has a projection, and erases the ones it has
-//! forgotten. The join is in the server because this crate sits above
-//! `aiwatcher-execution` and may not name it.
-//!
-//! Two orderings carry it, and they run *opposite* ways for the same reason:
-//!
-//! - **Sealing** writes the head before the content. The registry's rule is the
-//!   other way round because there the ordering protects a pointer to bytes
-//!   worth keeping; here the obligation is that content a sweep cannot find is
-//!   content nothing can erase.
-//! - **Erasing** deletes the content before the head. A crash mid-erase leaves
-//!   a head naming nothing, which the next pass finishes; the reverse would
-//!   leave sealed bytes no listing could attribute to a run again.
-//!
-//! ## What it still does not do
-//!
-//! **Erasure by subject does not reach these.** A turn says whose words it
-//! holds; a payload does not, because nothing on the wire says so — the worker
-//! would have to declare it, and that is a field this protocol has not got. A
-//! deployment under an obligation to erase *by subject* rather than by
-//! retention still performs that part itself.
-//!
+//! Erasure *by subject* does not reach these: a payload does not say whose
+//! words it holds, because nothing on the wire declares it. A deployment with
+//! that obligation performs that part itself.
+
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
