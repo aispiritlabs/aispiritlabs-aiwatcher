@@ -1,12 +1,14 @@
 //! From an authored curation chain to a runnable plan.
 //!
 //! ADR_0024's block kinds compile to four runtimes, and the interesting part is
-//! that they do not compile one-to-one. **Flow executes one pipeline**, so a
-//! source and every transform after it fold into a single
-//! [`RuntimeBinding::FlowPhp`] step whose `blocks` lists the authored ids the
-//! panel lights up together. That fold is also what makes "a transform reads
-//! past nothing" a compiler refusal rather than a runtime surprise: there is
-//! nowhere for a second Flow step to read from.
+//! that they do not compile one-to-one. **A query engine executes one
+//! pipeline**, so a source and every transform after it fold into a single
+//! query step — [`RuntimeBinding::FlowPhp`], or [`RuntimeBinding::DataFusion`]
+//! or [`RuntimeBinding::DuckDb`] on a deployment that runs one (AW-3) — whose
+//! `blocks` lists the authored ids
+//! the panel lights up together. That fold is also what makes "a transform
+//! reads past nothing" a compiler refusal rather than a runtime surprise: there
+//! is nowhere for a second query step to read from.
 //!
 //! An **approval** compiles the way a notebook does — its own step, ending the
 //! fold — and unlike every other kind it is in the chain without being in the
@@ -26,13 +28,13 @@ use aiwatcher_datasets::{BlockSpec, CurationPipeline, PipelineBlock, QueryEngine
 
 use crate::error::CompileError;
 use crate::plan::{
-    CachePolicy, DefinitionKind, DefinitionRevision, ExecutionPlan, FlowSourceRef, FlowStepSpec,
-    HumanInputSpec, InputBinding, MarimoStepSpec, OutputDeclaration, PlanEdge, PlanStep,
-    PublishDatasetSpec, ResolvedWindow, RetryPolicy, RuntimeBinding,
+    CachePolicy, DefinitionKind, DefinitionRevision, ExecutionPlan, FlowSourceRef, HumanInputSpec,
+    InputBinding, MarimoStepSpec, OutputDeclaration, PlanEdge, PlanStep, PublishDatasetSpec,
+    QueryStepSpec, ResolvedWindow, RetryPolicy, RuntimeBinding,
 };
 
-/// A Flow query is a request/response to a service that holds nothing.
-const FLOW_TIMEOUT_SECONDS: u64 = 300;
+/// A query is a request/response to a service that holds nothing.
+const QUERY_TIMEOUT_SECONDS: u64 = 300;
 /// A notebook is a subprocess somebody is halfway through writing.
 const NOTEBOOK_TIMEOUT_SECONDS: u64 = 900;
 /// Publishing writes one content-addressed version in this process.
@@ -95,10 +97,9 @@ pub fn compile_curation(
     let mut rows_from: Option<String> = None;
 
     // The source and every transform before the first block that is neither is
-    // one Flow query. `order_of` has already refused a transform behind a
-    // notebook or an approval, so "the transforms" is a prefix rather than a
-    // search.
-    let flow_blocks: Vec<&PipelineBlock> = chain
+    // one query. `order_of` has already refused a transform behind a notebook
+    // or an approval, so "the transforms" is a prefix rather than a search.
+    let query_blocks: Vec<&PipelineBlock> = chain
         .iter()
         .copied()
         .take_while(|block| {
@@ -109,7 +110,7 @@ pub fn compile_curation(
         })
         .collect();
 
-    if let Some(source) = flow_blocks.first() {
+    if let Some(source) = query_blocks.first() {
         let BlockSpec::Source { dataset, arguments } = &source.spec else {
             problems.push(format!(
                 "the chain starts with {}, which is not a source",
@@ -117,41 +118,47 @@ pub fn compile_curation(
             ));
             return Err(CompileError::Refused(problems));
         };
-        let step_id = step_id_of(source);
-        let script = flow_script(&source.spec, &flow_blocks);
-        steps.push(PlanStep {
-            id: step_id.clone(),
-            runtime: RuntimeBinding::FlowPhp(FlowStepSpec {
-                script,
-                source: FlowSourceRef {
-                    dataset: dataset.clone(),
-                    arguments: arguments.clone(),
-                    resolved_revision: None,
-                    window: options.window,
-                    cursor: None,
-                },
-                blocks: flow_blocks.iter().map(|block| block.id.clone()).collect(),
-            }),
-            inputs: Vec::new(),
-            outputs: vec![OutputDeclaration {
-                name: "rows".to_owned(),
-                kind: ArtifactKind::Rows,
-                schema_ref: None,
-            }],
-            retry: RetryPolicy::default(),
-            timeout_seconds: options
-                .query_timeout_seconds
-                .unwrap_or(FLOW_TIMEOUT_SECONDS),
-            // A query over a resolved window is a pure function of things that
-            // are addressed. Over a moving one it is not, and `cache_key`
-            // refuses to produce a key rather than trusting this flag.
-            cache: CachePolicy::ByContent,
-        });
-        previous = Some(step_id.clone());
-        rows_from = Some(step_id);
+        let spec = |script: String| QueryStepSpec {
+            script,
+            source: FlowSourceRef {
+                dataset: dataset.clone(),
+                arguments: arguments.clone(),
+                resolved_revision: None,
+                window: options.window,
+                cursor: None,
+            },
+            blocks: query_blocks.iter().map(|block| block.id.clone()).collect(),
+        };
+        match query_runtime(source, &query_blocks, options.engine, spec) {
+            Err(problem) => problems.push(problem),
+            Ok(runtime) => {
+                let step_id = step_id_of(source);
+                steps.push(PlanStep {
+                    id: step_id.clone(),
+                    runtime,
+                    inputs: Vec::new(),
+                    outputs: vec![OutputDeclaration {
+                        name: "rows".to_owned(),
+                        kind: ArtifactKind::Rows,
+                        schema_ref: None,
+                    }],
+                    retry: RetryPolicy::default(),
+                    timeout_seconds: options
+                        .query_timeout_seconds
+                        .unwrap_or(QUERY_TIMEOUT_SECONDS),
+                    // A query over a resolved window is a pure function of
+                    // things that are addressed. Over a moving one it is not,
+                    // and `cache_key` refuses to produce a key rather than
+                    // trusting this flag.
+                    cache: CachePolicy::ByContent,
+                });
+                previous = Some(step_id.clone());
+                rows_from = Some(step_id);
+            }
+        }
     }
 
-    for block in chain.iter().skip(flow_blocks.len()) {
+    for block in chain.iter().skip(query_blocks.len()) {
         let step_id = step_id_of(block);
         match &block.spec {
             BlockSpec::Source { .. } | BlockSpec::Transform { .. } => {
@@ -304,6 +311,55 @@ fn step_id_of(block: &PipelineBlock) -> String {
     block.id.clone()
 }
 
+/// The step a source and its transforms compile to, on this deployment's
+/// engine.
+///
+/// A chain's engine is its transforms' — `order_of` has already refused two —
+/// and a source alone takes the deployment's, because every engine serves the
+/// same catalog. A chain written for another engine is refused here rather than
+/// compiled to a step no process of this deployment would ever claim, which
+/// would sit `pending` with nothing to say why.
+fn query_runtime(
+    source: &PipelineBlock,
+    blocks: &[&PipelineBlock],
+    deployed: QueryEngine,
+    spec: impl Fn(String) -> QueryStepSpec,
+) -> Result<RuntimeBinding, String> {
+    let written = blocks.iter().find_map(|block| match &block.spec {
+        BlockSpec::Transform { engine, .. } => Some((block.id.as_str(), *engine)),
+        _ => None,
+    });
+    if let Some((block, engine)) = written
+        && engine != deployed
+    {
+        return Err(format!(
+            "{block} is written for {engine}, and this deployment runs {deployed} \
+             (AIWATCHER_QUERY_ENGINE). A step runs on the engine that is deployed: run this \
+             pipeline where {engine} is, or write its transforms for {deployed}"
+        ));
+    }
+    // DataFusion and DuckDB are both Python, and differ only in the binding
+    // that routes the step to the service running it.
+    let python = |bind: fn(QueryStepSpec) -> RuntimeBinding| {
+        python_script(&source.spec, blocks)
+            .map(|script| bind(spec(script)))
+            .map_err(|name| {
+                format!(
+                    "{} passes {name}=, which is not an argument name Python can pass to read()",
+                    source.id
+                )
+            })
+    };
+    match deployed {
+        QueryEngine::Flow => Ok(RuntimeBinding::FlowPhp(spec(flow_script(
+            &source.spec,
+            blocks,
+        )))),
+        QueryEngine::DataFusion => python(RuntimeBinding::DataFusion),
+        QueryEngine::DuckDb => python(RuntimeBinding::DuckDb),
+    }
+}
+
 /// The Flow PHP script a source and its transforms add up to.
 ///
 /// This is the authoritative generator (ADR_0025): the panel may show the same
@@ -376,6 +432,68 @@ fn literal(value: &str) -> String {
     format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"))
 }
 
+/// The Python a source and its transforms add up to, for a Python engine.
+///
+/// `df = read("<dataset>", <argument>="<value>", …)`, then `df = (<transform>)`
+/// for each transform, then `df`: the spec binds `df` to the rows so far, and
+/// the parentheses let a transform run over several lines the way a method
+/// chain is written. Every value is a JSON string, which Python reads as a
+/// string literal, so there is no second escaper — and the query service takes
+/// a whole number written as text as the number. The browser's `compilePython`
+/// is this, ported line for line, for the preview.
+///
+/// # Errors
+///
+/// The name of an argument Python cannot pass as a keyword.
+pub fn python_script(source: &BlockSpec, chain: &[&PipelineBlock]) -> Result<String, String> {
+    let (dataset, arguments) = match source {
+        BlockSpec::Source { dataset, arguments } => (dataset.as_str(), Some(arguments)),
+        _ => ("default", None),
+    };
+    let mut call = vec![python_string(dataset)];
+    for (name, value) in arguments.into_iter().flatten() {
+        if value.trim().is_empty() {
+            continue;
+        }
+        if !is_python_name(name) {
+            return Err(name.clone());
+        }
+        call.push(format!("{name}={}", python_string(value)));
+    }
+    let mut lines = vec![format!("df = read({})", call.join(", "))];
+    for block in chain {
+        if let BlockSpec::Transform { steps, .. } = &block.spec
+            && !steps.trim().is_empty()
+        {
+            lines.push(format!("df = (\n{}\n)", steps.trim()));
+        }
+    }
+    lines.push("df".to_owned());
+    Ok(lines.join("\n"))
+}
+
+/// Python's keywords: they look like names, and none can be passed as one.
+const PYTHON_KEYWORDS: [&str; 35] = [
+    "False", "None", "True", "and", "as", "assert", "async", "await", "break", "class", "continue",
+    "def", "del", "elif", "else", "except", "finally", "for", "from", "global", "if", "import",
+    "in", "is", "lambda", "nonlocal", "not", "or", "pass", "raise", "return", "try", "while",
+    "with", "yield",
+];
+
+fn is_python_name(name: &str) -> bool {
+    let mut characters = name.chars();
+    characters
+        .next()
+        .is_some_and(|first| first == '_' || first.is_ascii_alphabetic())
+        && characters.all(|character| character == '_' || character.is_ascii_alphanumeric())
+        && !PYTHON_KEYWORDS.contains(&name)
+}
+
+/// A value as a Python string literal: its JSON form, which Python reads as one.
+fn python_string(value: &str) -> String {
+    serde_json::Value::String(value.to_owned()).to_string()
+}
+
 /// The named-parameter form the panel and the query service both read.
 #[must_use]
 pub fn arguments_of(spec: &BlockSpec) -> BTreeMap<String, String> {
@@ -430,6 +548,160 @@ mod tests {
         }
     }
 
+    fn datafusion(id: &str, steps: &str) -> PipelineBlock {
+        block(
+            id,
+            BlockSpec::Transform {
+                steps: steps.to_owned(),
+                engine: QueryEngine::DataFusion,
+            },
+        )
+    }
+
+    fn on(engine: QueryEngine) -> CompileOptions {
+        CompileOptions {
+            engine,
+            ..CompileOptions::default()
+        }
+    }
+
+    #[test]
+    fn a_datafusion_chain_compiles_to_one_datafusion_step_whose_script_binds_df() {
+        let plan = compile_curation(
+            &pipeline(vec![
+                block("read", source()),
+                datafusion("clean", r#"df.filter(col("text").is_not_null())"#),
+                datafusion("trim", "df.limit(100)"),
+            ]),
+            on(QueryEngine::DataFusion),
+        )
+        .expect("a source and two DataFusion transforms");
+
+        let RuntimeBinding::DataFusion(spec) = &plan.steps[0].runtime else {
+            panic!("the one step is a DataFusion query");
+        };
+        assert_eq!(spec.blocks, vec!["read", "clean", "trim"]);
+        assert_eq!(
+            spec.script,
+            "df = read(\"hub_rows\", dataset=\"ai4privacy/pii\", limit=\"500\")\n\
+             df = (\ndf.filter(col(\"text\").is_not_null())\n)\n\
+             df = (\ndf.limit(100)\n)\n\
+             df"
+        );
+    }
+
+    fn duckdb(id: &str, steps: &str) -> PipelineBlock {
+        block(
+            id,
+            BlockSpec::Transform {
+                steps: steps.to_owned(),
+                engine: QueryEngine::DuckDb,
+            },
+        )
+    }
+
+    #[test]
+    fn a_duckdb_chain_compiles_to_one_duckdb_step_whose_script_binds_df() {
+        let plan = compile_curation(
+            &pipeline(vec![
+                block("read", source()),
+                duckdb(
+                    "clean",
+                    r#"df.filter(ColumnExpression("text").isnotnull())"#,
+                ),
+            ]),
+            on(QueryEngine::DuckDb),
+        )
+        .expect("a source and a DuckDB transform");
+
+        let RuntimeBinding::DuckDb(spec) = &plan.steps[0].runtime else {
+            panic!("the one step is a DuckDB query");
+        };
+        assert_eq!(spec.blocks, vec!["read", "clean"]);
+        assert_eq!(
+            spec.script,
+            "df = read(\"hub_rows\", dataset=\"ai4privacy/pii\", limit=\"500\")\n\
+             df = (\ndf.filter(ColumnExpression(\"text\").isnotnull())\n)\n\
+             df"
+        );
+        // `duckdb` on the wire and in the claim table, never `duck_db`.
+        let wire = serde_json::to_value(&plan.steps[0].runtime).expect("a binding serialises");
+        assert_eq!(wire["runtime"], "duckdb");
+        assert_eq!(plan.steps[0].runtime.kind().as_str(), "duckdb");
+    }
+
+    #[test]
+    fn a_datafusion_chain_on_a_duckdb_deployment_is_refused_naming_both_engines() {
+        let refused = compile_curation(
+            &pipeline(vec![
+                block("read", source()),
+                datafusion("clean", "df.limit(10)"),
+            ]),
+            on(QueryEngine::DuckDb),
+        )
+        .expect_err("a DataFusion transform on a DuckDB deployment");
+        let [problem] = refused.problems() else {
+            panic!("one problem: {:?}", refused.problems());
+        };
+        assert!(
+            problem.starts_with("clean is written for datafusion, and this deployment runs duckdb"),
+            "{problem}"
+        );
+    }
+
+    #[test]
+    fn a_chain_written_for_another_engine_is_refused_naming_the_block_and_both_engines() {
+        let refused = compile_curation(
+            &pipeline(vec![
+                block("read", source()),
+                block(
+                    "clean",
+                    BlockSpec::Transform {
+                        steps: "->limit(10)".to_owned(),
+                        engine: QueryEngine::Flow,
+                    },
+                ),
+            ]),
+            on(QueryEngine::DataFusion),
+        )
+        .expect_err("a Flow transform on a DataFusion deployment");
+        let [problem] = refused.problems() else {
+            panic!("one problem: {:?}", refused.problems());
+        };
+        assert!(
+            problem.starts_with("clean is written for flow, and this deployment runs datafusion"),
+            "{problem}"
+        );
+    }
+
+    #[test]
+    fn a_source_alone_runs_on_the_deployments_engine() {
+        let plan = compile_curation(
+            &pipeline(vec![block("read", source())]),
+            on(QueryEngine::DataFusion),
+        )
+        .expect("a source");
+        assert_eq!(plan.steps[0].runtime.kind(), RuntimeKind::DataFusion);
+    }
+
+    #[test]
+    fn an_argument_python_cannot_pass_is_refused_by_its_name() {
+        let odd = BlockSpec::Source {
+            dataset: "hub_rows".to_owned(),
+            arguments: BTreeMap::from([("not a name".to_owned(), "x".to_owned())]),
+        };
+        let refused = compile_curation(
+            &pipeline(vec![block("read", odd)]),
+            on(QueryEngine::DataFusion),
+        )
+        .expect_err("a space in a keyword");
+        assert!(
+            refused.problems()[0].starts_with("read passes not a name="),
+            "{:?}",
+            refused.problems()
+        );
+    }
+
     #[test]
     fn a_source_and_its_transforms_compile_to_one_flow_step_that_names_all_three() {
         // Flow executes one pipeline, which is why three canvas boxes light up
@@ -482,12 +754,35 @@ mod tests {
         )
         .expect("a source");
 
-        assert_eq!(unset.steps[0].timeout_seconds, FLOW_TIMEOUT_SECONDS);
+        assert_eq!(unset.steps[0].timeout_seconds, QUERY_TIMEOUT_SECONDS);
         assert_eq!(raised.steps[0].timeout_seconds, 7200);
         assert_ne!(
             unset.plan_id, raised.plan_id,
             "a limit is part of what runs, so it is part of the plan's address"
         );
+    }
+
+    #[test]
+    fn a_configured_query_timeout_reaches_the_step_whichever_engine_runs_it() {
+        // The limit is the query step's, not Flow's: a corpus through DataFusion
+        // or DuckDB is still a long step, and a timed-out one is still retried
+        // from the beginning.
+        for engine in [
+            QueryEngine::Flow,
+            QueryEngine::DataFusion,
+            QueryEngine::DuckDb,
+        ] {
+            let plan = compile_curation(
+                &pipeline(vec![block("read", source())]),
+                CompileOptions {
+                    engine,
+                    query_timeout_seconds: Some(7200),
+                    ..CompileOptions::default()
+                },
+            )
+            .expect("a source");
+            assert_eq!(plan.steps[0].timeout_seconds, 7200, "{engine}");
+        }
     }
 
     #[test]

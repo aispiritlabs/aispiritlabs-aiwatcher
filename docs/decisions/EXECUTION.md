@@ -2,19 +2,20 @@
 
 **The one decision underneath all of these:** a thing that executes work and a
 thing that decides what to execute are different, and only the second belongs to
-this server. Read in date order these six ADRs are one argument arriving in
-stages — a query surface, then a chain, then an owner, then a producer — and
-each stage names what would make it wrong. Two of them were made wrong on
-schedule.
+this server. Read in date order these seven ADRs are one argument arriving in
+stages — a query surface, then a chain, then an owner, then a producer, then a
+choice of engine — and each stage names what would make it wrong. Two of them
+were made wrong on schedule.
 
 | ADR | Decided | Where it stands |
 |---|---|---|
-| [0008](../ADR/ADR_0008_FLOW_QUERY_SURFACE.md) | Flow PHP is a query surface over the API, parsed rather than executed | Accepted, **three amendments** |
-| [0014](../ADR/ADR_0014_DATA_CURATION.md) | Flow executes curation; the Rust registry versions its scripts and outputs | Accepted; **browser-mediated persistence superseded by [0025](../ADR/ADR_0025_MANAGED_EXECUTION.md)** for managed runs |
+| [0008](../ADR/ADR_0008_FLOW_QUERY_SURFACE.md) | Flow PHP is a query surface over the API, parsed rather than executed | Accepted, **three amendments**; **amended by [0028](../ADR/ADR_0028_QUERY_ENGINES.md)** — one of three engines |
+| [0014](../ADR/ADR_0014_DATA_CURATION.md) | Flow executes curation; the Rust registry versions its scripts and outputs | Accepted; **browser-mediated persistence superseded by [0025](../ADR/ADR_0025_MANAGED_EXECUTION.md)** for managed runs; the engine is the deployment's since 0028 |
 | [0016](../ADR/ADR_0016_PIPELINE_ENGINE.md) | The orchestrator is read for its inventory and asked to start one entry; the graph still comes from the log | Accepted, unchanged |
-| [0024](../ADR/ADR_0024_CURATION_BLOCKS.md) | A curation is a chain of blocks, each belonging to the engine that can run it | Accepted; **the execution half superseded by 0025**, the blocks stand |
+| [0024](../ADR/ADR_0024_CURATION_BLOCKS.md) | A curation is a chain of blocks, each belonging to the engine that can run it | Accepted; **the execution half superseded by 0025**, the blocks stand; a transform names its engine since 0028 |
 | [0025](../ADR/ADR_0025_MANAGED_EXECUTION.md) | A managed execution is owned by the server, and the browser only asks for one | Accepted |
 | [0026](../ADR/ADR_0026_ENGINE_AS_PRODUCER.md) | The execution engine is a producer on its own log | Accepted |
+| [0028](../ADR/ADR_0028_QUERY_ENGINES.md) | A deployment chooses its query engine, and a typed query is admitted or runs where code runs | Accepted, 2026-09-11 — amends 0008, 0014 and 0024 |
 
 ## The arc, in the order it happened
 
@@ -43,6 +44,14 @@ in favour: `execution.*` joins the catalog, a started plan publishes
 fold](OBSERVABILITY.md), the waterfall and the live stream draw a managed run
 with **no second read path** — and the store keeps the *why*, never the facts.
 
+**0028 made the query engine a choice.** Once a curation ran unattended over a
+corpus, Flow's speed was the run's: 548.8 s over 5 GB where DataFusion and DuckDB
+took about two. Both are Python APIs rather than a language to parse, so a
+deployment chooses one engine, content names the engine it was written for, and a
+typed query is either admitted from the engine's own vocabulary (`strict`) or run as
+a notebook runs (`open`, the default) — the first place since 0008 where query text
+is executed, by decision and with its costs written down.
+
 ## Where the boundary actually sits
 
 The amendments to 0008 are worth reading as a group, because they moved a line
@@ -57,6 +66,11 @@ adding a name by hand now means the rule did not cover it.
 What remains outside is what has no vocabulary in a query language: a model, a
 scanner. That is what a notebook block is for, and it is why 0024 exists at all.
 
+0028 moves the line again, for two engines of three: under `open` admission the
+boundary is the query's child process and its ceilings, not what the text may name.
+`strict` is 0008's rule in Python, derived the same way, and DuckDB's session is
+locked to its corpus root under both.
+
 ## What would reopen one
 
 0016's is a consumer that needs one launch API for local and engine work —
@@ -65,4 +79,6 @@ a fourth engine, which would test whether "each block belongs to the engine that
 can run it" is a principle or a description of three cases. 0025's own trigger
 has already fired once and produced 0026; the next would be an execution whose
 decisions genuinely cannot live in this process, which is what the hosted mode
-in `ExecutionMode` is reserved for.
+in `ExecutionMode` is reserved for. 0028's is an `open` deployment reachable by
+anyone but its operator, or a `strict` refusal shown to be bypassable — either makes
+`strict` the default rather than the option.

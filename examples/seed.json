@@ -2,6 +2,160 @@
   "version": 1,
   "pipelines": [
     {
+      "name": "curation/flow-vs-polars-datafusion",
+      "description": "One aggregation over the benchmark corpus in DataFusion, the same one in Polars over the same files, and whether they agree \u2014 the DataFusion variant of curation/flow-vs-polars. Needs the corpus and a DataFusion deployment: run it under `AIWATCHER_QUERY_ENGINE=datafusion just bench-curation-serve`, on the server, and read the two steps' times in the Workflows waterfall.",
+      "blocks": [
+        {
+          "id": "corpus",
+          "title": "Benchmark corpus",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "spec": {
+            "kind": "source",
+            "dataset": "corpus_spans",
+            "arguments": {
+              "format": "csv"
+            }
+          }
+        },
+        {
+          "id": "per-model",
+          "title": "DataFusion: per model",
+          "position": {
+            "x": 300,
+            "y": 0
+          },
+          "spec": {
+            "kind": "transform",
+            "steps": "df.filter(col(\"kind\") == lit(\"llm\"))\n.aggregate(\n    [col(\"model\")],\n    [\n        f.count(col(\"span_id\")).alias(\"spans\"),\n        f.sum(col(\"input_tokens\")).alias(\"input_tokens\"),\n        f.sum(col(\"output_tokens\")).alias(\"output_tokens\"),\n        f.avg(col(\"duration_ms\")).alias(\"avg_duration_ms\"),\n    ],\n)\n.sort(col(\"model\").sort(ascending=True))",
+            "engine": "datafusion"
+          }
+        },
+        {
+          "id": "polars",
+          "title": "Polars: the same query",
+          "position": {
+            "x": 600,
+            "y": 0
+          },
+          "spec": {
+            "kind": "notebook",
+            "notebook": "flow_vs_polars",
+            "params": {
+              "format": "csv",
+              "engine": "datafusion"
+            },
+            "revision": "676d0c47f30afec8c3f5ef0c2d669251855d8883a1a012442ee11522d46a71b5"
+          }
+        },
+        {
+          "id": "result",
+          "title": "View",
+          "position": {
+            "x": 900,
+            "y": 0
+          },
+          "spec": {
+            "kind": "view",
+            "dataset": "curation/flow-vs-polars-datafusion"
+          }
+        }
+      ],
+      "edges": [
+        {
+          "from": "corpus",
+          "to": "per-model"
+        },
+        {
+          "from": "per-model",
+          "to": "polars"
+        },
+        {
+          "from": "polars",
+          "to": "result"
+        }
+      ]
+    },
+    {
+      "name": "curation/flow-vs-polars-duckdb",
+      "description": "One aggregation over the benchmark corpus in DuckDB, the same one in Polars over the same files, and whether they agree \u2014 the DuckDB variant of curation/flow-vs-polars. Needs the corpus and a DuckDB deployment: run it under `AIWATCHER_QUERY_ENGINE=duckdb just bench-curation-serve`, on the server, and read the two steps' times in the Workflows waterfall.",
+      "blocks": [
+        {
+          "id": "corpus",
+          "title": "Benchmark corpus",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "spec": {
+            "kind": "source",
+            "dataset": "corpus_spans",
+            "arguments": {
+              "format": "csv"
+            }
+          }
+        },
+        {
+          "id": "per-model",
+          "title": "DuckDB: per model",
+          "position": {
+            "x": 300,
+            "y": 0
+          },
+          "spec": {
+            "kind": "transform",
+            "steps": "df.filter(ColumnExpression(\"kind\") == ConstantExpression(\"llm\"))\n.aggregate(\n    [\n        ColumnExpression(\"model\"),\n        FunctionExpression(\"count\", ColumnExpression(\"span_id\")).alias(\"spans\"),\n        FunctionExpression(\"sum\", ColumnExpression(\"input_tokens\")).alias(\"input_tokens\"),\n        FunctionExpression(\"sum\", ColumnExpression(\"output_tokens\")).alias(\"output_tokens\"),\n        FunctionExpression(\"avg\", ColumnExpression(\"duration_ms\")).alias(\"avg_duration_ms\"),\n    ],\n    \"model\",\n)\n.sort(ColumnExpression(\"model\").asc())",
+            "engine": "duckdb"
+          }
+        },
+        {
+          "id": "polars",
+          "title": "Polars: the same query",
+          "position": {
+            "x": 600,
+            "y": 0
+          },
+          "spec": {
+            "kind": "notebook",
+            "notebook": "flow_vs_polars",
+            "params": {
+              "format": "csv",
+              "engine": "duckdb"
+            },
+            "revision": "676d0c47f30afec8c3f5ef0c2d669251855d8883a1a012442ee11522d46a71b5"
+          }
+        },
+        {
+          "id": "result",
+          "title": "View",
+          "position": {
+            "x": 900,
+            "y": 0
+          },
+          "spec": {
+            "kind": "view",
+            "dataset": "curation/flow-vs-polars-duckdb"
+          }
+        }
+      ],
+      "edges": [
+        {
+          "from": "corpus",
+          "to": "per-model"
+        },
+        {
+          "from": "per-model",
+          "to": "polars"
+        },
+        {
+          "from": "polars",
+          "to": "result"
+        }
+      ]
+    },
+    {
       "name": "curation/flow-vs-polars",
       "description": "One aggregation over the benchmark corpus in Flow PHP, the same one in Polars over the same files, and whether they agree. Needs the corpus: run it under `just bench-curation-serve`, on the server, and read the two steps' times in the Workflows waterfall.",
       "blocks": [
@@ -45,7 +199,7 @@
             "params": {
               "format": "csv"
             },
-            "revision": "e7312f5e2098512e9cc8001fb812cfd2cb265cd9ac5a06cfa064594d4033b5d5"
+            "revision": "676d0c47f30afec8c3f5ef0c2d669251855d8883a1a012442ee11522d46a71b5"
           }
         },
         {
@@ -72,6 +226,164 @@
         },
         {
           "from": "polars",
+          "to": "result"
+        }
+      ]
+    },
+    {
+      "name": "curation/pii-detection-datafusion",
+      "description": "Read a public PII corpus, keep the English rows, mask what a shape detector finds, publish what is left. Written for DataFusion (AW-3): it runs where AIWATCHER_QUERY_ENGINE=datafusion.",
+      "blocks": [
+        {
+          "id": "corpus",
+          "title": "Hugging Face",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "spec": {
+            "kind": "source",
+            "dataset": "hub_rows",
+            "arguments": {
+              "dataset": "ai4privacy/pii-masking-200k",
+              "split": "train",
+              "limit": "50"
+            }
+          }
+        },
+        {
+          "id": "shape",
+          "title": "DataFusion: English text",
+          "position": {
+            "x": 300,
+            "y": 0
+          },
+          "spec": {
+            "kind": "transform",
+            "steps": "df.with_column(\"text\", col(\"row\")[\"source_text\"])\n.with_column(\"language\", col(\"row\")[\"language\"])\n.filter(col(\"language\") == lit(\"en\"))\n.select(col(\"row_index\"), col(\"language\"), col(\"text\"))",
+            "engine": "datafusion"
+          }
+        },
+        {
+          "id": "detect",
+          "title": "Python processing",
+          "position": {
+            "x": 600,
+            "y": 0
+          },
+          "spec": {
+            "kind": "notebook",
+            "notebook": "pii_detection",
+            "params": {
+              "text_column": "text",
+              "only_matches": false
+            },
+            "revision": "036794f0fa040d3b75f91051938995aa29113a10d5cf2435dc9f357f78ac13d5"
+          }
+        },
+        {
+          "id": "result",
+          "title": "View",
+          "position": {
+            "x": 900,
+            "y": 0
+          },
+          "spec": {
+            "kind": "view",
+            "dataset": "curation/pii-masked-sample-datafusion"
+          }
+        }
+      ],
+      "edges": [
+        {
+          "from": "corpus",
+          "to": "shape"
+        },
+        {
+          "from": "shape",
+          "to": "detect"
+        },
+        {
+          "from": "detect",
+          "to": "result"
+        }
+      ]
+    },
+    {
+      "name": "curation/pii-detection-duckdb",
+      "description": "Read a public PII corpus, keep the English rows, mask what a shape detector finds, publish what is left. Written for DuckDB (AW-3): it runs where AIWATCHER_QUERY_ENGINE=duckdb.",
+      "blocks": [
+        {
+          "id": "corpus",
+          "title": "Hugging Face",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "spec": {
+            "kind": "source",
+            "dataset": "hub_rows",
+            "arguments": {
+              "dataset": "ai4privacy/pii-masking-200k",
+              "split": "train",
+              "limit": "50"
+            }
+          }
+        },
+        {
+          "id": "shape",
+          "title": "DuckDB: English text",
+          "position": {
+            "x": 300,
+            "y": 0
+          },
+          "spec": {
+            "kind": "transform",
+            "steps": "df.select(\n    ColumnExpression(\"row_index\"),\n    ColumnExpression(\"row\", \"language\").alias(\"language\"),\n    ColumnExpression(\"row\", \"source_text\").alias(\"text\"),\n)\n.filter(ColumnExpression(\"language\") == ConstantExpression(\"en\"))",
+            "engine": "duckdb"
+          }
+        },
+        {
+          "id": "detect",
+          "title": "Python processing",
+          "position": {
+            "x": 600,
+            "y": 0
+          },
+          "spec": {
+            "kind": "notebook",
+            "notebook": "pii_detection",
+            "params": {
+              "text_column": "text",
+              "only_matches": false
+            },
+            "revision": "036794f0fa040d3b75f91051938995aa29113a10d5cf2435dc9f357f78ac13d5"
+          }
+        },
+        {
+          "id": "result",
+          "title": "View",
+          "position": {
+            "x": 900,
+            "y": 0
+          },
+          "spec": {
+            "kind": "view",
+            "dataset": "curation/pii-masked-sample-duckdb"
+          }
+        }
+      ],
+      "edges": [
+        {
+          "from": "corpus",
+          "to": "shape"
+        },
+        {
+          "from": "shape",
+          "to": "detect"
+        },
+        {
+          "from": "detect",
           "to": "result"
         }
       ]
@@ -331,6 +643,412 @@
       ]
     },
     {
+      "name": "curation/titanic-from-scratch-datafusion",
+      "description": "Titanic from raw passengers to a held-out Random Forest baseline, with thematic data curation blocks and FlowAI encoders. Written for DataFusion (AW-3): it runs where AIWATCHER_QUERY_ENGINE=datafusion.",
+      "blocks": [
+        {
+          "id": "passengers",
+          "title": "Titanic \u00b7 raw passengers",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "spec": {
+            "kind": "source",
+            "dataset": "hub_rows",
+            "arguments": {
+              "dataset": "phihung/titanic",
+              "split": "train",
+              "limit": "891"
+            }
+          }
+        },
+        {
+          "id": "columns",
+          "title": "DataFusion: columns",
+          "position": {
+            "x": 270,
+            "y": 0
+          },
+          "spec": {
+            "kind": "transform",
+            "steps": "df.select(\n    *[\n        col(\"row\")[name].alias(name)\n        for name in [\n            \"PassengerId\", \"Survived\", \"Pclass\", \"Name\", \"Sex\", \"Age\",\n            \"SibSp\", \"Parch\", \"Ticket\", \"Fare\", \"Cabin\", \"Embarked\",\n        ]\n    ]\n)",
+            "engine": "datafusion"
+          }
+        },
+        {
+          "id": "split",
+          "title": "Train / validation split",
+          "position": {
+            "x": 540,
+            "y": 0
+          },
+          "spec": {
+            "kind": "notebook",
+            "notebook": "flowai_split",
+            "params": {
+              "seed": 42,
+              "validation_fraction": 0.2
+            },
+            "revision": "7168755cc33a64cbc3e239dfc166e8124a8c7ccf2d38c13fdde65fbe245bdd59"
+          }
+        },
+        {
+          "id": "missing-values",
+          "title": "Missing values",
+          "position": {
+            "x": 810,
+            "y": 0
+          },
+          "spec": {
+            "kind": "notebook",
+            "notebook": "flowai_missing_values",
+            "params": {},
+            "revision": "edc06d130debe1ad5d71a2a46a2de0a45a8ba9a4bba5cf7769bdf1d61bb0aaae"
+          }
+        },
+        {
+          "id": "features",
+          "title": "Feature engineering",
+          "position": {
+            "x": 1080,
+            "y": 0
+          },
+          "spec": {
+            "kind": "notebook",
+            "notebook": "flowai_titanic_features",
+            "params": {},
+            "revision": "8eff4d19afd298518bdf5833ed90757fd9ba3b905f1e648805ad59cf632fedd3"
+          }
+        },
+        {
+          "id": "visualization",
+          "title": "Visualization",
+          "position": {
+            "x": 0,
+            "y": 180
+          },
+          "spec": {
+            "kind": "notebook",
+            "notebook": "flowai_visualization",
+            "params": {},
+            "revision": "7d8eb176d4cf34f56330b2df345ae98b482f1bf5756aa210eb996726a5eff7e5"
+          }
+        },
+        {
+          "id": "one-hot",
+          "title": "OneHotEncoder",
+          "position": {
+            "x": 270,
+            "y": 180
+          },
+          "spec": {
+            "kind": "notebook",
+            "notebook": "flowai_one_hot_encoder",
+            "params": {
+              "columns": [
+                "Sex",
+                "Pclass",
+                "EmbarkedFilled",
+                "Title",
+                "Deck",
+                "AgeBand",
+                "FareBand"
+              ],
+              "handle_unknown": "ignore"
+            },
+            "revision": "973fd064fa8214f708aeef68c083394942164b79bee3414917e1ced8a059b2d2"
+          }
+        },
+        {
+          "id": "label",
+          "title": "LabelEncoder",
+          "position": {
+            "x": 540,
+            "y": 180
+          },
+          "spec": {
+            "kind": "notebook",
+            "notebook": "flowai_label_encoder",
+            "params": {
+              "target": "Survived"
+            },
+            "revision": "63919d306b495df1f0cc3388d45844a5e87ab74fca1d683bbf56a51adb118ec3"
+          }
+        },
+        {
+          "id": "model",
+          "title": "Model training & evaluation",
+          "position": {
+            "x": 810,
+            "y": 180
+          },
+          "spec": {
+            "kind": "notebook",
+            "notebook": "flowai_random_forest",
+            "params": {
+              "seed": 42,
+              "n_estimators": 120
+            },
+            "revision": "f02e07921f23e68edfabf3a4d189585fbcdc655d4e805e9fd6cecad3800f4f50"
+          }
+        },
+        {
+          "id": "publish",
+          "title": "Publish predictions",
+          "position": {
+            "x": 1080,
+            "y": 180
+          },
+          "spec": {
+            "kind": "view",
+            "dataset": "curation/titanic-from-scratch-datafusion"
+          }
+        }
+      ],
+      "edges": [
+        {
+          "from": "passengers",
+          "to": "columns"
+        },
+        {
+          "from": "columns",
+          "to": "split"
+        },
+        {
+          "from": "split",
+          "to": "missing-values"
+        },
+        {
+          "from": "missing-values",
+          "to": "features"
+        },
+        {
+          "from": "features",
+          "to": "visualization"
+        },
+        {
+          "from": "visualization",
+          "to": "one-hot"
+        },
+        {
+          "from": "one-hot",
+          "to": "label"
+        },
+        {
+          "from": "label",
+          "to": "model"
+        },
+        {
+          "from": "model",
+          "to": "publish"
+        }
+      ]
+    },
+    {
+      "name": "curation/titanic-from-scratch-duckdb",
+      "description": "Titanic from raw passengers to a held-out Random Forest baseline, with thematic data curation blocks and FlowAI encoders. Written for DuckDB (AW-3): it runs where AIWATCHER_QUERY_ENGINE=duckdb.",
+      "blocks": [
+        {
+          "id": "passengers",
+          "title": "Titanic \u00b7 raw passengers",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "spec": {
+            "kind": "source",
+            "dataset": "hub_rows",
+            "arguments": {
+              "dataset": "phihung/titanic",
+              "split": "train",
+              "limit": "891"
+            }
+          }
+        },
+        {
+          "id": "columns",
+          "title": "DuckDB: columns",
+          "position": {
+            "x": 270,
+            "y": 0
+          },
+          "spec": {
+            "kind": "transform",
+            "steps": "df.select(\n    *[\n        ColumnExpression(\"row\", name).alias(name)\n        for name in [\n            \"PassengerId\", \"Survived\", \"Pclass\", \"Name\", \"Sex\", \"Age\",\n            \"SibSp\", \"Parch\", \"Ticket\", \"Fare\", \"Cabin\", \"Embarked\",\n        ]\n    ]\n)",
+            "engine": "duckdb"
+          }
+        },
+        {
+          "id": "split",
+          "title": "Train / validation split",
+          "position": {
+            "x": 540,
+            "y": 0
+          },
+          "spec": {
+            "kind": "notebook",
+            "notebook": "flowai_split",
+            "params": {
+              "seed": 42,
+              "validation_fraction": 0.2
+            },
+            "revision": "7168755cc33a64cbc3e239dfc166e8124a8c7ccf2d38c13fdde65fbe245bdd59"
+          }
+        },
+        {
+          "id": "missing-values",
+          "title": "Missing values",
+          "position": {
+            "x": 810,
+            "y": 0
+          },
+          "spec": {
+            "kind": "notebook",
+            "notebook": "flowai_missing_values",
+            "params": {},
+            "revision": "edc06d130debe1ad5d71a2a46a2de0a45a8ba9a4bba5cf7769bdf1d61bb0aaae"
+          }
+        },
+        {
+          "id": "features",
+          "title": "Feature engineering",
+          "position": {
+            "x": 1080,
+            "y": 0
+          },
+          "spec": {
+            "kind": "notebook",
+            "notebook": "flowai_titanic_features",
+            "params": {},
+            "revision": "8eff4d19afd298518bdf5833ed90757fd9ba3b905f1e648805ad59cf632fedd3"
+          }
+        },
+        {
+          "id": "visualization",
+          "title": "Visualization",
+          "position": {
+            "x": 0,
+            "y": 180
+          },
+          "spec": {
+            "kind": "notebook",
+            "notebook": "flowai_visualization",
+            "params": {},
+            "revision": "7d8eb176d4cf34f56330b2df345ae98b482f1bf5756aa210eb996726a5eff7e5"
+          }
+        },
+        {
+          "id": "one-hot",
+          "title": "OneHotEncoder",
+          "position": {
+            "x": 270,
+            "y": 180
+          },
+          "spec": {
+            "kind": "notebook",
+            "notebook": "flowai_one_hot_encoder",
+            "params": {
+              "columns": [
+                "Sex",
+                "Pclass",
+                "EmbarkedFilled",
+                "Title",
+                "Deck",
+                "AgeBand",
+                "FareBand"
+              ],
+              "handle_unknown": "ignore"
+            },
+            "revision": "973fd064fa8214f708aeef68c083394942164b79bee3414917e1ced8a059b2d2"
+          }
+        },
+        {
+          "id": "label",
+          "title": "LabelEncoder",
+          "position": {
+            "x": 540,
+            "y": 180
+          },
+          "spec": {
+            "kind": "notebook",
+            "notebook": "flowai_label_encoder",
+            "params": {
+              "target": "Survived"
+            },
+            "revision": "63919d306b495df1f0cc3388d45844a5e87ab74fca1d683bbf56a51adb118ec3"
+          }
+        },
+        {
+          "id": "model",
+          "title": "Model training & evaluation",
+          "position": {
+            "x": 810,
+            "y": 180
+          },
+          "spec": {
+            "kind": "notebook",
+            "notebook": "flowai_random_forest",
+            "params": {
+              "seed": 42,
+              "n_estimators": 120
+            },
+            "revision": "f02e07921f23e68edfabf3a4d189585fbcdc655d4e805e9fd6cecad3800f4f50"
+          }
+        },
+        {
+          "id": "publish",
+          "title": "Publish predictions",
+          "position": {
+            "x": 1080,
+            "y": 180
+          },
+          "spec": {
+            "kind": "view",
+            "dataset": "curation/titanic-from-scratch-duckdb"
+          }
+        }
+      ],
+      "edges": [
+        {
+          "from": "passengers",
+          "to": "columns"
+        },
+        {
+          "from": "columns",
+          "to": "split"
+        },
+        {
+          "from": "split",
+          "to": "missing-values"
+        },
+        {
+          "from": "missing-values",
+          "to": "features"
+        },
+        {
+          "from": "features",
+          "to": "visualization"
+        },
+        {
+          "from": "visualization",
+          "to": "one-hot"
+        },
+        {
+          "from": "one-hot",
+          "to": "label"
+        },
+        {
+          "from": "label",
+          "to": "model"
+        },
+        {
+          "from": "model",
+          "to": "publish"
+        }
+      ]
+    },
+    {
       "name": "curation/titanic-from-scratch",
       "description": "Titanic from raw passengers to a held-out Random Forest baseline, with thematic data curation blocks and FlowAI encoders.",
       "blocks": [
@@ -533,6 +1251,176 @@
       ]
     },
     {
+      "name": "curation/titanic-features-datafusion",
+      "description": "Read the Titanic training split, recode sex and the title in the name, then let a notebook fill a missing age from its status group and size the family. Written for DataFusion (AW-3): it runs where AIWATCHER_QUERY_ENGINE=datafusion.",
+      "blocks": [
+        {
+          "id": "corpus",
+          "title": "Hugging Face",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "spec": {
+            "kind": "source",
+            "dataset": "hub_rows",
+            "arguments": {
+              "dataset": "phihung/titanic",
+              "split": "train",
+              "limit": "100"
+            }
+          }
+        },
+        {
+          "id": "shape",
+          "title": "DataFusion: features",
+          "position": {
+            "x": 300,
+            "y": 0
+          },
+          "spec": {
+            "kind": "transform",
+            "steps": "df.select(\n    col(\"row\")[\"PassengerId\"].alias(\"passenger_id\"),\n    col(\"row\")[\"Name\"].alias(\"name\"),\n    col(\"row\")[\"Sex\"].alias(\"sex\"),\n    col(\"row\")[\"Age\"].alias(\"age\"),\n    col(\"row\")[\"Pclass\"].alias(\"pclass\"),\n    col(\"row\")[\"SibSp\"].alias(\"sib_sp\"),\n    col(\"row\")[\"Parch\"].alias(\"parch\"),\n    col(\"row\")[\"Fare\"].alias(\"fare\"),\n    col(\"row\")[\"Cabin\"].alias(\"cabin\"),\n    col(\"row\")[\"Survived\"].alias(\"survived\"),\n)\n.with_column(\"sex_code\", f.when(col(\"sex\") == lit(\"female\"), lit(1)).otherwise(lit(0)))\n.with_column(\"title\", f.regexp_replace(col(\"name\"), lit(r\"^[^,]*,\\s*([^.]+)\\..*$\"), lit(r\"\\1\")))\n.with_column(\n    \"status\",\n    f.when(col(\"title\") == lit(\"Mr\"), lit(\"mr\"))\n    .when(col(\"title\") == lit(\"Master\"), lit(\"master\"))\n    .when((col(\"title\") == lit(\"Mrs\")) | (col(\"title\") == lit(\"Mme\")), lit(\"mrs\"))\n    .when(\n        (col(\"title\") == lit(\"Miss\")) | (col(\"title\") == lit(\"Mlle\")) | (col(\"title\") == lit(\"Ms\")),\n        lit(\"miss\"),\n    )\n    .otherwise(lit(\"rare\")),\n)\n.with_column(\"outcome\", f.when(col(\"survived\") == lit(1), lit(\"survived\")).otherwise(lit(\"died\")))\n.with_column(\n    \"deck\",\n    f.when(col(\"cabin\").is_null(), lit(\"unknown\"))\n    .otherwise(f.regexp_replace(col(\"cabin\"), lit(\"^(.).*$\"), lit(r\"\\1\"))),\n)\n.select(\n    col(\"passenger_id\"), col(\"name\"), col(\"sex\"), col(\"sex_code\"), col(\"title\"),\n    col(\"status\"), col(\"age\"), col(\"pclass\"), col(\"sib_sp\"), col(\"parch\"), col(\"fare\"),\n    col(\"deck\"), col(\"survived\"), col(\"outcome\"),\n)",
+            "engine": "datafusion"
+          }
+        },
+        {
+          "id": "features",
+          "title": "Python processing",
+          "position": {
+            "x": 600,
+            "y": 0
+          },
+          "spec": {
+            "kind": "notebook",
+            "notebook": "titanic_features",
+            "params": {
+              "age_column": "age",
+              "status_column": "status",
+              "siblings_column": "sib_sp",
+              "parents_column": "parch",
+              "fare_column": "fare",
+              "age_strategy": "status_median",
+              "child_max": 12,
+              "senior_min": 60
+            },
+            "revision": "dd3e0c9abd06d05db5e5c27384773353a2c034d7aebac7e8c5649c68ac343133"
+          }
+        },
+        {
+          "id": "result",
+          "title": "View",
+          "position": {
+            "x": 900,
+            "y": 0
+          },
+          "spec": {
+            "kind": "view",
+            "dataset": "curation/titanic-features-datafusion"
+          }
+        }
+      ],
+      "edges": [
+        {
+          "from": "corpus",
+          "to": "shape"
+        },
+        {
+          "from": "shape",
+          "to": "features"
+        },
+        {
+          "from": "features",
+          "to": "result"
+        }
+      ]
+    },
+    {
+      "name": "curation/titanic-features-duckdb",
+      "description": "Read the Titanic training split, recode sex and the title in the name, then let a notebook fill a missing age from its status group and size the family. Written for DuckDB (AW-3): it runs where AIWATCHER_QUERY_ENGINE=duckdb.",
+      "blocks": [
+        {
+          "id": "corpus",
+          "title": "Hugging Face",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "spec": {
+            "kind": "source",
+            "dataset": "hub_rows",
+            "arguments": {
+              "dataset": "phihung/titanic",
+              "split": "train",
+              "limit": "100"
+            }
+          }
+        },
+        {
+          "id": "shape",
+          "title": "DuckDB: features",
+          "position": {
+            "x": 300,
+            "y": 0
+          },
+          "spec": {
+            "kind": "transform",
+            "steps": "df.select(\n    ColumnExpression(\"row\", \"PassengerId\").alias(\"passenger_id\"),\n    ColumnExpression(\"row\", \"Name\").alias(\"name\"),\n    ColumnExpression(\"row\", \"Sex\").alias(\"sex\"),\n    ColumnExpression(\"row\", \"Age\").alias(\"age\"),\n    ColumnExpression(\"row\", \"Pclass\").alias(\"pclass\"),\n    ColumnExpression(\"row\", \"SibSp\").alias(\"sib_sp\"),\n    ColumnExpression(\"row\", \"Parch\").alias(\"parch\"),\n    ColumnExpression(\"row\", \"Fare\").alias(\"fare\"),\n    ColumnExpression(\"row\", \"Cabin\").alias(\"cabin\"),\n    ColumnExpression(\"row\", \"Survived\").alias(\"survived\"),\n)\n.project(\n    StarExpression(),\n    CaseExpression(ColumnExpression(\"sex\") == ConstantExpression(\"female\"), ConstantExpression(1))\n    .otherwise(ConstantExpression(0))\n    .alias(\"sex_code\"),\n    FunctionExpression(\n        \"regexp_replace\",\n        ColumnExpression(\"name\"),\n        ConstantExpression(r\"^[^,]*,\\s*([^.]+)\\..*$\"),\n        ConstantExpression(r\"\\1\"),\n    ).alias(\"title\"),\n    CaseExpression(ColumnExpression(\"survived\") == ConstantExpression(1), ConstantExpression(\"survived\"))\n    .otherwise(ConstantExpression(\"died\"))\n    .alias(\"outcome\"),\n    CaseExpression(ColumnExpression(\"cabin\").isnull(), ConstantExpression(\"unknown\"))\n    .otherwise(\n        FunctionExpression(\n            \"regexp_replace\",\n            ColumnExpression(\"cabin\"),\n            ConstantExpression(\"^(.).*$\"),\n            ConstantExpression(r\"\\1\"),\n        )\n    )\n    .alias(\"deck\"),\n)\n.project(\n    StarExpression(),\n    CaseExpression(ColumnExpression(\"title\") == ConstantExpression(\"Mr\"), ConstantExpression(\"mr\"))\n    .when(ColumnExpression(\"title\") == ConstantExpression(\"Master\"), ConstantExpression(\"master\"))\n    .when(\n        ColumnExpression(\"title\").isin(ConstantExpression(\"Mrs\"), ConstantExpression(\"Mme\")),\n        ConstantExpression(\"mrs\"),\n    )\n    .when(\n        ColumnExpression(\"title\").isin(\n            ConstantExpression(\"Miss\"), ConstantExpression(\"Mlle\"), ConstantExpression(\"Ms\")\n        ),\n        ConstantExpression(\"miss\"),\n    )\n    .otherwise(ConstantExpression(\"rare\"))\n    .alias(\"status\"),\n)\n.select(\n    ColumnExpression(\"passenger_id\"), ColumnExpression(\"name\"), ColumnExpression(\"sex\"),\n    ColumnExpression(\"sex_code\"), ColumnExpression(\"title\"), ColumnExpression(\"status\"),\n    ColumnExpression(\"age\"), ColumnExpression(\"pclass\"), ColumnExpression(\"sib_sp\"),\n    ColumnExpression(\"parch\"), ColumnExpression(\"fare\"), ColumnExpression(\"deck\"),\n    ColumnExpression(\"survived\"), ColumnExpression(\"outcome\"),\n)",
+            "engine": "duckdb"
+          }
+        },
+        {
+          "id": "features",
+          "title": "Python processing",
+          "position": {
+            "x": 600,
+            "y": 0
+          },
+          "spec": {
+            "kind": "notebook",
+            "notebook": "titanic_features",
+            "params": {
+              "age_column": "age",
+              "status_column": "status",
+              "siblings_column": "sib_sp",
+              "parents_column": "parch",
+              "fare_column": "fare",
+              "age_strategy": "status_median",
+              "child_max": 12,
+              "senior_min": 60
+            },
+            "revision": "dd3e0c9abd06d05db5e5c27384773353a2c034d7aebac7e8c5649c68ac343133"
+          }
+        },
+        {
+          "id": "result",
+          "title": "View",
+          "position": {
+            "x": 900,
+            "y": 0
+          },
+          "spec": {
+            "kind": "view",
+            "dataset": "curation/titanic-features-duckdb"
+          }
+        }
+      ],
+      "edges": [
+        {
+          "from": "corpus",
+          "to": "shape"
+        },
+        {
+          "from": "shape",
+          "to": "features"
+        },
+        {
+          "from": "features",
+          "to": "result"
+        }
+      ]
+    },
+    {
       "name": "curation/titanic-features",
       "description": "Read the Titanic training split, recode sex and the title in the name, then let a notebook fill a missing age from its status group and size the family.",
       "blocks": [
@@ -612,6 +1500,122 @@
         },
         {
           "from": "features",
+          "to": "result"
+        }
+      ]
+    },
+    {
+      "name": "curation/titanic-survival-datafusion",
+      "description": "Survival rate, headcount and median age by status and class over the Titanic training split, as one DataFusion query. Written for DataFusion (AW-3): it runs where AIWATCHER_QUERY_ENGINE=datafusion.",
+      "blocks": [
+        {
+          "id": "corpus",
+          "title": "Hugging Face",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "spec": {
+            "kind": "source",
+            "dataset": "hub_rows",
+            "arguments": {
+              "dataset": "phihung/titanic",
+              "split": "train",
+              "limit": "100"
+            }
+          }
+        },
+        {
+          "id": "rates",
+          "title": "DataFusion: survival rates",
+          "position": {
+            "x": 300,
+            "y": 0
+          },
+          "spec": {
+            "kind": "transform",
+            "steps": "df.select(\n    col(\"row\")[\"Name\"].alias(\"name\"),\n    col(\"row\")[\"Sex\"].alias(\"sex\"),\n    col(\"row\")[\"Pclass\"].alias(\"pclass\"),\n    col(\"row\")[\"Age\"].alias(\"age\"),\n    col(\"row\")[\"Survived\"].alias(\"survived\"),\n)\n.with_column(\"title\", f.regexp_replace(col(\"name\"), lit(r\"^[^,]*,\\s*([^.]+)\\..*$\"), lit(r\"\\1\")))\n.with_column(\n    \"status\",\n    f.when(col(\"title\") == lit(\"Mr\"), lit(\"mr\"))\n    .when(col(\"title\") == lit(\"Master\"), lit(\"master\"))\n    .when((col(\"title\") == lit(\"Mrs\")) | (col(\"title\") == lit(\"Mme\")), lit(\"mrs\"))\n    .when(\n        (col(\"title\") == lit(\"Miss\")) | (col(\"title\") == lit(\"Mlle\")) | (col(\"title\") == lit(\"Ms\")),\n        lit(\"miss\"),\n    )\n    .otherwise(lit(\"rare\")),\n)\n.aggregate(\n    [col(\"status\"), col(\"sex\"), col(\"pclass\")],\n    [\n        f.count(col(\"survived\")).alias(\"passengers\"),\n        f.avg(col(\"survived\")).alias(\"survival_rate\"),\n        f.median(col(\"age\")).alias(\"age_median\"),\n    ],\n)\n.sort(col(\"survival_rate\").sort(ascending=False))",
+            "engine": "datafusion"
+          }
+        },
+        {
+          "id": "result",
+          "title": "View",
+          "position": {
+            "x": 600,
+            "y": 0
+          },
+          "spec": {
+            "kind": "view",
+            "dataset": "curation/titanic-survival-datafusion"
+          }
+        }
+      ],
+      "edges": [
+        {
+          "from": "corpus",
+          "to": "rates"
+        },
+        {
+          "from": "rates",
+          "to": "result"
+        }
+      ]
+    },
+    {
+      "name": "curation/titanic-survival-duckdb",
+      "description": "Survival rate, headcount and median age by status and class over the Titanic training split, as one DuckDB query. Written for DuckDB (AW-3): it runs where AIWATCHER_QUERY_ENGINE=duckdb.",
+      "blocks": [
+        {
+          "id": "corpus",
+          "title": "Hugging Face",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "spec": {
+            "kind": "source",
+            "dataset": "hub_rows",
+            "arguments": {
+              "dataset": "phihung/titanic",
+              "split": "train",
+              "limit": "100"
+            }
+          }
+        },
+        {
+          "id": "rates",
+          "title": "DuckDB: survival rates",
+          "position": {
+            "x": 300,
+            "y": 0
+          },
+          "spec": {
+            "kind": "transform",
+            "steps": "df.select(\n    ColumnExpression(\"row\", \"Name\").alias(\"name\"),\n    ColumnExpression(\"row\", \"Sex\").alias(\"sex\"),\n    ColumnExpression(\"row\", \"Pclass\").alias(\"pclass\"),\n    ColumnExpression(\"row\", \"Age\").alias(\"age\"),\n    ColumnExpression(\"row\", \"Survived\").alias(\"survived\"),\n)\n.project(\n    StarExpression(),\n    FunctionExpression(\n        \"regexp_replace\",\n        ColumnExpression(\"name\"),\n        ConstantExpression(r\"^[^,]*,\\s*([^.]+)\\..*$\"),\n        ConstantExpression(r\"\\1\"),\n    ).alias(\"title\"),\n)\n.project(\n    StarExpression(),\n    CaseExpression(ColumnExpression(\"title\") == ConstantExpression(\"Mr\"), ConstantExpression(\"mr\"))\n    .when(ColumnExpression(\"title\") == ConstantExpression(\"Master\"), ConstantExpression(\"master\"))\n    .when(\n        ColumnExpression(\"title\").isin(ConstantExpression(\"Mrs\"), ConstantExpression(\"Mme\")),\n        ConstantExpression(\"mrs\"),\n    )\n    .when(\n        ColumnExpression(\"title\").isin(\n            ConstantExpression(\"Miss\"), ConstantExpression(\"Mlle\"), ConstantExpression(\"Ms\")\n        ),\n        ConstantExpression(\"miss\"),\n    )\n    .otherwise(ConstantExpression(\"rare\"))\n    .alias(\"status\"),\n)\n.aggregate(\n    [\n        ColumnExpression(\"status\"),\n        ColumnExpression(\"sex\"),\n        ColumnExpression(\"pclass\"),\n        FunctionExpression(\"count\", ColumnExpression(\"survived\")).alias(\"passengers\"),\n        FunctionExpression(\"avg\", ColumnExpression(\"survived\")).alias(\"survival_rate\"),\n        FunctionExpression(\"median\", ColumnExpression(\"age\")).alias(\"age_median\"),\n    ],\n    \"status, sex, pclass\",\n)\n.sort(ColumnExpression(\"survival_rate\").desc())",
+            "engine": "duckdb"
+          }
+        },
+        {
+          "id": "result",
+          "title": "View",
+          "position": {
+            "x": 600,
+            "y": 0
+          },
+          "spec": {
+            "kind": "view",
+            "dataset": "curation/titanic-survival-duckdb"
+          }
+        }
+      ],
+      "edges": [
+        {
+          "from": "corpus",
+          "to": "rates"
+        },
+        {
+          "from": "rates",
           "to": "result"
         }
       ]

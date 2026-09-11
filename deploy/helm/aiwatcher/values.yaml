@@ -262,6 +262,13 @@ query:
   # parsed rather than executed, and reads neither.
   admission: open
 
+  # The engine's own ceiling on one query, in seconds (AIWATCHER_QUERY_TIMEOUT_SECONDS),
+  # read by every engine. 0 derives it: with managed execution on, a minute above
+  # `execution.queryStepTimeoutSeconds`, so a long step is stopped by the step's
+  # clock and retried rather than refused by the engine; with it off, the
+  # engine's own default of 30, which is what a person at the Query tab waits on.
+  timeoutSeconds: 0
+
   images:
     flow:
       repository: ghcr.io/example/aiwatcher-flow
@@ -382,6 +389,12 @@ execution:
   # The name `queryUrl` had while Flow was the only engine. Read for one
   # release; `queryUrl` wins when both are set.
   flowUrl: ""
+
+  # How long a managed query step may run, whichever engine runs it
+  # (AIWATCHER_QUERY_STEP_TIMEOUT_SECONDS). A corpus read on disk is minutes, so
+  # a deployment reading one raises this; the engine's ceiling follows it unless
+  # `query.timeoutSeconds` says otherwise.
+  queryStepTimeoutSeconds: 300
 
   # Whether to run the API and the worker as two Deployments (section 27).
   #

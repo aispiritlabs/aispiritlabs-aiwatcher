@@ -34,6 +34,8 @@ jobs:
             printf 'server=%s/%s/aiwatcher\n' "$REGISTRY" "$owner"
             printf 'panel=%s/%s/aiwatcher-panel\n' "$REGISTRY" "$owner"
             printf 'flow=%s/%s/aiwatcher-flow\n' "$REGISTRY" "$owner"
+            printf 'datafusion=%s/%s/aiwatcher-query-datafusion\n' "$REGISTRY" "$owner"
+            printf 'duckdb=%s/%s/aiwatcher-query-duckdb\n' "$REGISTRY" "$owner"
           } >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v4
@@ -95,6 +97,30 @@ jobs:
           cache-from: type=gha,scope=flow
           cache-to: type=gha,scope=flow,mode=max
 
+      - name: aiwatcher query (DataFusion)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deploy/Dockerfile.query
+          target: datafusion
+          platforms: ${{ env.PLATFORM }}
+          push: true
+          tags: ${{ steps.meta.outputs.datafusion }}:${{ steps.meta.outputs.tag }}
+          cache-from: type=gha,scope=datafusion
+          cache-to: type=gha,scope=datafusion,mode=max
+
+      - name: aiwatcher query (DuckDB)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deploy/Dockerfile.query
+          target: duckdb
+          platforms: ${{ env.PLATFORM }}
+          push: true
+          tags: ${{ steps.meta.outputs.duckdb }}:${{ steps.meta.outputs.tag }}
+          cache-from: type=gha,scope=duckdb
+          cache-to: type=gha,scope=duckdb,mode=max
+
       - name: Deployment values
         run: |
           {
@@ -102,7 +128,10 @@ jobs:
             printf '```env\n'
             printf 'AIWATCHER_IMAGE=%s\n' '${{ steps.meta.outputs.server }}'
             printf 'AIWATCHER_PANEL_IMAGE=%s\n' '${{ steps.meta.outputs.panel }}'
-            printf 'AIWATCHER_FLOW_IMAGE=%s\n' '${{ steps.meta.outputs.flow }}'
+            printf '# one query image, for the engine AIWATCHER_QUERY_ENGINE names:\n'
+            printf 'AIWATCHER_QUERY_IMAGE=%s\n' '${{ steps.meta.outputs.flow }}'
+            printf '# AIWATCHER_QUERY_IMAGE=%s  (AIWATCHER_QUERY_ENGINE=datafusion)\n' '${{ steps.meta.outputs.datafusion }}'
+            printf '# AIWATCHER_QUERY_IMAGE=%s  (AIWATCHER_QUERY_ENGINE=duckdb)\n' '${{ steps.meta.outputs.duckdb }}'
             printf 'AIWATCHER_IMAGE_TAG=%s\n' '${{ steps.meta.outputs.tag }}'
             printf '```\n'
           } >> "$GITHUB_STEP_SUMMARY"

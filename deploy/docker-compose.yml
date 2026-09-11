@@ -127,6 +127,8 @@ services:
       # which engine the server compiles plans for.
       AIWATCHER_QUERY_ENGINE: ${AIWATCHER_QUERY_ENGINE:-flow}
       AIWATCHER_QUERY_URL: 'http://query:8081'
+      # A step's clock; the `query` service's ceiling below stays a minute above it.
+      AIWATCHER_QUERY_STEP_TIMEOUT_SECONDS: ${AIWATCHER_QUERY_STEP_TIMEOUT_SECONDS:-300}
     volumes:
       - aiwatcher-data:/var/lib/aiwatcher
     ports:
@@ -161,6 +163,9 @@ services:
     environment:
       AIWATCHER_URL: 'http://aiwatcher:8080'
       AIWATCHER_QUERY_ADMISSION: ${AIWATCHER_QUERY_ADMISSION:-open}
+      # Above the server's step timeout, so a long step is stopped by its own
+      # clock and retried rather than refused here. Raise the two together.
+      AIWATCHER_QUERY_TIMEOUT_SECONDS: ${AIWATCHER_QUERY_TIMEOUT_SECONDS:-360}
 
   perses:
     # Anonymous and writable — see deploy/perses/config.yaml. The Jaeger and

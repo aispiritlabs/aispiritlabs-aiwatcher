@@ -22,6 +22,8 @@
 //! without it would answer every read from an empty fold.
 
 pub mod artifacts;
+pub mod datafusion;
+pub mod duckdb;
 pub mod editor;
 pub mod flow;
 pub mod marimo;

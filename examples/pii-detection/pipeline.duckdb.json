@@ -1,0 +1,78 @@
+{
+  "name": "curation/pii-detection-duckdb",
+  "description": "Read a public PII corpus, keep the English rows, mask what a shape detector finds, publish what is left. Written for DuckDB (AW-3): it runs where AIWATCHER_QUERY_ENGINE=duckdb.",
+  "blocks": [
+    {
+      "id": "corpus",
+      "title": "Hugging Face",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "spec": {
+        "kind": "source",
+        "dataset": "hub_rows",
+        "arguments": {
+          "dataset": "ai4privacy/pii-masking-200k",
+          "split": "train",
+          "limit": "50"
+        }
+      }
+    },
+    {
+      "id": "shape",
+      "title": "DuckDB: English text",
+      "position": {
+        "x": 300,
+        "y": 0
+      },
+      "spec": {
+        "kind": "transform",
+        "steps": "df.select(\n    ColumnExpression(\"row_index\"),\n    ColumnExpression(\"row\", \"language\").alias(\"language\"),\n    ColumnExpression(\"row\", \"source_text\").alias(\"text\"),\n)\n.filter(ColumnExpression(\"language\") == ConstantExpression(\"en\"))",
+        "engine": "duckdb"
+      }
+    },
+    {
+      "id": "detect",
+      "title": "Python processing",
+      "position": {
+        "x": 600,
+        "y": 0
+      },
+      "spec": {
+        "kind": "notebook",
+        "notebook": "pii_detection",
+        "params": {
+          "text_column": "text",
+          "only_matches": false
+        }
+      }
+    },
+    {
+      "id": "result",
+      "title": "View",
+      "position": {
+        "x": 900,
+        "y": 0
+      },
+      "spec": {
+        "kind": "view",
+        "dataset": "curation/pii-masked-sample-duckdb"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "corpus",
+      "to": "shape"
+    },
+    {
+      "from": "shape",
+      "to": "detect"
+    },
+    {
+      "from": "detect",
+      "to": "result"
+    }
+  ]
+}

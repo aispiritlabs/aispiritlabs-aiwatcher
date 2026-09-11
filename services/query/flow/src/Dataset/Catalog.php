@@ -27,27 +27,23 @@ use function Flow\Types\DSL\type_array;
  *
  * ## Why HTTP and not a local copy
  *
- * Measured on 1500 runs: `groupBy(agent)` over `/api/v1/runs` through Flow's
- * paginated HTTP extractor takes 210 ms. The same question over 175 000 raw
- * events in Parquet takes 2 s, and over the raw write-ahead log 16 s. What
- * decides it is the grain, not the transport — the API already folds events
- * into run summaries, so there are 1500 rows to read instead of 175 000.
+ * Measured on 1500 runs: `groupBy(agent)` over `/api/v1/runs` through Flow's paginated
+ * HTTP extractor takes 210 ms; the same question over 175 000 raw events takes 2 s in
+ * Parquet and 16 s over the raw write-ahead log. The grain decides it, not the
+ * transport — the API has already folded those events into 1500 run summaries.
  *
- * So there is no export, no ingest job and no second copy of the data. The
- * cursors the API already serves (`next_cursor` in the body, replayed as a
- * query parameter) are exactly the shape `http_pagination_cursor` expects.
- *
- * The cost is that a query only sees what the API serves, which is the read
- * model's retention window. History older than that needs the columnar path;
- * see ADR_0008 for the condition under which that gets built.
+ * So there is no export, no ingest job and no second copy of the data. The cursors the
+ * API serves (`next_cursor` in the body, replayed as a query parameter) are exactly the
+ * shape `http_pagination_cursor` expects. The cost is that a query sees only the read
+ * model's retention window; ADR_0008 says when the columnar path for older history gets
+ * built.
  *
  * ## What a dataset is, and where that is written
  *
- * Not here. `services/query/contract/catalog.json` declares every dataset — its
- * route, its columns, its hints, its `read()` arguments — and every query engine
- * loads that one file (AW-3), so the DataFusion and DuckDB engines serve exactly
- * the catalog this one does. What is Flow's is how a declared dataset becomes a
- * `DataFrame`, which is `open()` below.
+ * Not here. `services/query/contract/catalog.json` declares every dataset — route,
+ * columns, hints, `read()` arguments — and every query engine loads that one file (AW-3),
+ * so the DataFusion and DuckDB engines serve exactly this catalog. What is Flow's is how a
+ * declared dataset becomes a `DataFrame`, which is `open()` below.
  */
 final readonly class Catalog
 {

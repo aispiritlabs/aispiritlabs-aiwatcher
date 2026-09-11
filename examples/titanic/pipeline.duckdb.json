@@ -1,0 +1,196 @@
+{
+  "name": "curation/titanic-from-scratch-duckdb",
+  "description": "Titanic from raw passengers to a held-out Random Forest baseline, with thematic data curation blocks and FlowAI encoders. Written for DuckDB (AW-3): it runs where AIWATCHER_QUERY_ENGINE=duckdb.",
+  "blocks": [
+    {
+      "id": "passengers",
+      "title": "Titanic · raw passengers",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "spec": {
+        "kind": "source",
+        "dataset": "hub_rows",
+        "arguments": {
+          "dataset": "phihung/titanic",
+          "split": "train",
+          "limit": "891"
+        }
+      }
+    },
+    {
+      "id": "columns",
+      "title": "DuckDB: columns",
+      "position": {
+        "x": 270,
+        "y": 0
+      },
+      "spec": {
+        "kind": "transform",
+        "steps": "df.select(\n    *[\n        ColumnExpression(\"row\", name).alias(name)\n        for name in [\n            \"PassengerId\", \"Survived\", \"Pclass\", \"Name\", \"Sex\", \"Age\",\n            \"SibSp\", \"Parch\", \"Ticket\", \"Fare\", \"Cabin\", \"Embarked\",\n        ]\n    ]\n)",
+        "engine": "duckdb"
+      }
+    },
+    {
+      "id": "split",
+      "title": "Train / validation split",
+      "position": {
+        "x": 540,
+        "y": 0
+      },
+      "spec": {
+        "kind": "notebook",
+        "notebook": "flowai_split",
+        "params": {
+          "seed": 42,
+          "validation_fraction": 0.2
+        }
+      }
+    },
+    {
+      "id": "missing-values",
+      "title": "Missing values",
+      "position": {
+        "x": 810,
+        "y": 0
+      },
+      "spec": {
+        "kind": "notebook",
+        "notebook": "flowai_missing_values",
+        "params": {}
+      }
+    },
+    {
+      "id": "features",
+      "title": "Feature engineering",
+      "position": {
+        "x": 1080,
+        "y": 0
+      },
+      "spec": {
+        "kind": "notebook",
+        "notebook": "flowai_titanic_features",
+        "params": {}
+      }
+    },
+    {
+      "id": "visualization",
+      "title": "Visualization",
+      "position": {
+        "x": 0,
+        "y": 180
+      },
+      "spec": {
+        "kind": "notebook",
+        "notebook": "flowai_visualization",
+        "params": {}
+      }
+    },
+    {
+      "id": "one-hot",
+      "title": "OneHotEncoder",
+      "position": {
+        "x": 270,
+        "y": 180
+      },
+      "spec": {
+        "kind": "notebook",
+        "notebook": "flowai_one_hot_encoder",
+        "params": {
+          "columns": [
+            "Sex",
+            "Pclass",
+            "EmbarkedFilled",
+            "Title",
+            "Deck",
+            "AgeBand",
+            "FareBand"
+          ],
+          "handle_unknown": "ignore"
+        }
+      }
+    },
+    {
+      "id": "label",
+      "title": "LabelEncoder",
+      "position": {
+        "x": 540,
+        "y": 180
+      },
+      "spec": {
+        "kind": "notebook",
+        "notebook": "flowai_label_encoder",
+        "params": {
+          "target": "Survived"
+        }
+      }
+    },
+    {
+      "id": "model",
+      "title": "Model training & evaluation",
+      "position": {
+        "x": 810,
+        "y": 180
+      },
+      "spec": {
+        "kind": "notebook",
+        "notebook": "flowai_random_forest",
+        "params": {
+          "seed": 42,
+          "n_estimators": 120
+        }
+      }
+    },
+    {
+      "id": "publish",
+      "title": "Publish predictions",
+      "position": {
+        "x": 1080,
+        "y": 180
+      },
+      "spec": {
+        "kind": "view",
+        "dataset": "curation/titanic-from-scratch-duckdb"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "passengers",
+      "to": "columns"
+    },
+    {
+      "from": "columns",
+      "to": "split"
+    },
+    {
+      "from": "split",
+      "to": "missing-values"
+    },
+    {
+      "from": "missing-values",
+      "to": "features"
+    },
+    {
+      "from": "features",
+      "to": "visualization"
+    },
+    {
+      "from": "visualization",
+      "to": "one-hot"
+    },
+    {
+      "from": "one-hot",
+      "to": "label"
+    },
+    {
+      "from": "label",
+      "to": "model"
+    },
+    {
+      "from": "model",
+      "to": "publish"
+    }
+  ]
+}

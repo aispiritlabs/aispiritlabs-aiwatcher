@@ -74,6 +74,10 @@ spec:
             # Which API a query reads. A dataset is a named route on this
             # server, not a copy of the data.
             - { name: AIWATCHER_URL, value: "http://{{ $fullname }}-server:8080" }
+            {{- with include "aiwatcher.queryTimeoutSeconds" $ }}
+            # Above a managed step's timeout, so the step's clock stops first.
+            - { name: AIWATCHER_QUERY_TIMEOUT_SECONDS, value: {{ . | quote }} }
+            {{- end }}
             {{- if ne $q.engine "flow" }}
             # What a Python query may do before it runs: `open` or `strict`.
             - { name: AIWATCHER_QUERY_ADMISSION, value: {{ $q.admission | quote }} }

@@ -1,10 +1,13 @@
-"""Run the Flow block's aggregation again in Polars, over the same files, and compare.
+"""Run the query block's aggregation again in Polars, over the same files, and compare.
 
-The notebook half of `curation/flow-vs-polars`. The block before it is Flow PHP
-reading `corpus_spans` and aggregating it per model; this one reads the same
-part files with Polars' streaming engine, computes the same aggregation, and
-hands on one row per model carrying both answers and whether they are the same
-answer. A faster engine that computed something else has not been measured.
+The notebook half of `curation/flow-vs-polars` and of its DataFusion and DuckDB
+variants. The block before it is the query engine — Flow PHP, DataFusion or DuckDB,
+which `params` names as `engine` — reading `corpus_spans` and aggregating it per
+model; this one reads the same part files with Polars' streaming engine, computes
+the same aggregation, and hands on one row per model carrying both answers and
+whether they are the same answer. A faster engine that computed something else has
+not been measured. The columns carry the engine's name, so a DataFusion run never
+publishes its counts under Flow's.
 
 What each engine took is in the Workflows waterfall, where the two steps sit
 side by side. This block also reports the seconds Polars spent in its query
@@ -116,33 +119,35 @@ def _(pl, spans, time):
 
 
 @app.cell
-def _(polars_rows, polars_seconds, rows):
+def _(params, polars_rows, polars_seconds, rows):
     # One row per model with both answers side by side. Counts and sums must be
     # equal; a mean within half a hundredth, because Flow's `average()` keeps
-    # two decimals (half up, in BigDecimal) and Polars does not round at all.
-    _flow = {str(row.get("model")): row for row in rows}
+    # two decimals (half up, in BigDecimal) and neither DataFusion nor Polars
+    # rounds at all.
+    engine = str(params.get("engine") or "flow")
+    _query = {str(row.get("model")): row for row in rows}
     _polars = {str(row["model"]): row for row in polars_rows}
     output = []
-    for _model in sorted(_flow.keys() | _polars.keys()):
-        _f = _flow.get(_model, {})
+    for _model in sorted(_query.keys() | _polars.keys()):
+        _q = _query.get(_model, {})
         _p = _polars.get(_model, {})
         _agrees = (
-            bool(_f)
+            bool(_q)
             and bool(_p)
-            and all(_f.get(_key) == _p.get(_key) for _key in ("spans", "input_tokens", "output_tokens"))
-            and abs(float(_f.get("avg_duration_ms") or 0) - float(_p.get("avg_duration_ms") or 0))
+            and all(_q.get(_key) == _p.get(_key) for _key in ("spans", "input_tokens", "output_tokens"))
+            and abs(float(_q.get("avg_duration_ms") or 0) - float(_p.get("avg_duration_ms") or 0))
             <= 0.005 + 1e-9
         )
         output.append(
             {
                 "model": _model,
-                "flow_spans": _f.get("spans"),
+                f"{engine}_spans": _q.get("spans"),
                 "polars_spans": _p.get("spans"),
-                "flow_input_tokens": _f.get("input_tokens"),
+                f"{engine}_input_tokens": _q.get("input_tokens"),
                 "polars_input_tokens": _p.get("input_tokens"),
-                "flow_output_tokens": _f.get("output_tokens"),
+                f"{engine}_output_tokens": _q.get("output_tokens"),
                 "polars_output_tokens": _p.get("output_tokens"),
-                "flow_avg_duration_ms": _f.get("avg_duration_ms"),
+                f"{engine}_avg_duration_ms": _q.get("avg_duration_ms"),
                 "polars_avg_duration_ms": (
                     None if _p.get("avg_duration_ms") is None else round(float(_p["avg_duration_ms"]), 6)
                 ),
@@ -151,16 +156,16 @@ def _(polars_rows, polars_seconds, rows):
             }
         )
     deterministic = False
-    return deterministic, output
+    return deterministic, engine, output
 
 
 @app.cell
-def _(corpus_format, mo, output, polars_seconds, rows):
+def _(corpus_format, engine, mo, output, polars_seconds, rows):
     _agreed = bool(output) and all(row["agrees"] for row in output)
     mo.hstack(
         [
             mo.stat(label="Models", value=len(output)),
-            mo.stat(label="Rows from Flow", value=len(rows)),
+            mo.stat(label=f"Rows from {engine}", value=len(rows)),
             mo.stat(label=f"Polars over the {corpus_format.upper()}", value=f"{polars_seconds:.2f} s"),
             mo.stat(label="The two answers", value="agree" if _agreed else "differ"),
         ],

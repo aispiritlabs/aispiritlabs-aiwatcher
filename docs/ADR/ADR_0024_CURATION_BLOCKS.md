@@ -1,7 +1,7 @@
 # ADR_0024: A curation is a chain of blocks, each belonging to the engine that can run it
 
 - **Status**: accepted; the execution half superseded by ADR_0025; the block
-  vocabulary amended 2026-09-09 (below)
+  vocabulary amended 2026-09-09, and the transform's engine by ADR_0028 (below)
 - **Date**: 2026-09-04
 
 The block vocabulary, the chain validation and the content-addressed revision
@@ -218,3 +218,24 @@ clock with nothing behind it, or a rule nothing can reach. The row lives in the
 workflow store beside every other deferred append and is delivered by the tick
 that already existed, because two timers for one wait is the same mistake as
 two parties retrying one attempt.
+
+## Amendment, 2026-09-11: a transform names its engine (ADR_0028)
+
+The transform block carries `engine: flow | datafusion | duckdb`, absent read as `flow`,
+and its text is that engine's language ([ADR_0028](ADR_0028_QUERY_ENGINES.md)). A
+chain's engine is its transforms': two engines in one chain is a chain problem, reported
+with every other, and a chain written for another engine than the deployment's is
+refused by the compiler, the one place that knows the deployment — a 422 naming the
+block and both engines, and no run. A source is a catalog read every engine serves
+alike, so it names none, and a chain of a source alone runs on whichever is deployed.
+
+*Every source and transform compiles to one Flow query* becomes *to one query of the
+deployed engine*: a Flow script as before, or for a Python engine `df = read(…)`, then
+`df = (<transform>)` per block, then `df`. The fold is the same one, so three boxes
+still light from one `step.started`, and the placement rule is unchanged — a query step
+reads past nothing, so it ends at the first notebook or approval.
+
+This ADR's Consequences named a second notebook runtime as the signal that a block kind
+needs a declared runtime. A second query engine arrived first, and it is handled by the
+deployment choosing one and the block saying which it was written for, rather than by a
+block declaring a runtime of its own.

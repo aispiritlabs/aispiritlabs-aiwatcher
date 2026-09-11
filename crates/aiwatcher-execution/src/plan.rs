@@ -23,6 +23,7 @@ use std::time::Duration;
 
 use aiwatcher_core::ArtifactKind;
 use aiwatcher_core::human_input::OnTimeout;
+use aiwatcher_datasets::QueryEngine;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::ToSchema;
@@ -96,6 +97,15 @@ pub enum RuntimeBinding {
     /// light up together: Flow executes one pipeline, so a source and its
     /// transforms compile to one step.
     FlowPhp(FlowStepSpec),
+    /// One DataFusion query: Python calling DataFusion's DataFrame API (AW-3).
+    /// Flow's spec with another language in `script`, run by another service —
+    /// so a kind of its own, which a claim filter tells apart without the plan.
+    #[serde(rename = "datafusion")]
+    DataFusion(QueryStepSpec),
+    /// One DuckDB query: Python calling DuckDB's relational API (AW-3), on the
+    /// same spec. `duckdb` on the wire, where snake_case would write `duck_db`.
+    #[serde(rename = "duckdb")]
+    DuckDb(QueryStepSpec),
     /// One marimo notebook over the rows the step before it produced.
     Marimo(MarimoStepSpec),
     /// A dataset version, written by the serve role. The one binding that runs
@@ -116,6 +126,10 @@ pub enum RuntimeBinding {
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeKind {
     FlowPhp,
+    #[serde(rename = "datafusion")]
+    DataFusion,
+    #[serde(rename = "duckdb")]
+    DuckDb,
     Marimo,
     PublishDataset,
     PythonTask,
@@ -128,6 +142,8 @@ impl RuntimeKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::FlowPhp => "flow_php",
+            Self::DataFusion => "datafusion",
+            Self::DuckDb => "duckdb",
             Self::Marimo => "marimo",
             Self::PublishDataset => "publish_dataset",
             Self::PythonTask => "python_task",
@@ -160,7 +176,10 @@ impl RuntimeKind {
     /// result is the engine's to reuse or not.
     #[must_use]
     pub const fn is_cacheable(self) -> bool {
-        matches!(self, Self::FlowPhp | Self::Marimo | Self::PythonTask)
+        matches!(
+            self,
+            Self::FlowPhp | Self::DataFusion | Self::DuckDb | Self::Marimo | Self::PythonTask
+        )
     }
 }
 
@@ -169,6 +188,8 @@ impl RuntimeBinding {
     pub const fn kind(&self) -> RuntimeKind {
         match self {
             Self::FlowPhp(_) => RuntimeKind::FlowPhp,
+            Self::DataFusion(_) => RuntimeKind::DataFusion,
+            Self::DuckDb(_) => RuntimeKind::DuckDb,
             Self::Marimo(_) => RuntimeKind::Marimo,
             Self::PublishDataset(_) => RuntimeKind::PublishDataset,
             Self::PythonTask(_) => RuntimeKind::PythonTask,
@@ -192,7 +213,7 @@ impl RuntimeBinding {
         match self {
             // Many, and that is the interesting one: the compiler folds a
             // source and every transform behind it into a single query.
-            Self::FlowPhp(spec) => Some(&spec.blocks),
+            Self::FlowPhp(spec) | Self::DataFusion(spec) | Self::DuckDb(spec) => Some(&spec.blocks),
             // `from_ref` rather than `as_slice`: a spec with no block answers
             // `None` — *not drawn on a canvas* — instead of an empty list. The
             // two are used differently and a gate is where the difference
@@ -203,6 +224,26 @@ impl RuntimeBinding {
             Self::PublishDataset(spec) => spec.block.as_ref().map(std::slice::from_ref),
             Self::HumanInput(spec) => spec.block.as_ref().map(std::slice::from_ref),
             Self::PythonTask(_) | Self::ExternalWorkflow(_) => None,
+        }
+    }
+
+    /// The query this step runs, and the engine that runs it.
+    ///
+    /// For a reader that treats every engine's query alike — the dataset
+    /// version names the text and its engine — so it is one question here
+    /// rather than an arm per engine there. Routing stays on [`Self::kind`],
+    /// which keeps one kind per engine.
+    #[must_use]
+    pub const fn query(&self) -> Option<(QueryEngine, &QueryStepSpec)> {
+        match self {
+            Self::FlowPhp(spec) => Some((QueryEngine::Flow, spec)),
+            Self::DataFusion(spec) => Some((QueryEngine::DataFusion, spec)),
+            Self::DuckDb(spec) => Some((QueryEngine::DuckDb, spec)),
+            Self::Marimo(_)
+            | Self::PublishDataset(_)
+            | Self::PythonTask(_)
+            | Self::HumanInput(_)
+            | Self::ExternalWorkflow(_) => None,
         }
     }
 }

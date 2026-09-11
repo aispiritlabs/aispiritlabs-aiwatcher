@@ -264,6 +264,18 @@ fi
 # for another engine, so it is applied to Flow's and never to the one chosen.
 query_image="${AIWATCHER_QUERY_IMAGE:-}"
 if [[ -n $query_image ]]; then
+  # An image named for another engine is what a copied .env leaves behind when
+  # only AIWATCHER_QUERY_ENGINE was changed: the pod goes Ready answering as the
+  # engine its image holds, and every step the server sends it fails.
+  case ${query_engine:-flow} in
+    flow) expected=aiwatcher-flow ;;
+    *) expected=aiwatcher-query-${query_engine} ;;
+  esac
+  for named in aiwatcher-flow aiwatcher-query-datafusion aiwatcher-query-duckdb; do
+    if [[ ${query_image##*/} == "$named" && $named != "$expected" ]]; then
+      fail "AIWATCHER_QUERY_IMAGE is '$query_image', $named's image, but AIWATCHER_QUERY_ENGINE is ${query_engine:-flow}; set it to $expected, or leave it unset"
+    fi
+  done
   sets+=(--set "query.images.${query_engine:-flow}.repository=$query_image")
 fi
 if [[ -n ${AIWATCHER_FLOW_IMAGE:-} ]]; then

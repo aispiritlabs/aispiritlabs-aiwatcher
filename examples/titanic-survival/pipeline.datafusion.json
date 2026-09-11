@@ -1,0 +1,58 @@
+{
+  "name": "curation/titanic-survival-datafusion",
+  "description": "Survival rate, headcount and median age by status and class over the Titanic training split, as one DataFusion query. Written for DataFusion (AW-3): it runs where AIWATCHER_QUERY_ENGINE=datafusion.",
+  "blocks": [
+    {
+      "id": "corpus",
+      "title": "Hugging Face",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "spec": {
+        "kind": "source",
+        "dataset": "hub_rows",
+        "arguments": {
+          "dataset": "phihung/titanic",
+          "split": "train",
+          "limit": "100"
+        }
+      }
+    },
+    {
+      "id": "rates",
+      "title": "DataFusion: survival rates",
+      "position": {
+        "x": 300,
+        "y": 0
+      },
+      "spec": {
+        "kind": "transform",
+        "steps": "df.select(\n    col(\"row\")[\"Name\"].alias(\"name\"),\n    col(\"row\")[\"Sex\"].alias(\"sex\"),\n    col(\"row\")[\"Pclass\"].alias(\"pclass\"),\n    col(\"row\")[\"Age\"].alias(\"age\"),\n    col(\"row\")[\"Survived\"].alias(\"survived\"),\n)\n.with_column(\"title\", f.regexp_replace(col(\"name\"), lit(r\"^[^,]*,\\s*([^.]+)\\..*$\"), lit(r\"\\1\")))\n.with_column(\n    \"status\",\n    f.when(col(\"title\") == lit(\"Mr\"), lit(\"mr\"))\n    .when(col(\"title\") == lit(\"Master\"), lit(\"master\"))\n    .when((col(\"title\") == lit(\"Mrs\")) | (col(\"title\") == lit(\"Mme\")), lit(\"mrs\"))\n    .when(\n        (col(\"title\") == lit(\"Miss\")) | (col(\"title\") == lit(\"Mlle\")) | (col(\"title\") == lit(\"Ms\")),\n        lit(\"miss\"),\n    )\n    .otherwise(lit(\"rare\")),\n)\n.aggregate(\n    [col(\"status\"), col(\"sex\"), col(\"pclass\")],\n    [\n        f.count(col(\"survived\")).alias(\"passengers\"),\n        f.avg(col(\"survived\")).alias(\"survival_rate\"),\n        f.median(col(\"age\")).alias(\"age_median\"),\n    ],\n)\n.sort(col(\"survival_rate\").sort(ascending=False))",
+        "engine": "datafusion"
+      }
+    },
+    {
+      "id": "result",
+      "title": "View",
+      "position": {
+        "x": 600,
+        "y": 0
+      },
+      "spec": {
+        "kind": "view",
+        "dataset": "curation/titanic-survival-datafusion"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "corpus",
+      "to": "rates"
+    },
+    {
+      "from": "rates",
+      "to": "result"
+    }
+  ]
+}

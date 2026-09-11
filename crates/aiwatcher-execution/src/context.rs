@@ -217,7 +217,9 @@ fn allowed_for(
     }
 
     let mut actions = match runtime {
-        RuntimeKind::FlowPhp => vec![ContextAction::Validate, ContextAction::Test],
+        RuntimeKind::FlowPhp | RuntimeKind::DataFusion | RuntimeKind::DuckDb => {
+            vec![ContextAction::Validate, ContextAction::Test]
+        }
         RuntimeKind::Marimo => vec![ContextAction::Test, ContextAction::OpenEditor],
         // Publishing, a wait and a delegation have no ad-hoc form: the first
         // writes a dataset version and the other two are not this system's to

@@ -1,0 +1,10 @@
+data_frame()->read(corpus_spans)
+    ->groupBy(ref('run_id'))
+    ->aggregate(
+        count(ref('span_id')->as('spans')),
+        sum(ref('input_tokens')->as('input_tokens')),
+        sum(ref('output_tokens')->as('output_tokens')),
+        max(ref('duration_ms')->as('max_duration_ms'))
+    )
+    ->sortBy(ref('run_id')->asc())
+    ->limit(100)

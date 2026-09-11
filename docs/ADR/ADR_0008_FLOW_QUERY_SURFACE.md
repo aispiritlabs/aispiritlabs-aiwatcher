@@ -1,6 +1,7 @@
 # ADR_0008: Flow PHP is a query surface over the API, parsed rather than executed
 
-- **Status**: accepted
+- **Status**: accepted; three amendments below, and a fourth made by ADR_0028 —
+  Flow is one of three query engines, and the other two run code
 - **Date**: 2026-08-28
 
 ## Context
@@ -325,3 +326,25 @@ takes a `Loader`, a new source still takes an `Extractor`. The test that would
 catch it is `stepsTheAdmissionRuleRefuses`, which is a list of things that must
 keep failing — and, unlike the whitelist, it is cheap to extend and costs
 nothing when it is right.
+
+
+## Amendment, 2026-09-11: one of three engines (ADR_0028)
+
+Flow is no longer *the* query surface. It is the default of three that a deployment
+chooses between with `AIWATCHER_QUERY_ENGINE`, beside DataFusion and DuckDB, and
+everything this ADR decided about Flow stands: a Flow query is lexed, admitted from
+Flow's own signatures and built through explicit dispatch, and it is never executed.
+
+What changes is the sentence around it. *No query text is executed* is now true of Flow,
+and of the two Python engines under `strict` admission — a query parsed with `ast` and
+admitted from the engine's own vocabulary before it runs, this ADR's shape in another
+language. It is false of them under `open`, the default, where a query is Python run as
+a notebook's cell is: in a child process, with ceilings and without credentials, on a
+service bound to localhost. [ADR_0028](ADR_0028_QUERY_ENGINES.md) states what that costs
+and what would make it wrong.
+
+Three things moved with it. The routes are `/query/*`, and Flow serves `/flow/*` beside
+them for one release. The service lives at `services/query/flow`. And the declarative
+half of the catalog — names, routes, columns, parameters, windows — is
+`services/query/contract/catalog.json`, which every engine loads, so the datasets a
+query can name are one list in one file rather than one per language.

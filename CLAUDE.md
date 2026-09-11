@@ -26,12 +26,14 @@ Python / TypeScript agents
    conversations   ──► RustFS (S3)   encrypted, its own retention, erasable
    training runs   ──► RustFS (S3)   a curve and a model registry; off the log
    dataset hubs    ──► Kaggle, HF    what exists; never what is permitted
-   curation blocks ──► Flow PHP      one query, up to the first notebook
+   query engine    ──► Flow PHP | DataFusion | DuckDB — one per deployment,
+                                     behind the Query tab, recipes and a chain
+   curation blocks ──► that engine   one query, up to the first notebook
                    └─► ml_pipeline   a marimo notebook: run as a step, served live
    managed runs    ──► PostgreSQL    the plan, the decisions, the outbox — and
                                      back onto the log as facts about work
                    └─► serve | work  two roles, one binary; `work` is the only
-                                     one that opens a socket to Flow
+                                     one that opens a socket to a query engine
 ```
 
 ## Commands
@@ -43,7 +45,7 @@ just test          # cargo test --workspace --all-targets
 just lint          # cargo clippy -Dwarnings
 just openapi       # regenerate contracts/openapi.json AND the panel's client
 just run           # server on :8080, write-ahead log in ./.data
-just run-execution # the same, with managed Flow execution wired to :8081
+just run-execution # the same, with managed query execution wired to :8081
 just run-postgres  # the same, with the workflow store on PostgreSQL
 just run-hubs      # the same, with Kaggle/Hugging Face dataset search on
 just dev           # server (in-memory bus) + panel on :5173, seeded with data to click around in
@@ -62,6 +64,9 @@ just serve-model      # verify the promoted package's digests, load it, serve it
 just onnx-version     # re-express that model as an ONNX graph, check it agrees, move the label
 just ml-pipeline-serve # the marimo notebook runtime on :8082, for notebook blocks
 just ml-pipeline-check # ruff, mypy --strict and pytest for that service
+just query-serve   # the query engine AIWATCHER_QUERY_ENGINE names (flow | datafusion | duckdb) on :8081
+just query-check   # that engine's own checks; `query-contract-check` is the Python workspace's
+just query-conformance # the same four questions asked of that engine, compared with Flow's rows
 just stack-up      # docker compose: VictoriaTraces, VictoriaMetrics, Collector, Perses
 just tilt-up       # the same stack on a local Kubernetes, rebuilt on save
 just skills        # re-vendor .claude/skills at their pinned commits
@@ -149,23 +154,27 @@ Crates, in dependency order. A crate may only depend on ones above it.
 | `aiwatcher-auth` | Single sign-on: OIDC discovery, a JWKS cache, the authorization-code flow with PKCE, HMAC-signed session cookies, authentik's forward-auth headers, and the group-to-role mapping. Knows nothing about axum. |
 | `aiwatcher-projector` | The pipeline, live hub, read model, dimension, span, evaluation and workflow-graph folds, dedup, retry, dead letters |
 | `aiwatcher-api` | axum router: REST, SSE, WebSocket, OpenAPI. `worker` is the one module whose caller is not a browser: the reactor's own loop with an HTTP seam where the work happens (Phase 10). |
-| `aiwatcher-server` | Config, wiring, graceful shutdown, and the **reactors** — the one place an executor's client lives, because an executor holds a socket and a credential. `execution/` is mostly the work role: `artifacts` (the object store's sixth prefix, and the receipt a lookup reads), `flow` (the Flow activity executor) and `publish` (the dataset version, which runs in `serve` because it executes nothing) — and `editor`, which runs in `serve` because opening a block on a step's rows is a person waiting on a request rather than an attempt somebody claimed. The only crate that knows every implementation exists. |
+| `aiwatcher-server` | Config, wiring, graceful shutdown, and the **reactors** — the one place an executor's client lives, because an executor holds a socket and a credential. `execution/` is mostly the work role: `artifacts` (the object store's sixth prefix, and the receipt a lookup reads), `query` (the client every query engine shares) with `flow`, `datafusion` and `duckdb` beside it (one executor per engine, and only the deployed one registered) and `publish` (the dataset version, which runs in `serve` because it executes nothing) — and `editor`, which runs in `serve` because opening a block on a step's rows is a person waiting on a request rather than an attempt somebody claimed. The only crate that knows every implementation exists. |
 
 Everything else: `apps/panel` (React), `sdk/python`, `sdk/agentic`, `sdk/typescript`,
 `contracts/` (the OpenAPI document and the envelope JSON Schema), `deploy/`
 (the Dockerfiles, the docker compose stack, the kustomize test stack, and
 `helm/aiwatcher` + `helmfile.yaml.gotmpl` + `scripts/` — the install path),
 `docs/ADR/`, and two **optional** services outside the Cargo workspace that the
-Rust binary does not know exist. `services/query/flow` is the PHP query surface behind
-the panel's Query tab and its curation transforms (`just flow-check`).
+Rust binary does not know exist. `services/query` holds the **query engines** a
+deployment chooses between with `AIWATCHER_QUERY_ENGINE` (ADR_0028), behind the
+panel's Query tab, its recipes and a chain's query step: `flow` is the PHP surface
+(`just flow-check`), and `contract`, `datafusion` and `duckdb` are one `uv`
+workspace — the contract every Python engine serves, the catalog all three load,
+and the two engines on it (`just query-contract-check`; `services/query/README.md`).
 `services/ml_pipeline` is the Python 3.14 notebook runtime behind a pipeline's
 marimo blocks: it runs one as a step through marimo's own `App.run(defs=…)` — in
 a worker thread, so a run does not hold the loop that serves everything else —
 and serves the same file as a live app for the block's editor (`just
 ml-pipeline-check`). `just check` covers neither — PHP and a Python toolchain
-may not be on a machine that only touches the Rust crates — but **CI runs both**,
-in their own jobs, because a managed `flow_php` or `marimo` step runs through
-them and a break there is a break in the execution path.
+may not be on a machine that only touches the Rust crates — but **CI runs each**,
+in their own jobs and once per query engine, because a managed query or `marimo`
+step runs through them and a break there is a break in the execution path.
 
 ### The words, since "workflow" meant four things
 
@@ -461,6 +470,20 @@ area.
    next command, never for a list the fold already serves. Facts, never
    decisions: the *why* stays in the store.
 
+23. **A deployment chooses its query engine, and a typed query is admitted or
+   runs where code runs** ([ADR_0028](docs/ADR/ADR_0028_QUERY_ENGINES.md)). Over a
+   5 GB corpus Flow took 548.8 s where DataFusion and DuckDB took about two, and a
+   managed run waits on its slowest step. So `AIWATCHER_QUERY_ENGINE` is `flow |
+   datafusion | duckdb`, one per deployment, each its own `RuntimeKind`; content
+   names the engine it was written for, absent read as Flow so no stored digest
+   moves; and a plan for another engine is a 422 at start naming the block and both
+   engines. The two Python engines run each query in a child of a fork server that
+   imported the engine and never ran one, under `open` admission (the default: the
+   query is code, run as a notebook's cell is, with ceilings and no credentials) or
+   `strict` (parsed and admitted from the engine's own vocabulary, ADR_0008's shape
+   in Python). One contract — the six `/query` routes, one `catalog.json` — and a
+   conformance suite asking every engine the same four questions.
+
 ## Conventions
 
 ### Rust
@@ -680,11 +703,12 @@ what runs a real graph.
   says which parts of a selection it is not following rather than going quiet.
   Its feed is bounded and Pause freezes the rendering, never the subscription.
 - The Query view has a **Build** mode that compiles clicked attributes into the
-  Flow text, and the move to **Write** is one-way. `src/lib/query-builder.ts`
-  generates; `services/query/flow/src/Dsl` decides. Parsing text back into chips
-  would be a second grammar in TypeScript for a language whose real one is in
-  PHP, and the day they disagreed opening a hand-written query in the builder
-  would silently rewrite it.
+  deployed engine's language — Flow, DataFusion or DuckDB — and the move to
+  **Write** is one-way. `query-builder.ts` generates; the engine decides
+  (`services/query/flow/src/Dsl` for Flow, admission for a Python engine). Parsing
+  text back into chips would be a second grammar in TypeScript for languages whose
+  real ones live in the engines, and the day they disagreed opening a hand-written
+  query in the builder would silently rewrite it.
 - `training` is the one area that reads nothing folded from the log at all. It
   polls while a run is `running` and stops when none is — an epoch is minutes,
   so five seconds costs one request and answers the same question a live
@@ -1380,7 +1404,8 @@ the review.
   variable arrives as `Path "rows" does not exists`. `CheckedClient` throws at
   the seam, carrying aiwatcher's own message, and a permanent answer is relayed
   as a 4xx so a managed step reads it as `UserCode` rather than spending ten
-  attempts on a flag that is still off. Section 43.28.
+  attempts on a flag that is still off. Section 43.28. The Python engines' pager
+  (`aiwatcher_query.api`) reads the status before the body for the same reason.
 - **Never re-implement a pipeline's rules in the panel.** `aiwatcher-datasets`
   decides whether blocks form a runnable chain and returns every problem as
   `details` on a 422; the canvas renders those lines. `lib/pipeline.ts`'s
@@ -1997,11 +2022,15 @@ the review.
   and `Flow\ETL\Function\Uuid` throws at load without `ramsey/uuid`. The
   return type is matched as a **string**, or the service fails to start over an
   optional dependency of a function nobody called.
-- **Never remember a result the query service says is not deterministic.**
+- **Never remember a result the query engine says is not deterministic.**
   `now()`, `uuid_v4()` and `random_string()` are honest work in the Query tab
   and a wrong cache entry in a managed step. The answer carries `deterministic`
-  beside `window_applied`, for the same reason: only the service knows what its
-  query resolved to. Section 43.22.
+  beside `window_applied`, for the same reason: only the engine knows what its
+  query resolved to. Section 43.22. Every engine answers it: false for a corpus
+  read, and for a call to a volatile function — DuckDB's read from the stability
+  `duckdb_functions()` reports, through `FunctionExpression`'s text as well as a
+  call's own name; DataFusion's from a declared set, because its binding says
+  nothing about volatility.
 - **Never offer Flow's loose comparisons.** In Flow 0.43 `equals` matches null
   against anything and `notEquals` drops nulls. Every column in every dataset is
   nullable, so both silently return the wrong rows. Refused *with the reason*
@@ -2010,10 +2039,39 @@ the review.
 - **Never make the security boundary depend on Mago.** It is a dev dependency
   and may be absent. It reports syntax; `src/Dsl` decides what runs. `just
   flow-check` is the service's own gate (format, lint, tests) — `just check`
-  does not cover PHP, and the `flow` job in CI does.
-- **Never expose the Flow service without authentication.** It has none. The
-  parser bounds what a query can say, not who may ask, and `just flow-serve`
-  binds it to localhost.
+  does not cover PHP, and CI's `query` job does, in its Flow entry.
+- **Never expose a query engine without authentication.** None has any. Flow's
+  parser and a Python engine's `strict` admission bound what a query can say, not
+  who may ask — and under `open` a query is code. `just query-serve` binds to
+  localhost, and the chart's NetworkPolicy admits the panel and the server and
+  nothing else. ADR_0028 names what `open` costs and what would make it wrong.
+- **Never run a query in a process that has run one.** A Python engine's fork
+  server imports the engine and runs nothing, and every query — `strict` ones too
+  — runs in a child of it. Measured: a child forked after `import datafusion`
+  answers, and one forked after the parent *ran* a DataFusion query panics in
+  Tokio's I/O driver. For the same reason a DuckDB connection is made in
+  `open()`, in the child, and its function catalog is read lazily, never at
+  import.
+- **Never let a forked query child ask macOS for anything.** Asking the system
+  for its proxies calls CoreFoundation in a process that was forked and never
+  exec'd, and it crashed every child of some fork servers and none of others —
+  which reads as a flaky engine. The child's HTTP client takes nothing from its
+  environment (`trust_env=False`), which also keeps `~/.netrc` out of it; anything
+  new in the child that wants proxies, a locale or the keychain brings it back.
+- **Never run a plan on an engine it was not written for.** A transform's text
+  belongs to one language, so a chain naming another engine than the deployment's
+  is refused when it is started — a 422 naming the block, the engine it was
+  written for and the one deployed, and no run — rather than sent to an engine
+  that would read it as a syntax error somebody takes for their own. The panel
+  shows such content and does not run it.
+- **Never hand a DuckDB relation text under `strict`.** A string handed to an
+  expression is a column's name or a constant; a string handed to a relation
+  method is parsed as SQL — `project("x + 1")` adds one, and a SQL string can name
+  a file. So `strict` refuses anything that may be text — a literal, an f-string,
+  a name bound to one, a property, a method of text — in any relation method's
+  arguments, except `set_alias`, a join's kind and a group key of bare column
+  names. Under either admission the session is locked beneath that:
+  `allowed_directories` is the corpus root and `enable_external_access` is off.
 - **Never filter a live stream in the browser.** `Scope::Selection` narrows
   `/api/v1/events/stream` server-side, which is why `LiveEvent` carries
   `agent_id` and `service` at all — the same reason it already carried
@@ -2025,14 +2083,16 @@ the review.
   dimension, and across them — and an event with no value for a dimension
   somebody filtered on is not a match, or narrowing to one agent would put its
   whole run back in the stream.
-- **Never let the query builder refuse anything.** It generates Flow text and
-  the query service decides whether that text runs, exactly as it does for
-  typed text — the split the annotation canvas and the pipeline canvas already
-  make. It follows that the builder must *drop* an attribute the chosen grain
-  cannot express rather than emit a column that is not there: a refusal for a
-  chip the builder itself offered reads as the reader's mistake. The shapes it
-  emits are pinned by `services/query/flow/tests/Dsl/BuilderShapesTest.php`, which
-  guards the language features it leans on rather than copying its output.
+- **Never let the query builder refuse anything.** It generates text in the
+  deployed engine's language and the engine decides whether that text runs,
+  exactly as it does for typed text — the split the annotation canvas and the
+  pipeline canvas already make. It follows that the builder must *drop* an
+  attribute the chosen grain cannot express rather than emit a column that is not
+  there: a refusal for a chip the builder itself offered reads as the reader's
+  mistake. The shapes it emits are pinned per engine, each against the real
+  engine — `services/query/flow/tests/Dsl/BuilderShapesTest.php`, and
+  `test_panel_shapes.py` and `test_duckdb_panel_shapes.py` under `strict` — which
+  guard the language features it leans on rather than copying its output.
 - **Never let the projector decide a run has died.** A run with no end event
   stays `Running`: the producer may have been killed, or may be thinking for
   twenty minutes, and nothing in the log distinguishes them. What the read

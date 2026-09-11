@@ -1,6 +1,6 @@
 # The decisions, in four readings
 
-Twenty-seven ADRs is the right number of *records* and the wrong number of
+Twenty-eight ADRs is the right number of *records* and the wrong number of
 *things to read*. These four documents group them by the question they answer,
 say what each decided in one line, and — the part a flat index cannot give —
 say which ones later ones amended or partly took back.
@@ -13,7 +13,7 @@ right. Every line links to the file it summarises.
 |---|---|---|
 | [The log](OBSERVABILITY.md) | What is observed, how it folds, and what retention therefore bounds | 0001–0005, 0007, 0010, 0012 |
 | [The registries](REGISTRIES.md) | What is authored rather than observed, and so lives outside retention | 0011, 0015, 0017–0023 |
-| [Execution](EXECUTION.md) | Who runs work, who decides, and where the facts about it go | 0008, 0014, 0016, 0024–0026 |
+| [Execution](EXECUTION.md) | Who runs work, who decides, and where the facts about it go | 0008, 0014, 0016, 0024–0026, 0028 |
 | [Deployment](DEPLOYMENT.md) | How it is installed, and who may call it | 0006, 0009, 0013, 0027 |
 
 The split is the one the codebase already makes. Everything in *The log* is a

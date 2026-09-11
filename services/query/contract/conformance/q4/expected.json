@@ -1,0 +1,904 @@
+{
+  "rows": [
+    {
+      "span_id": "s000000000000000",
+      "run_id": "run-0000000000",
+      "day": "2026-08-01",
+      "model": "claude-haiku-4-5",
+      "total_tokens": 4405,
+      "run_llm_spans": 5,
+      "duration_ms": 574
+    },
+    {
+      "span_id": "s000000000000004",
+      "run_id": "run-0000000000",
+      "day": "2026-08-01",
+      "model": "gemini-3-pro",
+      "total_tokens": 2397,
+      "run_llm_spans": 5,
+      "duration_ms": 929
+    },
+    {
+      "span_id": "s000000000000005",
+      "run_id": "run-0000000000",
+      "day": "2026-08-01",
+      "model": "claude-haiku-4-5",
+      "total_tokens": 1189,
+      "run_llm_spans": 5,
+      "duration_ms": 457
+    },
+    {
+      "span_id": "s000000000000008",
+      "run_id": "run-0000000000",
+      "day": "2026-08-01",
+      "model": "gpt-5",
+      "total_tokens": 535,
+      "run_llm_spans": 5,
+      "duration_ms": 5273
+    },
+    {
+      "span_id": "s000000000000009",
+      "run_id": "run-0000000000",
+      "day": "2026-08-01",
+      "model": "claude-haiku-4-5",
+      "total_tokens": 11826,
+      "run_llm_spans": 5,
+      "duration_ms": 1745
+    },
+    {
+      "span_id": "s000000000000013",
+      "run_id": "run-0000000001",
+      "day": "2026-08-01",
+      "model": "gemini-3-pro",
+      "total_tokens": 2961,
+      "run_llm_spans": 8,
+      "duration_ms": 2227
+    },
+    {
+      "span_id": "s000000000000014",
+      "run_id": "run-0000000001",
+      "day": "2026-08-01",
+      "model": "mistral-large-3",
+      "total_tokens": 1985,
+      "run_llm_spans": 8,
+      "duration_ms": 242
+    },
+    {
+      "span_id": "s000000000000015",
+      "run_id": "run-0000000001",
+      "day": "2026-08-01",
+      "model": "qwen-3-72b",
+      "total_tokens": 1569,
+      "run_llm_spans": 8,
+      "duration_ms": 1706
+    },
+    {
+      "span_id": "s000000000000016",
+      "run_id": "run-0000000001",
+      "day": "2026-08-01",
+      "model": "claude-sonnet-5",
+      "total_tokens": 2225,
+      "run_llm_spans": 8,
+      "duration_ms": 1088
+    },
+    {
+      "span_id": "s000000000000019",
+      "run_id": "run-0000000001",
+      "day": "2026-08-01",
+      "model": "claude-haiku-4-5",
+      "total_tokens": 3466,
+      "run_llm_spans": 8,
+      "duration_ms": 1481
+    },
+    {
+      "span_id": "s000000000000022",
+      "run_id": "run-0000000001",
+      "day": "2026-08-01",
+      "model": "llama-4-70b",
+      "total_tokens": 873,
+      "run_llm_spans": 8,
+      "duration_ms": 2704
+    },
+    {
+      "span_id": "s000000000000023",
+      "run_id": "run-0000000001",
+      "day": "2026-08-01",
+      "model": "llama-4-70b",
+      "total_tokens": 2446,
+      "run_llm_spans": 8,
+      "duration_ms": 3613
+    },
+    {
+      "span_id": "s000000000000027",
+      "run_id": "run-0000000002",
+      "day": "2026-08-01",
+      "model": "gpt-5",
+      "total_tokens": 962,
+      "run_llm_spans": 4,
+      "duration_ms": 1625
+    },
+    {
+      "span_id": "s000000000000029",
+      "run_id": "run-0000000002",
+      "day": "2026-08-01",
+      "model": "gpt-5",
+      "total_tokens": 1946,
+      "run_llm_spans": 4,
+      "duration_ms": 2503
+    },
+    {
+      "span_id": "s000000000000031",
+      "run_id": "run-0000000002",
+      "day": "2026-08-01",
+      "model": "qwen-3-72b",
+      "total_tokens": 3721,
+      "run_llm_spans": 4,
+      "duration_ms": 285
+    },
+    {
+      "span_id": "s000000000000034",
+      "run_id": "run-0000000002",
+      "day": "2026-08-01",
+      "model": "claude-haiku-4-5",
+      "total_tokens": 2287,
+      "run_llm_spans": 4,
+      "duration_ms": 1300
+    },
+    {
+      "span_id": "s000000000000036",
+      "run_id": "run-0000000003",
+      "day": "2026-08-01",
+      "model": "gemini-3-pro",
+      "total_tokens": 1372,
+      "run_llm_spans": 3,
+      "duration_ms": 826
+    },
+    {
+      "span_id": "s000000000000045",
+      "run_id": "run-0000000003",
+      "day": "2026-08-01",
+      "model": "gpt-5",
+      "total_tokens": 2163,
+      "run_llm_spans": 3,
+      "duration_ms": 1002
+    },
+    {
+      "span_id": "s000000000000046",
+      "run_id": "run-0000000003",
+      "day": "2026-08-01",
+      "model": "gemini-3-pro",
+      "total_tokens": 4173,
+      "run_llm_spans": 3,
+      "duration_ms": 529
+    },
+    {
+      "span_id": "s000000000000048",
+      "run_id": "run-0000000004",
+      "day": "2026-08-01",
+      "model": "gpt-5",
+      "total_tokens": 526,
+      "run_llm_spans": 5,
+      "duration_ms": 776
+    },
+    {
+      "span_id": "s000000000000051",
+      "run_id": "run-0000000004",
+      "day": "2026-08-01",
+      "model": "claude-haiku-4-5",
+      "total_tokens": 1570,
+      "run_llm_spans": 5,
+      "duration_ms": 1994
+    },
+    {
+      "span_id": "s000000000000053",
+      "run_id": "run-0000000004",
+      "day": "2026-08-01",
+      "model": "gpt-5",
+      "total_tokens": 1529,
+      "run_llm_spans": 5,
+      "duration_ms": 3663
+    },
+    {
+      "span_id": "s000000000000055",
+      "run_id": "run-0000000004",
+      "day": "2026-08-01",
+      "model": "claude-sonnet-5",
+      "total_tokens": 1324,
+      "run_llm_spans": 5,
+      "duration_ms": 3236
+    },
+    {
+      "span_id": "s000000000000056",
+      "run_id": "run-0000000004",
+      "day": "2026-08-01",
+      "model": "claude-sonnet-5",
+      "total_tokens": 926,
+      "run_llm_spans": 5,
+      "duration_ms": 1324
+    },
+    {
+      "span_id": "s000000000000061",
+      "run_id": "run-0000000005",
+      "day": "2026-08-01",
+      "model": "mistral-large-3",
+      "total_tokens": 4397,
+      "run_llm_spans": 8,
+      "duration_ms": 1383
+    },
+    {
+      "span_id": "s000000000000063",
+      "run_id": "run-0000000005",
+      "day": "2026-08-01",
+      "model": "gpt-5",
+      "total_tokens": 2350,
+      "run_llm_spans": 8,
+      "duration_ms": 253
+    },
+    {
+      "span_id": "s000000000000064",
+      "run_id": "run-0000000005",
+      "day": "2026-08-01",
+      "model": "claude-sonnet-5",
+      "total_tokens": 4071,
+      "run_llm_spans": 8,
+      "duration_ms": 1677
+    },
+    {
+      "span_id": "s000000000000065",
+      "run_id": "run-0000000005",
+      "day": "2026-08-01",
+      "model": "claude-sonnet-5",
+      "total_tokens": 1192,
+      "run_llm_spans": 8,
+      "duration_ms": 723
+    },
+    {
+      "span_id": "s000000000000066",
+      "run_id": "run-0000000005",
+      "day": "2026-08-01",
+      "model": "llama-4-70b",
+      "total_tokens": 2711,
+      "run_llm_spans": 8,
+      "duration_ms": 1492
+    },
+    {
+      "span_id": "s000000000000067",
+      "run_id": "run-0000000005",
+      "day": "2026-08-01",
+      "model": "llama-4-70b",
+      "total_tokens": 606,
+      "run_llm_spans": 8,
+      "duration_ms": 1251
+    },
+    {
+      "span_id": "s000000000000070",
+      "run_id": "run-0000000005",
+      "day": "2026-08-01",
+      "model": "llama-4-70b",
+      "total_tokens": 1988,
+      "run_llm_spans": 8,
+      "duration_ms": 1883
+    },
+    {
+      "span_id": "s000000000000071",
+      "run_id": "run-0000000005",
+      "day": "2026-08-01",
+      "model": "gemini-3-pro",
+      "total_tokens": 1496,
+      "run_llm_spans": 8,
+      "duration_ms": 1515
+    },
+    {
+      "span_id": "s000000000000072",
+      "run_id": "run-0000000006",
+      "day": "2026-08-01",
+      "model": "claude-haiku-4-5",
+      "total_tokens": 392,
+      "run_llm_spans": 6,
+      "duration_ms": 1052
+    },
+    {
+      "span_id": "s000000000000075",
+      "run_id": "run-0000000006",
+      "day": "2026-08-01",
+      "model": "claude-sonnet-5",
+      "total_tokens": 2959,
+      "run_llm_spans": 6,
+      "duration_ms": 650
+    },
+    {
+      "span_id": "s000000000000076",
+      "run_id": "run-0000000006",
+      "day": "2026-08-01",
+      "model": "claude-haiku-4-5",
+      "total_tokens": 1704,
+      "run_llm_spans": 6,
+      "duration_ms": 728
+    },
+    {
+      "span_id": "s000000000000077",
+      "run_id": "run-0000000006",
+      "day": "2026-08-01",
+      "model": "claude-sonnet-5",
+      "total_tokens": 1052,
+      "run_llm_spans": 6,
+      "duration_ms": 4976
+    },
+    {
+      "span_id": "s000000000000079",
+      "run_id": "run-0000000006",
+      "day": "2026-08-01",
+      "model": "claude-haiku-4-5",
+      "total_tokens": 1365,
+      "run_llm_spans": 6,
+      "duration_ms": 201
+    },
+    {
+      "span_id": "s000000000000080",
+      "run_id": "run-0000000006",
+      "day": "2026-08-01",
+      "model": "qwen-3-72b",
+      "total_tokens": 1774,
+      "run_llm_spans": 6,
+      "duration_ms": 1161
+    },
+    {
+      "span_id": "s000000000000084",
+      "run_id": "run-0000000007",
+      "day": "2026-08-01",
+      "model": "llama-4-70b",
+      "total_tokens": 1230,
+      "run_llm_spans": 5,
+      "duration_ms": 2357
+    },
+    {
+      "span_id": "s000000000000089",
+      "run_id": "run-0000000007",
+      "day": "2026-08-01",
+      "model": "claude-haiku-4-5",
+      "total_tokens": 2126,
+      "run_llm_spans": 5,
+      "duration_ms": 3470
+    },
+    {
+      "span_id": "s000000000000091",
+      "run_id": "run-0000000007",
+      "day": "2026-08-01",
+      "model": "llama-4-70b",
+      "total_tokens": 3677,
+      "run_llm_spans": 5,
+      "duration_ms": 1177
+    },
+    {
+      "span_id": "s000000000000092",
+      "run_id": "run-0000000007",
+      "day": "2026-08-01",
+      "model": "gpt-5",
+      "total_tokens": 1281,
+      "run_llm_spans": 5,
+      "duration_ms": 2448
+    },
+    {
+      "span_id": "s000000000000095",
+      "run_id": "run-0000000007",
+      "day": "2026-08-01",
+      "model": "text-embedding-3",
+      "total_tokens": 2212,
+      "run_llm_spans": 5,
+      "duration_ms": 1071
+    },
+    {
+      "span_id": "s000000000000098",
+      "run_id": "run-0000000008",
+      "day": "2026-08-01",
+      "model": "gpt-5",
+      "total_tokens": 2334,
+      "run_llm_spans": 6,
+      "duration_ms": 1565
+    },
+    {
+      "span_id": "s000000000000101",
+      "run_id": "run-0000000008",
+      "day": "2026-08-01",
+      "model": "claude-sonnet-5",
+      "total_tokens": 4373,
+      "run_llm_spans": 6,
+      "duration_ms": 710
+    },
+    {
+      "span_id": "s000000000000102",
+      "run_id": "run-0000000008",
+      "day": "2026-08-01",
+      "model": "gemini-3-pro",
+      "total_tokens": 1856,
+      "run_llm_spans": 6,
+      "duration_ms": 278
+    },
+    {
+      "span_id": "s000000000000103",
+      "run_id": "run-0000000008",
+      "day": "2026-08-01",
+      "model": "gemini-3-pro",
+      "total_tokens": 3062,
+      "run_llm_spans": 6,
+      "duration_ms": 771
+    },
+    {
+      "span_id": "s000000000000105",
+      "run_id": "run-0000000008",
+      "day": "2026-08-01",
+      "model": "llama-4-70b",
+      "total_tokens": 2723,
+      "run_llm_spans": 6,
+      "duration_ms": 690
+    },
+    {
+      "span_id": "s000000000000107",
+      "run_id": "run-0000000008",
+      "day": "2026-08-01",
+      "model": "qwen-3-72b",
+      "total_tokens": 1712,
+      "run_llm_spans": 6,
+      "duration_ms": 2086
+    },
+    {
+      "span_id": "s000000000000110",
+      "run_id": "run-0000000009",
+      "day": "2026-08-01",
+      "model": "text-embedding-3",
+      "total_tokens": 660,
+      "run_llm_spans": 2,
+      "duration_ms": 3745
+    },
+    {
+      "span_id": "s000000000000119",
+      "run_id": "run-0000000009",
+      "day": "2026-08-01",
+      "model": "claude-sonnet-5",
+      "total_tokens": 1937,
+      "run_llm_spans": 2,
+      "duration_ms": 927
+    },
+    {
+      "span_id": "s000000000000123",
+      "run_id": "run-0000000010",
+      "day": "2026-08-01",
+      "model": "claude-haiku-4-5",
+      "total_tokens": 1716,
+      "run_llm_spans": 4,
+      "duration_ms": 284
+    },
+    {
+      "span_id": "s000000000000127",
+      "run_id": "run-0000000010",
+      "day": "2026-08-01",
+      "model": "gemini-3-pro",
+      "total_tokens": 4631,
+      "run_llm_spans": 4,
+      "duration_ms": 282
+    },
+    {
+      "span_id": "s000000000000128",
+      "run_id": "run-0000000010",
+      "day": "2026-08-01",
+      "model": "claude-sonnet-5",
+      "total_tokens": 909,
+      "run_llm_spans": 4,
+      "duration_ms": 510
+    },
+    {
+      "span_id": "s000000000000131",
+      "run_id": "run-0000000010",
+      "day": "2026-08-01",
+      "model": "mistral-large-3",
+      "total_tokens": 1948,
+      "run_llm_spans": 4,
+      "duration_ms": 1210
+    },
+    {
+      "span_id": "s000000000000132",
+      "run_id": "run-0000000011",
+      "day": "2026-08-01",
+      "model": "gpt-5",
+      "total_tokens": 5225,
+      "run_llm_spans": 7,
+      "duration_ms": 1206
+    },
+    {
+      "span_id": "s000000000000133",
+      "run_id": "run-0000000011",
+      "day": "2026-08-01",
+      "model": "gpt-5",
+      "total_tokens": 2381,
+      "run_llm_spans": 7,
+      "duration_ms": 1344
+    },
+    {
+      "span_id": "s000000000000137",
+      "run_id": "run-0000000011",
+      "day": "2026-08-01",
+      "model": "claude-haiku-4-5",
+      "total_tokens": 1053,
+      "run_llm_spans": 7,
+      "duration_ms": 900
+    },
+    {
+      "span_id": "s000000000000138",
+      "run_id": "run-0000000011",
+      "day": "2026-08-01",
+      "model": "claude-sonnet-5",
+      "total_tokens": 1358,
+      "run_llm_spans": 7,
+      "duration_ms": 1389
+    },
+    {
+      "span_id": "s000000000000140",
+      "run_id": "run-0000000011",
+      "day": "2026-08-01",
+      "model": "gemini-3-pro",
+      "total_tokens": 552,
+      "run_llm_spans": 7,
+      "duration_ms": 337
+    },
+    {
+      "span_id": "s000000000000142",
+      "run_id": "run-0000000011",
+      "day": "2026-08-01",
+      "model": "claude-sonnet-5",
+      "total_tokens": 2709,
+      "run_llm_spans": 7,
+      "duration_ms": 2310
+    },
+    {
+      "span_id": "s000000000000143",
+      "run_id": "run-0000000011",
+      "day": "2026-08-01",
+      "model": "gpt-5",
+      "total_tokens": 1488,
+      "run_llm_spans": 7,
+      "duration_ms": 1394
+    },
+    {
+      "span_id": "s000000000000147",
+      "run_id": "run-0000000012",
+      "day": "2026-08-01",
+      "model": "claude-sonnet-5",
+      "total_tokens": 6922,
+      "run_llm_spans": 5,
+      "duration_ms": 3158
+    },
+    {
+      "span_id": "s000000000000151",
+      "run_id": "run-0000000012",
+      "day": "2026-08-01",
+      "model": "claude-haiku-4-5",
+      "total_tokens": 1201,
+      "run_llm_spans": 5,
+      "duration_ms": 432
+    },
+    {
+      "span_id": "s000000000000153",
+      "run_id": "run-0000000012",
+      "day": "2026-08-01",
+      "model": "claude-sonnet-5",
+      "total_tokens": 1816,
+      "run_llm_spans": 5,
+      "duration_ms": 1364
+    },
+    {
+      "span_id": "s000000000000154",
+      "run_id": "run-0000000012",
+      "day": "2026-08-01",
+      "model": "claude-sonnet-5",
+      "total_tokens": 607,
+      "run_llm_spans": 5,
+      "duration_ms": 381
+    },
+    {
+      "span_id": "s000000000000155",
+      "run_id": "run-0000000012",
+      "day": "2026-08-01",
+      "model": "claude-sonnet-5",
+      "total_tokens": 8647,
+      "run_llm_spans": 5,
+      "duration_ms": 531
+    },
+    {
+      "span_id": "s000000000000158",
+      "run_id": "run-0000000013",
+      "day": "2026-08-01",
+      "model": "gemini-3-pro",
+      "total_tokens": 1343,
+      "run_llm_spans": 5,
+      "duration_ms": 1832
+    },
+    {
+      "span_id": "s000000000000159",
+      "run_id": "run-0000000013",
+      "day": "2026-08-01",
+      "model": "text-embedding-3",
+      "total_tokens": 983,
+      "run_llm_spans": 5,
+      "duration_ms": 695
+    },
+    {
+      "span_id": "s000000000000163",
+      "run_id": "run-0000000013",
+      "day": "2026-08-01",
+      "model": "claude-haiku-4-5",
+      "total_tokens": 2580,
+      "run_llm_spans": 5,
+      "duration_ms": 3848
+    },
+    {
+      "span_id": "s000000000000165",
+      "run_id": "run-0000000013",
+      "day": "2026-08-01",
+      "model": "gpt-5",
+      "total_tokens": 6006,
+      "run_llm_spans": 5,
+      "duration_ms": 673
+    },
+    {
+      "span_id": "s000000000000166",
+      "run_id": "run-0000000013",
+      "day": "2026-08-01",
+      "model": "mistral-large-3",
+      "total_tokens": 1838,
+      "run_llm_spans": 5,
+      "duration_ms": 3736
+    },
+    {
+      "span_id": "s000000000000168",
+      "run_id": "run-0000000014",
+      "day": "2026-08-01",
+      "model": "claude-sonnet-5",
+      "total_tokens": 4258,
+      "run_llm_spans": 8,
+      "duration_ms": 1282
+    },
+    {
+      "span_id": "s000000000000169",
+      "run_id": "run-0000000014",
+      "day": "2026-08-01",
+      "model": "qwen-3-72b",
+      "total_tokens": 3732,
+      "run_llm_spans": 8,
+      "duration_ms": 1019
+    },
+    {
+      "span_id": "s000000000000171",
+      "run_id": "run-0000000014",
+      "day": "2026-08-01",
+      "model": "claude-haiku-4-5",
+      "total_tokens": 2060,
+      "run_llm_spans": 8,
+      "duration_ms": 9026
+    },
+    {
+      "span_id": "s000000000000172",
+      "run_id": "run-0000000014",
+      "day": "2026-08-01",
+      "model": "claude-sonnet-5",
+      "total_tokens": 1340,
+      "run_llm_spans": 8,
+      "duration_ms": 764
+    },
+    {
+      "span_id": "s000000000000173",
+      "run_id": "run-0000000014",
+      "day": "2026-08-01",
+      "model": "mistral-large-3",
+      "total_tokens": 8406,
+      "run_llm_spans": 8,
+      "duration_ms": 760
+    },
+    {
+      "span_id": "s000000000000174",
+      "run_id": "run-0000000014",
+      "day": "2026-08-01",
+      "model": "qwen-3-72b",
+      "total_tokens": 4713,
+      "run_llm_spans": 8,
+      "duration_ms": 3414
+    },
+    {
+      "span_id": "s000000000000175",
+      "run_id": "run-0000000014",
+      "day": "2026-08-01",
+      "model": "gemini-3-pro",
+      "total_tokens": 2011,
+      "run_llm_spans": 8,
+      "duration_ms": 832
+    },
+    {
+      "span_id": "s000000000000179",
+      "run_id": "run-0000000014",
+      "day": "2026-08-01",
+      "model": "claude-sonnet-5",
+      "total_tokens": 1140,
+      "run_llm_spans": 8,
+      "duration_ms": 1243
+    },
+    {
+      "span_id": "s000000000000181",
+      "run_id": "run-0000000015",
+      "day": "2026-08-01",
+      "model": "gpt-5",
+      "total_tokens": 1152,
+      "run_llm_spans": 1,
+      "duration_ms": 1328
+    },
+    {
+      "span_id": "s000000000000197",
+      "run_id": "run-0000000016",
+      "day": "2026-08-01",
+      "model": "claude-sonnet-5",
+      "total_tokens": 1834,
+      "run_llm_spans": 3,
+      "duration_ms": 2287
+    },
+    {
+      "span_id": "s000000000000198",
+      "run_id": "run-0000000016",
+      "day": "2026-08-01",
+      "model": "gpt-5",
+      "total_tokens": 882,
+      "run_llm_spans": 3,
+      "duration_ms": 2641
+    },
+    {
+      "span_id": "s000000000000200",
+      "run_id": "run-0000000016",
+      "day": "2026-08-01",
+      "model": "gpt-5",
+      "total_tokens": 7027,
+      "run_llm_spans": 3,
+      "duration_ms": 1035
+    },
+    {
+      "span_id": "s000000000000205",
+      "run_id": "run-0000000017",
+      "day": "2026-08-01",
+      "model": "claude-sonnet-5",
+      "total_tokens": 439,
+      "run_llm_spans": 6,
+      "duration_ms": 1362
+    },
+    {
+      "span_id": "s000000000000207",
+      "run_id": "run-0000000017",
+      "day": "2026-08-01",
+      "model": "claude-sonnet-5",
+      "total_tokens": 1948,
+      "run_llm_spans": 6,
+      "duration_ms": 380
+    },
+    {
+      "span_id": "s000000000000208",
+      "run_id": "run-0000000017",
+      "day": "2026-08-01",
+      "model": "llama-4-70b",
+      "total_tokens": 3712,
+      "run_llm_spans": 6,
+      "duration_ms": 3202
+    },
+    {
+      "span_id": "s000000000000209",
+      "run_id": "run-0000000017",
+      "day": "2026-08-01",
+      "model": "claude-sonnet-5",
+      "total_tokens": 828,
+      "run_llm_spans": 6,
+      "duration_ms": 1951
+    },
+    {
+      "span_id": "s000000000000214",
+      "run_id": "run-0000000017",
+      "day": "2026-08-01",
+      "model": "claude-haiku-4-5",
+      "total_tokens": 2702,
+      "run_llm_spans": 6,
+      "duration_ms": 865
+    },
+    {
+      "span_id": "s000000000000215",
+      "run_id": "run-0000000017",
+      "day": "2026-08-01",
+      "model": "claude-sonnet-5",
+      "total_tokens": 1151,
+      "run_llm_spans": 6,
+      "duration_ms": 611
+    },
+    {
+      "span_id": "s000000000000216",
+      "run_id": "run-0000000018",
+      "day": "2026-08-01",
+      "model": "gpt-5",
+      "total_tokens": 2756,
+      "run_llm_spans": 5,
+      "duration_ms": 1462
+    },
+    {
+      "span_id": "s000000000000218",
+      "run_id": "run-0000000018",
+      "day": "2026-08-01",
+      "model": "mistral-large-3",
+      "total_tokens": 2964,
+      "run_llm_spans": 5,
+      "duration_ms": 403
+    },
+    {
+      "span_id": "s000000000000221",
+      "run_id": "run-0000000018",
+      "day": "2026-08-01",
+      "model": "claude-haiku-4-5",
+      "total_tokens": 747,
+      "run_llm_spans": 5,
+      "duration_ms": 4905
+    },
+    {
+      "span_id": "s000000000000225",
+      "run_id": "run-0000000018",
+      "day": "2026-08-01",
+      "model": "mistral-large-3",
+      "total_tokens": 1793,
+      "run_llm_spans": 5,
+      "duration_ms": 1378
+    },
+    {
+      "span_id": "s000000000000226",
+      "run_id": "run-0000000018",
+      "day": "2026-08-01",
+      "model": "llama-4-70b",
+      "total_tokens": 4580,
+      "run_llm_spans": 5,
+      "duration_ms": 6309
+    },
+    {
+      "span_id": "s000000000000229",
+      "run_id": "run-0000000019",
+      "day": "2026-08-01",
+      "model": "claude-sonnet-5",
+      "total_tokens": 1258,
+      "run_llm_spans": 5,
+      "duration_ms": 251
+    },
+    {
+      "span_id": "s000000000000230",
+      "run_id": "run-0000000019",
+      "day": "2026-08-01",
+      "model": "claude-haiku-4-5",
+      "total_tokens": 1349,
+      "run_llm_spans": 5,
+      "duration_ms": 2687
+    },
+    {
+      "span_id": "s000000000000231",
+      "run_id": "run-0000000019",
+      "day": "2026-08-01",
+      "model": "claude-sonnet-5",
+      "total_tokens": 3510,
+      "run_llm_spans": 5,
+      "duration_ms": 742
+    },
+    {
+      "span_id": "s000000000000234",
+      "run_id": "run-0000000019",
+      "day": "2026-08-01",
+      "model": "gemini-3-pro",
+      "total_tokens": 5264,
+      "run_llm_spans": 5,
+      "duration_ms": 494
+    },
+    {
+      "span_id": "s000000000000237",
+      "run_id": "run-0000000019",
+      "day": "2026-08-01",
+      "model": "claude-sonnet-5",
+      "total_tokens": 1600,
+      "run_llm_spans": 5,
+      "duration_ms": 1272
+    }
+  ]
+}

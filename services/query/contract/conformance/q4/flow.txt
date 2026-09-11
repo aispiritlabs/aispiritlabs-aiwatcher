@@ -1,0 +1,15 @@
+data_frame()->read(corpus_spans)
+    ->filter(ref('status')->same(lit('ok'))->and(ref('kind')->same(lit('llm'))))
+    ->join(
+        data_frame()->read(corpus_spans)
+            ->filter(ref('kind')->same(lit('llm')))
+            ->groupBy(ref('run_id'))
+            ->aggregate(count(ref('span_id')->as('run_llm_spans'))),
+        on: join_on(identical(ref('run_id'), ref('run_id'))),
+        type: 'inner'
+    )
+    ->withEntry('day', ref('start')->stringBefore('T'))
+    ->withEntry('total_tokens', ref('input_tokens')->plus(ref('output_tokens')))
+    ->select(ref('span_id'), ref('run_id'), ref('day'), ref('model'), ref('total_tokens'), ref('run_llm_spans'), ref('duration_ms'))
+    ->sortBy(ref('span_id')->asc())
+    ->limit(100)

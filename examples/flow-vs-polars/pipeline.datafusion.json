@@ -1,0 +1,76 @@
+{
+  "name": "curation/flow-vs-polars-datafusion",
+  "description": "One aggregation over the benchmark corpus in DataFusion, the same one in Polars over the same files, and whether they agree — the DataFusion variant of curation/flow-vs-polars. Needs the corpus and a DataFusion deployment: run it under `AIWATCHER_QUERY_ENGINE=datafusion just bench-curation-serve`, on the server, and read the two steps' times in the Workflows waterfall.",
+  "blocks": [
+    {
+      "id": "corpus",
+      "title": "Benchmark corpus",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "spec": {
+        "kind": "source",
+        "dataset": "corpus_spans",
+        "arguments": {
+          "format": "csv"
+        }
+      }
+    },
+    {
+      "id": "per-model",
+      "title": "DataFusion: per model",
+      "position": {
+        "x": 300,
+        "y": 0
+      },
+      "spec": {
+        "kind": "transform",
+        "steps": "df.filter(col(\"kind\") == lit(\"llm\"))\n.aggregate(\n    [col(\"model\")],\n    [\n        f.count(col(\"span_id\")).alias(\"spans\"),\n        f.sum(col(\"input_tokens\")).alias(\"input_tokens\"),\n        f.sum(col(\"output_tokens\")).alias(\"output_tokens\"),\n        f.avg(col(\"duration_ms\")).alias(\"avg_duration_ms\"),\n    ],\n)\n.sort(col(\"model\").sort(ascending=True))",
+        "engine": "datafusion"
+      }
+    },
+    {
+      "id": "polars",
+      "title": "Polars: the same query",
+      "position": {
+        "x": 600,
+        "y": 0
+      },
+      "spec": {
+        "kind": "notebook",
+        "notebook": "flow_vs_polars",
+        "params": {
+          "format": "csv",
+          "engine": "datafusion"
+        }
+      }
+    },
+    {
+      "id": "result",
+      "title": "View",
+      "position": {
+        "x": 900,
+        "y": 0
+      },
+      "spec": {
+        "kind": "view",
+        "dataset": "curation/flow-vs-polars-datafusion"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "corpus",
+      "to": "per-model"
+    },
+    {
+      "from": "per-model",
+      "to": "polars"
+    },
+    {
+      "from": "polars",
+      "to": "result"
+    }
+  ]
+}

@@ -5767,6 +5767,10 @@ export type Runtime = typeof Runtime[keyof typeof Runtime];
  */
 export type RuntimeBinding = (QueryStepSpec & {
     runtime: 'flow_php';
+}) | (QueryStepSpec & {
+    runtime: 'datafusion';
+}) | (QueryStepSpec & {
+    runtime: 'duckdb';
 }) | (MarimoStepSpec & {
     runtime: 'marimo';
 }) | (PublishDatasetSpec & {
@@ -5784,6 +5788,8 @@ export type RuntimeBinding = (QueryStepSpec & {
  */
 export const RuntimeKind = {
     FLOW_PHP: 'flow_php',
+    DATAFUSION: 'datafusion',
+    DUCKDB: 'duckdb',
     MARIMO: 'marimo',
     PUBLISH_DATASET: 'publish_dataset',
     PYTHON_TASK: 'python_task',

@@ -36,6 +36,15 @@
         "AIWATCHER_DATA_DIR=\"${TMPDIR:-/tmp}/aiwatcher-bench-data\" AIWATCHER_BENCH_API_PORT=8095 AIWATCHER_BENCH_PANEL_PORT=5180 just bench-curation-serve 1GB"
       ],
       "port": 5180
+    },
+    {
+      "name": "panel-datafusion",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "AIWATCHER_API_URL=\"${AIWATCHER_API_URL:-http://127.0.0.1:18080}\" AIWATCHER_QUERY_URL=\"${AIWATCHER_QUERY_URL:-http://127.0.0.1:18081}\" npm --prefix apps/panel run dev -- --port 5181 --strictPort"
+      ],
+      "port": 5181
     }
   ]
 }

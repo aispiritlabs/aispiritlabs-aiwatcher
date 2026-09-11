@@ -1231,6 +1231,8 @@ fn runtime_from(value: String) -> crate::RuntimeKind {
     use crate::RuntimeKind;
     match value.as_str() {
         "flow_php" => RuntimeKind::FlowPhp,
+        "datafusion" => RuntimeKind::DataFusion,
+        "duckdb" => RuntimeKind::DuckDb,
         "marimo" => RuntimeKind::Marimo,
         "publish_dataset" => RuntimeKind::PublishDataset,
         "python_task" => RuntimeKind::PythonTask,

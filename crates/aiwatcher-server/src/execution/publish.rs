@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use aiwatcher_api::state::AppState;
-use aiwatcher_datasets::{PublishDatasetRequest, Registry as DatasetRegistry};
+use aiwatcher_datasets::{PublishDatasetRequest, QueryEngine, Registry as DatasetRegistry};
 use aiwatcher_execution::{
     ActivityCommand, ActivityContext, ActivityError, ActivityExecutor, ActivityResult,
     ExecutionPlan, ExecutorRegistry, FailureClass, RuntimeBinding, RuntimeKind,
@@ -87,16 +87,17 @@ impl ActivityExecutor for PublishExecutor {
             .map(|row| row.keys().cloned().collect())
             .unwrap_or_default();
 
+        let (pipeline, engine) = query_of(&context.plan, &command.key.step_id);
         let published = self
             .datasets
             .publish(PublishDatasetRequest {
                 name: spec.dataset.clone(),
                 description: String::new(),
                 recipe: None,
-                pipeline: script_of(&context.plan, &command.key.step_id),
-                // The only query binding `script_of` reads today is Flow's; the
-                // other two engines' steps name theirs when they compile.
-                engine: aiwatcher_datasets::QueryEngine::Flow,
+                pipeline,
+                // Beside the text, because a DataFusion script read later
+                // without its engine is ambiguous. Omitted when it is Flow.
+                engine,
                 columns,
                 items: rows,
                 // Where the rows came from, in the words a reader of the
@@ -131,28 +132,31 @@ impl ActivityExecutor for PublishExecutor {
     }
 }
 
-/// The query that produced the rows this step publishes.
+/// The query that produced the rows this step publishes, and its engine.
 ///
-/// Walks back through the plan's edges to the nearest Flow step. In a
-/// Flow-only chain there is exactly one and it is the step before; the walk
-/// is what keeps that true once a notebook sits between them, where the script
-/// alone no longer describes the execution and `produced_by` is what does.
-fn script_of(plan: &ExecutionPlan, from: &str) -> String {
+/// Walks back through the plan's edges to the nearest query step. In a chain
+/// of queries there is exactly one and it is the step before; the walk is what
+/// keeps that true once a notebook sits between them, where the script alone no
+/// longer describes the execution and `produced_by` is what does.
+fn query_of(plan: &ExecutionPlan, from: &str) -> (String, QueryEngine) {
     let mut seen = std::collections::BTreeSet::new();
     let mut frontier = vec![from.to_owned()];
     while let Some(step_id) = frontier.pop() {
         if !seen.insert(step_id.clone()) {
             continue;
         }
-        if let Some(RuntimeBinding::FlowPhp(spec)) = plan.step(&step_id).map(|step| &step.runtime) {
-            return spec.script.clone();
+        if let Some((engine, spec)) = plan.step(&step_id).and_then(|step| step.runtime.query()) {
+            return (spec.script.clone(), engine);
         }
         frontier.extend(plan.parents_of(&step_id).iter().map(|id| (*id).to_owned()));
     }
-    // A chain with no Flow step in it at all. The registry demands a non-empty
-    // script, and saying which plan produced the rows is more use than a
-    // refusal nobody can act on.
-    format!("-- produced by the plan {}", plan.plan_id)
+    // A chain with no query step in it at all. The registry demands a
+    // non-empty script, and saying which plan produced the rows is more use
+    // than a refusal nobody can act on.
+    (
+        format!("-- produced by the plan {}", plan.plan_id),
+        QueryEngine::Flow,
+    )
 }
 
 /// A registry refusal, as the class that decides whether to retry.
@@ -179,7 +183,7 @@ mod tests {
 
     use aiwatcher_execution::plan::{
         CachePolicy, DefinitionKind, DefinitionRevision, FlowSourceRef, FlowStepSpec, InputBinding,
-        PlanEdge, PlanStep, PublishDatasetSpec, RetryPolicy,
+        PlanEdge, PlanStep, PublishDatasetSpec, QueryStepSpec, RetryPolicy,
     };
 
     use super::*;
@@ -212,6 +216,38 @@ mod tests {
         })
     }
 
+    fn datafusion(script: &str) -> RuntimeBinding {
+        RuntimeBinding::DataFusion(QueryStepSpec {
+            script: script.to_owned(),
+            source: FlowSourceRef::default(),
+            blocks: Vec::new(),
+        })
+    }
+
+    #[test]
+    fn a_version_names_the_engine_its_query_ran_on() {
+        // A DataFusion script read months later without its engine is text in
+        // an unnamed language; the version says which.
+        let script = "df = read(\"hub_rows\")\ndf";
+        let plan = ExecutionPlan::seal(
+            DefinitionKind::CurationPipeline,
+            "pii".to_owned(),
+            DefinitionRevision("ab".repeat(32)),
+            vec![
+                step("read", datafusion(script), Vec::new()),
+                step("write", publish(), Vec::new()),
+            ],
+            vec![PlanEdge {
+                from: "read".to_owned(),
+                to: "write".to_owned(),
+            }],
+        );
+        assert_eq!(
+            query_of(&plan, "write"),
+            (script.to_owned(), QueryEngine::DataFusion)
+        );
+    }
+
     #[test]
     fn a_published_version_names_the_query_that_produced_its_rows() {
         let plan = ExecutionPlan::seal(
@@ -234,7 +270,7 @@ mod tests {
                 to: "write".to_owned(),
             }],
         );
-        assert_eq!(script_of(&plan, "write"), "data_frame()->read(hub_rows)");
+        assert_eq!(query_of(&plan, "write").0, "data_frame()->read(hub_rows)");
     }
 
     #[test]
@@ -271,7 +307,7 @@ mod tests {
                 },
             ],
         );
-        assert_eq!(script_of(&plan, "write"), "data_frame()->read(hub_rows)");
+        assert_eq!(query_of(&plan, "write").0, "data_frame()->read(hub_rows)");
     }
 
     #[test]
@@ -285,6 +321,10 @@ mod tests {
             vec![step("write", publish(), Vec::new())],
             Vec::new(),
         );
-        assert!(script_of(&plan, "write").contains(&plan.plan_id.to_string()));
+        assert!(
+            query_of(&plan, "write")
+                .0
+                .contains(&plan.plan_id.to_string())
+        );
     }
 }

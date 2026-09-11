@@ -1,7 +1,7 @@
 # ADR_0014: Flow executes curation; the Rust registry versions its scripts and outputs
 
 - **Status**: accepted; browser-mediated persistence superseded by ADR_0025 for
-  managed runs
+  managed runs; the engine amended by ADR_0028 (below)
 - **Date**: 2026-08-31
 
 The recipe, the versioned script and the content-addressed dataset version
@@ -89,3 +89,16 @@ artifact joins it.
 publishing is the wrong transport. Flow should then write a staged artifact and
 ask the Rust registry to commit its manifest, while preserving the same recipe
 and content identities.
+
+## Amendment, 2026-09-11: curation runs on the deployment's engine (ADR_0028)
+
+*Flow executes curation* now reads *the deployed query engine executes curation* —
+Flow, DataFusion or DuckDB, one per deployment ([ADR_0028](ADR_0028_QUERY_ENGINES.md)).
+A recipe and a dataset version name the engine their script was written for, omitted
+when it is Flow, so every recipe revision and dataset version saved before keeps its
+identity. A version's `engine` joins its identity only when it is not Flow, because a
+DataFusion script read months later without its engine is text in an unnamed language.
+
+The rest stands: the Rust registry versions scripts and outputs, a version is capped at
+1 000 rows, and a truncated execution is refused as a version. Answers over that bound —
+Parquet between steps and sharded versions — are outside ADR_0028 on purpose.

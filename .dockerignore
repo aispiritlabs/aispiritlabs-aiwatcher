@@ -5,6 +5,10 @@ apps/panel/node_modules/
 apps/panel/dist/
 sdk/typescript/node_modules/
 .data/
+# Every service's own: a benchmark corpus is gigabytes, and a local virtualenv is
+# the wrong platform's wheels. No image copies either.
+**/.data/
+**/.venv/
 .git/
 docs/
 *.md

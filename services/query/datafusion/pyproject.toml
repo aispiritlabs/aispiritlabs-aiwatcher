@@ -1,0 +1,20 @@
+[project]
+name = "aiwatcher-query-datafusion"
+version = "0.1.0"
+description = "The DataFusion query engine: a query is DataFusion's Python API, served on the six /query routes."
+requires-python = ">=3.14"
+license = "Apache-2.0"
+# DataFusion at the line the benchmark measured — 280 MiB peak through this binding
+# over the 5 GB corpus — and nothing else: everything around the engine is the
+# contract's.
+dependencies = ["aiwatcher-query", "datafusion>=54,<55"]
+
+[tool.uv.sources]
+aiwatcher-query = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["query_datafusion"]

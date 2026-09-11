@@ -1,0 +1,76 @@
+{
+  "name": "curation/flow-vs-polars-duckdb",
+  "description": "One aggregation over the benchmark corpus in DuckDB, the same one in Polars over the same files, and whether they agree — the DuckDB variant of curation/flow-vs-polars. Needs the corpus and a DuckDB deployment: run it under `AIWATCHER_QUERY_ENGINE=duckdb just bench-curation-serve`, on the server, and read the two steps' times in the Workflows waterfall.",
+  "blocks": [
+    {
+      "id": "corpus",
+      "title": "Benchmark corpus",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "spec": {
+        "kind": "source",
+        "dataset": "corpus_spans",
+        "arguments": {
+          "format": "csv"
+        }
+      }
+    },
+    {
+      "id": "per-model",
+      "title": "DuckDB: per model",
+      "position": {
+        "x": 300,
+        "y": 0
+      },
+      "spec": {
+        "kind": "transform",
+        "steps": "df.filter(ColumnExpression(\"kind\") == ConstantExpression(\"llm\"))\n.aggregate(\n    [\n        ColumnExpression(\"model\"),\n        FunctionExpression(\"count\", ColumnExpression(\"span_id\")).alias(\"spans\"),\n        FunctionExpression(\"sum\", ColumnExpression(\"input_tokens\")).alias(\"input_tokens\"),\n        FunctionExpression(\"sum\", ColumnExpression(\"output_tokens\")).alias(\"output_tokens\"),\n        FunctionExpression(\"avg\", ColumnExpression(\"duration_ms\")).alias(\"avg_duration_ms\"),\n    ],\n    \"model\",\n)\n.sort(ColumnExpression(\"model\").asc())",
+        "engine": "duckdb"
+      }
+    },
+    {
+      "id": "polars",
+      "title": "Polars: the same query",
+      "position": {
+        "x": 600,
+        "y": 0
+      },
+      "spec": {
+        "kind": "notebook",
+        "notebook": "flow_vs_polars",
+        "params": {
+          "format": "csv",
+          "engine": "duckdb"
+        }
+      }
+    },
+    {
+      "id": "result",
+      "title": "View",
+      "position": {
+        "x": 900,
+        "y": 0
+      },
+      "spec": {
+        "kind": "view",
+        "dataset": "curation/flow-vs-polars-duckdb"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "corpus",
+      "to": "per-model"
+    },
+    {
+      "from": "per-model",
+      "to": "polars"
+    },
+    {
+      "from": "polars",
+      "to": "result"
+    }
+  ]
+}

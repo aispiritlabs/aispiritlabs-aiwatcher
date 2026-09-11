@@ -303,7 +303,9 @@ fn declaration(plan: &ExecutionPlan) -> Value {
 /// waterfall separates "we waited on somebody else" from "we were busy".
 fn node_kind(runtime: &RuntimeBinding) -> &'static str {
     match runtime {
-        RuntimeBinding::FlowPhp(_) => "retriever",
+        RuntimeBinding::FlowPhp(_) | RuntimeBinding::DataFusion(_) | RuntimeBinding::DuckDb(_) => {
+            "retriever"
+        }
         RuntimeBinding::Marimo(_) | RuntimeBinding::PythonTask(_) => "chain",
         RuntimeBinding::PublishDataset(_) => "chain",
         RuntimeBinding::HumanInput(_) => "guardrail",

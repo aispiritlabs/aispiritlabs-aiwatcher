@@ -88,5 +88,7 @@ detected-*.yaml
 # block and the notebook that reads them. Both are scratch.
 services/ml_pipeline/.venv/
 services/ml_pipeline/.data/
+services/query/.venv/
+services/query/contract/conformance/.data/
 # and the source of every notebook revision a run may still pin.
 services/ml_pipeline/.revisions/

@@ -415,6 +415,9 @@ later as "holds no object".
 # `query.engine` runs — so switching a release is one value, and the server
 # follows it.
 - { name: AIWATCHER_QUERY_ENGINE, value: {{ (include "aiwatcher.query" . | fromYaml).engine | quote }} }
+# A step's clock, which the engine's ceiling is derived a minute above
+# (`aiwatcher.queryTimeoutSeconds`), so the step's is the one that stops first.
+- { name: AIWATCHER_QUERY_STEP_TIMEOUT_SECONDS, value: {{ .Values.execution.queryStepTimeoutSeconds | int | quote }} }
 {{- with .Values.execution.mlPipelineUrl }}
 - { name: AIWATCHER_ML_PIPELINE_URL, value: {{ . | quote }} }
 {{- end }}
@@ -471,4 +474,29 @@ values` and every CI log that renders the release.
 {{- fail "auth.mode is \"oidc\" but auth.oidc.secret.name is empty. It holds the client secret and the session signing key, both of which are passwords, so they come from a Secret rather than from values." -}}
 {{- end -}}
 {{- $name -}}
+{{- end -}}
+
+{{/*
+The query engine's ceiling on one query, or nothing for the engine's own default
+(30 s, sized for a person at the Query tab). `query.timeoutSeconds` when set; with
+managed execution on, a minute above `execution.queryStepTimeoutSeconds`, so a
+long step is stopped by its own clock and retried, rather than refused by the
+engine with a 422 that fails it outright. AW-3's spec asks that the engine's
+ceiling stay above the step's, and the two live in two processes, so this is the
+one place that can keep them in order — which is why a `query.timeoutSeconds`
+at or below the step's is refused rather than rendered. `int` throughout, because
+a value from `--set` is a float64 and one of a million renders as `1e+06`.
+*/}}
+{{- define "aiwatcher.queryTimeoutSeconds" -}}
+{{- $own := int .Values.query.timeoutSeconds -}}
+{{- $step := int .Values.execution.queryStepTimeoutSeconds -}}
+{{- $managed := ne .Values.execution.store "none" -}}
+{{- if and $managed (gt $own 0) (le $own $step) -}}
+{{- fail (printf "query.timeoutSeconds is %d, at or below execution.queryStepTimeoutSeconds (%d). The engine would refuse a long step with a 422 before the step's own clock stops it, which fails the step outright instead of retrying it. Raise query.timeoutSeconds above the step's, or leave it at 0 to derive it a minute above." $own $step) -}}
+{{- end -}}
+{{- if gt $own 0 -}}
+{{ $own }}
+{{- else if $managed -}}
+{{ add $step 60 }}
+{{- end -}}
 {{- end -}}

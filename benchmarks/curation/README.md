@@ -224,13 +224,84 @@ Three limits had to move for a corpus on disk, and each is configuration:
 
 | limit | default | set by |
 |---|---|---|
-| a managed Flow step's timeout | 300 s | `AIWATCHER_FLOW_STEP_TIMEOUT_SECONDS` |
-| the Flow service's own ceiling (CPU time) | 30 s | `AIWATCHER_FLOW_TIMEOUT_SECONDS` — above the step's: PHP stopping first is a 500, which a reactor retries |
+| a managed query step's timeout | 300 s | `AIWATCHER_QUERY_STEP_TIMEOUT_SECONDS` |
+| the query service's own ceiling (CPU time) | 30 s | `AIWATCHER_QUERY_TIMEOUT_SECONDS` — above the step's: PHP stopping first is a 500, which a reactor retries |
 | a notebook subprocess | 120 s | `AIWATCHER_ML_PIPELINE_TIMEOUT` |
 
 A managed Flow step still returns at most 1 000 rows, so q3 and q4 cannot go
 through one; and a reactor renews no lease while it waits, so beside a second
 reactor a Flow step longer than five minutes can be taken over.
+
+### The DataFusion variant
+
+`curation/flow-vs-polars-datafusion` is the same chain with its transform written
+in DataFusion's Python API (AW-3), and it runs where
+`AIWATCHER_QUERY_ENGINE=datafusion`: `AIWATCHER_QUERY_ENGINE=datafusion just
+bench-curation-serve 1GB`, then `just bench-curation-run`, which asks the engine's
+`/query/healthz` which variant to start. On the same 1 GB corpus, as the workflow
+fold reports it:
+
+| step | engine | took |
+|---|---|---|
+| `corpus` (+ `per-model`) | DataFusion: one query over the CSV, in the query service's child | **0.85 s** — Flow's is 95.2 s above |
+| `polars` | the notebook: Polars over the same files, then the comparison | 1.52 s — Polars' own query 0.47 s |
+| `result` | publish the comparison as a dataset version | 0.04 s |
+
+All eight models agreed, the means to the sixth decimal. The Flow variant, started
+on the same deployment, is a 422 naming its block, `flow` and `datafusion`, and no
+run is created.
+
+Through the service alone — q2 posted to `/query/query` over the 5 GB corpus, peak
+RSS sampled every 20 ms, so each peak is a lower bound:
+
+| corpus | admission | took | service | fork server | query child |
+|---|---|---|---|---|---|
+| CSV, 5.0 GiB | open | 6.64 s | 74 MiB | 67 MiB | 129 MiB |
+| CSV, 5.0 GiB | strict | 6.47 s | 74 MiB | 67 MiB | 129 MiB |
+| Parquet, 0.4 GiB (`formats/spans.parquet`) | open | 0.35 s | 74 MiB | 67 MiB | 228 MiB |
+| Parquet, 0.4 GiB | strict | 0.30 s | 74 MiB | 67 MiB | 234 MiB |
+
+Admission costs nothing measurable: `strict` is one walk over the query's syntax
+tree before the same child runs it. The service never holds a query's rows — its
+74 MiB is the interpreter, the routes and DataFusion's import — and a query's memory
+is its child's, returned when the child exits. Every figure is inside the 512 MiB
+the spec asks for and the 1 GiB the chart allows.
+
+### The DuckDB variant
+
+`curation/flow-vs-polars-duckdb` is the same chain with its transform written in
+DuckDB's relational Python API (AW-3), and it runs where
+`AIWATCHER_QUERY_ENGINE=duckdb`: `AIWATCHER_QUERY_ENGINE=duckdb just
+bench-curation-serve 1GB`, then `just bench-curation-run`. On the same 1 GB corpus,
+as the workflow fold reports it:
+
+| step | engine | took |
+|---|---|---|
+| `corpus` (+ `per-model`) | DuckDB: one query over the CSV, in the query service's child | **0.89 s** — Flow's is 95.2 s above, DataFusion's 0.85 s |
+| `polars` | the notebook: Polars over the same files, then the comparison | 1.68 s — Polars' own query 0.42 s |
+| `result` | publish the comparison as a dataset version | 0.03 s |
+
+All eight models agreed. The Flow variant, started on the same deployment, is a 422
+naming its block, `flow` and `duckdb`, and no run is created.
+
+Through the service alone, measured as DataFusion was — q2 over the 5 GB corpus,
+peak RSS sampled every 20 ms, two runs of each, so a range. The Parquet file is
+hard-linked into a corpus root rather than symlinked: a DuckDB session is locked to
+its corpus root, and DuckDB resolves a link before it compares the path.
+
+| corpus | admission | took | service | fork server | query child |
+|---|---|---|---|---|---|
+| CSV, 5.0 GiB | open | 2.19–2.66 s | 82 MiB | 75 MiB | 321–439 MiB |
+| CSV, 5.0 GiB | strict | 2.31–2.84 s | 82 MiB | 75 MiB | 259–472 MiB |
+| Parquet, 0.4 GiB (`formats/spans.parquet`) | open | 0.31–0.48 s | 82 MiB | 75 MiB | 126 MiB |
+| Parquet, 0.4 GiB | strict | 0.31–0.40 s | 82 MiB | 75 MiB | 123–126 MiB |
+
+Parquet is DuckDB's lean case, as the standalone benchmark found (227 MiB there):
+about half of DataFusion's child over the same file. Over CSV it is the faster of
+the two through the service, and its child's peak moves between runs — 259 to 472
+MiB across four, whichever the admission — where DataFusion's held at 129 MiB; the
+standalone benchmark measured 677 MiB for the same file. Every figure is inside the
+512 MiB the spec asks for and the 1 GiB the chart allows.
 
 ## What this decided
 

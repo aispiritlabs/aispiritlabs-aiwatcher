@@ -13,9 +13,6 @@
 //! `duckdb.rs` is which kind of step each claims and which binding it reads.
 //! This module is the rest.
 //!
-//! The script is compiled in Rust (`aiwatcher_execution::compile`); the panel's
-//! direct calls to the engine are the ad-hoc path and are labelled as such.
-//!
 //! The address is `AIWATCHER_QUERY_URL`, and [`executors`] wires it to the one
 //! engine `AIWATCHER_QUERY_ENGINE` names: a DataFusion deployment holds no Flow
 //! client and so never claims a `flow_php` attempt. A step carries a script and
@@ -47,6 +44,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::artifacts::{Artifacts, Receipt, Rows, preview};
+use super::datafusion::DataFusionExecutor;
+use super::duckdb::DuckDbExecutor;
 use super::flow::FlowExecutor;
 use crate::config::Config;
 
@@ -65,15 +64,10 @@ pub fn executors(config: &Config, artifacts: Option<&Artifacts>) -> ExecutorRegi
     let built: Result<Arc<dyn ActivityExecutor>, reqwest::Error> = match config.query_engine {
         QueryEngine::Flow => FlowExecutor::new(endpoint.clone(), artifacts.clone())
             .map(|executor| Arc::new(executor) as Arc<dyn ActivityExecutor>),
-        QueryEngine::DataFusion | QueryEngine::DuckDb => {
-            // AW-3 phases 3 and 4. Until an engine has an executor, a
-            // deployment naming it claims no query step — never a Flow one.
-            tracing::error!(
-                %endpoint, engine,
-                "this build has no executor for the query engine; no query step will be claimed"
-            );
-            return registry;
-        }
+        QueryEngine::DataFusion => DataFusionExecutor::new(endpoint.clone(), artifacts.clone())
+            .map(|executor| Arc::new(executor) as Arc<dyn ActivityExecutor>),
+        QueryEngine::DuckDb => DuckDbExecutor::new(endpoint.clone(), artifacts.clone())
+            .map(|executor| Arc::new(executor) as Arc<dyn ActivityExecutor>),
     };
     match built {
         Ok(executor) => {
@@ -611,16 +605,25 @@ mod tests {
             [RuntimeKind::FlowPhp]
         );
 
-        // A DataFusion deployment never claims a `flow_php` attempt, whatever
-        // address it was given.
+        // A DataFusion deployment claims DataFusion steps and never a
+        // `flow_php` attempt, whatever address it was given.
         let datafusion = Config {
             query_engine: QueryEngine::DataFusion,
             ..flow
         };
-        assert!(
-            !executors(&datafusion, Some(&artifacts))
-                .runtimes()
-                .contains(&RuntimeKind::FlowPhp)
+        assert_eq!(
+            executors(&datafusion, Some(&artifacts)).runtimes(),
+            [RuntimeKind::DataFusion]
+        );
+
+        // And a DuckDB one claims DuckDB steps: one engine per deployment.
+        let duckdb = Config {
+            query_engine: QueryEngine::DuckDb,
+            ..datafusion
+        };
+        assert_eq!(
+            executors(&duckdb, Some(&artifacts)).runtimes(),
+            [RuntimeKind::DuckDb]
         );
 
         // And no address is no executor: absence is a working state.

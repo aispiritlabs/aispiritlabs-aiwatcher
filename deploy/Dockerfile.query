@@ -4,8 +4,7 @@
 #
 # A deployment runs one engine, named by AIWATCHER_QUERY_ENGINE (AW-3), and the
 # target is named the same way, so Docker Compose picks the image with the same
-# variable the server reads. `flow` is here; `datafusion` and `duckdb` arrive
-# with their engines.
+# variable the server reads: `flow`, `datafusion` and `duckdb`.
 #
 # An image of its own rather than a stage of the panel's: the two are deployed
 # together but they are not the same lifecycle. The panel is static files and
@@ -37,6 +36,10 @@
 
 ARG FLOW_PHP_VERSION=8.4
 ARG FLOW_BASE_IMAGE=dunglas/frankenphp:1-php${FLOW_PHP_VERSION}-alpine
+ARG PYTHON_VERSION=3.14
+# The uv CI pins (.github/workflows/ci.yml), so the resolver that reads the lock
+# in an image is the one that wrote it.
+ARG UV_VERSION=0.12.7
 
 # ── Flow 1: the base every other Flow stage resolves against ─────────────────
 FROM ${FLOW_BASE_IMAGE} AS flow-base
@@ -165,3 +168,98 @@ ENV SERVER_NAME=:8081 \
 
 USER 10001
 EXPOSE 8081
+
+# ── The Python engines (AW-3) ────────────────────────────────────────────────
+#
+# One uv workspace (`services/query`), one lock, and an image per engine that
+# installs one member of it: `--package aiwatcher-query-<engine>` puts the
+# contract and that engine in the environment and leaves the other engine's
+# wheel out, which is the reason the engines are members rather than one
+# package. The interpreter is the official image's, at the floor the workspace
+# declares; uv is copied in at the version CI pins.
+FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
+
+FROM python:${PYTHON_VERSION}-slim AS python-base
+
+# ── Python 1: every manifest and the lock ────────────────────────────────────
+FROM python-base AS python-build
+COPY --from=uv /uv /usr/local/bin/uv
+# Bytecode compiled here, because the root filesystem is read-only at run time;
+# files copied rather than linked, because the environment leaves this stage;
+# and the image's interpreter rather than one uv would download.
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=never \
+    UV_PROJECT_ENVIRONMENT=/app/.venv
+WORKDIR /src
+# Manifests first, so a source-only change reuses the dependency layer. Every
+# member's, because `--frozen` reads a lock that names them all; a lock that
+# disagrees with a manifest fails the build rather than resolving afresh.
+COPY services/query/pyproject.toml services/query/uv.lock ./
+COPY services/query/contract/pyproject.toml contract/
+COPY services/query/datafusion/pyproject.toml datafusion/
+COPY services/query/duckdb/pyproject.toml duckdb/
+
+# ── Python 2: DataFusion's environment ───────────────────────────────────────
+FROM python-build AS datafusion-build
+RUN uv sync --frozen --no-dev --no-install-workspace --package aiwatcher-query-datafusion
+COPY services/query/contract/aiwatcher_query contract/aiwatcher_query
+COPY services/query/datafusion/query_datafusion datafusion/query_datafusion
+# Not editable: the image carries the environment and none of `/src`.
+RUN uv sync --frozen --no-dev --no-editable --package aiwatcher-query-datafusion
+
+# ── Python 3: what ships, DataFusion ─────────────────────────────────────────
+FROM python-base AS datafusion
+
+COPY --from=datafusion-build /app/.venv /app/.venv
+# The catalog every engine serves, where the configuration below says. The
+# package's own default is the repository's contract directory, which an
+# installed wheel is not beside.
+COPY services/query/contract/catalog.json /contract/catalog.json
+RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin query
+
+# Every interface rather than the service's 127.0.0.1: in a pod the port is
+# reached over the pod network, and what admits only the panel and the server
+# is the chart's NetworkPolicy, not the bind address. Off a cluster, run
+# `just query-serve`, which keeps the localhost default.
+ENV PATH=/app/.venv/bin:$PATH \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    AIWATCHER_QUERY_HOST=0.0.0.0 \
+    AIWATCHER_QUERY_PORT=8081 \
+    AIWATCHER_QUERY_CATALOG=/contract/catalog.json \
+    AIWATCHER_URL=http://aiwatcher-server:8080
+
+USER 10001
+EXPOSE 8081
+CMD ["python", "-m", "query_datafusion"]
+
+# ── Python 4: DuckDB's environment ───────────────────────────────────────────
+FROM python-build AS duckdb-build
+RUN uv sync --frozen --no-dev --no-install-workspace --package aiwatcher-query-duckdb
+COPY services/query/contract/aiwatcher_query contract/aiwatcher_query
+COPY services/query/duckdb/query_duckdb duckdb/query_duckdb
+RUN uv sync --frozen --no-dev --no-editable --package aiwatcher-query-duckdb
+
+# ── Python 5: what ships, DuckDB ─────────────────────────────────────────────
+#
+# DataFusion's image with DuckDB's environment. DuckDB spills to `.tmp` under
+# the working directory, which for a query is its child's scratch directory in
+# /tmp — the tmpfs the chart mounts — so the read-only root is never written.
+FROM python-base AS duckdb
+
+COPY --from=duckdb-build /app/.venv /app/.venv
+COPY services/query/contract/catalog.json /contract/catalog.json
+RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin query
+
+ENV PATH=/app/.venv/bin:$PATH \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    AIWATCHER_QUERY_HOST=0.0.0.0 \
+    AIWATCHER_QUERY_PORT=8081 \
+    AIWATCHER_QUERY_CATALOG=/contract/catalog.json \
+    AIWATCHER_URL=http://aiwatcher-server:8080
+
+USER 10001
+EXPOSE 8081
+CMD ["python", "-m", "query_duckdb"]

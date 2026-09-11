@@ -1,0 +1,84 @@
+{
+  "name": "curation/titanic-features-duckdb",
+  "description": "Read the Titanic training split, recode sex and the title in the name, then let a notebook fill a missing age from its status group and size the family. Written for DuckDB (AW-3): it runs where AIWATCHER_QUERY_ENGINE=duckdb.",
+  "blocks": [
+    {
+      "id": "corpus",
+      "title": "Hugging Face",
+      "position": {
+        "x": 0,
+        "y": 0
+      },
+      "spec": {
+        "kind": "source",
+        "dataset": "hub_rows",
+        "arguments": {
+          "dataset": "phihung/titanic",
+          "split": "train",
+          "limit": "100"
+        }
+      }
+    },
+    {
+      "id": "shape",
+      "title": "DuckDB: features",
+      "position": {
+        "x": 300,
+        "y": 0
+      },
+      "spec": {
+        "kind": "transform",
+        "steps": "df.select(\n    ColumnExpression(\"row\", \"PassengerId\").alias(\"passenger_id\"),\n    ColumnExpression(\"row\", \"Name\").alias(\"name\"),\n    ColumnExpression(\"row\", \"Sex\").alias(\"sex\"),\n    ColumnExpression(\"row\", \"Age\").alias(\"age\"),\n    ColumnExpression(\"row\", \"Pclass\").alias(\"pclass\"),\n    ColumnExpression(\"row\", \"SibSp\").alias(\"sib_sp\"),\n    ColumnExpression(\"row\", \"Parch\").alias(\"parch\"),\n    ColumnExpression(\"row\", \"Fare\").alias(\"fare\"),\n    ColumnExpression(\"row\", \"Cabin\").alias(\"cabin\"),\n    ColumnExpression(\"row\", \"Survived\").alias(\"survived\"),\n)\n.project(\n    StarExpression(),\n    CaseExpression(ColumnExpression(\"sex\") == ConstantExpression(\"female\"), ConstantExpression(1))\n    .otherwise(ConstantExpression(0))\n    .alias(\"sex_code\"),\n    FunctionExpression(\n        \"regexp_replace\",\n        ColumnExpression(\"name\"),\n        ConstantExpression(r\"^[^,]*,\\s*([^.]+)\\..*$\"),\n        ConstantExpression(r\"\\1\"),\n    ).alias(\"title\"),\n    CaseExpression(ColumnExpression(\"survived\") == ConstantExpression(1), ConstantExpression(\"survived\"))\n    .otherwise(ConstantExpression(\"died\"))\n    .alias(\"outcome\"),\n    CaseExpression(ColumnExpression(\"cabin\").isnull(), ConstantExpression(\"unknown\"))\n    .otherwise(\n        FunctionExpression(\n            \"regexp_replace\",\n            ColumnExpression(\"cabin\"),\n            ConstantExpression(\"^(.).*$\"),\n            ConstantExpression(r\"\\1\"),\n        )\n    )\n    .alias(\"deck\"),\n)\n.project(\n    StarExpression(),\n    CaseExpression(ColumnExpression(\"title\") == ConstantExpression(\"Mr\"), ConstantExpression(\"mr\"))\n    .when(ColumnExpression(\"title\") == ConstantExpression(\"Master\"), ConstantExpression(\"master\"))\n    .when(\n        ColumnExpression(\"title\").isin(ConstantExpression(\"Mrs\"), ConstantExpression(\"Mme\")),\n        ConstantExpression(\"mrs\"),\n    )\n    .when(\n        ColumnExpression(\"title\").isin(\n            ConstantExpression(\"Miss\"), ConstantExpression(\"Mlle\"), ConstantExpression(\"Ms\")\n        ),\n        ConstantExpression(\"miss\"),\n    )\n    .otherwise(ConstantExpression(\"rare\"))\n    .alias(\"status\"),\n)\n.select(\n    ColumnExpression(\"passenger_id\"), ColumnExpression(\"name\"), ColumnExpression(\"sex\"),\n    ColumnExpression(\"sex_code\"), ColumnExpression(\"title\"), ColumnExpression(\"status\"),\n    ColumnExpression(\"age\"), ColumnExpression(\"pclass\"), ColumnExpression(\"sib_sp\"),\n    ColumnExpression(\"parch\"), ColumnExpression(\"fare\"), ColumnExpression(\"deck\"),\n    ColumnExpression(\"survived\"), ColumnExpression(\"outcome\"),\n)",
+        "engine": "duckdb"
+      }
+    },
+    {
+      "id": "features",
+      "title": "Python processing",
+      "position": {
+        "x": 600,
+        "y": 0
+      },
+      "spec": {
+        "kind": "notebook",
+        "notebook": "titanic_features",
+        "params": {
+          "age_column": "age",
+          "status_column": "status",
+          "siblings_column": "sib_sp",
+          "parents_column": "parch",
+          "fare_column": "fare",
+          "age_strategy": "status_median",
+          "child_max": 12,
+          "senior_min": 60
+        }
+      }
+    },
+    {
+      "id": "result",
+      "title": "View",
+      "position": {
+        "x": 900,
+        "y": 0
+      },
+      "spec": {
+        "kind": "view",
+        "dataset": "curation/titanic-features-duckdb"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "corpus",
+      "to": "shape"
+    },
+    {
+      "from": "shape",
+      "to": "features"
+    },
+    {
+      "from": "features",
+      "to": "result"
+    }
+  ]
+}

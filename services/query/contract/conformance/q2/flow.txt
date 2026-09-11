@@ -1,0 +1,10 @@
+data_frame()->read(corpus_spans)
+    ->filter(ref('kind')->same(lit('llm')))
+    ->groupBy(ref('model'))
+    ->aggregate(
+        count(ref('span_id')->as('spans')),
+        sum(ref('input_tokens')->as('input_tokens')),
+        sum(ref('output_tokens')->as('output_tokens')),
+        average(ref('duration_ms')->as('avg_duration_ms'))
+    )
+    ->sortBy(ref('model')->asc())

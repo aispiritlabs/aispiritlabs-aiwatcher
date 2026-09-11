@@ -22,7 +22,7 @@ already run:
 |---|---|---|
 | aiwatcher server (projector + API) | always | — |
 | panel (nginx + the React build) | always | — |
-| Flow query service (the panel's Query tab) | **off** | — |
+| Query engine — Flow, DataFusion or DuckDB (the Query tab, recipes, a chain's query step) | **off** | — |
 | OpenTelemetry Collector | installed | detected, but **never** reused automatically |
 | VictoriaTraces | installed | yes → `mode: external` |
 | VictoriaMetrics | installed | yes → `mode: external` |
@@ -157,7 +157,8 @@ chain that runs on the server: the browser asks for a run and may then close.
 execution:
   store: postgres
   retentionDays: 90
-  flowUrl: ""                # derived from flow.enabled
+  queryUrl: ""               # derived from query.enabled
+  queryStepTimeoutSeconds: 300  # the engine's ceiling follows it, a minute above
   mlPipelineUrl: ""          # no default; see below
 
 postgresql:
@@ -206,9 +207,10 @@ most likely to already have other clients, so
 `networkPolicy.allowEgressToExternalWorkflowStore` is worth turning on only when
 `detect-stack.py` says something already fences it.
 
-**Where the steps run.** A managed `flow_php` step is the *server* reaching the
-Flow service directly, not the panel proxying a person's query — so
-`flow.enabled: true` is enough and the chart opens that path in the policy for
+**Where the steps run.** A managed query step — `flow_php`, `datafusion` or
+`duckdb`, whichever `query.engine` names — is the *server* reaching the query
+engine directly, not the panel proxying a person's query — so
+`query.enabled: true` is enough and the chart opens that path in the policy for
 you. A `marimo` notebook step has no default and no template: that service runs
 notebook code with no sandbox and no authentication, so it is a development
 surface bound to localhost, and a cluster that wants notebook blocks has to name
@@ -220,7 +222,7 @@ absence is a working state, not a failure.
 
 `execution.splitRoles: true` renders a second Deployment. `serve` holds the API,
 the read model and the object store; `work` holds the outbox and the reactors
-and is the only role that opens a socket to Flow, a notebook runtime or an
+and is the only role that opens a socket to the query engine, a notebook runtime or an
 orchestrator — so the pod behind the ingress stops holding those addresses and
 those credentials. It has no Service, no ingress path and no probes, because it
 opens no listener at all.
@@ -467,40 +469,68 @@ and the other three observability views do not know the difference.
 ```bash
 helm upgrade aiwatcher deploy/helm/aiwatcher -n planner \
   -f deploy/environments/planner.yaml \
-  --set flow.enabled=true
+  --set query.enabled=true \
+  --set query.engine=duckdb        # or flow (the default), or datafusion
 ```
 
 or, through the install script:
 
 ```bash
-AIWATCHER_FLOW=true AIWATCHER_FLOW_IMAGE=ghcr.io/you/aiwatcher-flow \
+AIWATCHER_QUERY=true AIWATCHER_QUERY_ENGINE=duckdb \
+  AIWATCHER_QUERY_IMAGE=ghcr.io/you/aiwatcher-query-duckdb \
   deploy/scripts/install.sh -e planner
 ```
 
-What that gets you is `services/query/flow` — a PHP service that answers the questions
-the explorer tree was not built for, by parsing a Flow DataFrame pipeline and
-running it against the API's own routes. ADR_0008 has the reasoning and the
-measurements; what matters at install time is three things.
+What that gets you is one of `services/query`'s engines, answering the questions
+the explorer tree was not built for against the API's own routes: Flow, a Flow
+DataFrame pipeline parsed and never executed (ADR_0008); or DataFusion or DuckDB,
+each queried in its own Python API (ADR_0028) and measured over a 5 GB corpus at
+a few seconds where Flow took minutes. One engine per release, and switching is
+`query.engine` alone: the server's `AIWATCHER_QUERY_ENGINE` follows it, so a
+pipeline written for another engine is shown and refused rather than run. Switch
+between runs, not during one: an attempt of the old engine still pending or
+retrying is one nothing claims any more, and it waits until its run is
+cancelled. What matters at install time is four things.
 
 **It is not part of the binary.** aiwatcher has no idea it exists. The panel
-calls it directly, `flow.enabled` only decides what the panel's nginx proxies
-`/flow` to, and turning it off later leaves nothing behind.
+calls it directly, `query.enabled` only decides what the panel's nginx proxies
+`/query` to (and `/flow`, for one release), and turning it off later leaves
+nothing behind.
 
-**It has no authentication of its own.** The parser bounds what a query can
-*say*, not who may ask, so the only thing that may reach it is the panel's
-nginx — which puts it behind whatever guards the panel's host. The chart keeps
-it that way: a ClusterIP Service, no ingress path, and with
-`networkPolicy.enabled` a policy that admits the panel's pod and nothing else.
-Do not give it an Ingress of its own.
+**It has no authentication of its own.** Flow's parser, and a Python engine's
+`strict` admission, bound what a query can *say*, not who may ask — and under
+`open` admission, the default, a DataFusion or DuckDB query is Python that runs,
+in a child process with ceilings and without credentials. So the only things
+that may reach it are the panel's nginx and the server's reactor, which puts it
+behind whatever guards the panel's host. The chart keeps it that way: a
+ClusterIP Service, no ingress path, and with `networkPolicy.enabled` a policy
+that admits those two pods and an egress policy that lets the engine reach the
+server and DNS and nothing else. Do not give it an Ingress of its own, and set
+`query.admission: strict` where the panel is shared with people who should not
+run code in the cluster.
+
+**Its memory is the engine's.** Flow's limit is 384 MiB; DataFusion's and
+DuckDB's are 1 GiB, which the 5 GB benchmark corpus stayed inside with room to
+spare (`benchmarks/curation/README.md`).
+
+**Its clock is a pair.** A managed query step runs for
+`execution.queryStepTimeoutSeconds` (300 by default), and the engine's own ceiling,
+`query.timeoutSeconds`, is derived a minute above it whenever managed execution is
+on — so a long step is stopped by its own clock and retried, rather than refused by
+the engine. With managed execution off the engine keeps its default of 30 seconds,
+which is what a person at the Query tab waits on. Raise the step's for a corpus on
+disk; set `query.timeoutSeconds` only to override the derivation.
 
 **A query only sees the retention window.** It reads the read model through the
 API, so a result is as current as the runs list and no older than it. The panel
 says so above every table, because a partial result read as "all time" is worse
 than no result.
 
-If the service already runs somewhere this chart does not manage, point at it
-with `panel.flowUpstream` instead and leave `flow.enabled` off. That field wins
-over `flow.enabled` when both are set.
+If the engine already runs somewhere this chart does not manage, point at it
+with `panel.queryUpstream` instead and leave `query.enabled` off. That field wins
+over `query.enabled` when both are set. The names these values had while Flow was
+the only engine — `flow.*`, `panel.flowUpstream`, `execution.flowUrl` — are still
+read for one release, and the new name wins where both are set.
 
 ## The pipeline engine
 
@@ -639,7 +669,7 @@ With a `.env` at the repo root, the script takes no arguments. Copy
 AIWATCHER_ENV=planner
 AIWATCHER_IMAGE=ghcr.io/<owner>/aiwatcher
 AIWATCHER_PANEL_IMAGE=ghcr.io/<owner>/aiwatcher-panel
-AIWATCHER_FLOW_IMAGE=ghcr.io/<owner>/aiwatcher-flow
+AIWATCHER_QUERY_IMAGE=ghcr.io/<owner>/aiwatcher-flow
 AIWATCHER_IMAGE_PULL_SECRET=ghcr-pull
 ```
 
@@ -705,9 +735,13 @@ REGISTRY=ghcr.io/you TAG=v0.1.0 deploy/scripts/build-images.sh --push
 ```
 
 Three images: `aiwatcher` (the Rust binary), `aiwatcher-panel` (nginx plus the
-built React app) and `aiwatcher-flow` (the optional query service). Separate, so
-a panel change does not rebuild the Rust binary and neither rebuilds the PHP.
-`--no-flow` skips the third for a deployment that will not run it.
+built React app) and `aiwatcher-flow` (Flow, the default query engine). Separate,
+so a panel change does not rebuild the Rust binary and neither rebuilds the PHP.
+`--no-flow` skips the third for a deployment that will not run it. The other two
+engines are targets of the same `deploy/Dockerfile.query` — `docker build -f
+deploy/Dockerfile.query --target datafusion .`, or `--target duckdb` — and the
+release workflow publishes all three: `aiwatcher-flow`,
+`aiwatcher-query-datafusion` and `aiwatcher-query-duckdb`.
 
 The panel's nginx config is not in its image — it comes from a ConfigMap in the
 chart, because it has to name the server's Service, which is a deployment-time

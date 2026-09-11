@@ -1,0 +1,60 @@
+{
+  "rows": [
+    {
+      "model": "claude-haiku-4-5",
+      "spans": 505,
+      "input_tokens": 979521,
+      "output_tokens": 186917,
+      "avg_duration_ms": 1656.09
+    },
+    {
+      "model": "claude-sonnet-5",
+      "spans": 560,
+      "input_tokens": 1287454,
+      "output_tokens": 224484,
+      "avg_duration_ms": 1623.17
+    },
+    {
+      "model": "gemini-3-pro",
+      "spans": 294,
+      "input_tokens": 632648,
+      "output_tokens": 106795,
+      "avg_duration_ms": 1591.31
+    },
+    {
+      "model": "gpt-5",
+      "spans": 407,
+      "input_tokens": 800126,
+      "output_tokens": 168517,
+      "avg_duration_ms": 1769.02
+    },
+    {
+      "model": "llama-4-70b",
+      "spans": 259,
+      "input_tokens": 606918,
+      "output_tokens": 102421,
+      "avg_duration_ms": 1567.11
+    },
+    {
+      "model": "mistral-large-3",
+      "spans": 192,
+      "input_tokens": 441737,
+      "output_tokens": 66218,
+      "avg_duration_ms": 1696.26
+    },
+    {
+      "model": "qwen-3-72b",
+      "spans": 163,
+      "input_tokens": 275585,
+      "output_tokens": 67607,
+      "avg_duration_ms": 1708.15
+    },
+    {
+      "model": "text-embedding-3",
+      "spans": 104,
+      "input_tokens": 206457,
+      "output_tokens": 0,
+      "avg_duration_ms": 1827.14
+    }
+  ]
+}

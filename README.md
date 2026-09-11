@@ -132,7 +132,7 @@ wired to it.
 | S3 (RustFS) for the registries | `just rustfs-up && just run-rustfs` |
 | PostgreSQL for managed runs | `just postgres-up && just run-postgres` |
 | DuckDB for managed runs, queryable | `just run-duckdb`, then `aiwatcher sql` |
-| Flow PHP for queries and curation | `just flow-serve` |
+| A query engine for queries and curation — Flow, DataFusion or DuckDB | `just query-serve` |
 | marimo notebook blocks | `just ml-pipeline-serve` |
 | Kaggle / Hugging Face search | `just run-hubs` |
 | SSO against authentik | `just authentik-up && just run-sso` |

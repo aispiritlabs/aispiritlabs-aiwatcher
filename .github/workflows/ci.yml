@@ -160,31 +160,69 @@ jobs:
       - name: storage contract against a real database
         run: just test-postgres
 
-  flow:
-    name: Flow query service
+  # One entry per engine a deployment may choose (AW-3): the engine's own checks,
+  # then the conformance suite against it — the same four questions, Flow's rows.
+  query:
+    name: Query engine (${{ matrix.engine }})
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [flow, datafusion, duckdb]
+    env:
+      AIWATCHER_QUERY_ENGINE: ${{ matrix.engine }}
     steps:
       - uses: actions/checkout@v7
       - uses: shivammathur/setup-php@v2
+        if: matrix.engine == 'flow'
         with:
           # The floor `composer.json` declares. Testing on it rather than on
           # the newest means a syntax somebody's 8.5 accepts does not ship
           # broken to an 8.3.
           php-version: '8.3'
           coverage: none
+      # Every entry needs uv: the conformance runner is the Python contract's,
+      # and its corpus comes from the benchmark's generator.
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          version: '0.12.7'
+          enable-cache: true
+          cache-dependency-glob: services/query/uv.lock
       - uses: extractions/setup-just@v3
 
       - name: install
-        run: just flow-install
+        run: just query-install
 
-      # `just check` covers neither optional service, deliberately: PHP may not
-      # be installed on a machine that only touches the Rust crates. That was a
-      # statement about a *developer's* laptop and it was never one about CI —
-      # a managed `flow_php` step runs through this service, so a break here is
-      # a break in the execution path.
+      # `just check` covers no optional service, deliberately: PHP or a Python
+      # toolchain may not be installed on a machine that only touches the Rust
+      # crates. That was a statement about a *developer's* laptop and it was
+      # never one about CI — a managed query step runs through the engine, so
+      # a break here is a break in the execution path.
       - name: format, lint, tests
-        run: just flow-check
+        run: just query-check
+
+      - name: conformance
+        run: just query-conformance
+
+  query-contract:
+    name: Query contract (Python)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          version: '0.12.7'
+          enable-cache: true
+          cache-dependency-glob: services/query/uv.lock
+      - uses: extractions/setup-just@v3
+
+      # What the Python engines share — the routes, the catalog loader, the
+      # sandbox, strict admission — checked on its own, so a break in it is
+      # found before an engine that stands on it is.
+      - name: ruff, mypy and pytest
+        run: just query-contract-check
 
   notebooks:
     name: Notebook runtime

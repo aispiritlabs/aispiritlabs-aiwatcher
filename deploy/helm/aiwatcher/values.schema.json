@@ -180,6 +180,11 @@
         "replicas": {
           "type": "integer",
           "minimum": 1
+        },
+        "timeoutSeconds": {
+          "description": "The engine's ceiling on one query. 0 derives it a minute above execution.queryStepTimeoutSeconds when managed execution is on.",
+          "type": "integer",
+          "minimum": 0
         }
       }
     },
@@ -237,6 +242,11 @@
         "retentionDays": {
           "type": "integer",
           "minimum": 0
+        },
+        "queryStepTimeoutSeconds": {
+          "description": "How long a managed query step may run, whichever engine runs it.",
+          "type": "integer",
+          "minimum": 1
         }
       }
     },

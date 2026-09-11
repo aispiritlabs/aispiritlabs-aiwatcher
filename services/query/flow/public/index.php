@@ -5,10 +5,9 @@ declare(strict_types=1);
 /**
  * The Flow query service: the first of the query engines (AW-3).
  *
- * Six routes and no framework, because the surface is still deliberately small. The panel
- * talks to this directly rather than through the Rust API: aiwatcher's binary
- * has no idea this exists, which is what lets the service be absent without the
- * rest of the panel noticing (see ADR_0008).
+ * Six routes and no framework. The panel talks to this directly rather than through the Rust
+ * API: aiwatcher's binary has no idea this exists, which is what lets the service be absent
+ * without the rest of the panel noticing (see ADR_0008).
  *
  *   GET  /query/healthz   is the service up, and can it see aiwatcher
  *   GET  /query/datasets  what a query may read, and the columns of each
@@ -23,11 +22,10 @@ declare(strict_types=1);
  * was the only engine, for one release: a server or a panel rolled out on either side of
  * this image still reaches it.
  *
- * The last two are what managed execution needs and all it needs: one field and one
- * route. `execution_id` is
- * `<execution>/<step>/<attempt>`, and what the service remembers about it is that it ran
- * and what the result hashed to — never the rows. ADR 0014 refused this service an S3
- * client and that refusal stands: the rows go to the artifact the *reactor* uploads.
+ * The last two are what managed execution needs, and all it needs. `execution_id` is
+ * `<execution>/<step>/<attempt>`, and what the service remembers about it is that it ran and
+ * what the result hashed to — never the rows. ADR 0014 refused this service an S3 client and
+ * that refusal stands: the rows go to the artifact the *reactor* uploads.
  */
 
 use Aiwatcher\Flow\Dataset\Catalog;

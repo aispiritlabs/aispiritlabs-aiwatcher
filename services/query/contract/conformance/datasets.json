@@ -1,0 +1,572 @@
+{
+  "datasets": [
+    {
+      "name": "runs",
+      "aliases": [
+        "default"
+      ],
+      "grain": "one row per run",
+      "description": "Runs the projector still retains, newest first. The default: it is the grain the explorer tree shows, and the fast one.",
+      "requires_run": false,
+      "parameters": [],
+      "columns": [
+        {
+          "name": "run_id",
+          "type": "string"
+        },
+        {
+          "name": "conversation_id",
+          "type": "string|null"
+        },
+        {
+          "name": "workflow",
+          "type": "string|null"
+        },
+        {
+          "name": "trace_id",
+          "type": "string"
+        },
+        {
+          "name": "status",
+          "type": "string"
+        },
+        {
+          "name": "agents",
+          "type": "list<string>"
+        },
+        {
+          "name": "runtimes",
+          "type": "list<string>"
+        },
+        {
+          "name": "started_at",
+          "type": "string"
+        },
+        {
+          "name": "ended_at",
+          "type": "string|null"
+        },
+        {
+          "name": "duration_ms",
+          "type": "int|null"
+        },
+        {
+          "name": "event_count",
+          "type": "int"
+        },
+        {
+          "name": "llm_calls",
+          "type": "int"
+        },
+        {
+          "name": "tool_calls",
+          "type": "int"
+        },
+        {
+          "name": "input_tokens",
+          "type": "int"
+        },
+        {
+          "name": "output_tokens",
+          "type": "int"
+        },
+        {
+          "name": "cached_tokens",
+          "type": "int"
+        },
+        {
+          "name": "error",
+          "type": "string|null"
+        }
+      ]
+    },
+    {
+      "name": "spans",
+      "aliases": [],
+      "grain": "one row per completed span",
+      "description": "Every retained span, flat. Each row has exactly one agent, model and tool, so this is the dataset to group by any of them.",
+      "requires_run": false,
+      "parameters": [],
+      "columns": [
+        {
+          "name": "run_id",
+          "type": "string"
+        },
+        {
+          "name": "trace_id",
+          "type": "string"
+        },
+        {
+          "name": "span_id",
+          "type": "string"
+        },
+        {
+          "name": "parent_span_id",
+          "type": "string|null"
+        },
+        {
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "name": "kind",
+          "type": "string"
+        },
+        {
+          "name": "start",
+          "type": "string"
+        },
+        {
+          "name": "end",
+          "type": "string"
+        },
+        {
+          "name": "duration_ms",
+          "type": "int"
+        },
+        {
+          "name": "operation",
+          "type": "string|null"
+        },
+        {
+          "name": "agent_id",
+          "type": "string|null"
+        },
+        {
+          "name": "model",
+          "type": "string|null"
+        },
+        {
+          "name": "tool",
+          "type": "string|null"
+        },
+        {
+          "name": "step_type",
+          "type": "string|null"
+        }
+      ]
+    },
+    {
+      "name": "events",
+      "aliases": [],
+      "grain": "one row per recorded event",
+      "description": "The raw log for one run, from the durable log rather than the read model. Needs a run: read(events, run: 'run-1').",
+      "requires_run": true,
+      "parameters": [],
+      "columns": [
+        {
+          "name": "event_type",
+          "type": "string"
+        },
+        {
+          "name": "run_id",
+          "type": "string"
+        },
+        {
+          "name": "conversation_id",
+          "type": "string|null"
+        },
+        {
+          "name": "workflow_id",
+          "type": "string|null"
+        },
+        {
+          "name": "agent_id",
+          "type": "string|null"
+        },
+        {
+          "name": "trace_id",
+          "type": "string"
+        },
+        {
+          "name": "span_id",
+          "type": "string"
+        },
+        {
+          "name": "parent_span_id",
+          "type": "string|null"
+        },
+        {
+          "name": "span_key",
+          "type": "string"
+        },
+        {
+          "name": "sequence",
+          "type": "int|null"
+        },
+        {
+          "name": "stream_position",
+          "type": "int"
+        },
+        {
+          "name": "occurred_at",
+          "type": "string"
+        },
+        {
+          "name": "service",
+          "type": "string"
+        },
+        {
+          "name": "sdk",
+          "type": "string"
+        },
+        {
+          "name": "data",
+          "type": "array"
+        }
+      ]
+    },
+    {
+      "name": "hub_datasets",
+      "aliases": [],
+      "grain": "one row per dataset a hub says it has",
+      "description": "Kaggle and Hugging Face, searched live. A discovery surface, never a licence: every row is usage \"unclear\" unless it matches a corpus whose licence a human read at the original.",
+      "requires_run": false,
+      "parameters": [
+        {
+          "name": "q",
+          "required": false,
+          "description": "Free text. Omitted asks each hub what it considers popular, which is a worse question than any real one.",
+          "values": []
+        },
+        {
+          "name": "hub",
+          "required": false,
+          "description": "One hub instead of both.",
+          "values": [
+            "kaggle",
+            "huggingface"
+          ]
+        },
+        {
+          "name": "limit",
+          "required": false,
+          "description": "Rows per hub, capped at 50 by the API.",
+          "values": []
+        }
+      ],
+      "columns": [
+        {
+          "name": "hub",
+          "type": "string"
+        },
+        {
+          "name": "id",
+          "type": "string"
+        },
+        {
+          "name": "title",
+          "type": "string"
+        },
+        {
+          "name": "owner",
+          "type": "string"
+        },
+        {
+          "name": "url",
+          "type": "string"
+        },
+        {
+          "name": "claimed_license",
+          "type": "string"
+        },
+        {
+          "name": "usage",
+          "type": "string"
+        },
+        {
+          "name": "curated_source",
+          "type": "string|null"
+        },
+        {
+          "name": "downloads",
+          "type": "int|null"
+        },
+        {
+          "name": "likes",
+          "type": "int|null"
+        },
+        {
+          "name": "updated_at",
+          "type": "string"
+        },
+        {
+          "name": "tags",
+          "type": "list<string>"
+        }
+      ]
+    },
+    {
+      "name": "hub_rows",
+      "aliases": [],
+      "grain": "one row of one hub dataset, as the hub sent it",
+      "description": "The contents of one Hugging Face dataset. The search says which corpora exist; this says what is in one — with the corpus's own columns under the corpus's own names. Which column is the picture, what the caption is called and what a family key is built from are decided here, in the query, because they are questions about that corpus.",
+      "requires_run": false,
+      "parameters": [
+        {
+          "name": "dataset",
+          "required": true,
+          "description": "owner/name, exactly as a hub_datasets row addresses it.",
+          "values": []
+        },
+        {
+          "name": "hub",
+          "required": false,
+          "description": "Only Hugging Face serves rows; Kaggle publishes archives and is refused.",
+          "values": [
+            "kaggle",
+            "huggingface"
+          ]
+        },
+        {
+          "name": "config",
+          "required": false,
+          "description": "The dataset configuration. Discovered when absent.",
+          "values": []
+        },
+        {
+          "name": "split",
+          "required": false,
+          "description": "The split to read. Discovered when absent.",
+          "values": []
+        },
+        {
+          "name": "offset",
+          "required": false,
+          "description": "Where in the split to start.",
+          "values": []
+        },
+        {
+          "name": "limit",
+          "required": false,
+          "description": "Total rows to read (1–1000, default 100), fetched in pages of at most 100.",
+          "values": []
+        },
+        {
+          "name": "address",
+          "required": false,
+          "description": "Columns to receive as an address instead of a value, comma-separated. This is where \"which column holds bytes\" is decided, and it is decided here: a hub calling a column binary says it is a byte string, not that it is a picture. Without it every column comes as it came — and a column of base64 pictures is then dropped for its size and named in \"omitted\".",
+          "values": []
+        }
+      ],
+      "columns": [
+        {
+          "name": "row_index",
+          "type": "int"
+        },
+        {
+          "name": "row",
+          "type": "array"
+        },
+        {
+          "name": "omitted",
+          "type": "list<string>"
+        }
+      ]
+    },
+    {
+      "name": "hub_columns",
+      "aliases": [],
+      "grain": "one row per column a hub dataset declares",
+      "description": "What a Hugging Face dataset says its columns are, in its own words. Read this first when writing a hub_rows query: it is where the column names come from, and it is the hub's answer rather than aiwatcher's.",
+      "requires_run": false,
+      "parameters": [
+        {
+          "name": "dataset",
+          "required": true,
+          "description": "owner/name, exactly as a hub_datasets row addresses it.",
+          "values": []
+        },
+        {
+          "name": "config",
+          "required": false,
+          "description": "The dataset configuration. Discovered when absent.",
+          "values": []
+        },
+        {
+          "name": "split",
+          "required": false,
+          "description": "The split to read. Discovered when absent.",
+          "values": []
+        }
+      ],
+      "columns": [
+        {
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "name": "kind",
+          "type": "string"
+        },
+        {
+          "name": "dtype",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "annotation_images",
+      "aliases": [],
+      "grain": "one row per registered image",
+      "description": "What an annotation project already holds. The dataset an import pipeline joins against so a second run of it does not re-register what the first one did.",
+      "requires_run": false,
+      "parameters": [
+        {
+          "name": "project",
+          "required": true,
+          "description": "Which annotation project to read. There is no route without one.",
+          "values": []
+        },
+        {
+          "name": "review",
+          "required": false,
+          "description": "Only images in this review state.",
+          "values": [
+            "draft",
+            "in_review",
+            "accepted",
+            "rejected"
+          ]
+        },
+        {
+          "name": "split",
+          "required": false,
+          "description": "Only one side of the family split.",
+          "values": [
+            "train",
+            "validation",
+            "test"
+          ]
+        }
+      ],
+      "columns": [
+        {
+          "name": "image_id",
+          "type": "string"
+        },
+        {
+          "name": "uri",
+          "type": "string"
+        },
+        {
+          "name": "width",
+          "type": "int"
+        },
+        {
+          "name": "height",
+          "type": "int"
+        },
+        {
+          "name": "group_id",
+          "type": "string"
+        },
+        {
+          "name": "source",
+          "type": "string"
+        },
+        {
+          "name": "review",
+          "type": "string"
+        },
+        {
+          "name": "level",
+          "type": "string|null"
+        }
+      ]
+    },
+    {
+      "name": "corpus_spans",
+      "aliases": [],
+      "grain": "one row per span, from part files on disk",
+      "description": "The benchmark corpus under AIWATCHER_CORPUS_DIR: synthetic spans as CSV or Parquet parts, read by Flow directly rather than through the API. Gigabytes, so a query over all of it takes minutes: run it on the server rather than as a preview.",
+      "requires_run": false,
+      "parameters": [
+        {
+          "name": "format",
+          "required": false,
+          "description": "Which copy to read: the CSV the size is quoted in (the default), or the same rows as Parquet.",
+          "values": [
+            "csv",
+            "parquet"
+          ]
+        }
+      ],
+      "columns": [
+        {
+          "name": "run_id",
+          "type": "string"
+        },
+        {
+          "name": "trace_id",
+          "type": "string"
+        },
+        {
+          "name": "span_id",
+          "type": "string"
+        },
+        {
+          "name": "parent_span_id",
+          "type": "string|null"
+        },
+        {
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "name": "kind",
+          "type": "string"
+        },
+        {
+          "name": "start",
+          "type": "string"
+        },
+        {
+          "name": "end",
+          "type": "string"
+        },
+        {
+          "name": "duration_ms",
+          "type": "int"
+        },
+        {
+          "name": "operation",
+          "type": "string|null"
+        },
+        {
+          "name": "agent_id",
+          "type": "string|null"
+        },
+        {
+          "name": "model",
+          "type": "string|null"
+        },
+        {
+          "name": "tool",
+          "type": "string|null"
+        },
+        {
+          "name": "step_type",
+          "type": "string|null"
+        },
+        {
+          "name": "status",
+          "type": "string"
+        },
+        {
+          "name": "input_tokens",
+          "type": "int|null"
+        },
+        {
+          "name": "output_tokens",
+          "type": "int|null"
+        },
+        {
+          "name": "error",
+          "type": "string|null"
+        }
+      ]
+    }
+  ],
+  "max_rows": 1000
+}

@@ -102,7 +102,9 @@ pub fn cache_key(step: &PlanStep, inputs: &[ArtifactRef]) -> Option<String> {
 /// cacheable-by-accident.
 fn code_digest(runtime: &RuntimeBinding) -> Option<String> {
     match runtime {
-        RuntimeBinding::FlowPhp(spec) => {
+        RuntimeBinding::FlowPhp(spec)
+        | RuntimeBinding::DataFusion(spec)
+        | RuntimeBinding::DuckDb(spec) => {
             // A pinned source *or* a pinned window, and the second only counts
             // because the query service can now read one: `POST /flow/query`
             // takes `window_from`/`window_to` and the API's windowed routes take
@@ -136,7 +138,9 @@ fn code_digest(runtime: &RuntimeBinding) -> Option<String> {
 /// The bounds a windowed source resolved to, when it has any.
 fn resolved_window(runtime: &RuntimeBinding) -> Option<(i64, i64)> {
     match runtime {
-        RuntimeBinding::FlowPhp(spec) => spec.source.window.map(|w| (w.from, w.to)),
+        RuntimeBinding::FlowPhp(spec)
+        | RuntimeBinding::DataFusion(spec)
+        | RuntimeBinding::DuckDb(spec) => spec.source.window.map(|w| (w.from, w.to)),
         _ => None,
     }
 }
@@ -145,7 +149,9 @@ fn parameters(runtime: &RuntimeBinding) -> Value {
     let map: BTreeMap<String, Value> = match runtime {
         RuntimeBinding::Marimo(spec) => spec.params.clone(),
         RuntimeBinding::PythonTask(spec) => spec.params.clone(),
-        RuntimeBinding::FlowPhp(spec) => spec
+        RuntimeBinding::FlowPhp(spec)
+        | RuntimeBinding::DataFusion(spec)
+        | RuntimeBinding::DuckDb(spec) => spec
             .source
             .arguments
             .iter()
@@ -231,6 +237,37 @@ mod tests {
             });
         }
         assert_ne!(cache_key(&morning, &[]), cache_key(&afternoon, &[]));
+    }
+
+    fn on_datafusion(mut step: PlanStep) -> PlanStep {
+        if let RuntimeBinding::FlowPhp(spec) = step.runtime.clone() {
+            step.runtime = RuntimeBinding::DataFusion(spec);
+        }
+        step
+    }
+
+    #[test]
+    fn a_datafusion_step_is_cached_as_a_flow_one_is_under_a_key_of_its_own() {
+        // The same rule — a pinned window, or no key — and the kind in the
+        // material, so one text asked of two engines is never one entry.
+        let pinned = on_datafusion(flow_step(true));
+        assert!(cache_key(&pinned, &[]).is_some());
+        assert_ne!(cache_key(&flow_step(true), &[]), cache_key(&pinned, &[]));
+        assert!(cache_key(&on_datafusion(flow_step(false)), &[]).is_none());
+    }
+
+    #[test]
+    fn a_duckdb_step_is_cached_under_a_key_neither_other_engine_shares() {
+        let mut pinned = flow_step(true);
+        if let RuntimeBinding::FlowPhp(spec) = pinned.runtime.clone() {
+            pinned.runtime = RuntimeBinding::DuckDb(spec);
+        }
+        assert!(cache_key(&pinned, &[]).is_some());
+        assert_ne!(cache_key(&flow_step(true), &[]), cache_key(&pinned, &[]));
+        assert_ne!(
+            cache_key(&on_datafusion(flow_step(true)), &[]),
+            cache_key(&pinned, &[])
+        );
     }
 
     #[test]

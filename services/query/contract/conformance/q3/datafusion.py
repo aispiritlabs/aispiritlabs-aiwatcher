@@ -1,0 +1,9 @@
+read("corpus_spans").aggregate(
+    [col("run_id")],
+    [
+        f.count(col("span_id")).alias("spans"),
+        f.sum(col("input_tokens")).alias("input_tokens"),
+        f.sum(col("output_tokens")).alias("output_tokens"),
+        f.max(col("duration_ms")).alias("max_duration_ms"),
+    ],
+).sort(col("run_id").sort(ascending=True)).limit(100)

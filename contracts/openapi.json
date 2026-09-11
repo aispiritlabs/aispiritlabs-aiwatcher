@@ -19563,6 +19563,52 @@
           {
             "allOf": [
               {
+                "$ref": "#/components/schemas/QueryStepSpec",
+                "description": "One DataFusion query: Python calling DataFusion's DataFrame API (AW-3).\nFlow's spec with another language in `script`, run by another service —\nso a kind of its own, which a claim filter tells apart without the plan."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "runtime"
+                ],
+                "properties": {
+                  "runtime": {
+                    "type": "string",
+                    "enum": [
+                      "datafusion"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "One DataFusion query: Python calling DataFusion's DataFrame API (AW-3).\nFlow's spec with another language in `script`, run by another service —\nso a kind of its own, which a claim filter tells apart without the plan."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/QueryStepSpec",
+                "description": "One DuckDB query: Python calling DuckDB's relational API (AW-3), on the\nsame spec. `duckdb` on the wire, where snake_case would write `duck_db`."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "runtime"
+                ],
+                "properties": {
+                  "runtime": {
+                    "type": "string",
+                    "enum": [
+                      "duckdb"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "One DuckDB query: Python calling DuckDB's relational API (AW-3), on the\nsame spec. `duckdb` on the wire, where snake_case would write `duck_db`."
+          },
+          {
+            "allOf": [
+              {
                 "$ref": "#/components/schemas/MarimoStepSpec",
                 "description": "One marimo notebook over the rows the step before it produced."
               },
@@ -19683,6 +19729,8 @@
         "description": "The word a reactor routes on, without loading the plan.",
         "enum": [
           "flow_php",
+          "datafusion",
+          "duckdb",
           "marimo",
           "publish_dataset",
           "python_task",

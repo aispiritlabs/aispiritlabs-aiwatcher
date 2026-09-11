@@ -1,0 +1,3 @@
+data_frame()->read(corpus_spans)
+    ->filter(ref('status')->same(lit('error'))->and(ref('duration_ms')->greaterThan(lit(1000))))
+    ->aggregate(count(ref('span_id')->as('spans')))

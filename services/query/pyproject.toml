@@ -1,0 +1,83 @@
+# The Python query engines (AW-3): one uv workspace, one lock, one toolchain.
+#
+# Not a package. The root holds the members and the rules they share: `contract`
+# is `aiwatcher_query` — the six /query routes, the declared catalog, the API
+# pager and the child a query runs in — and each engine is a member of its own,
+# so an image installs one engine's wheel and never the other's. `flow/` beside
+# them is the PHP engine and is not a member.
+[tool.uv.workspace]
+members = ["contract", "datafusion", "duckdb"]
+
+[tool.uv]
+required-version = ">=0.12.7,<0.13"
+
+[dependency-groups]
+# Every engine is in the development environment, so one `uv run pytest` covers the
+# contract and each engine; an image installs one member with `--package`.
+dev = [
+  "aiwatcher-query",
+  "aiwatcher-query-datafusion",
+  "aiwatcher-query-duckdb",
+  "mypy>=1.18,<2",
+  "pytest>=8.4,<9",
+  "ruff>=0.16.5,<0.17",
+]
+
+[tool.uv.sources]
+aiwatcher-query = { workspace = true }
+aiwatcher-query-datafusion = { workspace = true }
+aiwatcher-query-duckdb = { workspace = true }
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+# Not the default ["."]: a member's directory is named for its engine, and `datafusion/`
+# or `duckdb/` found from the root would make the engine itself a first-party import.
+src = ["contract", "datafusion", "duckdb"]
+# The conformance texts are queries, not modules: `read`, `col` and `f` are the
+# names an engine gives them, which a linter reads as undefined.
+extend-exclude = ["contract/conformance"]
+
+[tool.ruff.lint]
+# The notebook runtime's set, which is the one `planner` selects: the two
+# repositories are worked on together, and a lint that fires in one and not
+# the other is a lint people learn to ignore.
+select = ["E", "F", "I", "UP", "B", "C4", "SIM", "RUF", "ASYNC", "PTH", "BLE", "N", "S"]
+
+[tool.ruff.lint.isort]
+# The packages, and the two test modules the tests import by name.
+known-first-party = [
+  "aiwatcher_query",
+  "arrow_engine",
+  "conftest",
+  "query_datafusion",
+  "query_duckdb",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"*/tests/*" = ["S101", "S104", "S105", "S106", "S108"]
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+files = [
+  "contract/aiwatcher_query",
+  "contract/tests",
+  "datafusion/query_datafusion",
+  "datafusion/tests",
+  "duckdb/query_duckdb",
+  "duckdb/tests",
+]
+mypy_path = "contract/tests"
+
+[[tool.mypy.overrides]]
+# pyarrow ships no type information of its own; a table is `Any` to mypy, and
+# the tests are what check the shapes this package builds.
+module = ["pyarrow", "pyarrow.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["contract/tests", "datafusion/tests", "duckdb/tests"]
+# The Arrow test engine is imported by name — in this process and in the fork
+# server, which is handed this process's sys.path — so its directory is on it.
+pythonpath = ["contract/tests"]
