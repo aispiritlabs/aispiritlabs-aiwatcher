@@ -927,12 +927,48 @@ pub async fn a_released_lease_is_free_before_it_would_have_run_out(
     assert!(taken.taken().is_some(), "{name}");
 }
 
+/// Every timer due at `now`, however many other runs left behind.
+///
+/// `due_timers` is bounded and reads across every execution, and on a shared
+/// PostgreSQL the table holds each earlier run's timers at the same fixed
+/// instants — ordered by `due_at` alone, so a tie comes back in no stated
+/// order. A fixed bound is filled by those before it reaches this run's, and
+/// the property then fails, or passes having checked nothing, by chance. Asked
+/// again with a larger bound until the store returns fewer than it was allowed,
+/// the answer is the whole backlog at that instant.
+async fn everything_due(name: &str, store: &dyn WorkflowStore, now: OffsetDateTime) -> Vec<Timer> {
+    let mut limit = 64;
+    loop {
+        let due = ok!(name, store.due_timers(now, limit), "the timers due");
+        assert!(
+            due.len() <= limit,
+            "{name}: asked for at most {limit} timers and was handed {}",
+            due.len()
+        );
+        if due.len() < limit {
+            return due;
+        }
+        limit *= 2;
+    }
+}
+
+/// The part of an answer that belongs to one execution, in the order it came.
+fn timers_of_this_run<'a>(execution: &ExecutionId, due: &'a [Timer]) -> Vec<&'a Timer> {
+    due.iter()
+        .filter(|found| found.execution.as_str() == execution.as_str())
+        .collect()
+}
+
 /// A deferred append is due at its time, across every execution at once.
 ///
 /// The whole reason a timer is a row rather than an event in the stream it
 /// belongs to: one tick has to find what is due without opening a stream per
 /// run. Written against the port, because the four adapters answer it four
 /// ways — a map, a file read whole, an indexed `due_at`, and a lifted column.
+///
+/// What is due is read across every execution, as a tick reads it, and then
+/// narrowed to this one's: a database other runs have used holds their timers
+/// at these same instants, due whenever these are.
 pub async fn a_timer_is_due_when_its_time_comes_and_not_before(
     name: &str,
     store: &dyn WorkflowStore,
@@ -958,33 +994,34 @@ pub async fn a_timer_is_due_when_its_time_comes_and_not_before(
         ),
         "scheduling two timers"
     );
+    let ids = |timers: &[&Timer]| {
+        timers
+            .iter()
+            .map(|found| found.timer_id.clone())
+            .collect::<Vec<_>>()
+    };
 
+    let due = everything_due(name, store, start).await;
     assert!(
-        ok!(name, store.due_timers(start, 10), "nothing due yet").is_empty(),
+        timers_of_this_run(&execution, &due).is_empty(),
         "{name}: a timer is not due before its time"
     );
-    let due = ok!(
-        name,
-        store.due_timers(start + Duration::seconds(11), 10),
-        "one due"
-    );
-    assert_eq!(
-        due.iter().map(|t| t.timer_id.as_str()).collect::<Vec<_>>(),
-        ["soon"],
-        "{name}"
-    );
+    let due = everything_due(name, store, start + Duration::seconds(11)).await;
+    let mine = timers_of_this_run(&execution, &due);
+    assert_eq!(ids(&mine), ["soon"], "{name}");
     // The message comes back as the worker composed it. An engine that
     // assembled one here would be deciding what a timeout means.
-    assert_eq!(due[0].message.message_type, "saga.timeout_fired", "{name}");
+    assert_eq!(mine[0].message.message_type, "saga.timeout_fired", "{name}");
 
-    // Both, oldest first, once the second is due as well.
-    let due = ok!(
-        name,
-        store.due_timers(start + Duration::seconds(3_600), 10),
-        "both due"
+    // Both, oldest first, once the second is due as well — and the whole
+    // answer oldest first, not only the part of it that is this run's.
+    let due = everything_due(name, store, start + Duration::seconds(3_600)).await;
+    assert!(
+        due.windows(2).all(|pair| pair[0].due_at <= pair[1].due_at),
+        "{name}: a backlog drains in the order it accumulated"
     );
     assert_eq!(
-        due.iter().map(|t| t.timer_id.as_str()).collect::<Vec<_>>(),
+        ids(&timers_of_this_run(&execution, &due)),
         ["soon", "later"],
         "{name}: a backlog drains in the order it accumulated"
     );
@@ -1051,9 +1088,7 @@ pub async fn a_fired_timer_leaves_no_row_to_fire_again(name: &str, store: &dyn W
         "firing and cancelling"
     );
     assert!(
-        ok!(name, store.due_timers(due, 10), "after firing")
-            .iter()
-            .all(|found| found.execution.as_str() != execution.as_str()),
+        timers_of_this_run(&execution, &everything_due(name, store, due).await).is_empty(),
         "{name}: a fired timer is not a row"
     );
     assert!(
