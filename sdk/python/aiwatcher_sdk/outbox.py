@@ -557,9 +557,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     draining.add_argument("path", type=Path)
     draining.add_argument("--url", default=os.environ.get("AIWATCHER_URL"))
     draining.add_argument("--execution", default=None, help="only this execution's rows")
-    requeueing = commands.add_parser("requeue", help="put a dead-lettered row back")
-    requeueing.add_argument("path", type=Path)
-    requeueing.add_argument("message_id")
+    requeuing = commands.add_parser("requeue", help="put a dead-lettered row back")
+    requeuing.add_argument("path", type=Path)
+    requeuing.add_argument("message_id")
     args = parser.parse_args(argv)
 
     if not args.path.exists():

@@ -22,9 +22,9 @@ def test_gemma_prompt_builds_native_template_string() -> None:
 
 def test_gemma_prompt_reads_user_message_text_via_get_text() -> None:
     prompt = GemmaPromptBuilder(system_prompt="SYSTEM {tools}")
-    rendered = prompt.build_prompt(UserMessage("Treść od usera"), toolsets=None)
+    rendered = prompt.build_prompt(UserMessage("Treść od użytkownika"), toolsets=None)
 
-    assert "<start_of_turn>user\nTreść od usera\n<end_of_turn>" in rendered
+    assert "<start_of_turn>user\nTreść od użytkownika\n<end_of_turn>" in rendered
 
 
 def test_message_structural_get_text_is_role_neutral() -> None:

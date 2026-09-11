@@ -251,7 +251,10 @@ area.
    projection, not the runs list, and are served from `/api/v1/evaluations`.
    This is what lets a producer drop MLflow's `start_run` / `log_params` /
    `log_metrics` / `log_dict` block: `record_evaluation` in both SDKs is the
-   same four pieces on the client that is already there for tracing.
+   same four pieces on the client that is already there for tracing. A report
+   a managed step records through `TaskContext.record_evaluation` names that
+   run and step, which is why an evaluation is a worker task and not a binding
+   of its own (ADR_0010, amended; AW-5).
 
 9. **A prompt is authored, not observed** ([ADR_0011](docs/ADR/ADR_0011_PROMPT_REGISTRY.md)).
    Everything else here is a fold over the log, and everything else is
@@ -1658,6 +1661,15 @@ the review.
   checked *before* the scores in `verdict`, so the reason says "it stopped
   reading its input" rather than inviting somebody to raise the iteration
   count.
+- **Never let `production` name a candidate the verdict turned down.**
+  `promote: true` never overrode the verdict, and `PUT /labels/production` did
+  in one request — so `Registry::check_admitted` refuses it there and on a
+  publish carrying `label: production`, because a version is its text and
+  publishing a rejected candidate's text lands on the candidate. A candidate
+  whose record is missing is refused too: it is written first, and an
+  unwritten verdict is not an admission. `staging` and a version a person
+  wrote stay free. A 422 `promotion_refused`, the model registry's answer to
+  the same act. ADR_0011, amended.
 - **Never ship a label vocabulary.** aiwatcher is a generic vision annotation
   tool and the project's schema is where the domain lives — its classes, their
   geometry, which are `ignore`, and which `layer` each paints into. A shipped

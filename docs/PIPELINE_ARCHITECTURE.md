@@ -820,7 +820,6 @@ pub enum RuntimeBinding {
     ContainerJob(ContainerJobSpec),         // a PythonTask in a Kubernetes Job — section 37
     AgentTurn(AgentTurnSpec),               // a worker runs one agent turn — section 40
     HumanInput(HumanInputSpec),             // waits for a command — section 41
-    EvaluationSuite(EvaluationSuiteSpec),   // a worker runs a suite and records the report
     ExternalWorkflow(ExternalWorkflowSpec), // WorkflowEngine::launch — Flyte
 }
 ```
@@ -1702,7 +1701,8 @@ and the tick delivers it (43.39).
   aiwatcher, and with it the engine an execution would have been owned by.
 - **Phase 8** — read models in PostgreSQL. Gate: a measured replay-on-start over
   a minute, or history wanted past `AIWATCHER_MAX_RUNS`.
-- **Phase 15** — evaluation and distributed mode. Own use-case gate.
+- ~~**Phase 15**~~ — evaluation and distributed mode. **Delivered**:
+  distributed mode by AW-2 Phase F, the evaluation half by AW-5 (2026-09-11).
 
 **Measurements and follow-ups.**
 
@@ -1820,12 +1820,23 @@ tool-call gate; *What is left* above has both.
 panel by an admin; a tool call is approved from the panel and the turn
 continues.
 
-### Phase 15 — evaluation and distributed mode (optional)
+### Phase 15 — evaluation and distributed mode
 
-- `EvaluationSuite` binding over `record_evaluation`; planner's catalog gate
-  and `ai_spirit_agent`'s DeepEval scenarios as steps.
-- `AiwatcherTransport` for `agentic_runtime.distributed`, if lab 6's shape
-  is wanted on a shared history (40.6).
+**Delivered.** The exit passes: `just e2e-optimise`.
+
+- ~~`EvaluationSuite` binding over `record_evaluation`~~ — withdrawn by AW-5.
+  An evaluation is a worker task, and what was missing was not a runtime but
+  three joins:
+  - a report names the run and step that measured it;
+  - an optimisation names the held-out reports its scores came from;
+  - `production` refuses a candidate the verdict turned down.
+
+  The question to an admin is asked from inside the promote step, and only
+  when the verdict admitted, so a rejected candidate is never put to anybody
+  and no plan needed a conditional edge. planner's SIMBA optimiser is the first
+  real user, as planner's own ticket.
+- ~~`AiwatcherTransport` for `agentic_runtime.distributed`~~ — delivered by
+  AW-2 Phase F, with two deliberate departures from 40.6 (see there).
 
 **Exit:** an optimise-evaluate-promote definition runs end to end with the
 verdict computed server-side, as ADR 0011 requires.
@@ -2190,7 +2201,6 @@ not open its own `node()` scope.
 | `ContainerJob` | a Kubernetes Job the reactor creates, running a worker for one attempt (37) | the work role, the cluster API, a named template | Rust; `backoffLimit: 0` | as `PythonTask` | as `PythonTask` | as `PythonTask` |
 | `AgentTurn` | a worker running `agentic` | pulled | Rust for the attempt; the tool loop is inside one attempt | refs (40.4) | never | yes — by policy: references by default, sealed on request |
 | `HumanInput` | nobody — it waits | a command on the execution API (41) | n/a; a timeout is a policy | a request document → a decision, or a response ref | never | when the answer is words, under the same policy |
-| `EvaluationSuite` | a worker | pulled | Rust | dataset ref + prompt version → `record_evaluation` from the worker's client | never | the report is a document on the log, as ADR 0010 says, with ADR 0010's warning |
 | `ExternalWorkflow` | the engine's pods | `WorkflowEngine::launch` | the engine | bound to the declared interface | the engine's | the engine's |
 
 Rules that hold across the table:
@@ -2209,6 +2219,12 @@ Rules that hold across the table:
    panel renders a binding it does not know as a step with a name and a
    state, never as an error; what it needs per binding is only which editor
    to open.
+6. There is no `EvaluationSuite`. It was drawn as a row here and turned out
+   to be a `PythonTask` with a fixed shape (AW-5). An evaluation is a worker
+   task that records its report through `TaskContext.record_evaluation`, which
+   names the run and the step, and aiwatcher still runs no suite (ADR 0010).
+   A binding of its own is worth adding when a panel needs to draw an
+   evaluation step as one, or when the server consumes the report.
 
 Two plans, as examples. The PII curation: one `FlowPhp` step whose `blocks`
 lists the source and two transforms, one `Marimo` step, one `PublishDataset`.
@@ -2445,7 +2461,7 @@ one at a time, so the sizing holds; what is gone is the isolation, and section
 events are in addition, not instead. Needs Phases 1–3 and 10–12.
 
 **Level 3 — the cycle as one definition.** `curate (annotation export) →
-train (ContainerJob, a GPU template) → evaluate (EvaluationSuite) → promote
+train (ContainerJob, a GPU template) → evaluate (a task recording a report) → promote
 (HumanInput, admin)`. `app/training/run.py` does not exist yet; when it is
 written it should be a worker task from the first line, because the kickoff
 doc's `preflight`, `register_model` and `just ml-promote` map onto steps
@@ -2728,20 +2744,47 @@ reachability check — from `order_of`'s example.
 
 ### 40.6 Distributed mode, and evaluation
 
-`AiwatcherTransport`, implementing the protocol `RedisStreamsTransport`
-implements: publish → append; consume → a worker claim with the queue equal to
-the target agent; ack → complete; `XAUTOCLAIM` → lease expiry; a dead letter →
-the sink. Lab 6's three workers then share one history, and the service
-registry's capabilities and heartbeats become what a claim advertises.
-Deferred until the hosted mode works with one worker (Phase 15).
+**Delivered by AW-2 Phase F**, as
+`aiwatcher_agentic.runtime.distributed.AiwatcherTransport`:
+- a hop is `POST /executions` of the target agent's one-step workflow, keyed
+  by the message id;
+- consume is a worker claim on the target agent's queue;
+- ack is the claim's result;
+- idle entries are reclaimed by lease expiry;
+- a dead letter is a failed step.
 
-`packages/evaluation` runs DeepEval scenarios and MLflow scorers; planner runs
-a DeepEval gate and SIMBA optimisation. As `EvaluationSuite` steps they are
-what turns "optimise a prompt" into a definition: `evaluate(baseline) →
-optimise → evaluate(candidate, held-out) → record_optimization →
-HumanInput(promote?)`. ADR 0011's verdict stays server-side; the step feeds
-it. MLflow stays where it is — completions, and the scorers that read them —
-because this plan moves no content.
+Lab 6 runs on it with no broker. Two departures from what this section
+planned, both deliberate:
+
+- **A hop is a run, not a row in one shared history.** Nothing in a hosted
+  execution can be claimed, so three workers sharing one history would have
+  nothing to take. Only replies are appended, to a mailbox execution per
+  address.
+- **A claim carries no liveness.** A hop to a registered agent with no worker
+  waits in its queue, so the question a caller needs answered is whether the
+  agent exists, which a definition says. The registry's capabilities come
+  from the definitions, and its heartbeats are gone.
+
+`RedisStreamsTransport` no longer exists anywhere. Iggy replaced it, and Iggy
+went too.
+
+**The evaluation half is AW-5.** planner runs a catalog gate and SIMBA
+optimisation. `packages/evaluation` has MIPROv2 and scorers, and records
+nothing to aiwatcher yet. The cycle is:
+
+`evaluate(baseline) → optimise → evaluate(candidate, held-out) →
+record_optimization → promote`
+
+It is a registered workflow of ordinary worker tasks, and `just
+e2e-optimise` runs it. Each report names its run and step. The optimisation
+names both held-out reports. `promote` asks an admin, from inside the attempt,
+only when the verdict admitted. `production` refuses a candidate the verdict
+turned down.
+
+ADR 0011's verdict stays server-side, computed from the scores the client sent.
+Deriving them from the reports is gated on a producer caught sending numbers
+its reports do not show. MLflow stays where it is — completions, and the
+scorers that read them — because this plan moves no content.
 
 ## 41. Human input and the control path
 

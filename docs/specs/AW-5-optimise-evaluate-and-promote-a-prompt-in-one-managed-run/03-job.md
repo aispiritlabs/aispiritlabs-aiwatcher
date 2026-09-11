@@ -34,15 +34,21 @@ around another session's work any more.
 - **A report names its step in `data.step_id`, and its execution as the
   envelope's `workflow_run_id`** — *because* `node` is what a `step.*` fact
   calls a node of a declared graph, and a report is not one. A later reader
-  keying on `node` would draw it. The report also sets **no** `workflow_id`,
-  because the fold reads that as the suite's fallback name. Alternative
-  rejected: `data.node`, for symmetry with the facts.
+  keying on `node` would draw it. Alternative rejected: `data.node`, for
+  symmetry with the facts.
+
+  **Changed while building:** the report also carries the workflow's id. The
+  envelope keeps a `workflow_run_id` only beside a `workflow_id`
+  (`EventEnvelope::workflow_run`), so the plan of sending no `workflow_id`
+  dropped the link at the envelope. A test caught it. The suite fallback that
+  reads `workflow_id` never fires, because a report always names its suite.
 - **A task's report id is `uuid5` over `step_key/suite/variant`** — *because*
   it keeps the shape `_new_id` already gives, and a retry lands on the report
   it already wrote. Alternative rejected: `step_key` itself, which is not
   unique once one step records two suites.
-- **`record_evaluation` gains keyword-only `workflow_run_id` and `step_id`, and
-  `TaskContext.record_evaluation` fills them** — *because* the link is then
+- **`record_evaluation` gains keyword-only `workflow_id`, `workflow_run_id` and
+  `step_id`, and `TaskContext.record_evaluation` fills them** (the first
+  arrived with the change above) — *because* the link is then
   public and explicit, and usable by a script that knows its run. Alternative
   rejected: a private helper the context calls across modules. That is ruff's
   `SLF001`, and a second path to the same four events.
@@ -110,43 +116,46 @@ around another session's work any more.
 ## Tasks
 
 ### 1 — a report knows its step
-- [ ] 1.1 Projector: fold `execution_id` from the envelope's `workflow_run_id`
+- [x] 1.1 Projector: fold `execution_id` from the envelope's `workflow_run_id`
       and `step_id` from `data.step_id`. Tests: by a step, by a script, no
       workflow execution invented. — *a report knows the step that produced
       it*
-- [ ] 1.2 SDK: the two keywords on `record_evaluation`, and
+- [x] 1.2 SDK: the two keywords on `record_evaluation`, and
       `TaskContext.record_evaluation` with the derived id. Tests: stamped, and
       the same id on a second attempt. — *a report knows the step that
       produced it*
 
 ### 2 — an optimisation names its reports
-- [ ] 2.1 Core and prompts: `baseline_evaluation` and `candidate_evaluation` on
+- [x] 2.1 Core and prompts: `baseline_evaluation` and `candidate_evaluation` on
       the request and the record. Tests: kept and read back, an old record
       reads, and a named report does not decide. — *an optimisation names the
       reports behind its held-out scores*
-- [ ] 2.2 SDK: the two keywords and the record's two fields. — *same*
+- [x] 2.2 SDK: the two keywords and the record's two fields. — *same*
 
 ### 3 — `production` and the verdict
-- [ ] 3.1 Prompts: `set_label` refuses `production` on a rejected candidate or
+- [x] 3.1 Prompts: `set_label` refuses `production` on a rejected candidate or
       one with no record. Tests: the four scenarios plus the missing record. —
       *`production` never points at a rejected candidate*
-- [ ] 3.2 API: `NotAdmitted` as 422 `promotion_refused`, with an HTTP test. —
+- [x] 3.2 API: `NotAdmitted` as 422 `promotion_refused`, with an HTTP test. —
       *same*
-- [ ] 3.3 API test: an editor may not answer an admin's question asked
+- [x] 3.3 API test: an editor may not answer an admin's question asked
       mid-attempt. — *one managed run…* (the editor scenario)
 
 ### 4 — the contract and the run
-- [ ] 4.1 `just openapi`; commit the contract and the generated client.
-- [ ] 4.2 `scripts/e2e-optimise-prompt.py` and `just e2e-optimise`: the three
+- [x] 4.1 `just openapi`; commit the contract and the generated client.
+- [x] 4.2 `scripts/e2e-optimise-prompt.py` and `just e2e-optimise`: the three
       variants, the reports and their links, one optimisation per run, the
       candidate only in its artifact and the registry. — *one managed run
       optimises, evaluates and promotes*
 
 ### 5 — the record
-- [ ] 5.1 The plan's §12, §28, §35 and §40.6, the ADR_0010 and ADR_0011
+- [x] 5.1 The plan's §12, §28, §35 and §40.6, the ADR_0010 and ADR_0011
       amendments, and `CLAUDE.md`'s guardrail. — *Phase 15's scope in the
       plan*, and the removed `EvaluationSuite` binding
 - [ ] 5.2 Verify: `just check`, `just sdk-check`, `just e2e-optimise`.
 
 ## Log
 - 2026-09-11 12:20 — job planned on `main`: nine design decisions and twelve tasks; the three open questions settled — `data.step_id`, 422 `promotion_refused`, the verdict read from `record`'s artifact
+- 2026-09-11 12:28 — decision changed while building: a step's report carries `workflow_id` too, because the envelope keeps a `workflow_run_id` only beside one; the fold's test caught the dropped link
+- 2026-09-11 12:28 — built: the fold, the record's two references, `check_admitted` on `set_label` and on a publish carrying `production` (a gap found on the way: a version is its text), 422 `promotion_refused`, the SDK halves, the contract; core 88, projector 96, prompts 44, the two new HTTP tests, sdk 69 green
+- 2026-09-11 12:28 — `just e2e-optimise`: 21 of 21 checks over the three variants; the plan, ADR_0010, ADR_0011 and `CLAUDE.md` amended

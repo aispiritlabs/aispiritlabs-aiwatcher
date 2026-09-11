@@ -143,3 +143,29 @@ it still is not — it is a batch problem that belongs on the Parquet side of
   hundred thousand cases — the event log stops being the right transport for
   the case stream, and cases become a batch artifact with only the aggregate on
   the log.
+
+## Amendment, 2026-09-11: a report names the run and step that measured it (AW-5)
+
+An evaluation measured by a step of a managed run used to arrive with nothing
+saying so. `record_evaluation` minted a fresh correlation even inside a task
+whose context already carried the run. So the report of a baseline and the
+report of its candidate were two unconnected rows, and "which run produced
+this number" had to be answered from memory.
+
+- **`TaskContext.record_evaluation` sends three things with every report:**
+  - the workflow and the execution on the envelope, as `workflow_id` and
+    `workflow_run_id` — the envelope keeps a run only beside its workflow;
+  - the step as `data.step_id`;
+  - an id derived from the step and the suite and variant, so a retried
+    attempt lands on the report its predecessor wrote rather than beside it.
+- **The fold keeps both as `EvaluationSummary.execution_id` and `.step_id`.**
+  A report a script recorded carries neither, and folds exactly as before.
+- **The step is `step_id`, not `node`.** `node` is what a `step.*` fact calls a
+  node of a declared graph, and a report is not one. `ReadModel::apply` still
+  routes every `eval.*` event away before the workflow fold, which is what
+  stops a report carrying a `workflow_run_id` from inventing an execution.
+
+Point 5 stands: aiwatcher records evaluations and does not run them. The
+evaluation is a worker task like any other. The `EvaluationSuite` binding the
+pipeline plan drew for it was withdrawn, because as drawn it added a fixed
+shape and nothing else.

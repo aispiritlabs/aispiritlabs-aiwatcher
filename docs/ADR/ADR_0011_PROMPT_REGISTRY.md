@@ -185,6 +185,39 @@ it, and each is the smaller sibling of one already in this document.
 Not `gen_ai.*`: there is no convention for this, and what is being named is
 *this* registry's content address rather than a provider's id.
 
+## Amendment, 2026-09-11: `production` answers to the verdict (AW-5)
+
+Decision 3 said `promote: true` "never overrides the verdict", and the label
+route did not agree: `PUT /labels/production` checked only that the version was
+stored. So one request could put a rejected candidate live, with the record
+still saying it had been rejected. The model registry never allowed this:
+`check_promotable` runs on every label.
+
+- **`production` refuses a candidate the verdict did not admit.** This holds
+  for a version whose origin is an optimisation that was rejected, and for one
+  whose record is missing. The candidate is written before its record, so a
+  crash between the two leaves one with no verdict, and a verdict that was
+  never written is not an admission. The refusal is a 422 `promotion_refused`,
+  the model registry's answer to the same act. It names the optimisation and
+  the reason.
+- **Any other label is free, and so is a version a person published.**
+  Trying a rejected candidate on `staging` is something people do on purpose.
+  A version with no optimisation behind it has no verdict to answer to.
+- **The verdict that counts is the one the version's origin names.** A version
+  is its text, so the first optimisation to store a text is the one it is filed
+  under. Publishing the same text with `label: production` lands on that
+  candidate and is refused in the same way.
+- **An optimisation may name the held-out reports its `test` scores came
+  from:** `baseline_evaluation` and `candidate_evaluation`, kept and never
+  resolved. Reading the reports back to derive the scores would take a read
+  path from this registry into the log, or into a projection that evicts. It
+  waits for a producer caught sending numbers its reports do not show.
+
+A workflow step that calls `set_label` after an admin answered "promote" is
+not the workaround the Consequences below warn about. It is the split doing
+its job: the registry decides whether a candidate *may* go live, and a person
+decides whether it *does*.
+
 ## Consequences
 
 **Listing is one `GET` per prompt.** An object store has no query, and a global
