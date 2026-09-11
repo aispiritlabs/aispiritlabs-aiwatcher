@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Generator
 
 import pytest
@@ -53,3 +54,29 @@ def test_text_given_directly_is_never_looked_up() -> None:
     )
 
     assert builder.system_prompt == "SYSTEM"
+
+
+def test_a_named_prompt_carries_the_version_the_registry_names_its_text_by() -> None:
+    builder = QwenPromptBuilder(external_prompt_name="sage", prompt_source=lambda name: "Be wise.")
+
+    assert builder.external_prompt_version == hashlib.sha256(b"Be wise.").hexdigest()
+
+
+def test_a_prompt_nobody_read_by_name_names_no_version() -> None:
+    written = ChatPromptBuilder(system_prompt="SYSTEM")
+    given = ChatPromptBuilder(
+        system_prompt="SYSTEM", external_prompt_name="sage", prompt_source=lambda name: "read"
+    )
+
+    assert written.external_prompt_version is None
+    assert given.external_prompt_version is None
+
+
+def test_a_prompt_changed_after_it_was_read_is_no_longer_that_version() -> None:
+    edited = ChatPromptBuilder(external_prompt_name="sage", prompt_source=lambda name: "Be wise.")
+    edited.system_prompt = "Be brief."
+    renamed = ChatPromptBuilder(external_prompt_name="sage", prompt_source=lambda name: "Be wise.")
+    renamed.external_prompt_name = "chat"
+
+    assert edited.external_prompt_version is None
+    assert renamed.external_prompt_version is None

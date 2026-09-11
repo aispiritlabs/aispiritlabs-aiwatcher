@@ -497,6 +497,13 @@ e2e-agent-join:
 e2e-agent-outbox:
     "$(cd ../ai_spirit_agent && pwd)/.venv/bin/python" scripts/e2e-agent-outbox.py
 
+# A turn's model call names the registry version of the prompt it ran on: the
+# promoted candidate, or the authored text `make registry` published when the
+# builder has no registry — a reference that resolves, and never the words. The
+# builder reads through `ai_spirit_agent`'s `registry`. Starts a server of its own.
+e2e-agent-prompt:
+    "$(cd ../ai_spirit_agent && pwd)/.venv/bin/python" scripts/e2e-agent-prompt.py
+
 # One agent registered as a workflow of its own and started the way the panel
 # starts one, with no graph anywhere. Its first attempt is lost after its tool
 # wrote, and the retry does not write again; its spans nest under the run; its

@@ -138,3 +138,47 @@ def test_outside_an_attempt_a_tracer_opens_a_run_of_its_own_as_it_always_did() -
 
     [run] = [event for event in transport.events if event["event_type"] == "run.started"]
     assert run["run_id"].startswith("session-")
+
+
+def _llm_events(extra_attributes: dict[str, Any] | None) -> list[dict[str, Any]]:
+    from aiwatcher_sdk import AiwatcherClient
+    from aiwatcher_sdk.integrations.agentic import AiwatcherTracer
+
+    transport = Recording()
+    client = AiwatcherClient(service="agent", transport=transport)
+    tracer = AiwatcherTracer(client=client)
+    kwargs: dict[str, Any] = (
+        {} if extra_attributes is None else {"extra_attributes": extra_attributes}
+    )
+    with tracer.workflow(name="digest", session_id="session"):
+        tracer.llm(name="llm-call", model="m", messages=[], invoke=ModelResponse, **kwargs)
+    client.close()
+    return [event for event in transport.events if event["event_type"].startswith("llm.")]
+
+
+def test_the_prompt_an_agent_names_reaches_both_llm_events_as_a_reference() -> None:
+    version = "ab" * 32
+
+    events = _llm_events(
+        {
+            "agentic.prompt_name": "sage",
+            "agentic.prompt_version": version,
+            "agentic.prompt_hash": "of the rendered prompt",
+        }
+    )
+
+    assert [event["event_type"] for event in events] == ["llm.started", "llm.completed"]
+    for event in events:
+        assert event["data"]["prompt_name"] == "sage"
+        assert event["data"]["prompt_version"] == version
+        assert "of the rendered prompt" not in event["data"].values()
+
+
+@pytest.mark.parametrize("extra_attributes", [None, {"agentic.prompt_hash": "h"}])
+def test_a_call_that_names_no_prompt_carries_no_reference(
+    extra_attributes: dict[str, Any] | None,
+) -> None:
+    events = _llm_events(extra_attributes)
+
+    assert events
+    assert not any({"prompt_name", "prompt_version"} & event["data"].keys() for event in events)

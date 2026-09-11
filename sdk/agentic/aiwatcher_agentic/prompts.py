@@ -1,3 +1,4 @@
+import hashlib
 import re
 from collections.abc import Callable
 from pathlib import Path
@@ -94,6 +95,11 @@ def read_external_prompt(name: str, source: PromptSource | None = None) -> str:
     return resolved(name)
 
 
+def _version_of(text: str) -> str:
+    """``sha256(text)``, lowercase hex — how ADR_0011's registry names a version."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 class PromptBuilder(Protocol):
     @property
     def system_prompt(self) -> str: ...
@@ -125,10 +131,12 @@ class CorePromptBuilder:
         external_prompt_name: str | None = None,
         prompt_source: PromptSource | None = None,
     ) -> None:
+        self._read_version: str | None = None
         if system_prompt is not None:
             self._system_prompt = system_prompt
         elif external_prompt_name is not None:
             self._system_prompt = read_external_prompt(external_prompt_name, prompt_source)
+            self._read_version = _version_of(self._system_prompt)
         else:
             self._system_prompt = ""
         self._external_prompt_name = external_prompt_name
@@ -147,7 +155,23 @@ class CorePromptBuilder:
 
     @external_prompt_name.setter
     def external_prompt_name(self, value: str | None) -> None:
+        if value != self._external_prompt_name:
+            self._read_version = None
         self._external_prompt_name = value
+
+    @property
+    def external_prompt_version(self) -> str | None:
+        """The registry version of the named prompt this builder holds.
+
+        Derived from the text the source returned, the way the registry derives
+        it, so a span carrying it names the version the registry resolved
+        without the registry being asked twice. ``None`` when nothing was read
+        by name, and once the text or the name has changed since — the pair
+        would then name a version the model is not being given.
+        """
+        if self._read_version is None or _version_of(self._system_prompt) != self._read_version:
+            return None
+        return self._read_version
 
     @staticmethod
     def _map_types(type_name: str) -> str:

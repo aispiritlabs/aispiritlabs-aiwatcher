@@ -13,6 +13,7 @@ does not depend on the agent, and the agent does not depend on aiwatcher's types
 | `workflow(session_id=…)`          | one run, one trace   |
 | `agent(name=…, agent_id=…)`       | an agent span        |
 | `llm(model=…, invoke=…)`          | an LLM span + tokens |
+| `agentic.prompt_name` / `_version` | the registry version the call ran on |
 | `step(span_type="TOOL")`          | a tool span          |
 | `step(span_type=…)`               | a step span, kind carried in the payload |
 
@@ -420,6 +421,7 @@ class AiwatcherTracer:
         if temperature := kwargs.get("temperature"):
             payload["temperature"] = temperature
         payload["message_count"] = len(messages)
+        payload |= _prompt_reference(kwargs.get("extra_attributes"))
 
         started = time.monotonic()
         # Scoped even though an LLM call is usually a leaf: a model that calls
@@ -501,6 +503,27 @@ class AiwatcherTracer:
 
 def _elapsed_ms(started: float) -> float:
     return (time.monotonic() - started) * 1000
+
+
+def _prompt_reference(attributes: Any) -> dict[str, str]:
+    """The registry prompt a call ran on, as the two fields an `llm.*` event carries.
+
+    An agent names it as the attributes `agentic.prompt_name` and
+    `agentic.prompt_version`, which the MLflow tracer sets on its span as they
+    are; aiwatcher reads `prompt_name` and `prompt_version` (`PromptRef`), and
+    without this a trace could name the model and never the prompt. A
+    reference, never the text.
+    """
+    if not isinstance(attributes, Mapping):
+        return {}
+    fields: dict[str, str] = {}
+    for source, key in (
+        ("agentic.prompt_name", "prompt_name"),
+        ("agentic.prompt_version", "prompt_version"),
+    ):
+        if isinstance(value := attributes.get(source), str) and value:
+            fields[key] = value
+    return fields
 
 
 class TeeTracer:

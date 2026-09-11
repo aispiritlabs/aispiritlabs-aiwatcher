@@ -87,6 +87,9 @@ class PromptArtifacts:
     prompt_name: str | None = None
     prompt_hash: str = ""
     tool_schema: list[dict[str, Any]] = field(default_factory=list)
+    #: The registry version of the template ``prompt_name`` read — not
+    #: ``prompt_hash``, which is the rendered prompt and names no version.
+    prompt_version: str | None = None
 
     def __contains__(self, item: object) -> bool:
         return isinstance(self.prompt, str) and isinstance(item, str) and item in self.prompt
@@ -372,12 +375,14 @@ class Agent:
             toolsets=self._toolsets,
         )
         prompt_name = getattr(self._prompt_builder, "external_prompt_name", None)
+        prompt_version = getattr(self._prompt_builder, "external_prompt_version", None)
         return PromptArtifacts(
             prompt=prompt,
             system_prompt_text=system_prompt_text,
             prompt_name=prompt_name or None,
             prompt_hash=hashlib.sha256(system_prompt_text.encode("utf-8")).hexdigest(),
             tool_schema=tool_schema,
+            prompt_version=prompt_version or None,
         )
 
     def _call_model(self, prompt: str | list[dict[str, str]], **kwargs: Any) -> ModelResponse:
@@ -584,14 +589,12 @@ class Agent:
                     )
 
                     if self._capability is not None:
-                        prompt_artifacts = PromptArtifacts(
+                        # `replace`, not a rebuild, for the reason given below.
+                        prompt_artifacts = dataclasses.replace(
+                            prompt_artifacts,
                             prompt=self._capability.before_model_request(
                                 prompt_artifacts.prompt, hook_ctx
                             ),
-                            system_prompt_text=prompt_artifacts.system_prompt_text,
-                            prompt_name=prompt_artifacts.prompt_name,
-                            prompt_hash=prompt_artifacts.prompt_hash,
-                            tool_schema=prompt_artifacts.tool_schema,
                         )
 
                     trace_messages = _build_trace_messages(current_message_text, prompt_artifacts)
@@ -608,6 +611,11 @@ class Agent:
                             **(
                                 {"agentic.prompt_name": prompt_artifacts.prompt_name}
                                 if prompt_artifacts.prompt_name
+                                else {}
+                            ),
+                            **(
+                                {"agentic.prompt_version": prompt_artifacts.prompt_version}
+                                if prompt_artifacts.prompt_version
                                 else {}
                             ),
                         },
