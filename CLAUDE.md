@@ -25,7 +25,6 @@ Python / TypeScript agents
    annotations     ──► RustFS (S3)   drawn, versioned, exported for training
    conversations   ──► RustFS (S3)   encrypted, its own retention, erasable
    training runs   ──► RustFS (S3)   a curve and a model registry; off the log
-   pipeline engine ──► Flyte 2       what could be started; read, and asked
    dataset hubs    ──► Kaggle, HF    what exists; never what is permitted
    curation blocks ──► Flow PHP      one query, up to the first notebook
                    └─► ml_pipeline   a marimo notebook: run as a step, served live
@@ -111,13 +110,6 @@ just run-sso       # the server as an OIDC relying party against it
 
 With an object store, for the prompt registry:
 
-With an orchestrator, for launching registered pipelines:
-
-```bash
-just run-flyte     # the server with the Flyte engine wired to a local control plane
-just test-pipeline # the adapter, then the whole stack, against a stand-in Flyte admin
-```
-
 ```bash
 just rustfs-up     # RustFS on :9010
 just run-rustfs    # server with the registry in the object store
@@ -154,7 +146,6 @@ Crates, in dependency order. A crate may only depend on ones above it.
 | `aiwatcher-datasets` | Curation recipes, the dataset versions they produce, and the **block pipelines** of ADR_0024 — a chain of source, transform, notebook, approval and view, refused as a whole with every problem at once. Nothing here executes anything; the panel drives the chain because the engines are three different systems. |
 | `aiwatcher-execution` | Owned execution (ADR_0025, ADR_0026): the compiled `ExecutionPlan` and its `plan_id`, the states, the attempts, the pure `decide`/`evolve`, the cache key, the compiler from ADR_0024's blocks, the atomic command handler, the claim table, the `ContextSnapshot` that reopens a block, the fact encoder and the outbox publisher. Three ports: `WorkflowStore` (`memory | file | postgres | duckdb`, the last two behind features so `sqlx` and DuckDB's C++ amalgamation are out of every build that does not ask for them — the shape `laser` has in `aiwatcher-bus`), `ActivityExecutor` (what a reactor does with a claimed attempt) and `ArtifactCatalog` (metadata, lineage, the cache index). Executes nothing itself, and holds no second copy of `aiwatcher-jobs`' rules — it calls them. |
 | `aiwatcher-runner` | The workflow rerun dispatcher: one HTTP POST to one configured endpoint, behind `core::ports::WorkflowRunner`. |
-| `aiwatcher-pipeline` | Pipeline engines behind `core::engine::WorkflowEngine`: the orchestrator's launchable catalog, the inputs each entry declares, and starting one. Flyte 2 over its `/api/v1/` gateway, plus the literal encoder that binds a form's JSON to Flyte's declared types. With the runner, the second and last thing here that asks another system to do work. |
 | `aiwatcher-auth` | Single sign-on: OIDC discovery, a JWKS cache, the authorization-code flow with PKCE, HMAC-signed session cookies, authentik's forward-auth headers, and the group-to-role mapping. Knows nothing about axum. |
 | `aiwatcher-projector` | The pipeline, live hub, read model, dimension, span, evaluation and workflow-graph folds, dedup, retry, dead letters |
 | `aiwatcher-api` | axum router: REST, SSE, WebSocket, OpenAPI. `worker` is the one module whose caller is not a browser: the reactor's own loop with an HTTP seam where the work happens (Phase 10). |

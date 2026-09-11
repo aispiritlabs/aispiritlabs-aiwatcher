@@ -134,7 +134,6 @@ wired to it.
 | DuckDB for managed runs, queryable | `just run-duckdb`, then `aiwatcher sql` |
 | Flow PHP for queries and curation | `just flow-serve` |
 | marimo notebook blocks | `just ml-pipeline-serve` |
-| Flyte as the pipeline engine | `just run-flyte` |
 | Kaggle / Hugging Face search | `just run-hubs` |
 | SSO against authentik | `just authentik-up && just run-sso` |
 | Traces and metrics in Perses | `just stack-up` |

@@ -1,6 +1,9 @@
 # ADR_0016: The orchestrator is read for its inventory and asked to start one entry of it; the graph still comes from the log
 
-- **Status**: accepted
+- **Status**: superseded — the Flyte engine was removed from aiwatcher on
+  2026-09-11, its one user having moved onto aiwatcher's own workflow engine;
+  see [AW-4](../specs/AW-4-retire-flyte-and-run-steps-in-pods-of-our-own/_index.md).
+  What follows is the decision as it stood.
 - **Date**: 2026-08-31
 
 ## Context
