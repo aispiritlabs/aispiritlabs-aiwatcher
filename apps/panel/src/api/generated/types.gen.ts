@@ -1854,6 +1854,11 @@ export type EvaluationSummary = {
      * report's events in order without serialising it behind agent traffic.
      */
     evaluation_id: string;
+    /**
+     * The managed run whose step recorded this report — the envelope's
+     * `workflow_run_id`. Absent on a report a script published on its own.
+     */
+    execution_id?: string | null;
     last_checkpoint: Checkpoint;
     /**
      * Everything that was measured. MLflow's `log_metrics`.
@@ -1890,6 +1895,11 @@ export type EvaluationSummary = {
     runtime: string;
     started_at: string;
     status: EvaluationStatus;
+    /**
+     * That run's step, from `data.step_id`. Not `node`: that is what a
+     * `step.*` fact calls a node of a declared graph, and a report is not one.
+     */
+    step_id?: string | null;
     /**
      * What was measured. Falls back through `suite`, `suite_name`, `run_name`
      * — MLflow's word — and finally the evaluation id, so a producer porting
@@ -4094,7 +4104,17 @@ export type OptimizationRecord = {
      */
     algorithm: string;
     baseline: PromptVersionId;
+    /**
+     * The baseline's report on the held-out cases: where `test`'s baseline
+     * column came from. A pointer into the log, and never resolved here —
+     * the verdict is decided from `test`, as the client sent it.
+     */
+    baseline_evaluation?: string | null;
     candidate: PromptVersionId;
+    /**
+     * The same, for the candidate's column.
+     */
+    candidate_evaluation?: string | null;
     /**
      * Which cases each split was drawn from, ideally versioned. Two scores on
      * different cases are two facts, not a comparison — the same rule
@@ -4156,6 +4176,15 @@ export type OptimizationRequest = {
      * optimisation against a prompt nobody stored is a claim with no subject.
      */
     baseline: PromptVersionId;
+    /**
+     * The baseline's report on the held-out cases. Kept on the record and
+     * never resolved: the verdict is still decided from `test`.
+     */
+    baseline_evaluation?: string | null;
+    /**
+     * The candidate's report on the held-out cases, likewise.
+     */
+    candidate_evaluation?: string | null;
     /**
      * The candidate's text. Published as a version as part of recording, so
      * the record cannot name a prompt that does not exist.

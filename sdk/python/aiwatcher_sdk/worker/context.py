@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import threading
 import time
+import uuid
 from collections.abc import Callable, Generator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import UTC, datetime
+from typing import Any
 
 from aiwatcher_sdk import AiwatcherClient, Correlation, RunContext
 from aiwatcher_sdk.integrations.agentic import AiwatcherTracer
@@ -18,6 +20,17 @@ from aiwatcher_sdk.worker.contract import ArtifactRef, JsonObject, JsonValue, On
 from aiwatcher_sdk.worker.errors import InputRequired, LeaseLostError, TaskError, WorkerError
 
 current_context: ContextVar[TaskContext | None] = ContextVar("aiwatcher_task_context", default=None)
+
+_EVALUATIONS = uuid.uuid5(uuid.NAMESPACE_URL, "aiwatcher:evaluation")
+
+
+def evaluation_id_for(step_key: str, suite: str, variant: str | None) -> str:
+    """The id a step's report of ``suite`` on ``variant`` is filed under.
+
+    A UUID, the shape a report recorded anywhere else gets, and the same on
+    every attempt of the step — which is the whole point of it.
+    """
+    return str(uuid.uuid5(_EVALUATIONS, f"{step_key}/{suite}/{variant or ''}"))
 
 
 def get_task_context() -> TaskContext:
@@ -183,6 +196,47 @@ class TaskContext:
         ref = self._api.write_artifact(name, rows)
         self._outputs[name] = ref
         return ref
+
+    def record_evaluation(
+        self,
+        *,
+        suite: str,
+        dataset: str | None = None,
+        variant: str | None = None,
+        params: dict[str, Any] | None = None,
+        metrics: dict[str, float] | None = None,
+        report: dict[str, Any] | None = None,
+        cases_total: int | None = None,
+        cases_passed: int | None = None,
+        duration_ms: float | None = None,
+        evaluation_id: str | None = None,
+    ) -> str:
+        """Publish an evaluation this step measured, listed under this run and this step.
+
+        ``record_evaluation`` on the client, with the run and the step filled
+        in — which is why it is here rather than a context the client picks up
+        on its own: the client is shared across threads, and an ambient run
+        would be stamped on a report some unrelated code in this process wrote.
+
+        The id is derived from ``step_key``, the suite and the variant unless
+        one is given, so a retried attempt lands on the report its predecessor
+        wrote rather than beside it.
+        """
+        return self.client.record_evaluation(
+            suite=suite,
+            evaluation_id=evaluation_id or evaluation_id_for(self.step_key, suite, variant),
+            dataset=dataset,
+            variant=variant,
+            params=params,
+            metrics=metrics,
+            report=report,
+            cases_total=cases_total,
+            cases_passed=cases_passed,
+            duration_ms=duration_ms,
+            workflow_id=self.correlation.workflow_id,
+            workflow_run_id=self.workflow_run_id,
+            step_id=self.assignment.step_id,
+        )
 
     def start(self) -> None:
         self._thread.start()

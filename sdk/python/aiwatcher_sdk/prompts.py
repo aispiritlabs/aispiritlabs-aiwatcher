@@ -217,6 +217,10 @@ class OptimizationRecord:
     variables_lost: tuple[str, ...] = ()
     dataset: str | None = None
     evaluation_id: str | None = None
+    #: The held-out reports the two ``test`` columns came from. Kept, never
+    #: read by the server: the verdict is still decided from ``test``.
+    baseline_evaluation: str | None = None
+    candidate_evaluation: str | None = None
 
     @property
     def admitted(self) -> bool:
@@ -262,6 +266,8 @@ class OptimizationRecord:
             variables_lost=tuple(body.get("variables_lost") or ()),
             dataset=body.get("dataset"),
             evaluation_id=body.get("evaluation_id"),
+            baseline_evaluation=body.get("baseline_evaluation"),
+            candidate_evaluation=body.get("candidate_evaluation"),
         )
 
 
@@ -434,6 +440,8 @@ class PromptRegistry:
         test: Sequence[Score] = (),
         dataset: str | None = None,
         evaluation_id: str | None = None,
+        baseline_evaluation: str | None = None,
+        candidate_evaluation: str | None = None,
         optimization_id: str | None = None,
         started_at: str | None = None,
         duration_ms: float | None = None,
@@ -449,7 +457,12 @@ class PromptRegistry:
         promotion, which is the outcome the split exists to produce.
 
         ``promote`` moves ``production`` **if** the server admits the
-        candidate. It never overrides the verdict.
+        candidate. It never overrides the verdict — and neither does
+        ``set_label``, which refuses ``production`` on a rejected candidate.
+
+        ``baseline_evaluation`` and ``candidate_evaluation`` name the held-out
+        reports the ``test`` scores came from. The record keeps them; the
+        verdict is still decided from ``test``.
         """
         body: dict[str, Any] = {
             "algorithm": algorithm,
@@ -463,6 +476,8 @@ class PromptRegistry:
         for key, value in (
             ("dataset", dataset),
             ("evaluation_id", evaluation_id),
+            ("baseline_evaluation", baseline_evaluation),
+            ("candidate_evaluation", candidate_evaluation),
             ("optimization_id", optimization_id),
             ("started_at", started_at),
             ("iterations", iterations),

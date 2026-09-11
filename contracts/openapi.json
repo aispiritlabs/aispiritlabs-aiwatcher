@@ -12567,6 +12567,13 @@
             "type": "string",
             "description": "The producer's `run_id`. An evaluation is an execution too, so it gets\nits own stream in the log and its own partition — which is what keeps a\nreport's events in order without serialising it behind agent traffic."
           },
+          "execution_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The managed run whose step recorded this report — the envelope's\n`workflow_run_id`. Absent on a report a script published on its own."
+          },
           "last_checkpoint": {
             "$ref": "#/components/schemas/Checkpoint"
           },
@@ -12618,6 +12625,13 @@
           },
           "status": {
             "$ref": "#/components/schemas/EvaluationStatus"
+          },
+          "step_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "That run's step, from `data.step_id`. Not `node`: that is what a\n`step.*` fact calls a node of a declared graph, and a report is not one."
           },
           "suite": {
             "type": "string",
@@ -16845,8 +16859,22 @@
           "baseline": {
             "$ref": "#/components/schemas/PromptVersionId"
           },
+          "baseline_evaluation": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The baseline's report on the held-out cases: where `test`'s baseline\ncolumn came from. A pointer into the log, and never resolved here —\nthe verdict is decided from `test`, as the client sent it."
+          },
           "candidate": {
             "$ref": "#/components/schemas/PromptVersionId"
+          },
+          "candidate_evaluation": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The same, for the candidate's column."
           },
           "dataset": {
             "type": [
@@ -16956,6 +16984,20 @@
           "baseline": {
             "$ref": "#/components/schemas/PromptVersionId",
             "description": "The version it started from. Must already be in the registry: an\noptimisation against a prompt nobody stored is a claim with no subject."
+          },
+          "baseline_evaluation": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The baseline's report on the held-out cases. Kept on the record and\nnever resolved: the verdict is still decided from `test`."
+          },
+          "candidate_evaluation": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The candidate's report on the held-out cases, likewise."
           },
           "candidate_text": {
             "type": "string",

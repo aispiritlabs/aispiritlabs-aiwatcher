@@ -530,6 +530,14 @@ pub struct OptimizationRecord {
     /// one. The join between the registry and the log.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evaluation_id: Option<String>,
+    /// The baseline's report on the held-out cases: where `test`'s baseline
+    /// column came from. A pointer into the log, and never resolved here —
+    /// the verdict is decided from `test`, as the client sent it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_evaluation: Option<String>,
+    /// The same, for the candidate's column.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidate_evaluation: Option<String>,
     /// Whatever the optimiser produced — `deepeval`'s serialised
     /// `OptimizationReport`, an iteration trace, anything. Bounded by the
     /// registry, not by this type.
@@ -1092,6 +1100,8 @@ mod tests {
             duration_ms: Some(60_000),
             iterations: Some(8),
             evaluation_id: None,
+            baseline_evaluation: None,
+            candidate_evaluation: None,
             report: None,
         };
         // 0.30 on dev against 0.05 held out: it learned the dev split.

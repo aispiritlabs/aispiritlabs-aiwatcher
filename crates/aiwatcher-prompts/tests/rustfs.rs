@@ -258,6 +258,8 @@ async fn the_registry_runs_against_a_bucket_exactly_as_it_does_in_memory() {
                 }],
                 dataset: Some("catalog@1".to_owned()),
                 evaluation_id: Some("eval-integration".to_owned()),
+                baseline_evaluation: None,
+                candidate_evaluation: None,
                 started_at: None,
                 duration_ms: Some(1_800_000),
                 iterations: Some(8),

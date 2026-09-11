@@ -1541,6 +1541,58 @@ async fn a_label_pointing_at_a_version_that_is_not_stored_is_a_404() {
 }
 
 #[tokio::test]
+async fn production_on_a_rejected_candidate_is_refused_as_a_promotion() {
+    // ADR_0011's `promote` never overrides the verdict, and the label route is
+    // the one that could. It answers what the model registry answers.
+    let fixture = Fixture::new(false);
+    let baseline = publish(&fixture, BASELINE).await["version"]["version_id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+    let (status, record) = fixture
+        .post(
+            "/api/v1/prompts/planner.floor-plan/optimizations",
+            json!({
+                "algorithm": "deepeval/SIMBA",
+                "baseline": baseline,
+                "candidate_text": CANDIDATE,
+                "primary_metric": "mean_score",
+                "test": [{ "metric": "mean_score", "baseline": 0.60, "candidate": 0.58 }],
+                "baseline_evaluation": "eval-baseline",
+                "candidate_evaluation": "eval-candidate",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{record}");
+    assert_eq!(record["outcome"], "rejected");
+    assert_eq!(record["baseline_evaluation"], "eval-baseline");
+    assert_eq!(record["candidate_evaluation"], "eval-candidate");
+    let candidate = record["candidate"].as_str().expect("an id");
+
+    let (status, body) = fixture
+        .put(
+            "/api/v1/prompts/planner.floor-plan/labels/production",
+            json!({ "version_id": candidate }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(body["code"], "promotion_refused");
+    let message = body["message"].as_str().expect("a message");
+    assert!(
+        message.contains(record["optimization_id"].as_str().expect("an id")),
+        "{message}"
+    );
+
+    let (status, _) = fixture
+        .put(
+            "/api/v1/prompts/planner.floor-plan/labels/staging",
+            json!({ "version_id": candidate }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "any other label stays free");
+}
+
+#[tokio::test]
 async fn an_optimisation_is_graded_by_the_server_rather_than_by_its_optimiser() {
     let fixture = Fixture::new(false);
     let baseline = publish(&fixture, BASELINE).await["version"]["version_id"]
@@ -5925,6 +5977,71 @@ async fn a_worker_that_stopped_to_ask_parks_its_attempt_and_nobody_else_may_take
         StatusCode::NO_CONTENT,
         "a question a worker is waiting on was handed to another worker: {next}"
     );
+}
+
+#[tokio::test]
+async fn a_question_a_worker_asked_for_an_admin_is_refused_to_an_editor() {
+    // A gate the plan declared carries its role in the plan; a question a
+    // running attempt asked carries it on the question. Either way the route
+    // holds the editor floor and then the role the question named.
+    let fixture = Fixture::behind_a_proxy(false).await;
+    fixture.seed_worker_run("exec-w23").await;
+    fixture
+        .claim_as(
+            WORKER_SECRET,
+            json!({ "worker": "laptop-1", "tasks": ["stage@1", "review@1"] }),
+        )
+        .await;
+    let (status, settled) = fixture
+        .send_with_token(
+            "POST",
+            "/api/v1/worker/claims/exec-w23/stage/1/result",
+            WORKER_SECRET,
+            Some(json!({
+                "worker": "laptop-1",
+                "outcome": "parked",
+                "prompt": "Promote the candidate to production?",
+                "choices": ["promote", "keep"],
+                "role": "admin",
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{settled}");
+
+    let (status, refused) = fixture
+        .post_as(
+            "/api/v1/executions/exec-w23/steps/stage/input",
+            "alice",
+            "aiwatcher-editors",
+            json!({ "attempt": 1, "response": "promote" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+
+    let (status, run) = fixture
+        .get_as("/api/v1/executions/exec-w23", "alice", "aiwatcher-editors")
+        .await;
+    assert_eq!(status, StatusCode::OK, "{run}");
+    let step = run["execution"]["steps"]
+        .as_array()
+        .expect("steps")
+        .iter()
+        .find(|step| step["step_id"] == "stage")
+        .expect("the parked step");
+    assert_eq!(
+        step["state"]["state_type"], "awaiting_input",
+        "the refusal answered nothing: {step}"
+    );
+
+    let (status, answered) = fixture
+        .post_as(
+            "/api/v1/executions/exec-w23/steps/stage/input",
+            "root",
+            "aiwatcher-admins",
+            json!({ "attempt": 1, "response": "promote" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{answered}");
 }
 
 #[tokio::test]

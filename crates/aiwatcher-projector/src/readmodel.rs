@@ -897,4 +897,37 @@ mod tests {
             "and the running total matches what is actually held"
         );
     }
+
+    /// A report a managed step recorded carries that run's `workflow_run_id`,
+    /// and the workflow fold keys executions by exactly that field — which is
+    /// why `apply` routes every `eval.*` event away before it.
+    #[tokio::test]
+    async fn a_report_a_step_recorded_starts_no_workflow_execution() {
+        use aiwatcher_core::{EventEnvelope, Sdk, Source};
+
+        let model = ReadModel::new(ReadModelConfig::default());
+        let at = datetime!(2026-09-11 09:00:00 UTC);
+        for event_type in [EventType::EvalStarted, EventType::EvalCompleted] {
+            let mut envelope =
+                EventEnvelope::new(event_type, "eval-1", at, Source::new("worker", Sdk::Python))
+                    .with_data(
+                        serde_json::json!({ "suite": "held-out", "step_id": "evaluate_baseline" }),
+                    );
+            // Both, as a step's report carries them: exactly what the workflow
+            // fold would key a new execution by, were the report to reach it.
+            envelope.workflow_id = Some("optimise-prompt".to_owned());
+            envelope.workflow_run_id = Some("nobody-declared-this".to_owned());
+            model.apply(&envelope.record(1, 1, at, None)).await;
+        }
+
+        let page = model.workflow_executions(&ExecutionFilter::default()).await;
+        assert!(
+            page.executions.is_empty(),
+            "a report is not a node, and the run it names is no execution of its own"
+        );
+        assert!(
+            model.run("eval-1").await.is_none(),
+            "nor is it an agent run"
+        );
+    }
 }

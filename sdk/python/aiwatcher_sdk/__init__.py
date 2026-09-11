@@ -474,6 +474,9 @@ class AiwatcherClient:
         cases_total: int | None = None,
         cases_passed: int | None = None,
         duration_ms: float | None = None,
+        workflow_id: str | None = None,
+        workflow_run_id: str | None = None,
+        step_id: str | None = None,
     ) -> str:
         """Publish a finished evaluation in one call. Returns its id.
 
@@ -491,9 +494,22 @@ class AiwatcherClient:
         `duration_ms` back-dates the start. Without it the report is stamped as
         instantaneous, which is honest — nothing told us when it began — and
         useless for anything that looks at how long a suite takes.
+
+        ``workflow_id``, ``workflow_run_id`` and ``step_id`` name the managed
+        workflow, the run and the step that measured it, so the report is
+        listed with the run and the step. The run is kept only beside the
+        workflow — that is the envelope's rule — so name both or neither. A
+        task does not pass them by hand: ``TaskContext.record_evaluation``
+        does, and derives the id as well.
         """
-        context = Correlation(run_id=evaluation_id or _new_id())
+        context = Correlation(
+            run_id=evaluation_id or _new_id(),
+            workflow_id=workflow_id,
+            workflow_run_id=workflow_run_id,
+        )
         base: dict[str, Any] = {"suite": suite}
+        if step_id:
+            base["step_id"] = step_id
         if dataset:
             base["dataset"] = dataset
         if variant:

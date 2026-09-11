@@ -383,6 +383,11 @@ fn registry_parts(error: &aiwatcher_prompts::RegistryError) -> (StatusCode, &'st
             (StatusCode::BAD_REQUEST, "bad_request")
         }
         RegistryError::TooLarge { .. } => (StatusCode::PAYLOAD_TOO_LARGE, "too_large"),
+        // The model registry's answer to the same act, for the same reason:
+        // a refused promotion is a decision about content, not a conflict.
+        RegistryError::NotAdmitted { .. } => {
+            (StatusCode::UNPROCESSABLE_ENTITY, "promotion_refused")
+        }
         RegistryError::Store(store) if store.is_retryable() => {
             (StatusCode::SERVICE_UNAVAILABLE, "registry_unavailable")
         }

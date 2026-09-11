@@ -81,6 +81,14 @@ pub struct EvaluationSummary {
     /// the experiments side.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub variant: Option<String>,
+    /// The managed run whose step recorded this report — the envelope's
+    /// `workflow_run_id`. Absent on a report a script published on its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_id: Option<String>,
+    /// That run's step, from `data.step_id`. Not `node`: that is what a
+    /// `step.*` fact calls a node of a declared graph, and a report is not one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step_id: Option<String>,
     pub status: EvaluationStatus,
     #[serde(with = "time::serde::rfc3339")]
     pub started_at: OffsetDateTime,
@@ -125,6 +133,8 @@ impl EvaluationSummary {
             suite: event.metadata.run_id.clone(),
             dataset: None,
             variant: None,
+            execution_id: None,
+            step_id: None,
             status: EvaluationStatus::Running,
             started_at: event.metadata.occurred_at,
             ended_at: None,
@@ -358,6 +368,22 @@ impl EvaluationState {
             }
             if let Some(variant) = identity(event, &["variant", "variant_id"]) {
                 summary.variant = Some(variant);
+            }
+            // The envelope's field rather than the payload's, because it is
+            // the one a stream scoped to the execution already filters on. It
+            // is kept only beside a `workflow_id`, so a step's report carries
+            // both; the suite fallback above never reads that one, because a
+            // report names its suite.
+            if let Some(execution) = event
+                .metadata
+                .workflow_run_id
+                .as_ref()
+                .filter(|id| !id.is_empty())
+            {
+                summary.execution_id = Some(execution.clone());
+            }
+            if let Some(step) = identity(event, &["step_id"]) {
+                summary.step_id = Some(step);
             }
             summary.params.extend(string_map(event.data.get("params")));
             summary
@@ -1393,5 +1419,113 @@ mod tests {
             now(),
         );
         assert_eq!(searched.total_known, 3);
+    }
+
+    /// The shape `TaskContext.record_evaluation` sends: the workflow and the
+    /// execution on the envelope, the step in the payload.
+    fn from_a_step(
+        id: &str,
+        event_type: EventType,
+        at: OffsetDateTime,
+        data: serde_json::Value,
+    ) -> RecordedEvent {
+        let mut envelope =
+            EventEnvelope::new(event_type, id, at, Source::new("worker", Sdk::Python))
+                .with_data(data);
+        envelope.workflow_id = Some("optimise-prompt".to_owned());
+        envelope.workflow_run_id = Some("execution-1".to_owned());
+        envelope.record(1, 1, at, None)
+    }
+
+    #[test]
+    fn a_report_a_step_recorded_names_its_execution_and_step() {
+        let state = fold(&[
+            from_a_step(
+                "eval-step",
+                EventType::EvalStarted,
+                datetime!(2026-09-11 09:00:00 UTC),
+                json!({ "suite": "held-out", "step_id": "evaluate_baseline" }),
+            ),
+            from_a_step(
+                "eval-step",
+                EventType::EvalCompleted,
+                datetime!(2026-09-11 09:01:00 UTC),
+                json!({
+                    "suite": "held-out",
+                    "step_id": "evaluate_baseline",
+                    "metrics": { "exact_match": 0.4 },
+                }),
+            ),
+        ]);
+        let summary = &state.detail("eval-step").expect("the evaluation").summary;
+        assert_eq!(summary.execution_id.as_deref(), Some("execution-1"));
+        assert_eq!(summary.step_id.as_deref(), Some("evaluate_baseline"));
+        assert_eq!(summary.suite, "held-out");
+    }
+
+    #[test]
+    fn a_report_a_script_recorded_names_no_execution_and_no_step() {
+        let state = fold(&[
+            event(
+                "eval-script",
+                EventType::EvalStarted,
+                datetime!(2026-09-11 09:00:00 UTC),
+                json!({ "suite": "catalog-floor-plan", "dataset": "house-catalog@3" }),
+            ),
+            event(
+                "eval-script",
+                EventType::EvalCompleted,
+                datetime!(2026-09-11 09:01:00 UTC),
+                json!({ "metrics": { "mean_score": 0.9 } }),
+            ),
+        ]);
+        let summary = &state.detail("eval-script").expect("the evaluation").summary;
+        assert_eq!(summary.execution_id, None);
+        assert_eq!(summary.step_id, None);
+        assert_eq!(summary.suite, "catalog-floor-plan");
+        assert_eq!(summary.dataset.as_deref(), Some("house-catalog@3"));
+        let listed = serde_json::to_value(summary).expect("serialises");
+        assert!(
+            listed.get("execution_id").is_none() && listed.get("step_id").is_none(),
+            "an absent link is not written, so a script's row reads as it did"
+        );
+    }
+
+    /// A step derives its report id, so the second attempt of a step whose
+    /// first lost its lease sends the same four events again under it.
+    #[test]
+    fn a_retried_step_that_records_again_lands_on_its_own_report() {
+        let attempt = |minute: u8, score: f64| {
+            let at = datetime!(2026-09-11 09:00:00 UTC) + time::Duration::minutes(minute.into());
+            [
+                from_a_step(
+                    "eval-derived",
+                    EventType::EvalStarted,
+                    at,
+                    json!({ "suite": "held-out", "step_id": "evaluate_candidate" }),
+                ),
+                from_a_step(
+                    "eval-derived",
+                    EventType::EvalCompleted,
+                    at + time::Duration::seconds(30),
+                    json!({
+                        "suite": "held-out",
+                        "step_id": "evaluate_candidate",
+                        "metrics": { "exact_match": score },
+                    }),
+                ),
+            ]
+        };
+        let events: Vec<RecordedEvent> =
+            attempt(0, 0.4).into_iter().chain(attempt(5, 0.8)).collect();
+        let state = fold(&events);
+
+        let page = state.page(&EvaluationFilter::default(), now());
+        assert_eq!(
+            page.evaluations.len(),
+            1,
+            "one report per step, not one per attempt"
+        );
+        assert_eq!(page.evaluations[0].metrics["exact_match"], 0.8);
     }
 }

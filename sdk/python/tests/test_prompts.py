@@ -218,6 +218,45 @@ def test_recording_an_optimisation_sends_both_splits(
     assert body["promote"] is True
 
 
+def test_an_optimisation_names_the_reports_its_held_out_scores_came_from(
+    api: tuple[PromptRegistry, type[Recorder]],
+) -> None:
+    registry, recorder = api
+    candidate = "Read {{ page }} closely; describe every room in {{ language }}."
+    recorder.stubbed[("POST", "/api/v1/prompts/planner.floor-plan/optimizations")] = (
+        201,
+        {
+            "optimization_id": "opt-3",
+            "prompt": "planner.floor-plan",
+            "algorithm": "e2e/append",
+            "baseline": version_id_of(BASELINE),
+            "candidate": version_id_of(candidate),
+            "primary_metric": "exact_match",
+            "outcome": "admitted",
+            "baseline_evaluation": "eval-baseline",
+            "candidate_evaluation": "eval-candidate",
+        },
+    )
+
+    record = registry.record_optimization(
+        "planner.floor-plan",
+        algorithm="e2e/append",
+        baseline=version_id_of(BASELINE),
+        candidate_text=candidate,
+        primary_metric="exact_match",
+        baseline_evaluation="eval-baseline",
+        candidate_evaluation="eval-candidate",
+    )
+
+    body = recorder.seen[-1]["body"]
+    assert body["baseline_evaluation"] == "eval-baseline"
+    assert body["candidate_evaluation"] == "eval-candidate"
+    assert (record.baseline_evaluation, record.candidate_evaluation) == (
+        "eval-baseline",
+        "eval-candidate",
+    )
+
+
 def test_a_rejection_carries_the_reason_rather_than_raising(
     api: tuple[PromptRegistry, type[Recorder]],
 ) -> None:

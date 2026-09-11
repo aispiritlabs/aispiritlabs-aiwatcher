@@ -281,6 +281,61 @@ def test_a_heartbeat_runs_while_user_code_is_busy() -> None:
     assert not any(t.name.startswith("aiwatcher-heartbeat-") for t in threading.enumerate())
 
 
+class Recording:
+    def __init__(self) -> None:
+        self.events: list[dict[str, Any]] = []
+
+    def send(self, batch: list[dict[str, Any]]) -> None:
+        self.events.extend(batch)
+
+    def close(self) -> None:
+        pass
+
+
+def test_a_step_files_its_evaluation_under_its_run_and_step_and_a_retry_lands_on_it() -> None:
+    transport = Recording()
+    telemetry = AiwatcherClient(service="test", transport=transport)
+    api = WorkerApi(
+        assignment(step_id="evaluate", context_id="import-1/evaluate/1"),
+        assignment(step_id="evaluate", context_id="import-1/evaluate/2", attempt=2),
+    )
+    ids: list[str] = []
+
+    def evaluate(inputs: dict[str, Any], ctx: TaskContext) -> None:
+        ids.append(
+            ctx.record_evaluation(
+                suite="held-out", variant="candidate", metrics={"exact_match": 0.8}
+            )
+        )
+
+    with worker(api, evaluate, telemetry=telemetry) as process:
+        assert process.run_once()
+        assert process.run_once()
+    telemetry.close()
+
+    assert len(ids) == 2
+    assert ids[0] == ids[1], "the second attempt lands on the report the first one wrote"
+    reports = [event for event in transport.events if event["event_type"].startswith("eval.")]
+    assert {event["run_id"] for event in reports} == {ids[0]}
+    assert all(event["workflow_run_id"] == "import-1" for event in reports)
+    assert all(event["workflow_id"] == "test-import" for event in reports), (
+        "the envelope keeps a workflow run only beside its workflow"
+    )
+    assert all(event["data"]["step_id"] == "evaluate" for event in reports)
+
+
+def test_a_report_recorded_outside_a_task_names_no_run_and_no_step() -> None:
+    transport = Recording()
+    client = AiwatcherClient(service="test", transport=transport)
+    client.record_evaluation(suite="held-out", metrics={"exact_match": 0.8})
+    client.close()
+
+    reports = [event for event in transport.events if event["event_type"].startswith("eval.")]
+    assert reports
+    assert not any(event.get("workflow_run_id") for event in reports)
+    assert not any("step_id" in event["data"] for event in reports)
+
+
 def test_a_lost_lease_discards_the_result_even_when_task_code_ignores_it() -> None:
     api = WorkerApi(assignment())
     api.heartbeat_status = 409

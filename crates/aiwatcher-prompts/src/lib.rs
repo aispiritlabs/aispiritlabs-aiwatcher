@@ -31,8 +31,9 @@ use time::OffsetDateTime;
 
 use aiwatcher_core::ports::PortError;
 use aiwatcher_core::prompts::{
-    ObjectStore, OptimizationRecord, PRODUCTION_LABEL, PromptError, PromptHead, PromptName,
-    PromptSummary, PromptVersion, PromptVersionId, Score, VersionOrigin, variables_lost,
+    ObjectStore, OptimizationOutcome, OptimizationRecord, PRODUCTION_LABEL, PromptError,
+    PromptHead, PromptName, PromptSummary, PromptVersion, PromptVersionId, Score, VersionOrigin,
+    variables_lost,
 };
 
 /// How many heads are fetched at once when listing.
@@ -63,6 +64,17 @@ pub enum RegistryError {
     UnknownOptimization {
         name: PromptName,
         optimization_id: String,
+    },
+
+    #[error(
+        "production may not name version {version} of {name}, the candidate of \
+         optimisation {optimization_id}: {reason}"
+    )]
+    NotAdmitted {
+        name: PromptName,
+        version: PromptVersionId,
+        optimization_id: String,
+        reason: String,
     },
 
     #[error(transparent)]
@@ -213,6 +225,13 @@ pub struct OptimizationRequest {
     /// The evaluation report this run published, where it published one.
     #[serde(default)]
     pub evaluation_id: Option<String>,
+    /// The baseline's report on the held-out cases. Kept on the record and
+    /// never resolved: the verdict is still decided from `test`.
+    #[serde(default)]
+    pub baseline_evaluation: Option<String>,
+    /// The candidate's report on the held-out cases, likewise.
+    #[serde(default)]
+    pub candidate_evaluation: Option<String>,
     #[serde(default)]
     pub started_at: Option<OffsetDateTime>,
     #[serde(default)]
@@ -477,8 +496,13 @@ impl Registry {
             head.tags = tags;
         }
         if let Some(label) = request.label {
-            head.labels
-                .insert(validate_identifier(&label)?, version.version_id.clone());
+            let label = validate_identifier(&label)?;
+            // A version is its text, so publishing a rejected candidate's text
+            // lands on that candidate — the same pointer `set_label` refuses.
+            if label == PRODUCTION_LABEL {
+                self.check_admitted(&request.name, &version).await?;
+            }
+            head.labels.insert(label, version.version_id.clone());
         }
         self.index_version(&mut head, &version, now);
         self.write_head(&head).await?;
@@ -500,7 +524,9 @@ impl Registry {
     ///
     /// [`RegistryError::UnknownPrompt`] or [`RegistryError::UnknownVersion`]
     /// when either side of the pointer is missing — a label may only name a
-    /// version that is actually stored.
+    /// version that is actually stored. [`RegistryError::NotAdmitted`] when
+    /// the label is `production` and the version is a candidate the verdict
+    /// did not admit.
     pub async fn set_label(
         &self,
         name: &PromptName,
@@ -512,16 +538,53 @@ impl Registry {
             .head(name)
             .await?
             .ok_or_else(|| RegistryError::UnknownPrompt(name.clone()))?;
-        if self.version(name, version).await?.is_none() {
+        let Some(stored) = self.version(name, version).await? else {
             return Err(RegistryError::UnknownVersion {
                 name: name.clone(),
                 version: version.clone(),
             });
+        };
+        if label == PRODUCTION_LABEL {
+            self.check_admitted(name, &stored).await?;
         }
         head.labels.insert(label, version.clone());
         head.updated_at = OffsetDateTime::now_utc();
         self.write_head(&head).await?;
         Ok(head)
+    }
+
+    /// Refuse `production` on a candidate the verdict did not admit.
+    ///
+    /// ADR_0011's `promote` never overrides the verdict, and this route is the
+    /// one that could: it is the model registry's `check_promotable`, for
+    /// prompts. A version a person published has no verdict to answer to, and
+    /// any other label is free — trying a rejected candidate on `staging` is
+    /// something people do on purpose. The verdict that counts is the one the
+    /// version's origin names: a version is its text, so the first
+    /// optimisation to store it is the one it is filed under. A candidate whose
+    /// record is missing — the version is written first, so a crash between
+    /// the two leaves one — has no verdict, and an unwritten verdict is not an
+    /// admission.
+    async fn check_admitted(&self, name: &PromptName, version: &PromptVersion) -> Result<()> {
+        let VersionOrigin::Optimized {
+            optimization_id, ..
+        } = &version.origin
+        else {
+            return Ok(());
+        };
+        let reason = match self.optimization(name, optimization_id).await? {
+            Some(record) if record.outcome == OptimizationOutcome::Admitted => return Ok(()),
+            Some(record) => record
+                .reason
+                .map_or_else(|| "it was rejected".to_owned(), |reason| reason.to_string()),
+            None => "no verdict was recorded for it".to_owned(),
+        };
+        Err(RegistryError::NotAdmitted {
+            name: name.clone(),
+            version: version.version_id.clone(),
+            optimization_id: optimization_id.clone(),
+            reason,
+        })
     }
 
     /// Record an optimisation, publishing its candidate as a version.
@@ -628,6 +691,8 @@ impl Registry {
             duration_ms: request.duration_ms,
             iterations: request.iterations,
             evaluation_id: request.evaluation_id,
+            baseline_evaluation: request.baseline_evaluation,
+            candidate_evaluation: request.candidate_evaluation,
             report: request.report,
         };
         self.write_json(&self.optimization_key(name, &optimization_id), &record)
@@ -922,6 +987,8 @@ mod tests {
             }],
             dataset: Some("catalog@1".to_owned()),
             evaluation_id: Some("eval-7".to_owned()),
+            baseline_evaluation: None,
+            candidate_evaluation: None,
             started_at: None,
             duration_ms: Some(1_800_000),
             iterations: Some(8),
@@ -1421,5 +1488,235 @@ mod tests {
         // what makes the cap a display decision rather than a deletion.
         let evicted = PromptVersionId::of("version 0 {{ x }}");
         assert!(registry.version(&name(), &evicted).await.unwrap().is_some());
+    }
+
+    /// The candidate, recorded against the baseline with held-out scores that
+    /// either improve the primary metric or do not.
+    async fn recorded(registry: &Registry, improves: bool) -> OptimizationRecord {
+        registry
+            .record_optimization(
+                &name(),
+                OptimizationRequest {
+                    test: vec![Score {
+                        metric: "mean_score".to_owned(),
+                        baseline: Some(0.60),
+                        candidate: Some(if improves { 0.66 } else { 0.58 }),
+                    }],
+                    ..optimization(CANDIDATE)
+                },
+            )
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn an_optimisation_keeps_the_reports_its_held_out_scores_came_from() {
+        let (registry, _) = registry();
+        registry.publish(publish(BASELINE)).await.unwrap();
+        let record = registry
+            .record_optimization(
+                &name(),
+                OptimizationRequest {
+                    baseline_evaluation: Some("eval-baseline".to_owned()),
+                    candidate_evaluation: Some("eval-candidate".to_owned()),
+                    ..optimization(CANDIDATE)
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(record.baseline_evaluation.as_deref(), Some("eval-baseline"));
+        assert_eq!(
+            record.candidate_evaluation.as_deref(),
+            Some("eval-candidate")
+        );
+        assert_eq!(
+            record.evaluation_id.as_deref(),
+            Some("eval-7"),
+            "the older reference keeps its own meaning beside them"
+        );
+        let stored = registry
+            .optimization(&name(), &record.optimization_id)
+            .await
+            .unwrap()
+            .expect("stored");
+        assert_eq!(stored, record, "what was returned is what is read back");
+    }
+
+    #[tokio::test]
+    async fn a_report_an_optimisation_names_does_not_decide_its_verdict() {
+        let (registry, _) = registry();
+        registry.publish(publish(BASELINE)).await.unwrap();
+        // Neither report exists anywhere, and nothing looks: the verdict is
+        // decided from `test`, as the client sent it. Reading the reports back
+        // is a separate change with its own gate.
+        let record = registry
+            .record_optimization(
+                &name(),
+                OptimizationRequest {
+                    baseline_evaluation: Some("nowhere-1".to_owned()),
+                    candidate_evaluation: Some("nowhere-2".to_owned()),
+                    ..optimization(CANDIDATE)
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(record.outcome, OptimizationOutcome::Admitted);
+    }
+
+    #[tokio::test]
+    async fn a_record_written_before_the_report_references_still_reads() {
+        let (registry, _) = registry();
+        registry.publish(publish(BASELINE)).await.unwrap();
+        let record = registry
+            .record_optimization(&name(), optimization(CANDIDATE))
+            .await
+            .unwrap();
+        let stored = serde_json::to_value(&record).unwrap();
+        assert!(
+            stored.get("baseline_evaluation").is_none()
+                && stored.get("candidate_evaluation").is_none(),
+            "an absent reference is not written, so this is the shape stored before it existed"
+        );
+        let read: OptimizationRecord = serde_json::from_value(stored).unwrap();
+        assert_eq!(read, record);
+    }
+
+    #[tokio::test]
+    async fn production_refuses_a_candidate_the_verdict_turned_down() {
+        let (registry, _) = registry();
+        let baseline = registry
+            .publish(PublishRequest {
+                label: Some(PRODUCTION_LABEL.to_owned()),
+                ..publish(BASELINE)
+            })
+            .await
+            .unwrap()
+            .version
+            .version_id;
+        let record = registry
+            .record_optimization(
+                &name(),
+                OptimizationRequest {
+                    candidate_text: "Describe every room in detail, with areas.".to_owned(),
+                    ..optimization(CANDIDATE)
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(record.reason, Some(RejectionReason::VariablesLost));
+
+        let error = registry
+            .set_label(&name(), PRODUCTION_LABEL, &record.candidate)
+            .await
+            .expect_err("refused");
+        let RegistryError::NotAdmitted {
+            optimization_id,
+            reason,
+            ..
+        } = &error
+        else {
+            panic!("{error}");
+        };
+        assert_eq!(optimization_id, &record.optimization_id);
+        assert!(reason.contains("dropped a variable"), "{reason}");
+        let head = registry.head(&name()).await.unwrap().expect("published");
+        assert_eq!(
+            head.labels[PRODUCTION_LABEL], baseline,
+            "production stays where it was"
+        );
+    }
+
+    #[tokio::test]
+    async fn staging_may_hold_a_candidate_the_verdict_turned_down() {
+        let (registry, _) = registry();
+        registry.publish(publish(BASELINE)).await.unwrap();
+        let record = recorded(&registry, false).await;
+        assert_eq!(record.outcome, OptimizationOutcome::Rejected);
+
+        let head = registry
+            .set_label(&name(), "staging", &record.candidate)
+            .await
+            .expect("trying a rejected candidate on purpose is allowed");
+        assert_eq!(head.labels["staging"], record.candidate);
+    }
+
+    #[tokio::test]
+    async fn production_takes_a_version_a_person_published() {
+        let (registry, _) = registry();
+        let baseline = registry
+            .publish(publish(BASELINE))
+            .await
+            .unwrap()
+            .version
+            .version_id;
+        let head = registry
+            .set_label(&name(), PRODUCTION_LABEL, &baseline)
+            .await
+            .expect("an authored version has no verdict to answer to");
+        assert_eq!(head.labels[PRODUCTION_LABEL], baseline);
+    }
+
+    #[tokio::test]
+    async fn production_takes_an_admitted_candidate_recorded_without_promote() {
+        let (registry, _) = registry();
+        registry.publish(publish(BASELINE)).await.unwrap();
+        let record = recorded(&registry, true).await;
+        assert_eq!(record.outcome, OptimizationOutcome::Admitted);
+        let head = registry.head(&name()).await.unwrap().expect("published");
+        assert!(
+            !head.labels.contains_key(PRODUCTION_LABEL),
+            "not promoted yet"
+        );
+
+        let head = registry
+            .set_label(&name(), PRODUCTION_LABEL, &record.candidate)
+            .await
+            .expect("admitted, and now somebody decided");
+        assert_eq!(head.labels[PRODUCTION_LABEL], record.candidate);
+    }
+
+    #[tokio::test]
+    async fn production_refuses_a_candidate_whose_verdict_was_never_written() {
+        let (registry, _) = registry();
+        registry.publish(publish(BASELINE)).await.unwrap();
+        // What a crash between the candidate's write and its record's leaves.
+        let mut orphan =
+            PromptVersion::new(name(), CANDIDATE.to_owned(), OffsetDateTime::now_utc()).unwrap();
+        orphan.origin = VersionOrigin::Optimized {
+            optimization_id: "opt-lost".to_owned(),
+            algorithm: "deepeval/SIMBA".to_owned(),
+        };
+        let (orphan, _) = registry.store_version(orphan).await.unwrap();
+
+        let error = registry
+            .set_label(&name(), PRODUCTION_LABEL, &orphan.version_id)
+            .await
+            .expect_err("an unwritten verdict is not an admission");
+        assert!(
+            matches!(&error, RegistryError::NotAdmitted { reason, .. } if reason.contains("no verdict")),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn publishing_a_rejected_candidates_text_onto_production_is_refused_too() {
+        let (registry, _) = registry();
+        registry.publish(publish(BASELINE)).await.unwrap();
+        let record = recorded(&registry, false).await;
+
+        // The text is the candidate's, so the publish lands on the candidate.
+        let error = registry
+            .publish(PublishRequest {
+                label: Some(PRODUCTION_LABEL.to_owned()),
+                ..publish(CANDIDATE)
+            })
+            .await
+            .expect_err("the same pointer set_label refuses");
+        assert!(
+            matches!(&error, RegistryError::NotAdmitted { optimization_id, .. } if optimization_id == &record.optimization_id),
+            "{error}"
+        );
+        let head = registry.head(&name()).await.unwrap().expect("published");
+        assert!(!head.labels.contains_key(PRODUCTION_LABEL));
     }
 }
