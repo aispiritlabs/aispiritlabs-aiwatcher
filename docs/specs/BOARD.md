@@ -21,10 +21,10 @@ means it is sitting on that column waiting for something.
 
 ## Tests
 
-- [ ] [AW-1 · Ship the spec flow with the repository](AW-1-ship-the-spec-flow-with-the-repository/_index.md)
-
 ## Review
 
 ## Deploy
 
 ## Done
+
+- [x] [AW-1 · Ship the spec flow with the repository](AW-1-ship-the-spec-flow-with-the-repository/_index.md)

@@ -1,13 +1,13 @@
 ---
 id: AW-1
 title: Ship the spec flow with the repository
-step: tests
-status: doing
+step: deploy
+status: done
 branch: main
 repo: aiwatcher
 created: 2026-09-10
-updated: 2026-09-10
-tags: [spec/AW-1, step/tests, branch/main, status/doing]
+updated: 2026-09-11
+tags: [spec/AW-1, step/deploy, branch/main, status/done]
 ---
 <!-- spec-card -->
 
@@ -22,8 +22,8 @@ tags: [spec/AW-1, step/tests, branch/main, status/doing]
 - [x] [② Spec](02-spec.md)
 - [x] [③ Job](03-job.md)
 - [x] [④ Tests](04-tests.md)
-- [ ] [⑤ Review](05-review.md)
-- [ ] [⑥ Deploy](06-deploy.md)
+- [x] [⑤ Review](05-review.md)
+- [x] [⑥ Deploy](06-deploy.md)
 
 ## Summary
 The spec-driven flow that this repository's work runs through lives in `~/.claude`,
@@ -37,3 +37,4 @@ repository authored and one it pinned from upstream.
 - 2026-09-10 01:00 — spec drafted: 4 requirements, 9 scenarios
 - 2026-09-10 01:00 — job planned: 8 tasks, none started
 - 2026-09-10 01:07 — verified: 7 scenarios green, 2 not automatable, just check not run in full
+- 2026-09-11 12:20 — re-verified, reviewed and shipped on `main` (not pushed): a fresh clone carries the flow; `just check` 18/19, the one red step outside this change

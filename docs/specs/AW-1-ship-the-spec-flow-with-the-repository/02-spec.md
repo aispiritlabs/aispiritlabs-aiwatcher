@@ -33,10 +33,12 @@ vendoring path never writes to them. The commands need no mechanism at all —
 `.claude/commands/` is outside the vendoring path entirely.
 
 **Success criteria:**
-- [ ] A checkout with no `~/.claude/skills/spec-flow` can run `/spec-new`
-- [ ] `just skills-check` exits 0 with the authored skill present
-- [ ] `just skills` leaves the authored skill byte-identical
-- [ ] A directory nobody declared is still reported and still exits 1
+- [x] A checkout with no `~/.claude/skills/spec-flow` can run `/spec-new`
+      (a fresh clone carries the skill and the commands; an agent resolving
+      them is the half no checkout asserts — `04-tests.md`)
+- [x] `just skills-check` exits 0 with the authored skill present
+- [x] `just skills` leaves the authored skill byte-identical
+- [x] A directory nobody declared is still reported and still exits 1
 
 ## Spec (delta)
 
