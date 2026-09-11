@@ -211,6 +211,11 @@ The implementation stays behind: the panel's React Flow canvases already carry
 the shared visual language, and a second canvas technology would be a second
 place every graph decision has to be made.
 
+*Corrected by the review ([gui-review.md](gui-review.md), 2026-09-11):* the
+Runner tab does not light nodes as they execute — it lights all of them before
+a run and all of them after it. The panel's Workflows view is the only live
+per-node view there is.
+
 ### Workshops
 `workshops` stays in the application and gains aiwatcher as the thing it
 observes. A lab that runs three agents and shows the traces, the join and the

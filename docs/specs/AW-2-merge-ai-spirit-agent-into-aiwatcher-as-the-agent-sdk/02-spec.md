@@ -828,6 +828,17 @@ answers to "which version did this run use". MLflow keeps tracing, teed.)
   without it a commercial licence could not cover the whole of the code, and
   that is not something to repair after the first outside contribution.
 
+- **The GUI is reviewed, and nothing of it moves** (2026-09-11,
+  [gui-review.md](gui-review.md)). The run overlay the investigation counted on
+  is not live — every node lights before a run and after it — and the panel's
+  Workflows view already draws a turn node by node; the Events tab is the
+  panel's run and live feeds after the fact; a turn started from the Gradio
+  Runner is already a declared execution in aiwatcher when `AIWATCHER_URL` is
+  set. Authoring an agent graph is the one real gap, and it is a spec of its
+  own. The panel's own gaps for agent graphs — the prompt a span ran on, a node
+  that says what it was, a composer — follow the panel rebuild in progress
+  rather than race it.
+
 ## Still open, deferred to the phase that can answer them
 
 - **Which `evaluation` scorers move.** The DeepEval bridge is already
@@ -845,3 +856,4 @@ answers to "which version did this run use". MLflow keeps tracing, teed.)
 - 2026-09-11 10:10 — a turn's prompt version: one requirement over five scenarios (57 in all), one success criterion added and ticked; the version derived from what was read, a reference only while it is true, the attribute channel, and the licence (Apache-2.0, the owner) settled; the root `LICENSE` contradiction recorded, not changed
 - 2026-09-11 10:25 — the licence re-decided by the owner: PolyForm Noncommercial 1.0.0 for the whole repository, replacing the Apache-2.0 settled an hour earlier and the proprietary root `LICENSE` with it
 - 2026-09-11 10:40 — `ai_spirit_agent` licensed the same way, and `CONTRIBUTING.md` asks contributions for the rights a commercial licence needs
+- 2026-09-11 11:00 — the GUI reviewed ([gui-review.md](gui-review.md)): nothing moves; the investigation's run overlay corrected; authoring an agent graph left for a spec of its own
