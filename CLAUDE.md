@@ -164,7 +164,7 @@ Everything else: `apps/panel` (React), `sdk/python`, `sdk/agentic`, `sdk/typescr
 Rust binary does not know exist. `services/query` holds the **query engines** a
 deployment chooses between with `AIWATCHER_QUERY_ENGINE` (ADR_0028), behind the
 panel's Query tab, its recipes and a chain's query step: `flow` is the PHP surface
-(`just flow-check`), and `contract`, `datafusion` and `duckdb` are one `uv`
+(`just query-check`), and `contract`, `datafusion` and `duckdb` are one `uv`
 workspace — the contract every Python engine serves, the catalog all three load,
 and the two engines on it (`just query-contract-check`; `services/query/README.md`).
 `services/ml_pipeline` is the Python 3.14 notebook runtime behind a pipeline's
@@ -811,8 +811,8 @@ the review.
 ## Guardrails
 
 - **Never let a process claim work it cannot perform.** The claim filter is
-  built from the `ExecutorRegistry`, so a process with no `AIWATCHER_FLOW_URL`
-  registers no Flow executor and never takes a `flow_php` attempt. The
+  built from the `ExecutorRegistry`, so a process with no `AIWATCHER_QUERY_URL`
+  registers no query executor and never takes a `flow_php` attempt. The
   reactor's "no executor for this runtime" branch is defensive rather than
   reachable, and a runtime whose client would not build is one this process
   claims nothing for rather than one it fails every attempt of.
@@ -1188,7 +1188,7 @@ the review.
   `ActivityResult::cacheable` to read. A notebook says `deterministic = False`
   beside its `output`; absent means true, because a curation block normally is
   one and the other default would make every chain pay for the exceptions.
-- **Never let a plan name its own executor's address.** `AIWATCHER_FLOW_URL`,
+- **Never let a plan name its own executor's address.** `AIWATCHER_QUERY_URL`,
   `AIWATCHER_ML_PIPELINE_URL`, the pod's service account. A `PlanStep` names a
   binding and its parameters, never a host — ADR_0012's reasoning, unchanged,
   and for the same reason the rerun target is configuration.
@@ -1205,7 +1205,7 @@ the review.
   rather than a key that means "probably the same". Caching is opt-in for the
   same reason: claiming a step is a pure function of digest-addressed things is
   wrong often enough to be worth saying out loud. A pinned window counts because
-  the query service reads one: `POST /flow/query` takes `window_from`/`window_to`
+  the query service reads one: `POST /query/query` takes `window_from`/`window_to`
   and the API's windowed routes take `as_of`, so a plan that pinned 09:00–10:00
   and a retry five minutes later read the same rows. Sections 43.15 and 43.18.
 - **Never decide from the request what only the runtime can answer.** Whether a
@@ -2018,7 +2018,7 @@ the review.
   for a typo. See `Registry::DECLINED`.
 - **Never make the security boundary depend on Mago.** It is a dev dependency
   and may be absent. It reports syntax; `src/Dsl` decides what runs. `just
-  flow-check` is the service's own gate (format, lint, tests) — `just check`
+  query-check` is the service's own gate (format, lint, tests) — `just check`
   does not cover PHP, and CI's `query` job does, in its Flow entry.
 - **Never expose a query engine without authentication.** None has any. Flow's
   parser and a Python engine's `strict` admission bound what a query can say, not

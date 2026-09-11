@@ -38,8 +38,8 @@ just run-hubs
 just panel
 
 # terminal 3 — optional Flow query/curation service
-just flow-install
-just flow-serve
+just query-install
+just query-serve
 ```
 
 Open <http://127.0.0.1:5173>. API health is available at
@@ -607,4 +607,4 @@ just onnx-version         # a second runtime for the same model, if `[onnx]` is 
 
 The resulting screens are documented in [EXAMPLES.md](EXAMPLES.md). Before a
 code change is pushed, run `just check`; the optional PHP service has its own
-`just flow-check` gate.
+`just query-check` gate.

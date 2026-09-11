@@ -401,7 +401,7 @@ fn start_flow() -> Result<Option<Child>, CliError> {
         return Ok(None);
     }
     if !root.join("vendor").is_dir() {
-        println!("query service: dependencies not installed (`just flow-install`); skipping");
+        println!("query service: dependencies not installed (`just query-install`); skipping");
         return Ok(None);
     }
     if !have("php") {

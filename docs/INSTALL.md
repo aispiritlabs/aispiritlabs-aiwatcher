@@ -529,8 +529,9 @@ than no result.
 If the engine already runs somewhere this chart does not manage, point at it
 with `panel.queryUpstream` instead and leave `query.enabled` off. That field wins
 over `query.enabled` when both are set. The names these values had while Flow was
-the only engine — `flow.*`, `panel.flowUpstream`, `execution.flowUrl` — are still
-read for one release, and the new name wins where both are set.
+the only engine — `flow.*`, `panel.flowUpstream`, `execution.flowUrl` — were read
+for one release and are refused by name since, as are the server's
+`AIWATCHER_FLOW_URL` and `install.sh`'s `AIWATCHER_FLOW` and `AIWATCHER_FLOW_IMAGE`.
 
 ## The pipeline engine
 

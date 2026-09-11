@@ -6,7 +6,7 @@ curation chain's query step, chosen with `AIWATCHER_QUERY_ENGINE` (AW-3,
 
 | directory | what it is | language | checks |
 |---|---|---|---|
-| [`flow/`](flow) | Flow PHP: a query is parsed and admitted, never executed ([ADR_0008](../../docs/ADR/ADR_0008_FLOW_QUERY_SURFACE.md)) | `flow-dsl` | `just flow-check` |
+| [`flow/`](flow) | Flow PHP: a query is parsed and admitted, never executed ([ADR_0008](../../docs/ADR/ADR_0008_FLOW_QUERY_SURFACE.md)) | `flow-dsl` | `just query-check` |
 | [`contract/`](contract) | `aiwatcher_query`: what every Python engine serves — the six `/query` routes, the catalog all three engines load ([`catalog.json`](contract/catalog.json)), the API paged into Arrow, the fork server and the child a query runs in, `strict` admission, and the conformance suite | — | `just query-contract-check` |
 | [`datafusion/`](datafusion) | `query_datafusion`: DataFusion's `DataFrame` API | `datafusion-python` | the same |
 | [`duckdb/`](duckdb) | `query_duckdb`: DuckDB's relational API, on a connection locked to the corpus root | `duckdb-python` | the same |

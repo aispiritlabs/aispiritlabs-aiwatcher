@@ -59,7 +59,7 @@ Two optional services sit outside the Cargo workspace and the Rust binary does n
 know they exist:
 
 - `services/query/flow` — the PHP query surface behind the panel's Query tab and a
-  pipeline's transforms. `just flow-check`.
+  pipeline's transforms. `just query-check`.
 - `services/ml_pipeline` — the Python notebook runtime behind a pipeline's marimo
   blocks. `just ml-pipeline-check`.
 

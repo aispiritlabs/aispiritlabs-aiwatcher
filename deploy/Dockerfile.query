@@ -109,7 +109,7 @@ RUN composer dump-autoload ${COMPOSER_DEV} --optimize --no-interaction
 # ── Flow 4: what ships ───────────────────────────────────────────────────────
 FROM flow-base AS flow
 
-# Not `php -S`, which is what `just flow-serve` runs and which PHP's own manual
+# Not `php -S`, which is what `just query-serve` runs for Flow and which PHP's own manual
 # says is not a production server: it is single-threaded, so a `/query/check`
 # fired while someone types would queue behind a 30-second `/query/query` on the
 # same tab. Caddy in front of PHP handles both at once.
@@ -162,7 +162,7 @@ RUN set -eux; \
       echo "brick/math backend: ", \
         get_class(Brick\Math\Internal\CalculatorRegistry::get()), PHP_EOL;'
 
-# 8081 to match `just flow-serve`, and above 1024 so an unprivileged user can
+# 8081 to match `just query-serve`, and above 1024 so an unprivileged user can
 # bind it. A bare port means no hostname, so Caddy serves plain HTTP and does
 # not try to provision a certificate — TLS terminates at the ingress.
 ENV SERVER_NAME=:8081 \

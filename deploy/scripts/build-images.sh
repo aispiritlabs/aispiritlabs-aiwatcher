@@ -87,7 +87,7 @@ fi
 
 printf '\n✓ built\n  %s\n  %s\n' "$server_image" "$panel_image"
 if $flow; then printf '  %s\n' "$flow_image"; fi
-printf '\nInstall with them:\n  AIWATCHER_IMAGE=%saiwatcher AIWATCHER_PANEL_IMAGE=%saiwatcher-panel \\\n    AIWATCHER_FLOW_IMAGE=%saiwatcher-flow AIWATCHER_IMAGE_TAG=%s \\\n    deploy/scripts/install.sh\n' \
+printf '\nInstall with them:\n  AIWATCHER_IMAGE=%saiwatcher AIWATCHER_PANEL_IMAGE=%saiwatcher-panel \\\n    AIWATCHER_QUERY_IMAGE=%saiwatcher-flow AIWATCHER_IMAGE_TAG=%s \\\n    deploy/scripts/install.sh\n' \
   "$prefix" "$prefix" "$prefix" "$TAG"
 if $flow; then
   printf '\nThe query engine is off in the chart until you ask for it:\n  --set query.enabled=true\n'

@@ -13,13 +13,13 @@ namespace Aiwatcher\Flow\Dataset;
  *
  * The column list is not documentation — it is the contract. `Catalog` projects
  * exactly these columns and the parser rejects references to anything else, so
- * what `/flow/datasets` shows is what a query can actually use. A schema that
+ * what `/query/datasets` shows is what a query can actually use. A schema that
  * can drift from the data is a schema nobody trusts.
  */
 final readonly class Dataset
 {
     /**
-     * @param array<string, string>    $columns    column name => type, for /flow/datasets
+     * @param array<string, string>    $columns    column name => type, for /query/datasets
      * @param array<string, string>    $hints      column name => what to write instead, for near-misses
      * @param array<string, Parameter> $parameters named read() arguments this route accepts
      */

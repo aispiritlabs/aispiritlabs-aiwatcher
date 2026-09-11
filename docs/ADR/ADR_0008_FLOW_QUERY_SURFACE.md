@@ -140,11 +140,11 @@ it does not decide.
 
 PHP 8.3+ becomes a build and runtime dependency for one optional service. It is
 outside the Cargo workspace, absent from `just check`, and has its own
-`just flow-check` (format, lint, test).
+`just query-check` (format, lint, test).
 
 Mago is a dev dependency, so `composer install --no-dev` leaves it out. That is
-a supported state: `/flow/check` then reports the parser's diagnostics alone and
-`/flow/healthz` says `linter: none`. Syntax errors are still caught — just with
+a supported state: `/query/check` then reports the parser's diagnostics alone and
+`/query/healthz` says `linter: none`. Syntax errors are still caught — just with
 the parser's own wording rather than a compiler front end's.
 
 The whitelist is a maintenance surface: a Flow function nobody listed is a
@@ -155,7 +155,7 @@ A query only sees what the API serves — the read model's retention window — 
 the panel says so above every result table. A result read as "all time" would be
 wrong, and a table with no provenance invites exactly that reading.
 
-The service has no authentication. It is bound to localhost by `just flow-serve`
+The service has no authentication. It is bound to localhost by `just query-serve`
 and must not be exposed without one; the parser bounds what a query can *say*,
 not who may ask.
 
@@ -343,8 +343,8 @@ a notebook's cell is: in a child process, with ceilings and without credentials,
 service bound to localhost. [ADR_0028](ADR_0028_QUERY_ENGINES.md) states what that costs
 and what would make it wrong.
 
-Three things moved with it. The routes are `/query/*`, and Flow serves `/flow/*` beside
-them for one release. The service lives at `services/query/flow`. And the declarative
+Three things moved with it. The routes are `/query/*`, and Flow served `/flow/*` beside
+them for one release, removed in the next. The service lives at `services/query/flow`. And the declarative
 half of the catalog — names, routes, columns, parameters, windows — is
 `services/query/contract/catalog.json`, which every engine loads, so the datasets a
 query can name are one list in one file rather than one per language.

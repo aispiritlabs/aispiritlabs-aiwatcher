@@ -188,19 +188,6 @@
         }
       }
     },
-    "flow": {
-      "description": "The name `query` had while Flow was the only engine, read for one release.",
-      "type": "object",
-      "properties": {
-        "enabled": {
-          "type": "boolean"
-        },
-        "replicas": {
-          "type": "integer",
-          "minimum": 1
-        }
-      }
-    },
     "promptStore": {
       "type": "object",
       "properties": {

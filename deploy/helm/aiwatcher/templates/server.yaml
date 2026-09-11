@@ -4,6 +4,18 @@
 {{- if hasKey .Values "engine" -}}
 {{- fail "engine is set, but the Flyte pipeline engine has been removed from aiwatcher and every value under engine went with it. Delete the engine block from your values. A rerun sent to an HTTP endpoint is AIWATCHER_WORKFLOW_RUNNER=http in server.extraEnv." -}}
 {{- end -}}
+{{- /* The names query's values had while Flow was the only engine, read for the
+release that renamed them (AW-3) and refused since: each switched something on,
+and a release that ignored it would come up without the engine it asked for. */ -}}
+{{- if (.Values.flow | default dict).enabled -}}
+{{- fail "flow.enabled is true, but flow was the name of query while Flow was the only engine, read for one release only. Set query.enabled: true instead (query.engine defaults to flow), move flow.image to query.images.flow and flow.resources to query.resources.flow, and delete the flow block." -}}
+{{- end -}}
+{{- if .Values.panel.flowUpstream -}}
+{{- fail "panel.flowUpstream is set, but it was the older name of panel.queryUpstream, read for one release only. Rename it to panel.queryUpstream." -}}
+{{- end -}}
+{{- if .Values.execution.flowUrl -}}
+{{- fail "execution.flowUrl is set, but it was the older name of execution.queryUrl, read for one release only. Rename it to execution.queryUrl." -}}
+{{- end -}}
 {{- if and (eq .Values.auth.mode "proxy") (not .Values.networkPolicy.enabled) -}}
 {{- fail "auth.mode is \"proxy\" but networkPolicy.enabled is false. That mode takes the caller's identity from request headers, which is only sound while nothing but the authenticating proxy can reach the server. With no policy, any pod in the namespace can claim to be an admin. Turn the policy on, or use auth.mode \"oidc\", where the identity is proved to this process rather than asserted to it." -}}
 {{- end -}}

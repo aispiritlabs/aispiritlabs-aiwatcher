@@ -47,21 +47,6 @@ pub enum ConfigError {
         because: &'static str,
     },
 
-    /// Two variables that name one thing, set to different values.
-    ///
-    /// The older name is read for one release so an installation upgrades
-    /// without touching its configuration; both set to two answers is a
-    /// question this process cannot settle, and a guess would send somebody's
-    /// work to the wrong service.
-    #[error(
-        "{current} and {older} are both set, to different values; {older} is the older name \
-         for {current}, so set one of them"
-    )]
-    Conflict {
-        current: &'static str,
-        older: &'static str,
-    },
-
     /// A configuration the authentication crate itself refused. Its own
     /// variant rather than a `String` in `Invalid`, so the message the crate
     /// wrote — which names the variable and says what it needed — reaches the
@@ -468,8 +453,8 @@ pub struct Config {
     /// no query attempt — the claim filter is built from what is registered,
     /// so a process never takes work it cannot perform. It is also the only
     /// address a query step ever runs against: a plan names a binding and its
-    /// parameters, never a host. Read from `AIWATCHER_QUERY_URL`, or from
-    /// `AIWATCHER_FLOW_URL` for one release.
+    /// parameters, never a host. Read from `AIWATCHER_QUERY_URL`;
+    /// `AIWATCHER_FLOW_URL`, its name before AW-3, is refused naming it.
     pub query_url: Option<String>,
     /// The notebook runtime, for a managed `marimo` step.
     ///
@@ -849,7 +834,12 @@ impl Config {
         if let Some(raw) = var("AIWATCHER_QUERY_ENGINE") {
             config.query_engine = query_engine_of(raw)?;
         }
-        config.query_url = query_address(var("AIWATCHER_QUERY_URL"), var("AIWATCHER_FLOW_URL"))?;
+        if let Some(raw) = var("AIWATCHER_FLOW_URL") {
+            return Err(renamed_query_url(raw));
+        }
+        if let Some(raw) = var("AIWATCHER_QUERY_URL") {
+            config.query_url = Some(raw.trim_end_matches('/').to_owned());
+        }
         if let Some(raw) = var("AIWATCHER_ML_PIPELINE_URL") {
             config.ml_pipeline_url = Some(raw.trim_end_matches('/').to_owned());
         }
@@ -1294,24 +1284,19 @@ fn query_engine_of(raw: String) -> Result<QueryEngine, ConfigError> {
     })
 }
 
-/// The query engine's address, from its name or the name it had before.
+/// `AIWATCHER_FLOW_URL`, which survives only as a refusal.
 ///
-/// `AIWATCHER_FLOW_URL` is read for one release, so an installation that set
-/// it upgrades running Flow at that address exactly as before. Both set to one
-/// address is the same installation half-way through renaming it; both set to
-/// two is refused naming both.
-fn query_address(
-    current: Option<String>,
-    older: Option<String>,
-) -> Result<Option<String>, ConfigError> {
-    let trim = |raw: String| raw.trim_end_matches('/').to_owned();
-    match (current.map(trim), older.map(trim)) {
-        (Some(current), Some(older)) if current != older => Err(ConfigError::Conflict {
-            current: "AIWATCHER_QUERY_URL",
-            older: "AIWATCHER_FLOW_URL",
-        }),
-        (Some(url), _) | (None, Some(url)) => Ok(Some(url)),
-        (None, None) => Ok(None),
+/// It was the query engine's address while Flow was the only engine, and was
+/// read beside `AIWATCHER_QUERY_URL` for the release that renamed it (AW-3).
+/// Ignored rather than refused, a deployment still setting only it would start
+/// with no query executor, claim no query step, and say nothing while its runs
+/// sat pending.
+fn renamed_query_url(raw: String) -> ConfigError {
+    ConfigError::Removed {
+        name: "AIWATCHER_FLOW_URL",
+        value: raw,
+        what: "that name for the query engine's address",
+        instead: "set AIWATCHER_QUERY_URL to the address instead",
     }
 }
 
@@ -1399,33 +1384,12 @@ mod tests {
     }
 
     #[test]
-    fn an_installation_that_set_only_the_flow_address_upgrades_unchanged() {
-        assert_eq!(
-            query_address(None, Some("http://flow:8081/".to_owned())).expect("the alias"),
-            Some("http://flow:8081".to_owned())
-        );
-        // Both, naming one address: an installation half-way through renaming.
-        assert_eq!(
-            query_address(
-                Some("http://query:8081".to_owned()),
-                Some("http://query:8081/".to_owned())
-            )
-            .expect("one address"),
-            Some("http://query:8081".to_owned())
-        );
-        assert_eq!(query_address(None, None).expect("none"), None);
-    }
-
-    #[test]
-    fn two_addresses_for_one_engine_are_refused_naming_both() {
-        let message = query_address(
-            Some("http://datafusion:8081".to_owned()),
-            Some("http://flow:8081".to_owned()),
-        )
-        .expect_err("two answers to one question")
-        .to_string();
+    fn a_deployment_still_naming_the_flow_address_is_told_the_name_that_replaced_it() {
+        let message = renamed_query_url("http://flow:8081".to_owned()).to_string();
         assert!(
-            message.contains("AIWATCHER_QUERY_URL") && message.contains("AIWATCHER_FLOW_URL"),
+            message.contains("AIWATCHER_FLOW_URL")
+                && message.contains("was removed")
+                && message.contains("AIWATCHER_QUERY_URL"),
             "{message}"
         );
     }

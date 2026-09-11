@@ -38,9 +38,8 @@ workflow_postgres_url := env_var_or_default("AIWATCHER_WORKFLOW_POSTGRES_URL", "
 
 # Where a managed query step is sent: the one engine this deployment runs, and
 # the only address a query step ever runs against — a plan names a binding and
-# its parameters, never a host. `AIWATCHER_FLOW_URL` is its older name, read for
-# one release.
-query_url := env_var_or_default("AIWATCHER_QUERY_URL", env_var_or_default("AIWATCHER_FLOW_URL", "http://127.0.0.1:8081"))
+# its parameters, never a host.
+query_url := env_var_or_default("AIWATCHER_QUERY_URL", "http://127.0.0.1:8081")
 
 # Which query engine `query-serve`, `query-install` and `query-check` mean:
 # flow, datafusion or duckdb (AW-3).
@@ -569,8 +568,8 @@ agentic-check:
 #
 # Optional. The panel's Query tab talks to the engine directly; without it that
 # tab says so and the rest of the panel is unaffected. A deployment runs one
-# engine, named by AIWATCHER_QUERY_ENGINE (AW-3): the `query-*` recipes serve,
-# install and check that one, and the `flow-*` recipes below are Flow's own.
+# engine, named by AIWATCHER_QUERY_ENGINE (AW-3), and the `query-*` recipes
+# install, serve, check and format that one.
 
 query := "services/query"
 flow := query + "/flow"
@@ -581,7 +580,7 @@ query-install:
     #!/usr/bin/env bash
     set -euo pipefail
     case "{{query_engine}}" in
-        flow) just flow-install ;;
+        flow) cd {{flow}} && composer install ;;
         datafusion|duckdb) just _query-engine-exists && cd {{query}} && uv sync --all-packages --all-groups ;;
         *) echo "AIWATCHER_QUERY_ENGINE is '{{query_engine}}'; the engines are flow, datafusion, duckdb" >&2; exit 1 ;;
     esac
@@ -594,7 +593,14 @@ query-serve port="8081":
     # set, so a long step is stopped by its own clock rather than refused (AW-3).
     export AIWATCHER_QUERY_TIMEOUT_SECONDS="${AIWATCHER_QUERY_TIMEOUT_SECONDS:-$(( ${AIWATCHER_QUERY_STEP_TIMEOUT_SECONDS:-300} + 60 ))}"
     case "{{query_engine}}" in
-        flow) just flow-serve {{port}} ;;
+        flow)
+            # `php -S` handles one request at a time unless told otherwise, and the
+            # panel polls this service's health while a query is running — so the
+            # single-worker default deadlocks the two against each other and the
+            # Query tab reports the service as down mid-query.
+            cd {{flow}} && AIWATCHER_URL="${AIWATCHER_URL:-http://127.0.0.1:8080}" \
+              PHP_CLI_SERVER_WORKERS="${PHP_CLI_SERVER_WORKERS:-4}" \
+              exec php -S 127.0.0.1:{{port}} -t public ;;
         datafusion|duckdb)
             just _query-engine-exists
             cd {{query}} && AIWATCHER_URL="${AIWATCHER_URL:-http://127.0.0.1:8080}" \
@@ -607,7 +613,14 @@ query-check:
     #!/usr/bin/env bash
     set -euo pipefail
     case "{{query_engine}}" in
-        flow) just flow-check ;;
+        flow)
+            # Mago's format check and lint — what `cargo clippy -Dwarnings` is for
+            # the Rust crates — then the tests. Not in `just check`, which is Rust
+            # and the panel: the engine is optional and PHP may not be installed.
+            cd {{flow}}
+            vendor/bin/mago format --check
+            vendor/bin/mago lint --minimum-fail-level=warning
+            vendor/bin/phpunit ;;
         datafusion|duckdb) just _query-engine-exists && just query-contract-check ;;
         *) echo "AIWATCHER_QUERY_ENGINE is '{{query_engine}}'; the engines are flow, datafusion, duckdb" >&2; exit 1 ;;
     esac
@@ -672,44 +685,20 @@ query-conformance *args: query-conformance-corpus
     done
     cd {{query}} && uv run python -m aiwatcher_query.conformance --url "$url" {{args}}
 
-# Install the PHP dependencies.
-flow-install:
-    cd {{flow}} && composer install
-
-# The query service on :8081, against the aiwatcher API on :8080.
-flow-serve port="8081":
-    # `php -S` handles one request at a time unless told otherwise, and the
-    # panel polls this service's health while a query is running — so the
-    # single-worker default deadlocks the two against each other and the Query
-    # tab reports the service as down mid-query.
-    cd {{flow}} && AIWATCHER_URL="${AIWATCHER_URL:-http://127.0.0.1:8080}" \
-      PHP_CLI_SERVER_WORKERS="${PHP_CLI_SERVER_WORKERS:-4}" \
-      php -S 127.0.0.1:{{port}} -t public
-
-flow-test:
-    cd {{flow}} && vendor/bin/phpunit
-
-# Mago: what `cargo clippy -Dwarnings` is for the Rust crates.
-flow-lint:
-    cd {{flow}} && vendor/bin/mago lint --minimum-fail-level=warning
-
-flow-fmt:
-    cd {{flow}} && vendor/bin/mago format
-
-flow-fmt-check:
-    cd {{flow}} && vendor/bin/mago format --check
-
-# Everything the PHP service has to pass. Not part of `just check`, which is
-# Rust and the panel — the service is optional and PHP may not be installed.
-flow-check:
+# Format the engine AIWATCHER_QUERY_ENGINE names: Mago for Flow, ruff for the
+# Python workspace.
+query-fmt:
     #!/usr/bin/env bash
     set -euo pipefail
-    just flow-fmt-check
-    just flow-lint
-    just flow-test
+    case "{{query_engine}}" in
+        flow) cd {{flow}} && vendor/bin/mago format ;;
+        datafusion|duckdb) just _query-engine-exists && cd {{query}} && uv run ruff format . ;;
+        *) echo "AIWATCHER_QUERY_ENGINE is '{{query_engine}}'; the engines are flow, datafusion, duckdb" >&2; exit 1 ;;
+    esac
 
-# Run one query from the shell, e.g. `just flow-query "data_frame()->read(default)"`.
-flow-query pipeline:
+# Run one query from the shell against the engine on :8081, in that engine's
+# language — e.g. `just query-run "data_frame()->read(default)"` for Flow.
+query-run pipeline:
     #!/usr/bin/env bash
     set -euo pipefail
     python3 -c 'import json,sys;print(json.dumps({"pipeline":sys.argv[1]}))' {{quote(pipeline)}} \

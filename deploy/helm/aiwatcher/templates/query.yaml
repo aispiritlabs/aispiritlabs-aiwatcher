@@ -85,15 +85,13 @@ spec:
           # healthz answers 200 whether or not the engine can reach the server,
           # and says which in the body: the engine is up or down on its own
           # terms, and a server restart should not take the Query tab's pods out
-          # of rotation. Flow is probed under `/flow`, which every Flow build
-          # serves, for the release in which `/query` is new to it.
-          {{- $healthz := ternary "/flow/healthz" "/query/healthz" (eq $q.engine "flow") }}
+          # of rotation.
           readinessProbe:
-            httpGet: { path: {{ $healthz }}, port: http }
+            httpGet: { path: /query/healthz, port: http }
             initialDelaySeconds: 3
             periodSeconds: 20
           livenessProbe:
-            httpGet: { path: {{ $healthz }}, port: http }
+            httpGet: { path: /query/healthz, port: http }
             initialDelaySeconds: 10
             periodSeconds: 30
           resources:

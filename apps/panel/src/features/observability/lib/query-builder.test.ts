@@ -18,7 +18,7 @@ import {
  * conjoined filters that can never both hold, and that nothing reaches the
  * text through string interpolation without being quoted.
  *
- * `flow-check` in CI runs the same shapes through the real parser
+ * `query-check` in CI runs the same shapes through the real parser
  * (`services/query/flow/tests`), which is what says the text is *valid*. These say
  * it is the text we meant.
  */

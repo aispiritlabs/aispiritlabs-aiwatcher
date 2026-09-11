@@ -2191,7 +2191,7 @@ not open its own `node()` scope.
 
 | Binding | Executes in | Reached by | Owner of retries | In → out | Cacheable | May carry content |
 |---|---|---|---|---|---|---|
-| `FlowPhp` | `services/query/flow` | the work role, HTTP, `AIWATCHER_FLOW_URL` | Rust | compiled script + resolved source → rows artifact | with a pinned source revision or a resolved window | no beyond what retention already holds |
+| `FlowPhp` | `services/query/flow` | the work role, HTTP, `AIWATCHER_QUERY_URL` | Rust | compiled script + resolved source → rows artifact | with a pinned source revision or a resolved window | no beyond what retention already holds |
 | `Marimo` | `services/ml_pipeline`, a subprocess per run | the work role, HTTP, `AIWATCHER_ML_PIPELINE_URL` | Rust | input artifact + params → output artifact | with a pinned notebook digest | yes — a PII notebook by definition; a development-profile binding until Phase 4 (16.4) |
 | `PublishDataset` | the serve role — the registry | in-process | Rust; idempotent by content | artifact → dataset version with `produced_by` and `execution_id` | n/a | rows as today |
 | `PythonTask` | a worker process | pulled by the worker (36) | Rust for the attempt | JSON ≤ 64 KiB inline, else `ArtifactRef` | with `task_ref` version + input digests | what the task writes is the task's own storage; it reports refs |
@@ -2204,7 +2204,7 @@ never produced; AW-4 removed it with the engine (2026-09-11).
 
 Rules that hold across the table:
 
-1. Every executor's address is configuration — `AIWATCHER_FLOW_URL`,
+1. Every executor's address is configuration — `AIWATCHER_QUERY_URL`,
    `AIWATCHER_ML_PIPELINE_URL`, the pod's service account for the cluster. A
    `PlanStep` names a binding and its parameters, never a host. The reasoning
    is ADR 0012's, unchanged.

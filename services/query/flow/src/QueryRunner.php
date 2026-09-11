@@ -38,7 +38,7 @@ final readonly class QueryRunner
      * milliseconds, so this is a backstop against a query that walks far more
      * than it meant to, not a budget anyone should be near. A deployment that
      * reads a corpus from disk is a different case — ten gigabytes is tens of
-     * minutes — and raises it with `AIWATCHER_FLOW_TIMEOUT_SECONDS`, above the
+     * minutes — and raises it with `AIWATCHER_QUERY_TIMEOUT_SECONDS`, above the
      * managed step's own limit: PHP stopping first is a 500, which a reactor
      * reads as an outage and retries.
      */

@@ -934,8 +934,8 @@ The Query tab needs the optional PHP service; without it that tab says so and
 nothing else is affected:
 
 ```bash
-just flow-install
-just flow-serve       # :8081, reading the aiwatcher API on :8080
+just query-install
+just query-serve      # :8081, reading the aiwatcher API on :8080
 ```
 
 The runs behind the fuller screenshots — several workflows, four agents, four

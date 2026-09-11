@@ -106,7 +106,7 @@ fn code_digest(runtime: &RuntimeBinding) -> Option<String> {
         | RuntimeBinding::DataFusion(spec)
         | RuntimeBinding::DuckDb(spec) => {
             // A pinned source *or* a pinned window, and the second only counts
-            // because the query service can now read one: `POST /flow/query`
+            // because the query service can now read one: `POST /query/query`
             // takes `window_from`/`window_to` and the API's windowed routes take
             // `as_of`, so a plan that pinned 09:00–10:00 and a retry five
             // minutes later read the same rows.

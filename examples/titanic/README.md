@@ -153,13 +153,13 @@ Start the API, Flow query service, Python runtime, and panel in separate termina
 
 ```sh
 just run-execution
-just flow-serve
+just query-serve
 just ml-pipeline-serve
 just panel
 ```
 
 If ports are occupied, select others with the recipes' port arguments and point
-the panel's `AIWATCHER_FLOW_URL` and `AIWATCHER_ML_PIPELINE_URL` to those services.
+the panel's `AIWATCHER_QUERY_URL` and `AIWATCHER_ML_PIPELINE_URL` to those services.
 The server's managed execution also needs both URLs configured; see
 [the notebook runtime](../../services/ml_pipeline/README.md).
 
@@ -296,7 +296,7 @@ python3 examples/titanic/build_bundle.py
 python3 examples/build_seed.py
 python3 examples/titanic/build_bundle.py --check
 just ml-pipeline-check
-just flow-check
+just query-check
 cd apps/panel && npm test && npm run build
 ```
 

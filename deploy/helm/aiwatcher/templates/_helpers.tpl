@@ -145,10 +145,8 @@ The query engine this release runs, as one dict — enabled, engine, image,
 resources, replicas, admission and scheduling — for every template that needs
 it, so no two of them can come to disagree about which engine that is.
 
-`query.*` is the way in. `flow.*` is what it was called while Flow was the only
-engine, read for one release: `flow.enabled` with `query.enabled` off is a Flow
-engine from `flow`'s own values, rendered as it was before. With both on,
-`query` wins — an explicit new value is not one to ignore silently.
+`query.*` is the only way in. `flow.*`, its name while Flow was the only engine,
+was read for one release and is refused by `server.yaml` since.
 
 The engine is checked here, at render time, for the reason the server refuses an
 unknown one at start-up: `query.engine: polars` is a release whose values name
@@ -169,17 +167,6 @@ admission: {{ $q.admission }}
 nodeSelector: {{ $q.nodeSelector | toJson }}
 tolerations: {{ $q.tolerations | toJson }}
 affinity: {{ $q.affinity | toJson }}
-{{- else if .Values.flow.enabled -}}
-{{- $f := .Values.flow -}}
-enabled: true
-engine: flow
-image: {{ $f.image | toJson }}
-resources: {{ $f.resources | toJson }}
-replicas: {{ $f.replicas }}
-admission: {{ $q.admission }}
-nodeSelector: {{ $f.nodeSelector | toJson }}
-tolerations: {{ $f.tolerations | toJson }}
-affinity: {{ $f.affinity | toJson }}
 {{- else -}}
 enabled: false
 engine: {{ $q.engine }}
@@ -194,12 +181,12 @@ the Query tab reads that as "the engine is not running" and says so, which is
 the degradation ADR_0008 designed for.
 
 `query.enabled` is the normal way in and needs no URL — the Service is this
-release's. `panel.queryUpstream` (or `panel.flowUpstream`, its older name) is for
-the other case: an engine running somewhere this chart does not manage. It wins
-when both are set, because an explicit URL is not something to silently ignore.
+release's. `panel.queryUpstream` is for the other case: an engine running
+somewhere this chart does not manage. It wins when both are set, because an
+explicit URL is not something to silently ignore.
 */}}
 {{- define "aiwatcher.queryUpstream" -}}
-{{- $upstream := .Values.panel.queryUpstream | default .Values.panel.flowUpstream -}}
+{{- $upstream := .Values.panel.queryUpstream -}}
 {{- if $upstream -}}
 {{- $upstream | trimSuffix "/" -}}
 {{- else if (include "aiwatcher.query" . | fromYaml).enabled -}}
@@ -257,7 +244,7 @@ so it never *claims* a query attempt. A process that cannot do the work takes
 none of it, rather than failing every attempt it takes.
 */}}
 {{- define "aiwatcher.executionQueryUrl" -}}
-{{- $url := .Values.execution.queryUrl | default .Values.execution.flowUrl -}}
+{{- $url := .Values.execution.queryUrl -}}
 {{- if $url -}}
 {{- $url | trimSuffix "/" -}}
 {{- else if (include "aiwatcher.query" . | fromYaml).enabled -}}

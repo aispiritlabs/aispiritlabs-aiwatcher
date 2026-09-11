@@ -10,7 +10,7 @@ namespace Aiwatcher\Flow\Dataset;
  * Declared rather than accepted, for the same reason the column list is
  * declared: the aiwatcher API **rejects** unknown query parameters instead of
  * ignoring them, so a parameter that exists here and not there turns a whole
- * query into a 400 with no clue which word caused it. What `/flow/datasets`
+ * query into a 400 with no clue which word caused it. What `/query/datasets`
  * lists is exactly what a query may write.
  *
  * `run:` and `period:` are deliberately not modelled here. `run:` substitutes

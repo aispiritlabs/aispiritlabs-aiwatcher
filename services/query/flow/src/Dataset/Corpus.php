@@ -26,7 +26,7 @@ use function Flow\ETL\DSL\str_schema;
  * path under it.
  *
  * The files are typed on read from the column list: the contract the API
- * datasets keep, where what `/flow/datasets` shows is what a query can use.
+ * datasets keep, where what `/query/datasets` shows is what a query can use.
  * CSV carries no types of its own to disagree with it.
  */
 final readonly class Corpus

@@ -212,18 +212,15 @@ panel:
     tag: ""
     pullPolicy: IfNotPresent
 
-  # Where nginx proxies the query engine — `/query/`, and `/flow/` for one
-  # release. Leave it empty and set `query.enabled` below to run the engine in
-  # this release — the upstream is then this release's own Service. This field
-  # is for the other case: an engine that already runs somewhere this chart does
-  # not manage. It wins over `query.enabled` when both are set.
+  # Where nginx proxies the query engine's `/query/`. Leave it empty and set
+  # `query.enabled` below to run the engine in this release — the upstream is
+  # then this release's own Service. This field is for the other case: an engine
+  # that already runs somewhere this chart does not manage. It wins over
+  # `query.enabled` when both are set.
   #
   # Empty with no engine enabled means nginx answers 503 there, which the Query
   # tab reads as "the engine is not running" rather than as a failed query.
   queryUpstream: ""
-  # The name `queryUpstream` had while Flow was the only engine. Read for one
-  # release; `queryUpstream` wins when both are set.
-  flowUpstream: ""
 
   resources:
     requests:
@@ -309,26 +306,6 @@ query:
   tolerations: []
   affinity: {}
 
-# The name `query` had while Flow was the only engine, read for one release.
-# `flow.enabled` with `query.enabled` off renders the Flow engine from these
-# values exactly as it rendered before; with both on, `query` wins.
-flow:
-  enabled: false
-  image:
-    repository: ghcr.io/example/aiwatcher-flow
-    tag: ""
-    pullPolicy: IfNotPresent
-  replicas: 1
-  resources:
-    requests:
-      cpu: 50m
-      memory: 96Mi
-    limits:
-      memory: 384Mi
-  nodeSelector: {}
-  tolerations: []
-  affinity: {}
-
 # ── Managed execution ────────────────────────────────────────────────────────
 #
 # ADR_0025 and ADR_0026. A curation pipeline or a workflow started here is owned
@@ -386,9 +363,6 @@ execution:
   # A process with no address here registers no query executor and therefore
   # claims no query attempt — absence is a working state, not a failure.
   queryUrl: ""
-  # The name `queryUrl` had while Flow was the only engine. Read for one
-  # release; `queryUrl` wins when both are set.
-  flowUrl: ""
 
   # How long a managed query step may run, whichever engine runs it
   # (AIWATCHER_QUERY_STEP_TIMEOUT_SECONDS). A corpus read on disk is minutes, so

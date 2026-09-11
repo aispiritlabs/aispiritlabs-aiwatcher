@@ -210,20 +210,20 @@ def seed_volume_runs(api: str, count: int = 80) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--api", default="http://127.0.0.1:8080")
-    parser.add_argument("--flow", default="http://127.0.0.1:8081")
+    parser.add_argument("--query", default="http://127.0.0.1:8081")
     args = parser.parse_args()
 
     seed_volume_runs(args.api)
     print("runs: 80 lightweight rows for lazy-loading tests")
 
     for recipe in RECIPES:
-        checked = post(f"{args.flow}/flow/check", {"pipeline": recipe["pipeline"]})
+        checked = post(f"{args.query}/query/check", {"pipeline": recipe["pipeline"]})
         if not checked["ok"]:
             raise RuntimeError(f"invalid recipe {recipe['name']}: {checked['diagnostics']}")
         saved = post(f"{args.api}/api/v1/curations", recipe)
         print(f"recipe: {saved['recipe']['name']}")
 
-    result = post(f"{args.flow}/flow/query", {"pipeline": RECIPES[0]["pipeline"]})
+    result = post(f"{args.query}/query/query", {"pipeline": RECIPES[0]["pipeline"]})
     published = post(
         f"{args.api}/api/v1/datasets",
         {
@@ -240,7 +240,7 @@ def main() -> None:
     dataset = published["dataset"]
     print(f"dataset: {dataset['name']} ({dataset['latest']['row_count']} rows)")
 
-    explorer_result = post(f"{args.flow}/flow/query", {"pipeline": RECIPES[3]["pipeline"]})
+    explorer_result = post(f"{args.query}/query/query", {"pipeline": RECIPES[3]["pipeline"]})
     explorer_published = post(
         f"{args.api}/api/v1/datasets",
         {

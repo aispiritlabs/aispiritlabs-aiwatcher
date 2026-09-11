@@ -120,16 +120,12 @@ $path = \parse_url($_SERVER['REQUEST_URI'] ?? '/', \PHP_URL_PATH) ?: '/';
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 
 /**
- * The route, whichever of the two prefixes it was asked under.
+ * The route, under `/query` — the prefix every engine serves.
  *
- * One table of routes reached two ways, so `/flow` and `/query` cannot come to answer
- * differently. Anything under neither prefix falls through to the 404 below.
+ * `/flow`, its name before AW-3, was answered beside it for one release and is gone.
+ * Anything else falls through to the 404 below.
  */
-$route = match (true) {
-    \str_starts_with($path, '/query/') => \substr($path, \strlen('/query')),
-    \str_starts_with($path, '/flow/') => \substr($path, \strlen('/flow')),
-    default => '',
-};
+$route = \str_starts_with($path, '/query/') ? \substr($path, \strlen('/query')) : '';
 
 /** @param array<string, mixed> $body */
 $send = static function (int $status, array $body): void {
