@@ -3,9 +3,10 @@ from __future__ import annotations
 import datetime as dt
 from decimal import Decimal
 
+import pyarrow as pa
 import pytest
 
-from aiwatcher_query.answer import json_safe, window_applied
+from aiwatcher_query.answer import json_safe, rows_of, window_applied
 from aiwatcher_query.errors import QueryRefusedError
 from aiwatcher_query.memory import digest_of
 
@@ -28,6 +29,30 @@ def test_a_timestamp_is_iso_8601() -> None:
     assert (
         json_safe(dt.datetime(2026, 9, 10, 12, 0, tzinfo=dt.UTC), "at")
         == "2026-09-10T12:00:00+00:00"
+    )
+
+
+def test_a_nanosecond_time_is_answered_to_the_microsecond_on_any_clock() -> None:
+    # A Linux clock ticks in nanoseconds, and pyarrow makes no `datetime` of a value whose
+    # last three digits are not zero: DataFusion's `now()` there, and CI's first red run.
+    table = pa.table(
+        {
+            "at": pa.array([1_000_000_123_456_789], pa.timestamp("ns", "UTC")),
+            "of_day": pa.array([45_296_123_456_789], pa.time64("ns")),
+            "took": pa.array([1_500], pa.duration("ns")),
+            "seen": pa.array([[1_000_000_123_456_789]], pa.list_(pa.timestamp("ns"))),
+        }
+    )
+    assert rows_of(table) == (
+        ["at", "of_day", "took", "seen"],
+        [
+            {
+                "at": "1970-01-12T13:46:40.123456+00:00",
+                "of_day": "12:34:56.123456",
+                "took": 1e-06,
+                "seen": ["1970-01-12T13:46:40.123456"],
+            }
+        ],
     )
 
 

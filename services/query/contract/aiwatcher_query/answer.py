@@ -44,8 +44,47 @@ def rows_of(table: pa.Table) -> tuple[list[str], list[dict[str, Any]]]:
             )
         seen.add(name)
     return columns, [
-        {name: json_safe(value, name) for name, value in row.items()} for row in table.to_pylist()
+        {name: json_safe(value, name) for name, value in row.items()}
+        for row in _to_microseconds(table).to_pylist()
     ]
+
+
+def _to_microseconds(table: pa.Table) -> pa.Table:
+    """The table with every nanosecond time cast down to microseconds.
+
+    A Python `datetime`, `time` or `timedelta` holds microseconds, and pyarrow refuses to
+    make one of a nanosecond value unless its last three digits are zero — which they are
+    from a clock that ticks in microseconds, as macOS's does, and are not from Linux's, so
+    DataFusion's `now()` failed the whole answer there and nowhere else. Microseconds are
+    the answer's precision anyway: `isoformat` writes no more, and Flow's `DateTime` holds
+    no more. So the extra digits are cut, the same on every clock.
+    """
+    schema = pa.schema(
+        [field.with_type(_microseconds(field.type)) for field in table.schema],
+        metadata=table.schema.metadata,
+    )
+    return table if schema.equals(table.schema) else table.cast(schema, safe=False)
+
+
+def _microseconds(kind: pa.DataType) -> pa.DataType:
+    if isinstance(kind, pa.TimestampType) and kind.unit == "ns":
+        return pa.timestamp("us", kind.tz)
+    if isinstance(kind, pa.Time64Type) and kind.unit == "ns":
+        return pa.time64("us")
+    if isinstance(kind, pa.DurationType) and kind.unit == "ns":
+        return pa.duration("us")
+    if isinstance(kind, pa.ListType):
+        return pa.list_(kind.value_field.with_type(_microseconds(kind.value_type)))
+    if isinstance(kind, pa.LargeListType):
+        return pa.large_list(kind.value_field.with_type(_microseconds(kind.value_type)))
+    if isinstance(kind, pa.StructType):
+        return pa.struct(
+            [
+                kind.field(i).with_type(_microseconds(kind.field(i).type))
+                for i in range(kind.num_fields)
+            ]
+        )
+    return kind
 
 
 def json_safe(value: Any, column: str) -> Any:
