@@ -805,13 +805,22 @@ answers to "which version did this run use". MLflow keeps tracing, teed.)
   `llm.*` events. `LLMTracer`'s protocol is unchanged. The capability path
   rebuilt `PromptArtifacts` field by field, and would have dropped the new
   field; it is `dataclasses.replace` now.
-- **The licence is Apache-2.0** (the owner, 2026-09-11), as the distributions
-  beside it declare. `sdk/agentic/NOTICE` keeps the MIT notice the engine, the
-  core and the runtime were published under in `ai_spirit_agent`, as that
-  licence asks. Found on the way and not changed: the repository's root
-  `LICENSE` is proprietary, while `aiwatcher-sdk` and `aiwatcher-agentic`
-  declare Apache-2.0 and ship no licence text of their own — the carve-out
-  that reconciles the two is written nowhere.
+- **The licence is PolyForm Noncommercial 1.0.0, for the whole repository**
+  (the owner, 2026-09-11). Apache-2.0 was the first answer the same morning and
+  did not survive the second question: the owner wants the code used for
+  nothing commercial, which a permissive licence cannot say. The root `LICENSE`
+  — proprietary, granting nothing — and the Apache-2.0 that `Cargo.toml`, both
+  SDKs and `ml_pipeline` declared had disagreed since before AW-2; they are now
+  one licence, its text verbatim under a `Required Notice:` line, and `NOTICE`
+  says commercial use needs a separate licence. Each SDK carries its own
+  `LICENSE`, because a wheel or a package does not ship the repository's, and
+  `sdk/agentic/NOTICE` keeps the MIT notice the engine, the core and the
+  runtime came under. The crates are `publish = false`, and `deny.toml` skips
+  unpublished workspace crates rather than allowing PolyForm — allowed, it
+  would admit a noncommercial *dependency* with nobody deciding so. Unlike the
+  text it replaces, it does not forbid training a model on the code. Left for
+  their owners: `services/query/flow` still declares MIT, and AW-3's three
+  `services/query` projects Apache-2.0.
 
 ## Still open, deferred to the phase that can answer them
 
@@ -828,3 +837,4 @@ answers to "which version did this run use". MLflow keeps tracing, teed.)
 - 2026-09-10 20:05 — Phase A finished: `declare_graph` wired. One requirement added over six scenarios (45 in all), one success criterion ticked; the shape a turn can reach, the turn as its own execution, a node's own span id, nesting in process and the two message kinds, settled
 - 2026-09-10 20:04 — the MLflow prompt registry retired: one requirement added over seven scenarios (52 in all), the agent core's prompt clause reworded, one success criterion ticked; the catalogue staying with the application, the authored text without aiwatcher and never with it, publishing not deploying, and a 404 naming the fix, settled; a turn's prompt version left open
 - 2026-09-11 10:10 — a turn's prompt version: one requirement over five scenarios (57 in all), one success criterion added and ticked; the version derived from what was read, a reference only while it is true, the attribute channel, and the licence (Apache-2.0, the owner) settled; the root `LICENSE` contradiction recorded, not changed
+- 2026-09-11 10:25 — the licence re-decided by the owner: PolyForm Noncommercial 1.0.0 for the whole repository, replacing the Apache-2.0 settled an hour earlier and the proprietary root `LICENSE` with it
