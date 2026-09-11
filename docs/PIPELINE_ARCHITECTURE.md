@@ -1569,18 +1569,19 @@ because both roles are one process.
 
 ## 28. Migration plan
 
-**Delivery order as of 2026-09-09.** Works 1–6 are closed. The only item being
-worked toward in this repository is Phase 13, which is half-built; phases 8, 9,
-12, 14 and 15 stay behind their own gates, with nothing building them. Phase 0–15 labels are
+**Delivery order as of 2026-09-11.** Works 1–6 are closed, and so are Phase 13
+and Phase 14 as far as this repository goes. Phases 8 and 15 stay behind their
+own gates; Phase 9 is withdrawn and Phase 12 reopened, because the owner has
+decided that Flyte leaves aiwatcher and that the engine starts its own pods —
+[AW-4](specs/AW-4-retire-flyte-and-run-steps-in-pods-of-our-own/_index.md). Phase 0–15 labels are
 kept because ADRs, kickoff documents and code comments cite them by number —
 they name feature scope, not an order that requires every lower-numbered phase
 before a higher-numbered one.
 
 A document for finished work is deleted rather than kept as a closure note —
-the kickoffs for works 1–6, and the two reviews whose findings they closed. The
-two kickoffs that remain, [join hardening](KICKOFF_JOIN_HARDENING.md) and
-[mid-attempt input](KICKOFF_MID_ATTEMPT_INPUT.md), are the live ones and are
-named under *What is left*. What survives a review is its **findings**, kept in
+the kickoffs for works 1–6 and for mid-attempt input, and the two reviews whose
+findings they closed. The one kickoff that remains,
+[join hardening](KICKOFF_JOIN_HARDENING.md), is named under *What is left*. What survives a review is its **findings**, kept in
 43.35, and the tests each work item names below: a test that runs is better
 evidence than a document that says it passed.
 
@@ -1600,8 +1601,8 @@ where to check it.
 | 6 | The worker protocol, then Planner (Phases 10, 11 L2) | Queue-scoped ingest tokens that only ever narrow; `Reactor::take`/`settle`/`resume`, so only `perform` crosses the wire; proxied artifacts rather than presigned URLs; `aiwatcher_sdk.worker` and `Runtime`; a second compiler for registered workflows, which are also schedulable through one `compile_head`; Planner's four stages byte-identical to the direct path. | `just test-worker-runtime`, `just test-worker-protocol`; Planner's `test_house_orchestrator_parity.py` and `just ml-aiwatcher-import` |
 
 Two things work 6 deliberately does **not** claim: one pod per stage, and the
-removal of Flyte from Planner's chart. The first is Phase 12; the second is what
-Phase 12 earns.
+removal of Flyte from Planner's chart. The first is Phase 12, which AW-4
+reopens; the second happened in planner without it (below).
 
 ### What exists now
 
@@ -1615,7 +1616,7 @@ Phase 12 earns.
 | Scheduler | Cadence, CRUD, transactional admission, per-slot outcomes, `next_run` computed on the server |
 | Worker (Phases 10, 11 Level 2) | The protocol, the Python `Runtime`, the authoring path, schedules for registered workflows, Planner on the boundary |
 | Hosted decider (Phase 13) | **Closed** — the append route, the decider lease, `AiwatcherEventStore`, the timer table and its tick, the `sealed` refusal, and a join on the stream rather than in process memory |
-| Human input (Phase 14) | **Partial** — both authored surfaces have a gate: a curation's `approval` block and a workflow step's `approval`, compiling to one `HumanInput` binding, answered through one route and one panel control, with the role each question names required on top of the editor floor, and a deadline the timer table delivers. No `await` from inside an attempt |
+| Human input (Phase 14) | **Closed in this repository** — both authored surfaces have a gate: a curation's `approval` block and a workflow step's `approval`, compiling to one `HumanInput` binding, answered through one route and one panel control, with the role each question names required on top of the editor floor, and a deadline the timer table delivers. A worker stops mid-attempt with `TaskContext.ask`: the attempt parks, its lease is released, and the answer resumes it as the next attempt of the step (43.40). Nothing yet asks from an agent's `before_tool_execute` |
 
 ### What is left
 
@@ -1628,25 +1629,19 @@ fires the summarizer once. **Phase 14's authored gate is closed too**:
 `BlockSpec::Approval` compiles to the `HumanInput` binding that already existed,
 so a curation chain can stop and wait for a person.
 
-Two sessions are live, each with its own kickoff, and they **share four files** —
-`decide.rs`, `handler.rs`, `hosted.rs` and `message.rs`. Agree who holds them
-before either starts, and commit by path: a `git commit -a` has already once
-swept one session's work into another's.
-
 **[Hardening the graph join](KICKOFF_JOIN_HARDENING.md)** — mostly in
-`ai_spirit_agent`. The join works; these three reduce what happens when it goes
-wrong. Scope the stream to a turn (`graph:<graph_id>:<turn_id>`) rather than to
-a graph; make the claim takeable over, taken before the work rather than after;
-put a deadline on the join, so a node that never arrives is a failure somebody
-sees instead of silence.
+`ai_spirit_agent`, and parked with AW-2. The join works; these three reduce what
+happens when it goes wrong. Scope the stream to a turn
+(`graph:<graph_id>:<turn_id>`) rather than to a graph; make the claim takeable
+over, taken before the work rather than after; put a deadline on the join, so a
+node that never arrives is a failure somebody sees instead of silence.
 
-**[An attempt that stops to ask](KICKOFF_MID_ATTEMPT_INPUT.md)** — the rest of
-Phase 14, in aiwatcher. The authored gate stops *between* steps; what is missing
-is a step that stops *inside* one and continues after the answer, which is the
-half of §41 that 43.8 recorded as absent. `WorkReport::Parked` carrying the
-question, `ProvideInput` against a parked attempt rather than a waiting step, the
-deadline riding Phase 13's timer row, and the way for `aiwatcher_sdk.worker` to
-ask.
+**An attempt that stops to ask — closed**, and its kickoff deleted with the
+work. `WorkReport::Parked` carries the question, `AttemptWrite::Park` keeps the
+attempt's row and drops its lease, `ProvideInput` against a parked attempt
+schedules the next attempt of the step with the answers kept on the step, and
+the deadline rides Phase 13's timer row (43.40, `tests/mid_attempt_input.rs`).
+`TaskContext.ask` is how `aiwatcher_sdk.worker` asks.
 
 **In planner's repository, and now closed** — its kickoff deleted with the work.
 As of 2026-09-09: the timing defect work 6 left behind is one authored
@@ -1661,10 +1656,8 @@ validating `deploy/config.json` against `config.schema.json`, which is how
 `flyteEnabled` outlived its own removal — is closed by
 `tests/test_deploy_config_schema.py`.
 
-**Phase 14 — human input.** Delivered except for one thing, which is why it is
-no longer behind a gate.
-[KICKOFF_MID_ATTEMPT_INPUT.md](KICKOFF_MID_ATTEMPT_INPUT.md) is the next
-session's entry point.
+**Phase 14 — human input.** Delivered in this repository. What is left is an
+agent's, below, and a control channel that has to earn its gate first.
 
 Both authored surfaces have one. A curation's `approval` block compiles to the
 `HumanInput` binding and `order_of` refuses it where a Flow step would then have
@@ -1680,13 +1673,11 @@ with an `on_timeout` of `fail | skip | answer`: `decide` resolves the instant
 from the clock in its input, the handler derives the timer row from the fact,
 and the tick delivers it (43.39).
 
-- **`await` from inside an attempt.** Today a step either *is* a gate or is not.
-  §41 also wants a worker to park **mid-attempt** — the tool call an
-  `AbstractCapability.before_tool_execute` hook wants approved — releasing its
-  lease and leaving the attempt `awaiting_input`. Nothing of this exists, and it
-  is a worker-protocol change rather than a gate one. *Exit:* a claimed attempt
-  parks, its lease is released, the answer resumes it as a new attempt of the
-  same step.
+- ~~**`await` from inside an attempt.**~~ **Closed** (43.40). A claimed attempt
+  parks, its lease is released, and the answer resumes it as a new attempt of
+  the same step. What nothing does yet is the use §41 named first: an agent's
+  `before_tool_execute` asking through `TaskContext.ask` before a tool runs.
+  That is a capability in `aiwatcher_agentic`, not a protocol change.
 - **The first control message on `/api/v1/live`** — and this one deserves its
   gate re-argued before anybody builds it. It was specified when the panel had
   no other way to hear about a question; the run card now re-reads on every
@@ -1695,18 +1686,20 @@ and the tick delivers it (43.39).
   to send one command. Build it when something needs to answer without a request
   — not because §41 named it.
 
-*What Phase 14 does not need:* approval inside an agent turn, which is Phase 13's
-`agentic_graph` work rather than this.
+*What Phase 14 does not need:* approval inside a composed graph's turn, which is
+`agentic_graph`'s work in the application, parked with AW-2.
 
 **Behind their own gates, with nothing building them.**
 
-- **Phase 12** — container jobs, and Flyte out of Planner's chart. It asks for a
-  concrete need for one pod per stage and Planner has none: its Flyte resource
+- **Phase 12** — container jobs, and Flyte out of Planner's chart. **Reopened by
+  AW-4** (2026-09-11): the owner wants the engine to start its own pods, and
+  AW-4's investigation weighs that against what follows. It asked for a
+  concrete need for one pod per stage and Planner had none: its Flyte resource
   declaration was a single value for all four tasks. `ContainerJob` appears
   nowhere in the workspace. §39.4 records what was accepted instead — four
   attempts in one worker pod, whose limits already match Flyte's task envelope.
-- **Phase 9** — engine-owned executions. Only for a consumer that needs one
-  launch API for local and engine work; not a prerequisite for the worker.
+- ~~**Phase 9**~~ — engine-owned executions. **Withdrawn** (AW-4): Flyte leaves
+  aiwatcher, and with it the engine an execution would have been owned by.
 - **Phase 8** — read models in PostgreSQL. Gate: a measured replay-on-start over
   a minute, or history wanted past `AIWATCHER_MAX_RUNS`.
 - **Phase 15** — evaluation and distributed mode. Own use-case gate.
@@ -1727,13 +1720,9 @@ and the tick delivers it (43.39).
 - **Still open:** Flow `join` waits for a concrete sub-pipeline use case, and
   schedule window and parameter policy must be explicit before promising
   "process the previous day".
-- Level 0 in `ai_spirit_agent` is worth more than its size:
-  `build_compiled_graph_system` builds its runtime with no tracer, the tee in
-  `agentic_runtime/trace.py` is uncommitted, and `declare_graph` is about thirty
-  lines. It is what makes Phase 13's exit observable — and it belongs to that
-  session rather than beside it, because it edits the same `compiler.py` as the
-  join buckets and lands `declare_graph` in the same SDK module as the event
-  store.
+- ~~Level 0 in `ai_spirit_agent`~~ **Closed** by AW-2: the tracer tee is
+  committed and passed by `build_compiled_graph_system`, and a composed graph
+  declares its shape (`just e2e-agent-graph`).
 - planner's Level 0 is delivered for the `direct` and `cache` branches (§38).
   What is left of it is one file: `app/agents/_app/_harness.py` names no tracer,
   so the market-research harness's `AgentStepTrace` reaches nothing, while the
@@ -1774,7 +1763,7 @@ over the log" and the 512 MB memory contract, and deserves its own ADR.
 measured, or history beyond `AIWATCHER_MAX_RUNS` is wanted. Until then,
 nothing here builds it.
 
-### Phase 9 — engine-owned executions
+### Phase 9 — engine-owned executions — **withdrawn** (AW-4)
 
 - `ExecutionOwner::Engine` over the existing `WorkflowEngine`; no new trait.
 - `WorkflowEngine::cancel`.
@@ -1787,7 +1776,7 @@ nothing here builds it.
 execution API, and an engine run whose pods published nothing shows the
 disagreement.
 
-### Phase 12 — container jobs, and Flyte out of planner's chart
+### Phase 12 — container jobs, and Flyte out of planner's chart — **reopened** (AW-4)
 
 - `aiwatcher-kube` behind the `kube` feature; named pod templates in
   configuration; image allowlist.
@@ -1802,23 +1791,24 @@ component installed, byte-identical, and the chart is smaller by the list in
 
 ### Phase 13 — the hosted decider
 
-The first two items are delivered; *What is left* above is the current state of
-the other four.
+**Closed.** Every item below landed, and the exit passes.
 
 - ~~`ExecutionOwner::Worker`, the decider lease, the append route with expected
-  version and `Idempotency-Key`~~ — done. **Timers** are not.
-- The payload policy, `external | sealed`; `sealed` refused without a key,
-  `external` needing nothing. Decided, and nothing enforces the refusal.
-- `AiwatcherEventStore` in `aiwatcher_sdk.integrations.agentic`, satisfying
-  `agentic.workflow.EventStore`.
-- `agentic_graph`'s join buckets as events in the stream; the graph declared
-  and traced (40.2).
+  version and `Idempotency-Key`~~ — done, and the timers with them.
+- ~~The payload policy, `external | sealed`~~ — done: a `sealed` run is refused
+  without the conversation archive, at start and in configuration.
+- ~~`AiwatcherEventStore` in `aiwatcher_sdk.integrations.agentic`~~ — done.
+- ~~`agentic_graph`'s join buckets as events in the stream; the graph declared
+  and traced~~ — done, the last half by AW-2 (40.2).
 
 **Exit:** a searcher → summarizer graph with a fan-out of three survives a
 worker restart between the second and third completion and fires the
 summarizer once.
 
 ### Phase 14 — human input and the control path
+
+**Delivered in this repository**, except the control message and an agent's
+tool-call gate; *What is left* above has both.
 
 - `HumanInput` binding; `await` from inside an attempt; timers with
   `on_timeout`.
@@ -2802,7 +2792,8 @@ answer and where the reasoning lives.
 | 1 | PostgreSQL for execution | Yes, behind the port, with `file` for development (7.1) |
 | 4 | The engine as producer | Yes (34, ADR_0026). It cost an SDK release |
 | 5 | Worker identity | An ingest token with a queue scope, no fourth role; the "at most an editor" guardrail amended to name it (36.2) |
-| 8 | Hosted payloads | A per-definition policy, `external` by default and `sealed` as the private option; no `plain` (40.4). The refusal it implies is not built — see §28 |
+| 7 | The hosted decider | Built: Phase 13 is closed, and `agentic_graph`'s join was its first user (§28) |
+| 8 | Hosted payloads | A per-definition policy, `external` by default and `sealed` as the private option; no `plain` (40.4). The refusal is built: a `sealed` run without the conversation archive is refused at start and in configuration |
 | 9 | Layout in the revision | Keep ADR_0024's revision, digesting the whole authored request; `plan_id` digests the executable fields only (9.1) |
 | 10 | Level 1 for planner | Skip (38) |
 | 11 | Where `app/training/run.py` is written | As a worker task from the start (38, Level 3) |
@@ -2825,9 +2816,6 @@ answer and where the reasoning lives.
 6. **Jobs, Kueue, or Flyte for GPU work.** Build `ContainerJob`; add a Kueue
    label when queueing is needed; keep `Engine` for map tasks and dynamic
    graphs (39.5). Nothing builds it until Phase 12 has its use case.
-7. **The hosted decider.** Yes, after the compiled mode runs end to end — which
-   it now does — and the first user is `agentic_graph`'s join. In progress; §28
-   says which half exists.
 13. **Who owns the pod templates.** The aiwatcher chart, as values, because the
     work role reads them; planner's chart supplies its own under a documented
     key. Settled by whoever writes the second template, which is Phase 12.
