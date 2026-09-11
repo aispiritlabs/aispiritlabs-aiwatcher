@@ -25,6 +25,33 @@ class WorkflowInput:
 
 
 @dataclass(frozen=True)
+class PodRequest:
+    """A pod of the step's own, from a template an operator wrote (ADR_0029).
+
+    ``template`` names it and ``image`` has to be on that template's list,
+    matched by repository; the tag or digest is yours. ``cpu`` and ``memory``
+    are Kubernetes quantities, each the request and the limit both, and absent
+    ones come from the template. The server checks all of it when the
+    definition is registered, against the deployment's own templates, so
+    nothing is checked here. Everything else a pod holds — volumes, secrets, a
+    service account — is the template's and cannot be said in a step.
+    """
+
+    template: str
+    image: str
+    cpu: str | None = None
+    memory: str | None = None
+
+    def as_definition(self) -> dict[str, object]:
+        pod: dict[str, object] = {"template": self.template, "image": self.image}
+        if self.cpu is not None:
+            pod["cpu"] = self.cpu
+        if self.memory is not None:
+            pod["memory"] = self.memory
+        return pod
+
+
+@dataclass(frozen=True)
 class WorkflowStep:
     """One invocation in a static workflow, not one worker or deployment."""
 
@@ -36,6 +63,9 @@ class WorkflowStep:
     params: Mapping[str, object] = field(default_factory=dict)
     retry: RetryPolicy = field(default_factory=RetryPolicy)
     timeout_seconds: int = 300
+    #: Set to run this step in a pod of its own rather than on whichever
+    #: worker holds the queue. Opt-in per step.
+    pod: PodRequest | None = None
 
     @property
     def dependencies(self) -> tuple[str, ...]:
@@ -187,7 +217,7 @@ def as_definition_step(step: Step, queue: str) -> dict[str, object]:
             "after": list(step.after),
             "inputs": [asdict(item) for item in step.inputs],
         }
-    return {
+    definition: dict[str, object] = {
         "id": step.name,
         "task_ref": step.task.ref,
         "queue": queue,
@@ -198,3 +228,8 @@ def as_definition_step(step: Step, queue: str) -> dict[str, object]:
         "retry": asdict(step.retry),
         "timeout_seconds": step.timeout_seconds,
     }
+    # Sent only when there is one, so a step without a pod registers the same
+    # revision it always did.
+    if step.pod is not None:
+        definition["pod"] = step.pod.as_definition()
+    return definition

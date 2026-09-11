@@ -16,6 +16,7 @@ from aiwatcher_sdk.worker import get_task_context, task
 from aiwatcher_sdk.workflow import (
     ApprovalStep,
     OnTimeout,
+    PodRequest,
     Workflow,
     WorkflowInput,
     WorkflowStep,
@@ -156,6 +157,38 @@ def test_a_gate_sends_its_deadline_only_when_it_has_one() -> None:
         "timeout_seconds": 3600,
         "on_timeout": {"on": "answer", "response": "reject"},
     }
+
+
+def test_a_step_sends_its_pod_only_when_it_asks_for_one() -> None:
+    # Absent rather than null, so a step without one registers the revision it
+    # always did; and a request sends only the quantities it names, because the
+    # rest are the template's.
+    @task("stage", version="1")
+    def stage() -> None:
+        pass
+
+    workflow = Workflow(
+        "house",
+        "1",
+        (
+            WorkflowStep(
+                "acquire",
+                stage,
+                pod=PodRequest("planner-import", "ghcr.io/planner/import:1.4", memory="2Gi"),
+            ),
+            WorkflowStep("persist", stage, after=("acquire",)),
+        ),
+    )
+
+    steps = workflow.to_definition("local")["steps"]
+    assert isinstance(steps, list)
+    assert steps[0]["pod"] == {
+        "template": "planner-import",
+        "image": "ghcr.io/planner/import:1.4",
+        "memory": "2Gi",
+    }
+    assert steps[0]["queue"] == "local"
+    assert "pod" not in steps[1]
 
 
 def test_an_approval_step_is_ordered_and_depended_on_like_any_other() -> None:

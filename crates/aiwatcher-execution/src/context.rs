@@ -224,9 +224,10 @@ fn allowed_for(
         // Publishing, a worker's task and a wait have no ad-hoc form: the
         // first writes a dataset version and the other two are not this
         // system's to perform.
-        RuntimeKind::PublishDataset | RuntimeKind::PythonTask | RuntimeKind::HumanInput => {
-            Vec::new()
-        }
+        RuntimeKind::PublishDataset
+        | RuntimeKind::PythonTask
+        | RuntimeKind::ContainerJob
+        | RuntimeKind::HumanInput => Vec::new(),
     };
 
     let Some(state) = state else {

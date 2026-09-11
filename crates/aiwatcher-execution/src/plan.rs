@@ -29,6 +29,7 @@ use serde_json::Value;
 use utoipa::ToSchema;
 
 use crate::digest;
+use crate::pods::PodRequest;
 
 /// The immutable, content-addressed version of an authored definition.
 ///
@@ -114,6 +115,12 @@ pub enum RuntimeBinding {
     PublishDataset(PublishDatasetSpec),
     /// A registered function a worker pulls and runs.
     PythonTask(PythonTaskSpec),
+    /// A registered function run in a pod of its own, started for this one
+    /// attempt from an operator's template (ADR_0029). `PythonTask`'s fields
+    /// plus the pod it asked for, and a kind of its own rather than a field on
+    /// that one: a claim filter tells the two apart from the row, without
+    /// loading the plan.
+    ContainerJob(ContainerJobSpec),
     /// Nobody runs it. It waits for somebody to answer.
     HumanInput(HumanInputSpec),
 }
@@ -130,6 +137,7 @@ pub enum RuntimeKind {
     Marimo,
     PublishDataset,
     PythonTask,
+    ContainerJob,
     HumanInput,
 }
 
@@ -143,14 +151,18 @@ impl RuntimeKind {
             Self::Marimo => "marimo",
             Self::PublishDataset => "publish_dataset",
             Self::PythonTask => "python_task",
+            Self::ContainerJob => "container_job",
             Self::HumanInput => "human_input",
         }
     }
 
     /// Whether a worker claims this rather than a reactor in the work role.
+    ///
+    /// A pod's attempt is one: the pod is the worker, and the process that
+    /// started it claims nothing (ADR_0029).
     #[must_use]
     pub const fn is_pulled(self) -> bool {
-        matches!(self, Self::PythonTask)
+        matches!(self, Self::PythonTask | Self::ContainerJob)
     }
 
     /// Whether performing this needs a process the server does not run.
@@ -171,7 +183,12 @@ impl RuntimeKind {
     pub const fn is_cacheable(self) -> bool {
         matches!(
             self,
-            Self::FlowPhp | Self::DataFusion | Self::DuckDb | Self::Marimo | Self::PythonTask
+            Self::FlowPhp
+                | Self::DataFusion
+                | Self::DuckDb
+                | Self::Marimo
+                | Self::PythonTask
+                | Self::ContainerJob
         )
     }
 
@@ -186,7 +203,11 @@ impl RuntimeKind {
             Self::FlowPhp => Some(QueryEngine::Flow),
             Self::DataFusion => Some(QueryEngine::DataFusion),
             Self::DuckDb => Some(QueryEngine::DuckDb),
-            Self::Marimo | Self::PublishDataset | Self::PythonTask | Self::HumanInput => None,
+            Self::Marimo
+            | Self::PublishDataset
+            | Self::PythonTask
+            | Self::ContainerJob
+            | Self::HumanInput => None,
         }
     }
 }
@@ -201,6 +222,7 @@ impl RuntimeBinding {
             Self::Marimo(_) => RuntimeKind::Marimo,
             Self::PublishDataset(_) => RuntimeKind::PublishDataset,
             Self::PythonTask(_) => RuntimeKind::PythonTask,
+            Self::ContainerJob(_) => RuntimeKind::ContainerJob,
             Self::HumanInput(_) => RuntimeKind::HumanInput,
         }
     }
@@ -230,7 +252,7 @@ impl RuntimeBinding {
             Self::Marimo(spec) => spec.block.as_ref().map(std::slice::from_ref),
             Self::PublishDataset(spec) => spec.block.as_ref().map(std::slice::from_ref),
             Self::HumanInput(spec) => spec.block.as_ref().map(std::slice::from_ref),
-            Self::PythonTask(_) => None,
+            Self::PythonTask(_) | Self::ContainerJob(_) => None,
         }
     }
 
@@ -249,6 +271,7 @@ impl RuntimeBinding {
             Self::Marimo(_)
             | Self::PublishDataset(_)
             | Self::PythonTask(_)
+            | Self::ContainerJob(_)
             | Self::HumanInput(_) => None,
         }
     }
@@ -349,6 +372,24 @@ pub struct PythonTaskSpec {
     #[serde(default)]
     #[schema(value_type = Object)]
     pub params: BTreeMap<String, Value>,
+}
+
+/// A [`PythonTaskSpec`] and the pod it runs in.
+///
+/// The template and the image are executable fields, and so part of `plan_id`:
+/// the same task in a different image is a different program. Where the pod
+/// runs, what it mounts and which secrets it holds are not here at all — they
+/// are the template's, read from configuration when the pod is started.
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, ToSchema)]
+pub struct ContainerJobSpec {
+    /// `name@version`, as for a [`PythonTaskSpec`]: what the pod's worker has
+    /// to have registered before it may claim the attempt.
+    pub task_ref: String,
+    pub queue: String,
+    #[serde(default)]
+    #[schema(value_type = Object)]
+    pub params: BTreeMap<String, Value>,
+    pub pod: PodRequest,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
@@ -837,6 +878,35 @@ mod tests {
             Vec::new(),
         );
         assert!(here.steps_needing_another_process().is_empty());
+
+        // A pod is another process too, even one this deployment starts: a
+        // store that holds one process cannot hand it the attempt.
+        let mut podded = step("stage");
+        podded.runtime = RuntimeBinding::ContainerJob(ContainerJobSpec {
+            task_ref: "stage@1".to_owned(),
+            queue: "planner".to_owned(),
+            params: BTreeMap::new(),
+            pod: PodRequest {
+                template: "planner-import".to_owned(),
+                image: "ghcr.io/planner/import:1.4".to_owned(),
+                cpu: None,
+                memory: None,
+            },
+        });
+        let in_a_pod = ExecutionPlan::seal(
+            DefinitionKind::Workflow,
+            "import".to_owned(),
+            DefinitionRevision("ab".repeat(32)),
+            vec![podded],
+            Vec::new(),
+        );
+        assert_eq!(in_a_pod.steps_needing_another_process(), vec!["stage"]);
+        assert_eq!(RuntimeKind::ContainerJob.as_str(), "container_job");
+        assert_eq!(
+            serde_json::to_value(RuntimeKind::ContainerJob).expect("a kind"),
+            serde_json::json!("container_job"),
+            "the store decodes a kind through this spelling"
+        );
     }
 
     #[test]

@@ -309,6 +309,25 @@ fn build_dataset_sources(config: &Config) -> Result<Arc<SourceCatalog>> {
     Ok(Arc::new(catalog))
 }
 
+/// The operator's pod templates, or `None` when none are configured (ADR_0029).
+///
+/// A malformed file fails the start-up with every template and field that is
+/// wrong, for the source catalogue's reason: a template that silently did not
+/// load refuses every step naming it while looking exactly like one that had.
+fn build_pod_templates(
+    config: &Config,
+) -> Result<Option<Arc<aiwatcher_execution::pods::PodTemplates>>> {
+    let Some(path) = config.pod_templates.as_deref() else {
+        return Ok(None);
+    };
+    let body =
+        std::fs::read(path).with_context(|| format!("reading the pod templates at {path}"))?;
+    let templates = aiwatcher_execution::pods::PodTemplates::parse(&body)
+        .with_context(|| format!("checking the pod templates at {path}"))?;
+    tracing::info!(templates = templates.len(), %path, "the pod templates are loaded");
+    Ok(Some(Arc::new(templates)))
+}
+
 /// The dataset hubs this instance may search, or `None`.
 ///
 /// `None` is the default and makes `/api/v1/dataset-hubs` answer 501 naming the
@@ -726,6 +745,7 @@ pub async fn build(config: Config) -> Result<Runtime> {
                 Arc::clone(store),
             ))
         }),
+        pod_templates: build_pod_templates(&config)?,
         schedules: registries
             .objects
             .as_ref()

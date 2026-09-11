@@ -10271,6 +10271,30 @@
           }
         }
       },
+      "ContainerJobSpec": {
+        "type": "object",
+        "description": "A [`PythonTaskSpec`] and the pod it runs in.\n\nThe template and the image are executable fields, and so part of `plan_id`:\nthe same task in a different image is a different program. Where the pod\nruns, what it mounts and which secrets it holds are not here at all — they\nare the template's, read from configuration when the pod is started.",
+        "required": [
+          "task_ref",
+          "queue",
+          "pod"
+        ],
+        "properties": {
+          "params": {
+            "type": "object"
+          },
+          "pod": {
+            "$ref": "#/components/schemas/PodRequest"
+          },
+          "queue": {
+            "type": "string"
+          },
+          "task_ref": {
+            "type": "string",
+            "description": "`name@version`, as for a [`PythonTaskSpec`]: what the pod's worker has\nto have registered before it may claim the attempt."
+          }
+        }
+      },
       "ContentPart": {
         "oneOf": [
           {
@@ -16752,6 +16776,39 @@
           }
         }
       },
+      "PodRequest": {
+        "type": "object",
+        "description": "What a step asks for when it wants a pod of its own.\n\nNested under `pod` rather than flattened into the step, because serde's\n`flatten` and `deny_unknown_fields` do not compose — and it denies unknown\nfields itself, so a `namespace`, a `secret`, a `serviceAccount` or a `gpu`\nis refused by name rather than stored and ignored. Those are the template's,\nor are not built yet.",
+        "required": [
+          "template",
+          "image"
+        ],
+        "properties": {
+          "cpu": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "CPU as a Kubernetes quantity (`500m`, `2`), the request and the limit\nboth. Absent takes the template's defaults."
+          },
+          "image": {
+            "type": "string",
+            "description": "`registry/repository[:tag][@digest]`. The repository has to be on the\ntemplate's list, exactly; the tag or digest is the step's own."
+          },
+          "memory": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Memory as a Kubernetes quantity (`512Mi`, `4Gi`), the same way."
+          },
+          "template": {
+            "type": "string",
+            "description": "The operator's template, by name."
+          }
+        },
+        "additionalProperties": false
+      },
       "PolicyMode": {
         "type": "string",
         "description": "How strict this deployment is.",
@@ -19016,6 +19073,29 @@
           {
             "allOf": [
               {
+                "$ref": "#/components/schemas/ContainerJobSpec",
+                "description": "A registered function run in a pod of its own, started for this one\nattempt from an operator's template (ADR_0029). `PythonTask`'s fields\nplus the pod it asked for, and a kind of its own rather than a field on\nthat one: a claim filter tells the two apart from the row, without\nloading the plan."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "runtime"
+                ],
+                "properties": {
+                  "runtime": {
+                    "type": "string",
+                    "enum": [
+                      "container_job"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "A registered function run in a pod of its own, started for this one\nattempt from an operator's template (ADR_0029). `PythonTask`'s fields\nplus the pod it asked for, and a kind of its own rather than a field on\nthat one: a claim filter tells the two apart from the row, without\nloading the plan."
+          },
+          {
+            "allOf": [
+              {
                 "$ref": "#/components/schemas/HumanInputSpec",
                 "description": "Nobody runs it. It waits for somebody to answer."
               },
@@ -19049,6 +19129,7 @@
           "marimo",
           "publish_dataset",
           "python_task",
+          "container_job",
           "human_input"
         ]
       },
@@ -22543,6 +22624,17 @@
           },
           "params": {
             "type": "object"
+          },
+          "pod": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PodRequest",
+                "description": "Set to run this step in a pod of its own, from an operator's template\n(ADR_0029). Absent from what a revision digests when unset, so every\ndefinition saved before pods existed keeps its revision."
+              }
+            ]
           },
           "queue": {
             "type": "string"

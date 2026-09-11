@@ -129,6 +129,17 @@ fn code_digest(runtime: &RuntimeBinding) -> Option<String> {
             .task_ref
             .split_once('@')
             .map(|_| digest(spec.task_ref.as_bytes())),
+        // The image is code too, and only a digest addresses one: a tag is
+        // whatever was pushed under it last, which is an unpinned notebook in
+        // another costume.
+        RuntimeBinding::ContainerJob(spec) => {
+            let pinned = crate::pods::ImageRef::parse(&spec.pod.image)
+                .ok()
+                .and_then(|image| image.digest)?;
+            spec.task_ref
+                .split_once('@')
+                .map(|_| digest(format!("{}\n{pinned}", spec.task_ref).as_bytes()))
+        }
         RuntimeBinding::PublishDataset(_) | RuntimeBinding::HumanInput(_) => None,
     }
 }
@@ -147,6 +158,7 @@ fn parameters(runtime: &RuntimeBinding) -> Value {
     let map: BTreeMap<String, Value> = match runtime {
         RuntimeBinding::Marimo(spec) => spec.params.clone(),
         RuntimeBinding::PythonTask(spec) => spec.params.clone(),
+        RuntimeBinding::ContainerJob(spec) => spec.params.clone(),
         RuntimeBinding::FlowPhp(spec)
         | RuntimeBinding::DataFusion(spec)
         | RuntimeBinding::DuckDb(spec) => spec

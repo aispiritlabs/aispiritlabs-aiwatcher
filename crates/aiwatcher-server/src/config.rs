@@ -47,6 +47,17 @@ pub enum ConfigError {
         because: &'static str,
     },
 
+    /// A variable this process cannot act on, in this role or this build.
+    ///
+    /// Refused rather than ignored, for `Removed`'s reason: whoever set it
+    /// expects what it asks for, and a server that started without it would
+    /// say nothing.
+    #[error("{name} is set, but {why}")]
+    Unusable {
+        name: &'static str,
+        why: &'static str,
+    },
+
     /// A configuration the authentication crate itself refused. Its own
     /// variant rather than a `String` in `Invalid`, so the message the crate
     /// wrote — which names the variable and says what it needed — reaches the
@@ -420,6 +431,10 @@ pub struct Config {
     /// which is a working state: nothing matches a hub result, so every one
     /// stays `unclear`. See `aiwatcher_annotations::sources`.
     pub dataset_sources: Option<String>,
+    /// The operator's pod templates: a JSON file, one template per name, which
+    /// no route writes (ADR_0029). Absent means none, and a step asking for a
+    /// pod is refused at registration naming this variable.
+    pub pod_templates: Option<String>,
     /// Whether the dataset area may search Hugging Face.
     ///
     /// A switch rather than a credential: the dataset search is public. Off by
@@ -584,6 +599,7 @@ impl Default for Config {
             // The same ten seconds the OTLP exporter and the object store use.
             workflow_runner_timeout: Duration::from_secs(10),
             dataset_sources: None,
+            pod_templates: None,
             huggingface_enabled: false,
             huggingface_token: None,
             kaggle_username: None,
@@ -809,6 +825,7 @@ impl Config {
             config.workflow_runner_timeout = Duration::from_secs(seconds);
         }
         config.dataset_sources = var("AIWATCHER_DATASET_SOURCES");
+        config.pod_templates = var("AIWATCHER_POD_TEMPLATES");
         if let Some(raw) = var("AIWATCHER_HUGGINGFACE_ENABLED") {
             config.huggingface_enabled = parse_bool("AIWATCHER_HUGGINGFACE_ENABLED", &raw)?;
         }
@@ -1058,6 +1075,21 @@ impl Config {
                               a step's result for the other to read",
                 });
             }
+        }
+
+        // A process that claims attempts is the one that would start the pods
+        // they ask for, and the launcher that does is behind the `kube` cargo
+        // feature (ADR_0029). Without it, a pod's attempt would be accepted
+        // and wait for ever with nothing here saying why. The serve role only
+        // checks a step against the file, which needs no cluster, so it reads
+        // templates in any build.
+        if self.pod_templates.is_some() && self.role.works() {
+            return Err(ConfigError::Unusable {
+                name: "AIWATCHER_POD_TEMPLATES",
+                why: "this process claims attempts and would have to start the pods they ask \
+                      for, which needs the `kube` cargo feature this build lacks; set it on \
+                      AIWATCHER_ROLE=serve, which only checks what a step asks for",
+            });
         }
 
         self.auth.validate()?;
@@ -1450,6 +1482,51 @@ mod tests {
         Config::default()
             .validate()
             .expect("one process, both roles");
+    }
+
+    #[test]
+    fn pod_templates_are_read_by_the_serve_role_and_refused_where_nothing_could_start_a_pod() {
+        let templates = Some("/etc/aiwatcher/pod-templates.json".to_owned());
+        for role in [ProcessRole::Both, ProcessRole::Work] {
+            let error = Config {
+                role,
+                pod_templates: templates.clone(),
+                // Everything a split role needs, so the refusal is this one.
+                workflow_store: WorkflowStoreKind::Postgres,
+                workflow_postgres_url: Some("postgres://localhost/aiwatcher".to_owned()),
+                bus: BackendKind::Laser,
+                laser_connection_string: Some("iggy:iggy@127.0.0.1:8090".to_owned()),
+                prompt_store: PromptStoreKind::S3,
+                prompt_s3_endpoint: Some("http://rustfs:9000".to_owned()),
+                prompt_s3_access_key: Some("key".to_owned()),
+                prompt_s3_secret_key: Some("secret".to_owned()),
+                ..Config::default()
+            }
+            .validate()
+            .expect_err("no launcher in this build")
+            .to_string();
+            assert!(
+                error.contains("AIWATCHER_POD_TEMPLATES") && error.contains("kube"),
+                "{}: {error}",
+                role.as_str()
+            );
+        }
+
+        Config {
+            role: ProcessRole::Serve,
+            pod_templates: templates,
+            workflow_store: WorkflowStoreKind::Postgres,
+            workflow_postgres_url: Some("postgres://localhost/aiwatcher".to_owned()),
+            bus: BackendKind::Laser,
+            laser_connection_string: Some("iggy:iggy@127.0.0.1:8090".to_owned()),
+            prompt_store: PromptStoreKind::S3,
+            prompt_s3_endpoint: Some("http://rustfs:9000".to_owned()),
+            prompt_s3_access_key: Some("key".to_owned()),
+            prompt_s3_secret_key: Some("secret".to_owned()),
+            ..Config::default()
+        }
+        .validate()
+        .expect("the serve role checks steps against the file, in any build");
     }
 
     #[test]

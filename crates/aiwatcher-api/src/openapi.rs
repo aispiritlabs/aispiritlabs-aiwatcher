@@ -132,6 +132,8 @@ use utoipa::OpenApi;
         aiwatcher_execution::plan::MarimoStepSpec,
         aiwatcher_execution::plan::PublishDatasetSpec,
         aiwatcher_execution::plan::PythonTaskSpec,
+        aiwatcher_execution::plan::ContainerJobSpec,
+        aiwatcher_execution::pods::PodRequest,
         aiwatcher_execution::plan::HumanInputSpec,
         aiwatcher_execution::plan::InputBinding,
         aiwatcher_execution::plan::OutputDeclaration,

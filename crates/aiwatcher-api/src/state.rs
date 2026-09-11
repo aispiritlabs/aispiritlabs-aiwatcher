@@ -151,6 +151,11 @@ pub struct AppState {
     pub schedules: Option<Arc<aiwatcher_execution::ScheduleStore>>,
     /// Authored Python workflows, versioned outside execution retention.
     pub workflow_definitions: Option<Arc<aiwatcher_execution::definition::DefinitionRegistry>>,
+    /// The operator's pod templates, from `AIWATCHER_POD_TEMPLATES` (ADR_0029).
+    /// `None` configures none, and a step asking for a pod is refused at
+    /// registration naming the variable. Read with no cluster credential:
+    /// checking a name against a list needs none.
+    pub pod_templates: Option<Arc<aiwatcher_execution::pods::PodTemplates>>,
     /// The query engine this deployment runs (`AIWATCHER_QUERY_ENGINE`). Read
     /// by the compile that starts runs, so a plan written for another engine
     /// is refused when it is started rather than left for nothing to claim.
@@ -317,6 +322,10 @@ impl std::fmt::Debug for AppState {
             .field("training_registry", &self.training.is_some())
             .field("dataset_hubs", &self.hubs.is_some())
             .field("dataset_sources", &self.sources.sources.len())
+            .field(
+                "pod_templates",
+                &self.pod_templates.as_ref().map(|templates| templates.len()),
+            )
             .field("workflow_runner", &self.runner)
             .field("editor", &self.editor)
             .field("auth", &self.auth)

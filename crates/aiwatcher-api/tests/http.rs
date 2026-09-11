@@ -198,6 +198,10 @@ impl Fixture {
                     Arc::new(MemoryObjectStore::new()),
                 ))
             }),
+            // None, like `just run`: a step asking for a pod is refused at
+            // registration. `with_pod_templates` is the deployment that has
+            // some.
+            pod_templates: None,
             schedules: registry_enabled.then(|| {
                 Arc::new(aiwatcher_execution::ScheduleStore::new(Arc::new(
                     MemoryObjectStore::new(),
@@ -312,6 +316,15 @@ impl Fixture {
     /// — has to stay, or the refusal never runs because an earlier one does.
     fn without_archive(mut self) -> Self {
         self.state.conversations = None;
+        self
+    }
+
+    /// The same instance with an operator's pod templates read in.
+    fn with_pod_templates(mut self, templates: Value) -> Self {
+        self.state.pod_templates = Some(Arc::new(
+            aiwatcher_execution::pods::PodTemplates::parse(templates.to_string().as_bytes())
+                .expect("templates a chart would render"),
+        ));
         self
     }
 
@@ -6040,6 +6053,96 @@ async fn holding_the_lease_is_not_enough_if_the_token_is_for_another_queue() {
         )
         .await;
     assert_eq!(status, StatusCode::NO_CONTENT, "{ok}");
+}
+
+/// One step asking for a pod from planner's template.
+fn podded_workflow(image: &str, cpu: &str) -> Value {
+    json!({"name":"pod-import", "version":"1", "steps":[
+        {"id":"acquire", "task_ref":"acquire@1", "queue":"planner-import", "timeout_seconds":30,
+         "pod": {"template": "planner-import", "image": image, "cpu": cpu}}
+    ]})
+}
+
+fn planner_pod_templates() -> Value {
+    json!({"planner-import": {
+        "images": ["ghcr.io/planner/import"],
+        "resources": {"max": {"cpu": "2", "memory": "4Gi"}},
+        "command": ["python", "-m", "aiwatcher_sdk.worker", "run-attempt"]
+    }})
+}
+
+#[tokio::test]
+async fn a_step_asking_for_a_pod_its_template_does_not_allow_is_refused_and_nothing_is_stored() {
+    let fixture = Fixture::new(true).with_pod_templates(planner_pod_templates());
+
+    let (status, refused) = fixture
+        .post(
+            "/api/v1/workflow-definitions",
+            podded_workflow("ghcr.io/planner/import-debug:1", "4"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    let details: Vec<&str> = refused["details"]
+        .as_array()
+        .expect("details")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    // Every problem at once, each naming the step, the value and the template.
+    assert_eq!(details.len(), 2, "{details:?}");
+    assert!(
+        details
+            .iter()
+            .any(|problem| problem.starts_with("acquire: ")
+                && problem.contains("ghcr.io/planner/import-debug:1")
+                && problem.contains("planner-import")),
+        "{details:?}"
+    );
+    assert!(
+        details
+            .iter()
+            .any(|problem| problem.contains("cpu '4'") && problem.contains("ceiling of 2")),
+        "{details:?}"
+    );
+    let (status, _) = fixture.get("/api/v1/workflow-definitions/pod-import").await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "a refused definition is not stored"
+    );
+
+    // On the list and under the ceiling, the same step registers.
+    let (status, saved) = fixture
+        .post(
+            "/api/v1/workflow-definitions",
+            podded_workflow("ghcr.io/planner/import:1.4", "1500m"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(
+        saved["definition"]["steps"][0]["pod"]["image"],
+        "ghcr.io/planner/import:1.4"
+    );
+}
+
+#[tokio::test]
+async fn a_step_asking_for_a_pod_where_no_template_is_configured_is_refused_naming_the_variable() {
+    // `just run`: no templates, so a definition no launcher could ever run
+    // here is not one to store.
+    let fixture = Fixture::new(true);
+    let (status, refused) = fixture
+        .post(
+            "/api/v1/workflow-definitions",
+            podded_workflow("ghcr.io/planner/import:1.4", "1"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    assert!(
+        refused["details"][0]
+            .as_str()
+            .is_some_and(|problem| problem.contains("AIWATCHER_POD_TEMPLATES")),
+        "{refused}"
+    );
 }
 
 fn authored_worker_workflow() -> Value {

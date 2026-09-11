@@ -306,7 +306,9 @@ fn node_kind(runtime: &RuntimeBinding) -> &'static str {
         RuntimeBinding::FlowPhp(_) | RuntimeBinding::DataFusion(_) | RuntimeBinding::DuckDb(_) => {
             "retriever"
         }
-        RuntimeBinding::Marimo(_) | RuntimeBinding::PythonTask(_) => "chain",
+        RuntimeBinding::Marimo(_)
+        | RuntimeBinding::PythonTask(_)
+        | RuntimeBinding::ContainerJob(_) => "chain",
         RuntimeBinding::PublishDataset(_) => "chain",
         RuntimeBinding::HumanInput(_) => "guardrail",
     }

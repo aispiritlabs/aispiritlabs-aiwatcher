@@ -610,6 +610,13 @@ pub fn attempt_rows(
                 // A pulled attempt names the queue it is claimable on and the
                 // pinned code a worker must match. Everything else is a
                 // reactor's, claimed by runtime.
+                //
+                // Not a pod's, although it is pulled too. A queued row goes to
+                // any worker holding that queue and that task
+                // (`ClaimFilter::matches`), and a pod's attempt belongs to the
+                // pod started for it — so until the filter can tell the two
+                // apart by key (ADR_0029), a `container_job` row carries no
+                // queue, is claimed by nothing, and waits.
                 if let Some(RuntimeBinding::PythonTask(spec)) =
                     run.plan.step(step_id).map(|step| &step.runtime)
                 {

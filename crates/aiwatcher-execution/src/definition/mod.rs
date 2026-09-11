@@ -12,9 +12,11 @@ use serde_json::Value;
 use utoipa::ToSchema;
 
 use crate::plan::{
-    CachePolicy, DefinitionKind, DefinitionRevision, ExecutionPlan, HumanInputSpec, InputBinding,
-    OutputDeclaration, PlanEdge, PlanStep, PythonTaskSpec, RetryPolicy, RuntimeBinding, canonical,
+    CachePolicy, ContainerJobSpec, DefinitionKind, DefinitionRevision, ExecutionPlan,
+    HumanInputSpec, InputBinding, OutputDeclaration, PlanEdge, PlanStep, PythonTaskSpec,
+    RetryPolicy, RuntimeBinding, canonical,
 };
+use crate::pods::PodRequest;
 use crate::{CompileError, digest};
 
 /// A workflow's executable definition, saved by content before it is run.
@@ -45,6 +47,11 @@ pub struct WorkflowTask {
     pub task_ref: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub queue: String,
+    /// Set to run this step in a pod of its own, from an operator's template
+    /// (ADR_0029). Absent from what a revision digests when unset, so every
+    /// definition saved before pods existed keeps its revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pod: Option<PodRequest>,
     /// Set to make this step a gate: it waits for a person and runs nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval: Option<ApprovalGate>,
@@ -163,6 +170,7 @@ impl WorkflowSpec {
                 for (field, set) in [
                     ("task_ref", !step.task_ref.is_empty()),
                     ("queue", !step.queue.is_empty()),
+                    ("pod", step.pod.is_some()),
                     ("outputs", !step.outputs.is_empty()),
                     ("timeout_seconds", step.timeout_seconds != 0),
                     // Against the *default* rather than against `once()`: an
@@ -208,6 +216,12 @@ impl WorkflowSpec {
                     || step.outputs.iter().collect::<BTreeSet<_>>().len() != step.outputs.len()
                 {
                     problems.push(format!("{}: outputs must be nonempty and unique", step.id));
+                }
+                // What a request says on its own. Whether this deployment has
+                // the template, lists the image and allows the quantities is
+                // registration's question, asked against the templates file.
+                if let Some(pod) = &step.pod {
+                    problems.extend(pod.problems(&step.id));
                 }
             }
             let mut input_names = BTreeSet::new();
@@ -288,11 +302,19 @@ impl WorkflowSpec {
                         timeout_seconds: gate.timeout_seconds,
                         on_timeout: gate.on_timeout.clone(),
                     }),
-                    None => RuntimeBinding::PythonTask(PythonTaskSpec {
-                        task_ref: step.task_ref.clone(),
-                        queue: step.queue.clone(),
-                        params: step.params.clone(),
-                    }),
+                    None => match &step.pod {
+                        Some(pod) => RuntimeBinding::ContainerJob(ContainerJobSpec {
+                            task_ref: step.task_ref.clone(),
+                            queue: step.queue.clone(),
+                            params: step.params.clone(),
+                            pod: pod.clone(),
+                        }),
+                        None => RuntimeBinding::PythonTask(PythonTaskSpec {
+                            task_ref: step.task_ref.clone(),
+                            queue: step.queue.clone(),
+                            params: step.params.clone(),
+                        }),
+                    },
                 },
                 inputs: step
                     .inputs
@@ -500,15 +522,97 @@ mod tests {
 
         assert!(spec.steps[0].approval.is_none());
         let digested = canonical(&spec);
-        assert!(
-            !digested.contains("approval"),
-            "the new field is absent from what a revision digests: {digested}"
-        );
+        for absent in ["approval", "\"pod\""] {
+            assert!(
+                !digested.contains(absent),
+                "{absent} is absent from what a revision digests: {digested}"
+            );
+        }
         // And the three a gate may omit are still written by a step that runs,
         // so nothing that was in an older digest has left it.
         for present in ["\"task_ref\"", "\"queue\"", "\"timeout_seconds\""] {
             assert!(digested.contains(present), "{present} left the digest");
         }
+    }
+
+    /// `definition()` with `acquire` asking for a pod.
+    fn podded(pod: Value) -> WorkflowSpec {
+        let mut spec = definition();
+        spec.steps[1].pod = Some(serde_json::from_value(pod).expect("a pod request"));
+        spec
+    }
+
+    #[test]
+    fn a_step_that_asks_for_a_pod_compiles_to_a_container_job_carrying_it() {
+        let spec = podded(json!({"template": "planner-import",
+            "image": "ghcr.io/planner/import:1.4", "memory": "2Gi"}));
+        let plan = spec.compile().expect("compile");
+
+        let acquire = plan.step("acquire").expect("acquire");
+        let RuntimeBinding::ContainerJob(job) = &acquire.runtime else {
+            panic!("a pod of its own: {:?}", acquire.runtime);
+        };
+        assert_eq!(job.task_ref, "acquire@1");
+        assert_eq!(job.queue, "local");
+        assert_eq!(job.pod.image, "ghcr.io/planner/import:1.4");
+        assert_eq!(job.pod.memory.as_deref(), Some("2Gi"));
+        // The other step is untouched: a pod is opt-in per step.
+        assert!(matches!(
+            plan.step("persist").map(|step| &step.runtime),
+            Some(RuntimeBinding::PythonTask(_))
+        ));
+        // And the image is part of what the plan is.
+        let other = podded(json!({"template": "planner-import",
+            "image": "ghcr.io/planner/import:1.5", "memory": "2Gi"}));
+        assert_ne!(plan.plan_id, other.compile().expect("compile").plan_id);
+    }
+
+    #[test]
+    fn a_pod_request_is_refused_for_a_field_it_does_not_have() {
+        // Where it runs, what it mounts and what it may hold are the
+        // template's. Refused by name rather than stored and ignored.
+        for field in ["namespace", "secret", "serviceAccount", "gpu"] {
+            let mut pod = json!({"template": "planner-import", "image": "python:3.13"});
+            pod[field] = json!("x");
+            let error = serde_json::from_value::<PodRequest>(pod).expect_err(field);
+            assert!(error.to_string().contains(field), "{error}");
+        }
+    }
+
+    #[test]
+    fn a_pod_request_that_is_not_one_is_refused_before_any_template_is_read() {
+        let spec = podded(json!({"template": "Planner Import",
+            "image": "ghcr.io/Planner/import", "cpu": "lots", "memory": "0"}));
+        let problems = spec.compile().expect_err("refused").problems().to_vec();
+        for named in [
+            "pod.template",
+            "pod.image",
+            "pod.cpu 'lots'",
+            "pod.memory '0'",
+        ] {
+            assert!(
+                problems.iter().any(|problem| problem.contains(named)),
+                "{named} not named: {problems:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_gate_that_asks_for_a_pod_is_refused_by_name() {
+        let mut spec = gated();
+        spec.steps[1].pod = Some(PodRequest {
+            template: "planner-import".to_owned(),
+            image: "python:3.13".to_owned(),
+            cpu: None,
+            memory: None,
+        });
+        let problems = spec.compile().expect_err("refused").problems().to_vec();
+        assert!(
+            problems
+                .iter()
+                .any(|problem| problem.contains("names pod,")),
+            "{problems:?}"
+        );
     }
 
     #[test]

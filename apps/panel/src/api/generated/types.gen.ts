@@ -752,6 +752,27 @@ export type ConsentRecord = {
 };
 
 /**
+ * A [`PythonTaskSpec`] and the pod it runs in.
+ *
+ * The template and the image are executable fields, and so part of `plan_id`:
+ * the same task in a different image is a different program. Where the pod
+ * runs, what it mounts and which secrets it holds are not here at all — they
+ * are the template's, read from configuration when the pod is started.
+ */
+export type ContainerJobSpec = {
+    params?: {
+        [key: string]: unknown;
+    };
+    pod: PodRequest;
+    queue: string;
+    /**
+     * `name@version`, as for a [`PythonTaskSpec`]: what the pod's worker has
+     * to have registered before it may claim the attempt.
+     */
+    task_ref: string;
+};
+
+/**
  * One piece of a message.
  *
  * A list rather than a string, because a modern turn is not one: an assistant
@@ -4196,6 +4217,36 @@ export type PlanStep = {
 };
 
 /**
+ * What a step asks for when it wants a pod of its own.
+ *
+ * Nested under `pod` rather than flattened into the step, because serde's
+ * `flatten` and `deny_unknown_fields` do not compose — and it denies unknown
+ * fields itself, so a `namespace`, a `secret`, a `serviceAccount` or a `gpu`
+ * is refused by name rather than stored and ignored. Those are the template's,
+ * or are not built yet.
+ */
+export type PodRequest = {
+    /**
+     * CPU as a Kubernetes quantity (`500m`, `2`), the request and the limit
+     * both. Absent takes the template's defaults.
+     */
+    cpu?: string | null;
+    /**
+     * `registry/repository[:tag][@digest]`. The repository has to be on the
+     * template's list, exactly; the tag or digest is the step's own.
+     */
+    image: string;
+    /**
+     * Memory as a Kubernetes quantity (`512Mi`, `4Gi`), the same way.
+     */
+    memory?: string | null;
+    /**
+     * The operator's template, by name.
+     */
+    template: string;
+};
+
+/**
  * How strict this deployment is.
  */
 export const PolicyMode = { PROTECTED: 'protected', OPEN: 'open' } as const;
@@ -5533,6 +5584,8 @@ export type RuntimeBinding = (QueryStepSpec & {
     runtime: 'publish_dataset';
 }) | (PythonTaskSpec & {
     runtime: 'python_task';
+}) | (ContainerJobSpec & {
+    runtime: 'container_job';
 }) | (HumanInputSpec & {
     runtime: 'human_input';
 });
@@ -5547,6 +5600,7 @@ export const RuntimeKind = {
     MARIMO: 'marimo',
     PUBLISH_DATASET: 'publish_dataset',
     PYTHON_TASK: 'python_task',
+    CONTAINER_JOB: 'container_job',
     HUMAN_INPUT: 'human_input'
 } as const;
 
@@ -7289,6 +7343,7 @@ export type WorkflowTask = {
     params?: {
         [key: string]: unknown;
     };
+    pod?: null | PodRequest;
     queue?: string;
     retry?: RetryPolicy;
     /**

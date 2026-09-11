@@ -46,6 +46,7 @@ pub mod hosted;
 pub mod message;
 pub mod outbox;
 pub mod plan;
+pub mod pods;
 pub mod reactor;
 pub mod schedule;
 pub mod state;

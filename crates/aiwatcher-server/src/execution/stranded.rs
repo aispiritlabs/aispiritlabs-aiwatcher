@@ -84,8 +84,13 @@ const fn claimed_by_the_work_role(kind: RuntimeKind) -> bool {
         | RuntimeKind::DataFusion
         | RuntimeKind::DuckDb
         | RuntimeKind::Marimo => true,
-        // The serve role's reactor, a worker by its queue, and a wait.
-        RuntimeKind::PublishDataset | RuntimeKind::PythonTask | RuntimeKind::HumanInput => false,
+        // The serve role's reactor, a worker by its queue, a pod by its key —
+        // the work role starts the pod and claims nothing (ADR_0029) — and a
+        // wait.
+        RuntimeKind::PublishDataset
+        | RuntimeKind::PythonTask
+        | RuntimeKind::ContainerJob
+        | RuntimeKind::HumanInput => false,
     }
 }
 

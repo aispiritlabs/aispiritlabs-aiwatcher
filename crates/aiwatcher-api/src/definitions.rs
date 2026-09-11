@@ -55,10 +55,21 @@ async fn register_workflow(
         .require(aiwatcher_auth::Role::Editor)?
         .log_subject()
         .to_owned();
-    body.compile().map_err(|error| ApiError::PlanRefused {
+    let plan = body.compile().map_err(|error| ApiError::PlanRefused {
         summary: "workflow definition is invalid".to_owned(),
         problems: error.problems().to_vec(),
     })?;
+    // What only this deployment can answer: whether it has the template a step
+    // names, lists its image and allows what it asks for. Refused before
+    // anything is stored, every problem at once. The launcher asks again,
+    // because the file is configuration and can change after this (ADR_0029).
+    let refused = aiwatcher_execution::pods::refusals(&plan, state.pod_templates.as_deref());
+    if !refused.is_empty() {
+        return Err(ApiError::PlanRefused {
+            summary: "workflow definition asks for a pod this deployment does not allow".to_owned(),
+            problems: refused,
+        });
+    }
     let saved = registry(&state)?
         .save(body, requested_by, time::OffsetDateTime::now_utc())
         .await
