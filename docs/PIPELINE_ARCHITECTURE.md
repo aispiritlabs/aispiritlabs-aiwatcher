@@ -1677,12 +1677,14 @@ and the tick delivers it (43.39).
 **Behind their own gates, with nothing building them.**
 
 - **Phase 12** — container jobs, and Flyte out of Planner's chart. **Reopened by
-  AW-4** (2026-09-11): the owner wants the engine to start its own pods, and
-  AW-4's investigation weighs that against what follows. It asked for a
-  concrete need for one pod per stage and Planner had none: its Flyte resource
-  declaration was a single value for all four tasks. `ContainerJob` appears
-  nowhere in the workspace. §39.4 records what was accepted instead — four
-  attempts in one worker pod, whose limits already match Flyte's task envelope.
+  AW-4** (2026-09-11): Flyte is out of both repositories, and AW-4's Part 2 is
+  the engine starting its own pods — a step opts in by naming a template, and
+  the templates are Helm values with a per-template image allowlist. The gate
+  it replaces asked for a concrete need for one pod per stage, and Planner had
+  none: its Flyte resource declaration was a single value for all four tasks,
+  and §39.4 records what was accepted instead — four attempts in one worker
+  pod, whose limits already match Flyte's task envelope. `ContainerJob` appears
+  nowhere in the workspace yet.
 - ~~**Phase 9**~~ — engine-owned executions. **Withdrawn** (AW-4): Flyte leaves
   aiwatcher, and with it the engine an execution would have been owned by.
 - **Phase 8** — read models in PostgreSQL. Gate: a measured replay-on-start over

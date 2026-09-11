@@ -304,8 +304,8 @@ area.
    house import as four Flyte stages *or* as the same four functions
    in-process, and only a declaration was right on both paths. It has since
    removed Flyte, and the rule stands: a declaration is right on every path.
-   So aiwatcher never asks an
-   orchestrator anything: `workflow.declared` carries the topology on the log,
+   So aiwatcher never asks an orchestrator anything: `workflow.declared`
+   carries the topology on the log,
    `step.*` with `data.node` executes a node of it, `artifact.produced` points
    at what a node handed on, and `agent.message` records one agent addressing
    another — the one thing nesting cannot show. `workflow_run_id` joins the
@@ -464,8 +464,8 @@ area.
 22. **The execution engine is a producer on its own log**
    ([ADR_0026](docs/ADR/ADR_0026_ENGINE_AS_PRODUCER.md)). The question ADR_0016
    deferred, decided in favour — and it stands with ADR_0016 superseded, since
-   "the engine" here is aiwatcher's own. `execution.*` and `Subject::Execution` join the
-   catalog with `forms_span = false`; a started plan publishes
+   "the engine" here is aiwatcher's own. `execution.*` and `Subject::Execution`
+   join the catalog with `forms_span = false`; a started plan publishes
    `workflow.declared`, an attempt publishes `step.*` with `data.published_by`,
    a result publishes `artifact.produced` with a digest. The workflow fold, the
    waterfall, `Pending`, the live SSE and VictoriaTraces then draw a managed run
@@ -1194,7 +1194,8 @@ the review.
   and for the same reason the rerun target is configuration.
 - **Never retry the same work in two places.** The owner of an execution owns
   its retries: Rust for a `local` run's steps, the store for a hosted decider's
-  *attempt* and never the worker's own loop as well. A `ContainerJob` sets `backoffLimit: 0` for the same reason.
+  *attempt* and never the worker's own loop as well. A `ContainerJob` sets
+  `backoffLimit: 0` for the same reason.
 - **Never make `plan_id` depend on where a block sits.** The authored revision
   digests the whole request, positions included, because that is what somebody
   saved and what `produced_by` names; `plan_id` digests the executable fields

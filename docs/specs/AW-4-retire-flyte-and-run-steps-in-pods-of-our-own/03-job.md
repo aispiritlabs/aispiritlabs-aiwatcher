@@ -106,7 +106,7 @@ outline below is what the spec already fixes.
 - [x] 1.9 `ExecutionOwner::Unknown`; `RuntimeBinding::ExternalWorkflow` and its
       spec and kind removed; the contract regenerated. — *an unknown owner is not
       an engine*
-- [ ] 1.10 The documents that describe the engine as a design. — *no build
+- [x] 1.10 The documents that describe the engine as a design. — *no build
       carries Flyte*
 
 ### Part 2 — pods (outline)
@@ -125,3 +125,4 @@ outline below is what the spec already fixes.
 - 2026-09-11 13:40 — Part 1a built: the server refuses the engine by name (`ConfigError::Removed`, two tests), the crate and its end-to-end test are gone, the chart refuses `engine`, the SDK integration and the recipes are gone, ADR_0016 superseded; `cargo clippy -Dwarnings` and the config tests green, `just chart-check` and `just sdk-check` (419) green
 - 2026-09-11 13:55 — verified: `just check` 19/19 on the working tree, other sessions' work included
 - 2026-09-11 12:47 — Parts 1b and 1c built (`8154041`): the five routes, `core::engine`, `AppState.engine`, the three error variants, the launcher on the recipe and Experiments pages, `ExecutionOwner::Unknown`, `ExternalWorkflow` and its spec and kind; the contract and the panel's client regenerated with no engine left in them; clippy clean, every touched crate's tests and the panel's 178 green
+- 2026-09-11 12:54 — 1.10 done: the docs pass landed inside `5f9996b`; after it, §28's Phase 12 bullet no longer says AW-4 is investigating, and three unwrapped `CLAUDE.md` lines are wrapped; `just check` 18/19 on HEAD, `comments` failing on the same five panel blocks from `ea2dfe7`
