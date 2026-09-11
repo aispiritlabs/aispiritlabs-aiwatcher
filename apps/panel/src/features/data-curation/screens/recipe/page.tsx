@@ -161,10 +161,9 @@ export function DataCurationPage() {
         <div>
           <h1 className="text-lg font-semibold">One script</h1>
           <p className="max-w-3xl text-sm text-muted-foreground">
-            Turn retained production data into reproducible, versioned datasets. Either start a
-            curation workflow the orchestrator already holds and set only what, where and over what
-            period, or write the transformation here in {language}: pin its period in read(), test
-            without reading rows, simulate 25 cases, then execute and save the exact output.
+            Turn retained production data into reproducible, versioned datasets. Write the
+            transformation here in {language}: pin its period in read(), test without reading rows,
+            simulate 25 cases, then execute and save the exact output.
           </p>
         </div>
         <TimeRange

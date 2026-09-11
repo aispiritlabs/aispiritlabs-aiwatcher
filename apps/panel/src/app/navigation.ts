@@ -160,7 +160,7 @@ export const SECTIONS: NavSection[] = [
         to: '/experiments',
         label: 'Experiments',
         icon: Sparkles,
-        blurb: 'Launching what a registered orchestrator could start.',
+        blurb: 'Comparing variants on quality, latency and cost — not built yet.',
         views: [],
       },
       {
