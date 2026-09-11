@@ -61,22 +61,26 @@ FROM ${FLOW_BASE_IMAGE} AS flow-base
 # service opens no database — ADR_0008's catalog reads the aiwatcher API over
 # HTTP and nothing else), `protobuf` and `arrow-ext` (it writes no columnar
 # format; there is no export, ADR_0008 again), and the `brotli`/`lz4`/`snappy`/
-# `zstd` codecs (they matter for compressed file adapters, and the one adapter
-# here is `etl-adapter-http`). Each is a line to add back the day a query needs
-# it, and none is a line to carry now.
+# `zstd` codecs (they matter for compressed file adapters; the adapters here are
+# `etl-adapter-http` and, for a corpus on disk, `etl-adapter-parquet`). Each is
+# a line to add back the day a query needs it, and none is a line to carry now.
 FROM flow-base AS flow-extensions
 
+# `gmp` stays installed: it is the shared library the extension links against,
+# and the vendor stage below runs PHP on this interpreter.
 RUN set -eux; \
+    apk add --no-cache gmp; \
     apk add --no-cache --virtual .build-deps $PHPIZE_DEPS gmp-dev; \
     docker-php-ext-install -j"$(nproc)" bcmath gmp; \
     apk del .build-deps
 
 # ── Flow 3: the vendor tree ──────────────────────────────────────────────────
 #
-# On the same base, so `composer install` resolves against the interpreter that
-# will run it: `composer.json` pins `platform.php` to the declared floor, and a
-# stage on a different PHP would write a tree the runtime disagrees with.
-FROM flow-base AS flow-vendor
+# On the interpreter that will run it, extensions included: `composer.json`
+# pins `platform.php` to the declared floor, and `composer install` checks every
+# package's `ext-*` requirement against what is loaded — `flow-php/parquet`
+# needs `bcmath`, and the bare base refused the lock file for want of it.
+FROM flow-extensions AS flow-vendor
 
 # Composer unpacks a `--prefer-dist` package with the `zip` extension or with
 # `unzip`, and this base has neither. Worth a line, because the failure is a
