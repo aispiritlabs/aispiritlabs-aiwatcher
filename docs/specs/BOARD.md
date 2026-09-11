@@ -9,9 +9,9 @@ means it is sitting on that column waiting for something.
 
 ## Investigation
 
-- [ ] [AW-5 · Optimise, evaluate and promote a prompt in one managed run](AW-5-optimise-evaluate-and-promote-a-prompt-in-one-managed-run/_index.md)
-
 ## Spec
+
+- [ ] [AW-5 · Optimise, evaluate and promote a prompt in one managed run](AW-5-optimise-evaluate-and-promote-a-prompt-in-one-managed-run/_index.md)
 
 - [ ] [AW-2 · Merge ai_spirit_agent into aiwatcher as the agent SDK](AW-2-merge-ai-spirit-agent-into-aiwatcher-as-the-agent-sdk/_index.md)
 

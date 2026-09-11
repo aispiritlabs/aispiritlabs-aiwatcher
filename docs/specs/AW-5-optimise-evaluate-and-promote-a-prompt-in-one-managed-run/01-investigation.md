@@ -257,25 +257,30 @@ refusing a request whose submitted scores disagree.
 
 ## Open questions
 
-- [ ] **B or A?** Is a panel that renders an evaluation step as a plain task
-      acceptable for now? B, then A later.
-- [ ] **The label refusal.** Refuse only a *rejected optimised candidate* for
+- [x] **B or A?** Is a panel that renders an evaluation step as a plain task
+      acceptable for now? B, then A later. — *The owner: B.*
+- [x] **The label refusal.** Refuse only a *rejected optimised candidate* for
       `production`, and leave a version a person wrote free to label? Or
       refuse every label on it? The second would also block `staging`, the
       label somebody uses to try a rejected candidate on purpose. Recommend:
-      `production` only, which mirrors `check_promotable`.
-- [ ] **How a report finds its step.** The client can pick it up implicitly
+      `production` only, which mirrors `check_promotable`. — *The owner:
+      `production` only.*
+- [x] **How a report finds its step.** The client can pick it up implicitly
       inside a task, or `TaskContext` can offer an explicit
       `record_evaluation`. Recommend the explicit form: the client is shared
       across threads, and an ambient context would stamp a report written by
-      unrelated code in the same process.
-- [ ] **The existing `evaluation_id` on `OptimizationRequest`.** Keep it as it
+      unrelated code in the same process. — *Settled as recommended: the
+      explicit form.*
+- [x] **The existing `evaluation_id` on `OptimizationRequest`.** Keep it as it
       is and add the two held-out references beside it, or read it as the
       candidate's? Recommend keeping it: stored records carry it with no stated
-      meaning, and reinterpreting it changes what they say.
-- [ ] **First real user.** planner's SIMBA, as its own ticket in planner after
+      meaning, and reinterpreting it changes what they say. — *Settled as
+      recommended: kept.*
+- [x] **First real user.** planner's SIMBA, as its own ticket in planner after
       this lands? Or nobody until a second optimiser asks? Recommend planner,
-      because it already records both halves.
+      because it already records both halves. — *The owner: planner, as its own
+      ticket.*
 
 ## Log
 - 2026-09-11 12:02 — investigation written on `main`: distributed mode is already delivered, the verdict is already the server's, four joins are missing; Option B recommended, C gated, A withdrawn from §35
+- 2026-09-11 12:08 — the owner answered: Option B, the refusal on `production` only, planner as its own ticket; the two technical questions settled as recommended

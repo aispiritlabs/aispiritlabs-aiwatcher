@@ -1,13 +1,13 @@
 ---
 id: AW-5
 title: Optimise, evaluate and promote a prompt in one managed run
-step: investigation
+step: spec
 status: doing
 branch: main
 repo: aiwatcher
 created: 2026-09-11
 updated: 2026-09-11
-tags: [spec/AW-5, step/investigation, branch/main, status/doing]
+tags: [spec/AW-5, step/spec, branch/main, status/doing]
 ---
 <!-- spec-card -->
 
@@ -19,7 +19,7 @@ tags: [spec/AW-5, step/investigation, branch/main, status/doing]
 
 ## Phases
 - [x] [① Investigation](01-investigation.md)
-- [ ] [② Spec](02-spec.md)
+- [x] [② Spec](02-spec.md)
 - [ ] [③ Job](03-job.md)
 - [ ] [④ Tests](04-tests.md)
 - [ ] [⑤ Review](05-review.md)
@@ -35,3 +35,4 @@ evaluation report, an optimisation and a label, rather than a new runtime.
 ## Log
 - 2026-09-11 12:02 — spec opened on `main` for Phase 15
 - 2026-09-11 12:02 — investigation written: distributed mode is already delivered, and the verdict is already computed on the server; recommend no new binding, three joins, one refusal and an end-to-end run
+- 2026-09-11 12:08 — spec drafted: four requirements added over seventeen scenarios, one modified, the `EvaluationSuite` binding removed; the owner's three answers settled
