@@ -680,14 +680,14 @@ what runs a real graph.
   `routeTree.gen.ts` are in `.prettierignore`: their generators emit their own
   formatting, and `just fmt` reformatting them would fight `just openapi`.
 - Runtime validation belongs only where codegen cannot reach — the SSE and
-  WebSocket frames, in `src/lib/live.ts`. Everything the generated SDK returns is
+  WebSocket frames, in `src/shared/lib/live.ts`. Everything the generated SDK returns is
   already typed.
 - Filters live in the URL, not in component state, so a link to a filtered view
   lands the reader on the same view. That includes the search boxes: the input
   holds a draft, a 250 ms debounce commits it to the search params.
 - Routes are grouped by product area, and the areas are grouped into **three
   sections** — Feature, Training, Inference — described once in
-  `src/lib/navigation.ts` and drawn by the root layout as a header of sections
+  `src/app/navigation.ts` and drawn by the root layout as a header of sections
   and a sidebar of that section's areas and their pages. The split is the
   lifecycle: Feature is what a model learns from and reads an object store,
   Training is fitting it and judging it, Inference is what is running now and
@@ -778,10 +778,10 @@ what runs a real graph.
   implements no validation — the registry's 422 carries every problem, and a
   second rule set in TypeScript would drift from the first.
 - Any list that can grow with retention is a `useInfiniteQuery` feeding
-  `VirtualList` (`src/components/virtual-list.tsx`). A `.map` over a full
+  `VirtualList` (`src/shared/components/virtual-list.tsx`). A `.map` over a full
   response is only correct for a list with a fixed ceiling.
 - Every list that can grow with retention also carries the time window
-  (`src/components/time-range.tsx`), in the URL as `window` seconds and served
+  (`src/shared/components/time-range.tsx`), in the URL as `window` seconds and served
   by the API as `window_seconds`. One control, one preset list, one default
   across every tab: a period that means the last hour in Explore and something
   else in Metrics is a control people re-read before every click. It carries
@@ -790,7 +790,7 @@ what runs a real graph.
 - An area that exists in the navigation before it exists in the backend renders
   `AreaPlaceholder`, which names what is missing. Never mock data to fill a
   screen — a plausible fake reads as working software.
-- `src/components/ui/primitives.tsx` holds the shadcn-style primitives in use
+- `src/shared/components/ui/primitives.tsx` holds the shadcn-style primitives in use
   (button, badge, card, stat, id chip). Radix is not a dependency yet — none of
   those need it. It goes in with the first dialog or select, and TanStack Form
   with the first form, which will be the WebSocket control path (cancel a run,
@@ -1071,7 +1071,7 @@ the review.
   this key.
 - **Never make a managed execution depend on an open browser tab.** ADR_0025.
   The panel authors, commands, links and renders; it does not compile, sequence,
-  retry, resume or publish. `lib/pipeline.ts`'s `orderOf` stays a *traversal*
+  retry, resume or publish. `src/features/data-curation/lib/pipeline.ts`'s `orderOf` stays a *traversal*
   for drawing and never an explanation of a refusal, and a managed run's Flow
   script is compiled in Rust — the browser may show the same text, and what runs
   is what the server produced.
@@ -1387,7 +1387,7 @@ the review.
   does not throw: a 403 comes back as `{ data: undefined, error }` and the
   promise *resolves*, so a mutation that returns the SDK call runs react-query's
   `onSuccess` over a refusal — the run re-read, nothing changed, nothing said.
-  Every call goes through `lib/result.ts`, whose three readers are named for
+  Every call goes through `src/shared/lib/result.ts`, whose three readers are named for
   what absence means on that route: `answerOf` where there is always a body,
   `answerOrNone` where "no such thing" is an ordinary answer, and `confirmDone`
   where success carries no body at all. That last one is not a nicety — a
@@ -1412,7 +1412,7 @@ the review.
   (`aiwatcher_query.api`) reads the status before the body for the same reason.
 - **Never re-implement a pipeline's rules in the panel.** `aiwatcher-datasets`
   decides whether blocks form a runnable chain and returns every problem as
-  `details` on a 422; the canvas renders those lines. `lib/pipeline.ts`'s
+  `details` on a 422; the canvas renders those lines. `src/features/data-curation/lib/pipeline.ts`'s
   `orderOf` is a *traversal* — it answers "in what order" and `null` when there
   is no one order — and it never explains a refusal. Same split as the
   annotation canvas and the shape validator, for the same reason.
