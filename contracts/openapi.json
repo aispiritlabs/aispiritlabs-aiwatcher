@@ -4,8 +4,8 @@
     "title": "aiwatcher",
     "description": "Observability for agent runs: events in, traces and live streams out.",
     "license": {
-      "name": "Apache-2.0",
-      "identifier": "Apache-2.0"
+      "name": "PolyForm-Noncommercial-1.0.0",
+      "identifier": "PolyForm-Noncommercial-1.0.0"
     },
     "version": "0.1.0"
   },
