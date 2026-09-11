@@ -726,6 +726,14 @@ export type ClaimRequest = {
     worker: string;
 };
 
+export const Comparability = {
+    COMPARABLE: 'comparable',
+    INCOMPATIBLE: 'incompatible',
+    UNVERIFIED: 'unverified'
+} as const;
+
+export type Comparability = typeof Comparability[keyof typeof Comparability];
+
 /**
  * Who this is about, on what basis, and what that permits.
  */
@@ -1625,8 +1633,16 @@ export type EvaluationCase = {
  * This evaluation against the one before it.
  */
 export type EvaluationComparison = {
+    baseline_cases_complete: boolean;
+    baseline_cases_retained: number;
     baseline_id: string;
     baseline_started_at: string;
+    baseline_summary: EvaluationSummary;
+    common_cases: number;
+    comparability: Comparability;
+    current_cases_complete: boolean;
+    current_cases_retained: number;
+    details_complete: boolean;
     /**
      * Failed on the baseline, passes now.
      */
@@ -1636,11 +1652,23 @@ export type EvaluationComparison = {
      * is visible rather than silently absent.
      */
     metrics: Array<MetricDelta>;
+    reasons: Array<string>;
     /**
      * Passed on the baseline, fails now. The view that has to be read before
      * a release.
      */
     regressed: Array<CaseDelta>;
+};
+
+/**
+ * Evidence supplied by the producer. Missing fields stay missing on legacy events.
+ */
+export type EvaluationContext = {
+    dataset_kind?: string | null;
+    dataset_version?: string | null;
+    scorer_version?: string | null;
+    split?: string | null;
+    suite_version?: string | null;
 };
 
 /**
@@ -1700,6 +1728,7 @@ export type EvaluationSummary = {
     cases_failed: number;
     cases_passed: number;
     cases_total: number;
+    context?: EvaluationContext;
     /**
      * The cases it was measured on, ideally versioned. Without this a
      * comparison is not one; see [`EvaluationDetail::comparison`].
@@ -9024,7 +9053,12 @@ export type GetEvaluationData = {
          */
         evaluation_id: string;
     };
-    query?: never;
+    query?: {
+        /**
+         * Explicit baseline; missing IDs return 404, never an automatic replacement.
+         */
+        baseline_id?: string | null;
+    };
     url: '/api/v1/evaluations/{evaluation_id}';
 };
 

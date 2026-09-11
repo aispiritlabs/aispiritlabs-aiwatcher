@@ -1,0 +1,73 @@
+{{- if .Values.execution.pods.templates }}
+{{- $fullname := include "aiwatcher.fullname" . -}}
+{{- $namespace := .Values.execution.pods.namespace | default .Release.Namespace -}}
+{{- /*
+ADR_0029. The templates file both roles read, and the one cluster credential
+this chart hands out: the pod holding the reactors — `worker` when the roles
+are split, `server` otherwise — may create and delete Jobs and read pods and
+their logs, in one namespace. Nothing else in the release mounts a token.
+
+aiwatcher enforces a template's image list, the cluster does not: a work role
+that was compromised could create a Job with any image here. An admission
+policy is the second wall, and an operator who wants one writes it from the
+same values.
+*/ -}}
+{{- if ne .Values.execution.store "postgres" -}}
+{{- fail "execution.pods.templates is set but execution.store is not \"postgres\". A launched pod is a second process claiming its attempt against the same store, and `file` holds one process: the server would refuse the run when it starts." -}}
+{{- end -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-pod-templates
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+data:
+  templates.json: {{ toJson .Values.execution.pods.templates | quote }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $fullname }}-launcher
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+# Mounted only by the pod that launches, which says so itself.
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $fullname }}-launcher
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+rules:
+  # One Job per attempt, created by name and deleted on a cancel or once its
+  # log is kept.
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  # Watched for why a pod ended, and read for its log. Never created: a pod is
+  # the Job's.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $fullname }}-launcher
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $fullname }}-launcher
+subjects:
+  - kind: ServiceAccount
+    name: {{ $fullname }}-launcher
+    namespace: {{ .Release.Namespace }}
+{{- end }}

@@ -34,6 +34,14 @@ extend-exclude = [
   # the dictionary reads each as a near-miss for an English one. By directory
   # rather than by file, because a walkthrough is written as a set.
   "examples/titanic/",
+  # The FTI design and acceptance documents are also written in Polish.
+  "docs/FTI_KICKOFF.md",
+  "docs/FTI_IMPLEMENTATION_PLAN.md",
+  "docs/FTI_ARCHITECTURE_REVIEW.md",
+  "docs/FTI_FEATURE_CATALOG.md",
+  "docs/FTI_FEATURE_GAPS.md",
+  "docs/FTI_LANGFUSE_MLFLOW_ANALYSIS.md",
+  "docs/FTI_UX_WANDB_PLAN.md",
 ]
 
 [default.extend-words]

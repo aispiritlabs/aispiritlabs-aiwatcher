@@ -396,6 +396,47 @@ execution:
   # that wants notebook blocks has to say where one is, deliberately.
   mlPipelineUrl: ""
 
+  # Steps that run in a pod of their own (ADR_0029). No templates is the
+  # default and means none: a step naming one is refused when it is registered.
+  # Needs `store: postgres`, because a pod is a second process claiming its
+  # attempt against the same store.
+  pods:
+    # One per name, the operator's; no route writes one. Each lists the images
+    # it runs (repositories, matched exactly and never by prefix — the step
+    # names the tag), default resources and a required ceiling, the command its
+    # container runs, and a pod-spec fragment written in full: volumes, env
+    # from secrets, a service account, node selectors, tolerations. The server
+    # refuses at start a template that sets what aiwatcher fills in — the
+    # container's image, resources, command, args and three AIWATCHER_*
+    # variables, and the pod's restartPolicy and deadline — and one whose
+    # quantities are not strings, so quote `"1"`.
+    #
+    # Give each template a queue of its own and a token scoped to it
+    # (`name[queue]=secret` in auth.ingestTokenSecret), and hand the pod that
+    # token as AIWATCHER_TOKEN. Every pod of one template shares it.
+    #
+    # templates:
+    #   planner-import:
+    #     images: [ghcr.io/planner/import]
+    #     resources:
+    #       requests: { cpu: 500m, memory: 1Gi }
+    #       limits: { cpu: "1", memory: 2Gi }
+    #       max: { cpu: "4", memory: 8Gi }
+    #     command: [python, -m, aiwatcher_sdk.worker, run-attempt,
+    #               --queue, planner-import, --task, app.pipeline.stages:acquire]
+    #     start_allowance_seconds: 300
+    #     pod:
+    #       containers:
+    #         - name: stage
+    #           env:
+    #             - name: AIWATCHER_TOKEN
+    #               valueFrom:
+    #                 secretKeyRef: { name: planner-import-token, key: token }
+    templates: {}
+    # Where launched pods run. Empty is the release's namespace. Another one
+    # gets the launcher's Role and RoleBinding written into it.
+    namespace: ""
+
 # ── PostgreSQL ───────────────────────────────────────────────────────────────
 #
 # The workflow store, and nothing else in this chart uses it. Read only when

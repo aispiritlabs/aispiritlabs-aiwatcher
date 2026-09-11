@@ -113,7 +113,7 @@
   }
 
   select {
-    color-scheme: dark;
+    color-scheme: inherit;
     background-color: var(--color-card);
     color: var(--color-card-foreground);
   }
@@ -256,5 +256,48 @@
   .flow-live-ring,
   .react-flow__edge .react-flow__edge-path {
     animation: none !important;
+  }
+}
+
+/* Light surfaces retain the same semantic tokens and visible focus treatment. */
+:root[data-theme='light'] {
+  color-scheme: light;
+  --color-background: #f5f6f8;
+  --color-foreground: #20232b;
+  --color-card: #ffffff;
+  --color-card-foreground: #20232b;
+  --color-muted: #e9ecf1;
+  --color-muted-foreground: #535c6b;
+  --color-border: #cdd2dc;
+  --color-input: #cdd2dc;
+  --color-primary: #205fa6;
+  --color-primary-foreground: #ffffff;
+  --color-accent: #e1e9f5;
+  --color-accent-foreground: #20232b;
+  --color-success: #167343;
+  --color-warning: #855a00;
+  --color-danger: #b42331;
+  --color-running: #205fa6;
+  --color-gridline: #e3e6ed;
+  --color-axis: #a1aaba;
+  --color-series-1: #2462aa;
+  --color-series-2: #ae421a;
+  --color-series-3: #127b56;
+  --color-series-4: #916000;
+}
+:root[data-density='compact'] td,
+:root[data-density='compact'] th {
+  padding-block: 0.2rem;
+}
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
   }
 }

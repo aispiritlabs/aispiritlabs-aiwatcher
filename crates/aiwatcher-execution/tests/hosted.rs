@@ -563,6 +563,15 @@ impl WorkflowStore for OneProcess {
     > {
         self.0.unclaimed_attempts(now).await
     }
+
+    async fn claimable_attempts(
+        &self,
+        runtime: aiwatcher_execution::RuntimeKind,
+        now: OffsetDateTime,
+        limit: usize,
+    ) -> aiwatcher_execution::Result<Vec<aiwatcher_execution::AttemptRow>> {
+        self.0.claimable_attempts(runtime, now, limit).await
+    }
 }
 
 fn saga_timeout(timer_id: &str, due_at: OffsetDateTime) -> TimerWrite {

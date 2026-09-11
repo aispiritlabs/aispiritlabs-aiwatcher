@@ -435,6 +435,15 @@ pub struct Config {
     /// no route writes (ADR_0029). Absent means none, and a step asking for a
     /// pod is refused at registration naming this variable.
     pub pod_templates: Option<String>,
+    /// The namespace launched pods run in (ADR_0029). Absent means the one
+    /// this process's own service account is in, which is the release's.
+    /// Never from a step or a template: the grant is a namespaced Role, and
+    /// one namespace is the whole of it.
+    pub pod_namespace: Option<String>,
+    /// Where a launched pod reaches the API — what it is told in
+    /// `AIWATCHER_URL`. Required wherever pods are launched, because the
+    /// process launching them cannot see the Service in front of the API.
+    pub pod_api_url: Option<String>,
     /// Whether the dataset area may search Hugging Face.
     ///
     /// A switch rather than a credential: the dataset search is public. Off by
@@ -600,6 +609,8 @@ impl Default for Config {
             workflow_runner_timeout: Duration::from_secs(10),
             dataset_sources: None,
             pod_templates: None,
+            pod_namespace: None,
+            pod_api_url: None,
             huggingface_enabled: false,
             huggingface_token: None,
             kaggle_username: None,
@@ -826,6 +837,8 @@ impl Config {
         }
         config.dataset_sources = var("AIWATCHER_DATASET_SOURCES");
         config.pod_templates = var("AIWATCHER_POD_TEMPLATES");
+        config.pod_namespace = var("AIWATCHER_POD_NAMESPACE");
+        config.pod_api_url = var("AIWATCHER_POD_API_URL");
         if let Some(raw) = var("AIWATCHER_HUGGINGFACE_ENABLED") {
             config.huggingface_enabled = parse_bool("AIWATCHER_HUGGINGFACE_ENABLED", &raw)?;
         }
@@ -1077,19 +1090,29 @@ impl Config {
             }
         }
 
-        // A process that claims attempts is the one that would start the pods
-        // they ask for, and the launcher that does is behind the `kube` cargo
-        // feature (ADR_0029). Without it, a pod's attempt would be accepted
-        // and wait for ever with nothing here saying why. The serve role only
-        // checks a step against the file, which needs no cluster, so it reads
-        // templates in any build.
+        // A process that claims attempts is the one that starts the pods they
+        // ask for, and the client that does is behind the `kube` cargo feature
+        // (ADR_0029). Without it, a pod's attempt would be accepted and wait
+        // for ever with nothing here saying why. The serve role only checks a
+        // step against the file, which needs no cluster, so it reads templates
+        // in any build.
         if self.pod_templates.is_some() && self.role.works() {
-            return Err(ConfigError::Unusable {
-                name: "AIWATCHER_POD_TEMPLATES",
-                why: "this process claims attempts and would have to start the pods they ask \
-                      for, which needs the `kube` cargo feature this build lacks; set it on \
-                      AIWATCHER_ROLE=serve, which only checks what a step asks for",
-            });
+            if !cfg!(feature = "kube") {
+                return Err(ConfigError::Unusable {
+                    name: "AIWATCHER_POD_TEMPLATES",
+                    why: "this process claims attempts and would have to start the pods they \
+                          ask for, which needs the `kube` cargo feature this build lacks; set it \
+                          on AIWATCHER_ROLE=serve, which only checks what a step asks for",
+                });
+            }
+            if self.pod_api_url.is_none() {
+                return Err(ConfigError::Required {
+                    name: "AIWATCHER_POD_API_URL",
+                    because: "this process launches pods (AIWATCHER_POD_TEMPLATES in the work or \
+                              combined role): each is told where to report, and only the \
+                              Service in front of the API knows that",
+                });
+            }
         }
 
         self.auth.validate()?;
@@ -1484,37 +1507,12 @@ mod tests {
             .expect("one process, both roles");
     }
 
-    #[test]
-    fn pod_templates_are_read_by_the_serve_role_and_refused_where_nothing_could_start_a_pod() {
-        let templates = Some("/etc/aiwatcher/pod-templates.json".to_owned());
-        for role in [ProcessRole::Both, ProcessRole::Work] {
-            let error = Config {
-                role,
-                pod_templates: templates.clone(),
-                // Everything a split role needs, so the refusal is this one.
-                workflow_store: WorkflowStoreKind::Postgres,
-                workflow_postgres_url: Some("postgres://localhost/aiwatcher".to_owned()),
-                bus: BackendKind::Laser,
-                laser_connection_string: Some("iggy:iggy@127.0.0.1:8090".to_owned()),
-                prompt_store: PromptStoreKind::S3,
-                prompt_s3_endpoint: Some("http://rustfs:9000".to_owned()),
-                prompt_s3_access_key: Some("key".to_owned()),
-                prompt_s3_secret_key: Some("secret".to_owned()),
-                ..Config::default()
-            }
-            .validate()
-            .expect_err("no launcher in this build")
-            .to_string();
-            assert!(
-                error.contains("AIWATCHER_POD_TEMPLATES") && error.contains("kube"),
-                "{}: {error}",
-                role.as_str()
-            );
-        }
-
+    /// Templates, and everything a split role needs, so a refusal is about the
+    /// templates.
+    fn with_pod_templates(role: ProcessRole) -> Config {
         Config {
-            role: ProcessRole::Serve,
-            pod_templates: templates,
+            role,
+            pod_templates: Some("/etc/aiwatcher/pod-templates.json".to_owned()),
             workflow_store: WorkflowStoreKind::Postgres,
             workflow_postgres_url: Some("postgres://localhost/aiwatcher".to_owned()),
             bus: BackendKind::Laser,
@@ -1525,8 +1523,53 @@ mod tests {
             prompt_s3_secret_key: Some("secret".to_owned()),
             ..Config::default()
         }
-        .validate()
-        .expect("the serve role checks steps against the file, in any build");
+    }
+
+    #[test]
+    fn the_serve_role_reads_pod_templates_in_any_build() {
+        // It only checks a step against the file, which needs no cluster.
+        with_pod_templates(ProcessRole::Serve)
+            .validate()
+            .expect("the serve role checks steps against the file, in any build");
+    }
+
+    #[cfg(not(feature = "kube"))]
+    #[test]
+    fn pod_templates_are_refused_where_this_build_could_not_start_a_pod() {
+        for role in [ProcessRole::Both, ProcessRole::Work] {
+            let error = with_pod_templates(role)
+                .validate()
+                .expect_err("no launcher in this build")
+                .to_string();
+            assert!(
+                error.contains("AIWATCHER_POD_TEMPLATES") && error.contains("kube"),
+                "{}: {error}",
+                role.as_str()
+            );
+        }
+    }
+
+    #[cfg(feature = "kube")]
+    #[test]
+    fn a_process_that_launches_pods_has_to_be_told_where_they_report() {
+        for role in [ProcessRole::Both, ProcessRole::Work] {
+            let error = with_pod_templates(role)
+                .validate()
+                .expect_err("a pod would not know where its API is")
+                .to_string();
+            assert!(
+                error.contains("AIWATCHER_POD_API_URL"),
+                "{}: {error}",
+                role.as_str()
+            );
+
+            Config {
+                pod_api_url: Some("http://aiwatcher-server:8080".to_owned()),
+                ..with_pod_templates(role)
+            }
+            .validate()
+            .expect("templates, a client and an address are all a launcher needs");
+        }
     }
 
     #[test]

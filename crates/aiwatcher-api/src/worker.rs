@@ -344,8 +344,11 @@ fn reactor(state: &AppState, worker: &str) -> ApiResult<Reactor<Arc<dyn Workflow
     })
 }
 
-/// The one runtime a worker performs.
-const PERFORMABLE: &[RuntimeKind] = &[RuntimeKind::PythonTask];
+/// What a worker performs: a registered function, in a process somebody else
+/// runs or in a pod started for one attempt (ADR_0029). A pod's worker is the
+/// same worker, and which rows it may take is the claim filter's — a pod's
+/// attempt goes only to a claim naming its key.
+const PERFORMABLE: &[RuntimeKind] = &[RuntimeKind::PythonTask, RuntimeKind::ContainerJob];
 
 fn key_of(execution_id: &str, step_id: &str, attempt: u32) -> AttemptKey {
     AttemptKey::new(ExecutionId::new(execution_id.to_owned()), step_id, attempt)
@@ -477,6 +480,13 @@ use axum::response::IntoResponse;
 fn assignment(claimed: &Claimed) -> WorkAssignment {
     let (task_ref, queue, params) = match &claimed.command.step.runtime {
         RuntimeBinding::PythonTask(spec) => (
+            spec.task_ref.clone(),
+            spec.queue.clone(),
+            spec.params.clone(),
+        ),
+        // The pod's image and resources were the launcher's business. What the
+        // worker inside it is handed is what any worker is handed.
+        RuntimeBinding::ContainerJob(spec) => (
             spec.task_ref.clone(),
             spec.queue.clone(),
             spec.params.clone(),
@@ -812,10 +822,13 @@ async fn recorded_result(
     let Some(step) = run.plan.step(&key.step_id) else {
         return Ok(None);
     };
-    let RuntimeBinding::PythonTask(spec) = &step.runtime else {
-        return Ok(None);
+    // A pod's step is a worker's too (ADR_0029), on its template's queue.
+    let queue = match &step.runtime {
+        RuntimeBinding::PythonTask(spec) => &spec.queue,
+        RuntimeBinding::ContainerJob(spec) => &spec.queue,
+        _ => return Ok(None),
     };
-    if !caller.identity().may_claim(&spec.queue) {
+    if !caller.identity().may_claim(queue) {
         return Err(ApiError::Forbidden {
             needed: aiwatcher_auth::Role::Editor,
             held: caller.identity().role(),

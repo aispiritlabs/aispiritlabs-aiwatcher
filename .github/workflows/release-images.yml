@@ -61,9 +61,11 @@ jobs:
           # feature. Which is exactly what a planner install did.
           #
           # The rule, not the instance: when the schema gains a backend behind a
-          # feature, it goes here in the same change.
+          # feature, it goes here in the same change. `kube` is the third:
+          # `execution.pods.templates` starts pods only in a binary that can
+          # reach a cluster (ADR_0029).
           build-args: |
-            FEATURES=aiwatcher-server/postgres,aiwatcher-server/laser
+            FEATURES=aiwatcher-server/postgres,aiwatcher-server/laser,aiwatcher-server/kube
           platforms: ${{ env.PLATFORM }}
           push: true
           tags: ${{ steps.meta.outputs.server }}:${{ steps.meta.outputs.tag }}

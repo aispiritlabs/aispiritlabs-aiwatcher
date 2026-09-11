@@ -123,6 +123,59 @@ outline below is what the spec already fixes.
   `never` anyway, so this is only `cache_key`'s own answer.
 - **The SDK's `WorkflowStep` takes `pod=PodRequest(…)`** (2.2), and sends it only
   when it is set, so a step without one registers the same revision.
+- **The key-only rule is one list, `RuntimeKind::CLAIMED_BY_KEY`** (2.3).
+  `ClaimFilter::matches` reads it, and the PostgreSQL claim binds it
+  (`runtime <> all($9)` unless a key was named). A pod's row now carries its
+  queue and task, so a claim naming the key still needs the token's queue and
+  the code.
+- **The launcher's read is `WorkflowStore::claimable_attempts`** (2.3): one
+  runtime's rows that may be taken now, in four adapters and one contract
+  property. A retry inside its delay and a row a pod holds are both left out.
+  One pass reads 1000 rows, because an attempt whose pod was asked for stays
+  claimable until the pod claims it, and a small bound would let those starve
+  the rows behind them.
+- **A Job is named `aiwatcher-` plus 32 hex characters of `sha256(key)`** (2.3),
+  because the name is also a label, at most 63 characters. The attempt rides as
+  the annotation `aiwatcher.dev/attempt`. The labels
+  `app.kubernetes.io/managed-by: aiwatcher` and
+  `app.kubernetes.io/component: step` are what the NetworkPolicy admits the pods
+  by.
+- **The loop and the manifest are in every build** (2.3). The manifest is JSON,
+  and kube-rs reads it back into a typed Job before sending it. Only
+  `execution/pods/kubernetes.rs` needs `kube`, and the loop is tested against a
+  stand-in cluster.
+- **A launch that cannot happen is reported the way a reactor reports** (2.3): a
+  `StepFailed` through `handle`, under an id derived from the attempt.
+  - A template or an image no longer allowed fails as `UserCode`.
+  - A manifest the cluster refuses (400 or 422) fails as `Validation`, naming
+    the template.
+  - Anything else — a missing grant, a quota, a 5xx, a connection — leaves the
+    attempt waiting for the next pass.
+- **`AIWATCHER_POD_API_URL` is required wherever pods are launched** (2.3). The
+  chart sets it to the server Service's fully qualified name.
+  `AIWATCHER_POD_NAMESPACE` defaults to the client's own namespace. The
+  `Unusable` refusal now depends on `cfg!(feature = "kube")`.
+- **The SDK worker reads its attempt and its name from the environment** (2.3):
+  `AIWATCHER_ATTEMPT` when `--ref` is absent, and `AIWATCHER_WORKER_NAME`. A
+  template's command is the same for every attempt.
+- **Found while building: the result route acknowledged only a `PythonTask`'s
+  report** (2.3). `recorded_result` read the queue with a `let-else` on that
+  one binding, so a pod's committed report came back as a 409. It now reads the
+  queue from either binding.
+- **Left to 2.4: a pod that dies after claiming** (2.3). Its row is claimable
+  again, the launcher is told the Job already exists, and the attempt waits.
+  2.4's watch ends it with the pod's reason; until then only the Job's
+  one-hour TTL and a restart of the launcher start a second pod, as a retake.
+- **The chart** (2.3):
+  - one ConfigMap of templates, mounted by the server and the worker;
+  - a `-launcher` ServiceAccount on the pod that holds the reactors, the only
+    pod in the release with a token;
+  - a Role and a RoleBinding in the pods' namespace;
+  - a NetworkPolicy entry for the step pods;
+  - a schema that wants quantities as strings;
+  - a `fail` unless the store is `postgres`.
+
+  The release image and `build-images.sh` build with `aiwatcher-server/kube`.
 
 ## Tasks
 
@@ -164,7 +217,7 @@ outline below is what the spec already fixes.
 - [x] 2.2 `RuntimeBinding::ContainerJob` and the step's `pod` field; the
       templates file both roles read; registration's refusals — *only an
       allowed image runs*, *resources come from the template*
-- [ ] 2.3 The launcher behind `kube`: the store's read of claimable rows by
+- [x] 2.3 The launcher behind `kube`: the store's read of claimable rows by
       runtime, a Job per attempt under a name derived from its key,
       `backoffLimit: 0`, the key-only claim rule; the chart's RBAC, templates
       and network rule, and `kube` in the release image — *a step may ask for a

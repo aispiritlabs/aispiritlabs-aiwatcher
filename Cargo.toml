@@ -68,6 +68,13 @@ hex = "0.4.3"
 # fixed release, so `just audit` would go red on a crate we only ever use to
 # *verify* somebody else's signature.
 jsonwebtoken = "9.3.1"
+# The pod launcher's Kubernetes client (ADR_0029), behind `aiwatcher-server`'s
+# `kube` feature for the reason `laser` and `postgres` are optional. `ring`
+# because rustls already puts it in this graph. `k8s-openapi` is generated per
+# API version and needs one named: the oldest this release knows, because the
+# launcher only creates a `batch/v1` Job, whose fields it sets have not moved.
+kube = { version = "4.2", default-features = false, features = ["client", "rustls-tls", "ring"] }
+k8s-openapi = { version = "0.28", features = ["v1_32"] }
 # The real Laser SDK, over Apache Iggy. Optional: the default build (and every
 # test that does not need a broker) stays free of it, and of the ~360 crates
 # beneath it.

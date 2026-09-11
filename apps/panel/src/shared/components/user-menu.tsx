@@ -21,6 +21,8 @@ export function UserMenu() {
   const enabled = config.data?.enabled === true;
   const session = useSession(enabled);
   const [open, setOpen] = React.useState(false);
+  const trigger = React.useRef<HTMLButtonElement>(null);
+  const panelId = React.useId();
 
   if (!enabled || !session.data) return null;
   const identity = session.data;
@@ -30,13 +32,25 @@ export function UserMenu() {
   const maySignOut = config.data?.logout_url != null;
 
   return (
-    <div className="relative ml-auto shrink-0">
+    <div
+      className="relative ml-auto shrink-0"
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') {
+          setOpen(false);
+          trigger.current?.focus();
+        }
+      }}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
+      }}
+    >
       <button
         type="button"
         onClick={() => setOpen((was) => !was)}
         className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         title={displayNameOf(identity)}
-        aria-haspopup="menu"
+        ref={trigger}
+        aria-controls={panelId}
         aria-expanded={open}
       >
         <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/15 text-[10px] font-semibold text-primary">
@@ -55,7 +69,9 @@ export function UserMenu() {
               has to do for itself. Radix goes in with the first dialog. */}
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
           <div
-            role="menu"
+            id={panelId}
+            role="region"
+            aria-label="Signed-in profile"
             className="absolute right-0 z-20 mt-1 w-64 rounded-md border border-border bg-card p-3 shadow-lg"
           >
             <div className="flex flex-col gap-0.5 pb-2">

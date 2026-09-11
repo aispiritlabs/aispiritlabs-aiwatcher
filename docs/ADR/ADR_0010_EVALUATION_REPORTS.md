@@ -169,3 +169,24 @@ Point 5 stands: aiwatcher records evaluations and does not run them. The
 evaluation is a worker task like any other. The `EvaluationSuite` binding the
 pipeline plan drew for it was withdrawn, because as drawn it added a fixed
 shape and nothing else.
+
+## Amendment, 2026-09-11: explicit baseline and evidence (FTI A3)
+
+`GET /api/v1/evaluations/{id}?baseline_id=...` resolves the requested pair under
+one read lock. A missing explicit ID returns 404, with no automatic fallback.
+Omitting it chooses the previous successful evaluation of the same suite and
+dataset. A failed or self-selected baseline may be inspected but is incompatible.
+
+The projection retains optional producer fields `dataset_kind`, `dataset_version`,
+`suite_version`, `scorer_version`, and `split` from the event or its parameters.
+It never invents these fields for historical records. Known differences produce
+`incompatible`; missing evidence produces `unverified`; matching evidence on two
+successful reports produces `comparable`. Quality deltas and changed-case findings
+are emitted only for the last state, including on suite summaries. This read
+policy does not change model or prompt promotion rules.
+
+Comparisons expose both summaries, common retained case IDs, retained counts and
+completeness for each side. Aggregate-only totals and shed documents remain
+visible as incomplete detail. A local saved view stores selection metadata and
+cannot extend retention. Durable results, rubric registry and new quality
+policies remain the scope of FTI B / AR2.

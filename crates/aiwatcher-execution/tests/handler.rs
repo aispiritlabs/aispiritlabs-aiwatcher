@@ -335,6 +335,15 @@ impl WorkflowStore for OneProcess {
     > {
         self.0.unclaimed_attempts(now).await
     }
+
+    async fn claimable_attempts(
+        &self,
+        runtime: aiwatcher_execution::RuntimeKind,
+        now: OffsetDateTime,
+        limit: usize,
+    ) -> aiwatcher_execution::Result<Vec<AttemptRow>> {
+        self.0.claimable_attempts(runtime, now, limit).await
+    }
 }
 
 #[tokio::test]
@@ -558,6 +567,15 @@ impl WorkflowStore for Contends {
         std::collections::BTreeMap<aiwatcher_execution::RuntimeKind, u64>,
     > {
         self.inner.unclaimed_attempts(now).await
+    }
+
+    async fn claimable_attempts(
+        &self,
+        runtime: aiwatcher_execution::RuntimeKind,
+        now: OffsetDateTime,
+        limit: usize,
+    ) -> aiwatcher_execution::Result<Vec<AttemptRow>> {
+        self.inner.claimable_attempts(runtime, now, limit).await
     }
 }
 

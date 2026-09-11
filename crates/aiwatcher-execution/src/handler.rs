@@ -611,16 +611,18 @@ pub fn attempt_rows(
                 // pinned code a worker must match. Everything else is a
                 // reactor's, claimed by runtime.
                 //
-                // Not a pod's, although it is pulled too. A queued row goes to
-                // any worker holding that queue and that task
-                // (`ClaimFilter::matches`), and a pod's attempt belongs to the
-                // pod started for it — so until the filter can tell the two
-                // apart by key (ADR_0029), a `container_job` row carries no
-                // queue, is claimed by nothing, and waits.
-                if let Some(RuntimeBinding::PythonTask(spec)) =
-                    run.plan.step(step_id).map(|step| &step.runtime)
-                {
-                    row = row.on_queue(spec.queue.clone(), spec.task_ref.clone());
+                // A pod's attempt is pulled too, on the queue its template's
+                // token holds. What keeps a long-lived worker on that queue
+                // off it is the key-only rule in `ClaimFilter::matches`
+                // (ADR_0029): only the pod started for it names its key.
+                match run.plan.step(step_id).map(|step| &step.runtime) {
+                    Some(RuntimeBinding::PythonTask(spec)) => {
+                        row = row.on_queue(spec.queue.clone(), spec.task_ref.clone());
+                    }
+                    Some(RuntimeBinding::ContainerJob(spec)) => {
+                        row = row.on_queue(spec.queue.clone(), spec.task_ref.clone());
+                    }
+                    _ => {}
                 }
                 if let Some(not_before) = retry_delay_of(outputs, step_id, *attempt) {
                     row = row.not_before(not_before);

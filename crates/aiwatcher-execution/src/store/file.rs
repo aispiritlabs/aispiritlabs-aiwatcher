@@ -35,7 +35,9 @@ use tokio::sync::Mutex;
 
 use aiwatcher_core::{Checkpoint, MessageId};
 
-use crate::claim::{AttemptKey, AttemptRow, AttemptWrite, ClaimFilter, tally_unclaimed};
+use crate::claim::{
+    AttemptKey, AttemptRow, AttemptWrite, ClaimFilter, claimable_of, tally_unclaimed,
+};
 use crate::error::{Result, StoreError};
 use crate::hosted::{DeciderLease, LeaseOutcome, Timer, TimerWrite};
 use crate::message::{Direction, OutboxMessage, RecordedMessage, RunProjection, WorkflowEvent};
@@ -996,6 +998,21 @@ impl WorkflowStore for FileWorkflowStore {
         // No gate, as for `attempt`: a read, and `write_attempts` replaces the
         // file by rename, so this sees one whole table or the one before it.
         Ok(tally_unclaimed(self.read_attempts().await?.values(), now))
+    }
+
+    async fn claimable_attempts(
+        &self,
+        runtime: RuntimeKind,
+        now: OffsetDateTime,
+        limit: usize,
+    ) -> Result<Vec<AttemptRow>> {
+        // No gate, for `unclaimed_attempts`' reason.
+        Ok(claimable_of(
+            self.read_attempts().await?.values(),
+            runtime,
+            now,
+            limit,
+        ))
     }
 
     async fn advance_checkpoint(&self, processor: &str, checkpoint: Checkpoint) -> Result<()> {

@@ -321,8 +321,15 @@ impl ClaimFilter {
     /// Whether this claimant would take that row.
     #[must_use]
     pub fn matches(&self, row: &AttemptRow) -> bool {
-        if self.attempt.as_ref().is_some_and(|key| key != &row.key) {
-            return false;
+        match &self.attempt {
+            Some(key) if key != &row.key => return false,
+            // A pod's attempt belongs to the pod started for it, and that pod
+            // is the only claimant that names its key (ADR_0029). Without this
+            // a long-lived worker holding the same queue and the same code
+            // would take it and run it outside any pod — so a claim naming no
+            // attempt never matches one, whatever else it holds.
+            None if row.runtime.is_claimed_by_key() => return false,
+            _ => {}
         }
         match &row.queue {
             // A pulled attempt belongs to whoever holds its queue, and to
@@ -368,6 +375,28 @@ pub fn tally_unclaimed<'a>(
         *counts.entry(row.runtime).or_insert(0) += 1;
     }
     counts
+}
+
+/// The rows of one runtime somebody may take now, in the order given, at most
+/// `limit` of them.
+///
+/// The rule behind
+/// [`WorkflowStore::claimable_attempts`](crate::store::WorkflowStore::claimable_attempts)
+/// for the adapters that hold rows, written once for [`tally_unclaimed`]'s
+/// reason. "May take now" is [`AttemptRow::is_claimable`], so a row held by a
+/// live lease and a retry inside its delay are both left out.
+#[must_use]
+pub fn claimable_of<'a>(
+    rows: impl IntoIterator<Item = &'a AttemptRow>,
+    runtime: RuntimeKind,
+    now: OffsetDateTime,
+    limit: usize,
+) -> Vec<AttemptRow> {
+    rows.into_iter()
+        .filter(|row| row.runtime == runtime && row.is_claimable(now))
+        .take(limit)
+        .cloned()
+        .collect()
 }
 
 #[cfg(test)]
@@ -535,6 +564,80 @@ mod tests {
         assert!(!ClaimFilter::for_queues(&queues, &["stage@1".to_owned()]).matches(&pinned));
         assert!(!ClaimFilter::for_queues(&queues, &[]).matches(&pinned));
         assert!(ClaimFilter::for_queues(&queues, &["stage@2".to_owned()]).matches(&pinned));
+    }
+
+    fn pod_row(step: &str) -> AttemptRow {
+        AttemptRow::claimable(
+            AttemptKey::new(ExecutionId::new("exec-1"), step, 1),
+            RuntimeKind::ContainerJob,
+            MessageId::new(format!("cmd-{step}")),
+        )
+        .on_queue("houses".to_owned(), "stage@1".to_owned())
+    }
+
+    #[test]
+    fn a_pods_attempt_is_taken_only_by_a_claim_naming_its_key() {
+        // ADR_0029's hole, closed. A long-lived worker on the pod's queue,
+        // holding its code, would otherwise take it and run it outside any pod.
+        let pod = pod_row("stage");
+        let queues = ["houses".to_owned()];
+        let stage = ["stage@1".to_owned()];
+        let worker = ClaimFilter::for_queues(&queues, &stage);
+        assert!(!worker.matches(&pod), "a worker naming no key took it");
+        assert!(
+            !ClaimFilter::for_runtimes(&[RuntimeKind::ContainerJob]).matches(&pod),
+            "nor does a reactor listing the runtime"
+        );
+
+        let the_pod = ClaimFilter {
+            attempt: Some(pod.key.clone()),
+            ..worker.clone()
+        };
+        assert!(the_pod.matches(&pod));
+
+        // The key narrows what the token and the code allow; it never
+        // replaces them.
+        let other_queue = ClaimFilter {
+            attempt: Some(pod.key.clone()),
+            ..ClaimFilter::for_queues(&["other".to_owned()], &stage)
+        };
+        assert!(!other_queue.matches(&pod));
+        let no_code = ClaimFilter {
+            attempt: Some(pod.key.clone()),
+            ..ClaimFilter::for_queues(&queues, &[])
+        };
+        assert!(!no_code.matches(&pod));
+
+        // And a worker's own rows on that queue are unchanged.
+        let pulled = AttemptRow {
+            runtime: RuntimeKind::PythonTask,
+            ..pod_row("other")
+        };
+        assert!(worker.matches(&pulled));
+    }
+
+    #[test]
+    fn the_launcher_reads_the_rows_of_its_runtime_that_may_be_taken_now() {
+        let waiting = pod_row("waiting");
+        let mut held = pod_row("held");
+        held.claim("pod-a", at(0));
+        let backing_off = pod_row("backing-off").not_before(at(30));
+        let rows = [waiting.clone(), held, backing_off.clone(), row()];
+
+        assert_eq!(
+            claimable_of(&rows, RuntimeKind::ContainerJob, at(10), 10),
+            vec![waiting.clone()],
+            "a held row is running, a retry inside its delay has nothing to claim yet, \
+             and a flow row is not a pod's"
+        );
+        assert_eq!(
+            claimable_of(&rows, RuntimeKind::ContainerJob, at(30), 10),
+            vec![waiting.clone(), backing_off]
+        );
+        assert_eq!(
+            claimable_of(&rows, RuntimeKind::ContainerJob, at(30), 1),
+            vec![waiting]
+        );
     }
 
     #[test]

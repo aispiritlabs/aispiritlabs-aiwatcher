@@ -7,6 +7,7 @@ import json
 import subprocess
 import sys
 import threading
+import types
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
@@ -28,6 +29,7 @@ from aiwatcher_sdk.worker import (
     get_task_context,
     task,
 )
+from aiwatcher_sdk.worker import __main__ as entrypoint
 
 CONTRACT = json.loads((Path(__file__).parents[3] / "contracts/openapi.json").read_text())
 
@@ -148,6 +150,62 @@ def worker(
         client=httpx.Client(transport=httpx.MockTransport(api.handle)),
         telemetry=telemetry or AiwatcherClient(service="test", transport=NullTransport()),
     )
+
+
+def test_a_pod_is_told_its_attempt_and_its_name_through_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A launched pod runs its template's command, the same for every attempt,
+    # so which attempt, where to report and the name to claim under arrive in
+    # the environment rather than on the line.
+    @task("planner.acquire", version="sha256:abc")
+    def acquire() -> None:
+        return None
+
+    stages = types.ModuleType("pod_stages")
+    monkeypatch.setattr(stages, "acquire", acquire, raising=False)
+    monkeypatch.setitem(sys.modules, "pod_stages", stages)
+    seen: dict[str, Any] = {}
+
+    class Recorder:
+        def __init__(
+            self, url: str, *, queues: list[str], tasks: list[Any], name: str | None
+        ) -> None:
+            seen.update(url=url, queues=queues, name=name)
+
+        def __enter__(self) -> Recorder:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+        def run_attempt(self, reference: str) -> bool:
+            seen["ref"] = reference
+            return True
+
+        def run(self) -> None:
+            raise AssertionError("a pod serves nothing but its one attempt")
+
+    monkeypatch.setattr(entrypoint, "Worker", Recorder)
+    monkeypatch.setenv("AIWATCHER_ATTEMPT", "import-1/acquire/2")
+    monkeypatch.setenv("AIWATCHER_WORKER_NAME", "aiwatcher-0a1b-xyz")
+    monkeypatch.setenv("AIWATCHER_URL", "http://aiwatcher-server:8080")
+    line = ["run-attempt", "--queue", "planner-import", "--task", "pod_stages:acquire"]
+    entrypoint.main(line)
+    assert seen == {
+        "url": "http://aiwatcher-server:8080",
+        "queues": ["planner-import"],
+        "name": "aiwatcher-0a1b-xyz",
+        "ref": "import-1/acquire/2",
+    }
+
+    # Outside a pod nothing names an attempt, and run-attempt refuses to guess.
+    monkeypatch.delenv("AIWATCHER_ATTEMPT")
+    with pytest.raises(SystemExit):
+        entrypoint.main(line)
 
 
 @pytest.mark.parametrize("succeeds", [True, False])

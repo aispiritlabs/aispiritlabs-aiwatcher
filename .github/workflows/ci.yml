@@ -40,6 +40,11 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
 
+      - name: Rust context boundaries
+        run: |
+          python3 scripts/check-rust-boundaries.py
+          python3 scripts/check-rust-boundaries.py --test
+
       - name: cargo fmt
         run: cargo fmt --all --check
 

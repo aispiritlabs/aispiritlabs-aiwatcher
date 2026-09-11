@@ -1,9 +1,12 @@
+import { LocalViews } from '@/shared/components/local-views';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
-import { getRouteApi, Link } from '@tanstack/react-router';
+import { getRouteApi } from '@tanstack/react-router';
 import { Search } from 'lucide-react';
 import * as React from 'react';
 import { z } from 'zod';
 import { searchSchema } from './search';
+import { ParameterComparison } from '@/shared/components/parameter-comparison';
+import { DatasetReference, ExecutionReference } from '@/shared/components/lineage-reference';
 
 import { getEvaluation, listEvaluations, listEvaluationSuites } from '@/api/generated/sdk.gen';
 import type {
@@ -35,6 +38,8 @@ export function EvaluationPage() {
   const search = routeApi.useSearch();
   const navigate = routeApi.useNavigate();
   const windowSeconds = search.window ?? DEFAULT_WINDOW_SECONDS;
+  const [baselineDraft, setBaselineDraft] = React.useState(search.baseline ?? '');
+  React.useEffect(() => setBaselineDraft(search.baseline ?? ''), [search.baseline]);
 
   const select = React.useCallback(
     (next: Partial<z.infer<typeof searchSchema>>) => {
@@ -104,6 +109,11 @@ export function EvaluationPage() {
         />
       </div>
 
+      <LocalViews
+        screen="evaluation"
+        search={search}
+        onRestore={(value) => void navigate({ search: searchSchema.parse(value) })}
+      />
       <Suites
         suites={suites.data?.suites ?? []}
         loading={suites.isLoading}
@@ -117,6 +127,49 @@ export function EvaluationPage() {
         }
       />
 
+      <form
+        className="flex flex-wrap items-end gap-2 text-xs"
+        onSubmit={(event) => {
+          event.preventDefault();
+          const data = new FormData(event.currentTarget);
+          select({ baseline: String(data.get('baseline') ?? '').trim() || undefined });
+        }}
+      >
+        <label>
+          Baseline ID (blank = previous success)
+          <input
+            name="baseline"
+            aria-label="Baseline ID"
+            list="baseline-options"
+            value={baselineDraft}
+            onChange={(event) => setBaselineDraft(event.target.value)}
+            className="ml-2 rounded border border-border bg-background p-2"
+          />
+        </label>
+        <datalist id="baseline-options">
+          {rows
+            .filter((row) => row.evaluation_id !== search.report)
+            .map((row) => (
+              <option value={row.evaluation_id} key={row.evaluation_id}>
+                {row.status} · {row.suite}
+              </option>
+            ))}
+        </datalist>
+        <Button type="submit" size="sm">
+          Apply baseline
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => select({ baseline: undefined })}
+        >
+          Automatic baseline
+        </Button>
+        <span className="text-muted-foreground">
+          Suggestions use loaded reports; paste any retained report ID.
+        </span>
+      </form>
       <Filters
         search={search}
         onSelect={select}
@@ -162,7 +215,11 @@ export function EvaluationPage() {
           )}
         </Card>
 
-        <ReportPane evaluationId={search.report} />
+        <ReportPane
+          evaluationId={search.report}
+          baselineId={search.baseline}
+          selectedMetrics={search.metrics?.split(',')}
+        />
       </div>
     </div>
   );
@@ -270,6 +327,7 @@ function Filters({
         <input
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
+          aria-label="Search evaluations"
           placeholder="Search suite, dataset, variant or a parameter"
           className="h-8 w-full rounded-md border border-border bg-background pl-7 pr-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-primary"
         />
@@ -343,15 +401,28 @@ function ReportRow({
 
 // ── The detail pane ──────────────────────────────────────────────────────────
 
-function ReportPane({ evaluationId }: { evaluationId?: string }) {
+function ReportPane({
+  evaluationId,
+  baselineId,
+  selectedMetrics,
+}: {
+  evaluationId?: string;
+  baselineId?: string;
+  selectedMetrics?: string[];
+}) {
   const detail = useQuery({
-    queryKey: ['evaluation', evaluationId],
+    queryKey: ['evaluation', evaluationId, baselineId],
     enabled: Boolean(evaluationId),
     queryFn: async () => {
-      const response = await getEvaluation({ path: { evaluation_id: evaluationId! } });
+      const response = await getEvaluation({
+        throwOnError: true,
+        path: { evaluation_id: evaluationId! },
+        query: { baseline_id: baselineId },
+      });
       if (!response.data) throw new Error('failed to load the evaluation');
       return response.data;
     },
+    retry: false,
     refetchInterval: 10_000,
   });
 
@@ -376,17 +447,24 @@ function ReportPane({ evaluationId }: { evaluationId?: string }) {
     return (
       <Card>
         <EmptyState
-          title="That report is no longer retained"
-          hint="Evaluations are held in a bounded projection; the events themselves are still in the log."
+          title="Could not load the report or requested baseline"
+          hint="Check the IDs or retry. Reports may have expired from the bounded projection. No replacement baseline was selected."
         />
       </Card>
     );
   }
 
-  return <ReportDetail detail={detail.data} />;
+  return <ReportDetail detail={detail.data} selectedMetrics={selectedMetrics} />;
 }
 
-function ReportDetail({ detail }: { detail: EvaluationDetail }) {
+export function ReportDetail({
+  detail,
+  selectedMetrics,
+}: {
+  detail: EvaluationDetail;
+  selectedMetrics?: string[];
+}) {
+  const navigate = routeApi.useNavigate();
   const { summary, comparison } = detail;
 
   return (
@@ -404,15 +482,16 @@ function ReportDetail({ detail }: { detail: EvaluationDetail }) {
                 value={pinchId(summary.evaluation_id, 10, 8)}
                 full={summary.evaluation_id}
               />
-              {summary.dataset ? (
-                <Link
-                  to="/datasets"
-                  search={{ ...datasetTarget(summary.dataset), view: 'evaluations' }}
-                  className="hover:opacity-80"
-                >
-                  <Badge>{summary.dataset}</Badge>
-                </Link>
-              ) : null}
+              {summary.dataset && (
+                <DatasetReference
+                  reference={summary.dataset}
+                  kind={summary.context?.dataset_kind}
+                  version={summary.context?.dataset_version}
+                />
+              )}
+              {summary.execution_id && (
+                <ExecutionReference executionId={summary.execution_id} stepId={summary.step_id} />
+              )}
               {summary.variant ? <Badge tone="warning">{summary.variant}</Badge> : null}
               <span>{summary.runtime}</span>
             </div>
@@ -437,13 +516,112 @@ function ReportDetail({ detail }: { detail: EvaluationDetail }) {
         ) : null}
       </Card>
 
-      <div className="grid gap-4 xl:grid-cols-2">
+      <Card className="p-4 text-xs">
+        <h3 className="text-sm font-semibold">Comparison evidence</h3>
+        {comparison ? (
+          <>
+            <p>
+              {comparison.comparability} · baseline {comparison.baseline_id}
+            </p>
+            <ul>
+              {comparison.reasons.map((reason) => (
+                <li key={reason}>{reason}</li>
+              ))}
+            </ul>
+            <p>
+              Common retained cases: {comparison.common_cases}. Current:{' '}
+              {comparison.current_cases_retained}/{summary.cases_total}; baseline:{' '}
+              {comparison.baseline_cases_retained}/{comparison.baseline_summary.cases_total}.
+            </p>
+            <p>
+              {comparison.details_complete
+                ? 'All reported details retained.'
+                : 'Partial details — this is not a complete regression analysis.'}
+            </p>
+            {comparison.comparability !== 'comparable' && (
+              <p>
+                Quality deltas and changed-case conclusions are withheld until compatibility is
+                verified.
+              </p>
+            )}
+          </>
+        ) : (
+          <p>
+            No earlier successful baseline on this suite and dataset. Select a baseline explicitly
+            to inspect another report.
+          </p>
+        )}
+        <p>
+          Current context:{' '}
+          {Object.entries(summary.context ?? {})
+            .map(([key, value]) => `${key}: ${value ?? 'unknown'}`)
+            .join(' · ')}
+        </p>
+        {comparison && (
+          <p>
+            Baseline data: {comparison.baseline_summary.dataset ?? 'unknown'} ·{' '}
+            {Object.entries(comparison.baseline_summary.context ?? {})
+              .map(([key, value]) => `${key}: ${value ?? 'unknown'}`)
+              .join(' · ')}
+          </p>
+        )}
+        <p>
+          Retained cases: {detail.cases.length}/{summary.cases_total}. Report:{' '}
+          {summary.report_dropped
+            ? 'detail lost'
+            : summary.report_bytes
+              ? 'retained'
+              : 'not supplied'}
+          .
+        </p>
+      </Card>
+      <fieldset className="flex flex-wrap gap-3 text-xs">
+        <legend>Metrics</legend>
+        {[
+          ...new Set([
+            ...Object.keys(summary.metrics),
+            ...(comparison?.metrics.map((metric) => metric.name) ?? []),
+          ]),
+        ].map((name) => (
+          <label key={name}>
+            <input
+              type="checkbox"
+              checked={!selectedMetrics?.length || selectedMetrics.includes(name)}
+              onChange={() => {
+                const all =
+                  comparison?.metrics.map((metric) => metric.name) ?? Object.keys(summary.metrics);
+                const shown = selectedMetrics?.length ? selectedMetrics : all;
+                const next =
+                  shown.includes(name) && shown.length > 1
+                    ? shown.filter((entry) => entry !== name)
+                    : [...new Set([...shown, name])];
+                void navigate({ search: (previous) => ({ ...previous, metrics: next.join(',') }) });
+              }}
+            />{' '}
+            {name}
+          </label>
+        ))}
+      </fieldset>
+      <div className="grid min-w-0 gap-4">
         <Metrics
-          metrics={summary.metrics}
-          comparison={comparison?.metrics}
+          metrics={Object.fromEntries(
+            Object.entries(summary.metrics).filter(
+              ([name]) => !selectedMetrics?.length || selectedMetrics.includes(name),
+            ),
+          )}
+          comparison={comparison?.metrics.filter(
+            (metric) => !selectedMetrics?.length || selectedMetrics.includes(metric.name),
+          )}
           baselineId={comparison?.baseline_id}
         />
-        <Params params={summary.params} />
+        <ParameterComparison
+          entries={[
+            { id: summary.evaluation_id, params: summary.params },
+            ...(comparison
+              ? [{ id: comparison.baseline_id, params: comparison.baseline_summary.params }]
+              : []),
+          ]}
+        />
       </div>
 
       {comparison ? <Regressions detail={detail} /> : null}
@@ -453,15 +631,6 @@ function ReportDetail({ detail }: { detail: EvaluationDetail }) {
       <ReportDocument detail={detail} />
     </div>
   );
-}
-
-function datasetTarget(reference: string): { dataset: string; version?: string } {
-  const separator = reference.lastIndexOf('@');
-  const version = separator >= 0 ? reference.slice(separator + 1) : '';
-  if (/^[a-f0-9]{64}$/.test(version)) {
-    return { dataset: reference.slice(0, separator), version };
-  }
-  return { dataset: reference };
 }
 
 function Metrics({
@@ -480,7 +649,7 @@ function Metrics({
     comparison ?? Object.entries(metrics).map(([name, value]) => ({ name, current: value }));
 
   return (
-    <Card>
+    <Card className="overflow-auto">
       <div className="flex items-center justify-between p-4 pb-2">
         <h3 className="text-sm font-semibold">Metrics</h3>
         {baselineId ? (
@@ -493,6 +662,14 @@ function Metrics({
         <p className="px-4 pb-4 text-xs text-muted-foreground">Nothing was measured.</p>
       ) : (
         <table className="w-full text-left text-sm">
+          <thead>
+            <tr>
+              <th scope="col" className="px-4 py-1.5">Metric</th>
+              <th scope="col" className="px-4 py-1.5 text-right">Current</th>
+              {baselineId && <th scope="col" className="px-4 py-1.5 text-right">Baseline</th>}
+              <th scope="col" className="px-4 py-1.5 text-right">Delta</th>
+            </tr>
+          </thead>
           <tbody>
             {rows.map((row) => (
               <tr key={row.name} className="border-t border-border/40">
@@ -502,32 +679,14 @@ function Metrics({
                     ? '—'
                     : formatMetric(row.current)}
                 </td>
+                {baselineId && (
+                  <td className="px-4 py-1.5 text-right tabular-nums">
+                    {row.baseline == null ? '—' : formatMetric(row.baseline)}
+                  </td>
+                )}
                 <td className="w-24 px-4 py-1.5 text-right text-xs tabular-nums">
                   <Delta value={row.delta} />
                 </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </Card>
-  );
-}
-
-function Params({ params }: { params: Record<string, string> }) {
-  const entries = Object.entries(params);
-  return (
-    <Card>
-      <h3 className="p-4 pb-2 text-sm font-semibold">Parameters</h3>
-      {entries.length === 0 ? (
-        <p className="px-4 pb-4 text-xs text-muted-foreground">Nothing was pinned.</p>
-      ) : (
-        <table className="w-full text-left text-sm">
-          <tbody>
-            {entries.map(([name, value]) => (
-              <tr key={name} className="border-t border-border/40">
-                <td className="px-4 py-1.5 text-muted-foreground">{name}</td>
-                <td className="px-4 py-1.5 text-right font-medium">{value}</td>
               </tr>
             ))}
           </tbody>
@@ -547,9 +706,9 @@ function Regressions({ detail }: { detail: EvaluationDetail }) {
       <div className="p-4 pb-2">
         <h3 className="text-sm font-semibold">Changed cases</h3>
         <p className="text-xs text-muted-foreground">
-          Against {comparison.baseline_id}, run {formatTime(comparison.baseline_started_at)}. A case
-          that passed then and fails now is the one thing on this page whose direction is not a
-          matter of interpretation.
+          Among retained common cases, against {comparison.baseline_id}, run{' '}
+          {formatTime(comparison.baseline_started_at)}. A case that passed then and fails now is the
+          one thing on this page whose direction is not a matter of interpretation.
         </p>
       </div>
       <div className="grid gap-4 p-4 pt-2 md:grid-cols-2">

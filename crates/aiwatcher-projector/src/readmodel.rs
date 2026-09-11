@@ -587,6 +587,19 @@ impl ReadModel {
         self.state.read().await.evaluations.detail(evaluation_id)
     }
 
+    /// Resolve both reports under the same read lock.
+    pub async fn evaluation_with_baseline(
+        &self,
+        evaluation_id: &str,
+        baseline_id: Option<&str>,
+    ) -> Option<EvaluationDetail> {
+        self.state
+            .read()
+            .await
+            .evaluations
+            .detail_with_baseline(evaluation_id, baseline_id)
+    }
+
     /// Suites: the level above an evaluation report.
     /// The workflow catalog: every declared graph, and the ones only observed.
     pub async fn workflows(&self, filter: &WorkflowFilter) -> WorkflowPage {

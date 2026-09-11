@@ -21,6 +21,7 @@ use serde_json::{Map, Value};
 use thiserror::Error;
 use utoipa::ToSchema;
 
+use crate::claim::AttemptKey;
 use crate::plan::{ExecutionPlan, RuntimeBinding};
 
 /// The variables aiwatcher sets on a launched pod's container: the attempt it
@@ -694,6 +695,21 @@ impl PodTemplates {
     }
 }
 
+/// The name of the one Job an attempt gets (ADR_0029).
+///
+/// Derived from the attempt's key, so a second launcher asking for the same
+/// Job is told it already exists: Kubernetes' name uniqueness is the
+/// compare-and-set, and no lease is needed. A retry is a new attempt number,
+/// so it gets a new name and a new Job. Hashed rather than spelled out,
+/// because a Job's name is also a label on its pods — at most 63 characters of
+/// `[a-z0-9-]` — and an execution id and a step id are neither. The attempt
+/// itself rides on the Job as an annotation, for whoever reads `kubectl`.
+#[must_use]
+pub fn job_name(key: &AttemptKey) -> String {
+    let digest = crate::digest(key.idempotency_key().as_bytes());
+    format!("aiwatcher-{}", &digest[..32])
+}
+
 /// Why a plan's pods may not run under `templates`, every step at once.
 ///
 /// `None` is a deployment that configured no templates, and every step asking
@@ -830,6 +846,29 @@ mod tests {
             cpu: None,
             memory: None,
         }
+    }
+
+    #[test]
+    fn one_attempt_names_one_job_and_its_retry_names_another() {
+        use crate::state::ExecutionId;
+        let first = AttemptKey::new(ExecutionId::new("exec-1"), "Stage_One/x", 1);
+        let name = job_name(&first);
+        assert_eq!(
+            name,
+            job_name(&first.clone()),
+            "derived, so a second launcher asks for the same Job"
+        );
+        assert_ne!(
+            name,
+            job_name(&AttemptKey::new(
+                ExecutionId::new("exec-1"),
+                "Stage_One/x",
+                2
+            )),
+            "a retry is a new attempt, a new name and a new Job"
+        );
+        // Whatever the ids hold, the name is a label a pod can carry.
+        assert!(is_label(&name), "{name}");
     }
 
     #[test]

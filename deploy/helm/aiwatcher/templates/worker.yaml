@@ -51,7 +51,15 @@ spec:
         app.kubernetes.io/part-of: aiwatcher
         app.kubernetes.io/component: worker
     spec:
+      {{- if .Values.execution.pods.templates }}
+      # The role holding the reactors starts the pods steps ask for (ADR_0029)
+      # — the one pod here with a cluster token, and its Role is Jobs and pod
+      # logs in one namespace. The API pod behind the ingress holds none.
+      serviceAccountName: {{ $fullname }}-launcher
+      automountServiceAccountToken: true
+      {{- else }}
       automountServiceAccountToken: false
+      {{- end }}
       {{- include "aiwatcher.imagePullSecrets" . | nindent 6 }}
       securityContext:
         runAsNonRoot: true
@@ -83,6 +91,9 @@ spec:
             # claim on a ReadWriteOnce volume is a pod that never schedules.
             - { name: data, mountPath: /var/lib/aiwatcher }
             - { name: tmp, mountPath: /tmp }
+            {{- if .Values.execution.pods.templates }}
+            - { name: pod-templates, mountPath: /etc/aiwatcher/pods, readOnly: true }
+            {{- end }}
       {{- with .Values.server.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -100,4 +111,8 @@ spec:
           emptyDir: {}
         - name: tmp
           emptyDir: {}
+        {{- if .Values.execution.pods.templates }}
+        - name: pod-templates
+          configMap: { name: {{ $fullname }}-pod-templates }
+        {{- end }}
 {{- end }}

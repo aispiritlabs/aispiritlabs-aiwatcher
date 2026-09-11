@@ -31,6 +31,12 @@ postgres = ["aiwatcher-execution/postgres"]
 # builds with, and off by default for the same reason as the others.
 duckdb = ["aiwatcher-execution/duckdb", "dep:duckdb"]
 iggy = ["aiwatcher-bus/iggy"]
+# The pod launcher's cluster client (ADR_0029). Off by default for the same
+# reason: the launcher's loop and its Job manifest are in every build and
+# tested there, and only what reaches a real cluster needs kube-rs.
+# `AIWATCHER_POD_TEMPLATES` on a role that claims attempts, in a build without
+# this, refuses to start naming it.
+kube = ["dep:kube", "dep:k8s-openapi"]
 
 [dependencies]
 aiwatcher-core.workspace = true
@@ -47,6 +53,8 @@ aiwatcher-projector.workspace = true
 aiwatcher-prompts.workspace = true
 aiwatcher-runner.workspace = true
 duckdb = { workspace = true, optional = true }
+kube = { workspace = true, optional = true }
+k8s-openapi = { workspace = true, optional = true }
 aiwatcher-auth.workspace = true
 aiwatcher-api.workspace = true
 anyhow.workspace = true

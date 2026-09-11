@@ -165,6 +165,20 @@ impl RuntimeKind {
         matches!(self, Self::PythonTask | Self::ContainerJob)
     }
 
+    /// The kinds only a claim naming the attempt's key may take (ADR_0029).
+    ///
+    /// A pod's attempt belongs to the pod started for it, and that pod is the
+    /// one claimant that knows its key. A list rather than only a predicate,
+    /// because the PostgreSQL adapter binds it into its claim and one list is
+    /// what keeps that query and [`crate::ClaimFilter::matches`] agreeing.
+    pub const CLAIMED_BY_KEY: &'static [Self] = &[Self::ContainerJob];
+
+    /// Whether only a claim naming the attempt's key may take this.
+    #[must_use]
+    pub fn is_claimed_by_key(self) -> bool {
+        Self::CLAIMED_BY_KEY.contains(&self)
+    }
+
     /// Whether performing this needs a process the server does not run.
     ///
     /// A pulled attempt is claimed by a worker — a process somebody else

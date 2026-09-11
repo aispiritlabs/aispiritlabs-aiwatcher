@@ -33,7 +33,9 @@ use time::OffsetDateTime;
 
 use aiwatcher_core::{Checkpoint, MessageId};
 
-use crate::claim::{AttemptKey, AttemptRow, AttemptWrite, ClaimFilter, tally_unclaimed};
+use crate::claim::{
+    AttemptKey, AttemptRow, AttemptWrite, ClaimFilter, claimable_of, tally_unclaimed,
+};
 use crate::error::{Result, StoreError};
 use crate::hosted::{DeciderLease, LeaseOutcome, Timer, TimerWrite};
 use crate::message::{Direction, OutboxMessage, RecordedMessage, RunProjection, WorkflowEvent};
@@ -683,6 +685,25 @@ impl WorkflowStore for DuckdbWorkflowStore {
             // declines to keep. The table holds live attempts only.
             let live: Vec<AttemptRow> = rows(db, "select payload from attempts", [])?;
             Ok(tally_unclaimed(&live, now))
+        })
+        .await
+    }
+
+    async fn claimable_attempts(
+        &self,
+        runtime: RuntimeKind,
+        now: OffsetDateTime,
+        limit: usize,
+    ) -> Result<Vec<AttemptRow>> {
+        self.with(move |db| {
+            // Ordered as `claim_attempt` orders, and asked in Rust for its
+            // reason: the rule is `AttemptRow`'s.
+            let live: Vec<AttemptRow> = rows(
+                db,
+                "select payload from attempts order by updated_at, execution, step, attempt",
+                [],
+            )?;
+            Ok(claimable_of(&live, runtime, now, limit))
         })
         .await
     }

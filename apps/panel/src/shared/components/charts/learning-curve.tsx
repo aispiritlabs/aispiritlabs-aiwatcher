@@ -1,6 +1,13 @@
 import * as React from 'react';
 
-import { AxisLabel, ChartEmpty, Legend, SERIES, Tooltip, TooltipRow } from '@/shared/components/charts/primitives';
+import {
+  AxisLabel,
+  ChartEmpty,
+  Legend,
+  SERIES,
+  Tooltip,
+  TooltipRow,
+} from '@/shared/components/charts/primitives';
 
 /**
  * A metric against epoch: the third chart form in this panel, and the first
@@ -27,6 +34,18 @@ export interface CurveSeries {
   key: string;
   label: string;
   points: [number, number][];
+  /** Epochs explicitly missing a measurement; never bridge these gaps. */
+  missing?: number[];
+}
+
+/** Stable across filtering and ordering; dash patterns also distinguish series. */
+export function seriesStyle(key: string) {
+  let hash = 2166136261;
+  for (const character of key) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619) >>> 0;
+  return {
+    color: SERIES[hash % SERIES.length] ?? SERIES[0],
+    dash: ['', '6 3', '2 3', '8 3 2 3'][Math.floor(hash / SERIES.length) % 4],
+  };
 }
 
 const PADDING = { top: 12, right: 12, bottom: 26, left: 44 };
@@ -43,6 +62,8 @@ export function LearningCurve({
   normalise?: boolean;
 }) {
   const container = React.useRef<HTMLDivElement>(null);
+  const hasPoints = series.some((entry) => entry.points.length > 0);
+  const [fullScreenError, setFullScreenError] = React.useState('');
   const [width, setWidth] = React.useState(640);
   const [hover, setHover] = React.useState<number | null>(null);
 
@@ -54,13 +75,20 @@ export function LearningCurve({
     const observer = new ResizeObserver(measure);
     observer.observe(element);
     return () => observer.disconnect();
-  }, []);
+  }, [hasPoints]);
 
-  const drawn = series.filter((entry) => entry.points.length > 0);
-  const defs = drawn.map((entry, index) => ({
+  const drawn = series
+    .map((entry) => ({
+      ...entry,
+      points: entry.points
+        .filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y))
+        .sort(([a], [b]) => a - b),
+    }))
+    .filter((entry) => entry.points.length > 0);
+  const defs = drawn.map((entry) => ({
     key: entry.key,
     label: entry.label,
-    color: SERIES[index % SERIES.length] ?? SERIES[0],
+    ...seriesStyle(entry.key),
   }));
 
   const geometry = React.useMemo(() => {
@@ -123,8 +151,30 @@ export function LearningCurve({
           );
 
   return (
-    <div ref={container} className="relative flex flex-col gap-2">
-      <Legend series={defs} />
+    <div
+      ref={container}
+      className="relative flex flex-col gap-2 bg-card fullscreen:overflow-auto fullscreen:p-6"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Legend series={defs} />
+        {typeof document.documentElement.requestFullscreen === 'function' && (
+          <button
+            type="button"
+            className="rounded border border-border px-2 py-1 text-xs"
+            onClick={async () => {
+              try {
+                if (document.fullscreenElement) await document.exitFullscreen();
+                else await container.current?.requestFullscreen();
+              } catch {
+                setFullScreenError('Full screen is unavailable in this browser.');
+              }
+            }}
+          >
+            Full screen / exit
+          </button>
+        )}
+      </div>
+      {fullScreenError && <p role="status">{fullScreenError}</p>}
       <svg
         width={width}
         height={HEIGHT}
@@ -191,7 +241,7 @@ export function LearningCurve({
           const path = entry.points
             .map(
               ([x, value], at) =>
-                `${at === 0 ? 'M' : 'L'}${geometry.x(x).toFixed(1)},${geometry.y(value, entry).toFixed(1)}`,
+                `${at === 0 || entry.missing?.some((gap) => gap > (entry.points[at - 1]?.[0] ?? x) && gap < x) ? 'M' : 'L'}${geometry.x(x).toFixed(1)},${geometry.y(value, entry).toFixed(1)}`,
             )
             .join(' ');
           return (
@@ -200,6 +250,7 @@ export function LearningCurve({
                 d={path}
                 fill="none"
                 stroke={def?.color}
+                strokeDasharray={def?.dash}
                 strokeWidth={1.75}
                 strokeLinejoin="round"
                 strokeLinecap="round"
@@ -228,7 +279,49 @@ export function LearningCurve({
           ))}
         </Tooltip>
       )}
-      <AxisLabel className="self-center">{xLabel}</AxisLabel>
+      <AxisLabel className="self-center">
+        {xLabel}
+        {normalise ? ' · each series scaled to its own range' : ''}
+      </AxisLabel>
+      <details className="text-xs">
+        <summary className="cursor-pointer">Recorded values</summary>
+        <div className="max-h-64 overflow-auto">
+          <table className="w-full text-left tabular-nums">
+            <caption>
+              Recorded measurements; — means no measurement. Lines only connect observations.
+            </caption>
+            <thead>
+              <tr>
+                <th scope="col">{xLabel}</th>
+                {series.map((entry) => (
+                  <th scope="col" key={entry.key}>
+                    {entry.label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {[
+                ...new Set(
+                  series.flatMap((entry) => [
+                    ...entry.points.map(([x]) => x),
+                    ...(entry.missing ?? []),
+                  ]),
+                ),
+              ]
+                .sort((a, b) => a - b)
+                .map((x) => (
+                  <tr key={x}>
+                    <th scope="row">{x}</th>
+                    {series.map((entry) => (
+                      <td key={entry.key}>{entry.points.find(([at]) => at === x)?.[1] ?? '—'}</td>
+                    ))}
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+        </div>
+      </details>
     </div>
   );
 }

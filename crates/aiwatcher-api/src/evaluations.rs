@@ -32,6 +32,13 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/evaluation-suites", get(list_evaluation_suites))
 }
 
+#[derive(serde::Deserialize, utoipa::IntoParams)]
+#[serde(deny_unknown_fields)]
+struct DetailQuery {
+    /// Explicit baseline; missing IDs return 404, never an automatic replacement.
+    baseline_id: Option<String>,
+}
+
 // ── Evaluations ──────────────────────────────────────────────────────────────
 
 /// Evaluation reports, newest first.
@@ -61,7 +68,7 @@ async fn list_evaluations(
 #[utoipa::path(
     get,
     path = "/api/v1/evaluations/{evaluation_id}",
-    params(("evaluation_id" = String, Path, description = "The evaluation to fetch")),
+    params(("evaluation_id" = String, Path, description = "The evaluation to fetch"), DetailQuery),
     responses(
         (status = 200, body = EvaluationDetail),
         (status = 404, body = crate::error::ErrorBody),
@@ -71,13 +78,16 @@ async fn list_evaluations(
 async fn get_evaluation(
     State(state): State<AppState>,
     Path(evaluation_id): Path<String>,
+    Query(query): Query<DetailQuery>,
 ) -> ApiResult<Json<EvaluationDetail>> {
     state
         .read_model
-        .evaluation(&evaluation_id)
+        .evaluation_with_baseline(&evaluation_id, query.baseline_id.as_deref())
         .await
         .map(Json)
-        .ok_or_else(|| ApiError::NotFound(format!("evaluation {evaluation_id}")))
+        .ok_or_else(|| {
+            ApiError::NotFound(format!("evaluation {evaluation_id} or requested baseline"))
+        })
 }
 
 /// Suites: the level above a report, and what MLflow calls an experiment.

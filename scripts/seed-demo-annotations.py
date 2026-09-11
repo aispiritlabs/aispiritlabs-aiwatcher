@@ -576,7 +576,7 @@ def main(argv: list[str] | None = None) -> int:
     # And a training run against it, so the Training area has a curve to draw.
     # It goes to `/api/v1/training-runs`, not to the event log: a training run
     # is a record that grows in place, not a trace. See ADR_0018.
-    training = TrainingClient(BASE)
+    training = TrainingClient(args.base_url)
     run_id = f"demo-train-{int(time.time())}"
     best = 0.0
     with training.run(

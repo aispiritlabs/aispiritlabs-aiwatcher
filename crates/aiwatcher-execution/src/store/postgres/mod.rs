@@ -537,6 +537,10 @@ impl WorkflowStore for PostgresWorkflowStore {
             .map(|runtime| runtime.as_str())
             .collect();
         let tasks: Vec<&str> = filter.tasks.iter().map(String::as_str).collect();
+        let by_key: Vec<&str> = RuntimeKind::CLAIMED_BY_KEY
+            .iter()
+            .map(|runtime| runtime.as_str())
+            .collect();
         let stale = now - time::Duration::seconds(aiwatcher_jobs::LEASE_SECONDS);
 
         // `SKIP LOCKED` is what makes two claimants polling together take two
@@ -556,6 +560,10 @@ impl WorkflowStore for PostgresWorkflowStore {
         // keep. It read `<=`, which took a row at exactly five minutes that the
         // count still called held and `AttemptRow::is_held_by` still told its
         // holder was its own.
+        //
+        // `runtime <> all($9)` unless a key was named is the key-only rule
+        // (ADR_0029): a pod's attempt is taken by the claim naming it and by
+        // nothing else, however well the rest of a worker's filter matches.
         let row = sqlx::query(
             "select execution_id, step_id, attempt, runtime, command_id, queue,
                     task_ref, state, lease_owner, previous_owner, claimed_at, not_before
@@ -565,6 +573,7 @@ impl WorkflowStore for PostgresWorkflowStore {
                 and (claimed_at is null or claimed_at < $3)
                 and (not_before is null or not_before <= $4)
                 and ($6::text is null or (execution_id = $6 and step_id = $7 and attempt::bigint = $8))
+                and ($6::text is not null or runtime <> all($9))
                 and ( (queue is not null and queue = any($1)
                        and task_ref is not null and task_ref = any($5))
                    or (queue is null and runtime = any($2)) )
@@ -580,6 +589,7 @@ impl WorkflowStore for PostgresWorkflowStore {
         .bind(filter.attempt.as_ref().map(|key| key.execution_id.as_str()))
         .bind(filter.attempt.as_ref().map(|key| key.step_id.as_str()))
         .bind(filter.attempt.as_ref().map(|key| i64::from(key.attempt)))
+        .bind(&by_key)
         .fetch_optional(&mut *transaction)
         .await
         .map_err(|error| StoreError::Backend(error.to_string()))?;
@@ -638,6 +648,38 @@ impl WorkflowStore for PostgresWorkflowStore {
         .await
         .map_err(|error| StoreError::Backend(error.to_string()))?;
         row.map(|row| attempt_from(&row)).transpose()
+    }
+
+    async fn claimable_attempts(
+        &self,
+        runtime: RuntimeKind,
+        now: OffsetDateTime,
+        limit: usize,
+    ) -> Result<Vec<AttemptRow>> {
+        // `AttemptRow::is_claimable` in SQL for one runtime, the predicate
+        // `claim_attempt` carries, and outside any transaction: nothing is
+        // taken, so a read never delays a claim.
+        let stale = now - time::Duration::seconds(aiwatcher_jobs::LEASE_SECONDS);
+        let rows = sqlx::query(
+            "select execution_id, step_id, attempt, runtime, command_id, queue,
+                    task_ref, state, lease_owner, previous_owner, claimed_at, not_before
+               from step_attempts
+              where state not in ('completed', 'failed', 'crashed', 'cancelled',
+                                  'awaiting_input')
+                and runtime = $1
+                and (claimed_at is null or claimed_at < $2)
+                and (not_before is null or not_before <= $3)
+              order by updated_at
+              limit $4",
+        )
+        .bind(runtime.as_str())
+        .bind(stale)
+        .bind(now)
+        .bind(i64::try_from(limit).unwrap_or(i64::MAX))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|error| StoreError::Backend(error.to_string()))?;
+        rows.iter().map(attempt_from).collect()
     }
 
     async fn unclaimed_attempts(&self, now: OffsetDateTime) -> Result<BTreeMap<RuntimeKind, u64>> {

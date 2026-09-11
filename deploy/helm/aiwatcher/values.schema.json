@@ -3,6 +3,21 @@
   "title": "aiwatcher chart values",
   "description": "Deliberately partial. It pins the fields where a typo produces a plausible-looking deployment that quietly does the wrong thing \u2014 the three-way modes, the bus, the log format \u2014 and leaves the rest to the templates, which fail with their own messages.",
   "type": "object",
+  "definitions": {
+    "quantities": {
+      "description": "Kubernetes quantities, as strings: an unquoted `1` is a number, and the server reads quantities as text.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cpu": {
+          "type": "string"
+        },
+        "memory": {
+          "type": "string"
+        }
+      }
+    }
+  },
   "properties": {
     "server": {
       "type": "object",
@@ -234,6 +249,65 @@
           "description": "How long a managed query step may run, whichever engine runs it.",
           "type": "integer",
           "minimum": 1
+        },
+        "pods": {
+          "type": "object",
+          "properties": {
+            "templates": {
+              "description": "ADR_0029: the operator's pod templates, one per name. The server checks each at start and refuses every problem at once; this only catches the shapes a render would carry through.",
+              "type": "object",
+              "additionalProperties": {
+                "type": "object",
+                "required": [
+                  "images",
+                  "command"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "images": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "command": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "resources": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "requests": {
+                        "$ref": "#/definitions/quantities"
+                      },
+                      "limits": {
+                        "$ref": "#/definitions/quantities"
+                      },
+                      "max": {
+                        "$ref": "#/definitions/quantities"
+                      }
+                    }
+                  },
+                  "start_allowance_seconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 3600
+                  },
+                  "pod": {
+                    "type": "object"
+                  }
+                }
+              }
+            },
+            "namespace": {
+              "type": "string"
+            }
+          }
         }
       }
     },

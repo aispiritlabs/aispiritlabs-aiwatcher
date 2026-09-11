@@ -511,6 +511,29 @@ pub trait WorkflowStore: Send + Sync + std::fmt::Debug {
     /// Whatever the backend could not do.
     async fn unclaimed_attempts(&self, now: OffsetDateTime) -> Result<BTreeMap<RuntimeKind, u64>>;
 
+    /// The attempts of one runtime somebody may take now, oldest first, at
+    /// most `limit` of them. A read: nothing is claimed, leased or rewritten.
+    ///
+    /// The launcher's question (ADR_0029). It starts one pod per attempt and
+    /// claims none — the pod does, by key — so what it needs is the rows a pod
+    /// would find. "May take now" is [`AttemptRow::is_claimable`]. A retry
+    /// inside its delay is left out, because a pod started before it would
+    /// find nothing to claim and end having done nothing. A row a pod already
+    /// holds is left out too, which is what stops a second Job being asked for
+    /// an attempt that is running.
+    ///
+    /// Bounded by the claim table, which holds live attempts only.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the backend could not do.
+    async fn claimable_attempts(
+        &self,
+        runtime: RuntimeKind,
+        now: OffsetDateTime,
+        limit: usize,
+    ) -> Result<Vec<AttemptRow>>;
+
     /// Take one schedule slot, or say why not.
     ///
     /// **The transactional half of the scheduler**. Three
@@ -727,6 +750,15 @@ impl<T: WorkflowStore + ?Sized> WorkflowStore for std::sync::Arc<T> {
 
     async fn unclaimed_attempts(&self, now: OffsetDateTime) -> Result<BTreeMap<RuntimeKind, u64>> {
         (**self).unclaimed_attempts(now).await
+    }
+
+    async fn claimable_attempts(
+        &self,
+        runtime: RuntimeKind,
+        now: OffsetDateTime,
+        limit: usize,
+    ) -> Result<Vec<AttemptRow>> {
+        (**self).claimable_attempts(runtime, now, limit).await
     }
 
     async fn admit_slot(&self, request: &SlotAdmissionRequest) -> Result<SlotAdmission> {

@@ -327,6 +327,7 @@ pub async fn assert_contract(name: &str, store: &dyn WorkflowStore) {
     two_claimants_racing_for_one_attempt_produce_one_claim(name, store).await;
     a_claimant_only_takes_what_it_said_it_could_run(name, store).await;
     an_exact_attempt_filter_never_claims_a_neighbour(name, store).await;
+    a_pods_attempt_is_read_by_its_runtime_and_taken_only_by_its_key(name, store).await;
     a_lost_claim_expires_and_the_next_claimant_takes_it_over(name, store).await;
     a_heartbeat_keeps_a_long_step_from_being_taken_over(name, store).await;
     a_lease_exactly_its_length_old_is_still_held_and_one_second_later_is_not(name, store).await;
@@ -1846,6 +1847,109 @@ pub async fn a_retry_is_not_claimable_before_its_delay(name: &str, store: &dyn W
         )
         .is_some(),
         "{name}"
+    );
+}
+
+/// A pod's attempt, from both sides of ADR_0029: the launcher finds it by its
+/// runtime without taking it, and only the claim naming its key takes it.
+///
+/// Every read is narrowed to this execution: on a shared PostgreSQL the table
+/// holds other runs' rows. The row is retired at the end for the same reason.
+pub async fn a_pods_attempt_is_read_by_its_runtime_and_taken_only_by_its_key(
+    name: &str,
+    store: &dyn WorkflowStore,
+) {
+    let execution = fresh("pod-claim");
+    let now = OffsetDateTime::UNIX_EPOCH;
+    let pod = AttemptRow::claimable(
+        AttemptKey::new(execution.clone(), "stage", 1),
+        RuntimeKind::ContainerJob,
+        MessageId::new(format!("{execution}/cmd-pod")),
+    )
+    .on_queue(queue_of(&execution), STAGE_TASK.to_owned());
+    ok!(
+        name,
+        store.append(
+            &execution,
+            dispatch(
+                &execution,
+                "pod-dispatch",
+                vec![AttemptWrite::Dispatch(pod.clone())]
+            )
+        ),
+        "a dispatch"
+    );
+    let this_run = |rows: Vec<AttemptRow>| -> Vec<AttemptKey> {
+        rows.into_iter()
+            .filter(|row| row.key.execution_id == execution)
+            .map(|row| row.key)
+            .collect()
+    };
+
+    let found = ok!(
+        name,
+        store.claimable_attempts(RuntimeKind::ContainerJob, now, 1_000),
+        "a read"
+    );
+    assert_eq!(
+        this_run(found),
+        vec![pod.key.clone()],
+        "{name}: the launcher did not find the pod's attempt"
+    );
+    let other = ok!(
+        name,
+        store.claimable_attempts(RuntimeKind::PythonTask, now, 1_000),
+        "a read of another runtime"
+    );
+    assert!(
+        this_run(other).is_empty(),
+        "{name}: a read by one runtime returned another's row"
+    );
+
+    // A worker holding the pod's queue and its code, naming no key.
+    assert!(
+        ok!(
+            name,
+            store.claim_attempt(&mine(&execution), "worker", now),
+            "a keyless claim"
+        )
+        .is_none(),
+        "{name}: a worker naming no key took a pod's attempt"
+    );
+    let the_pod = ClaimFilter {
+        attempt: Some(pod.key.clone()),
+        ..mine(&execution)
+    };
+    let taken = ok!(
+        name,
+        store.claim_attempt(&the_pod, "pod-1", now),
+        "the pod's claim"
+    )
+    .unwrap_or_else(|| panic!("{name}: the pod could not claim its own attempt"));
+    assert_eq!(taken.key, pod.key, "{name}");
+
+    // Held, it is no longer an attempt to start a pod for.
+    let held = ok!(
+        name,
+        store.claimable_attempts(RuntimeKind::ContainerJob, now + Duration::seconds(1), 1_000),
+        "a read while held"
+    );
+    assert!(
+        this_run(held).is_empty(),
+        "{name}: an attempt a pod holds was read as one to launch"
+    );
+
+    ok!(
+        name,
+        store.append(
+            &execution,
+            dispatch(
+                &execution,
+                "pod-retire",
+                vec![AttemptWrite::Retire(pod.key.clone())]
+            )
+        ),
+        "a retirement"
     );
 }
 

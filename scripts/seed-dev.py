@@ -1101,11 +1101,64 @@ def managed(api: Api) -> None:
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 
+def seed_fti(api: Api) -> None:
+    """Small repeatable acceptance set, using the normal public seed transport."""
+    def post(path: str, body: Any) -> None:
+        status, answer = api.post(path, body)
+        if status >= 300:
+            raise RuntimeError(f"{path}: {status} {answer}")
+
+    for index in range(1, 5):
+        run_id = f"fti-training-{index}"
+        status, _ = api.get(f"/api/v1/training-runs/{run_id}")
+        if status == 200:
+            continue
+        if status != 404:
+            raise RuntimeError(f"training lookup: {status}")
+        post("/api/v1/training-runs", {
+            "run_id": run_id, "model": "fti-demo", "dataset": "fti-cases@v1" if index < 4 else "fti-cases",
+            "params": {"lr": index * 0.001, "batch_size": 32 if index < 3 else 64}, "framework": "fixture",
+        })
+        post(f"/api/v1/training-runs/{run_id}/progress", {"epochs": [
+            {"epoch": epoch, "metrics": {"loss": round(1 / (epoch + index), 4), **(
+                {"accuracy": round(0.6 + epoch * 0.05 - index * 0.01, 4)}
+                if index != 3 and epoch != 2 else {})}}
+            for epoch in range(4)
+        ]})
+        post(f"/api/v1/training-runs/{run_id}/finish", {
+            "status": "failed" if index == 4 else "succeeded",
+            "best": {"metric": "loss", "value": round(1 / (2 + index), 4), "epoch": 2},
+        })
+    now = datetime.now(UTC) - timedelta(minutes=10)
+    for index, variant in enumerate(("baseline", "candidate", "failed", "other-data", "legacy", "partial")):
+        run_id = f"fti-eval-{variant}"
+        status, _ = api.get(f"/api/v1/evaluations/{run_id}")
+        if status == 200:
+            continue
+        line = Timeline(now + timedelta(minutes=index), "fti-seed", "python", "local")
+        context = {} if variant == "legacy" else {
+            "dataset_kind": "external", "dataset_version": "v2" if variant == "other-data" else "v1",
+            "suite_version": "v1", "scorer_version": "exact-v1", "split": "test",
+        }
+        line.emit(run_id, "eval.started", {"suite": "fti-acceptance", "dataset": "fti-cases",
+            "variant": variant, "params": {"temperature": index / 10}, **context})
+        for case in range(1 if variant == "partial" else 3):
+            line.emit(run_id, "eval.case", {"case_id": f"case-{case}", "passed": case != index % 3,
+                "score": 0.5 + index * 0.05}, after=1)
+        line.emit(run_id, "eval.failed" if variant == "failed" else "eval.completed", {
+            "metrics": {"accuracy": 0.5 + index * 0.05, **({"latency_ms": 120} if index == 0 else {})},
+            "cases_total": 3, **({"error": "fixture scorer failure"} if variant == "failed" else {}),
+        }, after=1)
+        api.publish(line.events)
+    say("FTI acceptance: four training runs, six evaluations; existing IDs are preserved")
+
+
 def arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--api", default=os.environ.get("AIWATCHER_URL", "http://127.0.0.1:8080"))
     parser.add_argument("--runs", type=int, default=500, help="agent runs in the history (default 500)")
     parser.add_argument("--seed", type=int, default=7, help="random seed (default 7)")
+    parser.add_argument("--fti", action="store_true", help="only the small FTI acceptance set")
     parser.add_argument("--live", action="store_true", help="keep a run arriving every few seconds")
     parser.add_argument("--registries", action="store_true", help="seed the registries again")
     parser.add_argument("--no-registries", action="store_true", help="leave the registries alone")
@@ -1122,6 +1175,10 @@ def main() -> int:
     else:
         say(f"✗ nothing answers on {api.base}")
         return 1
+
+    if args.fti:
+        seed_fti(api)
+        return 0
 
     stop = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stop.set())

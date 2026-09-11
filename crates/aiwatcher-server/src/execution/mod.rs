@@ -28,6 +28,7 @@ pub mod editor;
 pub mod flow;
 pub mod marimo;
 pub mod measure;
+pub mod pods;
 pub mod publish;
 pub mod query;
 pub mod scheduler;
@@ -72,6 +73,9 @@ pub struct Tasks {
     /// measurement too, and aborted on shutdown for the same reason.
     pub stranded: Option<JoinHandle<()>>,
     pub timers: Option<JoinHandle<()>>,
+    /// The loop that starts one Job per pod's attempt (ADR_0029). Only where
+    /// there are templates and a build that can reach a cluster.
+    pub launcher: Option<JoinHandle<()>>,
     pub reactors: Vec<(&'static str, JoinHandle<()>)>,
 }
 
@@ -97,6 +101,16 @@ impl Tasks {
                 // Every timer it did not deliver is still due, so the next
                 // process to run this loop delivers it. Late, never lost.
                 Err(_) => tracing::warn!("the timer loop did not stop within the grace"),
+            }
+        }
+        if let Some(task) = self.launcher {
+            match tokio::time::timeout(grace, task).await {
+                Ok(Ok(())) => tracing::info!("the pod launcher stopped"),
+                Ok(Err(error)) => tracing::error!(%error, "the pod launcher panicked"),
+                // A Job it was asking for either exists or does not, and the
+                // next launcher asks again and is told which. It holds no
+                // attempt: the pods do.
+                Err(_) => tracing::warn!("the pod launcher did not stop within the grace"),
             }
         }
         if let Some(task) = self.scheduler {
@@ -233,6 +247,10 @@ pub fn spawn(
         // store belong with the outbox that publishes what they wrote.
         tasks.timers = Some(timers::spawn(state, Arc::clone(store), shutdown.clone()));
 
+        // The role that holds the reactors starts the pods, and claims none of
+        // their attempts: each pod does, by key (ADR_0029).
+        tasks.launcher = launcher(state, config, store, shutdown);
+
         tasks.outbox = Some(spawn_outbox(
             Arc::clone(store),
             Arc::clone(sink),
@@ -297,6 +315,41 @@ fn with_catalog<S: WorkflowStore>(
         Some(catalog) => reactor.with_catalog(catalog),
         None => reactor,
     }
+}
+
+/// The pod launcher, when this process has templates to launch from.
+///
+/// No templates is a working state, as no executor address is: a step asking
+/// for a pod was refused at registration, so nothing here is waiting for one.
+#[cfg(feature = "kube")]
+fn launcher(
+    state: &AppState,
+    config: &Config,
+    store: &Arc<dyn WorkflowStore>,
+    shutdown: &CancellationToken,
+) -> Option<JoinHandle<()>> {
+    let templates = state.pod_templates.as_ref()?;
+    // `Config::validate` refused templates in this role without it.
+    let api_url = config.pod_api_url.clone()?;
+    Some(pods::spawn(
+        Arc::clone(store),
+        Arc::clone(templates),
+        pods::Settings { api_url },
+        config.pod_namespace.clone(),
+        shutdown.clone(),
+    ))
+}
+
+/// No launcher in a build without `kube`. `Config::validate` refuses
+/// templates in this role here, so there is nothing to launch.
+#[cfg(not(feature = "kube"))]
+const fn launcher(
+    _state: &AppState,
+    _config: &Config,
+    _store: &Arc<dyn WorkflowStore>,
+    _shutdown: &CancellationToken,
+) -> Option<JoinHandle<()>> {
+    None
 }
 
 /// The name this process holds its leases under.

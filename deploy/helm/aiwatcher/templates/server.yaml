@@ -94,7 +94,15 @@ spec:
         app.kubernetes.io/part-of: aiwatcher
         app.kubernetes.io/component: server
     spec:
+      {{- if and .Values.execution.pods.templates (not .Values.execution.splitRoles) }}
+      # This process holds the reactors, so it starts the pods steps ask for
+      # (ADR_0029) — the one pod here with a cluster token, and its Role is
+      # Jobs and pod logs in one namespace.
+      serviceAccountName: {{ $fullname }}-launcher
+      automountServiceAccountToken: true
+      {{- else }}
       automountServiceAccountToken: false
+      {{- end }}
       {{- include "aiwatcher.imagePullSecrets" . | nindent 6 }}
       securityContext:
         runAsNonRoot: true
@@ -131,6 +139,9 @@ spec:
           volumeMounts:
             - { name: data, mountPath: /var/lib/aiwatcher }
             - { name: tmp, mountPath: /tmp }
+            {{- if .Values.execution.pods.templates }}
+            - { name: pod-templates, mountPath: /etc/aiwatcher/pods, readOnly: true }
+            {{- end }}
       {{- with .Values.server.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -152,3 +163,7 @@ spec:
           {{- end }}
         - name: tmp
           emptyDir: {}
+        {{- if .Values.execution.pods.templates }}
+        - name: pod-templates
+          configMap: { name: {{ $fullname }}-pod-templates }
+        {{- end }}

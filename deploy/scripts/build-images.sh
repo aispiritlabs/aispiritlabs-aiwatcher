@@ -26,7 +26,9 @@ TAG="${TAG:-dev}"
 # i `execution.store: postgres` siedzą za cargo feature'ami wyłączonymi
 # domyślnie, a obraz bez nich odmawia startu na wartości, którą chart
 # renderuje. Ta sama decyzja, co w `.github/workflows/release-images.yml`.
-FEATURES="${FEATURES:-aiwatcher-server/postgres,aiwatcher-server/laser}"
+# `kube` jest trzeci: `execution.pods.templates` uruchamia pody tylko w
+# binarce, która dosięga klastra (ADR_0029).
+FEATURES="${FEATURES:-aiwatcher-server/postgres,aiwatcher-server/laser,aiwatcher-server/kube}"
 push=false
 flow=true
 platform="${PLATFORM:-}"

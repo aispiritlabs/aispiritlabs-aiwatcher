@@ -20,7 +20,9 @@ use tokio::sync::Mutex;
 
 use aiwatcher_core::{Checkpoint, MessageId};
 
-use crate::claim::{AttemptKey, AttemptRow, AttemptWrite, ClaimFilter, tally_unclaimed};
+use crate::claim::{
+    AttemptKey, AttemptRow, AttemptWrite, ClaimFilter, claimable_of, tally_unclaimed,
+};
 use crate::error::{Result, StoreError};
 use crate::hosted::{DeciderLease, LeaseOutcome, Timer, TimerWrite};
 use crate::message::{Direction, OutboxMessage, RecordedMessage, RunProjection, WorkflowEvent};
@@ -504,6 +506,20 @@ impl WorkflowStore for MemoryWorkflowStore {
         Ok(tally_unclaimed(
             self.inner.lock().await.attempts.values(),
             now,
+        ))
+    }
+
+    async fn claimable_attempts(
+        &self,
+        runtime: RuntimeKind,
+        now: OffsetDateTime,
+        limit: usize,
+    ) -> Result<Vec<AttemptRow>> {
+        Ok(claimable_of(
+            self.inner.lock().await.attempts.values(),
+            runtime,
+            now,
+            limit,
         ))
     }
 

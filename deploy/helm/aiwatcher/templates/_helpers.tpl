@@ -408,6 +408,16 @@ later as "holds no object".
 {{- with .Values.execution.mlPipelineUrl }}
 - { name: AIWATCHER_ML_PIPELINE_URL, value: {{ . | quote }} }
 {{- end }}
+{{- if .Values.execution.pods.templates }}
+# Both roles read the templates: `serve` checks a step against them when it is
+# registered, and the role holding the reactors checks again before it starts
+# a pod (ADR_0029).
+- { name: AIWATCHER_POD_TEMPLATES, value: /etc/aiwatcher/pods/templates.json }
+- { name: AIWATCHER_POD_NAMESPACE, value: {{ .Values.execution.pods.namespace | default .Release.Namespace | quote }} }
+# What a launched pod is told in AIWATCHER_URL. Fully qualified, so a pod in
+# another namespace reaches it too.
+- { name: AIWATCHER_POD_API_URL, value: {{ printf "http://%s-server.%s.svc:8080" (include "aiwatcher.fullname" .) .Release.Namespace | quote }} }
+{{- end }}
 {{- end }}
 {{- if eq .Values.server.bus "laser" }}
 - name: AIWATCHER_LASER_CONNECTION_STRING

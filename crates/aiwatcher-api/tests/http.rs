@@ -1229,15 +1229,25 @@ async fn an_evaluation_detail_carries_its_cases_document_and_baseline() {
     assert_eq!(body["cases"].as_array().expect("an array").len(), 1);
     assert!(body["report"]["note"].is_string());
     assert_eq!(body["comparison"]["baseline_id"], "eval-1");
-    let delta = body["comparison"]["metrics"]
-        .as_array()
-        .expect("an array")
-        .iter()
-        .find(|metric| metric["name"] == "mean_score")
-        .expect("the metric")["delta"]
-        .as_f64()
-        .expect("a number");
-    assert!((delta - 0.1).abs() < 1e-9);
+    assert_eq!(body["comparison"]["comparability"], "unverified");
+    assert!(
+        body["comparison"]["metrics"][0].get("delta").is_none(),
+        "legacy data does not invent version evidence"
+    );
+    let (status, body) = fixture
+        .get("/api/v1/evaluations/eval-2?baseline_id=eval-1")
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["comparison"]["baseline_id"], "eval-1");
+    let (status, _) = fixture
+        .get("/api/v1/evaluations/eval-2?baseline_id=missing")
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, body) = fixture
+        .get("/api/v1/evaluations/eval-2?baseline_id=eval-2")
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["comparison"]["comparability"], "incompatible");
 }
 
 #[tokio::test]
@@ -1272,13 +1282,10 @@ async fn suites_are_the_level_above_a_report() {
         .expect("the suite");
     assert_eq!(catalog["evaluations"], 2);
     assert_eq!(catalog["last_evaluation_id"], "eval-2");
-    assert!(
-        (catalog["metric_deltas"]["mean_score"]
-            .as_f64()
-            .expect("a number")
-            - 0.1)
-            .abs()
-            < 1e-9
+    assert_eq!(
+        catalog["metric_deltas"],
+        json!({}),
+        "legacy suite aggregates do not prove matching evaluation versions"
     );
 }
 
@@ -6143,6 +6150,57 @@ async fn a_step_asking_for_a_pod_where_no_template_is_configured_is_refused_nami
             .is_some_and(|problem| problem.contains("AIWATCHER_POD_TEMPLATES")),
         "{refused}"
     );
+}
+
+#[tokio::test]
+async fn a_pods_attempt_is_claimed_by_its_key_and_by_no_worker_that_did_not_name_it() {
+    let fixture = Fixture::new(true).with_pod_templates(planner_pod_templates());
+    let (status, saved) = fixture
+        .post(
+            "/api/v1/workflow-definitions",
+            podded_workflow("ghcr.io/planner/import:1.4", "1"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let (status, started) = fixture
+        .post(
+            "/api/v1/executions",
+            json!({"target":{"kind":"workflow", "name":"pod-import", "revision":saved["revision"]},
+                   "parameters":{}}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{started}");
+    let id = started["execution"]["execution_id"].as_str().expect("id");
+
+    // A long-lived worker on the pod's queue, holding its code: ADR_0029's
+    // hole. It would run the step outside any pod.
+    let (status, body) = fixture
+        .post(
+            "/api/v1/worker/claims",
+            json!({"worker":"laptop-1", "queues":["planner-import"], "tasks":["acquire@1"]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    // The pod, naming its attempt, is handed what any worker is handed.
+    let (status, assignment) = fixture
+        .post(
+            "/api/v1/worker/claims",
+            json!({"worker":"aiwatcher-0a1b-xyz", "queues":["planner-import"], "tasks":["acquire@1"],
+                   "attempt":{"execution_id":id, "step_id":"acquire", "attempt":1}}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{assignment}");
+    assert_eq!(assignment["task_ref"], "acquire@1");
+    assert_eq!(assignment["queue"], "planner-import");
+    let (status, settled) = fixture
+        .post(
+            &format!("/api/v1/worker/claims/{id}/acquire/1/result"),
+            json!({"worker":"aiwatcher-0a1b-xyz", "outcome":"completed", "result":{"houses":1}}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{settled}");
+    assert_eq!(settled["outcome"], "completed");
 }
 
 fn authored_worker_workflow() -> Value {

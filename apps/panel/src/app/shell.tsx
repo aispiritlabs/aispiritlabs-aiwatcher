@@ -2,6 +2,7 @@ import * as React from 'react';
 import { Link, Outlet, useRouterState } from '@tanstack/react-router';
 import { Activity, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 
+import { Appearance } from '@/shared/components/appearance';
 import { UserMenu } from '@/shared/components/user-menu';
 import { SECTIONS, areaOf, sectionOf, type NavArea, type NavSection } from '@/app/navigation';
 import { cn } from '@/shared/lib/utils';
@@ -97,6 +98,7 @@ export function RootLayout() {
           </nav>
 
           <div className="ml-auto flex items-center gap-2">
+            <Appearance />
             <UserMenu />
           </div>
         </div>

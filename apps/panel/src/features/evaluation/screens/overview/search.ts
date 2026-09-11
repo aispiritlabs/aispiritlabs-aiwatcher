@@ -32,4 +32,6 @@ export const searchSchema = z.object({
   q: z.string().optional(),
   /** The report open in the pane on the right. */
   report: z.string().optional(),
+  baseline: z.string().optional(),
+  metrics: z.string().optional(),
 });

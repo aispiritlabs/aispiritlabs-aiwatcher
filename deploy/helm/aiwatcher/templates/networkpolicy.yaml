@@ -24,6 +24,21 @@ spec:
         {{- with .Values.networkPolicy.allowIngressFrom }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
+        {{- if .Values.execution.pods.templates }}
+        # The step pods this release launches, which claim and report here
+        # (ADR_0029). Inside "same namespace" when they run in the release's,
+        # and named anyway: the rule must still admit them the day that line
+        # is narrowed, or when they run in a namespace of their own.
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/managed-by: aiwatcher
+              app.kubernetes.io/component: step
+          {{- with .Values.execution.pods.namespace }}
+          namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . }}
+          {{- end }}
+        {{- end }}
       ports:
         - { protocol: TCP, port: 8080 }
 {{- if eq .Values.collector.mode "install" }}

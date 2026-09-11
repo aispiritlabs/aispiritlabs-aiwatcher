@@ -1,3 +1,4 @@
+import { DatasetReference } from '@/shared/components/lineage-reference';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, Link } from '@tanstack/react-router';
 import { ShieldAlert } from 'lucide-react';
@@ -133,7 +134,9 @@ export function ModelsPage() {
                   </Link>
                 </dd>
                 <dt>dataset</dt>
-                <dd className="font-mono text-foreground">{current.dataset}</dd>
+                <dd className="font-mono text-foreground">
+                  <DatasetReference reference={current.dataset} />
+                </dd>
                 <dt>checkpoint</dt>
                 <dd className="truncate font-mono text-foreground">{current.checkpoint_uri}</dd>
                 <dt>code</dt>
@@ -208,7 +211,15 @@ export function ModelsPage() {
                           </Badge>
                         )}
                       </td>
-                      <td className="py-1 font-mono">{version.run_id}</td>
+                      <td className="py-1 font-mono">
+                        <Link
+                          to="/training/runs"
+                          search={{ run: version.run_id }}
+                          className="text-primary underline"
+                        >
+                          {version.run_id}
+                        </Link>
+                      </td>
                       <td className="py-1 font-mono">
                         {version.reproducible ? shortId(version.dataset, 28) : version.dataset}
                       </td>

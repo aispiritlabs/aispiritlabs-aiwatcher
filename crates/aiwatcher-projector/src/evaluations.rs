@@ -61,6 +61,84 @@ pub struct EvaluationCase {
     pub error: Option<String>,
 }
 
+/// Evidence supplied by the producer. Missing fields stay missing on legacy events.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct EvaluationContext {
+    pub dataset_kind: Option<String>,
+    pub dataset_version: Option<String>,
+    pub suite_version: Option<String>,
+    pub scorer_version: Option<String>,
+    pub split: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Comparability {
+    Comparable,
+    Incompatible,
+    Unverified,
+}
+
+/// A read policy over observed evidence, not a model/prompt promotion policy.
+fn comparability(
+    current: &EvaluationSummary,
+    baseline: &EvaluationSummary,
+) -> (Comparability, Vec<String>) {
+    let mut incompatible = Vec::new();
+    let mut missing = Vec::new();
+    if current.evaluation_id == baseline.evaluation_id {
+        incompatible.push("An evaluation cannot be its own baseline".to_owned());
+    }
+    if current.status != EvaluationStatus::Succeeded
+        || baseline.status != EvaluationStatus::Succeeded
+    {
+        incompatible.push("Both evaluations must have succeeded".to_owned());
+    }
+    if current.suite != baseline.suite {
+        incompatible.push("Different suites".to_owned());
+    }
+    for (name, left, right) in [
+        ("dataset", &current.dataset, &baseline.dataset),
+        (
+            "dataset kind",
+            &current.context.dataset_kind,
+            &baseline.context.dataset_kind,
+        ),
+        (
+            "dataset version",
+            &current.context.dataset_version,
+            &baseline.context.dataset_version,
+        ),
+        (
+            "suite version",
+            &current.context.suite_version,
+            &baseline.context.suite_version,
+        ),
+        (
+            "scorer version",
+            &current.context.scorer_version,
+            &baseline.context.scorer_version,
+        ),
+        ("split", &current.context.split, &baseline.context.split),
+    ] {
+        match (left, right) {
+            (Some(left), Some(right)) if left != right => {
+                incompatible.push(format!("Different {name}"))
+            }
+            (Some(_), Some(_)) => {}
+            _ => missing.push(format!("Missing {name} evidence")),
+        }
+    }
+    if !incompatible.is_empty() {
+        incompatible.extend(missing);
+        (Comparability::Incompatible, incompatible)
+    } else if !missing.is_empty() {
+        (Comparability::Unverified, missing)
+    } else {
+        (Comparability::Comparable, Vec::new())
+    }
+}
+
 /// One row in the evaluations list.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct EvaluationSummary {
@@ -89,6 +167,8 @@ pub struct EvaluationSummary {
     /// `step.*` fact calls a node of a declared graph, and a report is not one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub step_id: Option<String>,
+    #[serde(default)]
+    pub context: EvaluationContext,
     pub status: EvaluationStatus,
     #[serde(with = "time::serde::rfc3339")]
     pub started_at: OffsetDateTime,
@@ -135,6 +215,7 @@ impl EvaluationSummary {
             variant: None,
             execution_id: None,
             step_id: None,
+            context: EvaluationContext::default(),
             status: EvaluationStatus::Running,
             started_at: event.metadata.occurred_at,
             ended_at: None,
@@ -176,6 +257,15 @@ pub struct EvaluationDetail {
 #[derive(Clone, Debug, Serialize, utoipa::ToSchema)]
 pub struct EvaluationComparison {
     pub baseline_id: String,
+    pub comparability: Comparability,
+    pub reasons: Vec<String>,
+    pub baseline_summary: EvaluationSummary,
+    pub common_cases: usize,
+    pub current_cases_retained: usize,
+    pub baseline_cases_retained: usize,
+    pub current_cases_complete: bool,
+    pub baseline_cases_complete: bool,
+    pub details_complete: bool,
     #[serde(with = "time::serde::rfc3339")]
     pub baseline_started_at: OffsetDateTime,
     /// Every metric either side reported, so one that appeared or disappeared
@@ -385,6 +475,17 @@ impl EvaluationState {
             if let Some(step) = identity(event, &["step_id"]) {
                 summary.step_id = Some(step);
             }
+            for (name, field) in [
+                ("dataset_kind", &mut summary.context.dataset_kind),
+                ("dataset_version", &mut summary.context.dataset_version),
+                ("suite_version", &mut summary.context.suite_version),
+                ("scorer_version", &mut summary.context.scorer_version),
+                ("split", &mut summary.context.split),
+            ] {
+                if let Some(value) = identity(event, &[name]) {
+                    *field = Some(value);
+                }
+            }
             summary.params.extend(string_map(event.data.get("params")));
             summary
                 .metrics
@@ -529,16 +630,29 @@ impl EvaluationState {
     /// One evaluation, with its cases, its report, and its baseline.
     #[must_use]
     pub fn detail(&self, evaluation_id: &str) -> Option<EvaluationDetail> {
+        self.detail_with_baseline(evaluation_id, None)
+    }
+
+    /// Explicit baseline IDs are resolved as given, with no automatic fallback.
+    #[must_use]
+    pub fn detail_with_baseline(
+        &self,
+        evaluation_id: &str,
+        baseline_id: Option<&str>,
+    ) -> Option<EvaluationDetail> {
         let held = self.held.get(evaluation_id)?;
         let summary = held.summary.as_ref()?.clone();
-        let comparison = self
-            .baseline_for(&summary)
-            .map(|baseline| self.compare(&summary, held, baseline));
+        let baseline = match baseline_id {
+            Some(id) => Some(self.held.get(id)?.summary.as_ref()?),
+            None => self.baseline_for(&summary),
+        };
+        let comparison = baseline.map(|baseline| self.compare(&summary, held, baseline));
 
         Some(EvaluationDetail {
             summary,
             cases: held.cases.clone(),
-            cases_truncated: held.cases_truncated,
+            cases_truncated: held.cases_truncated
+                || held.cases.len() < held.summary.as_ref()?.cases_total as usize,
             report: held.report.clone(),
             comparison,
         })
@@ -568,7 +682,7 @@ impl EvaluationState {
                 let last = rows.last().copied().unwrap_or(rows[0]);
                 let finished: Vec<&&EvaluationSummary> = rows
                     .iter()
-                    .filter(|row| row.status != EvaluationStatus::Running)
+                    .filter(|row| row.status == EvaluationStatus::Succeeded)
                     .collect();
                 let latest = finished.last().copied();
                 let previous = finished.len().checked_sub(2).and_then(|i| finished.get(i));
@@ -576,6 +690,11 @@ impl EvaluationState {
                 let metric_deltas = previous.map_or_else(BTreeMap::new, |before| {
                     latest_metrics
                         .iter()
+                        .filter(|_| {
+                            latest.is_some_and(|now| {
+                                comparability(now, before).0 == Comparability::Comparable
+                            })
+                        })
                         .filter_map(|(name, value)| {
                             before
                                 .metrics
@@ -622,14 +741,8 @@ impl EvaluationState {
         self.held.is_empty()
     }
 
-    /// The previous finished evaluation of the same suite **on the same
-    /// dataset**.
-    ///
-    /// The dataset is not optional pedantry: a score measured on one set of
-    /// cases and a score measured on another are two facts, and putting a
-    /// delta between them claims they are one. Where the producer names no
-    /// dataset, `None == None` still matches — an unversioned suite compares
-    /// against itself, which is the honest reading of "we did not say".
+    /// The previous successful result of the same suite and named dataset.
+    /// Legacy reports may be inspected together, but do not prove comparability.
     fn baseline_for(&self, current: &EvaluationSummary) -> Option<&EvaluationSummary> {
         self.order
             .iter()
@@ -637,7 +750,7 @@ impl EvaluationState {
             .filter_map(|held| held.summary.as_ref())
             .filter(|row| row.evaluation_id != current.evaluation_id)
             .filter(|row| row.suite == current.suite && row.dataset == current.dataset)
-            .filter(|row| row.status != EvaluationStatus::Running)
+            .filter(|row| row.status == EvaluationStatus::Succeeded)
             .filter(|row| row.started_at < current.started_at)
             .max_by_key(|row| row.started_at)
     }
@@ -648,6 +761,8 @@ impl EvaluationState {
         held: &Held,
         baseline: &EvaluationSummary,
     ) -> EvaluationComparison {
+        let (comparability, reasons) = comparability(current, baseline);
+        let comparable = comparability == Comparability::Comparable;
         let mut names: Vec<&String> = current.metrics.keys().collect();
         names.extend(baseline.metrics.keys());
         names.sort_unstable();
@@ -662,7 +777,10 @@ impl EvaluationState {
                     name: name.clone(),
                     current: now,
                     baseline: then,
-                    delta: now.zip(then).map(|(now, then)| now - then),
+                    delta: now
+                        .zip(then)
+                        .filter(|_| comparable)
+                        .map(|(now, then)| now - then),
                 }
             })
             .collect();
@@ -680,7 +798,7 @@ impl EvaluationState {
 
         let mut regressed = Vec::new();
         let mut fixed = Vec::new();
-        for case in &held.cases {
+        for case in held.cases.iter().filter(|_| comparable) {
             let Some(before) = baseline_cases.get(case.case_id.as_str()) else {
                 continue;
             };
@@ -696,7 +814,37 @@ impl EvaluationState {
             }
         }
 
+        let baseline_held = self.held.get(&baseline.evaluation_id);
+        let current_cases_complete = !held.cases_truncated
+            && current.cases_total > 0
+            && held.cases.len() == current.cases_total as usize;
+        let baseline_cases_complete = baseline_held.is_some_and(|held| {
+            !held.cases_truncated
+                && baseline.cases_total > 0
+                && held.cases.len() == baseline.cases_total as usize
+        });
+        let current_ids: std::collections::HashSet<&str> = held
+            .cases
+            .iter()
+            .map(|case| case.case_id.as_str())
+            .collect();
+        let common_cases = current_ids
+            .iter()
+            .filter(|id| baseline_cases.contains_key(**id))
+            .count();
         EvaluationComparison {
+            comparability,
+            reasons,
+            baseline_summary: baseline.clone(),
+            common_cases,
+            current_cases_retained: held.cases.len(),
+            baseline_cases_retained: baseline_cases.len(),
+            current_cases_complete,
+            baseline_cases_complete,
+            details_complete: current_cases_complete
+                && baseline_cases_complete
+                && !current.report_dropped
+                && !baseline.report_dropped,
             baseline_id: baseline.evaluation_id.clone(),
             baseline_started_at: baseline.started_at,
             metrics,
@@ -1020,7 +1168,7 @@ mod tests {
             id,
             EventType::EvalStarted,
             at,
-            json!({ "suite": "catalog", "dataset": dataset }),
+            json!({ "suite": "catalog", "dataset": dataset, "dataset_kind": "external", "dataset_version": dataset, "suite_version": "v1", "scorer_version": "v1", "split": "test" }),
         )];
         for (case_id, passed, score) in cases {
             events.push(event(
@@ -1329,6 +1477,159 @@ mod tests {
 
         assert!(state.detail("watching").is_some());
         assert!(state.len() <= 3, "held {} evaluations", state.len());
+    }
+
+    #[test]
+    fn failed_baselines_are_skipped_and_explicit_missing_ids_never_fall_back() {
+        let at = datetime!(2026-09-11 09:00:00 UTC);
+        let mut events = suite_run("good", "data@v1", at, &[("a", true, 0.5)]);
+        events.extend(suite_run(
+            "failed",
+            "data@v1",
+            at + time::Duration::minutes(2),
+            &[("a", false, 0.2)],
+        ));
+        events.push(event(
+            "failed",
+            EventType::EvalFailed,
+            at + time::Duration::minutes(3),
+            json!({}),
+        ));
+        events.extend(suite_run(
+            "current",
+            "data@v1",
+            at + time::Duration::minutes(4),
+            &[("a", true, 0.8)],
+        ));
+        let state = fold(&events);
+        assert_eq!(
+            state
+                .detail("current")
+                .unwrap()
+                .comparison
+                .unwrap()
+                .baseline_id,
+            "good"
+        );
+        assert!(
+            state
+                .detail_with_baseline("current", Some("missing"))
+                .is_none()
+        );
+        let failed = state
+            .detail_with_baseline("current", Some("failed"))
+            .unwrap()
+            .comparison
+            .unwrap();
+        assert_eq!(failed.comparability, Comparability::Incompatible);
+        assert!(failed.metrics.iter().all(|metric| metric.delta.is_none()));
+        assert!(failed.regressed.is_empty() && failed.fixed.is_empty());
+        assert_eq!(
+            state
+                .detail_with_baseline("current", Some("current"))
+                .unwrap()
+                .comparison
+                .unwrap()
+                .comparability,
+            Comparability::Incompatible
+        );
+    }
+
+    #[test]
+    fn mismatched_or_missing_evidence_withholds_quality_deltas() {
+        let at = datetime!(2026-09-11 09:00:00 UTC);
+        for field in [
+            "dataset",
+            "dataset_kind",
+            "dataset_version",
+            "suite_version",
+            "scorer_version",
+            "split",
+        ] {
+            for missing in [false, true] {
+                let mut events = suite_run("base", "data@v1", at, &[("a", true, 0.5)]);
+                let mut current = suite_run(
+                    "current",
+                    "data@v1",
+                    at + time::Duration::minutes(2),
+                    &[("a", false, 0.2)],
+                );
+                if missing {
+                    current[0].data.as_object_mut().unwrap().remove(field);
+                    if field == "dataset" {
+                        current[0]
+                            .data
+                            .as_object_mut()
+                            .unwrap()
+                            .remove("dataset_version");
+                    }
+                } else {
+                    current[0].data[field] = json!("different");
+                }
+                events.extend(current);
+                let detail = fold(&events)
+                    .detail_with_baseline("current", Some("base"))
+                    .unwrap();
+                let comparison = detail.comparison.unwrap();
+                assert_eq!(
+                    comparison.comparability,
+                    if missing {
+                        Comparability::Unverified
+                    } else {
+                        Comparability::Incompatible
+                    },
+                    "{field}"
+                );
+                assert!(
+                    comparison
+                        .metrics
+                        .iter()
+                        .all(|metric| metric.delta.is_none()),
+                    "{field}"
+                );
+                assert!(comparison.regressed.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn aggregate_only_and_shed_cases_report_incomplete_coverage() {
+        let at = datetime!(2026-09-11 09:00:00 UTC);
+        let mut events = suite_run(
+            "base",
+            "data@v1",
+            at,
+            &[("a", true, 0.5), ("b", false, 0.1)],
+        );
+        events.extend(suite_run(
+            "current",
+            "data@v1",
+            at + time::Duration::minutes(2),
+            &[("a", false, 0.2)],
+        ));
+        events.push(event(
+            "current",
+            EventType::EvalCompleted,
+            at + time::Duration::minutes(3),
+            json!({"cases_total": 3}),
+        ));
+        let detail = fold(&events).detail("current").unwrap();
+        assert!(detail.cases_truncated);
+        let comparison = detail.comparison.unwrap();
+        assert_eq!(comparison.common_cases, 1);
+        assert!(!comparison.current_cases_complete && comparison.baseline_cases_complete);
+        assert!(!comparison.details_complete);
+        let mut state = EvaluationState::default();
+        let config = EvaluationConfig {
+            max_cases_total: 1,
+            ..EvaluationConfig::default()
+        };
+        for event in &events {
+            state.apply(event, &config);
+        }
+        let comparison = state.detail("current").unwrap().comparison.unwrap();
+        assert!(!comparison.baseline_cases_complete);
+        assert!(!comparison.details_complete);
     }
 
     /// A report is in the window when it finished in it.

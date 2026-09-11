@@ -4179,6 +4179,18 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "baseline_id",
+            "in": "query",
+            "description": "Explicit baseline; missing IDs return 404, never an automatic replacement.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
           }
         ],
         "responses": {
@@ -10241,6 +10253,14 @@
         },
         "additionalProperties": false
       },
+      "Comparability": {
+        "type": "string",
+        "enum": [
+          "comparable",
+          "incompatible",
+          "unverified"
+        ]
+      },
       "ConsentRecord": {
         "type": "object",
         "description": "Who this is about, on what basis, and what that permits.",
@@ -11815,18 +11835,54 @@
         "description": "This evaluation against the one before it.",
         "required": [
           "baseline_id",
+          "comparability",
+          "reasons",
+          "baseline_summary",
+          "common_cases",
+          "current_cases_retained",
+          "baseline_cases_retained",
+          "current_cases_complete",
+          "baseline_cases_complete",
+          "details_complete",
           "baseline_started_at",
           "metrics",
           "regressed",
           "fixed"
         ],
         "properties": {
+          "baseline_cases_complete": {
+            "type": "boolean"
+          },
+          "baseline_cases_retained": {
+            "type": "integer",
+            "minimum": 0
+          },
           "baseline_id": {
             "type": "string"
           },
           "baseline_started_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "baseline_summary": {
+            "$ref": "#/components/schemas/EvaluationSummary"
+          },
+          "common_cases": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "comparability": {
+            "$ref": "#/components/schemas/Comparability"
+          },
+          "current_cases_complete": {
+            "type": "boolean"
+          },
+          "current_cases_retained": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "details_complete": {
+            "type": "boolean"
           },
           "fixed": {
             "type": "array",
@@ -11842,12 +11898,54 @@
             },
             "description": "Every metric either side reported, so one that appeared or disappeared\nis visible rather than silently absent."
           },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "regressed": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/CaseDelta"
             },
             "description": "Passed on the baseline, fails now. The view that has to be read before\na release."
+          }
+        }
+      },
+      "EvaluationContext": {
+        "type": "object",
+        "description": "Evidence supplied by the producer. Missing fields stay missing on legacy events.",
+        "properties": {
+          "dataset_kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dataset_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scorer_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "split": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "suite_version": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -11958,6 +12056,9 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          },
+          "context": {
+            "$ref": "#/components/schemas/EvaluationContext"
           },
           "dataset": {
             "type": [
