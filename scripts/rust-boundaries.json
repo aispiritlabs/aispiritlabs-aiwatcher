@@ -2,12 +2,12 @@
   "production": {
     "core": [], "jobs": [], "auth": [],
     "bus": ["core"], "trace": ["core"], "runner": ["core"],
-    "prompts": ["core"], "datasets": ["core"], "training": ["core"],
+    "prompts": ["core"], "datasets": ["core"], "training": ["core"], "evaluation": ["core"],
     "annotations": ["core", "jobs"], "conversations": ["core", "jobs"],
     "execution": ["bus", "core", "datasets", "jobs"],
     "projector": ["bus", "core", "trace"],
-    "api": ["annotations", "auth", "bus", "conversations", "core", "datasets", "execution", "projector", "prompts", "training"],
-    "server": ["annotations", "api", "auth", "bus", "conversations", "core", "datasets", "execution", "jobs", "projector", "prompts", "runner", "trace", "training"],
+    "api": ["annotations", "auth", "bus", "conversations", "core", "datasets", "evaluation", "execution", "projector", "prompts", "training"],
+    "server": ["annotations", "api", "auth", "bus", "conversations", "core", "datasets", "evaluation", "execution", "jobs", "projector", "prompts", "runner", "trace", "training"],
     "cli": ["api", "auth", "bus", "core", "execution", "server"]
   },
   "test_only": {

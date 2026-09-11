@@ -39,6 +39,17 @@ export type AgentMessage = {
     to: string;
 };
 
+export const Aggregation = {
+    MEAN: 'mean',
+    SUM: 'sum',
+    MIN: 'min',
+    MAX: 'max',
+    RATE: 'rate',
+    NONE: 'none'
+} as const;
+
+export type Aggregation = typeof Aggregation[keyof typeof Aggregation];
+
 /**
  * One drawn instance.
  */
@@ -661,6 +672,28 @@ export type CaseDelta = {
 };
 
 /**
+ * Producer measurements only. Expected answers are resolved from the source.
+ */
+export type CaseMeasurement = {
+    actual?: unknown;
+    case_id: string;
+    error?: string | null;
+    metrics: {
+        [key: string]: number;
+    };
+    repetition_id: string;
+    span_id?: string | null;
+    trace_id?: string | null;
+};
+
+export type CasePage = {
+    cases: Array<EvidenceCase>;
+    next_cursor?: string | null;
+    state: EvidenceState;
+    version: string;
+};
+
+/**
  * Names the *direct* cause of this event. Roots itself on the correlation id
  * when nothing seeded it — the same rule Emmett's scope applies.
  */
@@ -1164,8 +1197,23 @@ export type CurationRecipe = {
     saved_at: string;
 };
 
+export const DatasetKind = {
+    CURATION: 'curation',
+    ANNOTATIONS: 'annotations',
+    CONVERSATIONS: 'conversations',
+    EXTERNAL: 'external'
+} as const;
+
+export type DatasetKind = typeof DatasetKind[keyof typeof DatasetKind];
+
 export type DatasetPage = {
     datasets: Array<DatasetSummary>;
+};
+
+export type DatasetReference = {
+    kind: DatasetKind;
+    name: string;
+    version: string;
 };
 
 /**
@@ -1495,6 +1543,22 @@ export const Direction = { INPUT: 'input', OUTPUT: 'output' } as const;
  */
 export type Direction = typeof Direction[keyof typeof Direction];
 
+export type DurableEvaluation = {
+    counts?: null | ResultCounts;
+    manifest?: null | EvaluationManifest;
+    metrics: {
+        [key: string]: number;
+    };
+    receipt: EvaluationReceipt;
+    state: EvidenceState;
+    status?: null | ResultStatus;
+};
+
+export type DurablePage = {
+    evaluations: Array<DurableEvaluation>;
+    next_cursor?: string | null;
+};
+
 /**
  * Where to look, and what is under it.
  */
@@ -1661,14 +1725,23 @@ export type EvaluationComparison = {
 };
 
 /**
- * Evidence supplied by the producer. Missing fields stay missing on legacy events.
+ * Evidence context is separate from variant identity: a new scorer measures
+ * the same variant, and a different case manifest is a different cohort.
  */
 export type EvaluationContext = {
-    dataset_kind?: string | null;
-    dataset_version?: string | null;
-    scorer_version?: string | null;
-    split?: string | null;
-    suite_version?: string | null;
+    case_count: number;
+    case_manifest: ArtifactRef;
+    dataset: DatasetReference;
+    expectations_schema: ArtifactRef;
+    input_schema: ArtifactRef;
+    judge?: null | JudgeConfiguration;
+    metrics: Array<MetricDefinition>;
+    scorer: VersionReference;
+    /**
+     * A producer's split name, not proof of independence or permission to use it.
+     */
+    split: string;
+    suite: VersionReference;
 };
 
 /**
@@ -1692,6 +1765,29 @@ export type EvaluationDetail = {
     summary: EvaluationSummary;
 };
 
+export type EvaluationManifest = {
+    context: EvaluationContext;
+    origin: EvaluationOrigin;
+    schema_version: number;
+    variant: VariantManifest;
+};
+
+export type EvaluationOrigin = {
+    /**
+     * The existing logical report ID; a technical retry must reuse it.
+     */
+    evaluation_id: string;
+    /**
+     * The envelope calls the same identity `workflow_run_id`.
+     */
+    execution_id?: string | null;
+    /**
+     * Independent measurement, not a worker attempt counter.
+     */
+    repetition_id: string;
+    step_id?: string | null;
+};
+
 export type EvaluationPage = {
     evaluations: Array<EvaluationSummary>;
     /**
@@ -1699,6 +1795,15 @@ export type EvaluationPage = {
      */
     next_cursor?: string | null;
     total_known: number;
+};
+
+export type EvaluationReceipt = {
+    committed_at: number;
+    context_id: string;
+    evaluation_id: string;
+    expires_at: number;
+    variant_id: string;
+    version: string;
 };
 
 /**
@@ -1728,7 +1833,7 @@ export type EvaluationSummary = {
     cases_failed: number;
     cases_passed: number;
     cases_total: number;
-    context?: EvaluationContext;
+    context?: LegacyEvaluationContext;
     /**
      * The cases it was measured on, ideally versioned. Without this a
      * comparison is not one; see [`EvaluationDetail::comparison`].
@@ -1903,6 +2008,23 @@ export type EventPage = {
 export type EventType = 'RunStarted' | 'RunCompleted' | 'RunFailed' | 'AgentStarted' | 'AgentCompleted' | 'AgentFailed' | 'AgentMessage' | 'LlmStarted' | 'LlmFirstToken' | 'LlmChunk' | 'LlmCompleted' | 'LlmFailed' | 'ToolStarted' | 'ToolCompleted' | 'ToolFailed' | 'StepStarted' | 'StepCompleted' | 'StepFailed' | 'EvalStarted' | 'EvalCase' | 'EvalCompleted' | 'EvalFailed' | 'WorkflowDeclared' | 'ArtifactProduced' | 'ExecutionRequested' | 'ExecutionStarted' | 'ExecutionPaused' | 'ExecutionAwaitingInput' | 'ExecutionResumed' | 'ExecutionCompleted' | 'ExecutionFailed' | 'ExecutionCancelled' | {
     Unknown: string;
 };
+
+export type EvidenceCase = {
+    expected: unknown;
+    measurement: CaseMeasurement;
+};
+
+export const EvidenceState = {
+    COMPLETE: 'complete',
+    PARTIAL: 'partial',
+    MISSING_ARTIFACT: 'missing_artifact',
+    CORRUPT_ARTIFACT: 'corrupt_artifact',
+    EXPIRED: 'expired',
+    DELETED_SOURCE: 'deleted_source',
+    FORBIDDEN: 'forbidden'
+} as const;
+
+export type EvidenceState = typeof EvidenceState[keyof typeof EvidenceState];
 
 /**
  * Why an image is not in an export.
@@ -3306,6 +3428,13 @@ export const JobState = {
  */
 export type JobState = typeof JobState[keyof typeof JobState];
 
+export type JudgeConfiguration = {
+    calibration_dataset: DatasetReference;
+    configuration: ArtifactRef;
+    model: VersionReference;
+    provider: string;
+};
+
 /**
  * One named position inside a keypoint instance.
  */
@@ -3462,6 +3591,17 @@ export type LeaseReleased = {
 };
 
 /**
+ * Evidence supplied by the producer. Missing fields stay missing on legacy events.
+ */
+export type LegacyEvaluationContext = {
+    dataset_kind?: string | null;
+    dataset_version?: string | null;
+    scorer_version?: string | null;
+    split?: string | null;
+    suite_version?: string | null;
+};
+
+/**
  * One named reference from an instance to another instance.
  */
 export type LinkDef = {
@@ -3606,6 +3746,13 @@ export type MessageMetadata = {
     trace_id?: null | TraceId;
 };
 
+export type MetricDefinition = {
+    aggregation: Aggregation;
+    direction: MetricDirection;
+    name: string;
+    unit: string;
+};
+
 export type MetricDelta = {
     baseline?: number | null;
     current?: number | null;
@@ -3616,6 +3763,14 @@ export type MetricDelta = {
     delta?: number | null;
     name: string;
 };
+
+export const MetricDirection = {
+    HIGHER: 'higher',
+    LOWER: 'lower',
+    NONE: 'none'
+} as const;
+
+export type MetricDirection = typeof MetricDirection[keyof typeof MetricDirection];
 
 export type MetricsSummary = {
     by_agent: Array<AgentBreakdown>;
@@ -4646,6 +4801,15 @@ export type PublishDatasetSpec = {
     produced_by: string;
 };
 
+export type PublishEvaluation = {
+    /**
+     * Missing selected cases remain unscored; never implicitly successful.
+     */
+    cases: Array<CaseMeasurement>;
+    manifest: EvaluationManifest;
+    status: ResultStatus;
+};
+
 /**
  * Publish a version, and optionally update the prompt around it.
  */
@@ -5133,6 +5297,21 @@ export type ResourceRequest = {
     gpus?: number | null;
     memory_mb?: number | null;
 };
+
+export type ResultCounts = {
+    failed: number;
+    scored: number;
+    selected: number;
+    unscored: number;
+};
+
+export const ResultStatus = {
+    SUCCEEDED: 'succeeded',
+    FAILED: 'failed',
+    PARTIAL: 'partial'
+} as const;
+
+export type ResultStatus = typeof ResultStatus[keyof typeof ResultStatus];
 
 /**
  * How long the content may be held, on a clock of its own.
@@ -6913,6 +7092,23 @@ export type UsageRights = {
 };
 
 /**
+ * All references are resolved before this snapshot is prepared. Configuration
+ * and code are digested artifacts, so changing them cannot retarget a variant.
+ */
+export type VariantManifest = {
+    code: ArtifactRef;
+    dataset: DatasetReference;
+    experiment_id: string;
+    generation_config: ArtifactRef;
+    model?: null | VersionReference;
+    prompt?: null | VersionReference;
+    response_schema?: null | ArtifactRef;
+    schema_version: number;
+    tools?: null | ArtifactRef;
+    workflow?: null | VersionReference;
+};
+
+/**
  * Where a version came from.
  *
  * The distinction the panel needs to answer "did a person write this, or did
@@ -6925,6 +7121,16 @@ export type VersionOrigin = {
     algorithm: string;
     optimization_id: string;
     origin: 'optimized';
+};
+
+/**
+ * `version` is the owner's immutable revision, never a deployment label.
+ * External revisions must be resolved by the producer; validation of this
+ * contract is not evidence that the referenced resource exists.
+ */
+export type VersionReference = {
+    name: string;
+    version: string;
 };
 
 /**
@@ -8998,6 +9204,92 @@ export type ListDimensionResponses = {
 };
 
 export type ListDimensionResponse = ListDimensionResponses[keyof ListDimensionResponses];
+
+export type ListResultsData = {
+    body?: never;
+    path?: never;
+    query?: {
+        cursor?: string | null;
+        limit?: number | null;
+    };
+    url: '/api/v1/evaluation-results';
+};
+
+export type ListResultsResponses = {
+    200: DurablePage;
+};
+
+export type ListResultsResponse = ListResultsResponses[keyof ListResultsResponses];
+
+export type PublishResultData = {
+    body: PublishEvaluation;
+    path?: never;
+    query?: never;
+    url: '/api/v1/evaluation-results';
+};
+
+export type PublishResultErrors = {
+    400: ErrorBody;
+    403: ErrorBody;
+    409: ErrorBody;
+    410: ErrorBody;
+    503: ErrorBody;
+};
+
+export type PublishResultError = PublishResultErrors[keyof PublishResultErrors];
+
+export type PublishResultResponses = {
+    200: EvaluationReceipt;
+};
+
+export type PublishResultResponse = PublishResultResponses[keyof PublishResultResponses];
+
+export type GetResultData = {
+    body?: never;
+    path: {
+        evaluation_id: string;
+    };
+    query?: never;
+    url: '/api/v1/evaluation-results/{evaluation_id}';
+};
+
+export type GetResultErrors = {
+    404: ErrorBody;
+};
+
+export type GetResultError = GetResultErrors[keyof GetResultErrors];
+
+export type GetResultResponses = {
+    200: DurableEvaluation;
+};
+
+export type GetResultResponse = GetResultResponses[keyof GetResultResponses];
+
+export type GetCasesData = {
+    body?: never;
+    path: {
+        evaluation_id: string;
+    };
+    query: {
+        version: string;
+        cursor?: string | null;
+        limit?: number | null;
+    };
+    url: '/api/v1/evaluation-results/{evaluation_id}/cases';
+};
+
+export type GetCasesErrors = {
+    400: ErrorBody;
+    404: ErrorBody;
+};
+
+export type GetCasesError = GetCasesErrors[keyof GetCasesErrors];
+
+export type GetCasesResponses = {
+    200: CasePage;
+};
+
+export type GetCasesResponse = GetCasesResponses[keyof GetCasesResponses];
 
 export type ListEvaluationSuitesData = {
     body?: never;

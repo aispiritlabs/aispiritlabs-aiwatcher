@@ -63,6 +63,7 @@ pub struct EvaluationCase {
 
 /// Evidence supplied by the producer. Missing fields stay missing on legacy events.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+#[schema(as = LegacyEvaluationContext)]
 pub struct EvaluationContext {
     pub dataset_kind: Option<String>,
     pub dataset_version: Option<String>,
@@ -579,6 +580,16 @@ impl EvaluationState {
     /// Newest first, filtered, one page.
     #[must_use]
     pub fn page(&self, filter: &EvaluationFilter, now: OffsetDateTime) -> EvaluationPage {
+        self.page_excluding(filter, now, &Default::default())
+    }
+
+    /// Compatibility readers may exclude IDs owned by an authoritative registry.
+    pub fn page_excluding(
+        &self,
+        filter: &EvaluationFilter,
+        now: OffsetDateTime,
+        excluded: &std::collections::BTreeSet<String>,
+    ) -> EvaluationPage {
         let limit = filter.limit.unwrap_or(50).clamp(1, 500);
         let needle = filter.search.as_ref().map(|text| text.to_lowercase());
         let since = crate::window::cutoff(filter.window_seconds, now);
@@ -587,6 +598,7 @@ impl EvaluationState {
             .order
             .iter()
             .rev()
+            .filter(|id| !excluded.contains(*id))
             .filter_map(|id| self.held.get(id))
             .filter_map(|held| held.summary.as_ref())
             .filter(|row| since.is_none_or(|start| row.ended_at.unwrap_or(row.started_at) >= start))
@@ -640,11 +652,23 @@ impl EvaluationState {
         evaluation_id: &str,
         baseline_id: Option<&str>,
     ) -> Option<EvaluationDetail> {
+        self.detail_excluding(evaluation_id, baseline_id, &Default::default())
+    }
+
+    pub fn detail_excluding(
+        &self,
+        evaluation_id: &str,
+        baseline_id: Option<&str>,
+        excluded: &std::collections::BTreeSet<String>,
+    ) -> Option<EvaluationDetail> {
+        if excluded.contains(evaluation_id) || baseline_id.is_some_and(|id| excluded.contains(id)) {
+            return None;
+        }
         let held = self.held.get(evaluation_id)?;
         let summary = held.summary.as_ref()?.clone();
         let baseline = match baseline_id {
             Some(id) => Some(self.held.get(id)?.summary.as_ref()?),
-            None => self.baseline_for(&summary),
+            None => self.baseline_for(&summary, excluded),
         };
         let comparison = baseline.map(|baseline| self.compare(&summary, held, baseline));
 
@@ -661,11 +685,16 @@ impl EvaluationState {
     /// Suites, newest activity first.
     #[must_use]
     pub fn suites(&self) -> SuitePage {
+        self.suites_excluding(&Default::default())
+    }
+
+    pub fn suites_excluding(&self, excluded: &std::collections::BTreeSet<String>) -> SuitePage {
         let mut grouped: HashMap<(String, Option<String>), Vec<&EvaluationSummary>> =
             HashMap::new();
         for summary in self
             .order
             .iter()
+            .filter(|id| !excluded.contains(*id))
             .filter_map(|id| self.held.get(id))
             .filter_map(|held| held.summary.as_ref())
         {
@@ -743,9 +772,14 @@ impl EvaluationState {
 
     /// The previous successful result of the same suite and named dataset.
     /// Legacy reports may be inspected together, but do not prove comparability.
-    fn baseline_for(&self, current: &EvaluationSummary) -> Option<&EvaluationSummary> {
+    fn baseline_for(
+        &self,
+        current: &EvaluationSummary,
+        excluded: &std::collections::BTreeSet<String>,
+    ) -> Option<&EvaluationSummary> {
         self.order
             .iter()
+            .filter(|id| !excluded.contains(*id))
             .filter_map(|id| self.held.get(id))
             .filter_map(|held| held.summary.as_ref())
             .filter(|row| row.evaluation_id != current.evaluation_id)

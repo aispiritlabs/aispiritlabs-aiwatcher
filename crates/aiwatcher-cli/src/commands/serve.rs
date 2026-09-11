@@ -90,6 +90,7 @@ pub async fn run(config: Config) -> Result<()> {
     // The archive's own two background jobs: the export worker and the
     // retention sweep. `None` when this deployment keeps no archive, which is
     // the default.
+    let evaluation_task = aiwatcher_server::evaluation::spawn(&state, shutdown.clone());
     let archive_task = aiwatcher_server::conversations::spawn(&state, &config, shutdown.clone());
 
     // The annotation registry's own background job: the import queue. `None`
@@ -126,6 +127,9 @@ pub async fn run(config: Config) -> Result<()> {
     state.health.mark_unready();
     shutdown.cancel();
     execution.drain(GRACE).await;
+    if let Some(task) = evaluation_task {
+        task.await.context("evaluation retention worker")?;
+    }
     if let Some(task) = archive_task {
         match tokio::time::timeout(GRACE, task).await {
             Ok(Ok(())) => tracing::info!("the conversation archive worker stopped"),

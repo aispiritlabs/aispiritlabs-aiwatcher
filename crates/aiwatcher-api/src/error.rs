@@ -11,6 +11,10 @@ use serde::Serialize;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ApiError {
+    #[error("evaluation: {0}")]
+    Evaluation(#[from] aiwatcher_evaluation::EvaluationError),
+    #[error("durable evaluations require an object store (AIWATCHER_PROMPT_STORE)")]
+    EvaluationDisabled,
     #[error("{0} not found")]
     NotFound(String),
 
@@ -238,6 +242,7 @@ impl ApiError {
             | Self::DatasetRegistryDisabled
             | Self::WorkflowDefinitionsDisabled
             | Self::AnnotationRegistryDisabled
+            | Self::EvaluationDisabled
             | Self::TrainingRegistryDisabled
             | Self::ConversationArchiveDisabled => {
                 (StatusCode::NOT_IMPLEMENTED, "registry_disabled")
@@ -301,6 +306,22 @@ impl ApiError {
             Self::Registry(error) => registry_parts(error),
             Self::DatasetRegistry(error) => dataset_registry_parts(error),
             Self::AnnotationRegistry(error) => annotation_registry_parts(error),
+            Self::Evaluation(error) => match error {
+                aiwatcher_evaluation::EvaluationError::Invalid { .. } => {
+                    (StatusCode::BAD_REQUEST, "invalid_evaluation")
+                }
+                aiwatcher_evaluation::EvaluationError::Conflict => {
+                    (StatusCode::CONFLICT, "evaluation_conflict")
+                }
+                aiwatcher_evaluation::EvaluationError::Unavailable(
+                    aiwatcher_evaluation::EvidenceState::Forbidden,
+                ) => (StatusCode::FORBIDDEN, "evidence_forbidden"),
+                aiwatcher_evaluation::EvaluationError::Unavailable(
+                    aiwatcher_evaluation::EvidenceState::Expired
+                    | aiwatcher_evaluation::EvidenceState::DeletedSource,
+                ) => (StatusCode::GONE, "evidence_gone"),
+                _ => (StatusCode::SERVICE_UNAVAILABLE, "evidence_unavailable"),
+            },
             Self::TrainingRegistry(error) => training_registry_parts(error),
             Self::ConversationArchive(error) => conversation_archive_parts(error),
             // The same retryable/not split the registry makes, for the same

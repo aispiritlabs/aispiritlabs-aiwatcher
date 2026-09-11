@@ -1,0 +1,382 @@
+{
+  "$defs": {
+    "Aggregation": {
+      "enum": [
+        "mean",
+        "sum",
+        "min",
+        "max",
+        "rate",
+        "none"
+      ],
+      "type": "string"
+    },
+    "ArtifactKind": {
+      "description": "What sort of thing an artifact holds.\n\nAn enum rather than free text — unlike `data.step_type`, which is free text\nso a producer can introduce `rerank` without a backend release. The\ndifference is who chooses: a step type is chosen by whoever instruments an\nagent, and this is chosen by the code in this workspace that writes the\nbytes. It decides a key prefix and a filter, and nothing that executes.",
+      "enum": [
+        "rows",
+        "code",
+        "preview",
+        "log",
+        "model",
+        "report",
+        "blob"
+      ],
+      "type": "string"
+    },
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "description": "One file, addressed by what is in it.",
+      "properties": {
+        "content_type": {
+          "type": "string"
+        },
+        "digest": {
+          "description": "`sha256` of the bytes, lowercase hex.\n\nThe reason this type exists rather than a `(name, uri)` pair. Whether it\nmay be empty is the caller's rule, not this type's.",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ArtifactKind",
+          "description": "Added when this moved out of `aiwatcher-training`. Defaulted and skipped\nwhen unset, so every package already written reads and re-writes\nunchanged."
+        },
+        "name": {
+          "description": "What the reader calls it: `weights`, `tokenizer`, `rows`.",
+          "type": "string"
+        },
+        "schema_ref": {
+          "description": "The schema the bytes claim to be in — a dataset version, a `sha256` of a\ncolumn list. Read by whoever consumes them; interpreted by nothing here.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "size_bytes": {
+          "format": "int64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "uri": {
+          "description": "Where the bytes are. A pointer, like every other artifact in this\nworkspace — nothing here stores a copy.\n\nA `file://` on a shared volume is accepted and is never the only\nreference to something that matters: nothing outside that node can\nverify it, so a step handing on a path also reports the object store\ncopy's digest, or reports no artifact at all.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "uri",
+        "digest"
+      ],
+      "type": "object"
+    },
+    "DatasetKind": {
+      "enum": [
+        "curation",
+        "annotations",
+        "conversations",
+        "external"
+      ],
+      "type": "string"
+    },
+    "DatasetReference": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/DatasetKind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "version"
+      ],
+      "type": "object"
+    },
+    "EvaluationContext": {
+      "additionalProperties": false,
+      "description": "Evidence context is separate from variant identity: a new scorer measures\nthe same variant, and a different case manifest is a different cohort.",
+      "properties": {
+        "case_count": {
+          "format": "int64",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "case_manifest": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "dataset": {
+          "$ref": "#/$defs/DatasetReference"
+        },
+        "expectations_schema": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "input_schema": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "judge": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/JudgeConfiguration"
+            }
+          ]
+        },
+        "metrics": {
+          "items": {
+            "$ref": "#/$defs/MetricDefinition"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "type": "array"
+        },
+        "scorer": {
+          "$ref": "#/$defs/VersionReference"
+        },
+        "split": {
+          "description": "A producer's split name, not proof of independence or permission to use it.",
+          "type": "string"
+        },
+        "suite": {
+          "$ref": "#/$defs/VersionReference"
+        }
+      },
+      "required": [
+        "dataset",
+        "case_manifest",
+        "case_count",
+        "split",
+        "suite",
+        "scorer",
+        "input_schema",
+        "expectations_schema",
+        "metrics"
+      ],
+      "type": "object"
+    },
+    "EvaluationManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "context": {
+          "$ref": "#/$defs/EvaluationContext"
+        },
+        "origin": {
+          "$ref": "#/$defs/EvaluationOrigin"
+        },
+        "schema_version": {
+          "format": "int32",
+          "maximum": 1,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "variant": {
+          "$ref": "#/$defs/VariantManifest"
+        }
+      },
+      "required": [
+        "schema_version",
+        "origin",
+        "variant",
+        "context"
+      ],
+      "type": "object"
+    },
+    "EvaluationOrigin": {
+      "additionalProperties": false,
+      "properties": {
+        "evaluation_id": {
+          "description": "The existing logical report ID; a technical retry must reuse it.",
+          "type": "string"
+        },
+        "execution_id": {
+          "description": "The envelope calls the same identity `workflow_run_id`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repetition_id": {
+          "description": "Independent measurement, not a worker attempt counter.",
+          "type": "string"
+        },
+        "step_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "evaluation_id",
+        "repetition_id"
+      ],
+      "type": "object"
+    },
+    "JudgeConfiguration": {
+      "additionalProperties": false,
+      "properties": {
+        "calibration_dataset": {
+          "$ref": "#/$defs/DatasetReference"
+        },
+        "configuration": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "model": {
+          "$ref": "#/$defs/VersionReference"
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "model",
+        "configuration",
+        "calibration_dataset"
+      ],
+      "type": "object"
+    },
+    "MetricDefinition": {
+      "additionalProperties": false,
+      "properties": {
+        "aggregation": {
+          "$ref": "#/$defs/Aggregation"
+        },
+        "direction": {
+          "$ref": "#/$defs/MetricDirection"
+        },
+        "name": {
+          "type": "string"
+        },
+        "unit": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "unit",
+        "direction",
+        "aggregation"
+      ],
+      "type": "object"
+    },
+    "MetricDirection": {
+      "enum": [
+        "higher",
+        "lower",
+        "none"
+      ],
+      "type": "string"
+    },
+    "VariantManifest": {
+      "additionalProperties": false,
+      "description": "All references are resolved before this snapshot is prepared. Configuration\nand code are digested artifacts, so changing them cannot retarget a variant.",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "dataset": {
+          "$ref": "#/$defs/DatasetReference"
+        },
+        "experiment_id": {
+          "type": "string"
+        },
+        "generation_config": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "model": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/VersionReference"
+            }
+          ]
+        },
+        "prompt": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/VersionReference"
+            }
+          ]
+        },
+        "response_schema": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/ArtifactRef"
+            }
+          ]
+        },
+        "schema_version": {
+          "format": "int32",
+          "maximum": 1,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "tools": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/ArtifactRef"
+            }
+          ]
+        },
+        "workflow": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/VersionReference"
+            }
+          ]
+        }
+      },
+      "required": [
+        "schema_version",
+        "experiment_id",
+        "dataset",
+        "code",
+        "generation_config"
+      ],
+      "type": "object"
+    },
+    "VersionReference": {
+      "additionalProperties": false,
+      "description": "`version` is the owner's immutable revision, never a deployment label.\nExternal revisions must be resolved by the producer; validation of this\ncontract is not evidence that the referenced resource exists.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "type": "object"
+    }
+  },
+  "$ref": "#/$defs/EvaluationManifest",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Evaluation manifest v1"
+}

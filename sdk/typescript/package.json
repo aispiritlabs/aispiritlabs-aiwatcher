@@ -6,10 +6,17 @@
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
-  "exports": { ".": "./src/index.ts" },
-  "files": ["src"],
+  "exports": {
+    ".": "./src/index.ts",
+    "./evaluation": "./src/evaluation.ts",
+    "./evaluation-registry": "./src/evaluation-registry.ts"
+  },
+  "files": [
+    "src"
+  ],
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test tests/*.test.mjs"
   },
   "devDependencies": {
     "typescript": "^5.7.3"

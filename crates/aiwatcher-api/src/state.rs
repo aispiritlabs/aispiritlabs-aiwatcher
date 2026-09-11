@@ -229,6 +229,8 @@ pub struct AppState {
     /// prefix — and the one registry here whose contents never came from the
     /// event log at all. See ADR_0018.
     pub training: Option<Arc<TrainingRegistry>>,
+    /// Authoritative durable evidence; independent of the event projection.
+    pub evaluations: Option<Arc<aiwatcher_evaluation::Registry>>,
     /// `None` when no orchestrator is configured, which makes the rerun route
     /// answer 501 rather than 404 — the same reasoning as `prompts`, with a
     /// sharper edge. This is the only thing here that makes something happen

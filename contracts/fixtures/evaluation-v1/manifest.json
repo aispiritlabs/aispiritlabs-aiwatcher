@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "origin": {
+    "evaluation_id": "fti-contract-eval-1",
+    "repetition_id": "measurement-1"
+  },
+  "variant": {
+    "schema_version": 1,
+    "experiment_id": "fti-contract-example",
+    "dataset": {
+      "kind": "external",
+      "name": "fti-synthetic-answers",
+      "version": "ae2de4eb550bf1fd05cdee384dc0ec6b05d2cb614f10a646defe03d46ae52b5b"
+    },
+    "code": {
+      "name": "responses.py",
+      "uri": "fixture://evaluation-v1/responses.py",
+      "digest": "88379bb620da8e238d291f56ff3c2ecc5e39ab92af4ef8d2f4209622c6f00608",
+      "size_bytes": 272,
+      "content_type": "text/x-python",
+      "kind": "code"
+    },
+    "generation_config": {
+      "name": "generation.json",
+      "uri": "fixture://evaluation-v1/generation.json",
+      "digest": "5ca6b59c24c4ad255b40f819d7b360d4189940aad211084682dcb7e93784834f",
+      "size_bytes": 63,
+      "content_type": "application/json",
+      "kind": "blob"
+    },
+    "workflow": {
+      "name": "fti-synthetic-responses",
+      "version": "0656e093d1e518117c78a4aaa5a670b21a71f57723ef7a97fab20a59787985b0"
+    }
+  },
+  "context": {
+    "dataset": {
+      "kind": "external",
+      "name": "fti-synthetic-answers",
+      "version": "ae2de4eb550bf1fd05cdee384dc0ec6b05d2cb614f10a646defe03d46ae52b5b"
+    },
+    "case_manifest": {
+      "name": "cases.json",
+      "uri": "fixture://evaluation-v1/cases.json",
+      "digest": "ae2de4eb550bf1fd05cdee384dc0ec6b05d2cb614f10a646defe03d46ae52b5b",
+      "size_bytes": 547,
+      "content_type": "application/json",
+      "kind": "blob"
+    },
+    "case_count": 3,
+    "split": "regression",
+    "suite": {
+      "name": "fti-exact-answer",
+      "version": "eaa42dc65a79e816bccc9df8876ceaf6401edbe14a4e0e7d8ab986c0417ecc33"
+    },
+    "scorer": {
+      "name": "exact-string",
+      "version": "f8f0a379b9875910e673e98aace2da9ce146fcd2e04e4c4cbc1541dd7644afe1"
+    },
+    "input_schema": {
+      "name": "input-schema.json",
+      "uri": "fixture://evaluation-v1/input-schema.json",
+      "digest": "777137268ccfb56404df74e43f793147730d4b0c43d278c0692c46c7deb77aa2",
+      "size_bytes": 162,
+      "content_type": "application/json",
+      "kind": "blob"
+    },
+    "expectations_schema": {
+      "name": "expectations-schema.json",
+      "uri": "fixture://evaluation-v1/expectations-schema.json",
+      "digest": "34f94f7470785bb0922c4317982d773f4d287dfef56ad7a753fe6329157d357d",
+      "size_bytes": 158,
+      "content_type": "application/json",
+      "kind": "blob"
+    },
+    "metrics": [
+      {
+        "name": "accuracy",
+        "unit": "ratio",
+        "direction": "higher",
+        "aggregation": "rate"
+      }
+    ]
+  }
+}

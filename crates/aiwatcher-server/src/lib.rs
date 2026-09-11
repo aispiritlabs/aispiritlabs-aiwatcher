@@ -13,3 +13,5 @@ pub mod wiring;
 
 pub use config::{BackendKind, Config, ConfigError};
 pub use wiring::{Runtime, build};
+
+pub mod evaluation;

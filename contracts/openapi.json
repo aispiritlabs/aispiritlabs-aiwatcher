@@ -4020,6 +4020,252 @@
         }
       }
     },
+    "/api/v1/evaluation-results": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Durable discovery is independent of telemetry retention. Pages follow stable\nstorage IDs; clients must use the opaque cursor, not a timestamp assumption.",
+        "operationId": "list_results",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DurablePage"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Publish terminal evidence. Retry the identical body and logical ID after a\ntimeout; a different body conflicts. No result content enters the event log.",
+        "operationId": "publish_result",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishEvaluation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvaluationReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/evaluation-results/{evaluation_id}": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "operationId": "get_result",
+        "parameters": [
+          {
+            "name": "evaluation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DurableEvaluation"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/evaluation-results/{evaluation_id}/cases": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "operationId": "get_cases",
+        "parameters": [
+          {
+            "name": "evaluation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CasePage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/evaluation-suites": {
       "get": {
         "tags": [
@@ -9000,6 +9246,17 @@
           }
         }
       },
+      "Aggregation": {
+        "type": "string",
+        "enum": [
+          "mean",
+          "sum",
+          "min",
+          "max",
+          "rate",
+          "none"
+        ]
+      },
       "Annotation": {
         "type": "object",
         "description": "One drawn instance.",
@@ -10111,6 +10368,81 @@
           }
         }
       },
+      "CaseMeasurement": {
+        "type": "object",
+        "description": "Producer measurements only. Expected answers are resolved from the source.",
+        "required": [
+          "case_id",
+          "repetition_id",
+          "metrics"
+        ],
+        "properties": {
+          "actual": {},
+          "case_id": {
+            "type": "string"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "metrics": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number",
+              "format": "double"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "repetition_id": {
+            "type": "string"
+          },
+          "span_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "trace_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "CasePage": {
+        "type": "object",
+        "required": [
+          "version",
+          "cases",
+          "state"
+        ],
+        "properties": {
+          "cases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EvidenceCase"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "$ref": "#/components/schemas/EvidenceState"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
       "CausationId": {
         "type": "string",
         "description": "Names the *direct* cause of this event. Roots itself on the correlation id\nwhen nothing seeded it — the same rule Emmett's scope applies."
@@ -11041,6 +11373,15 @@
           }
         }
       },
+      "DatasetKind": {
+        "type": "string",
+        "enum": [
+          "curation",
+          "annotations",
+          "conversations",
+          "external"
+        ]
+      },
       "DatasetPage": {
         "type": "object",
         "required": [
@@ -11054,6 +11395,26 @@
             }
           }
         }
+      },
+      "DatasetReference": {
+        "type": "object",
+        "required": [
+          "kind",
+          "name",
+          "version"
+        ],
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/DatasetKind"
+          },
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
       },
       "DatasetRow": {
         "type": "object",
@@ -11578,6 +11939,83 @@
           "output"
         ]
       },
+      "DurableEvaluation": {
+        "type": "object",
+        "required": [
+          "receipt",
+          "state",
+          "metrics"
+        ],
+        "properties": {
+          "counts": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResultCounts"
+              }
+            ]
+          },
+          "manifest": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/EvaluationManifest",
+                "description": "Absent after erasure; tombstones retain no manifest or metrics."
+              }
+            ]
+          },
+          "metrics": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number",
+              "format": "double"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "receipt": {
+            "$ref": "#/components/schemas/EvaluationReceipt"
+          },
+          "state": {
+            "$ref": "#/components/schemas/EvidenceState"
+          },
+          "status": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResultStatus"
+              }
+            ]
+          }
+        }
+      },
+      "DurablePage": {
+        "type": "object",
+        "required": [
+          "evaluations"
+        ],
+        "properties": {
+          "evaluations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DurableEvaluation"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "EditorSession": {
         "type": "object",
         "description": "Where to look, and what is under it.",
@@ -11915,39 +12353,66 @@
       },
       "EvaluationContext": {
         "type": "object",
-        "description": "Evidence supplied by the producer. Missing fields stay missing on legacy events.",
+        "description": "Evidence context is separate from variant identity: a new scorer measures\nthe same variant, and a different case manifest is a different cohort.",
+        "required": [
+          "dataset",
+          "case_manifest",
+          "case_count",
+          "split",
+          "suite",
+          "scorer",
+          "input_schema",
+          "expectations_schema",
+          "metrics"
+        ],
         "properties": {
-          "dataset_kind": {
-            "type": [
-              "string",
-              "null"
+          "case_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
+          "case_manifest": {
+            "$ref": "#/components/schemas/ArtifactRef"
+          },
+          "dataset": {
+            "$ref": "#/components/schemas/DatasetReference"
+          },
+          "expectations_schema": {
+            "$ref": "#/components/schemas/ArtifactRef"
+          },
+          "input_schema": {
+            "$ref": "#/components/schemas/ArtifactRef"
+          },
+          "judge": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/JudgeConfiguration"
+              }
             ]
           },
-          "dataset_version": {
-            "type": [
-              "string",
-              "null"
-            ]
+          "metrics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MetricDefinition"
+            },
+            "maxItems": 128,
+            "minItems": 1
           },
-          "scorer_version": {
-            "type": [
-              "string",
-              "null"
-            ]
+          "scorer": {
+            "$ref": "#/components/schemas/VersionReference"
           },
           "split": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string",
+            "description": "A producer's split name, not proof of independence or permission to use it."
           },
-          "suite_version": {
-            "type": [
-              "string",
-              "null"
-            ]
+          "suite": {
+            "$ref": "#/components/schemas/VersionReference"
           }
-        }
+        },
+        "additionalProperties": false
       },
       "EvaluationDetail": {
         "type": "object",
@@ -11988,6 +12453,64 @@
           }
         }
       },
+      "EvaluationManifest": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "origin",
+          "variant",
+          "context"
+        ],
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/EvaluationContext"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/EvaluationOrigin"
+          },
+          "schema_version": {
+            "type": "integer",
+            "format": "int32",
+            "maximum": 1,
+            "minimum": 1
+          },
+          "variant": {
+            "$ref": "#/components/schemas/VariantManifest"
+          }
+        },
+        "additionalProperties": false
+      },
+      "EvaluationOrigin": {
+        "type": "object",
+        "required": [
+          "evaluation_id",
+          "repetition_id"
+        ],
+        "properties": {
+          "evaluation_id": {
+            "type": "string",
+            "description": "The existing logical report ID; a technical retry must reuse it."
+          },
+          "execution_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The envelope calls the same identity `workflow_run_id`."
+          },
+          "repetition_id": {
+            "type": "string",
+            "description": "Independent measurement, not a worker attempt counter."
+          },
+          "step_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "EvaluationPage": {
         "type": "object",
         "required": [
@@ -12011,6 +12534,39 @@
           "total_known": {
             "type": "integer",
             "minimum": 0
+          }
+        }
+      },
+      "EvaluationReceipt": {
+        "type": "object",
+        "required": [
+          "evaluation_id",
+          "version",
+          "variant_id",
+          "context_id",
+          "committed_at",
+          "expires_at"
+        ],
+        "properties": {
+          "committed_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "context_id": {
+            "type": "string"
+          },
+          "evaluation_id": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "variant_id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
           }
         }
       },
@@ -12058,7 +12614,7 @@
             "minimum": 0
           },
           "context": {
-            "$ref": "#/components/schemas/EvaluationContext"
+            "$ref": "#/components/schemas/LegacyEvaluationContext"
           },
           "dataset": {
             "type": [
@@ -12549,6 +13105,31 @@
           }
         ],
         "description": "Every event type aiwatcher understands, plus a passthrough for the\nones it does not.\n\n[`EventType::Unknown`] is deliberate: a producer running a newer SDK\nmust not have its events rejected. They are stored and streamed\nlive, they simply take part in no span."
+      },
+      "EvidenceCase": {
+        "type": "object",
+        "required": [
+          "measurement",
+          "expected"
+        ],
+        "properties": {
+          "expected": {},
+          "measurement": {
+            "$ref": "#/components/schemas/CaseMeasurement"
+          }
+        }
+      },
+      "EvidenceState": {
+        "type": "string",
+        "enum": [
+          "complete",
+          "partial",
+          "missing_artifact",
+          "corrupt_artifact",
+          "expired",
+          "deleted_source",
+          "forbidden"
+        ]
       },
       "ExclusionReason": {
         "type": "string",
@@ -15147,6 +15728,30 @@
           "cancelled"
         ]
       },
+      "JudgeConfiguration": {
+        "type": "object",
+        "required": [
+          "provider",
+          "model",
+          "configuration",
+          "calibration_dataset"
+        ],
+        "properties": {
+          "calibration_dataset": {
+            "$ref": "#/components/schemas/DatasetReference"
+          },
+          "configuration": {
+            "$ref": "#/components/schemas/ArtifactRef"
+          },
+          "model": {
+            "$ref": "#/components/schemas/VersionReference"
+          },
+          "provider": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "Keypoint": {
         "type": "object",
         "description": "One named position inside a keypoint instance.",
@@ -15371,6 +15976,42 @@
         "properties": {
           "released": {
             "type": "boolean"
+          }
+        }
+      },
+      "LegacyEvaluationContext": {
+        "type": "object",
+        "description": "Evidence supplied by the producer. Missing fields stay missing on legacy events.",
+        "properties": {
+          "dataset_kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dataset_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "scorer_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "split": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "suite_version": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -15658,6 +16299,30 @@
           }
         }
       },
+      "MetricDefinition": {
+        "type": "object",
+        "required": [
+          "name",
+          "unit",
+          "direction",
+          "aggregation"
+        ],
+        "properties": {
+          "aggregation": {
+            "$ref": "#/components/schemas/Aggregation"
+          },
+          "direction": {
+            "$ref": "#/components/schemas/MetricDirection"
+          },
+          "name": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "MetricDelta": {
         "type": "object",
         "required": [
@@ -15690,6 +16355,14 @@
             "type": "string"
           }
         }
+      },
+      "MetricDirection": {
+        "type": "string",
+        "enum": [
+          "higher",
+          "lower",
+          "none"
+        ]
       },
       "MetricsSummary": {
         "type": "object",
@@ -17586,6 +18259,30 @@
           }
         }
       },
+      "PublishEvaluation": {
+        "type": "object",
+        "required": [
+          "manifest",
+          "status",
+          "cases"
+        ],
+        "properties": {
+          "cases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CaseMeasurement"
+            },
+            "description": "Missing selected cases remain unscored; never implicitly successful."
+          },
+          "manifest": {
+            "$ref": "#/components/schemas/EvaluationManifest"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ResultStatus"
+          }
+        },
+        "additionalProperties": false
+      },
       "PublishRequest": {
         "type": "object",
         "description": "Publish a version, and optionally update the prompt around it.",
@@ -18436,6 +19133,41 @@
           }
         },
         "additionalProperties": false
+      },
+      "ResultCounts": {
+        "type": "object",
+        "required": [
+          "selected",
+          "scored",
+          "failed",
+          "unscored"
+        ],
+        "properties": {
+          "failed": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "scored": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "selected": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "unscored": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "ResultStatus": {
+        "type": "string",
+        "enum": [
+          "succeeded",
+          "failed",
+          "partial"
+        ]
       },
       "RetentionPolicy": {
         "type": "object",
@@ -21454,6 +22186,88 @@
         ],
         "description": "What may be done with an image, and therefore with a model trained on it."
       },
+      "VariantManifest": {
+        "type": "object",
+        "description": "All references are resolved before this snapshot is prepared. Configuration\nand code are digested artifacts, so changing them cannot retarget a variant.",
+        "required": [
+          "schema_version",
+          "experiment_id",
+          "dataset",
+          "code",
+          "generation_config"
+        ],
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/ArtifactRef"
+          },
+          "dataset": {
+            "$ref": "#/components/schemas/DatasetReference"
+          },
+          "experiment_id": {
+            "type": "string"
+          },
+          "generation_config": {
+            "$ref": "#/components/schemas/ArtifactRef"
+          },
+          "model": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VersionReference"
+              }
+            ]
+          },
+          "prompt": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VersionReference"
+              }
+            ]
+          },
+          "response_schema": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ArtifactRef"
+              }
+            ]
+          },
+          "schema_version": {
+            "type": "integer",
+            "format": "int32",
+            "maximum": 1,
+            "minimum": 1
+          },
+          "tools": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ArtifactRef"
+              }
+            ]
+          },
+          "workflow": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VersionReference"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "VersionOrigin": {
         "oneOf": [
           {
@@ -21496,6 +22310,23 @@
           }
         ],
         "description": "Where a version came from.\n\nThe distinction the panel needs to answer \"did a person write this, or did\nan optimiser?\" — which is the first question asked about a prompt that is\nbehaving strangely."
+      },
+      "VersionReference": {
+        "type": "object",
+        "description": "`version` is the owner's immutable revision, never a deployment label.\nExternal revisions must be resolved by the producer; validation of this\ncontract is not evidence that the referenced resource exists.",
+        "required": [
+          "name",
+          "version"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
       },
       "Withdrawal": {
         "type": "object",

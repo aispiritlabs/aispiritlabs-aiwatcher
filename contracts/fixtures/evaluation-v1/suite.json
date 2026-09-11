@@ -1,0 +1,11 @@
+{
+  "name": "fti-exact-answer",
+  "metrics": [
+    {
+      "name": "accuracy",
+      "unit": "ratio",
+      "direction": "higher",
+      "aggregation": "rate"
+    }
+  ]
+}

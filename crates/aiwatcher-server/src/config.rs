@@ -354,6 +354,9 @@ pub struct Config {
     pub max_evaluation_cases_total: usize,
     /// Where the prompt registry keeps its objects.
     pub prompt_store: PromptStoreKind,
+    /// Operator-approved synthetic Evaluation bundle; no caller-controlled path.
+    pub evaluation_source_dir: Option<String>,
+    pub evaluation_limits: aiwatcher_evaluation::RegistryConfig,
     /// Key prefix inside the bucket or directory, so one bucket can hold this
     /// registry beside whatever else a cluster keeps in it.
     pub prompt_prefix: String,
@@ -571,6 +574,8 @@ impl Default for Config {
             max_evaluations: 500,
             max_evaluation_cases_total: 20_000,
             prompt_store: PromptStoreKind::default(),
+            evaluation_source_dir: None,
+            evaluation_limits: aiwatcher_evaluation::RegistryConfig::default(),
             prompt_prefix: "prompts".to_owned(),
             prompt_s3_endpoint: None,
             prompt_s3_bucket: "aiwatcher-prompts".to_owned(),
@@ -736,6 +741,36 @@ impl Config {
                 value: raw,
                 expected: "whole number of cases",
             })?;
+        }
+        config.evaluation_source_dir = var("AIWATCHER_EVALUATION_SOURCE_DIR");
+        if let Some(raw) = var("AIWATCHER_EVALUATION_MAX_CASES") {
+            config.evaluation_limits.max_cases = raw.parse().map_err(|_| ConfigError::Invalid {
+                name: "AIWATCHER_EVALUATION_MAX_CASES",
+                value: raw,
+                expected: "positive whole number",
+            })?;
+        }
+        if let Some(raw) = var("AIWATCHER_EVALUATION_MAX_BYTES") {
+            config.evaluation_limits.max_bytes = raw.parse().map_err(|_| ConfigError::Invalid {
+                name: "AIWATCHER_EVALUATION_MAX_BYTES",
+                value: raw,
+                expected: "positive whole number",
+            })?;
+        }
+        if let Some(raw) = var("AIWATCHER_EVALUATION_PAGE_SIZE") {
+            config.evaluation_limits.page_size = raw.parse().map_err(|_| ConfigError::Invalid {
+                name: "AIWATCHER_EVALUATION_PAGE_SIZE",
+                value: raw,
+                expected: "positive whole number",
+            })?;
+        }
+        if let Some(raw) = var("AIWATCHER_EVALUATION_RETENTION_SECONDS") {
+            config.evaluation_limits.retention_seconds =
+                raw.parse().map_err(|_| ConfigError::Invalid {
+                    name: "AIWATCHER_EVALUATION_RETENTION_SECONDS",
+                    value: raw,
+                    expected: "positive whole number",
+                })?;
         }
         if let Some(raw) = var("AIWATCHER_PROMPT_STORE") {
             config.prompt_store = raw.parse()?;

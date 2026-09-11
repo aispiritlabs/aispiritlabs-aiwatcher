@@ -107,6 +107,7 @@ dependencies = [
  "aiwatcher-conversations",
  "aiwatcher-core",
  "aiwatcher-datasets",
+ "aiwatcher-evaluation",
  "aiwatcher-execution",
  "aiwatcher-jobs",
  "aiwatcher-projector",
@@ -247,6 +248,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "aiwatcher-evaluation"
+version = "0.1.0"
+dependencies = [
+ "aiwatcher-core",
+ "async-trait",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.20",
+ "time",
+ "tokio",
+ "utoipa",
+]
+
+[[package]]
 name = "aiwatcher-execution"
 version = "0.1.0"
 dependencies = [
@@ -346,6 +363,7 @@ dependencies = [
  "aiwatcher-conversations",
  "aiwatcher-core",
  "aiwatcher-datasets",
+ "aiwatcher-evaluation",
  "aiwatcher-execution",
  "aiwatcher-jobs",
  "aiwatcher-projector",
@@ -357,11 +375,13 @@ dependencies = [
  "async-trait",
  "axum",
  "duckdb",
+ "hex",
  "k8s-openapi",
  "kube",
  "reqwest",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "thiserror 2.0.20",
  "time",
  "tokio",

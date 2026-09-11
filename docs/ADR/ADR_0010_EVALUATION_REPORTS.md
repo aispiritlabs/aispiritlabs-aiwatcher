@@ -190,3 +190,11 @@ completeness for each side. Aggregate-only totals and shed documents remain
 visible as incomplete detail. A local saved view stores selection metadata and
 cannot extend retention. Durable results, rubric registry and new quality
 policies remain the scope of FTI B / AR2.
+
+## Amendment, 2026-09-11: the durable evidence owner (FTI B1)
+
+[ADR_0030](ADR_0030_EVALUATION_EVIDENCE.md) defines Evaluation as the owner of
+pinned variants and future durable results. Its validated manifest contract is
+implemented independently of this fold. Existing event producers and HTTP reads
+remain unchanged. B2 will add persistent publication and a read bridge whose
+durable records take precedence; no report has been migrated by this amendment.

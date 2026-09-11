@@ -21,6 +21,7 @@ pub mod human_input;
 pub mod ids;
 pub mod ports;
 pub mod prompts;
+pub mod storage;
 pub mod stream;
 
 pub use artifact::{ArtifactKind, ArtifactRef};
@@ -33,8 +34,9 @@ pub use envelope::{
 pub use error::{CoreError, Result};
 pub use ids::{CausationId, CorrelationId, MessageId, SpanId, TraceId};
 pub use prompts::{
-    ObjectEntry, ObjectStore, OptimizationOutcome, OptimizationRecord, OptimizationSummary,
-    PromptError, PromptHead, PromptName, PromptRef, PromptSummary, PromptVersion, PromptVersionId,
-    PromptVersionSummary, RejectionReason, Score, Verdict, VersionOrigin,
+    OptimizationOutcome, OptimizationRecord, OptimizationSummary, PromptError, PromptHead,
+    PromptName, PromptRef, PromptSummary, PromptVersion, PromptVersionId, PromptVersionSummary,
+    RejectionReason, Score, Verdict, VersionOrigin,
 };
+pub use storage::{ObjectEntry, ObjectStore};
 pub use stream::{GlobalPosition, StreamName, StreamPosition};

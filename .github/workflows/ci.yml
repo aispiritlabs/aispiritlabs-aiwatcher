@@ -77,6 +77,8 @@ jobs:
       # whole failure mode the codegen exists to prevent.
       - name: contract is current
         run: just openapi-check
+      - name: Evaluation manifest contract
+        run: python3 scripts/check-evaluation-contract.py
 
   laser:
     name: Laser integration
@@ -342,6 +344,7 @@ jobs:
         run: |
           npm install --no-audit --no-fund
           npx tsc --noEmit
+          npm test
 
       - name: python sdk
         working-directory: sdk/python

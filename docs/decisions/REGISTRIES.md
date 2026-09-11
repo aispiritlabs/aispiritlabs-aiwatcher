@@ -20,6 +20,8 @@ content**, and a head that indexes an object is written *after* the object.
 | [0022](../ADR/ADR_0022_STAGED_IMPORT_JOBS.md) | A long job over an object store is one primitive, and a corpus is staged before it is imported | Accepted. `aiwatcher-jobs` holds the rules; each caller keeps its own records |
 | [0023](../ADR/ADR_0023_MODEL_PACKAGE.md) | A serving runtime is handed a declared package, and a checkpoint URI is not one | Accepted. Every artifact carries its `sha256`, because an address is not an identity |
 
+| [0030](../ADR/ADR_0030_EVALUATION_EVIDENCE.md) | Evaluation owns pinned variants and durable evidence | Contract, durable registry and legacy read bridge implemented for synthetic evidence; native source adapters and orphan collection remain |
+
 ## The three rules that repeat
 
 **Identity is content.** A prompt version is `sha256(text)`, an image id is the

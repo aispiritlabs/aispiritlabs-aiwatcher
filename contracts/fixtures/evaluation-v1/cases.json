@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "case_id": "capital-pl",
+      "input": {
+        "question": "What is the capital of Poland?"
+      },
+      "expected": {
+        "answer": "Warsaw"
+      }
+    },
+    {
+      "case_id": "two-plus-two",
+      "input": {
+        "question": "What is two plus two?"
+      },
+      "expected": {
+        "answer": "4"
+      }
+    },
+    {
+      "case_id": "empty",
+      "input": {
+        "question": "Return an empty string."
+      },
+      "expected": {
+        "answer": ""
+      }
+    }
+  ]
+}

@@ -21,11 +21,13 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use crate::ports::{PortError, PortResult};
+use crate::ports::PortError;
+
+// Keep both historical import paths source-compatible.
+pub use crate::storage::{ObjectEntry, ObjectStore};
 
 /// The label a deployment reads to answer "which version is live".
 pub const PRODUCTION_LABEL: &str = "production";
@@ -842,38 +844,6 @@ pub fn variables_lost(baseline: &str, candidate: &str) -> Vec<String> {
         .into_iter()
         .filter(|variable| !kept.contains(variable))
         .collect()
-}
-
-/// One object in the store.
-#[derive(Clone, Debug, PartialEq)]
-pub struct ObjectEntry {
-    pub key: String,
-    pub size: u64,
-    pub last_modified: Option<OffsetDateTime>,
-}
-
-/// Bytes, by key.
-///
-/// Deliberately not a `PromptStore`. The key layout, the immutability rule and
-/// the head index are the same whether the bytes land in RustFS or on a local
-/// disk, and a domain-level port would make every adapter reimplement them —
-/// which is how two adapters end up disagreeing about where a version lives.
-/// So the port is the part that genuinely differs between a bucket and a
-/// directory, and `aiwatcher_prompts::Registry` owns the rest.
-///
-/// The contract is S3's, because that is what the production implementation
-/// is: `put` overwrites, `get` returns `None` for a missing key rather than an
-/// error, `list` is prefix-scoped and returns every match, and `delete` on a
-/// missing key succeeds.
-#[async_trait]
-pub trait ObjectStore: Send + Sync + std::fmt::Debug {
-    async fn put(&self, key: &str, body: Vec<u8>) -> PortResult<()>;
-
-    async fn get(&self, key: &str) -> PortResult<Option<Vec<u8>>>;
-
-    async fn list(&self, prefix: &str) -> PortResult<Vec<ObjectEntry>>;
-
-    async fn delete(&self, key: &str) -> PortResult<()>;
 }
 
 impl From<PromptError> for PortError {

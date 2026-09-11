@@ -157,6 +157,18 @@ impl S3ObjectStore {
         query: &[(String, String)],
         body: Vec<u8>,
     ) -> PortResult<RawResponse> {
+        self.send_conditionally(method, key, query, body, false)
+            .await
+    }
+
+    async fn send_conditionally(
+        &self,
+        method: Method,
+        key: &str,
+        query: &[(String, String)],
+        body: Vec<u8>,
+        create: bool,
+    ) -> PortResult<RawResponse> {
         let path = if key.is_empty() {
             format!("/{}", self.config.bucket)
         } else {
@@ -208,6 +220,9 @@ impl S3ObjectStore {
             request = request.header("x-amz-security-token", token);
         }
 
+        if create {
+            request = request.header("if-none-match", "*");
+        }
         let response = request.body(body).send().await.map_err(|error| {
             // Nothing was answered, so the request may or may not have landed.
             // Retryable: every write this adapter makes is idempotent.
@@ -272,6 +287,22 @@ impl ObjectStore for S3ObjectStore {
             Ok(())
         } else {
             Err(response.into_error(&format!("putting {key}")))
+        }
+    }
+
+    async fn create(&self, key: &str, body: Vec<u8>) -> PortResult<bool> {
+        let response = self
+            .send_conditionally(Method::PUT, key, &[], body, true)
+            .await?;
+        match response.status {
+            status if status.is_success() => Ok(true),
+            StatusCode::PRECONDITION_FAILED => Ok(false),
+            StatusCode::CONFLICT => Err(PortError::Unavailable {
+                target: TARGET,
+                message: "conditional write raced with another operation; retry the same bytes"
+                    .into(),
+            }),
+            _ => Err(response.into_error(&format!("creating {key}"))),
         }
     }
 

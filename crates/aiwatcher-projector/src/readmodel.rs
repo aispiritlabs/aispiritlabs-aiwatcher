@@ -626,6 +626,40 @@ impl ReadModel {
         self.state.read().await.workflows.execution(workflow_run_id)
     }
 
+    pub async fn legacy_evaluations(
+        &self,
+        filter: &EvaluationFilter,
+        excluded: &std::collections::BTreeSet<String>,
+    ) -> EvaluationPage {
+        self.state.read().await.evaluations.page_excluding(
+            filter,
+            OffsetDateTime::now_utc(),
+            excluded,
+        )
+    }
+    pub async fn legacy_evaluation(
+        &self,
+        id: &str,
+        baseline: Option<&str>,
+        excluded: &std::collections::BTreeSet<String>,
+    ) -> Option<EvaluationDetail> {
+        self.state
+            .read()
+            .await
+            .evaluations
+            .detail_excluding(id, baseline, excluded)
+    }
+    pub async fn legacy_evaluation_suites(
+        &self,
+        excluded: &std::collections::BTreeSet<String>,
+    ) -> SuitePage {
+        self.state
+            .read()
+            .await
+            .evaluations
+            .suites_excluding(excluded)
+    }
+
     pub async fn evaluation_suites(&self) -> SuitePage {
         self.state.read().await.evaluations.suites()
     }

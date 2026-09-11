@@ -157,3 +157,22 @@ Właściciele zakresu A:
 Jawne wyjątki produkcyjne: Execution → Datasets (istniejący kompilator curation), Server → API (wiring i obecny scheduler/start, do wydzielenia w AR3). API i Server są warstwami kompozycji i mają enumerowane krawędzie, a nie wildcard. Core nadal zawiera historyczne typy promptów i `ObjectStore`; nie dodano tam reguł ocen.
 
 Wyjątki testowe: domeny używają `prompts` dla `MemoryObjectStore`; Execution używa własnej fasady testowej; Projector używa faktów Execution; API korzysta z Jobs w fixture. Żaden taki wpis nie pozwala na produkcyjny import. Test kontrolowanego naruszenia sprawdza Training → API jako zależność normal/build/dev, z aliasem i targetem Windows; drugi dowodzi, że pozwolenie testowe Training → Prompts nie przenika do produkcji.
+
+## 9. B1 — rozpoczęcie AR2 (2026-09-11)
+
+Dodano `aiwatcher-evaluation` z publiczną fasadą `Evaluation::prepare`, typami manifestu/kontekstu i prywatnymi modułami. Właściciel jest już wyodrębniony; trwałe operacje i ich prywatny storage pozostają B2. Fasada waliduje deklarację oraz wylicza niezmienne identyfikatory, nie potwierdza istnienia ani uprawnień do artefaktów. [ADR 0030](ADR/ADR_0030_EVALUATION_EVIDENCE.md) określa protokół atomowego zapisu, trwałość, źródła prawdy i migrację starszych raportów.
+
+`ObjectStore` i `ObjectEntry` przeniesiono do neutralnego `core::storage`; oba stare importy są reexportami tych samych typów. Istniejące adaptery zachowują semantykę. Evaluation ma jedyną dopuszczoną krawędź do Core; testy negatywne odrzucają jego zależności normal/build/dev od API, Projector, Training, Prompts i Execution. Nowa domena nie otrzymała wyjątku testowego do Prompts.
+
+Kontrakty SDK są osobnymi modułami, a test importu Python potwierdza brak workera i transportów. Generator JSON Schema oraz fixture konsumenta TypeScript mają własną bramkę w check/CI. Nie dodano endpointów ani importów między features panelu.
+
+**AR2 nie jest jeszcze zamknięte:** trwały odczyt po restarcie/utracie projekcji, weryfikacja artefaktów, usunięcie źródła i atomowe konflikty publication należą do odbioru B2. AR3 pozostaje przed C0; kontrakt B1 nie wciąga startu wykonania do Evaluation.
+
+
+## 10. B2 — trwały registry i mostek odczytu
+
+Evaluation zachowuje wyłącznie zależność do Core; prywatny `store` jest jedynym właścicielem kluczy/commita/tombstones. Dodano jawne krawędzie API → Evaluation i Server → Evaluation. Testy rzeczywistych adapterów są w Server, bez wyjątku Evaluation → Prompts. `ObjectStore::create` jest neutralną zdolnością; stary `put` i historyczne importy pozostają kompatybilne.
+
+API składa registry i starszy czytnik. Projector otrzymał tylko filtrowanie wykluczonych ID, bez importu Evaluation lub polityki dostępu. Odczyt znanego trwałego ID jest autorytatywny, również dla tombstone, forbidden i uszkodzonego artefaktu. Stare suite i automatyczny baseline nie używają wykluczonych raportów. Nowy klient registry Python importuje transport dopiero przez osobny moduł; same kontrakty oraz root telemetry pozostają lekkie. TypeScript ma osobny eksport i testy runtime.
+
+Potwierdzono współbieżny commit i utraconą odpowiedź na memory/file/real RustFS, odczyt po restarcie procesu i utracie projekcji, paginację, usunięcie źródła i stany uszkodzenia. Pełne check przeszło. **AR2 pozostaje otwarte** dla adapterów natywnych źródeł oraz bezpiecznej zbiórki niezatwierdzonych artefaktów; działający syntetyczny adapter nie dowodzi polityk Conversations/Annotations/Curation. Szczegóły i następny krok w sekcji 10 planu.

@@ -4,7 +4,7 @@ One file per decision that would be expensive to reverse, written when the
 decision is made rather than reconstructed afterwards. The value is in the
 **Consequences** section: what this costs, and what would make it wrong.
 
-Twenty-nine of them is a lot to read cold. [`docs/decisions/`](../decisions/)
+Thirty of them is a lot to read cold. [`docs/decisions/`](../decisions/)
 groups them into four readings — the log, the registries, execution,
 deployment — with one line each and, unlike the table below, which ones later
 ADRs amended or partly took back. Those are reading guides; **these files are
@@ -41,6 +41,8 @@ the record**, and they are what code comments cite.
 | [0027](ADR_0027_LOCAL_INSTALL.md) | A local install is one binary, one database and one token |
 | [0028](ADR_0028_QUERY_ENGINES.md) | A deployment chooses its query engine, and a typed query is admitted or runs where code runs |
 | [0029](ADR_0029_POD_PER_STEP.md) | A step that needs a pod names an operator's template, and the pod is a worker for one attempt |
+
+| [0030](ADR_0030_EVALUATION_EVIDENCE.md) | Evaluation owns pinned variants and durable evidence; contract first, persistence next |
 
 Use [template.md](template.md) for a new one, and add a line to the reading it
 belongs to in [`docs/decisions/`](../decisions/).

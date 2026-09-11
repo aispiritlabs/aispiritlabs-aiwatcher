@@ -75,6 +75,7 @@ struct Registries {
     datasets: Option<Arc<DatasetRegistry>>,
     annotations: Option<Arc<AnnotationRegistry>>,
     training: Option<Arc<TrainingRegistry>>,
+    evaluations: Option<Arc<aiwatcher_evaluation::Registry>>,
     /// The fifth, and the one this struct's doc comment does not describe: it
     /// shares the store and nothing else. Its content is encrypted, its
     /// retention is its own, and it is absent unless a deployment asked for it
@@ -179,6 +180,13 @@ async fn build_registries(
         datasets: Some(datasets),
         annotations: Some(annotations),
         training: Some(training),
+        evaluations: Some(Arc::new(aiwatcher_evaluation::Registry::new(
+            Arc::clone(&store),
+            Arc::new(crate::evaluation::LocalSource::new(
+                config.evaluation_source_dir.clone(),
+            )),
+            config.evaluation_limits.clone(),
+        )?)),
         conversations,
         objects: Some(store),
     })
@@ -762,6 +770,7 @@ pub async fn build(config: Config) -> Result<Runtime> {
         hubs,
         sources,
         training: registries.training,
+        evaluations: registries.evaluations,
         runner: build_workflow_runner(&config)?,
         // Built in the `serve` role too, unlike an executor: opening a block's
         // editor is a person waiting on a request, not an attempt somebody

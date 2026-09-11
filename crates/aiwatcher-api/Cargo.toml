@@ -10,6 +10,7 @@ repository.workspace = true
 
 [dependencies]
 aiwatcher-core.workspace = true
+aiwatcher-evaluation.workspace = true
 aiwatcher-auth.workspace = true
 aiwatcher-bus.workspace = true
 aiwatcher-annotations.workspace = true

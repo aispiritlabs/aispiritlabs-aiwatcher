@@ -40,6 +40,7 @@ kube = ["dep:kube", "dep:k8s-openapi"]
 
 [dependencies]
 aiwatcher-core.workspace = true
+aiwatcher-evaluation.workspace = true
 aiwatcher-bus.workspace = true
 aiwatcher-annotations.workspace = true
 # For the one line the import worker logs a job state with.
@@ -65,6 +66,8 @@ axum.workspace = true
 # crate is where a reactor lives (section 27).
 reqwest.workspace = true
 serde.workspace = true
+sha2.workspace = true
+hex.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 time.workspace = true

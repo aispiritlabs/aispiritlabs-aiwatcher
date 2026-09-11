@@ -131,6 +131,64 @@ impl ObjectStore for FileObjectStore {
             .map_err(|error| unavailable("replacing an object", &error))
     }
 
+    async fn create(&self, key: &str, body: Vec<u8>) -> PortResult<bool> {
+        let path = self.path_for(key)?;
+        tokio::task::spawn_blocking(move || {
+            use std::io::Write;
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let parent = path
+                .parent()
+                .ok_or_else(|| std::io::Error::other("no parent"))?;
+            std::fs::create_dir_all(parent)?;
+            // Unique staging files keep independent processes from sharing a
+            // partially written body. Hard-link publication is atomic and
+            // refuses an existing destination on the same filesystem.
+            let (temporary, mut file) = loop {
+                let temporary = parent.join(format!(
+                    ".create-{}-{}.tmp",
+                    std::process::id(),
+                    NEXT.fetch_add(1, Ordering::Relaxed)
+                ));
+                match std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&temporary)
+                {
+                    Ok(file) => break (temporary, file),
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => return Err(error),
+                }
+            };
+            let result = (|| {
+                file.write_all(&body)?;
+                file.sync_all()?;
+                match std::fs::hard_link(&temporary, &path) {
+                    Ok(()) => {
+                        // Persist newly-created ancestor entries too: a synced
+                        // leaf alone can disappear with its unsynced parent.
+                        for directory in parent.ancestors() {
+                            if !directory.as_os_str().is_empty() {
+                                std::fs::File::open(directory)?.sync_all()?;
+                            }
+                        }
+                        Ok(true)
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+                    Err(error) => Err(error),
+                }
+            })();
+            let _ = std::fs::remove_file(temporary);
+            result
+        })
+        .await
+        .map_err(|error| PortError::Other {
+            target: TARGET,
+            source: Box::new(error),
+        })?
+        .map_err(|error| unavailable("creating an immutable object", &error))
+    }
+
     async fn get(&self, key: &str) -> PortResult<Option<Vec<u8>>> {
         let path = self.path_for(key)?;
         match tokio::fs::read(&path).await {

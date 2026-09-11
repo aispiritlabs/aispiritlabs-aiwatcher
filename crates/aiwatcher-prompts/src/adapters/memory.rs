@@ -48,6 +48,17 @@ impl ObjectStore for MemoryObjectStore {
         Ok(())
     }
 
+    async fn create(&self, key: &str, body: Vec<u8>) -> PortResult<bool> {
+        use std::collections::btree_map::Entry;
+        match self.objects.write().await.entry(key.to_owned()) {
+            Entry::Vacant(entry) => {
+                entry.insert((body, OffsetDateTime::now_utc()));
+                Ok(true)
+            }
+            Entry::Occupied(_) => Ok(false),
+        }
+    }
+
     async fn get(&self, key: &str) -> PortResult<Option<Vec<u8>>> {
         Ok(self
             .objects

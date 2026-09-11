@@ -87,6 +87,7 @@ run "dockerfile lists every crate" dockerfile_lists_every_crate
 # The panel's client is generated from contracts/openapi.json. A stale contract
 # means the generated client and the Rust routes have silently diverged.
 run "openapi contract is current" just openapi-check
+run "Evaluation manifest contract" python3 scripts/check-evaluation-contract.py
 
 # ── Panel ────────────────────────────────────────────────────────────────────
 if [[ -d apps/panel/node_modules ]]; then
@@ -99,6 +100,7 @@ fi
 
 if [[ -d sdk/typescript/node_modules ]]; then
   run "typescript sdk typecheck" bash -c "cd sdk/typescript && npx tsc --noEmit"
+  run "typescript sdk tests" bash -c "cd sdk/typescript && npm test"
 else
   skip "typescript sdk typecheck" "run 'just install' first"
 fi

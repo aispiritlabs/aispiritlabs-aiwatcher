@@ -2,9 +2,26 @@
 
 Przygotowano: 2026-09-11. Repozytorium: `/Users/mkubaszek/Projects/ai_spirit/aiwatcher`.
 
-**Checkpoint po implementacji (2026-09-11):** A1–A4 i AR1 dostarczone; aktualny odbiór i ograniczenia opisuje [sekcja 8 planu](FTI_IMPLEMENTATION_PLAN.md#8-postęp-implementacji-2026-09-11). Pełne `just check` przeszło. Zachowano wcześniejsze zmiany AW-4. Istotny incydent dodatkowego seeda: przed naprawą obsługi `--base-url` jego część treningowa dodała demonstracyjny model/run i przestawiła etykietę `demo.segmenter/production` na istniejącej instancji :8080; szczegóły i ID w planie. Użytkownik zdecydował o pozostawieniu nowej wersji demonstracyjnej. Dalszy zakres rozwoju to B1/AR2, a nie powtarzanie A.
+**Checkpoint po implementacji (2026-09-11):** A1–A4 i AR1 dostarczone; aktualny odbiór i ograniczenia opisuje [sekcja 8 planu](FTI_IMPLEMENTATION_PLAN.md#8-postęp-implementacji-2026-09-11). Pełne `just check` przeszło. Zachowano wcześniejsze zmiany AW-4. Istotny incydent dodatkowego seeda: przed naprawą obsługi `--base-url` jego część treningowa dodała demonstracyjny model/run i przestawiła etykietę `demo.segmenter/production` na istniejącej instancji :8080; szczegóły i ID w planie. Użytkownik zdecydował o pozostawieniu nowej wersji demonstracyjnej. B1 z początkiem AR2 dostarczono w kontynuacji opisanej poniżej; dalszy zakres to B2.
 
-## Cel sesji
+
+**Kontynuacja B1 (2026-09-11):** HEAD `26be55e`, checkout początkowo czysty. B1 ukończone: fasada i kontrakty `aiwatcher-evaluation`, neutralny port storage z kompatybilnymi importami, schemat JSON i typy SDK, fixture i ADR 0030. Pełne `rtk just check` przeszło; szczegóły w sekcji 9 planu. Zmiany tej kontynuacji nie są zacommitowane. Następna paczka to B2 z trwałym zapisem, nie ponowne wykonywanie A.
+
+## Checkpoint B2 — trwała ścieżka syntetyczna
+
+Dostarczono pierwszy działający wycinek B2: atomowy storage file/S3/memory, trwały registry i strony przypadków, kontrola źródła, retencja/tombstones, API z ochroną przed legacy fallbackiem, osobne raising clients Python/TypeScript i seed z obowiązkowym adresem/ID. OpenAPI i klient panelu zostały wygenerowane. Zachowano wszystkie zmiany B1, bez commita.
+
+Pełne `just check` PASS (`/tmp/fti-b2-just-check.log`). Odbiór osobnego RustFS oraz HTTP obu SDK po restarcie procesu PASS. Końcowe dodatkowe sprawdzenia i dokładne ograniczenia: sekcja 10 planu i README `crates/aiwatcher-evaluation`.
+
+**Następny zakres: domknięcie B2/AR2.** Pierwszy adapter obsługuje tylko operator-approved lokalny syntetyczny bundle (`AIWATCHER_EVALUATION_SOURCE_DIR`). Native curation/annotations/conversations, model/prompt i judge są celowo odrzucane, dopóki ich właściciele nie potwierdzą referencji i praw. Zaimplementuj odpowiednie adaptery przez publiczne fasady właścicieli, wraz z testami usunięcia/retencji/uprawnień. Nie przechodź przez prywatne klucze innych rejestrów.
+
+Domknij zbieranie niezatwierdzonych osieroconych artefaktów po przerwaniu/konflikcie publikacji, z dowodem bezpieczeństwa przy konkurencyjnym commicie. Obecnie nie są odkrywalne, lecz nie mają automatycznej zbiórki, jeżeli ID nigdy nie zostało zatwierdzone. Zbiórka nie może usuwać bajtów właśnie zatwierdzanego wyniku. Powiadomienie `eval.*` z referencją po commicie jest nadal opcjonalnym brakującym mostkiem; trwałe listowanie już działa niezależnie od zdarzeń.
+
+B3: porównywanie trwałych wyników i prezentacja pełnych stron w panelu. Stary szczegół czyta pierwszą stronę registry, ale stara lista/suite/baseline wyklucza jego ID; pełny katalog jest pod `/api/v1/evaluation-results`. Nie przywracaj fallbacku po tombstone, odmowie dostępu lub uszkodzeniu. Nie oznaczaj całego B2/AR2 jako ukończonego na podstawie samego syntetycznego adaptera.
+
+Wartości startowe wybrane za zgodą użytkownika i wdrożone: 10 000 przypadków, 100 MiB, strony po 200, 30 dni retencji skracane źródłem. Manifest 256 KiB, 128 metryk. Zachowaj nową wersję demonstracyjną `demo.segmenter/production` na :8080 zgodnie z wcześniejszą decyzją użytkownika; nie modyfikowano jej w B2.
+
+## Pierwotny cel sesji — wydanie A
 
 Zrealizuj pierwsze wydanie FTI: **A1–A4 z planu implementacji**, z zachowaniem vertical slices i granic kontekstów. Dodaj małą bramkę zależności **AR1**, zgodnie z audytem architektury. Zacznij od przeglądu aktualnego stanu i przejdź do implementacji; nie kończ na kolejnym planie.
 
@@ -23,7 +40,7 @@ To pierwszy zamknięty zakres. Etapy B/C/D są dalszą roadmapą. Wydzielenie tr
 
 Kod w aktualnym checkoutcie rozstrzyga, co już działa. Jeżeli od audytu zaszły zmiany, zaktualizuj lokalny plan na podstawie różnicy, bez powtarzania całego badania konkurencji. Stare `docs/mlflow-comparison.md` jest historyczne; nowsza analiza ma zweryfikowane źródła Langfuse/MLflow.
 
-## Stan przekazania i katalog roboczy
+## Stan przekazania i katalog roboczy — historyczny, przed A
 
 - W sesji analitycznej powstała dokumentacja. Nie zaimplementowano w niej paczek A1–A4 ani AR1–AR4.
 - Przeszła kontrola granic panelu, statyczna kontrola acykliczności zależności 16 crate'ów oraz sprawdzenie lekkiego importu SDK. Nie uruchamiano pełnych testów aplikacji ani odbioru runtime.

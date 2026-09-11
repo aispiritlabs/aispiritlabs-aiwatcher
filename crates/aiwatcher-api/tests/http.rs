@@ -174,6 +174,7 @@ impl Fixture {
         let live = Arc::new(LiveHub::default());
         let health = HealthState::new();
         let state = AppState {
+            evaluations: None,
             answer_limits: Default::default(),
             query_engine: aiwatcher_datasets::QueryEngine::Flow,
             query_step_timeout_seconds: None,
@@ -6641,4 +6642,148 @@ async fn concurrent_worker_report_deliveries_share_one_recorded_outcome() {
         })
         .count();
     assert_eq!(failures, 1);
+}
+
+#[derive(Debug, Default)]
+struct EvaluationSource(std::sync::atomic::AtomicBool);
+#[async_trait::async_trait]
+impl aiwatcher_evaluation::SourceAuthority for EvaluationSource {
+    async fn resolve(
+        &self,
+        _: &aiwatcher_evaluation::EvaluationManifest,
+        _: &str,
+    ) -> aiwatcher_evaluation::Result<aiwatcher_evaluation::SourceEvidence> {
+        if self.0.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(aiwatcher_evaluation::EvaluationError::Unavailable(
+                aiwatcher_evaluation::EvidenceState::DeletedSource,
+            ));
+        }
+        Ok(aiwatcher_evaluation::SourceEvidence {
+            expected: ["capital-pl", "two-plus-two", "empty"]
+                .into_iter()
+                .map(|id| (id.into(), json!({"answer": ""})))
+                .collect(),
+            expires_at: None,
+        })
+    }
+}
+fn durable_request(id: &str) -> Value {
+    let mut manifest: Value = serde_json::from_str(include_str!(
+        "../../../contracts/fixtures/evaluation-v1/manifest.json"
+    ))
+    .unwrap();
+    manifest["origin"]["evaluation_id"] = json!(id);
+    json!({"manifest": manifest, "status": "succeeded", "cases": (["capital-pl", "two-plus-two", "empty"].into_iter().map(|id| json!({
+        "case_id": id, "repetition_id": "measurement-1", "actual": {"answer": ""}, "metrics": {"accuracy": 1.0}
+    })).collect::<Vec<_>>())})
+}
+#[tokio::test]
+async fn durable_reports_override_legacy_ids_and_erasure_never_falls_back() {
+    let mut fixture = Fixture::new(false);
+    fixture
+        .seed_evaluation(
+            "durable",
+            "legacy-suite",
+            "legacy-data",
+            json!({"accuracy": 0.1}),
+        )
+        .await;
+    fixture
+        .seed_evaluation(
+            "legacy",
+            "legacy-suite",
+            "legacy-data",
+            json!({"accuracy": 0.2}),
+        )
+        .await;
+    let source = Arc::new(EvaluationSource::default());
+    fixture.state.evaluations = Some(Arc::new(
+        aiwatcher_evaluation::Registry::new(
+            Arc::new(MemoryObjectStore::new()),
+            source.clone(),
+            Default::default(),
+        )
+        .unwrap(),
+    ));
+    let (status, receipt) = fixture
+        .post("/api/v1/evaluation-results", durable_request("durable"))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{receipt}");
+    let (status, detail) = fixture.get("/api/v1/evaluations/durable").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(detail["summary"]["metrics"]["accuracy"], 1.0);
+    let (_, retry) = fixture
+        .post("/api/v1/evaluation-results", durable_request("durable"))
+        .await;
+    assert_eq!(receipt, retry);
+    let mut changed = durable_request("durable");
+    changed["cases"][0]["metrics"]["accuracy"] = json!(0.0);
+    assert_eq!(
+        fixture.post("/api/v1/evaluation-results", changed).await.0,
+        StatusCode::CONFLICT
+    );
+    let (_, page) = fixture
+        .get(&format!(
+            "/api/v1/evaluation-results/durable/cases?version={}&limit=2",
+            receipt["version"].as_str().unwrap()
+        ))
+        .await;
+    assert_eq!(page["cases"].as_array().unwrap().len(), 2);
+    assert!(page["next_cursor"].is_string());
+    // Legacy discovery and automatic baselines cannot resurrect the shadowed ID.
+    let (_, list) = fixture.get("/api/v1/evaluations").await;
+    assert_eq!(list["evaluations"].as_array().unwrap().len(), 1);
+    let (_, legacy) = fixture.get("/api/v1/evaluations/legacy").await;
+    assert!(legacy.get("comparison").is_none());
+    source.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(
+        fixture.get("/api/v1/evaluations/durable").await.0,
+        StatusCode::GONE
+    );
+    let (_, tombstone) = fixture.get("/api/v1/evaluation-results/durable").await;
+    assert_eq!(tombstone["state"], "deleted_source");
+    assert!(tombstone["manifest"].is_null());
+    let (_, suites) = fixture.get("/api/v1/evaluation-suites").await;
+    assert_eq!(suites["suites"][0]["evaluations"], 1);
+    // Losing the entire projection leaves durable discovery intact.
+    fixture.state.read_model = Arc::new(ReadModel::new(Default::default()));
+    let (_, durable) = fixture.get("/api/v1/evaluation-results").await;
+    assert_eq!(durable["evaluations"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn durable_publication_requires_editor_and_a_source_authority() {
+    let mut fixture = Fixture::behind_a_proxy(false).await;
+    fixture.state.evaluations = Some(Arc::new(
+        aiwatcher_evaluation::Registry::new(
+            Arc::new(MemoryObjectStore::new()),
+            Arc::new(EvaluationSource::default()),
+            Default::default(),
+        )
+        .unwrap(),
+    ));
+    let (status, _) = fixture
+        .post_as(
+            "/api/v1/evaluation-results",
+            "reader",
+            "",
+            durable_request("forbidden"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(
+        fixture
+            .state
+            .evaluations
+            .as_ref()
+            .unwrap()
+            .known_ids()
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let (status, _) = Fixture::without_registry()
+        .post("/api/v1/evaluation-results", durable_request("disabled"))
+        .await;
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
 }
