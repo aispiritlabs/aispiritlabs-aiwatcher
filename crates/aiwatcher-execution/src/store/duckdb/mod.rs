@@ -23,7 +23,7 @@
 
 mod schema;
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -33,11 +33,11 @@ use time::OffsetDateTime;
 
 use aiwatcher_core::{Checkpoint, MessageId};
 
-use crate::claim::{AttemptKey, AttemptRow, AttemptWrite, ClaimFilter};
+use crate::claim::{AttemptKey, AttemptRow, AttemptWrite, ClaimFilter, tally_unclaimed};
 use crate::error::{Result, StoreError};
 use crate::hosted::{DeciderLease, LeaseOutcome, Timer, TimerWrite};
 use crate::message::{Direction, OutboxMessage, RecordedMessage, RunProjection, WorkflowEvent};
-use crate::plan::DefinitionKind;
+use crate::plan::{DefinitionKind, RuntimeKind};
 use crate::schedule::slot::{
     SlotAdmission, SlotAdmissionRequest, SlotKey, SlotRecord, SlotSettlement,
 };
@@ -674,6 +674,17 @@ impl WorkflowStore for DuckdbWorkflowStore {
     async fn attempt(&self, key: &AttemptKey) -> Result<Option<AttemptRow>> {
         let key = key.clone();
         self.with(move |db| read_attempt(db, &key)).await
+    }
+
+    async fn unclaimed_attempts(&self, now: OffsetDateTime) -> Result<BTreeMap<RuntimeKind, u64>> {
+        self.with(move |db| {
+            // Loaded and asked, as `claim_attempt` does: the rule is
+            // `AttemptRow`'s, and a second answer in SQL is what this adapter
+            // declines to keep. The table holds live attempts only.
+            let live: Vec<AttemptRow> = rows(db, "select payload from attempts", [])?;
+            Ok(tally_unclaimed(&live, now))
+        })
+        .await
     }
 
     async fn advance_checkpoint(&self, processor: &str, checkpoint: Checkpoint) -> Result<()> {

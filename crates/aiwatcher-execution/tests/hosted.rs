@@ -554,6 +554,15 @@ impl WorkflowStore for OneProcess {
     ) -> aiwatcher_execution::Result<aiwatcher_execution::store::Pruned> {
         self.0.prune(before, limit).await
     }
+
+    async fn unclaimed_attempts(
+        &self,
+        now: OffsetDateTime,
+    ) -> aiwatcher_execution::Result<
+        std::collections::BTreeMap<aiwatcher_execution::RuntimeKind, u64>,
+    > {
+        self.0.unclaimed_attempts(now).await
+    }
 }
 
 fn saga_timeout(timer_id: &str, due_at: OffsetDateTime) -> TimerWrite {

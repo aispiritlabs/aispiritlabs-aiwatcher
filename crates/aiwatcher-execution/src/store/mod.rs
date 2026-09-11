@@ -38,6 +38,8 @@ pub mod memory;
 #[cfg(feature = "postgres")]
 pub mod postgres;
 
+use std::collections::BTreeMap;
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -51,7 +53,7 @@ use crate::message::{
     Direction, MAX_PAYLOAD_BYTES, OutboxMessage, PendingMessage, RecordedMessage, RunProjection,
     WorkflowEvent,
 };
-use crate::plan::DefinitionKind;
+use crate::plan::{DefinitionKind, RuntimeKind};
 use crate::schedule::slot::{
     SlotAdmission, SlotAdmissionRequest, SlotKey, SlotRecord, SlotSettlement,
 };
@@ -484,6 +486,31 @@ pub trait WorkflowStore: Send + Sync + std::fmt::Debug {
     /// Whatever the backend could not do.
     async fn attempt(&self, key: &AttemptKey) -> Result<Option<AttemptRow>>;
 
+    /// How many attempts are waiting for a reactor, by the runtime that would
+    /// run them. A read: nothing is claimed, leased or rewritten.
+    ///
+    /// "Waiting" is [`AttemptRow::awaits_a_reactor`] — on no queue, not
+    /// finished, not waiting for a person, held by no live lease — and a retry
+    /// still inside its delay counts, because it is waiting all the same. Only
+    /// runtimes with at least one such row appear.
+    ///
+    /// The question is the one a claim filter cannot ask of itself: whether
+    /// something is waiting that *no* registered executor performs. A reactor
+    /// claims the runtimes it holds, so an attempt of any other runtime is
+    /// invisible to it — correct, and the reason a release that switched
+    /// `AIWATCHER_QUERY_ENGINE` mid-run leaves an attempt `pending` with nothing
+    /// saying so (ADR_0028). Counted by runtime so the store needs to know
+    /// nothing about what any process registered; the caller compares.
+    ///
+    /// Worker rows are left out: only a worker can say whether one is coming
+    /// for them. Bounded by the claim table, which holds live attempts only, so
+    /// it is cheap enough to ask on a timer.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the backend could not do.
+    async fn unclaimed_attempts(&self, now: OffsetDateTime) -> Result<BTreeMap<RuntimeKind, u64>>;
+
     /// Take one schedule slot, or say why not.
     ///
     /// **The transactional half of the scheduler**. Three
@@ -696,6 +723,10 @@ impl<T: WorkflowStore + ?Sized> WorkflowStore for std::sync::Arc<T> {
 
     async fn attempt(&self, key: &AttemptKey) -> Result<Option<AttemptRow>> {
         (**self).attempt(key).await
+    }
+
+    async fn unclaimed_attempts(&self, now: OffsetDateTime) -> Result<BTreeMap<RuntimeKind, u64>> {
+        (**self).unclaimed_attempts(now).await
     }
 
     async fn admit_slot(&self, request: &SlotAdmissionRequest) -> Result<SlotAdmission> {

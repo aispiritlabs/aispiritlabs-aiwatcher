@@ -62,7 +62,7 @@ pub use artifact::{
     Provenance,
 };
 pub use cache::cache_key;
-pub use claim::{AttemptKey, AttemptRow, AttemptWrite, ClaimFilter};
+pub use claim::{AttemptKey, AttemptRow, AttemptWrite, ClaimFilter, tally_unclaimed};
 pub use compile::{CompileOptions, compile_curation};
 pub use context::{ContextAction, ContextSnapshot, RunAction, allowed_run_actions};
 pub use decide::{Decision, Now, decide, evolve, idempotency_key, initial_state, replay};

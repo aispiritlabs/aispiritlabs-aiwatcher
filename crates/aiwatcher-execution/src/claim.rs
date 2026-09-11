@@ -23,6 +23,8 @@
 //! worker whose lease expired under it stops rather than writing beside its
 //! replacement.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use utoipa::ToSchema;
@@ -186,10 +188,34 @@ impl AttemptRow {
     /// minutes went by.
     #[must_use]
     pub fn is_claimable(&self, now: OffsetDateTime) -> bool {
+        self.awaits_a_claimant(now) && self.not_before.is_none_or(|at| now >= at)
+    }
+
+    /// Whether somebody still has to take this row — now, or once its retry
+    /// delay has passed.
+    ///
+    /// [`Self::is_claimable`] without the delay: not finished, not waiting for
+    /// a person, and held by no live lease. It is the question a count of
+    /// *stranded* work asks, which is "who will take this" rather than "may it
+    /// be taken this second": an attempt backing off before its next try is
+    /// exactly as stranded as one that could be taken now, when nothing that
+    /// runs its runtime is registered.
+    #[must_use]
+    pub fn awaits_a_claimant(&self, now: OffsetDateTime) -> bool {
         !self.state.is_terminal()
             && self.state != StateType::AwaitingInput
             && aiwatcher_jobs::lease_expired(self.claimed_at, now)
-            && self.not_before.is_none_or(|at| now >= at)
+    }
+
+    /// Whether the claimant this row is waiting for is a reactor.
+    ///
+    /// A row on no queue is claimed by runtime, by a reactor in one of this
+    /// binary's roles. A row on a queue belongs to whichever worker holds that
+    /// queue and the code it pins — a process somebody else operates, which is
+    /// the one party that can say whether it is coming.
+    #[must_use]
+    pub fn awaits_a_reactor(&self, now: OffsetDateTime) -> bool {
+        self.queue.is_none() && self.awaits_a_claimant(now)
     }
 
     /// Whether `owner` still holds this row.
@@ -324,6 +350,26 @@ impl ClaimFilter {
     }
 }
 
+/// How many rows are waiting for a reactor, by the runtime that would run them.
+///
+/// The rule behind
+/// [`WorkflowStore::unclaimed_attempts`](crate::store::WorkflowStore::unclaimed_attempts)
+/// for the adapters that hold rows rather than a query planner, written once
+/// for the reason [`crate::store::prunable`] is: three adapters counting three
+/// ways would be three answers to "is anything stranded". Only runtimes with a
+/// waiting row appear, so an empty map is the all-clear.
+#[must_use]
+pub fn tally_unclaimed<'a>(
+    rows: impl IntoIterator<Item = &'a AttemptRow>,
+    now: OffsetDateTime,
+) -> BTreeMap<RuntimeKind, u64> {
+    let mut counts = BTreeMap::new();
+    for row in rows.into_iter().filter(|row| row.awaits_a_reactor(now)) {
+        *counts.entry(row.runtime).or_insert(0) += 1;
+    }
+    counts
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -400,6 +446,59 @@ mod tests {
         let row = row().not_before(at(30));
         assert!(!row.is_claimable(at(10)));
         assert!(row.is_claimable(at(30)));
+    }
+
+    #[test]
+    fn a_retry_inside_its_delay_is_still_waiting_for_a_claimant() {
+        // Not claimable yet, and stranded all the same when nothing that runs
+        // its runtime is registered: the count asks who will take it, not
+        // whether it may be taken this second.
+        let backing_off = row().not_before(at(30));
+        assert!(!backing_off.is_claimable(at(10)));
+        assert!(backing_off.awaits_a_claimant(at(10)));
+        assert!(backing_off.awaits_a_reactor(at(10)));
+    }
+
+    #[test]
+    fn a_tally_counts_what_a_reactor_would_take_and_nothing_held_asked_finished_or_pulled() {
+        let waiting = row();
+        let mut held = row();
+        held.key.step_id = "held".to_owned();
+        held.claim("reactor-a", at(0));
+        let mut asked = row();
+        asked.key.step_id = "asked".to_owned();
+        asked.park();
+        let mut finished = row();
+        finished.key.step_id = "finished".to_owned();
+        finished.state = StateType::Completed;
+        let notebook = AttemptRow::claimable(
+            AttemptKey::new(ExecutionId::new("exec-1"), "score", 1),
+            RuntimeKind::Marimo,
+            MessageId::new("cmd-2"),
+        );
+        // A worker's, however long it waits: only a worker can say whether
+        // one is coming for its queue.
+        let pulled = AttemptRow::claimable(
+            AttemptKey::new(ExecutionId::new("exec-1"), "stage", 1),
+            RuntimeKind::PythonTask,
+            MessageId::new("cmd-3"),
+        )
+        .on_queue("houses".to_owned(), "stage@1".to_owned());
+        let rows = [waiting, held, asked, finished, notebook, pulled];
+
+        assert_eq!(
+            tally_unclaimed(&rows, at(10)),
+            BTreeMap::from([(RuntimeKind::FlowPhp, 1), (RuntimeKind::Marimo, 1)])
+        );
+        // A lease that ran out is waiting again. The question is not.
+        assert_eq!(
+            tally_unclaimed(&rows, at(aiwatcher_jobs::LEASE_SECONDS + 1)),
+            BTreeMap::from([(RuntimeKind::FlowPhp, 2), (RuntimeKind::Marimo, 1)])
+        );
+        assert!(
+            tally_unclaimed(&[], at(0)).is_empty(),
+            "an empty table is the all-clear"
+        );
     }
 
     #[test]

@@ -326,6 +326,15 @@ impl WorkflowStore for OneProcess {
     ) -> aiwatcher_execution::Result<Pruned> {
         self.0.prune(before, limit).await
     }
+
+    async fn unclaimed_attempts(
+        &self,
+        now: OffsetDateTime,
+    ) -> aiwatcher_execution::Result<
+        std::collections::BTreeMap<aiwatcher_execution::RuntimeKind, u64>,
+    > {
+        self.0.unclaimed_attempts(now).await
+    }
 }
 
 #[tokio::test]
@@ -540,6 +549,15 @@ impl WorkflowStore for Contends {
         limit: usize,
     ) -> aiwatcher_execution::Result<Pruned> {
         self.inner.prune(before, limit).await
+    }
+
+    async fn unclaimed_attempts(
+        &self,
+        now: OffsetDateTime,
+    ) -> aiwatcher_execution::Result<
+        std::collections::BTreeMap<aiwatcher_execution::RuntimeKind, u64>,
+    > {
+        self.inner.unclaimed_attempts(now).await
     }
 }
 

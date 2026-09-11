@@ -22,6 +22,8 @@
 pub mod error;
 pub mod schema;
 
+use std::collections::BTreeMap;
+
 use async_trait::async_trait;
 use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Row as _};
@@ -33,7 +35,7 @@ use crate::message::{
     Direction, MessageMetadata, OutboxMessage, RecordedMessage, RunProjection, WorkflowEvent,
     WorkflowMessage,
 };
-use crate::plan::DefinitionKind;
+use crate::plan::{DefinitionKind, RuntimeKind};
 use crate::schedule::slot::{
     SlotAdmission, SlotAdmissionRequest, SlotKey, SlotOutcome, SlotRecord, SlotSettlement,
 };
@@ -625,6 +627,41 @@ impl WorkflowStore for PostgresWorkflowStore {
         .await
         .map_err(|error| StoreError::Backend(error.to_string()))?;
         row.map(|row| attempt_from(&row)).transpose()
+    }
+
+    async fn unclaimed_attempts(&self, now: OffsetDateTime) -> Result<BTreeMap<RuntimeKind, u64>> {
+        // `AttemptRow::awaits_a_reactor` in SQL, the way `claim_attempt`
+        // carries `is_claimable`. The state list is the partial index's own
+        // predicate, word for word, so `step_attempts_claimable` answers this
+        // from `queue is null` — its leading column — rather than a scan of the
+        // table. `claimed_at < $1` is `aiwatcher_jobs::lease_expired`'s strict
+        // inequality. No `not_before`: a retry inside its delay is waiting all
+        // the same. A plain read, outside any transaction: nothing is locked,
+        // so a count never delays a claim.
+        let stale = now - time::Duration::seconds(aiwatcher_jobs::LEASE_SECONDS);
+        let rows = sqlx::query(
+            "select runtime, count(*) as attempts
+               from step_attempts
+              where state not in ('completed', 'failed', 'crashed', 'cancelled',
+                                  'awaiting_input')
+                and queue is null
+                and (claimed_at is null or claimed_at < $1)
+              group by runtime",
+        )
+        .bind(stale)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|error| StoreError::Backend(error.to_string()))?;
+
+        let mut counts = BTreeMap::new();
+        for row in rows {
+            let attempts: i64 = row.get("attempts");
+            counts.insert(
+                runtime_from(row.get("runtime"))?,
+                u64::try_from(attempts).unwrap_or(0),
+            );
+        }
+        Ok(counts)
     }
 
     async fn admit_slot(&self, request: &SlotAdmissionRequest) -> Result<SlotAdmission> {

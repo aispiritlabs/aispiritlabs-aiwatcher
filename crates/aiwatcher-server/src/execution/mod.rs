@@ -31,6 +31,7 @@ pub mod measure;
 pub mod publish;
 pub mod query;
 pub mod scheduler;
+pub mod stranded;
 pub mod timers;
 
 use std::sync::Arc;
@@ -67,6 +68,9 @@ pub struct Tasks {
     /// The hourly walk of the artifact prefix. A measurement, so it is the one
     /// task here whose loss on shutdown costs nothing.
     pub storage: Option<JoinHandle<()>>,
+    /// The count of attempts no executor in this process performs. A
+    /// measurement too, and aborted on shutdown for the same reason.
+    pub stranded: Option<JoinHandle<()>>,
     pub timers: Option<JoinHandle<()>>,
     pub reactors: Vec<(&'static str, JoinHandle<()>)>,
 }
@@ -109,6 +113,10 @@ impl Tasks {
             // prefix and it holds nothing: a measurement interrupted is one
             // reading missed, and making a shutdown wait an hour for a graph is
             // the wrong trade.
+            task.abort();
+        }
+        if let Some(task) = self.stranded {
+            // One read, holding nothing and deciding nothing.
             task.abort();
         }
         if let Some(task) = self.retention {
@@ -239,6 +247,14 @@ pub fn spawn(
         // is the one engine `AIWATCHER_QUERY_ENGINE` names.
         let executors =
             query::executors(config, artifacts).merge(marimo::executors(config, artifacts));
+        // Judged against the registry the claim filter is built from, so the
+        // two cannot disagree about what this process performs. Started even
+        // when that registry is empty, which is when it has the most to say.
+        tasks.stranded = Some(stranded::spawn(
+            Arc::clone(store),
+            stranded::Wiring::of(config, executors.runtimes(), artifacts.is_some()),
+            shutdown.clone(),
+        ));
         if executors.is_empty() {
             tracing::info!(
                 "the work role holds no runtime executor; nothing is claimed \

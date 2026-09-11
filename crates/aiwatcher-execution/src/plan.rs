@@ -174,6 +174,21 @@ impl RuntimeKind {
             Self::FlowPhp | Self::DataFusion | Self::DuckDb | Self::Marimo | Self::PythonTask
         )
     }
+
+    /// The query engine a step of this kind was written for, if it is a query.
+    ///
+    /// [`RuntimeBinding::query`] for a caller holding a claim row rather than a
+    /// plan — a row carries the kind and nothing else. What a warning about an
+    /// attempt stranded by an engine switch needs to name both engines.
+    #[must_use]
+    pub const fn query_engine(self) -> Option<QueryEngine> {
+        match self {
+            Self::FlowPhp => Some(QueryEngine::Flow),
+            Self::DataFusion => Some(QueryEngine::DataFusion),
+            Self::DuckDb => Some(QueryEngine::DuckDb),
+            Self::Marimo | Self::PublishDataset | Self::PythonTask | Self::HumanInput => None,
+        }
+    }
 }
 
 impl RuntimeBinding {

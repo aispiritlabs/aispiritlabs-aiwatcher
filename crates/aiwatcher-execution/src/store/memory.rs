@@ -20,11 +20,11 @@ use tokio::sync::Mutex;
 
 use aiwatcher_core::{Checkpoint, MessageId};
 
-use crate::claim::{AttemptKey, AttemptRow, AttemptWrite, ClaimFilter};
+use crate::claim::{AttemptKey, AttemptRow, AttemptWrite, ClaimFilter, tally_unclaimed};
 use crate::error::{Result, StoreError};
 use crate::hosted::{DeciderLease, LeaseOutcome, Timer, TimerWrite};
 use crate::message::{Direction, OutboxMessage, RecordedMessage, RunProjection, WorkflowEvent};
-use crate::plan::DefinitionKind;
+use crate::plan::{DefinitionKind, RuntimeKind};
 use crate::schedule::slot::{
     SlotAdmission, SlotAdmissionRequest, SlotKey, SlotRecord, SlotSettlement,
 };
@@ -498,6 +498,13 @@ impl WorkflowStore for MemoryWorkflowStore {
 
     async fn attempt(&self, key: &AttemptKey) -> Result<Option<AttemptRow>> {
         Ok(self.inner.lock().await.attempts.get(key).cloned())
+    }
+
+    async fn unclaimed_attempts(&self, now: OffsetDateTime) -> Result<BTreeMap<RuntimeKind, u64>> {
+        Ok(tally_unclaimed(
+            self.inner.lock().await.attempts.values(),
+            now,
+        ))
     }
 
     async fn advance_checkpoint(&self, processor: &str, checkpoint: Checkpoint) -> Result<()> {

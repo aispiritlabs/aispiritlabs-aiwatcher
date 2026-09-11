@@ -18,6 +18,8 @@
 //!
 //! Behind the `testing` feature, so none of this reaches a production build.
 
+use std::collections::BTreeMap;
+
 use time::{Duration, OffsetDateTime};
 
 use aiwatcher_core::{CausationId, Checkpoint, CorrelationId, MessageId};
@@ -330,6 +332,7 @@ pub async fn assert_contract(name: &str, store: &dyn WorkflowStore) {
     a_finished_attempt_leaves_no_row_behind(name, store).await;
     a_parked_attempt_keeps_its_row_and_loses_its_lease(name, store).await;
     a_retry_is_not_claimable_before_its_delay(name, store).await;
+    an_attempt_waiting_for_a_reactor_is_counted_by_its_runtime_and_left_alone(name, store).await;
     a_cursor_advances_on_its_own_for_a_message_the_inbox_knew(name, store).await;
     a_finished_execution_is_forgotten_and_a_running_one_is_not(name, store).await;
     an_execution_the_outbox_still_speaks_for_is_kept(name, store).await;
@@ -1588,6 +1591,157 @@ pub async fn a_retry_is_not_claimable_before_its_delay(name: &str, store: &dyn W
         .is_some(),
         "{name}"
     );
+}
+
+/// A count of the claim table, and nothing more than a count.
+///
+/// What the work role asks on a timer to find attempts no registered executor
+/// performs — so it must count exactly what a reactor would take, and must
+/// never be the thing that takes it. Every count is compared with one taken
+/// before the dispatch *at the same instant*: on a shared PostgreSQL the table
+/// holds other runs' rows, and at a fixed instant their contribution is a
+/// fixed number.
+pub async fn an_attempt_waiting_for_a_reactor_is_counted_by_its_runtime_and_left_alone(
+    name: &str,
+    store: &dyn WorkflowStore,
+) {
+    let execution = fresh("unclaimed");
+    let now = OffsetDateTime::UNIX_EPOCH;
+    let expired = now + Duration::seconds(aiwatcher_jobs::LEASE_SECONDS + 1);
+    let before_now = ok!(name, store.unclaimed_attempts(now), "a count before");
+    let before_expired = ok!(
+        name,
+        store.unclaimed_attempts(expired),
+        "a later count before"
+    );
+
+    let for_a_reactor = |step: &str, runtime: RuntimeKind| {
+        AttemptRow::claimable(
+            AttemptKey::new(execution.clone(), step, 1),
+            runtime,
+            MessageId::new(format!("{execution}/cmd-{step}")),
+        )
+    };
+    let waiting = for_a_reactor("waiting", RuntimeKind::FlowPhp);
+    let held = for_a_reactor("held", RuntimeKind::FlowPhp);
+    let asked = for_a_reactor("asked", RuntimeKind::FlowPhp);
+    let backing_off = for_a_reactor("backing-off", RuntimeKind::DataFusion)
+        .not_before(now + Duration::seconds(30));
+    let pulled = claimable(&execution);
+    ok!(
+        name,
+        store.append(
+            &execution,
+            dispatch(
+                &execution,
+                "unclaimed-dispatch",
+                [&waiting, &held, &asked, &backing_off, &pulled]
+                    .map(|row| AttemptWrite::Dispatch(row.clone()))
+                    .to_vec(),
+            )
+        ),
+        "a dispatch"
+    );
+
+    // One held by a live lease, and one that stopped to ask.
+    let exact = ClaimFilter {
+        attempt: Some(held.key.clone()),
+        ..ClaimFilter::for_runtimes(&[RuntimeKind::FlowPhp])
+    };
+    let taken = ok!(name, store.claim_attempt(&exact, "reactor", now), "a claim")
+        .unwrap_or_else(|| panic!("{name}: the exact claim found nothing to take"));
+    ok!(
+        name,
+        store.append(
+            &execution,
+            dispatch(
+                &execution,
+                "unclaimed-park",
+                vec![AttemptWrite::Park(asked.key.clone())]
+            )
+        ),
+        "a park"
+    );
+
+    let at_now = ok!(name, store.unclaimed_attempts(now), "a count");
+    assert_eq!(
+        grew(&before_now, &at_now, RuntimeKind::FlowPhp),
+        1,
+        "{name}: only the unheld flow row is waiting; a live lease and a question are not"
+    );
+    assert_eq!(
+        grew(&before_now, &at_now, RuntimeKind::DataFusion),
+        1,
+        "{name}: a retry inside its delay is waiting for a claimant all the same"
+    );
+    assert_eq!(
+        grew(&before_now, &at_now, RuntimeKind::PythonTask),
+        0,
+        "{name}: a worker's row was counted as a reactor's"
+    );
+    let at_expiry = ok!(name, store.unclaimed_attempts(expired), "a later count");
+    assert_eq!(
+        grew(&before_expired, &at_expiry, RuntimeKind::FlowPhp),
+        2,
+        "{name}: a lease that ran out is waiting for a claimant again"
+    );
+
+    // Counting took nothing and changed nothing — least of all the lease it
+    // counted as expired.
+    assert_eq!(
+        ok!(name, store.attempt(&waiting.key), "the waiting row").as_ref(),
+        Some(&waiting),
+        "{name}: counting rewrote a row it only had to count"
+    );
+    let still = ok!(name, store.attempt(&held.key), "the held row")
+        .unwrap_or_else(|| panic!("{name}: the held row is gone"));
+    assert_eq!(
+        (still.lease_owner.as_deref(), still.claimed_at),
+        (Some("reactor"), taken.claimed_at),
+        "{name}: counting past a lease's expiry took the attempt over"
+    );
+    assert_eq!(
+        ok!(name, store.attempt(&asked.key), "the parked row").map(|row| row.state),
+        Some(StateType::AwaitingInput),
+        "{name}: counting woke a question"
+    );
+
+    // And a retired attempt is waiting for nobody.
+    ok!(
+        name,
+        store.append(
+            &execution,
+            dispatch(
+                &execution,
+                "unclaimed-retire",
+                [waiting, held, asked, backing_off, pulled]
+                    .map(|row| AttemptWrite::Retire(row.key))
+                    .to_vec(),
+            )
+        ),
+        "retiring them"
+    );
+    let retired = ok!(name, store.unclaimed_attempts(now), "a count after");
+    for runtime in [RuntimeKind::FlowPhp, RuntimeKind::DataFusion] {
+        assert_eq!(
+            grew(&before_now, &retired, runtime),
+            0,
+            "{name}: a retired {} attempt is still counted as waiting",
+            runtime.as_str()
+        );
+    }
+}
+
+/// How much one runtime's count moved between two counts at one instant.
+fn grew(
+    before: &BTreeMap<RuntimeKind, u64>,
+    after: &BTreeMap<RuntimeKind, u64>,
+    runtime: RuntimeKind,
+) -> i128 {
+    let count = |counts: &BTreeMap<RuntimeKind, u64>| {
+        i128::from(counts.get(&runtime).copied().unwrap_or(0))
+    };
+    count(after) - count(before)
 }
 
 /// The one case a decision cannot cover: an input the inbox says was already
