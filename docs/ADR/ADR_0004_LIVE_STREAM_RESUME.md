@@ -1,6 +1,6 @@
 # ADR_0004: The live channel is the projector's own fan-out, and a reconnect closes its own gap
 
-- **Status**: accepted; the trace viewer it names is Perses since 2026-09-09 — see [ADR_0005](ADR_0005_TRACE_STORAGE.md#amendment-2026-09-09-the-waterfall-comes-from-perses-not-grafana)
+- **Status**: accepted; the trace viewer it names is Perses since 2026-09-09 — see [ADR_0005](ADR_0005_TRACE_STORAGE.md#amendment-2026-09-09-the-waterfall-comes-from-perses-not-grafana); amended 2026-09-11 (below) for the Live view's selection and Pause
 - **Date**: 2026-08-27
 
 ## Context
@@ -84,3 +84,42 @@ projector must share a process or share nothing. If the API needs to scale
 independently of the projector, the hub becomes a network hop — Redis pub/sub,
 or a second Laser consumer per API replica — and this decision needs revisiting
 before that split, not after.
+
+## Amendment, 2026-09-11: a selection is filtered by the server, and Pause keeps the subscription
+
+### What prompted it
+
+The Live view watches a *selection* — agents, runtimes, workflows, sessions —
+rather than one run, on this same channel. Two of its choices are about a live
+view that must not go quietly wrong, which is this ADR's subject.
+
+### The server applies the selection
+
+`/api/v1/events/stream` takes the selection as repeated parameters, and
+`Scope::Selection` narrows the stream before a frame is sent. **Subscribing to
+everything and filtering in the browser** lost on volume: `llm.chunk` is most
+of the log, and every one would cross the wire to be thrown away.
+
+Model, tool and status cannot be selected on. The first two are span-level
+facts assembled from several events ([ADR_0003](ADR_0003_SPAN_ASSEMBLY.md)) and
+status is a fold over a whole run, so no event carries any of them. A selection
+built in the Query view may name them validly, and the Live view says which
+parts it is not following. **Passing them through anyway** lost because a
+stream that ignores a filter looks identical to one where nothing is happening.
+
+### Pause freezes the rendering, never the subscription
+
+The Live view opens its stream with no cursor — live only, as above — because
+resuming from a checkpoint would replay the retained log through the filter on
+every change of selection, which is Explore's job. **Closing the connection on
+Pause** would therefore resume live only too, and the paused interval would be
+exactly the silent gap this ADR exists to prevent. So the connection stays
+open, the counters keep counting, and only the feed stops moving. The feed
+keeps the last few hundred events and the counters keep totals, so memory stays
+flat however long a tab is left open.
+
+**What it costs.** A paused tab still receives every matching frame it does not
+draw: Pause saves the browser's rendering and nothing on the wire. If paused
+tabs became a measurable share of what the hub fans out, the answer would be a
+Pause that resumes from its own checkpoint and accepts the replay, capped at
+`MAX_RESYNC_EVENTS` — never one that resumes live and loses the interval.

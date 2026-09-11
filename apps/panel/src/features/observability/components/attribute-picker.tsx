@@ -11,26 +11,16 @@ import { cn, formatCount, isStalled, shortId } from '@/shared/lib/utils';
 /**
  * The attributes a question can be asked about, and the values actually seen.
  *
- * ## Why clicking rather than typing
+ * Clicking spares somebody the columns' trivia: a run carries `agents` as a
+ * list, a span calls the same thing `agent_id`, and every column is nullable so
+ * the comparison has to be `same`. The values come from the read model, so each
+ * row has actually run, with its run count and whether any of those runs is
+ * working now — which also says whether the thing about to be filtered for is
+ * there at all.
  *
- * The explorer answers the questions somebody thought of when it was built and
- * the Flow editor answers the rest — at the cost of knowing that a run carries
- * `agents` as a list, that a span calls the same thing `agent_id`, and that
- * every column is nullable so the comparison has to be `same` — three pieces of
- * trivia between a person and their first query, none of them the question.
- *
- * So the values come from the read model rather than from memory. Every row is
- * an agent, model or tool that has actually run, with its run count and whether
- * any of those runs is working right now — which also answers the question
- * underneath: "is the thing I am about to filter for even there".
- *
- * ## Why the values are fetched per attribute and searched on the server
- *
- * `/api/v1/dimensions/{kind}` is a cursor page with a `search` parameter, and
- * the list of agents on a busy instance is not small. Fetching one attribute's
- * values when it is opened, and narrowing them server-side, is the same rule
- * every list in this panel follows: filtering in the browser means downloading
- * everything first.
+ * One attribute's values are fetched when it is opened and searched on the
+ * server (`/api/v1/dimensions/{kind}`, a cursor page): ADR_0007's rule for every
+ * list.
  */
 
 export type AttributeSelection = Partial<Record<AttributeId, string[]>>;

@@ -3,27 +3,15 @@ import type { ReachEdge } from '@/shared/lib/reach';
 /**
  * Where each node of a graph sits on the canvas.
  *
- * Hand-rolled rather than dagre, as `waterfall.tsx` is: a layout library is a
- * dependency with its own opinion, and the one that matters here is not
- * "optimal" but **stable**. This canvas re-renders on every live frame, and a
- * layout that reshuffled as a stage finished would make the graph unreadable
- * exactly while somebody is watching it.
+ * Longest-path layering, the first phase of a Sugiyama layout, kept stable so a
+ * canvas that re-renders on every live frame never reshuffles: within a rank,
+ * nodes keep the order the producer declared them in, and nothing minimises
+ * crossings. An edge that would push a node behind one it already sits after —
+ * a cycle, two agents calling each other — is drawn but does not rank.
  *
- * So it is longest-path layering — the standard first phase of a Sugiyama
- * layout — with two deliberate simplifications:
- *
- * * **No crossing minimisation.** Within a rank, nodes keep the order the
- *   producer declared them in: a human's idea of the sequence beats a heuristic
- *   that produces a slightly tidier picture nobody recognises.
- * * **Back edges do not affect ranking.** A graph with a cycle — two agents
- *   that call each other — has no topological order, so ranking ignores any
- *   edge that would push a node behind one it already sits after. The edge is
- *   still drawn; it just gets no say in where things go.
- *
- * It takes ids and edges and nothing else. Two canvases use it for opposite
- * purposes — the workflow graph *derives* positions it never stores, the
- * curation canvas writes them into a draft somebody saves — and a second
- * implementation would be two answers to "where does this go".
+ * Ids and edges in, positions out. The workflow graph derives positions it never
+ * stores; the curation canvas writes them into a draft somebody saves. Why it is
+ * hand-rolled, and why stable beats optimal: ADR_0012, amended.
  */
 
 /** Node box size, in canvas units. Must agree with `StageNode`'s CSS. */

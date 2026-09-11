@@ -11,11 +11,11 @@ this group. What must outlive retention is [authored](REGISTRIES.md) instead.
 | [0001](../ADR/ADR_0001_EVENT_ENVELOPE.md) | The envelope carries four correlation ids, and the backend derives what a producer omits | Accepted, **amended 2026-08-28** — the derivation gained an avalanche finalizer |
 | [0002](../ADR/ADR_0002_EVENT_BUS_PORT.md) | Laser is the backbone, behind a port, with adapters that work without it | Accepted. The write-ahead log is the default and `laser` is a cargo feature that is off |
 | [0003](../ADR/ADR_0003_SPAN_ASSEMBLY.md) | An event is not a span | Accepted. Hundreds of events fold into a handful of spans; `llm.chunk` is counted, never stored |
-| [0004](../ADR/ADR_0004_LIVE_STREAM_RESUME.md) | The live channel is the projector's own fan-out, and a reconnect closes its own gap | Accepted. Every frame carries its checkpoint as the SSE `id:`, so the browser resumes with no application code |
+| [0004](../ADR/ADR_0004_LIVE_STREAM_RESUME.md) | The live channel is the projector's own fan-out, and a reconnect closes its own gap | Accepted, **amended 2026-09-11** — the server applies a selection, and Pause keeps the subscription. Every frame carries its checkpoint as the SSE `id:`, so the browser resumes with no application code |
 | [0005](../ADR/ADR_0005_TRACE_STORAGE.md) | VictoriaTraces stores spans; QuestDB is a projection to add later, if ever | Accepted, **amended 2026-09-09** — the waterfall comes from Perses, not Grafana |
 | [0007](../ADR/ADR_0007_EXPLORER_DIMENSIONS.md) | Every way of slicing runs is one fold, and every list is a cursor page | Accepted. `session \| agent \| runtime \| workflow \| trace \| model \| tool` differ only in which key a run contributes |
-| [0010](../ADR/ADR_0010_EVALUATION_REPORTS.md) | An evaluation report rides the event log and forms **no** span | Accepted. `forms_span` is false and the assembler returns immediately |
-| [0012](../ADR/ADR_0012_WORKFLOW_GRAPH.md) | A workflow graph is declared on the log, not discovered from an orchestrator | Accepted, and load-bearing for [execution](EXECUTION.md): it is the source that is still right when the orchestrator is bypassed |
+| [0010](../ADR/ADR_0010_EVALUATION_REPORTS.md) | An evaluation report rides the event log and forms **no** span | Accepted, **amended 2026-09-11** — a report names the run and step that measured it (AW-5). `forms_span` is false and the assembler returns immediately |
+| [0012](../ADR/ADR_0012_WORKFLOW_GRAPH.md) | A workflow graph is declared on the log, not discovered from an orchestrator | Accepted, **amended 2026-09-11** — the panel lays the graph out, stable before optimal. Load-bearing for [execution](EXECUTION.md): it is the source that is still right when the orchestrator is bypassed |
 
 ## What has moved
 
@@ -23,6 +23,11 @@ this group. What must outlive retention is [authored](REGISTRIES.md) instead.
 [0006](DEPLOYMENT.md) and [0009](DEPLOYMENT.md) carry a status line pointing at
 it, because each names the viewer without deciding it. Nothing about the log
 itself was reopened.
+
+**Three amendments on 2026-09-11, none reopening a decision.** 0010's makes a
+report name the run and step that measured it (AW-5). 0004's records what the
+Live view decided on this channel — the server applies a selection, and Pause
+keeps the subscription — and 0012's how the panel lays a declared graph out.
 
 **Nothing else in this group has been amended or superseded.** 0002's port
 outlived a second backend and a role split, 0003's rule survived four new event

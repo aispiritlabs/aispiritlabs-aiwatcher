@@ -4,7 +4,7 @@
   removed Flyte on 2026-09-09, and ADR_0016 is superseded by
   [AW-4](../specs/AW-4-retire-flyte-and-run-steps-in-pods-of-our-own/_index.md).
   The decision stands — a declaration is still the source that is right on
-  every path.
+  every path. Amended 2026-09-11 (below): how the panel lays the graph out.
 - **Date**: 2026-08-29
 
 ## Context
@@ -218,3 +218,48 @@ every projector's memory, and nothing in this design stops it.
   orchestrator would mean the port is a fixed cost buying nothing, and a direct
   integration would be simpler. The evidence would be a second orchestrator
   never appearing after a year.
+
+## Amendment, 2026-09-11: the panel lays the graph out, and stable beats optimal
+
+### What prompted it
+
+A declared graph has to be drawn, and nothing above said how a node is placed.
+The workflow view re-renders its graph on every live frame, and the curation
+canvas ([ADR_0024](ADR_0024_CURATION_BLOCKS.md)) needs positions for blocks
+somebody then saves.
+
+### Decision
+
+`apps/panel/src/shared/lib/workflow-layout.ts` places nodes by longest-path
+layering, the first phase of a Sugiyama layout, with two simplifications:
+
+- **No crossing minimisation.** Within a rank, nodes keep the order the
+  producer declared them in.
+- **Back edges do not rank.** A graph with a cycle — two agents that call each
+  other — has no topological order, so an edge that would push a node behind
+  one it already sits after is drawn but has no say in where anything goes.
+
+It takes ids and edges and nothing else, and both canvases call it: the
+workflow graph derives positions it never stores, and the curation canvas
+writes them into a draft.
+
+### Alternatives considered
+
+**dagre, or any layout library.** A dependency with its own opinion about
+placement — the reason `waterfall.tsx` is hand-rolled too — when the opinion
+that matters here is not "optimal" but **stable**. A layout that reshuffled as
+a stage finished would make the graph unreadable exactly while somebody is
+watching it.
+
+**Crossing minimisation.** A slightly tidier picture, ordered by a heuristic
+instead of by the declaration. A declaration order is a human's idea of the
+sequence, and a neater graph nobody recognises is the worse of the two.
+
+**A layout per canvas.** Two answers to "where does this go", free to disagree.
+
+### What would make this wrong
+
+A graph that declaration order cannot keep legible — ranks tangled enough that
+people stop reading the canvas. `max_nodes_per_execution` above already says the
+answer to size is collapsing sub-graphs; the answer to tangle would be crossing
+minimisation, and only a variant that holds still across live frames.

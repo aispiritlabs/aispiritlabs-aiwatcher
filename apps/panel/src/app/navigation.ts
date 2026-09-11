@@ -17,25 +17,10 @@ import {
 /**
  * The navigation, as one description rather than as markup in eleven files.
  *
- * Eleven areas side by side stopped being legible, and nothing said which were
- * about the same job, so they sit in three sections — the lifecycle every area
- * already belongs to:
- *
- * - **Feature** — what goes *in*. Datasets, curation, annotations,
- *   conversations. All authored, all content-addressed, all outside retention
- *   (ADR_0011, ADR_0017, ADR_0021).
- * - **Training** — making the thing, and judging it. Runs and models, the
- *   experiments that launch them, the evaluations that measure them, and the
- *   prompts that are the other thing an evaluation is evidence about.
- * - **Inference** — what is running now. The whole observability area, and the
- *   workflows those runs are stages of.
- *
- * The split is the crate table's, not a cosmetic one: everything under Feature
- * and Training reads an object store, everything under Inference folds the log.
- *
- * A section's areas and their views are drawn as a sidebar rather than a third
- * row of tabs: it shows both levels at once, so the third is visible without
- * being clicked into, and stacked tab rows would cost the top of every page.
+ * Areas sit in three sections — Feature, Training, Inference — one per stage of
+ * the lifecycle; CLAUDE.md's Panel section says where the line falls and why.
+ * The root layout draws the sections as a header, and the lit section's areas
+ * and their views as a sidebar, so both lower levels are visible at once.
  */
 
 export interface NavView {

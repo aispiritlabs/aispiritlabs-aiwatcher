@@ -5,26 +5,17 @@ import type { QueryEngineName } from '@/shared/lib/query';
  * Building a query by clicking, and compiling it to the text the deployed engine
  * runs — Flow PHP, DataFusion's Python API or DuckDB's relational API (AW-3).
  *
- * It is a **generator**. Everything it produces goes through `/query/check` and
- * then `/query/query` exactly as hand-written text does, and the engine alone
- * decides whether a query is valid: the panel implements no second grammar and
- * reports no refusal of its own — the split the pipeline and annotation canvases
- * make, so two rule sets cannot drift until somebody trusts the wrong one.
+ * A generator, and one-way. Its text goes through `/query/check` and
+ * `/query/query` exactly as hand-written text does, the engine alone decides
+ * whether it is valid, and text never parses back into blocks — CLAUDE.md's
+ * Panel section and its query-builder guardrail say why. In `build` mode the
+ * draft is the truth and the text is derived from it; in `write` mode the text
+ * is, and the draft is gone.
  *
- * It is deliberately **one-way**: text never parses back into blocks. That would
- * be a second parser in TypeScript for languages whose real ones live in the
- * engines (`services/query/flow/src/Dsl` for Flow), and the day the two
- * disagreed the builder would silently rewrite somebody's query. So the draft
- * and the text are never both the truth: in `build` mode the draft is and the
- * text is derived on every keystroke; in `write` mode the text is and the draft
- * is gone.
- *
- * The attribute names are the live stream's: `agent`, `runtime`, `workflow` and
- * `session` mean the same here and on `/api/v1/events/stream`, so "watch this
- * live" is a link rather than a translation — one selection asked of the read
- * model and of the log. Only the encoding differs: the router writes an array as
- * JSON, the stream takes repeated parameters, and `selectionQuery` in
- * `shared/lib/live.ts` converts one to the other.
+ * The attribute names are the live stream's — `agent`, `runtime`, `workflow`,
+ * `session` — so "watch this live" is a link rather than a translation. Only the
+ * encoding differs: the router writes an array as JSON, the stream takes
+ * repeated parameters, and `selectionQuery` in `shared/lib/live.ts` converts.
  */
 
 export type Grain = 'runs' | 'spans';
