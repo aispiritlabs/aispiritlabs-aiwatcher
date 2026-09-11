@@ -318,9 +318,10 @@ export function DatasetsPage() {
                       Generated {ENGINE_LABEL[engine]}
                     </span>
                     <Link
-                      to="/data-curation"
+                      to="/data-curation/recipe"
                       search={{
                         q: pipeline,
+                        writtenFor: engine,
                         name: `promotion/${scope}`,
                         dataset: datasetName,
                         window: search.window,

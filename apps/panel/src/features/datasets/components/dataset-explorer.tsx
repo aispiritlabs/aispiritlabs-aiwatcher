@@ -14,9 +14,11 @@ import type {
   DatasetRowsPage,
   DatasetSummary,
   EvaluationSummary,
+  QueryEngine,
 } from '@/api/generated/types.gen';
 import { Badge, Button, Card, EmptyState, Spinner } from '@/shared/components/ui/primitives';
 import { StatusBadge } from '@/shared/components/status-badge';
+import { ENGINE_LABEL } from '@/shared/lib/query';
 import { answerOf } from '@/shared/lib/result';
 import { cn, formatTime } from '@/shared/lib/utils';
 
@@ -181,6 +183,7 @@ export function DatasetExplorer({
           reference={reference}
           evaluations={evaluations}
           pipeline={rows.data?.pages[0]?.pipeline}
+          engine={rows.data?.pages[0]?.engine}
           source={rows.data?.pages[0]?.source}
           windowSeconds={rows.data?.pages[0]?.window_seconds}
           versionId={version.version}
@@ -458,6 +461,7 @@ function Lineage({
   reference,
   evaluations,
   pipeline,
+  engine,
   source,
   windowSeconds,
   versionId,
@@ -466,6 +470,8 @@ function Lineage({
   reference: string;
   evaluations: EvaluationSummary[];
   pipeline?: string;
+  /** The engine `pipeline` was written for; absent is Flow. */
+  engine?: QueryEngine;
   source?: string;
   windowSeconds?: number | null;
   versionId: string;
@@ -478,7 +484,7 @@ function Lineage({
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_20rem]">
       <Card className="overflow-hidden">
         <div className="border-b border-border p-3">
-          <h3 className="text-sm font-semibold">Flow PHP provenance</h3>
+          <h3 className="text-sm font-semibold">{ENGINE_LABEL[engine ?? 'flow']} provenance</h3>
           <p className="text-xs text-muted-foreground">
             The exact transformation stored with this immutable output.
           </p>
@@ -502,8 +508,13 @@ function Lineage({
             <dd>
               {version.recipe ? (
                 <Link
-                  to="/data-curation"
-                  search={{ q: pipeline, name: version.recipe, dataset: dataset.name }}
+                  to="/data-curation/recipe"
+                  search={{
+                    q: pipeline,
+                    writtenFor: engine,
+                    name: version.recipe,
+                    dataset: dataset.name,
+                  }}
                   className="text-primary hover:underline"
                 >
                   {version.recipe}
