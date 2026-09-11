@@ -8,7 +8,7 @@ The [SDK design comparison](../../../../docs/PYTHON_SDK_DESIGN.md) explains
 which patterns were adopted from Temporal, Prefect and ZenML.
 
 This is the Python half of Phase 10: execute registered functions over the
-existing managed-execution HTTP API, without importing Flyte or Kubernetes.
+existing managed-execution HTTP API, without importing an orchestrator or Kubernetes.
 The server owns dispatch, retries, leases, dependency ordering and settlement.
 
 Create a local module, for example `planner_tasks.py`:
@@ -146,8 +146,8 @@ clock sources so deadline tests do not depend on sleeping or CI scheduling.
 
 The server registers and compiles Python workflow definitions, and Runtime can
 start them through its public API. `just test-worker-runtime` exercises worker
-and server restart against PostgreSQL. Planner's four-stage parity gate remains
-the next integration step before switching orchestration and removing Flyte.
+and server restart against PostgreSQL, and planner's four-stage parity gate
+holds its house import on this path byte-identical to the in-process one.
 
 `aiwatcher-worker run-attempt --ref execution/step/attempt --queue imports
 --task module:function` executes exactly one attempt. An unavailable target
