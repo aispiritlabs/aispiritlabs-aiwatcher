@@ -30,12 +30,15 @@ tags: [spec/AW-3, step/deploy, branch/main, status/done]
       `flow`, so a deployment that sets nothing runs as it did; switching is that one value
 
 ## Post-deploy checks
-- [ ] Behaviour matches the spec where it now runs — it runs nowhere but this checkout
-      yet. What was verified is the working tree these commits came from (`04-tests.md`,
-      and `05-review.md`'s re-run); the first runs outside it are CI's `query` job per
-      engine and the image build after the push
-- [ ] No regression in the signals this change could move — the same: after the push,
-      CI green for every engine, and a Flow deployment's managed runs unchanged
+- [x] Behaviour matches the spec where it now runs — CI's `query` job, once per engine on
+      Linux, green on `5f9996b` (run 34591223332), and all three query images built and
+      published beside the server and panel (release-images run 34591223340). No
+      deployment runs it yet; the first one to set `AIWATCHER_QUERY_ENGINE` is the next
+      place to look
+- [x] No regression in the signals this change could move — every CI job green on
+      `5f9996b`, the Rust suite and Flow's entry included. A Flow deployment's managed runs
+      are unchanged as far as CI can say: the default is `flow` and nothing here moved a
+      stored digest; no deployment has taken the release yet
 - **CI on the push** (run 34589791754): every job green but the three Python ones, which
   failed on one test, `test_a_query_naming_a_clock_is_not_deterministic` — DataFusion's
   `now()` on Linux carries nanoseconds, and `rows_of` could not make a `datetime` of
@@ -90,3 +93,4 @@ tags: [spec/AW-3, step/deploy, branch/main, status/done]
 - 2026-09-11 12:34 — pushed by the owner (origin/main at 5e4df79); CI run 34589791754 and release-images run 34589791847 started
 - 2026-09-11 12:39 — CI red on the push, one test on Linux's nanosecond clock; fixed in the working tree (rows_of to microseconds), query-contract-check 187 passed, not yet committed
 - 2026-09-11 12:45 — release images red on the push: the Flow image's vendor stage lacked bcmath for flow-php/parquet, so no query image published; fixed in the working tree, the flow target builds locally
+- 2026-09-11 13:00 — both fixes pushed (68775f6, b37c7de; origin/main at 5f9996b): CI run 34591223332 green, release-images run 34591223340 green with all five images published; post-deploy checks ticked
