@@ -7,9 +7,9 @@ means it is sitting on that column waiting for something.
 
 ## Backlog
 
-- [ ] [AW-4 · Retire Flyte, and run workflow steps in pods of our own](AW-4-retire-flyte-and-run-steps-in-pods-of-our-own/_index.md)
-
 ## Investigation
+
+- [ ] [AW-4 · Retire Flyte, and run workflow steps in pods of our own](AW-4-retire-flyte-and-run-steps-in-pods-of-our-own/_index.md)
 
 ## Spec
 
