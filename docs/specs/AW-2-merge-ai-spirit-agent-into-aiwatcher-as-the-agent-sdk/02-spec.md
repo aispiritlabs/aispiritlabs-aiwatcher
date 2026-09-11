@@ -5,7 +5,7 @@ status: doing
 branch: feat/agent-sdk-merge
 repo: aiwatcher
 created: 2026-09-10
-updated: 2026-09-10
+updated: 2026-09-11
 tags: [spec/AW-2, step/spec, branch/feat-agent-sdk-merge, status/doing]
 ---
 
@@ -94,6 +94,11 @@ spec adds is the repository dimension §40 does not cover.
       own, 9/9: `make registry` publishes six, a real builder reads the
       admitted candidate, a dev-only win is refused, a republish moves no
       label.)
+- [x] A turn's model call names the prompt version it ran on, and the
+      reference resolves. (`just e2e-agent-prompt`, 6/6, on a server of its
+      own: the promoted candidate named and answered by the registry, the
+      authored version when the builder has no registry, nothing for text
+      given directly, and none of the words on the log or the run.)
 
 ## Spec (delta)
 
@@ -484,6 +489,45 @@ their text and SHALL move no label. Nothing SHALL ask MLflow for a prompt.
 - THEN neither `mlflow` nor an HTTP client is loaded, and `registry` declares no
   MLflow dependency
 
+#### Requirement: a turn names the prompt version it ran on
+An agent's model call SHALL carry the registry reference of the prompt its
+builder read by name — `prompt_name` and `prompt_version` on its `llm.*`
+events, which aiwatcher writes as `aiwatcher.prompt.name` and
+`aiwatcher.prompt.version_id` on the span. The version SHALL be `sha256` of the
+text the builder read, so that it is the id the registry gave that text, and
+SHALL NOT be the hash of the rendered prompt, which names no version. A builder
+that read nothing by name, or whose text or name has changed since it read,
+SHALL name no version. The text SHALL NOT be carried.
+
+##### Scenario: a promoted candidate is named on the span
+- GIVEN `production` on a candidate of `sage`
+- WHEN an agent whose builder names `sage` runs a turn
+- THEN its LLM span names `sage` and the candidate's version, and the registry
+  answers that reference with the candidate's text
+
+##### Scenario: without a registry, the authored version
+- GIVEN no `AIWATCHER_URL` for the builder, and the catalogue published by
+  `make registry`
+- WHEN the same agent runs a turn
+- THEN its span names the authored version, and that reference resolves
+
+##### Scenario: the template's version, not the rendered prompt's
+- GIVEN a template with `{tools}` and whitespace around it, and a capability
+  that adds instructions
+- WHEN a turn renders it
+- THEN the version is the template's `sha256`, and differs from `prompt_hash`
+
+##### Scenario: text given directly names no version
+- GIVEN a builder handed its text as well as a name
+- WHEN a turn runs
+- THEN its span carries no prompt reference — the name alone would point at a
+  text the model was not given
+
+##### Scenario: the reference, never the words
+- GIVEN a turn on a named prompt
+- WHEN its events and its run are read back
+- THEN neither holds any of the prompt's text
+
 ### MODIFIED Requirements
 
 #### Requirement: the Python floor
@@ -741,16 +785,36 @@ answers to "which version did this run use". MLflow keeps tracing, teed.)
   than published on read: a read that writes would attribute a version to
   whichever process happened to ask first.
 
+- **A turn's prompt version is derived, not looked up** (2026-09-11). The
+  builder records `sha256` of what its source returned, which is the
+  registry's own content address, so the id on the span is the registry's by
+  construction and nothing asks the registry a second time — `make registry`'s
+  six versions are the `sha256` of their texts, and the span's id resolves.
+  Not `prompt_hash`: that is the *rendered* prompt, after `{tools}` is filled,
+  the template stripped and a capability's instructions added, and it names no
+  version of anything.
+- **A reference only while it is true.** Text handed to the builder directly,
+  a text replaced after it was read and a builder renamed since all name no
+  version. The tracer sends the name and the version independently and
+  `PromptRef` keeps nothing without a version, so a name alone never reaches a
+  span as a claim about a text the model was not given.
+- **The channel is the attribute the agent already wrote.** The agent passes
+  `agentic.prompt_version` beside `agentic.prompt_name` in `extra_attributes`,
+  which the MLflow tracer sets on its span verbatim; aiwatcher's tracer, which
+  dropped both, writes them as `prompt_name` and `prompt_version` on both
+  `llm.*` events. `LLMTracer`'s protocol is unchanged. The capability path
+  rebuilt `PromptArtifacts` field by field, and would have dropped the new
+  field; it is `dataclasses.replace` now.
+- **The licence is Apache-2.0** (the owner, 2026-09-11), as the distributions
+  beside it declare. `sdk/agentic/NOTICE` keeps the MIT notice the engine, the
+  core and the runtime were published under in `ai_spirit_agent`, as that
+  licence asks. Found on the way and not changed: the repository's root
+  `LICENSE` is proprietary, while `aiwatcher-sdk` and `aiwatcher-agentic`
+  declare Apache-2.0 and ship no licence text of their own — the carve-out
+  that reconciles the two is written nowhere.
+
 ## Still open, deferred to the phase that can answer them
 
-- **A turn's prompt version.** An agent names its prompt on its LLM call only
-  as the attribute `agentic.prompt_name`, which `AiwatcherTracer.llm` drops, so
-  a trace cannot link a turn to the version it ran — `prompt_name` and
-  `prompt_version` are what `PromptRef::from_data` reads. The builder can
-  derive the version from the text it read (`sha256`, as the registry does);
-  that is a change to the core and the tracer, not to the registry.
-- **The licence.** `ai_spirit_agent` declares MIT; `aiwatcher-agentic` was
-  given the Apache-2.0 of the distributions beside it. The owner's call.
 - **Which `evaluation` scorers move.** The DeepEval bridge is already
   structural here; the MLflow scorers read completions, and this plan moves no
   content.
@@ -763,3 +827,4 @@ answers to "which version did this run use". MLflow keeps tracing, teed.)
 - 2026-09-10 18:27 — agent runtime: one requirement added over six scenarios (39 in all); the runtime's cut, the tracer and settings ports with the application's subclass, `aiwatcher-sdk` as an extra, a store default found broken since Phase C, and the runtime's two wire names, settled
 - 2026-09-10 20:05 — Phase A finished: `declare_graph` wired. One requirement added over six scenarios (45 in all), one success criterion ticked; the shape a turn can reach, the turn as its own execution, a node's own span id, nesting in process and the two message kinds, settled
 - 2026-09-10 20:04 — the MLflow prompt registry retired: one requirement added over seven scenarios (52 in all), the agent core's prompt clause reworded, one success criterion ticked; the catalogue staying with the application, the authored text without aiwatcher and never with it, publishing not deploying, and a 404 naming the fix, settled; a turn's prompt version left open
+- 2026-09-11 10:10 — a turn's prompt version: one requirement over five scenarios (57 in all), one success criterion added and ticked; the version derived from what was read, a reference only while it is true, the attribute channel, and the licence (Apache-2.0, the owner) settled; the root `LICENSE` contradiction recorded, not changed
