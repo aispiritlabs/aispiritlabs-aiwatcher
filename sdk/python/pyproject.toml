@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Publish agent-run telemetry to aiwatcher, and read its prompt registry."
 readme = "README.md"
 requires-python = ">=3.13"
-license = "Apache-2.0"
+license = "PolyForm-Noncommercial-1.0.0"
 # Two, and the split is the design. The **telemetry** half — `aiwatcher_sdk`
 # itself, which is what an instrumented agent imports — reaches for neither:
 # it is `urllib`, `json` and `dataclasses`, because a telemetry library that

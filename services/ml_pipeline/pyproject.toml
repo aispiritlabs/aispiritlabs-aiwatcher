@@ -8,7 +8,7 @@ readme = "README.md"
 # that keep `sdk/python` on a 3.11 floor apply here, and the floor there is a
 # promise to whoever imports the SDK rather than a preference.
 requires-python = ">=3.14"
-license = "Apache-2.0"
+license = "PolyForm-Noncommercial-1.0.0"
 # marimo brings the server with it: it already requires starlette and uvicorn,
 # so the control routes and the app host cost nothing beyond the notebook
 # runtime itself. Pinned to a minor line rather than exactly — `create_asgi_app`

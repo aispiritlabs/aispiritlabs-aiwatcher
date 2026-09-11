@@ -32,6 +32,14 @@ allow = [
 ]
 confidence-threshold = 0.8
 
+# This workspace's own crates are PolyForm Noncommercial (LICENSE), which is not
+# on the list above and must never be: a dependency under it would make every
+# build of this a noncommercial one without anybody deciding so. They are
+# `publish = false`, and unpublished workspace crates are skipped here, so the
+# list stays a statement about what this depends on.
+[licenses.private]
+ignore = true
+
 # The Mozilla CA root store, redistributed as data rather than as code.
 # CDLA-Permissive-2.0 is the licence that data carries, and it is permissive
 # with no attribution or reciprocity obligation — but it is a *data* licence,

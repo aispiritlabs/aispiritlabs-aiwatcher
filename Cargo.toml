@@ -30,7 +30,10 @@ members = ["crates/*"]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.98.0"
-license = "Apache-2.0"
+license = "PolyForm-Noncommercial-1.0.0"
+# Noncommercial crates have no business on a public registry, and an unpublished
+# crate is what `deny.toml` exempts from its licence list — see there.
+publish = false
 repository = "https://github.com/ai-spirit/aiwatcher"
 
 [workspace.dependencies]

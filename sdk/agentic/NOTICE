@@ -1,7 +1,10 @@
 aiwatcher-agentic
-Copyright (c) 2026 AI Spirit Labs
+Required Notice: Copyright (c) 2026 AI Spirit Labs (https://github.com/aispiritlabs)
 
-This distribution is licensed under the Apache License, Version 2.0.
+This distribution is licensed under the PolyForm Noncommercial License 1.0.0;
+the terms are in LICENSE. It may be used, changed and shared for noncommercial
+purposes only. Any commercial use needs a separate written licence from AI
+Spirit Labs: https://github.com/aispiritlabs
 
 The workflow engine, the agent core and the agent runtime were moved here from
 ai_spirit_agent (AW-2), where they were published under the MIT licence below.

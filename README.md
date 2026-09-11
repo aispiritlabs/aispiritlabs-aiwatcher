@@ -184,4 +184,6 @@ Built on [Apache Iggy](https://github.com/apache/iggy),
 
 ## Licence
 
-Proprietary and confidential. No licence is granted — see [LICENSE](LICENSE).
+[PolyForm Noncommercial 1.0.0](LICENSE): use, change and share it for
+noncommercial purposes. Any commercial use needs a separate licence from
+[AI Spirit Labs](https://github.com/aispiritlabs) — see [NOTICE](NOTICE).

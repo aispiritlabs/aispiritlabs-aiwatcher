@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "What agents are built from: the durable workflow engine, the agent core, and the runtime that hosts agents on aiwatcher."
 readme = "README.md"
 requires-python = ">=3.13"
-license = "Apache-2.0"
+license = "PolyForm-Noncommercial-1.0.0"
 # The engine — `aiwatcher_agentic.workflow` — is the standard library and
 # nothing else, SQLite included. The agent layer beside it (AW-2) adds these
 # two, which it logged and parsed tool calls with before it moved: small,

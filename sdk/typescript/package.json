@@ -2,6 +2,7 @@
   "name": "@aiwatcher/sdk",
   "version": "0.1.0",
   "description": "Publish agent-run telemetry to aiwatcher.",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",

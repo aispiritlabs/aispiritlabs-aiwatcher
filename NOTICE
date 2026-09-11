@@ -1,0 +1,24 @@
+aiwatcher
+Required Notice: Copyright (c) 2026 AI Spirit Labs (https://github.com/aispiritlabs)
+
+This repository — the Rust workspace, the panel, the SDKs and the services — is
+licensed under the PolyForm Noncommercial License 1.0.0; the terms are in
+LICENSE. It may be used, changed and shared for noncommercial purposes only.
+Any commercial use, including running it for or inside a business, selling it,
+or offering it as a service, needs a separate written licence from AI Spirit
+Labs: https://github.com/aispiritlabs
+
+THIRD-PARTY COMPONENTS
+
+The software depends on third-party components that remain under their own
+licences. Those licences govern those components and nothing in LICENSE
+restricts rights granted by them. The dependency manifests are the record:
+Cargo.toml and Cargo.lock, apps/panel/package.json, sdk/typescript/package.json,
+sdk/python/pyproject.toml, sdk/agentic/pyproject.toml,
+services/ml_pipeline/pyproject.toml and services/query/flow/composer.json.
+
+CODE FROM ai_spirit_agent
+
+The workflow engine, the agent core and the agent runtime in sdk/agentic were
+moved from ai_spirit_agent, where they were published under the MIT licence.
+That notice is kept in sdk/agentic/NOTICE.
