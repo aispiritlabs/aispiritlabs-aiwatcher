@@ -43,6 +43,14 @@ tags: [spec/AW-3, step/deploy, branch/main, status/done]
   tree: `rows_of` casts nanosecond times to microseconds, the answer's precision, pinned
   by `test_a_nanosecond_time_is_answered_to_the_microsecond_on_any_clock`, which fails
   without the fix on any clock; `just query-contract-check` 187 passed
+- **Release images on the push** (run 34589791847): the server and panel images built;
+  the Flow image failed at `composer install`, as it had on `125ec93` the day before, so
+  the DataFusion and DuckDB images after it were skipped and none of the three query
+  images is published yet. `flow-php/parquet`, which `43453ed` (AW-3's phase 1) brought
+  in, requires `bcmath`, and the vendor stage resolved on the bare base. Fixed in the
+  working tree: the vendor stage builds on the extensions stage, which keeps `gmp`'s
+  library; `docker build --target flow` passes, and its gate finds `gmp` and `bcmath`
+  loaded
 - Left uncommitted and not in these commits: `sdk/agentic/tests/test_gemma_prompt.py`
   and `sdk/python/aiwatcher_sdk/outbox.py`, other work in the same checkout
 
@@ -81,3 +89,4 @@ tags: [spec/AW-3, step/deploy, branch/main, status/done]
 - 2026-09-11 12:06 — shipped from `main`: committed as 4d736b2, ea2dfe7 and fac6a8c (with cd18692 beside them), not pushed — the owner's step; ADR_0028 and three amendments graduated
 - 2026-09-11 12:34 — pushed by the owner (origin/main at 5e4df79); CI run 34589791754 and release-images run 34589791847 started
 - 2026-09-11 12:39 — CI red on the push, one test on Linux's nanosecond clock; fixed in the working tree (rows_of to microseconds), query-contract-check 187 passed, not yet committed
+- 2026-09-11 12:45 — release images red on the push: the Flow image's vendor stage lacked bcmath for flow-php/parquet, so no query image published; fixed in the working tree, the flow target builds locally
