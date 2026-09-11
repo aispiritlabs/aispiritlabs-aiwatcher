@@ -19,8 +19,6 @@ means it is sitting on that column waiting for something.
 
 - [ ] [AW-4 · Retire Flyte, and run workflow steps in pods of our own](AW-4-retire-flyte-and-run-steps-in-pods-of-our-own/_index.md)
 
-- [ ] [AW-3 · DataFusion and DuckDB as query and curation engines](AW-3-datafusion-and-duckdb-as-query-and-curation-engines/_index.md)
-
 ## Tests
 
 ## Review
@@ -28,5 +26,7 @@ means it is sitting on that column waiting for something.
 ## Deploy
 
 ## Done
+
+- [x] [AW-3 · DataFusion and DuckDB as query and curation engines](AW-3-datafusion-and-duckdb-as-query-and-curation-engines/_index.md)
 
 - [x] [AW-1 · Ship the spec flow with the repository](AW-1-ship-the-spec-flow-with-the-repository/_index.md)
