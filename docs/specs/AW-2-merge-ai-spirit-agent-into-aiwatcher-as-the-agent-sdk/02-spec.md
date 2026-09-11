@@ -820,7 +820,13 @@ answers to "which version did this run use". MLflow keeps tracing, teed.)
   would admit a noncommercial *dependency* with nobody deciding so. Unlike the
   text it replaces, it does not forbid training a model on the code. Left for
   their owners: `services/query/flow` still declares MIT, and AW-3's three
-  `services/query` projects Apache-2.0.
+  `services/query` projects Apache-2.0. `ai_spirit_agent` followed the same
+  day, on the same terms: MIT on top of a noncommercial dependency said
+  something no user could act on, and copies received under the earlier MIT
+  licence stay under it, as they must. And `CONTRIBUTING.md` asks every
+  contribution for a licence AI Spirit Labs may sublicense on any terms —
+  without it a commercial licence could not cover the whole of the code, and
+  that is not something to repair after the first outside contribution.
 
 ## Still open, deferred to the phase that can answer them
 
@@ -838,3 +844,4 @@ answers to "which version did this run use". MLflow keeps tracing, teed.)
 - 2026-09-10 20:04 — the MLflow prompt registry retired: one requirement added over seven scenarios (52 in all), the agent core's prompt clause reworded, one success criterion ticked; the catalogue staying with the application, the authored text without aiwatcher and never with it, publishing not deploying, and a 404 naming the fix, settled; a turn's prompt version left open
 - 2026-09-11 10:10 — a turn's prompt version: one requirement over five scenarios (57 in all), one success criterion added and ticked; the version derived from what was read, a reference only while it is true, the attribute channel, and the licence (Apache-2.0, the owner) settled; the root `LICENSE` contradiction recorded, not changed
 - 2026-09-11 10:25 — the licence re-decided by the owner: PolyForm Noncommercial 1.0.0 for the whole repository, replacing the Apache-2.0 settled an hour earlier and the proprietary root `LICENSE` with it
+- 2026-09-11 10:40 — `ai_spirit_agent` licensed the same way, and `CONTRIBUTING.md` asks contributions for the rights a commercial licence needs
