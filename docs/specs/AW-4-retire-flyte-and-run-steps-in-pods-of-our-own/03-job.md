@@ -87,6 +87,42 @@ outline below is what the spec already fixes.
   Two points move from §37: an image matches a repository exactly rather than
   by prefix, and the launcher creates Jobs without claiming anything — one per
   attempt, under a name derived from its key.
+- **The templates file is a JSON map from name to template** (2.2), and each
+  template has these fields:
+  - `images`;
+  - `resources`, holding `requests`, `limits` and a required `max`;
+  - `command`;
+  - `start_allowance_seconds`, 300 by default;
+  - `pod`.
+
+  Unknown fields are refused, every problem is reported at once, and a malformed
+  file fails the start. A template's name is a DNS label, because the Jobs it
+  starts will carry it.
+- **What aiwatcher fills in is refused in a template, by name** (2.2):
+  - on the pod: `restartPolicy`, `activeDeadlineSeconds`, and the Job's
+    `backoffLimit` and `ttlSecondsAfterFinished`;
+  - on the container: `image`, `resources`, `command`, `args`, and the three
+    variables aiwatcher sets — `AIWATCHER_ATTEMPT`, `AIWATCHER_URL` and
+    `AIWATCHER_WORKER_NAME`.
+
+  `command` and `args` go further than the ADR's list: the template has a
+  `command` of its own, and two places for one argv are two answers.
+  `pod.containers` is absent or holds exactly one container.
+- **Docker's defaults are written out before an image is compared** (2.2):
+  `python:3.13` is `docker.io/library/python`, so an entry and a step that spell
+  one image two ways agree. The match is still exact, by repository.
+- **Until 2.3, a `container_job` row carries no queue** (2.2), so nothing claims
+  it and it waits. Writing its queue before the key-only rule exists would let
+  any worker holding that queue take a pod's attempt and run it outside the
+  pod, which is the hole the ADR names.
+- **The work and combined roles refuse templates in every build until `kube`
+  exists** (2.2, `ConfigError::Unusable`). 2.3 makes the refusal depend on the
+  feature. The serve role reads templates in any build.
+- **A pod's step has a cache key only with an image pinned by digest** (2.2). A
+  tag names whatever was pushed under it last. The workflow compiler sets
+  `never` anyway, so this is only `cache_key`'s own answer.
+- **The SDK's `WorkflowStep` takes `pod=PodRequest(…)`** (2.2), and sends it only
+  when it is set, so a step without one registers the same revision.
 
 ## Tasks
 
@@ -125,7 +161,7 @@ outline below is what the spec already fixes.
 ### Part 2 — pods (outline)
 - [x] 2.1 ADR: templates, allowlists, who may name an image, the `kube` feature —
       [ADR_0029](../../ADR/ADR_0029_POD_PER_STEP.md)
-- [ ] 2.2 `RuntimeBinding::ContainerJob` and the step's `pod` field; the
+- [x] 2.2 `RuntimeBinding::ContainerJob` and the step's `pod` field; the
       templates file both roles read; registration's refusals — *only an
       allowed image runs*, *resources come from the template*
 - [ ] 2.3 The launcher behind `kube`: the store's read of claimable rows by
@@ -145,3 +181,4 @@ outline below is what the spec already fixes.
 - 2026-09-11 12:47 — Parts 1b and 1c built (`8154041`): the five routes, `core::engine`, `AppState.engine`, the three error variants, the launcher on the recipe and Experiments pages, `ExecutionOwner::Unknown`, `ExternalWorkflow` and its spec and kind; the contract and the panel's client regenerated with no engine left in them; clippy clean, every touched crate's tests and the panel's 178 green
 - 2026-09-11 12:54 — 1.10 done: the docs pass landed inside `5f9996b`; after it, §28's Phase 12 bullet no longer says AW-4 is investigating, and three unwrapped `CLAUDE.md` lines are wrapped; `just check` 18/19 on HEAD, `comments` failing on the same five panel blocks from `ea2dfe7`
 - 2026-09-11 14:45 — 2.1 done: ADR_0029 — a step opts in with `pod` and compiles to `container_job`; templates and per-template image lists are chart values, matched by exact repository; the launcher reads claimable rows and creates one Job per attempt by a derived name, never claiming; the pod claims its attempt by key under its template's queue token (a one-attempt credential deferred as the strict mode); the lease decides, the watch explains; the log is the last 256 KiB in the catalog. Answers the spec's three open questions; 2.2–2.4 reworded to match
+- 2026-09-11 15:13 — 2.2 built (`c4fc124`): `RuntimeBinding::ContainerJob` under `container_job`; the step`s `pod` field, absent from every older digest; `aiwatcher_execution::pods` with the templates file, the exact-repository image match, Kubernetes quantities and the refusals of fields aiwatcher fills in; a 422 at registration naming step, value and template; `AIWATCHER_POD_TEMPLATES` read by the serve role and refused where no launcher exists; the SDK `PodRequest`. Clippy -Dwarnings and the three crates suites green, `just sdk-check` 423, the panel build green, the contract regenerated
