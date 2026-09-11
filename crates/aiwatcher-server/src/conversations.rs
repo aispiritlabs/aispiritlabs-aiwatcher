@@ -185,10 +185,10 @@ async fn expire(archive: &Registry) {
 /// which; this is the one that was worth building.
 ///
 /// **Why here rather than beside the retention it mirrors.** The execution
-/// retention sweep runs in the `work` role and the archive in `serve`. §43.11
-/// already makes those two share the object store *and* the workflow store, so
-/// the join costs nothing here and would cost an archive wired into the other
-/// role there. A split deployment sweeps from `serve`; a combined one is the
+/// retention sweep runs in the `work` role and the archive in `serve`. A split
+/// deployment already has to share the object store *and* the workflow store
+/// between those two, so the join costs nothing here and would cost an archive
+/// wired into the other role there. A split deployment sweeps from `serve`; a combined one is the
 /// same process either way.
 ///
 /// **Why "no projection" is the whole test.** A projection is written by the
