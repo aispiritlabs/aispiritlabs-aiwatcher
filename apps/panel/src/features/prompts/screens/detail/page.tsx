@@ -28,6 +28,7 @@ import {
 } from '@/shared/components/prompt-bits';
 import { PromptDiff } from '@/features/prompts/components/prompt-diff';
 import { ErrorText } from '@/features/prompts/components/error-text';
+import { type Promotion, usePromotion } from '@/features/prompts/lib/promotion';
 import { RegistryDisabled, isRegistryDisabled } from '@/shared/components/registry-disabled';
 import {
   Badge,
@@ -121,6 +122,10 @@ export function PromptPage() {
     },
     onSuccess: invalidate,
   });
+
+  // The registry refuses `production` on a candidate its verdict rejected, so
+  // the button follows the recorded verdict rather than finding out on click.
+  const promotion = usePromotion(name, selected.data ?? undefined, head?.optimizations ?? []);
 
   // Authoring a prompt is an editor's job; reading one is not. The server
   // refuses either way — this is so that finding out does not cost a round
@@ -272,6 +277,7 @@ export function PromptPage() {
             onPromote={() => (selected.data ? promote.mutate(selected.data.version_id) : undefined)}
             promoting={promote.isPending}
             promoteError={promote.error}
+            promotion={promotion}
           />
 
           <Optimizations
@@ -362,6 +368,7 @@ function VersionPane({
   onPromote,
   promoting,
   promoteError,
+  promotion,
 }: {
   version: PromptVersion | undefined;
   loading: boolean;
@@ -373,8 +380,10 @@ function VersionPane({
   onPromote: () => void;
   promoting: boolean;
   promoteError: unknown;
+  promotion: Promotion;
 }) {
   const mayAuthor = useCan('editor');
+  const verdictId = React.useId();
 
   if (loading) {
     return (
@@ -437,20 +446,42 @@ function VersionPane({
             <Button
               variant="outline"
               size="sm"
-              disabled={promoting || !mayAuthor}
+              disabled={
+                promoting ||
+                !mayAuthor ||
+                promotion.state === 'reading' ||
+                promotion.state === 'refused'
+              }
               onClick={onPromote}
+              aria-describedby={promotion.state === 'refused' ? verdictId : undefined}
               title={
-                mayAuthor
-                  ? 'Point the production label at this version. Nothing is deployed by recording evidence — this is the act that deploys.'
-                  : needsRole('editor')
+                promotion.state === 'refused'
+                  ? 'The registry refuses production for a candidate its verdict did not admit.'
+                  : promotion.state === 'reading'
+                    ? 'Reading the verdict on this candidate…'
+                    : mayAuthor
+                      ? 'Point the production label at this version. Nothing is deployed by recording evidence — this is the act that deploys.'
+                      : needsRole('editor')
               }
             >
-              {promoting ? <Spinner /> : null}
+              {promoting || promotion.state === 'reading' ? <Spinner /> : null}
               Make production
             </Button>
           ) : null}
         </div>
       </CardHeader>
+
+      {!isProduction && promotion.state === 'refused' ? (
+        <Refused id={verdictId} promotion={promotion} />
+      ) : null}
+
+      {!isProduction && promotion.state === 'unread' ? (
+        <p className="px-4 pt-3 text-xs text-muted-foreground">
+          Could not read the verdict on this candidate
+          {promotion.failure instanceof Error ? ` (${promotion.failure.message})` : ''}. The
+          registry still refuses production if it was rejected.
+        </p>
+      ) : null}
 
       {promoteError ? (
         <div className="px-4 pt-3">
@@ -476,6 +507,49 @@ function VersionPane({
         </pre>
       )}
     </Card>
+  );
+}
+
+/**
+ * Why `production` may not point here, in the words the optimisations list uses.
+ *
+ * The reason is the recorded one and never re-derived: the verdict is the
+ * server's. Only `production` answers to it — any other label may still name
+ * this version, which is how a rejected candidate gets tried on `staging`.
+ */
+function Refused({
+  id,
+  promotion,
+}: {
+  id: string;
+  promotion: Extract<Promotion, { state: 'refused' }>;
+}) {
+  const { verdict } = promotion;
+  const why = !verdict
+    ? 'no verdict was recorded for the optimisation that produced it'
+    : verdict.reason
+      ? REJECTION_TEXT[verdict.reason]
+      : 'the verdict rejected it';
+  const lost =
+    verdict?.variables_lost && verdict.variables_lost.length > 0
+      ? ` (${verdict.variables_lost.join(', ')})`
+      : '';
+  return (
+    <p
+      id={id}
+      className={cn(
+        'flex flex-wrap items-center gap-1 px-4 pt-3 text-xs',
+        verdict?.reason === 'variables_lost' ? 'text-danger' : 'text-muted-foreground',
+      )}
+    >
+      <span>
+        Cannot be made production: {why}
+        {lost}.
+      </span>
+      <span>Verdict of</span>
+      <IdChip value={promotion.optimizationId.slice(0, 12)} full={promotion.optimizationId} />
+      <span>— other labels may still point here.</span>
+    </p>
   );
 }
 
