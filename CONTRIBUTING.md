@@ -1,5 +1,28 @@
 # Contributing
 
+## Rights in what you contribute
+
+aiwatcher is licensed under the PolyForm Noncommercial License 1.0.0
+([LICENSE](LICENSE)), and AI Spirit Labs licenses it separately for commercial
+use ([NOTICE](NOTICE)). The second licence can only be granted over code AI
+Spirit Labs has the rights to, so a contribution comes with those rights:
+
+- By submitting a contribution — a pull request, a patch, a commit pushed here —
+  you grant AI Spirit Labs a perpetual, worldwide, non-exclusive, royalty-free,
+  irrevocable licence to use, reproduce, modify, distribute and sublicense it,
+  under PolyForm Noncommercial and under any other terms, commercial ones
+  included.
+- You confirm that you wrote it, or otherwise have the right to grant that, and
+  that it brings in nothing under a licence that would forbid it: no copyleft
+  code, and nobody else's noncommercial code.
+- If an employer has rights in what you write, you have its permission to
+  contribute on these terms.
+
+Contributors outside AI Spirit Labs sign off every commit (`git commit -s`),
+which records that they agree. A contribution without the sign-off is not
+merged, and one that cannot meet the second point is not either — however good
+it is, it is code nobody could sell a licence for.
+
 ## Before a PR
 
 ```bash
