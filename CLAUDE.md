@@ -324,9 +324,14 @@ area.
    that still sets `AIWATCHER_ENGINE` is refused at start by name. A step that
    needs a pod of its own is to get one from the engine itself — Phase 12's
    `ContainerJob`, reopened by AW-4, decided in
-   [ADR_0029](docs/ADR/ADR_0029_POD_PER_STEP.md) and not built yet: a step
-   names an operator's template and an image on that template's list, and the
-   pod is a worker that claims its one attempt by key.
+   [ADR_0029](docs/ADR/ADR_0029_POD_PER_STEP.md) and built through AW-4's 2.3:
+   a step names an operator's template and an image on that template's list,
+   the work role starts one Job per attempt behind the `kube` feature and
+   claims none of them, and the pod is a worker that claims its one attempt by
+   key — `ClaimFilter` gives a `container_job` row to no claim that did not
+   name it, and the Job's derived name is what makes it exactly one. 2.4 is the
+   other direction: a cancel that deletes the Job, the watch that ends a dead
+   pod's attempt with its own reason, and the log.
 
 14. **An annotation is authored, vector-first, and split by family**
    ([ADR_0017](docs/ADR/ADR_0017_IMAGE_ANNOTATION.md),

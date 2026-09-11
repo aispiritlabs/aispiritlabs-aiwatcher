@@ -41,3 +41,4 @@ planner something aiwatcher now has.
 - 2026-09-11 12:54 — Part 1 done: 1b and 1c built (`8154041`, `a34c378`), the documents in `5f9996b`; Part 2 starts with its ADR
 - 2026-09-11 14:45 — Part 2 designed: ADR_0029 accepted — templates, images, the pod as a worker for one attempt, the lease deciding and the Job explaining; 2.2 is next
 - 2026-09-11 15:13 — 2.2 built (`c4fc124`): a step may ask for a pod, and registration refuses what its template does not allow; nothing launches one yet, and 2.3 is next
+- 2026-09-12 00:32 — 2.3 built (inside another session's `26be55e`): the work role starts one Job per pod's attempt and claims none of them, a pod claims its own attempt by key and no long-lived worker can take it, and the chart grants the launcher Jobs and pod logs in one namespace; 2.4 is next — a cancel deleting the Job, the watch ending a dead pod's attempt, and the log
