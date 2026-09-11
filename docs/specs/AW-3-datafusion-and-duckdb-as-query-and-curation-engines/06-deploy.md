@@ -23,8 +23,9 @@ tags: [spec/AW-3, step/deploy, branch/main, status/done]
       job calls `query-contract-check` and `query-conformance`, so the two go out
       together; and `cd18692`, `payload.rs`'s module doc, which is not AW-3's and was
       trimmed at the user's call to turn `just check` green
-- [ ] Pushed — **the owner's step**. A push to `main` runs `release-images.yml`, which now
-      also publishes `aiwatcher-query-datafusion` and `aiwatcher-query-duckdb`
+- [x] Pushed by the owner on 2026-09-11, with `5e4df79` on top; `origin/main` holds every
+      AW-3 commit. The push runs `release-images.yml`, which now also publishes
+      `aiwatcher-query-datafusion` and `aiwatcher-query-duckdb`
 - [x] Rollout: no flag. `AIWATCHER_QUERY_ENGINE` defaults to `flow` and `query.engine` to
       `flow`, so a deployment that sets nothing runs as it did; switching is that one value
 
@@ -35,6 +36,13 @@ tags: [spec/AW-3, step/deploy, branch/main, status/done]
       engine and the image build after the push
 - [ ] No regression in the signals this change could move — the same: after the push,
       CI green for every engine, and a Flow deployment's managed runs unchanged
+- **CI on the push** (run 34589791754): every job green but the three Python ones, which
+  failed on one test, `test_a_query_naming_a_clock_is_not_deterministic` — DataFusion's
+  `now()` on Linux carries nanoseconds, and `rows_of` could not make a `datetime` of
+  them; a macOS clock ticks in microseconds, so no local run saw it. Fixed in the working
+  tree: `rows_of` casts nanosecond times to microseconds, the answer's precision, pinned
+  by `test_a_nanosecond_time_is_answered_to_the_microsecond_on_any_clock`, which fails
+  without the fix on any clock; `just query-contract-check` 187 passed
 - Left uncommitted and not in these commits: `sdk/agentic/tests/test_gemma_prompt.py`
   and `sdk/python/aiwatcher_sdk/outbox.py`, other work in the same checkout
 
@@ -71,3 +79,5 @@ tags: [spec/AW-3, step/deploy, branch/main, status/done]
 
 ## Log
 - 2026-09-11 12:06 — shipped from `main`: committed as 4d736b2, ea2dfe7 and fac6a8c (with cd18692 beside them), not pushed — the owner's step; ADR_0028 and three amendments graduated
+- 2026-09-11 12:34 — pushed by the owner (origin/main at 5e4df79); CI run 34589791754 and release-images run 34589791847 started
+- 2026-09-11 12:39 — CI red on the push, one test on Linux's nanosecond clock; fixed in the working tree (rows_of to microseconds), query-contract-check 187 passed, not yet committed
