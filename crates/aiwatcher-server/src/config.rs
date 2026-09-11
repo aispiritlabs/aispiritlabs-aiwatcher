@@ -23,6 +23,18 @@ pub enum ConfigError {
         expected: &'static str,
     },
 
+    /// A variable that switched on something aiwatcher no longer has.
+    ///
+    /// Refused rather than ignored: a deployment still setting it expects what
+    /// it switched on, and a server that started without it would say nothing.
+    #[error("{name} is set to {value:?}, but {what} was removed from aiwatcher; {instead}")]
+    Removed {
+        name: &'static str,
+        value: String,
+        what: &'static str,
+        instead: &'static str,
+    },
+
     #[error("{name} is required when AIWATCHER_BUS={bus}")]
     Missing {
         name: &'static str,
@@ -278,11 +290,6 @@ pub enum WorkflowRunnerKind {
     /// One HTTP endpoint, named here. Never named by an event — see
     /// `aiwatcher_runner`.
     Http,
-    /// The configured pipeline engine. A rerun becomes a launch of the launch
-    /// plan with that workflow's name, so a deployment whose orchestrator is
-    /// Flyte configures one endpoint rather than two — see
-    /// `aiwatcher_pipeline::flyte`. Requires `AIWATCHER_ENGINE=flyte`.
-    Engine,
 }
 
 impl FromStr for WorkflowRunnerKind {
@@ -292,44 +299,19 @@ impl FromStr for WorkflowRunnerKind {
         match value.to_ascii_lowercase().as_str() {
             "none" | "off" | "disabled" => Ok(Self::None),
             "http" | "https" | "webhook" => Ok(Self::Http),
-            "engine" | "flyte" => Ok(Self::Engine),
+            // The runner that relaunched through the engine went with it. Named
+            // rather than left to the catch-all, so a deployment still asking
+            // for it reads why instead of a list it thinks it is on.
+            "engine" | "flyte" => Err(ConfigError::Removed {
+                name: "AIWATCHER_WORKFLOW_RUNNER",
+                value: value.to_owned(),
+                what: "the rerun through the Flyte pipeline engine",
+                instead: "set it to http or none",
+            }),
             other => Err(ConfigError::Invalid {
                 name: "AIWATCHER_WORKFLOW_RUNNER",
                 value: other.to_owned(),
-                expected: "one of none, http, engine",
-            }),
-        }
-    }
-}
-
-/// Which orchestrator this deployment can browse and start work in.
-///
-/// `None` by default, on the same reasoning as the runner: everything else
-/// aiwatcher does is a read, and being able to start a training job in another
-/// system should be a decision somebody made rather than one they inherited.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum EngineKind {
-    /// No engine. Every `/api/v1/engine` route answers 501.
-    #[default]
-    None,
-    /// Flyte's control plane, over its `/api/v1/` gateway — see
-    /// `aiwatcher_pipeline::flyte`.
-    Flyte,
-}
-
-impl FromStr for EngineKind {
-    type Err = ConfigError;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value.to_ascii_lowercase().as_str() {
-            "none" | "off" | "disabled" => Ok(Self::None),
-            // `flyte2` is accepted because that is what people call the thing
-            // they are pointing at; the gateway is the same either way.
-            "flyte" | "flyte2" | "union" => Ok(Self::Flyte),
-            other => Err(ConfigError::Invalid {
-                name: "AIWATCHER_ENGINE",
-                value: other.to_owned(),
-                expected: "none or flyte",
+                expected: "one of none, http",
             }),
         }
     }
@@ -542,28 +524,6 @@ pub struct Config {
     /// and unbounded the only backstop is the store refusing a message that has
     /// grown too large.
     pub answer_limits: aiwatcher_api::state::AnswerLimits,
-    /// Whether this instance can list and start an orchestrator's work.
-    pub engine: EngineKind,
-    /// The control plane's base URL. Required when `engine = Flyte`, and the
-    /// only place an engine target may come from — never an event, never a
-    /// request body.
-    pub flyte_endpoint: Option<String>,
-    pub flyte_project: String,
-    pub flyte_domain: String,
-    /// A pre-issued bearer token, for a cluster that hands out one.
-    pub flyte_token: Option<String>,
-    /// The service-account flow. All three together, or none of them.
-    pub flyte_client_id: Option<String>,
-    pub flyte_client_secret: Option<String>,
-    /// Explicit rather than discovered: taking the token endpoint from a
-    /// document the same host serves would hand the choice of who mints
-    /// aiwatcher's credentials to whoever answered the request.
-    pub flyte_token_url: Option<String>,
-    pub flyte_scopes: String,
-    /// Flyte's console, for links out of the panel. Absent renders no link
-    /// rather than a broken one.
-    pub flyte_console_url: Option<String>,
-    pub flyte_timeout: Duration,
     /// Who may reach this instance, and what they may do once they have.
     /// `AuthMode::None` by default — see `aiwatcher_auth`.
     pub auth: AuthConfig,
@@ -662,18 +622,6 @@ impl Default for Config {
             // Nothing is forgotten unless a deployment says so.
             workflow_retention: None,
             answer_limits: aiwatcher_api::state::AnswerLimits::default(),
-            engine: EngineKind::default(),
-            flyte_endpoint: None,
-            // Flyte's own defaults, so a sandbox needs one variable set.
-            flyte_project: "flytesnacks".to_owned(),
-            flyte_domain: "development".to_owned(),
-            flyte_token: None,
-            flyte_client_id: None,
-            flyte_client_secret: None,
-            flyte_token_url: None,
-            flyte_scopes: "all".to_owned(),
-            flyte_console_url: None,
-            flyte_timeout: Duration::from_secs(10),
             auth: AuthConfig::default(),
             log_format: LogFormat::default(),
         }
@@ -964,34 +912,7 @@ impl Config {
             })?;
         }
         if let Some(raw) = var("AIWATCHER_ENGINE") {
-            config.engine = raw.parse()?;
-        }
-        if let Some(raw) = var("AIWATCHER_FLYTE_ENDPOINT") {
-            config.flyte_endpoint = Some(raw);
-        }
-        if let Some(raw) = var("AIWATCHER_FLYTE_PROJECT") {
-            config.flyte_project = raw;
-        }
-        if let Some(raw) = var("AIWATCHER_FLYTE_DOMAIN") {
-            config.flyte_domain = raw;
-        }
-        config.flyte_token = var("AIWATCHER_FLYTE_TOKEN");
-        config.flyte_client_id = var("AIWATCHER_FLYTE_CLIENT_ID");
-        config.flyte_client_secret = var("AIWATCHER_FLYTE_CLIENT_SECRET");
-        config.flyte_token_url = var("AIWATCHER_FLYTE_TOKEN_URL");
-        if let Some(raw) = var("AIWATCHER_FLYTE_SCOPES") {
-            config.flyte_scopes = raw;
-        }
-        if let Some(raw) = var("AIWATCHER_FLYTE_CONSOLE_URL") {
-            config.flyte_console_url = Some(raw);
-        }
-        if let Some(raw) = var("AIWATCHER_FLYTE_TIMEOUT_SECONDS") {
-            let seconds: u64 = raw.parse().map_err(|_| ConfigError::Invalid {
-                name: "AIWATCHER_FLYTE_TIMEOUT_SECONDS",
-                value: raw,
-                expected: "whole number of seconds",
-            })?;
-            config.flyte_timeout = Duration::from_secs(seconds);
+            refuse_removed_engine(raw)?;
         }
         read_auth(&mut config)?;
 
@@ -1094,35 +1015,6 @@ impl Config {
             });
         }
 
-        // The engine's endpoint, on the same reasoning as the runner's: an
-        // engine with no address answers every catalog request with a
-        // connection error that reads as the orchestrator being down.
-        if self.engine == EngineKind::Flyte && self.flyte_endpoint.is_none() {
-            return Err(ConfigError::Required {
-                name: "AIWATCHER_FLYTE_ENDPOINT",
-                because: "AIWATCHER_ENGINE=flyte",
-            });
-        }
-
-        // Half a service-account credential authenticates nothing, and the
-        // symptom is a 401 from Flyte on the first catalog request rather than
-        // anything naming the variable that was left out.
-        let credentials = [
-            ("AIWATCHER_FLYTE_CLIENT_ID", &self.flyte_client_id),
-            ("AIWATCHER_FLYTE_CLIENT_SECRET", &self.flyte_client_secret),
-            ("AIWATCHER_FLYTE_TOKEN_URL", &self.flyte_token_url),
-        ];
-        if credentials.iter().any(|(_, value)| value.is_some()) {
-            for (name, value) in credentials {
-                if value.is_none() {
-                    return Err(ConfigError::Required {
-                        name,
-                        because: "the other Flyte client-credentials variables are set",
-                    });
-                }
-            }
-        }
-
         // The same reasoning once more, and the sharpest consequence of the
         // set: a workflow store with no address answers every command with a
         // connection error, and by then somebody has started an execution the
@@ -1176,16 +1068,6 @@ impl Config {
                               a step's result for the other to read",
                 });
             }
-        }
-
-        // A rerun routed through an engine that is not configured would answer
-        // 501 from one route and 502 from the other, which is two different
-        // stories about one missing variable.
-        if self.workflow_runner == WorkflowRunnerKind::Engine && self.engine == EngineKind::None {
-            return Err(ConfigError::Required {
-                name: "AIWATCHER_ENGINE",
-                because: "AIWATCHER_WORKFLOW_RUNNER=engine",
-            });
         }
 
         self.auth.validate()?;
@@ -1373,6 +1255,27 @@ fn list(raw: &str) -> Vec<String> {
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
         .collect()
+}
+
+/// `AIWATCHER_ENGINE`, which survives only as a refusal.
+///
+/// The Flyte engine it switched on has been removed, and it is the one variable
+/// a deployment could still be relying on: a server that started without the
+/// tab it used to have would say nothing. `none` still parses, for a deployment
+/// that spelled the default out.
+fn refuse_removed_engine(raw: String) -> Result<(), ConfigError> {
+    if matches!(
+        raw.to_ascii_lowercase().as_str(),
+        "none" | "off" | "disabled"
+    ) {
+        return Ok(());
+    }
+    Err(ConfigError::Removed {
+        name: "AIWATCHER_ENGINE",
+        value: raw,
+        what: "the Flyte pipeline engine",
+        instead: "unset it",
+    })
 }
 
 /// What a refusal of `AIWATCHER_QUERY_ENGINE` says it takes.
@@ -1855,6 +1758,37 @@ mod tests {
         assert_eq!(
             config.dead_letter_path(),
             "/var/lib/aiwatcher/dead-letters.jsonl"
+        );
+    }
+
+    #[test]
+    fn a_deployment_that_still_asks_for_the_flyte_engine_is_told_it_was_removed() {
+        let message = refuse_removed_engine("flyte".to_owned())
+            .expect_err("the engine is gone")
+            .to_string();
+        assert!(
+            message.contains("AIWATCHER_ENGINE") && message.contains("was removed"),
+            "{message}"
+        );
+        refuse_removed_engine("none".to_owned())
+            .expect("spelling the default out is not a refusal");
+    }
+
+    #[test]
+    fn a_rerun_through_the_removed_engine_is_refused_and_http_still_parses() {
+        for kind in ["engine", "flyte"] {
+            let message = kind
+                .parse::<WorkflowRunnerKind>()
+                .expect_err("the engine runner is gone")
+                .to_string();
+            assert!(
+                message.contains("AIWATCHER_WORKFLOW_RUNNER") && message.contains("was removed"),
+                "{message}"
+            );
+        }
+        assert_eq!(
+            "http".parse::<WorkflowRunnerKind>().expect("http stays"),
+            WorkflowRunnerKind::Http
         );
     }
 }

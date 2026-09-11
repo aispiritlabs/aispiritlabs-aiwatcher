@@ -21,7 +21,6 @@ use aiwatcher_core::ports::{
 };
 use aiwatcher_datasets::Registry as DatasetRegistry;
 use aiwatcher_execution::{ExecutionHandler, WorkflowStore};
-use aiwatcher_pipeline::{FlyteConfig, FlyteEngine};
 use aiwatcher_projector::pipeline::Outputs;
 use aiwatcher_projector::{FileDeadLetters, LiveHub, Projector, ProjectorConfig, ReadModel};
 use aiwatcher_prompts::{Registry, RegistryConfig};
@@ -31,7 +30,7 @@ use aiwatcher_trace::otlp::{OtlpConfig, OtlpMetricSink, OtlpTraceStore};
 use aiwatcher_training::Registry as TrainingRegistry;
 
 use crate::config::{
-    BackendKind, Config, ConversationPolicyMode, EngineKind, PromptStoreKind, WorkflowRunnerKind,
+    BackendKind, Config, ConversationPolicyMode, PromptStoreKind, WorkflowRunnerKind,
     WorkflowStoreKind,
 };
 
@@ -250,10 +249,7 @@ fn build_conversation_archive(
 /// runner would answer `202 Accepted` for a rerun that no orchestrator was ever
 /// asked to perform. Absence has to reach the caller, so it reaches them as a
 /// 501 naming the variable that is unset.
-fn build_workflow_runner(
-    config: &Config,
-    engine: Option<&Arc<FlyteEngine>>,
-) -> Result<Option<Arc<dyn WorkflowRunner>>> {
+fn build_workflow_runner(config: &Config) -> Result<Option<Arc<dyn WorkflowRunner>>> {
     match config.workflow_runner {
         WorkflowRunnerKind::None => {
             tracing::info!(
@@ -278,16 +274,6 @@ fn build_workflow_runner(
             })
             .context("building the workflow runner's HTTP client")?;
             Ok(Some(Arc::new(runner)))
-        }
-        WorkflowRunnerKind::Engine => {
-            // One adapter, both ports. The alternative is an HTTP runner
-            // pointed at a shim that then talks to the same control plane —
-            // a second thing to deploy for no new capability.
-            let engine = engine.context(
-                "AIWATCHER_WORKFLOW_RUNNER=engine needs AIWATCHER_ENGINE set to an engine",
-            )?;
-            tracing::info!("reruns will be dispatched to the configured pipeline engine");
-            Ok(Some(Arc::clone(engine) as Arc<dyn WorkflowRunner>))
         }
     }
 }
@@ -355,53 +341,6 @@ fn build_dataset_hubs(config: &Config, sources: &SourceCatalog) -> Result<Option
         Hubs::with_catalog(hub_config, sources.sources.clone())
             .context("the dataset hub HTTP client could not be built")?,
     )))
-}
-
-/// The pipeline engine, or `None`.
-///
-/// Absence is a 501: a catalog answering with an empty list would say "the
-/// orchestrator has nothing to run" about a deployment that has no
-/// orchestrator. Different problems, different fixes.
-///
-/// Built as the concrete type rather than `Arc<dyn WorkflowEngine>`, so the
-/// same instance also serves `WorkflowRunner` — one connection pool, one
-/// cached token.
-fn build_engine(config: &Config) -> Result<Option<Arc<FlyteEngine>>> {
-    match config.engine {
-        EngineKind::None => {
-            tracing::info!(
-                "AIWATCHER_ENGINE=none; the engine routes answer 501 and nothing can be launched"
-            );
-            Ok(None)
-        }
-        EngineKind::Flyte => {
-            let endpoint = config
-                .flyte_endpoint
-                .clone()
-                .context("AIWATCHER_FLYTE_ENDPOINT is required for AIWATCHER_ENGINE=flyte")?;
-            tracing::info!(
-                %endpoint,
-                project = %config.flyte_project,
-                domain = %config.flyte_domain,
-                authenticated = config.flyte_token.is_some() || config.flyte_client_id.is_some(),
-                "the Flyte catalog is readable and its launch plans can be started"
-            );
-            let engine = FlyteEngine::new(FlyteConfig {
-                endpoint,
-                project: config.flyte_project.clone(),
-                domain: config.flyte_domain.clone(),
-                token: config.flyte_token.clone(),
-                client_id: config.flyte_client_id.clone(),
-                client_secret: config.flyte_client_secret.clone(),
-                token_url: config.flyte_token_url.clone(),
-                scopes: config.flyte_scopes.clone(),
-                console_url: config.flyte_console_url.clone(),
-                timeout: config.flyte_timeout,
-            })
-            .context("building the pipeline engine's HTTP client")?;
-            Ok(Some(Arc::new(engine)))
-        }
-    }
 }
 
 /// Where a managed execution's history lives.
@@ -771,7 +710,6 @@ pub async fn build(config: Config) -> Result<Runtime> {
             .map(|hubs| hubs as Arc<dyn aiwatcher_annotations::integrations::fetch::ImageSource>),
     )
     .await?;
-    let engine = build_engine(&config)?;
     let workflow_store = build_workflow_store(&config).await?;
     let state = AppState {
         read_model,
@@ -804,7 +742,7 @@ pub async fn build(config: Config) -> Result<Runtime> {
         hubs,
         sources,
         training: registries.training,
-        runner: build_workflow_runner(&config, engine.as_ref())?,
+        runner: build_workflow_runner(&config)?,
         // Built in the `serve` role too, unlike an executor: opening a block's
         // editor is a person waiting on a request, not an attempt somebody
         // claimed. It still registers nothing without an address and an object
@@ -831,7 +769,9 @@ pub async fn build(config: Config) -> Result<Runtime> {
             Arc::new(aiwatcher_execution::ObjectArtifactCatalog::new(store))
                 as Arc<dyn aiwatcher_execution::ArtifactCatalog>
         }),
-        engine: engine.map(|engine| engine as Arc<dyn aiwatcher_core::engine::WorkflowEngine>),
+        // No engine since the Flyte adapter went: its routes answer 501 until
+        // they are removed with the contract they are part of.
+        engine: None,
         execution_payloads: aiwatcher_api::state::PayloadDefault {
             policy: config.execution_payloads,
             locked: config.execution_payloads_locked,

@@ -46,14 +46,6 @@ query_url := env_var_or_default("AIWATCHER_QUERY_URL", env_var_or_default("AIWAT
 # flow, datafusion or duckdb (AW-3).
 query_engine := env_var_or_default("AIWATCHER_QUERY_ENGINE", "flow")
 
-# The control plane `just run-flyte` browses. `flytectl demo start` serves one
-# on :30080; a cluster's is the flyteadmin Service. There is no `flyte-up` here
-# on purpose — the demo cluster is a k3s in Docker that this repo does not
-# manage, and pretending to own its lifecycle would be a recipe that half works.
-flyte_endpoint := env_var_or_default("AIWATCHER_FLYTE_ENDPOINT", "http://localhost:30080")
-flyte_project := env_var_or_default("AIWATCHER_FLYTE_PROJECT", "flytesnacks")
-flyte_domain := env_var_or_default("AIWATCHER_FLYTE_DOMAIN", "development")
-
 # Clusters Tilt is allowed to touch. A remote context is a hard stop, not a
 # prompt — see the Tiltfile.
 k8s_context := env_var_or_default("AIWATCHER_K8S_CONTEXT", "orbstack")
@@ -265,18 +257,6 @@ run-conversations:
     AIWATCHER_CONVERSATION_KEYS="$(cat "$key_file")" \
     AIWATCHER_LOG=info,aiwatcher=debug \
     cargo run --bin aiwatcher
-
-# Nothing needs to be running: both suites stand a control plane up on a
-# loopback socket. The second one is the end-to-end pass — a real instance built
-# by `wiring::build`, served on another socket, driven over HTTP — and it is
-# what covers the seams neither half can: a config field nothing wires, a rerun
-# reaching a 501 the engine would have served, a correlation id minted by the
-# API and dropped by the adapter.
-
-# The engine: the adapter, then the whole stack, against a stand-in Flyte.
-test-pipeline:
-    cargo test -p aiwatcher-pipeline
-    cargo test -p aiwatcher-server --test engine_end_to_end
 
 # The workflow store defaults to ./.data/workflow and holds one process, so the
 # two roles below are one process tree unless a database is behind them. That is

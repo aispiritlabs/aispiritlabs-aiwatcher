@@ -43,7 +43,6 @@ aiwatcher-training.workspace = true
 aiwatcher-datasets.workspace = true
 aiwatcher-execution.workspace = true
 aiwatcher-trace.workspace = true
-aiwatcher-pipeline.workspace = true
 aiwatcher-projector.workspace = true
 aiwatcher-prompts.workspace = true
 aiwatcher-runner.workspace = true
@@ -54,8 +53,8 @@ anyhow.workspace = true
 async-trait.workspace = true
 axum.workspace = true
 # The work role's one outbound client: the Flow query service, whose address is
-# configuration. `aiwatcher-pipeline` and `aiwatcher-runner` hold their own for
-# the same reason — this crate is where a reactor lives (section 27).
+# configuration. `aiwatcher-runner` holds its own for the same reason — this
+# crate is where a reactor lives (section 27).
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -69,9 +68,7 @@ tracing-subscriber.workspace = true
 utoipa.workspace = true
 
 [dev-dependencies]
-# A real socket on both sides: the test drives aiwatcher over HTTP and
-# aiwatcher reaches the stand-in control plane over HTTP. Anything less would
-# stop being end to end at the first seam that has ever broken.
+# The unit tests that drive a runtime: the reactors, the seed and the archive.
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]

@@ -283,21 +283,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "aiwatcher-pipeline"
-version = "0.1.0"
-dependencies = [
- "aiwatcher-core",
- "async-trait",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
- "time",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "aiwatcher-projector"
 version = "0.1.0"
 dependencies = [
@@ -363,7 +348,6 @@ dependencies = [
  "aiwatcher-datasets",
  "aiwatcher-execution",
  "aiwatcher-jobs",
- "aiwatcher-pipeline",
  "aiwatcher-projector",
  "aiwatcher-prompts",
  "aiwatcher-runner",

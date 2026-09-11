@@ -33,7 +33,6 @@ COPY crates/aiwatcher-training/Cargo.toml crates/aiwatcher-training/
 COPY crates/aiwatcher-conversations/Cargo.toml crates/aiwatcher-conversations/
 COPY crates/aiwatcher-execution/Cargo.toml crates/aiwatcher-execution/
 COPY crates/aiwatcher-runner/Cargo.toml crates/aiwatcher-runner/
-COPY crates/aiwatcher-pipeline/Cargo.toml crates/aiwatcher-pipeline/
 COPY crates/aiwatcher-auth/Cargo.toml crates/aiwatcher-auth/
 COPY crates/aiwatcher-projector/Cargo.toml crates/aiwatcher-projector/
 COPY crates/aiwatcher-api/Cargo.toml crates/aiwatcher-api/
