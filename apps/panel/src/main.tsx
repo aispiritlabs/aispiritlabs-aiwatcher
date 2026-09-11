@@ -3,9 +3,9 @@ import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider, createRouter } from '@tanstack/react-router';
 
-import '@/lib/api';
+import '@/shared/lib/api';
 import '@/styles.css';
-import { AuthGate } from '@/components/auth-gate';
+import { AuthGate } from '@/shared/components/auth-gate';
 import { routeTree } from './routeTree.gen';
 
 const queryClient = new QueryClient({

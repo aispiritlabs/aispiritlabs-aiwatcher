@@ -5,11 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && tsc -b",
+    "build": "npm run check:architecture && vite build && tsc -b",
     "preview": "vite preview",
     "test": "vitest run",
     "lint": "eslint .",
-    "typecheck": "tsc -b --noEmit",
+    "typecheck": "npm run check:architecture && tsc -b --noEmit",
+    "check:architecture": "node scripts/check-architecture.mjs",
     "generate:api": "openapi-ts"
   },
   "dependencies": {
