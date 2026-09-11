@@ -39,3 +39,4 @@ planner something aiwatcher now has.
 - 2026-09-11 12:35 — spec drafted: Part 1 removes the engine, Part 2 adds `ContainerJob`; nine requirements over twenty scenarios; three questions left to the job
 - 2026-09-11 13:40 — job planned and Part 1a built: the server, the crate, the chart, the SDK integration and the recipes; the API, the contract, the panel and the execution variants wait for the sessions holding them
 - 2026-09-11 12:54 — Part 1 done: 1b and 1c built (`8154041`, `a34c378`), the documents in `5f9996b`; Part 2 starts with its ADR
+- 2026-09-11 14:45 — Part 2 designed: ADR_0029 accepted — templates, images, the pod as a worker for one attempt, the lease deciding and the Job explaining; 2.2 is next

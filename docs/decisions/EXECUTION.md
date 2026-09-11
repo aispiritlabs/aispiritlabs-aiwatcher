@@ -2,10 +2,10 @@
 
 **The one decision underneath all of these:** a thing that executes work and a
 thing that decides what to execute are different, and only the second belongs to
-this server. Read in date order these seven ADRs are one argument arriving in
+this server. Read in date order these eight ADRs are one argument arriving in
 stages — a query surface, then a chain, then an owner, then a producer, then a
-choice of engine — and each stage names what would make it wrong. Two of them
-were made wrong on schedule.
+choice of engine, then a pod of a step's own — and each stage names what would
+make it wrong. Two of them were made wrong on schedule.
 
 | ADR | Decided | Where it stands |
 |---|---|---|
@@ -16,6 +16,7 @@ were made wrong on schedule.
 | [0025](../ADR/ADR_0025_MANAGED_EXECUTION.md) | A managed execution is owned by the server, and the browser only asks for one | Accepted |
 | [0026](../ADR/ADR_0026_ENGINE_AS_PRODUCER.md) | The execution engine is a producer on its own log | Accepted |
 | [0028](../ADR/ADR_0028_QUERY_ENGINES.md) | A deployment chooses its query engine, and a typed query is admitted or runs where code runs | Accepted, 2026-09-11 — amends 0008, 0014 and 0024 |
+| [0029](../ADR/ADR_0029_POD_PER_STEP.md) | A step that needs a pod names an operator's template, and the pod is a worker for one attempt | Accepted, 2026-09-11 — reopens Phase 12; not built yet |
 
 ## The arc, in the order it happened
 
@@ -52,6 +53,15 @@ typed query is either admitted from the engine's own vocabulary (`strict`) or ru
 a notebook runs (`open`, the default) — the first place since 0008 where query text
 is executed, by decision and with its costs written down.
 
+**0029 gave a step a pod of its own.** With 0016 superseded, the one thing
+planner lost with Flyte was a pod per stage: isolation, which one pod for four
+stages does not give. A step names a template an operator wrote and an image on
+that template's own list. The work role only creates the Job, under a name
+derived from the attempt, and the pod is a worker that claims that one attempt
+by key. The lease still decides how an attempt ended, and the Job only explains
+it. So the split this page is about holds one level down: nothing about a pod's
+step is decided in the pod or in the process that started it.
+
 ## Where the boundary actually sits
 
 The amendments to 0008 are worth reading as a group, because they moved a line
@@ -75,11 +85,15 @@ locked to its corpus root under both.
 
 0016 is past reopening: nothing needed one launch API for local and engine work,
 planner removed its orchestrator, and AW-4 removed the engine. A step that needs
-a pod of its own is to get one from this engine instead (Phase 12). 0024's is
+a pod of its own gets one from this engine instead (0029). 0024's is
 a fourth engine, which would test whether "each block belongs to the engine that
 can run it" is a principle or a description of three cases. 0025's own trigger
 has already fired once and produced 0026; the next would be an execution whose
 decisions genuinely cannot live in this process, which is what the hosted mode
 in `ExecutionMode` is reserved for. 0028's is an `open` deployment reachable by
 anyone but its operator, or a `strict` refusal shown to be bypassable — either makes
-`strict` the default rather than the option.
+`strict` the default rather than the option. 0029's is either of two things. If
+an allowed image is run by people who should not have its template's secrets,
+images have to be pinned by digest and signature rather than listed. If a leaked
+pod token is used on another pod's attempt, the one-attempt credential becomes
+the only credential.

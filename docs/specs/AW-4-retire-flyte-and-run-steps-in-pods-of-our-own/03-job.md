@@ -74,6 +74,19 @@ outline below is what the spec already fixes.
   control that changes nothing is a button that does not work. The `stage`,
   `engine` and `engineFind` search parameters go with them. Nothing linked in
   with them.
+- **Part 2's design is [ADR_0029](../../ADR/ADR_0029_POD_PER_STEP.md)** (2.1),
+  and it answers the spec's three open questions:
+  - **The pod claims its attempt by key**, under its template's queue-scoped
+    token. A key-only rule in `ClaimFilter` keeps long-lived workers off a pod's
+    row, and a one-attempt credential is deferred as the stricter mode.
+  - **The lease decides how an attempt ended**, and the Job's watch explains it
+    sooner, with the pod's own reason.
+  - **The log is the last 256 KiB**, in bytes rather than lines, recorded in
+    the catalog against the attempt.
+
+  Two points move from §37: an image matches a repository exactly rather than
+  by prefix, and the launcher creates Jobs without claiming anything — one per
+  attempt, under a name derived from its key.
 
 ## Tasks
 
@@ -110,13 +123,18 @@ outline below is what the spec already fixes.
       carries Flyte*
 
 ### Part 2 — pods (outline)
-- [ ] 2.1 ADR: templates, allowlists, who may name an image, the `kube` feature
-- [ ] 2.2 `RuntimeBinding::ContainerJob` and the step fields; registration's
-      refusals — *only an allowed image runs*, *resources come from the template*
-- [ ] 2.3 The pod executor behind `kube`: a Job per attempt, `backoffLimit: 0`,
-      the claim filter from the registry — *a step may ask for a pod*, *the
-      engine owns a pod's retries*
-- [ ] 2.4 Cancel deletes the Job; the log is read back — *a cancel reaches a
+- [x] 2.1 ADR: templates, allowlists, who may name an image, the `kube` feature —
+      [ADR_0029](../../ADR/ADR_0029_POD_PER_STEP.md)
+- [ ] 2.2 `RuntimeBinding::ContainerJob` and the step's `pod` field; the
+      templates file both roles read; registration's refusals — *only an
+      allowed image runs*, *resources come from the template*
+- [ ] 2.3 The launcher behind `kube`: the store's read of claimable rows by
+      runtime, a Job per attempt under a name derived from its key,
+      `backoffLimit: 0`, the key-only claim rule; the chart's RBAC, templates
+      and network rule, and `kube` in the release image — *a step may ask for a
+      pod*, *the engine owns a pod's retries*
+- [ ] 2.4 Cancel deletes the Job; the watch ends a dead pod's attempt with its
+      reason; the log is read back into the catalog — *a cancel reaches a
       running pod*, *a pod's log is kept*
 - [ ] 2.5 planner's four stages on a local cluster, byte-identical
 
@@ -126,3 +144,4 @@ outline below is what the spec already fixes.
 - 2026-09-11 13:55 — verified: `just check` 19/19 on the working tree, other sessions' work included
 - 2026-09-11 12:47 — Parts 1b and 1c built (`8154041`): the five routes, `core::engine`, `AppState.engine`, the three error variants, the launcher on the recipe and Experiments pages, `ExecutionOwner::Unknown`, `ExternalWorkflow` and its spec and kind; the contract and the panel's client regenerated with no engine left in them; clippy clean, every touched crate's tests and the panel's 178 green
 - 2026-09-11 12:54 — 1.10 done: the docs pass landed inside `5f9996b`; after it, §28's Phase 12 bullet no longer says AW-4 is investigating, and three unwrapped `CLAUDE.md` lines are wrapped; `just check` 18/19 on HEAD, `comments` failing on the same five panel blocks from `ea2dfe7`
+- 2026-09-11 14:45 — 2.1 done: ADR_0029 — a step opts in with `pod` and compiles to `container_job`; templates and per-template image lists are chart values, matched by exact repository; the launcher reads claimable rows and creates one Job per attempt by a derived name, never claiming; the pod claims its attempt by key under its template's queue token (a one-attempt credential deferred as the strict mode); the lease decides, the watch explains; the log is the last 256 KiB in the catalog. Answers the spec's three open questions; 2.2–2.4 reworded to match

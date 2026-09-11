@@ -2354,12 +2354,19 @@ exactly one attempt, claimed by reference rather than from a queue: what a
 
 ## 37. Container jobs on Kubernetes
 
-**Reopened by AW-4 (2026-09-11), and not built.** This is Phase 12's design,
-and it gets an ADR before its first line of code. Where AW-4's spec differs,
-the spec wins: templates and their image allowlists are chart values, one
-allowlist per template; the client is a `kube` feature of `aiwatcher-server`;
-a step sets CPU and memory within the template's ceilings and never names a
-namespace, a node, a service account or a secret; and GPU is later.
+**Reopened by AW-4 (2026-09-11), decided in
+[ADR_0029](ADR/ADR_0029_POD_PER_STEP.md), and not built.** This is Phase 12's
+design as it was first written; where the ADR differs, the ADR wins. Templates
+and their image lists are chart values, one list per template, read by both
+roles from `AIWATCHER_POD_TEMPLATES` rather than `AIWATCHER_KUBE_*`, and an
+image matches a repository exactly rather than by registry prefix. The client is
+a `kube` feature of `aiwatcher-server`. A step sets CPU and memory within the
+template's ceilings and never names a namespace, a node, a service account or a
+secret, and a template nobody configured is a refusal at registration rather
+than a 501. The launcher creates Jobs without claiming anything, one per attempt
+by a name derived from its key, and the pod is the worker that claims that
+attempt by key. The lease decides how an attempt ended, and the Job's watch only
+explains it. GPU is later.
 
 Flyte's one load-bearing feature in planner was a pod per stage: an image,
 resources, and a pod template with a PVC, a ConfigMap and five secrets. A

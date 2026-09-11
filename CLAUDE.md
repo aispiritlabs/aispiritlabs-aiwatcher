@@ -322,7 +322,10 @@ area.
    engine, its routes and the panel's launcher are removed, and a deployment
    that still sets `AIWATCHER_ENGINE` is refused at start by name. A step that
    needs a pod of its own is to get one from the engine itself — Phase 12's
-   `ContainerJob`, reopened by AW-4 and not built yet.
+   `ContainerJob`, reopened by AW-4, decided in
+   [ADR_0029](docs/ADR/ADR_0029_POD_PER_STEP.md) and not built yet: a step
+   names an operator's template and an image on that template's list, and the
+   pod is a worker that claims its one attempt by key.
 
 14. **An annotation is authored, vector-first, and split by family**
    ([ADR_0017](docs/ADR/ADR_0017_IMAGE_ANNOTATION.md),
