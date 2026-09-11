@@ -9,9 +9,9 @@ means it is sitting on that column waiting for something.
 
 ## Investigation
 
-- [ ] [AW-4 · Retire Flyte, and run workflow steps in pods of our own](AW-4-retire-flyte-and-run-steps-in-pods-of-our-own/_index.md)
-
 ## Spec
+
+- [ ] [AW-4 · Retire Flyte, and run workflow steps in pods of our own](AW-4-retire-flyte-and-run-steps-in-pods-of-our-own/_index.md)
 
 - [ ] [AW-2 · Merge ai_spirit_agent into aiwatcher as the agent SDK](AW-2-merge-ai-spirit-agent-into-aiwatcher-as-the-agent-sdk/_index.md)
 

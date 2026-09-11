@@ -1,13 +1,13 @@
 ---
 id: AW-4
 title: Retire Flyte, and run workflow steps in pods of our own
-step: investigation
+step: spec
 status: doing
 branch: main
 repo: aiwatcher
 created: 2026-09-11
 updated: 2026-09-11
-tags: [spec/AW-4, step/investigation, branch/main, status/doing]
+tags: [spec/AW-4, step/spec, branch/main, status/doing]
 ---
 <!-- spec-card -->
 
@@ -19,7 +19,7 @@ tags: [spec/AW-4, step/investigation, branch/main, status/doing]
 
 ## Phases
 - [x] [① Investigation](01-investigation.md)
-- [ ] [② Spec](02-spec.md)
+- [x] [② Spec](02-spec.md)
 - [ ] [③ Job](03-job.md)
 - [ ] [④ Tests](04-tests.md)
 - [ ] [⑤ Review](05-review.md)
@@ -36,3 +36,4 @@ planner something aiwatcher now has.
 ## Log
 - 2026-09-11 11:30 — spec opened on `main`; Phase 9 (engine-owned executions) withdrawn in its favour
 - 2026-09-11 11:55 — investigation written: for planner's use only one pod per stage is missing; recommend removing Flyte, then `ContainerJob`
+- 2026-09-11 12:35 — spec drafted: Part 1 removes the engine, Part 2 adds `ContainerJob`; nine requirements over twenty scenarios; three questions left to the job
