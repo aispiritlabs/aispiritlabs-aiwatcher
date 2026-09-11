@@ -129,9 +129,7 @@ fn code_digest(runtime: &RuntimeBinding) -> Option<String> {
             .task_ref
             .split_once('@')
             .map(|_| digest(spec.task_ref.as_bytes())),
-        RuntimeBinding::PublishDataset(_)
-        | RuntimeBinding::HumanInput(_)
-        | RuntimeBinding::ExternalWorkflow(_) => None,
+        RuntimeBinding::PublishDataset(_) | RuntimeBinding::HumanInput(_) => None,
     }
 }
 

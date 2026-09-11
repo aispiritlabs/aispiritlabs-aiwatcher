@@ -1151,7 +1151,7 @@ fn projection_from(row: &PgRow) -> Result<RunProjection> {
 }
 
 fn attempt_from(row: &PgRow) -> Result<AttemptRow> {
-    let runtime = runtime_from(row.get("runtime"));
+    let runtime = runtime_from(row.get("runtime"))?;
     Ok(AttemptRow {
         key: AttemptKey::new(
             ExecutionId::new(row.get::<String, _>("execution_id")),
@@ -1225,20 +1225,15 @@ fn state_type_from(value: String) -> crate::state::StateType {
     }
 }
 
-/// Same rule as the state: a runtime this build cannot name is one it must not
-/// claim, and `external_workflow` is the binding this process never runs.
-fn runtime_from(value: String) -> crate::RuntimeKind {
-    use crate::RuntimeKind;
-    match value.as_str() {
-        "flow_php" => RuntimeKind::FlowPhp,
-        "datafusion" => RuntimeKind::DataFusion,
-        "duckdb" => RuntimeKind::DuckDb,
-        "marimo" => RuntimeKind::Marimo,
-        "publish_dataset" => RuntimeKind::PublishDataset,
-        "python_task" => RuntimeKind::PythonTask,
-        "human_input" => RuntimeKind::HumanInput,
-        _ => RuntimeKind::ExternalWorkflow,
-    }
+/// Read through `RuntimeKind`'s own spelling, so the words live in one place.
+///
+/// A kind this build cannot name is refused rather than read as one it can, as
+/// the other three adapters refuse it when they decode. A claim never meets
+/// one — its SQL selects only the claimant's own kinds — so what reaches this
+/// is a lookup by key, and a guess there would hand back a row that says
+/// something it does not.
+fn runtime_from(value: String) -> Result<crate::RuntimeKind> {
+    serde_json::from_value(serde_json::Value::String(value)).map_err(StoreError::Encoding)
 }
 
 /// How long a caller waits for a connection before it is told the pool is full.

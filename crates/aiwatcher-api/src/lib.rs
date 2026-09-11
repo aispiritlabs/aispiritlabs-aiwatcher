@@ -10,7 +10,6 @@
 //! | `/annotation-import-*` | object store | a staged batch and a resumable job — see [`imports`] |
 //! | `/conversation-*` | encrypted store | `admin` reads content, `editor` writes, `viewer` sees everything but the words |
 //! | `/training-runs`, `/models` | object store | touches no log, no live hub, no assembler |
-//! | `/engine` | the orchestrator | what it could start, and starting one |
 //! | `.../context` | plan + artifacts | so the panel need not reconstruct one |
 //! | `/executions` | workflow store | the only transactional store here; serves no list |
 //! | `/workflows` | the log | a graph rather than a run. Its rerun is the one route that asks another system to work |
@@ -25,7 +24,6 @@ pub mod context;
 pub mod conversations;
 pub mod datasets;
 pub mod definitions;
-pub mod engine;
 pub mod error;
 pub mod evaluations;
 pub mod executions;

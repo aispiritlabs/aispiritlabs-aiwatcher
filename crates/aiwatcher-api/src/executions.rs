@@ -190,8 +190,7 @@ pub struct ExecutionTarget {
 /// mean anything to a caller and the other two are a run nobody would want:
 /// `local`+`hosted` is a decider with no plan to schedule, and `worker`+
 /// `compiled` is a worker that may not decide. One field with two arms is the
-/// choice that actually exists. `engine:` is [`ExecutionOwner::Engine`] and is
-/// not something a caller picks here — it is what ADR_0016's launch produces.
+/// choice that actually exists.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Decider {
@@ -1007,8 +1006,7 @@ pub async fn start(
                 // Recorded rather than derived, so a run always says who was
                 // responsible for it. The two arms are the two that exist:
                 // `local` schedules the plan here, `worker` keeps the history
-                // for a decider that runs somewhere else. `engine:` comes from
-                // ADR_0016's launch and never from this route.
+                // for a decider that runs somewhere else.
                 owner,
                 mode,
                 payloads,

@@ -8,7 +8,6 @@ use aiwatcher_annotations::integrations::hubs::Hubs;
 use aiwatcher_auth::Authenticator;
 use aiwatcher_bus::{MessageSink, MessageSource};
 use aiwatcher_conversations::Registry as ConversationArchive;
-use aiwatcher_core::engine::WorkflowEngine;
 use aiwatcher_core::ports::{AttemptArtifacts, EditorHost, WorkflowRunner};
 use aiwatcher_datasets::Registry as DatasetRegistry;
 use aiwatcher_execution::message::PayloadPolicy;
@@ -231,13 +230,6 @@ pub struct AppState {
     /// rather than reporting that it did, so the disabled case must be
     /// unmistakable: a no-op adapter would acknowledge a rerun nobody ran.
     pub runner: Option<Arc<dyn WorkflowRunner>>,
-    /// `None` when no orchestrator is configured, which makes every
-    /// `/api/v1/engine` route answer 501. Same reasoning as `runner`, and the
-    /// same sharp edge: this is the other thing here that makes something
-    /// happen. It is a separate field rather than the same one because the
-    /// two ports answer different questions — a deployment can perfectly well
-    /// dispatch reruns to a webhook while having no inventory to browse.
-    pub engine: Option<Arc<dyn WorkflowEngine>>,
     /// `None` when this process has no notebook runtime address or no object
     /// store, which makes `POST /executions/{id}/steps/{step}/editor` answer
     /// 501 naming the variable. The third port here that makes something
@@ -327,7 +319,6 @@ impl std::fmt::Debug for AppState {
             .field("dataset_sources", &self.sources.sources.len())
             .field("workflow_runner", &self.runner)
             .field("editor", &self.editor)
-            .field("engine", &self.engine)
             .field("auth", &self.auth)
             .finish_non_exhaustive()
     }

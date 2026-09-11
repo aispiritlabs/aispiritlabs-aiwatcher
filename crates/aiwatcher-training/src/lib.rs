@@ -98,9 +98,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// name with a slash in it would match no route at all. Dots separate instead,
 /// exactly as they do for a prompt name — `floor-plan.segmenter`.
 ///
-/// Checked before it is interpolated into an object key, for the same reason
-/// every part of an `EngineRef` is: a `..` in an identifier is a path traversal
-/// into somebody else's data.
+/// Checked before it is interpolated into an object key: a `..` in an
+/// identifier is a path traversal into somebody else's data.
 pub fn validate_slug(value: &str, what: &str) -> Result<()> {
     if value.is_empty() || value.len() > MAX_NAME_BYTES {
         return Err(Error::Invalid(format!(

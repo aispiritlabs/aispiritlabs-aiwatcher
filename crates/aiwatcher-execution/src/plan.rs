@@ -116,9 +116,6 @@ pub enum RuntimeBinding {
     PythonTask(PythonTaskSpec),
     /// Nobody runs it. It waits for somebody to answer.
     HumanInput(HumanInputSpec),
-    /// Handed whole to an external engine through `core::engine::WorkflowEngine`.
-    /// That engine owns its internal retries; this one records the reference.
-    ExternalWorkflow(ExternalWorkflowSpec),
 }
 
 /// The word a reactor routes on, without loading the plan.
@@ -134,7 +131,6 @@ pub enum RuntimeKind {
     PublishDataset,
     PythonTask,
     HumanInput,
-    ExternalWorkflow,
 }
 
 impl RuntimeKind {
@@ -148,7 +144,6 @@ impl RuntimeKind {
             Self::PublishDataset => "publish_dataset",
             Self::PythonTask => "python_task",
             Self::HumanInput => "human_input",
-            Self::ExternalWorkflow => "external_workflow",
         }
     }
 
@@ -162,8 +157,7 @@ impl RuntimeKind {
     ///
     /// A pulled attempt is claimed by a worker — a process somebody else
     /// operates, against the same store. Everything else here is a reactor in
-    /// one of this binary's two roles, or a wait, or a delegation to a system
-    /// that never touches the store at all.
+    /// one of this binary's two roles, or a wait.
     #[must_use]
     pub const fn needs_another_process(self) -> bool {
         self.is_pulled()
@@ -171,9 +165,8 @@ impl RuntimeKind {
 
     /// Whether a step of this kind may be answered from a cache.
     ///
-    /// Never for a wait or a delegation: a `HumanInput` cache hit would be a
-    /// decision somebody made about a different run, and an `ExternalWorkflow`
-    /// result is the engine's to reuse or not.
+    /// Never for a wait: a `HumanInput` cache hit would be a decision somebody
+    /// made about a different run.
     #[must_use]
     pub const fn is_cacheable(self) -> bool {
         matches!(
@@ -194,7 +187,6 @@ impl RuntimeBinding {
             Self::PublishDataset(_) => RuntimeKind::PublishDataset,
             Self::PythonTask(_) => RuntimeKind::PythonTask,
             Self::HumanInput(_) => RuntimeKind::HumanInput,
-            Self::ExternalWorkflow(_) => RuntimeKind::ExternalWorkflow,
         }
     }
 
@@ -223,7 +215,7 @@ impl RuntimeBinding {
             Self::Marimo(spec) => spec.block.as_ref().map(std::slice::from_ref),
             Self::PublishDataset(spec) => spec.block.as_ref().map(std::slice::from_ref),
             Self::HumanInput(spec) => spec.block.as_ref().map(std::slice::from_ref),
-            Self::PythonTask(_) | Self::ExternalWorkflow(_) => None,
+            Self::PythonTask(_) => None,
         }
     }
 
@@ -242,8 +234,7 @@ impl RuntimeBinding {
             Self::Marimo(_)
             | Self::PublishDataset(_)
             | Self::PythonTask(_)
-            | Self::HumanInput(_)
-            | Self::ExternalWorkflow(_) => None,
+            | Self::HumanInput(_) => None,
         }
     }
 }
@@ -363,17 +354,6 @@ pub struct HumanInputSpec {
     pub timeout_seconds: Option<u64>,
     #[serde(default)]
     pub on_timeout: OnTimeout,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
-pub struct ExternalWorkflowSpec {
-    /// The engine this is delegated to, as configuration names it.
-    pub engine: String,
-    /// Always version-pinned. An execution recorded against "whatever was
-    /// current" is not something anybody can repeat.
-    pub entity: String,
-    #[serde(default)]
-    pub inputs: BTreeMap<String, String>,
 }
 
 /// Where one of a step's inputs comes from.
@@ -845,11 +825,10 @@ mod tests {
     }
 
     #[test]
-    fn a_wait_and_a_delegation_are_never_answered_from_a_cache() {
+    fn a_wait_is_never_answered_from_a_cache() {
         // A `HumanInput` hit would be a decision somebody made about another
-        // run; an `ExternalWorkflow` result is the engine's to reuse.
+        // run.
         assert!(!RuntimeKind::HumanInput.is_cacheable());
-        assert!(!RuntimeKind::ExternalWorkflow.is_cacheable());
         assert!(RuntimeKind::FlowPhp.is_cacheable());
     }
 }

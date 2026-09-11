@@ -182,9 +182,8 @@ pub fn validate_slug(value: &str, what: &str) -> Result<()> {
 
 /// A lowercase SHA-256 in hex: an image id, a revision, an export.
 ///
-/// Checked before it is interpolated into an object key, for the same reason
-/// every part of an `EngineRef` is checked before it reaches an orchestrator's
-/// URL — a `..` in an identifier is a path traversal into somebody else's data.
+/// Checked before it is interpolated into an object key: a `..` in an
+/// identifier is a path traversal into somebody else's data.
 pub fn validate_digest(value: &str, what: &str) -> Result<()> {
     if value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         // Uppercase hex would key the same content twice.

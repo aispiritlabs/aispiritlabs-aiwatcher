@@ -4020,380 +4020,6 @@
         }
       }
     },
-    "/api/v1/engine": {
-      "get": {
-        "tags": [
-          "engine"
-        ],
-        "summary": "Which engine this instance can reach, if any.",
-        "description": "A 501 rather than an empty body when none is configured, so a client can\ntell \"this deployment has no orchestrator\" from \"the orchestrator has\nnothing to run\" — different problems with different fixes.",
-        "operationId": "describe_engine",
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EngineDescription"
-                }
-              }
-            }
-          },
-          "501": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/engine/launches": {
-      "post": {
-        "tags": [
-          "engine"
-        ],
-        "summary": "Start one.",
-        "description": "`202`, not `200`: nothing has run yet. What comes back is an\nacknowledgement carrying the engine's reference, a link into its console,\nand the `workflow_run_id` the events this execution publishes are expected\nto arrive under — which is what lets the panel open a live stream for work\nthat has not started.",
-        "operationId": "launch_workflow",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/LaunchBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/LaunchAccepted"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "The engine refused it: an undeclared input, a missing one, a value that will not bind",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "501": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "502": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/engine/launches/{reference}": {
-      "get": {
-        "tags": [
-          "engine"
-        ],
-        "summary": "Where one launched execution has got to, as the engine sees it.",
-        "description": "A second opinion, not the truth: aiwatcher's own view comes from the log\nand answers a different question. When they disagree the disagreement is\nthe finding — an execution the engine calls `succeeded` that published no\nevents is a producer nobody instrumented.",
-        "operationId": "get_launch",
-        "parameters": [
-          {
-            "name": "reference",
-            "in": "path",
-            "description": "The reference from a launch, e.g. project:domain:execution",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EngineExecution"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "501": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/engine/workflows": {
-      "get": {
-        "tags": [
-          "engine"
-        ],
-        "summary": "One page of what the engine could start.",
-        "operationId": "list_engine_workflows",
-        "parameters": [
-          {
-            "name": "search",
-            "in": "query",
-            "description": "Case-insensitive substring over name and description.",
-            "required": false,
-            "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          {
-            "name": "project",
-            "in": "query",
-            "description": "Overrides the configured project and domain for this request.",
-            "required": false,
-            "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          {
-            "name": "domain",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          {
-            "name": "stage",
-            "in": "query",
-            "description": "`curation | training | evaluation | inference`. A hint the engine\nderived from the entity's name — see `core::engine::PipelineStage`.",
-            "required": false,
-            "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          {
-            "name": "limit",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": [
-                "integer",
-                "null"
-              ],
-              "minimum": 0
-            }
-          },
-          {
-            "name": "token",
-            "in": "query",
-            "description": "The engine's own continuation token, from a previous `next_token`.",
-            "required": false,
-            "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EngineCatalog"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "501": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "502": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/engine/workflows/{workflow_id}": {
-      "get": {
-        "tags": [
-          "engine"
-        ],
-        "summary": "One entity and the inputs it declares.",
-        "description": "Read again at launch time by the adapter, so this is what a form renders\nand never what a launch is validated against — a panel open since before a\nredeploy is showing an interface that no longer exists.",
-        "operationId": "get_engine_workflow",
-        "parameters": [
-          {
-            "name": "workflow_id",
-            "in": "path",
-            "description": "An engine reference, e.g. lp:project:domain:name:version",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EngineWorkflow"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "501": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/api/v1/evaluation-suites": {
       "get": {
         "tags": [
@@ -11699,7 +11325,7 @@
       },
       "Decider": {
         "type": "string",
-        "description": "Who decides what this run does next.\n\nNot a pair of `owner`/`mode` fields, because only two of their combinations\nmean anything to a caller and the other two are a run nobody would want:\n`local`+`hosted` is a decider with no plan to schedule, and `worker`+\n`compiled` is a worker that may not decide. One field with two arms is the\nchoice that actually exists. `engine:` is [`ExecutionOwner::Engine`] and is\nnot something a caller picks here — it is what ADR_0016's launch produces.",
+        "description": "Who decides what this run does next.\n\nNot a pair of `owner`/`mode` fields, because only two of their combinations\nmean anything to a caller and the other two are a run nobody would want:\n`local`+`hosted` is a decider with no plan to schedule, and `worker`+\n`compiled` is a worker that may not decide. One field with two arms is the\nchoice that actually exists.",
         "enum": [
           "local",
           "worker"
@@ -11939,233 +11565,6 @@
             "minimum": 0
           }
         }
-      },
-      "EngineCatalog": {
-        "type": "object",
-        "description": "A page of launchable things.",
-        "required": [
-          "workflows"
-        ],
-        "properties": {
-          "next_token": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Absent on the last page."
-          },
-          "workflows": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/EngineWorkflow"
-            }
-          }
-        }
-      },
-      "EngineDescription": {
-        "type": "object",
-        "description": "How this instance is wired, for a client deciding what to render.",
-        "required": [
-          "kind",
-          "project",
-          "domain"
-        ],
-        "properties": {
-          "console_url": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The engine's console, when one is configured, so the panel can link out\nrather than pretending to be it."
-          },
-          "domain": {
-            "type": "string"
-          },
-          "kind": {
-            "type": "string",
-            "description": "`flyte` today. A name, not a version: the panel branches on nothing."
-          },
-          "project": {
-            "type": "string"
-          }
-        }
-      },
-      "EngineExecution": {
-        "type": "object",
-        "description": "Where an execution has got to, as the engine sees it.\n\naiwatcher's own view of a run comes from the log and says something\ndifferent: `RunStatus` is what the *producer* reported. When they disagree\nthe disagreement is the finding — an execution the orchestrator calls\n`Failed` whose events stop mid-run is a pod that was killed, and one it\ncalls `Succeeded` with no events at all is a producer that is not\ninstrumented.",
-        "required": [
-          "reference",
-          "phase"
-        ],
-        "properties": {
-          "message": {
-            "type": "string"
-          },
-          "phase": {
-            "$ref": "#/components/schemas/EnginePhase"
-          },
-          "reference": {
-            "type": "string"
-          },
-          "started_at": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "date-time"
-          },
-          "url": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "workflow": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "workflow_run_id": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Read back from the execution's labels, when aiwatcher set one."
-          }
-        }
-      },
-      "EngineParameter": {
-        "type": "object",
-        "description": "The shape of one declared input, for a form to render.\n\nDisplay only. Whatever a caller sends is bound to the engine's *own*\ndeclared type at launch time, read from the engine at that moment — see\n[`WorkflowEngine::launch`]. A panel that has been open since before a\nredeploy is therefore rendering a stale form against a fresh interface, and\nthe launch fails with the engine's own message rather than binding a value\nto a type nobody checked.",
-        "required": [
-          "name",
-          "kind",
-          "required"
-        ],
-        "properties": {
-          "default": {
-            "type": "object",
-            "description": "The default, rendered as JSON. `None` means there is none, which for a\nrequired parameter is the normal case."
-          },
-          "description": {
-            "type": "string"
-          },
-          "enum_values": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "The permitted values, when the engine declared a closed set. Turns a\ntext box into a select, which is the difference between a filter\nsomebody types wrong and one they pick."
-          },
-          "kind": {
-            "$ref": "#/components/schemas/ParameterKind"
-          },
-          "name": {
-            "type": "string"
-          },
-          "required": {
-            "type": "boolean",
-            "description": "Required *and* without a default. A parameter with a default is\noptional however the engine phrases it."
-          },
-          "type_name": {
-            "type": "string",
-            "description": "The engine's own name for the type, for the cases [`ParameterKind`]\nflattens: a blob, a structured dataset, a union. Shown beside the\nfield so a `Json` box is not a mystery."
-          }
-        }
-      },
-      "EnginePhase": {
-        "type": "string",
-        "enum": [
-          "queued",
-          "running",
-          "succeeded",
-          "failed",
-          "aborted",
-          "unknown"
-        ]
-      },
-      "EngineWorkflow": {
-        "type": "object",
-        "description": "One thing a caller could start.",
-        "required": [
-          "id",
-          "name",
-          "project",
-          "domain",
-          "kind",
-          "parameters",
-          "active"
-        ],
-        "properties": {
-          "active": {
-            "type": "boolean",
-            "description": "Whether the engine considers this version launchable. An inactive\nlaunch plan is listed rather than hidden, because \"it is there and it\nis switched off\" is the answer somebody is looking for when they cannot\nfind it."
-          },
-          "description": {
-            "type": "string"
-          },
-          "domain": {
-            "type": "string"
-          },
-          "id": {
-            "type": "string",
-            "description": "[`EngineRef::render`] — what `POST /launches` and the detail route take."
-          },
-          "kind": {
-            "$ref": "#/components/schemas/EntityKind"
-          },
-          "name": {
-            "type": "string",
-            "description": "The registered name, without project or domain."
-          },
-          "parameters": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/EngineParameter"
-            }
-          },
-          "project": {
-            "type": "string"
-          },
-          "stage_hint": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/PipelineStage",
-                "description": "A guess, never a fact — see [`PipelineStage`]."
-              }
-            ]
-          },
-          "updated_at": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "date-time"
-          },
-          "url": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Where to see it in the engine's own console, when one is configured."
-          },
-          "version": {
-            "type": "string"
-          }
-        }
-      },
-      "EntityKind": {
-        "type": "string",
-        "description": "The kind of registered thing a launch names.\n\nFlyte's launchable unit is a launch plan; a task and a workflow are\nregistered entities that a launch plan points at. Other engines divide this\ndifferently, so the kind travels with the reference rather than being\nassumed.",
-        "enum": [
-          "launch_plan",
-          "task",
-          "workflow"
-        ]
       },
       "EpochInput": {
         "type": "object",
@@ -13149,24 +12548,24 @@
             ]
           },
           {
-            "type": "object",
-            "description": "Handed whole to an external engine, which owns its own internal\nscheduling. Its phase is shown *beside* the status folded from the log\nand never merged into it.",
-            "required": [
-              "Engine"
-            ],
-            "properties": {
-              "Engine": {
-                "type": "string",
-                "description": "Handed whole to an external engine, which owns its own internal\nscheduling. Its phase is shown *beside* the status folded from the log\nand never merged into it."
-              }
-            }
-          },
-          {
             "type": "string",
             "description": "A worker runs `decide` and this system keeps the history and the lease.",
             "enum": [
               "Worker"
             ]
+          },
+          {
+            "type": "object",
+            "description": "An owner this build does not know, kept exactly as it was written. It\nis shown and never scheduled or decided for. `engine:flyte`, from the\nbuilds that had a pipeline engine (AW-4), reads back as this, and so\ndoes anything a newer build names.",
+            "required": [
+              "Unknown"
+            ],
+            "properties": {
+              "Unknown": {
+                "type": "string",
+                "description": "An owner this build does not know, kept exactly as it was written. It\nis shown and never scheduled or decided for. `engine:flyte`, from the\nbuilds that had a pipeline engine (AW-4), reads back as this, and so\ndoes anything a newer build names."
+              }
+            }
           }
         ],
         "description": "Who decides for this execution, and therefore who owns its retries.\n\nThe `ExecutionBackend` trait of the plan's first revision collapsed into\nthis field. A trait would have said the three are interchangeable\nimplementations of one thing; they are not — they differ in *who thinks*,\nwhich is a property of the run rather than a strategy the run holds."
@@ -14039,32 +13438,6 @@
           "withdrawn": {
             "type": "boolean",
             "description": "True once an erasure has taken this corpus' rows away."
-          }
-        }
-      },
-      "ExternalWorkflowSpec": {
-        "type": "object",
-        "required": [
-          "engine",
-          "entity"
-        ],
-        "properties": {
-          "engine": {
-            "type": "string",
-            "description": "The engine this is delegated to, as configuration names it."
-          },
-          "entity": {
-            "type": "string",
-            "description": "Always version-pinned. An execution recorded against \"whatever was\ncurrent\" is not something anybody can repeat."
-          },
-          "inputs": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "string"
-            },
-            "propertyNames": {
-              "type": "string"
-            }
           }
         }
       },
@@ -15801,57 +15174,6 @@
           }
         }
       },
-      "LaunchAccepted": {
-        "type": "object",
-        "description": "What came back. Not a result — nothing has finished.",
-        "required": [
-          "reference"
-        ],
-        "properties": {
-          "reference": {
-            "type": "string",
-            "description": "The engine's name for the execution it just created."
-          },
-          "url": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "workflow_run_id": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Echoed back so the caller can subscribe to\n`/api/v1/workflow-executions/{id}/stream` immediately — before the\nproducer has published anything, which is the interesting part of a\nlaunch's first thirty seconds."
-          }
-        }
-      },
-      "LaunchBody": {
-        "type": "object",
-        "description": "What a caller may ask to start.\n\nNote what is not here, and it is the same absence as `RerunBody`: no\nendpoint, no image, no command. `deny_unknown_fields` so an attempt to\nsupply one is a 400 rather than a field that is silently ignored and reads\nas accepted.",
-        "required": [
-          "workflow"
-        ],
-        "properties": {
-          "inputs": {
-            "type": "object",
-            "description": "Parameter name to value, bound to the types the engine declares."
-          },
-          "workflow": {
-            "type": "string",
-            "description": "The engine reference from the catalog, e.g.\n`lp:planner:production:house_dataset_curation:v7`."
-          },
-          "workflow_run_id": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Supply one to join this execution to events a producer will publish\nunder an id it already knows. Left out, aiwatcher mints one and returns\nit, which is what the panel follows."
-          }
-        },
-        "additionalProperties": false
-      },
       "LawfulBasis": {
         "type": "string",
         "description": "What makes keeping this lawful, in the producer's own words.\n\naiwatcher cannot check any of it and does not pretend to. What it can do is\nrefuse to hold content that never claimed one, and record the claim\nverbatim so that an auditor asking \"why was this row eligible\" gets the\nanswer somebody actually gave rather than one reconstructed afterwards.",
@@ -17217,22 +16539,6 @@
           "allow"
         ]
       },
-      "ParameterKind": {
-        "type": "string",
-        "description": "How a form should render one input.",
-        "enum": [
-          "string",
-          "integer",
-          "float",
-          "boolean",
-          "datetime",
-          "duration",
-          "enum",
-          "collection",
-          "map",
-          "json"
-        ]
-      },
       "PartSummary": {
         "type": "object",
         "description": "One part's shape, with none of its content.\n\nWhat makes a tombstoned turn still legible: \"an assistant message of three\nparts, 4 kB of text and a tool call\" is an auditable fact that survives the\nerasure of the words.",
@@ -17386,16 +16692,6 @@
             }
           }
         }
-      },
-      "PipelineStage": {
-        "type": "string",
-        "description": "Which part of the feature/training/inference cycle a workflow belongs to.\n\nA **hint**, and named as one everywhere it is rendered. It is derived from\nthe entity's own name and description, which is a guess: an orchestrator\nhas no field that says \"this one produces datasets\". The value is that a\npicker in Data Curation can default to curation workflows instead of\nlisting every launch plan in the cluster; the cost of being wrong is a\nfilter somebody switches off, which is why nothing but presentation may\ndepend on it.",
-        "enum": [
-          "curation",
-          "training",
-          "evaluation",
-          "inference"
-        ]
       },
       "PlanEdge": {
         "type": "object",
@@ -19739,29 +19035,6 @@
               }
             ],
             "description": "Nobody runs it. It waits for somebody to answer."
-          },
-          {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/ExternalWorkflowSpec",
-                "description": "Handed whole to an external engine through `core::engine::WorkflowEngine`.\nThat engine owns its internal retries; this one records the reference."
-              },
-              {
-                "type": "object",
-                "required": [
-                  "runtime"
-                ],
-                "properties": {
-                  "runtime": {
-                    "type": "string",
-                    "enum": [
-                      "external_workflow"
-                    ]
-                  }
-                }
-              }
-            ],
-            "description": "Handed whole to an external engine through `core::engine::WorkflowEngine`.\nThat engine owns its internal retries; this one records the reference."
           }
         ],
         "description": "Where a step runs, and everything that runtime needs.\n\nWhere each runtime executes, who owns its retries, and what it may carry.\nEvery variant names a *binding* and its parameters and never a host — an\nexecutor's address is configuration, for ADR_0012's and ADR_0016's reason,\nunchanged. A plan naming its own endpoint would be a request-forgery\nprimitive posted by anything that can reach the API."
@@ -19776,8 +19049,7 @@
           "marimo",
           "publish_dataset",
           "python_task",
-          "human_input",
-          "external_workflow"
+          "human_input"
         ]
       },
       "SampleInput": {
@@ -23333,10 +22605,6 @@
     {
       "name": "workflow",
       "description": "Declared graphs, their executions, and rerunning one"
-    },
-    {
-      "name": "engine",
-      "description": "The orchestrator's launchable inventory, and starting one"
     },
     {
       "name": "execution",

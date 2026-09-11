@@ -1,75 +1,33 @@
 import { getRouteApi } from '@tanstack/react-router';
 
-import type { PipelineStage } from '@/api/generated/types.gen';
 import { AreaPlaceholder } from '@/shared/components/area-placeholder';
-import { EngineLauncher } from '@/shared/components/engine-launcher';
-import { DEFAULT_WINDOW_SECONDS, TimeRange } from '@/shared/components/time-range';
-import { Badge, Button, Card } from '@/shared/components/ui/primitives';
+import { Badge, Card } from '@/shared/components/ui/primitives';
 
 /**
  * Experiments: changing the thing being observed.
  *
- * Two halves, and only one of them exists yet. The half that does is the
- * orchestrated one — training, evaluation and inference are workflows somebody
- * registered, and starting one from here is the same three questions Data
- * Curation asks about a dataset: which workflow, over what, for how long.
- *
- * The half that does not is the comparison: pinning a variant to the traces it
- * produced. `AreaPlaceholder` below names exactly what is missing, because a
- * plausible fake reads as working software.
+ * What belongs here is the comparison — a variant pinned to the traces it
+ * produced — and it does not exist yet, so `AreaPlaceholder` names exactly what
+ * is missing, because a plausible fake reads as working software. Starting the
+ * work is not this page's: a registered workflow runs as a managed execution,
+ * and it is followed in Workflows. The launcher that used to sit here asked the
+ * Flyte engine, which is gone (AW-4).
  */
-
-/**
- * The three stages this area starts. Curation is the fourth and lives on its
- * own page, because it produces the thing the other three consume.
- */
-type ExperimentStage = Extract<PipelineStage, 'training' | 'evaluation' | 'inference'>;
-
-const STAGES: { stage: ExperimentStage; label: string; summary: string }[] = [
-  {
-    stage: 'training',
-    label: 'Training',
-    summary:
-      'Fine-tuning and training runs the orchestrator holds. Point one at a dataset version and it becomes a model id that later shows up on production spans.',
-  },
-  {
-    stage: 'evaluation',
-    label: 'Evaluation',
-    summary:
-      'Scoring a variant against a suite. The report it publishes lands in Evaluation on the same log as everything else.',
-  },
-  {
-    stage: 'inference',
-    label: 'Inference',
-    summary:
-      'Batch scoring and embedding jobs — the third leg, and the one whose cost shows up in Observability rather than here.',
-  },
-];
 
 const routeApi = getRouteApi('/experiments');
 
 export function ExperimentsPage() {
   const search = routeApi.useSearch();
-  const navigate = routeApi.useNavigate();
-  const stage = search.stage ?? 'training';
-  const windowSeconds = search.window ?? DEFAULT_WINDOW_SECONDS;
-  const chosen = STAGES.find((option) => option.stage === stage) ?? STAGES[0]!;
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-lg font-semibold">Experiments</h1>
-          <p className="max-w-3xl text-sm text-muted-foreground">
-            Changing the thing being observed: prompt variants, model swaps, fine-tuning runs, and
-            what each of them cost. Start the work here; watch it in Workflows and judge it in
-            Evaluation.
-          </p>
-        </div>
-        <TimeRange
-          value={windowSeconds}
-          onChange={(window) => void navigate({ search: (previous) => ({ ...previous, window }) })}
-        />
+      <div>
+        <h1 className="text-lg font-semibold">Experiments</h1>
+        <p className="max-w-3xl text-sm text-muted-foreground">
+          Changing the thing being observed: prompt variants, model swaps, fine-tuning runs, and
+          what each of them cost. Run the work as a managed workflow, watch it in Workflows and
+          judge it in Evaluation.
+        </p>
       </div>
 
       {search.dataset ? (
@@ -78,49 +36,10 @@ export function ExperimentsPage() {
           <Badge>{search.dataset}</Badge>
           {search.variant ? <Badge tone="warning">{search.variant}</Badge> : null}
           <span className="text-muted-foreground">
-            This URL pins the dataset version and variant, and fills the workflow's inputs below.
+            This URL pins the dataset version and variant a comparison is about.
           </span>
         </Card>
       ) : null}
-
-      {/* One launcher, three stages. The stage is a filter over the same
-          catalog rather than three separate pickers: an orchestrator names its
-          launch plans however it likes, and a stage nobody's names match would
-          be an empty tab that looks broken. */}
-      <div className="flex flex-wrap items-center gap-1">
-        {STAGES.map((option) => (
-          <Button
-            key={option.stage}
-            size="sm"
-            variant={option.stage === stage ? 'default' : 'outline'}
-            onClick={() =>
-              void navigate({
-                search: (previous) => ({ ...previous, stage: option.stage, engine: undefined }),
-              })
-            }
-          >
-            {option.label}
-          </Button>
-        ))}
-      </div>
-
-      <EngineLauncher
-        stage={stage}
-        title={`Run a registered ${chosen.label.toLowerCase()} workflow`}
-        summary={chosen.summary}
-        context={{ dataset: search.dataset, windowSeconds, values: { variant: search.variant } }}
-        search={search.engineFind ?? ''}
-        onSearchChange={(engineFind) =>
-          void navigate({
-            search: (previous) => ({ ...previous, engineFind: engineFind || undefined }),
-            replace: true,
-          })
-        }
-        selected={search.engine}
-        onSelect={(engine) =>
-          void navigate({ search: (previous) => ({ ...previous, engine }), replace: true })
-        }
-      />
 
       <AreaPlaceholder
         title="Comparison"
@@ -134,7 +53,7 @@ export function ExperimentsPage() {
           {
             title: 'Training runs',
             description:
-              'Loss curves and checkpoints for the launches above, linked to the model id that later shows up on production spans.',
+              "Loss curves and checkpoints for a variant's training runs, linked to the model id that later shows up on production spans.",
           },
           {
             title: 'Cost',
@@ -144,9 +63,9 @@ export function ExperimentsPage() {
         ]}
         blockedOn={
           <>
-            Launching is solved: a registered workflow is startable from here and its execution is
-            watchable in Workflows. The remaining join is from a <code>variant</code> to the traces
-            it produced, where latency and token cost live. <code>model</code> and{' '}
+            Running the work is not what is missing: a registered workflow runs as a managed
+            execution and is watchable in Workflows. The missing join is from a <code>variant</code>{' '}
+            to the traces it produced, where latency and token cost live. <code>model</code> and{' '}
             <code>workflow</code> are dimensions today; <code>variant</code> must become one before
             a comparison can combine quality, latency and cost without guessing.
             <br />

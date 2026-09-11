@@ -1273,8 +1273,7 @@ export type DatasetVersionSummary = {
  * mean anything to a caller and the other two are a run nobody would want:
  * `local`+`hosted` is a decider with no plan to schedule, and `worker`+
  * `compiled` is a worker that may not decide. One field with two arms is the
- * choice that actually exists. `engine:` is [`ExecutionOwner::Engine`] and is
- * not something a caller picks here — it is what ADR_0016's launch produces.
+ * choice that actually exists.
  */
 export const Decider = { LOCAL: 'local', WORKER: 'worker' } as const;
 
@@ -1285,8 +1284,7 @@ export const Decider = { LOCAL: 'local', WORKER: 'worker' } as const;
  * mean anything to a caller and the other two are a run nobody would want:
  * `local`+`hosted` is a decider with no plan to schedule, and `worker`+
  * `compiled` is a worker that may not decide. One field with two arms is the
- * choice that actually exists. `engine:` is [`ExecutionOwner::Engine`] and is
- * not something a caller picks here — it is what ADR_0016's launch produces.
+ * choice that actually exists.
  */
 export type Decider = typeof Decider[keyof typeof Decider];
 
@@ -1489,165 +1487,6 @@ export type EditorSession = {
      */
     rows: number;
 };
-
-/**
- * A page of launchable things.
- */
-export type EngineCatalog = {
-    /**
-     * Absent on the last page.
-     */
-    next_token?: string | null;
-    workflows: Array<EngineWorkflow>;
-};
-
-/**
- * How this instance is wired, for a client deciding what to render.
- */
-export type EngineDescription = {
-    /**
-     * The engine's console, when one is configured, so the panel can link out
-     * rather than pretending to be it.
-     */
-    console_url?: string | null;
-    domain: string;
-    /**
-     * `flyte` today. A name, not a version: the panel branches on nothing.
-     */
-    kind: string;
-    project: string;
-};
-
-/**
- * Where an execution has got to, as the engine sees it.
- *
- * aiwatcher's own view of a run comes from the log and says something
- * different: `RunStatus` is what the *producer* reported. When they disagree
- * the disagreement is the finding — an execution the orchestrator calls
- * `Failed` whose events stop mid-run is a pod that was killed, and one it
- * calls `Succeeded` with no events at all is a producer that is not
- * instrumented.
- */
-export type EngineExecution = {
-    message?: string;
-    phase: EnginePhase;
-    reference: string;
-    started_at?: string | null;
-    url?: string | null;
-    workflow?: string | null;
-    /**
-     * Read back from the execution's labels, when aiwatcher set one.
-     */
-    workflow_run_id?: string | null;
-};
-
-/**
- * The shape of one declared input, for a form to render.
- *
- * Display only. Whatever a caller sends is bound to the engine's *own*
- * declared type at launch time, read from the engine at that moment — see
- * [`WorkflowEngine::launch`]. A panel that has been open since before a
- * redeploy is therefore rendering a stale form against a fresh interface, and
- * the launch fails with the engine's own message rather than binding a value
- * to a type nobody checked.
- */
-export type EngineParameter = {
-    /**
-     * The default, rendered as JSON. `None` means there is none, which for a
-     * required parameter is the normal case.
-     */
-    default?: {
-        [key: string]: unknown;
-    };
-    description?: string;
-    /**
-     * The permitted values, when the engine declared a closed set. Turns a
-     * text box into a select, which is the difference between a filter
-     * somebody types wrong and one they pick.
-     */
-    enum_values?: Array<string>;
-    kind: ParameterKind;
-    name: string;
-    /**
-     * Required *and* without a default. A parameter with a default is
-     * optional however the engine phrases it.
-     */
-    required: boolean;
-    /**
-     * The engine's own name for the type, for the cases [`ParameterKind`]
-     * flattens: a blob, a structured dataset, a union. Shown beside the
-     * field so a `Json` box is not a mystery.
-     */
-    type_name?: string;
-};
-
-export const EnginePhase = {
-    QUEUED: 'queued',
-    RUNNING: 'running',
-    SUCCEEDED: 'succeeded',
-    FAILED: 'failed',
-    ABORTED: 'aborted',
-    UNKNOWN: 'unknown'
-} as const;
-
-export type EnginePhase = typeof EnginePhase[keyof typeof EnginePhase];
-
-/**
- * One thing a caller could start.
- */
-export type EngineWorkflow = {
-    /**
-     * Whether the engine considers this version launchable. An inactive
-     * launch plan is listed rather than hidden, because "it is there and it
-     * is switched off" is the answer somebody is looking for when they cannot
-     * find it.
-     */
-    active: boolean;
-    description?: string;
-    domain: string;
-    /**
-     * [`EngineRef::render`] — what `POST /launches` and the detail route take.
-     */
-    id: string;
-    kind: EntityKind;
-    /**
-     * The registered name, without project or domain.
-     */
-    name: string;
-    parameters: Array<EngineParameter>;
-    project: string;
-    stage_hint?: null | PipelineStage;
-    updated_at?: string | null;
-    /**
-     * Where to see it in the engine's own console, when one is configured.
-     */
-    url?: string | null;
-    version?: string;
-};
-
-/**
- * The kind of registered thing a launch names.
- *
- * Flyte's launchable unit is a launch plan; a task and a workflow are
- * registered entities that a launch plan points at. Other engines divide this
- * differently, so the kind travels with the reference rather than being
- * assumed.
- */
-export const EntityKind = {
-    LAUNCH_PLAN: 'launch_plan',
-    TASK: 'task',
-    WORKFLOW: 'workflow'
-} as const;
-
-/**
- * The kind of registered thing a launch names.
- *
- * Flyte's launchable unit is a launch plan; a task and a workflow are
- * registered entities that a launch plan points at. Other engines divide this
- * differently, so the kind travels with the reference rather than being
- * assumed.
- */
-export type EntityKind = typeof EntityKind[keyof typeof EntityKind];
 
 export type EpochInput = {
     duration_ms?: number;
@@ -2115,14 +1954,15 @@ export type ExecutionMode = typeof ExecutionMode[keyof typeof ExecutionMode];
  * implementations of one thing; they are not — they differ in *who thinks*,
  * which is a property of the run rather than a strategy the run holds.
  */
-export type ExecutionOwner = 'Local' | {
+export type ExecutionOwner = 'Local' | 'Worker' | {
     /**
-     * Handed whole to an external engine, which owns its own internal
-     * scheduling. Its phase is shown *beside* the status folded from the log
-     * and never merged into it.
+     * An owner this build does not know, kept exactly as it was written. It
+     * is shown and never scheduled or decided for. `engine:flyte`, from the
+     * builds that had a pipeline engine (AW-4), reads back as this, and so
+     * does anything a newer build names.
      */
-    Engine: string;
-} | 'Worker';
+    Unknown: string;
+};
 
 export type ExecutionPage = {
     executions: Array<ExecutionSummary>;
@@ -2495,21 +2335,6 @@ export type ExportVersionSummary = {
      * True once an erasure has taken this corpus' rows away.
      */
     withdrawn?: boolean;
-};
-
-export type ExternalWorkflowSpec = {
-    /**
-     * The engine this is delegated to, as configuration names it.
-     */
-    engine: string;
-    /**
-     * Always version-pinned. An execution recorded against "whatever was
-     * current" is not something anybody can repeat.
-     */
-    entity: string;
-    inputs?: {
-        [key: string]: string;
-    };
 };
 
 /**
@@ -3543,52 +3368,6 @@ export type Latency = {
 };
 
 /**
- * What came back. Not a result — nothing has finished.
- */
-export type LaunchAccepted = {
-    /**
-     * The engine's name for the execution it just created.
-     */
-    reference: string;
-    url?: string | null;
-    /**
-     * Echoed back so the caller can subscribe to
-     * `/api/v1/workflow-executions/{id}/stream` immediately — before the
-     * producer has published anything, which is the interesting part of a
-     * launch's first thirty seconds.
-     */
-    workflow_run_id?: string | null;
-};
-
-/**
- * What a caller may ask to start.
- *
- * Note what is not here, and it is the same absence as `RerunBody`: no
- * endpoint, no image, no command. `deny_unknown_fields` so an attempt to
- * supply one is a 400 rather than a field that is silently ignored and reads
- * as accepted.
- */
-export type LaunchBody = {
-    /**
-     * Parameter name to value, bound to the types the engine declares.
-     */
-    inputs?: {
-        [key: string]: unknown;
-    };
-    /**
-     * The engine reference from the catalog, e.g.
-     * `lp:planner:production:house_dataset_curation:v7`.
-     */
-    workflow: string;
-    /**
-     * Supply one to join this execution to events a producer will publish
-     * under an id it already knows. Left out, aiwatcher mints one and returns
-     * it, which is what the panel follows.
-     */
-    workflow_run_id?: string | null;
-};
-
-/**
  * What makes keeping this lawful, in the producer's own words.
  *
  * aiwatcher cannot check any of it and does not pretend to. What it can do is
@@ -4293,27 +4072,6 @@ export const OverlapPolicy = { SKIP: 'skip', ALLOW: 'allow' } as const;
 export type OverlapPolicy = typeof OverlapPolicy[keyof typeof OverlapPolicy];
 
 /**
- * How a form should render one input.
- */
-export const ParameterKind = {
-    STRING: 'string',
-    INTEGER: 'integer',
-    FLOAT: 'float',
-    BOOLEAN: 'boolean',
-    DATETIME: 'datetime',
-    DURATION: 'duration',
-    ENUM: 'enum',
-    COLLECTION: 'collection',
-    MAP: 'map',
-    JSON: 'json'
-} as const;
-
-/**
- * How a form should render one input.
- */
-export type ParameterKind = typeof ParameterKind[keyof typeof ParameterKind];
-
-/**
  * One part's shape, with none of its content.
  *
  * What makes a tombstoned turn still legible: "an assistant message of three
@@ -4412,37 +4170,6 @@ export type PipelineEdge = {
 export type PipelinePage = {
     pipelines: Array<CurationPipeline>;
 };
-
-/**
- * Which part of the feature/training/inference cycle a workflow belongs to.
- *
- * A **hint**, and named as one everywhere it is rendered. It is derived from
- * the entity's own name and description, which is a guess: an orchestrator
- * has no field that says "this one produces datasets". The value is that a
- * picker in Data Curation can default to curation workflows instead of
- * listing every launch plan in the cluster; the cost of being wrong is a
- * filter somebody switches off, which is why nothing but presentation may
- * depend on it.
- */
-export const PipelineStage = {
-    CURATION: 'curation',
-    TRAINING: 'training',
-    EVALUATION: 'evaluation',
-    INFERENCE: 'inference'
-} as const;
-
-/**
- * Which part of the feature/training/inference cycle a workflow belongs to.
- *
- * A **hint**, and named as one everywhere it is rendered. It is derived from
- * the entity's own name and description, which is a guess: an orchestrator
- * has no field that says "this one produces datasets". The value is that a
- * picker in Data Curation can default to curation workflows instead of
- * listing every launch plan in the cluster; the cost of being wrong is a
- * filter somebody switches off, which is why nothing but presentation may
- * depend on it.
- */
-export type PipelineStage = typeof PipelineStage[keyof typeof PipelineStage];
 
 export type PlanEdge = {
     from: string;
@@ -5808,8 +5535,6 @@ export type RuntimeBinding = (QueryStepSpec & {
     runtime: 'python_task';
 }) | (HumanInputSpec & {
     runtime: 'human_input';
-}) | (ExternalWorkflowSpec & {
-    runtime: 'external_workflow';
 });
 
 /**
@@ -5822,8 +5547,7 @@ export const RuntimeKind = {
     MARIMO: 'marimo',
     PUBLISH_DATASET: 'publish_dataset',
     PYTHON_TASK: 'python_task',
-    HUMAN_INPUT: 'human_input',
-    EXTERNAL_WORKFLOW: 'external_workflow'
+    HUMAN_INPUT: 'human_input'
 } as const;
 
 /**
@@ -9190,145 +8914,6 @@ export type ListDimensionResponses = {
 };
 
 export type ListDimensionResponse = ListDimensionResponses[keyof ListDimensionResponses];
-
-export type DescribeEngineData = {
-    body?: never;
-    path?: never;
-    query?: never;
-    url: '/api/v1/engine';
-};
-
-export type DescribeEngineErrors = {
-    501: ErrorBody;
-};
-
-export type DescribeEngineError = DescribeEngineErrors[keyof DescribeEngineErrors];
-
-export type DescribeEngineResponses = {
-    200: EngineDescription;
-};
-
-export type DescribeEngineResponse = DescribeEngineResponses[keyof DescribeEngineResponses];
-
-export type LaunchWorkflowData = {
-    body: LaunchBody;
-    path?: never;
-    query?: never;
-    url: '/api/v1/engine/launches';
-};
-
-export type LaunchWorkflowErrors = {
-    /**
-     * The engine refused it: an undeclared input, a missing one, a value that will not bind
-     */
-    400: ErrorBody;
-    403: ErrorBody;
-    501: ErrorBody;
-    502: ErrorBody;
-    503: ErrorBody;
-};
-
-export type LaunchWorkflowError = LaunchWorkflowErrors[keyof LaunchWorkflowErrors];
-
-export type LaunchWorkflowResponses = {
-    202: LaunchAccepted;
-};
-
-export type LaunchWorkflowResponse = LaunchWorkflowResponses[keyof LaunchWorkflowResponses];
-
-export type GetLaunchData = {
-    body?: never;
-    path: {
-        /**
-         * The reference from a launch, e.g. project:domain:execution
-         */
-        reference: string;
-    };
-    query?: never;
-    url: '/api/v1/engine/launches/{reference}';
-};
-
-export type GetLaunchErrors = {
-    400: ErrorBody;
-    404: ErrorBody;
-    501: ErrorBody;
-};
-
-export type GetLaunchError = GetLaunchErrors[keyof GetLaunchErrors];
-
-export type GetLaunchResponses = {
-    200: EngineExecution;
-};
-
-export type GetLaunchResponse = GetLaunchResponses[keyof GetLaunchResponses];
-
-export type ListEngineWorkflowsData = {
-    body?: never;
-    path?: never;
-    query?: {
-        /**
-         * Case-insensitive substring over name and description.
-         */
-        search?: string | null;
-        /**
-         * Overrides the configured project and domain for this request.
-         */
-        project?: string | null;
-        domain?: string | null;
-        /**
-         * `curation | training | evaluation | inference`. A hint the engine
-         * derived from the entity's name — see `core::engine::PipelineStage`.
-         */
-        stage?: string | null;
-        limit?: number | null;
-        /**
-         * The engine's own continuation token, from a previous `next_token`.
-         */
-        token?: string | null;
-    };
-    url: '/api/v1/engine/workflows';
-};
-
-export type ListEngineWorkflowsErrors = {
-    400: ErrorBody;
-    501: ErrorBody;
-    502: ErrorBody;
-    503: ErrorBody;
-};
-
-export type ListEngineWorkflowsError = ListEngineWorkflowsErrors[keyof ListEngineWorkflowsErrors];
-
-export type ListEngineWorkflowsResponses = {
-    200: EngineCatalog;
-};
-
-export type ListEngineWorkflowsResponse = ListEngineWorkflowsResponses[keyof ListEngineWorkflowsResponses];
-
-export type GetEngineWorkflowData = {
-    body?: never;
-    path: {
-        /**
-         * An engine reference, e.g. lp:project:domain:name:version
-         */
-        workflow_id: string;
-    };
-    query?: never;
-    url: '/api/v1/engine/workflows/{workflow_id}';
-};
-
-export type GetEngineWorkflowErrors = {
-    400: ErrorBody;
-    404: ErrorBody;
-    501: ErrorBody;
-};
-
-export type GetEngineWorkflowError = GetEngineWorkflowErrors[keyof GetEngineWorkflowErrors];
-
-export type GetEngineWorkflowResponses = {
-    200: EngineWorkflow;
-};
-
-export type GetEngineWorkflowResponse = GetEngineWorkflowResponses[keyof GetEngineWorkflowResponses];
 
 export type ListEvaluationSuitesData = {
     body?: never;

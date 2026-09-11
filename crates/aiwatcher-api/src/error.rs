@@ -77,9 +77,6 @@ pub enum ApiError {
     #[error("the notebook runtime would not open this editor: {0}")]
     Editor(aiwatcher_core::ports::PortError),
 
-    #[error("this instance has no pipeline engine configured (AIWATCHER_ENGINE)")]
-    EngineDisabled,
-
     /// A worker asked for the bytes of an attempt on an instance with no
     /// object store. Claiming and settling still work — a task that takes its
     /// parameters and returns a bounded value needs no artifact — so this is
@@ -193,23 +190,6 @@ pub enum ApiError {
     #[error("the workflow runner refused the rerun: {0}")]
     Runner(aiwatcher_core::ports::PortError),
 
-    /// The engine would not answer. Same split as `Runner`: down is a 503
-    /// worth repeating, and a refusal is a 502 that will refuse identically
-    /// forever.
-    #[error("the pipeline engine could not serve that: {0}")]
-    Engine(aiwatcher_core::ports::PortError),
-
-    /// A launch the engine refused, or the adapter refused on its behalf: an
-    /// input the entity does not declare, a required one left out, a timestamp
-    /// that will not parse.
-    ///
-    /// Its own variant rather than [`Self::Engine`] because of who is at
-    /// fault. This is the request being wrong — a 400, and the message is what
-    /// a form puts beside the field. Answering 502 would tell somebody who
-    /// mistyped a date that the gateway is broken.
-    #[error("{0}")]
-    LaunchRefused(String),
-
     #[error(transparent)]
     Bus(#[from] aiwatcher_bus::BusError),
 
@@ -283,10 +263,6 @@ impl ApiError {
                 }
                 _ => (StatusCode::SERVICE_UNAVAILABLE, "editor_unavailable"),
             },
-            // And again for the engine: the routes exist in the contract and
-            // this deployment wired no orchestrator behind them. The message
-            // names the variable to set.
-            Self::EngineDisabled => (StatusCode::NOT_IMPLEMENTED, "engine_disabled"),
             Self::WorkerArtifactsDisabled => {
                 (StatusCode::NOT_IMPLEMENTED, "worker_artifacts_disabled")
             }
@@ -335,11 +311,6 @@ impl ApiError {
                 (StatusCode::SERVICE_UNAVAILABLE, "runner_unavailable")
             }
             Self::Runner(_) => (StatusCode::BAD_GATEWAY, "runner_rejected"),
-            Self::Engine(error) if error.is_retryable() => {
-                (StatusCode::SERVICE_UNAVAILABLE, "engine_unavailable")
-            }
-            Self::Engine(_) => (StatusCode::BAD_GATEWAY, "engine_rejected"),
-            Self::LaunchRefused(_) => (StatusCode::BAD_REQUEST, "launch_refused"),
         }
     }
 }

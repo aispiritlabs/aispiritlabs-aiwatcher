@@ -769,9 +769,6 @@ pub async fn build(config: Config) -> Result<Runtime> {
             Arc::new(aiwatcher_execution::ObjectArtifactCatalog::new(store))
                 as Arc<dyn aiwatcher_execution::ArtifactCatalog>
         }),
-        // No engine since the Flyte adapter went: its routes answer 501 until
-        // they are removed with the contract they are part of.
-        engine: None,
         execution_payloads: aiwatcher_api::state::PayloadDefault {
             policy: config.execution_payloads,
             locked: config.execution_payloads_locked,

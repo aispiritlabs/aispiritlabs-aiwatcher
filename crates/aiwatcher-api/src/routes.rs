@@ -51,7 +51,6 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::training::router())
         // ── Asking another system to do something ────────────────────────────
         .merge(crate::workflows::router())
-        .merge(crate::engine::router())
         // ── Doing the work here instead ──────────────────────────────────────
         //
         // The one group backed by a transactional store rather than by the log

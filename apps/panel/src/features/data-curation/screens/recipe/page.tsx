@@ -5,7 +5,6 @@ import * as React from 'react';
 
 import { listRecipes, publishDataset, saveRecipe } from '@/api/generated/sdk.gen';
 import type { CurationRecipe } from '@/api/generated/types.gen';
-import { EngineLauncher } from '@/shared/components/engine-launcher';
 import { FlowDiagnostics, FlowResultView } from '@/shared/components/flow-preview';
 import { DEFAULT_WINDOW_SECONDS, TimeRange, windowParam } from '@/shared/components/time-range';
 import { Badge, Button, Card, EmptyState, Spinner } from '@/shared/components/ui/primitives';
@@ -173,27 +172,6 @@ export function DataCurationPage() {
           onChange={(window) => void navigate({ search: (previous) => ({ ...previous, window }) })}
         />
       </div>
-
-      {/* The orchestrated route, first: a workflow somebody registered is
-          already able to do this, and the editor below is for when there is
-          not one. */}
-      <EngineLauncher
-        stage="curation"
-        title="Run a registered curation workflow"
-        summary="What the orchestrator holds, with the inputs it declared. The period above and the dataset name below fill this in; nothing else is sent."
-        context={{ dataset, windowSeconds }}
-        search={search.engineFind ?? ''}
-        onSearchChange={(engineFind) =>
-          void navigate({
-            search: (previous) => ({ ...previous, engineFind: engineFind || undefined }),
-            replace: true,
-          })
-        }
-        selected={search.engine}
-        onSelect={(engine) =>
-          void navigate({ search: (previous) => ({ ...previous, engine }), replace: true })
-        }
-      />
 
       {available.data === false ? (
         <EmptyState

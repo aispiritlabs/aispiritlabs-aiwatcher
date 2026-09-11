@@ -173,12 +173,13 @@ impl RunState {
 pub enum ExecutionOwner {
     /// The Rust decider schedules the steps and owns their retries.
     Local,
-    /// Handed whole to an external engine, which owns its own internal
-    /// scheduling. Its phase is shown *beside* the status folded from the log
-    /// and never merged into it.
-    Engine(String),
     /// A worker runs `decide` and this system keeps the history and the lease.
     Worker,
+    /// An owner this build does not know, kept exactly as it was written. It
+    /// is shown and never scheduled or decided for. `engine:flyte`, from the
+    /// builds that had a pipeline engine (AW-4), reads back as this, and so
+    /// does anything a newer build names.
+    Unknown(String),
 }
 
 impl ExecutionOwner {
@@ -186,20 +187,19 @@ impl ExecutionOwner {
     pub fn as_string(&self) -> String {
         match self {
             Self::Local => "local".to_owned(),
-            Self::Engine(name) => format!("engine:{name}"),
             Self::Worker => "worker".to_owned(),
+            Self::Unknown(text) => text.clone(),
         }
     }
 
-    /// `local`, `worker`, or `engine:<name>`. Unknown text is an engine nobody
-    /// configured rather than an error, so a record written by a newer build
-    /// still reads.
+    /// `local` or `worker`. Any other text is kept as [`Self::Unknown`] rather
+    /// than refused, so a record written by another build still reads.
     #[must_use]
     pub fn parse(value: &str) -> Self {
         match value {
             "local" => Self::Local,
             "worker" => Self::Worker,
-            other => Self::Engine(other.strip_prefix("engine:").unwrap_or(other).to_owned()),
+            other => Self::Unknown(other.to_owned()),
         }
     }
 }
@@ -592,16 +592,25 @@ mod tests {
         for owner in [
             ExecutionOwner::Local,
             ExecutionOwner::Worker,
-            ExecutionOwner::Engine("flyte".to_owned()),
+            ExecutionOwner::Unknown("engine:flyte".to_owned()),
         ] {
             assert_eq!(ExecutionOwner::parse(&owner.as_string()), owner);
         }
-        // A record written by a newer build names an engine nobody configured,
-        // which is a thing to report rather than a parse error.
-        assert_eq!(
-            ExecutionOwner::parse("prefect"),
-            ExecutionOwner::Engine("prefect".to_owned())
-        );
+    }
+
+    #[test]
+    fn a_run_the_removed_engine_owned_reads_back_as_unknown_and_unchanged() {
+        // A row written while the Flyte engine existed. It is not an engine
+        // nobody configured — there is no such thing any more — it is text
+        // this build does not know, shown exactly as it was written.
+        let owner = ExecutionOwner::parse("engine:flyte");
+        assert_eq!(owner, ExecutionOwner::Unknown("engine:flyte".to_owned()));
+        assert_eq!(owner.to_string(), "engine:flyte");
+
+        let read: ExecutionOwner =
+            serde_json::from_value(serde_json::json!("prefect")).expect("reads");
+        assert_eq!(read, ExecutionOwner::Unknown("prefect".to_owned()));
+        assert_eq!(serde_json::to_value(&read).expect("writes"), "prefect");
     }
 
     #[test]
