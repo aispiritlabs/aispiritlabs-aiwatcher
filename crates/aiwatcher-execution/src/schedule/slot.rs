@@ -166,15 +166,14 @@ impl SlotRecord {
     /// holds it or the holder's lease has run out — the claim table's rule
     /// ([`crate::claim::AttemptRow::is_claimable`]), for the same reason: a
     /// process that died holding a slot must not keep it for ever.
+    ///
+    /// [`aiwatcher_jobs::lease_expired`], called rather than copied. The copy
+    /// that stood here wrote `>=` and freed a slot at exactly
+    /// [`aiwatcher_jobs::LEASE_SECONDS`], a second before every other lease in
+    /// this store lets go of anything.
     #[must_use]
     pub fn is_available(&self, now: OffsetDateTime) -> bool {
-        if self.outcome.is_some() {
-            return false;
-        }
-        let Some(leased_at) = self.leased_at else {
-            return true;
-        };
-        now - leased_at >= time::Duration::seconds(aiwatcher_jobs::LEASE_SECONDS)
+        self.outcome.is_none() && aiwatcher_jobs::lease_expired(self.leased_at, now)
     }
 }
 

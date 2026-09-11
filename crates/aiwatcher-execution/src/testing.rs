@@ -329,6 +329,7 @@ pub async fn assert_contract(name: &str, store: &dyn WorkflowStore) {
     an_exact_attempt_filter_never_claims_a_neighbour(name, store).await;
     a_lost_claim_expires_and_the_next_claimant_takes_it_over(name, store).await;
     a_heartbeat_keeps_a_long_step_from_being_taken_over(name, store).await;
+    a_lease_exactly_its_length_old_is_still_held_and_one_second_later_is_not(name, store).await;
     a_finished_attempt_leaves_no_row_behind(name, store).await;
     a_parked_attempt_keeps_its_row_and_loses_its_lease(name, store).await;
     a_retry_is_not_claimable_before_its_delay(name, store).await;
@@ -1427,6 +1428,226 @@ pub async fn a_heartbeat_keeps_a_long_step_from_being_taken_over(
         )
         .is_none(),
         "{name}: a renewed lease was taken over"
+    );
+}
+
+/// One boundary for every lease this store keeps.
+///
+/// [`aiwatcher_jobs::lease_expired`] is strict: a lease exactly
+/// [`aiwatcher_jobs::LEASE_SECONDS`] old is still held, and one second later it
+/// is not. The other adapters ask that function; PostgreSQL writes the
+/// comparison into its statements, and a `<=` there took a row at exactly five
+/// minutes that `unclaimed_attempts` — written with `<` — still counted as
+/// held, while its `>` refused the holder's heartbeat at the instant
+/// [`AttemptRow::is_held_by`] said the row was still its own. Pinned at the one
+/// second where the two readings differ: at any other instant they agree, which
+/// is why every other property here passed either way. The decider lease and a
+/// schedule slot are the same rule over a whole run and one firing, so they are
+/// pinned at the same second.
+pub async fn a_lease_exactly_its_length_old_is_still_held_and_one_second_later_is_not(
+    name: &str,
+    store: &dyn WorkflowStore,
+) {
+    let execution = fresh("lease-boundary");
+    let start = OffsetDateTime::UNIX_EPOCH;
+    let boundary = start + Duration::seconds(aiwatcher_jobs::LEASE_SECONDS);
+    let after = boundary + Duration::seconds(1);
+
+    // Counted at both instants before anything is dispatched: on a shared
+    // PostgreSQL the table holds other runs' rows, and at a fixed instant
+    // their contribution is a fixed number.
+    let before_boundary = ok!(name, store.unclaimed_attempts(boundary), "a count before");
+    let before_after = ok!(
+        name,
+        store.unclaimed_attempts(after),
+        "a later count before"
+    );
+
+    // A reactor's row, so the count sees it, and a worker's for the renewal.
+    let counted = AttemptRow::claimable(
+        AttemptKey::new(execution.clone(), "counted", 1),
+        RuntimeKind::FlowPhp,
+        MessageId::new(format!("{execution}/cmd-counted")),
+    );
+    let renewed = claimable(&execution);
+    ok!(
+        name,
+        store.append(
+            &execution,
+            dispatch(
+                &execution,
+                "boundary-dispatch",
+                vec![
+                    AttemptWrite::Dispatch(counted.clone()),
+                    AttemptWrite::Dispatch(renewed.clone()),
+                ],
+            )
+        ),
+        "a dispatch"
+    );
+    let exact = ClaimFilter {
+        attempt: Some(counted.key.clone()),
+        ..ClaimFilter::for_runtimes(&[RuntimeKind::FlowPhp])
+    };
+    ok!(
+        name,
+        store.claim_attempt(&exact, "reactor-a", start),
+        "a claim"
+    )
+    .unwrap_or_else(|| panic!("{name}: the exact claim found nothing to take"));
+    ok!(
+        name,
+        store.claim_attempt(&mine(&execution), "worker-a", start),
+        "a worker's claim"
+    )
+    .unwrap_or_else(|| panic!("{name}: the worker's claim found nothing to take"));
+
+    // Exactly LEASE_SECONDS old: still held, by every reading of it.
+    assert!(
+        ok!(
+            name,
+            store.claim_attempt(&exact, "reactor-b", boundary),
+            "a claim at the boundary"
+        )
+        .is_none(),
+        "{name}: a lease exactly LEASE_SECONDS old was taken over"
+    );
+    let at_boundary = ok!(
+        name,
+        store.unclaimed_attempts(boundary),
+        "a count at the boundary"
+    );
+    assert_eq!(
+        grew(&before_boundary, &at_boundary, RuntimeKind::FlowPhp),
+        0,
+        "{name}: a lease exactly LEASE_SECONDS old was counted as waiting for a claimant"
+    );
+    assert!(
+        ok!(
+            name,
+            store.heartbeat(&renewed.key, "worker-a", boundary),
+            "a heartbeat at the boundary"
+        ),
+        "{name}: the holder could not renew a lease in its last second"
+    );
+
+    // One second later: free, by every reading of it — and the count is asked
+    // before the claim, which would make it held again.
+    let at_after = ok!(
+        name,
+        store.unclaimed_attempts(after),
+        "a count after the boundary"
+    );
+    assert_eq!(
+        grew(&before_after, &at_after, RuntimeKind::FlowPhp),
+        1,
+        "{name}: a lease one second past LEASE_SECONDS was not counted as waiting"
+    );
+    let taken = ok!(
+        name,
+        store.claim_attempt(&exact, "reactor-b", after),
+        "a claim after the boundary"
+    )
+    .unwrap_or_else(|| panic!("{name}: a lease one second past LEASE_SECONDS was not taken over"));
+    assert_eq!(taken.lease_owner.as_deref(), Some("reactor-b"), "{name}");
+    assert_eq!(
+        taken.previous_owner.as_deref(),
+        Some("reactor-a"),
+        "{name}: a takeover says who it interrupted"
+    );
+    // Except the one renewed at the boundary, which is held from there.
+    assert!(
+        ok!(
+            name,
+            store.claim_attempt(&mine(&execution), "worker-b", after),
+            "a claim of the renewed row"
+        )
+        .is_none(),
+        "{name}: a lease renewed in its last second was taken over the second after"
+    );
+
+    // The decider lease: the same rule, over a whole run.
+    let decided = fresh("lease-boundary-decider");
+    ok!(
+        name,
+        store.take_decider_lease(&decided, "worker-a", start),
+        "a decider's claim"
+    );
+    match ok!(
+        name,
+        store.take_decider_lease(&decided, "worker-b", boundary),
+        "a decider's claim at the boundary"
+    ) {
+        LeaseOutcome::Held { holder, .. } => assert_eq!(holder, "worker-a", "{name}"),
+        LeaseOutcome::Taken(_) => {
+            panic!("{name}: a decider lease exactly LEASE_SECONDS old was taken over")
+        }
+    }
+    let taken = ok!(
+        name,
+        store.take_decider_lease(&decided, "worker-b", after),
+        "a decider's claim after the boundary"
+    );
+    assert!(
+        taken
+            .taken()
+            .is_some_and(|lease| lease.holder == "worker-b"),
+        "{name}: a decider lease one second past LEASE_SECONDS was not taken over"
+    );
+    let released = fresh("lease-boundary-release");
+    ok!(
+        name,
+        store.take_decider_lease(&released, "worker-a", start),
+        "a decider's claim to release"
+    );
+    assert!(
+        ok!(
+            name,
+            store.release_decider_lease(&released, "worker-a", boundary),
+            "a release at the boundary"
+        ),
+        "{name}: the holder could not release a decider lease in its last second"
+    );
+
+    // And a schedule slot: the same rule, over one firing.
+    let slot = OffsetDateTime::UNIX_EPOCH + Duration::days(6);
+    let key = SlotKey::new(
+        DefinitionKind::CurationPipeline,
+        format!("{name}-lease-boundary-{}", stamp()),
+        slot,
+    );
+    ok!(
+        name,
+        store.admit_slot(&admission(&key, "tick-a", slot)),
+        "a slot's claim"
+    );
+    assert_eq!(
+        ok!(
+            name,
+            store.admit_slot(&admission(
+                &key,
+                "tick-b",
+                slot + Duration::seconds(aiwatcher_jobs::LEASE_SECONDS)
+            )),
+            "a slot's claim at the boundary"
+        ),
+        SlotAdmission::Held {
+            owner: "tick-a".to_owned()
+        },
+        "{name}: a slot lease exactly LEASE_SECONDS old was taken over"
+    );
+    assert_eq!(
+        ok!(
+            name,
+            store.admit_slot(&admission(
+                &key,
+                "tick-b",
+                slot + Duration::seconds(aiwatcher_jobs::LEASE_SECONDS + 1)
+            )),
+            "a slot's claim after the boundary"
+        ),
+        SlotAdmission::Admitted,
+        "{name}: a slot lease one second past LEASE_SECONDS was not taken over"
     );
 }
 

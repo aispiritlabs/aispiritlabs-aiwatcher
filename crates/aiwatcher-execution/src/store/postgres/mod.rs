@@ -549,13 +549,20 @@ impl WorkflowStore for PostgresWorkflowStore {
         // back: a claim that filtered in Rust would have already taken the
         // lease, and releasing it again is a five-minute stall on a row
         // somebody else could have run.
+        //
+        // `claimed_at < $3` is `aiwatcher_jobs::lease_expired`'s strict
+        // inequality — a lease is held through its last second and free the
+        // second after — the one `unclaimed_attempts` and every other adapter
+        // keep. It read `<=`, which took a row at exactly five minutes that the
+        // count still called held and `AttemptRow::is_held_by` still told its
+        // holder was its own.
         let row = sqlx::query(
             "select execution_id, step_id, attempt, runtime, command_id, queue,
                     task_ref, state, lease_owner, previous_owner, claimed_at, not_before
                from step_attempts
               where state not in ('completed', 'failed', 'crashed', 'cancelled',
                                   'awaiting_input')
-                and (claimed_at is null or claimed_at <= $3)
+                and (claimed_at is null or claimed_at < $3)
                 and (not_before is null or not_before <= $4)
                 and ($6::text is null or (execution_id = $6 and step_id = $7 and attempt::bigint = $8))
                 and ( (queue is not null and queue = any($1)
@@ -595,11 +602,15 @@ impl WorkflowStore for PostgresWorkflowStore {
         // The `lease_owner` and freshness checks are in the `where`, not in a
         // read followed by a write: a renewal that read a live lease and wrote
         // after it expired would be a worker renewing its replacement's claim.
+        // `claimed_at >= $6` is `AttemptRow::is_held_by`: held through the
+        // lease's last second, the instant `claim_attempt` still refuses it.
+        // `>` left that second with a holder that could not renew a lease
+        // nobody else could take either.
         let updated = sqlx::query(
             "update step_attempts
                 set claimed_at = $1, updated_at = $1
               where execution_id = $2 and step_id = $3 and attempt = $4
-                and lease_owner = $5 and claimed_at > $6",
+                and lease_owner = $5 and claimed_at >= $6",
         )
         .bind(now)
         .bind(key.execution_id.as_str())
@@ -695,9 +706,9 @@ impl WorkflowStore for PostgresWorkflowStore {
             }
             let leased_at: Option<OffsetDateTime> = row.get("leased_at");
             let owner: Option<String> = row.get("lease_owner");
-            let live = leased_at.is_some_and(|at| {
-                request.now - at < time::Duration::seconds(aiwatcher_jobs::LEASE_SECONDS)
-            });
+            // `SlotRecord::is_available`'s rule, which is the claim table's:
+            // called, so the boundary cannot drift from the other adapters'.
+            let live = !aiwatcher_jobs::lease_expired(leased_at, request.now);
             if live {
                 return Ok(SlotAdmission::Held {
                     owner: owner.unwrap_or_default(),
