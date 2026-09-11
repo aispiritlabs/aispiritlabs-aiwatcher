@@ -3,29 +3,27 @@ import type { ReachEdge } from '@/shared/lib/reach';
 /**
  * Where each node of a graph sits on the canvas.
  *
- * Hand-rolled rather than dagre, for the reason `waterfall.tsx` is hand-rolled:
- * a layout library would be a second dependency to hold an opinion about, and
- * the opinion that matters here is not "optimal" but **stable**. This canvas
- * re-renders on every live frame. A layout that reshuffled as a stage finished
- * would make the graph unreadable exactly while somebody is watching it.
+ * Hand-rolled rather than dagre, as `waterfall.tsx` is: a layout library is a
+ * dependency with its own opinion, and the one that matters here is not
+ * "optimal" but **stable**. This canvas re-renders on every live frame, and a
+ * layout that reshuffled as a stage finished would make the graph unreadable
+ * exactly while somebody is watching it.
  *
- * So the algorithm is longest-path layering — the standard first phase of a
- * Sugiyama layout — with two deliberate simplifications:
+ * So it is longest-path layering — the standard first phase of a Sugiyama
+ * layout — with two deliberate simplifications:
  *
  * * **No crossing minimisation.** Within a rank, nodes keep the order the
- *   producer declared them in. A declaration order is a human's idea of the
- *   sequence, and honouring it beats a heuristic that produces a slightly
- *   tidier picture nobody recognises.
+ *   producer declared them in: a human's idea of the sequence beats a heuristic
+ *   that produces a slightly tidier picture nobody recognises.
  * * **Back edges do not affect ranking.** A graph with a cycle — two agents
- *   that call each other — has no topological order at all, so ranking ignores
- *   any edge that would push a node behind a node it already sits after. The
- *   edge is still drawn; it just does not get a say in where things go.
+ *   that call each other — has no topological order, so ranking ignores any
+ *   edge that would push a node behind one it already sits after. The edge is
+ *   still drawn; it just gets no say in where things go.
  *
- * It takes ids and edges and nothing else, because that is all it ever looked
- * at. Two canvases use it for opposite purposes — the workflow graph *derives*
- * positions it never stores, and the curation canvas writes them into a draft
- * somebody then saves — and a second implementation for the second caller
- * would be two answers to "where does this go".
+ * It takes ids and edges and nothing else. Two canvases use it for opposite
+ * purposes — the workflow graph *derives* positions it never stores, the
+ * curation canvas writes them into a draft somebody saves — and a second
+ * implementation would be two answers to "where does this go".
  */
 
 /** Node box size, in canvas units. Must agree with `StageNode`'s CSS. */

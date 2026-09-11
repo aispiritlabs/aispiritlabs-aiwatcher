@@ -17,15 +17,9 @@ import {
 /**
  * The navigation, as one description rather than as markup in eleven files.
  *
- * ## Why three sections and not eleven tabs
- *
- * The header used to list every area side by side. That was legible at six and
- * stopped being legible at eleven: the row scrolled sideways on a laptop, the
- * labels were the only thing distinguishing an area you use daily from one you
- * open twice a year, and nothing on screen said which of them were about the
- * same job.
- *
- * The three sections are the lifecycle every area already belongs to:
+ * Eleven areas side by side stopped being legible, and nothing said which were
+ * about the same job, so they sit in three sections — the lifecycle every area
+ * already belongs to:
  *
  * - **Feature** — what goes *in*. Datasets, curation, annotations,
  *   conversations. All authored, all content-addressed, all outside retention
@@ -36,16 +30,12 @@ import {
  * - **Inference** — what is running now. The whole observability area, and the
  *   workflows those runs are stages of.
  *
- * The split is not cosmetic: it is the same one the crate table makes.
- * Everything under Feature and Training reads an object store; everything
- * under Inference folds the event log.
+ * The split is the crate table's, not a cosmetic one: everything under Feature
+ * and Training reads an object store, everything under Inference folds the log.
  *
- * ## Why a sidebar rather than a third row of tabs
- *
- * Three stacked tab rows cost 130px of every page and still hide the level
- * you are on. The sidebar shows the section's areas *and* their views at once,
- * so the third level is visible without being clicked into — which is the
- * whole complaint the flat header produced.
+ * A section's areas and their views are drawn as a sidebar rather than a third
+ * row of tabs: it shows both levels at once, so the third is visible without
+ * being clicked into, and stacked tab rows would cost the top of every page.
  */
 
 export interface NavView {

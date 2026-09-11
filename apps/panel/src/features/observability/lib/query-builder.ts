@@ -5,31 +5,26 @@ import type { QueryEngineName } from '@/shared/lib/query';
  * Building a query by clicking, and compiling it to the text the deployed engine
  * runs — Flow PHP, DataFusion's Python API or DuckDB's relational API (AW-3).
  *
- * ## What this is and is not
- *
  * It is a **generator**. Everything it produces goes through `/query/check` and
- * then `/query/query` exactly as hand-written text does, and the engine is the
- * only thing that decides whether a query is valid — the panel implements no
- * second grammar and reports no refusal of its own. That is the same split the
- * pipeline canvas and the annotation canvas already make, and it is what stops
- * two rule sets drifting until somebody trusts the wrong one.
+ * then `/query/query` exactly as hand-written text does, and the engine alone
+ * decides whether a query is valid: the panel implements no second grammar and
+ * reports no refusal of its own — the split the pipeline and annotation canvases
+ * make, so two rule sets cannot drift until somebody trusts the wrong one.
  *
- * It is deliberately **one-way**. Build compiles to text; text does not parse
- * back into blocks. Reversing it would mean a second parser in TypeScript for
- * a language whose real one lives in `services/query/flow/src/Dsl`, and the day the
- * two disagreed the builder would silently rewrite somebody's query. So the
- * draft and the text are never both the truth at once: in `build` mode the
- * draft is, and the text is derived on every keystroke; in `write` mode the
- * text is, and the draft is gone.
+ * It is deliberately **one-way**: text never parses back into blocks. That would
+ * be a second parser in TypeScript for languages whose real ones live in the
+ * engines (`services/query/flow/src/Dsl` for Flow), and the day the two
+ * disagreed the builder would silently rewrite somebody's query. So the draft
+ * and the text are never both the truth: in `build` mode the draft is and the
+ * text is derived on every keystroke; in `write` mode the text is and the draft
+ * is gone.
  *
- * ## Why the attribute names are the ones the live stream uses
- *
- * `agent`, `runtime`, `workflow`, `session` name the same things here and on
- * `/api/v1/events/stream`. The encodings differ — the router writes an array
- * as JSON and the stream takes repeated parameters, which `selectionQuery` in
- * `lib/live.ts` converts — but the *vocabulary* is one, which is what makes
- * "watch this live" a link rather than a translation. The two views are the
- * same selection asked of the read model and of the log.
+ * The attribute names are the live stream's: `agent`, `runtime`, `workflow` and
+ * `session` mean the same here and on `/api/v1/events/stream`, so "watch this
+ * live" is a link rather than a translation — one selection asked of the read
+ * model and of the log. Only the encoding differs: the router writes an array as
+ * JSON, the stream takes repeated parameters, and `selectionQuery` in
+ * `shared/lib/live.ts` converts one to the other.
  */
 
 export type Grain = 'runs' | 'spans';

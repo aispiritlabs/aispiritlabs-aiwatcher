@@ -16,15 +16,13 @@ import { cn, formatCount, isStalled, shortId } from '@/shared/lib/utils';
  * The explorer answers the questions somebody thought of when it was built and
  * the Flow editor answers the rest — at the cost of knowing that a run carries
  * `agents` as a list, that a span calls the same thing `agent_id`, and that
- * every column is nullable so the comparison has to be `same`. That is three
- * pieces of trivia between a person and their first query, and none of it is
- * the question they came with.
+ * every column is nullable so the comparison has to be `same` — three pieces of
+ * trivia between a person and their first query, none of them the question.
  *
- * So the values come from the read model rather than from memory. Every row
- * here is an agent, model or tool that has actually run, with how many runs it
- * has and whether any of them is working right now — which also answers the
- * question underneath the question, "is the thing I am about to filter for
- * even there".
+ * So the values come from the read model rather than from memory. Every row is
+ * an agent, model or tool that has actually run, with its run count and whether
+ * any of those runs is working right now — which also answers the question
+ * underneath: "is the thing I am about to filter for even there".
  *
  * ## Why the values are fetched per attribute and searched on the server
  *
