@@ -265,7 +265,13 @@ impl ActivityExecutor for ScoreExecutor {
                         .iter()
                         .map(|question| question.call.clone())
                         .collect(),
-                    *concurrency,
+                    // The declaration's pace, never past the deployment's:
+                    // the start refused a run asking for more, and a
+                    // declaration read back here is held to the same line.
+                    run.settings
+                        .concurrency
+                        .and_then(|asked| usize::try_from(asked).ok())
+                        .map_or(*concurrency, |asked| asked.min(*concurrency)),
                     &context.stop,
                 )
                 .await
@@ -459,6 +465,7 @@ mod tests {
             },
             answers: aiwatcher_evaluation::Answers::Recording(answers),
             judge: None,
+            settings: Default::default(),
         }
     }
 

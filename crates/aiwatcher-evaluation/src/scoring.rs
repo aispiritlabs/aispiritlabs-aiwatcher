@@ -178,6 +178,66 @@ pub fn archived(cohort: &BTreeMap<String, serde_json::Value>) -> Vec<RecordedAns
         .collect()
 }
 
+/// The longest a scoring step may be told it has, in seconds: a day.
+pub const MAX_RUN_TIMEOUT_SECONDS: u64 = 86_400;
+/// The shortest, in seconds. Below a minute a judge's first reply is a race.
+pub const MIN_RUN_TIMEOUT_SECONDS: u64 = 60;
+/// The most questions one run may put to a judge at once, whatever a
+/// deployment allows. A number past it is a mistake before it is a setting.
+pub const MAX_RUN_CONCURRENCY: u32 = 64;
+
+/// How a run is carried out, as opposed to what it measures.
+///
+/// Neither setting reaches the manifest: a result measured in ten minutes and
+/// the same one measured in an hour are one measurement, and two contexts for
+/// them would make the second incomparable with the first for no reason. They
+/// are part of the declaration, because a declaration is the run and a retry
+/// must read the deadline the first attempt had.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[schema(as = ScoringRunSettings)]
+#[serde(deny_unknown_fields)]
+pub struct RunSettings {
+    /// How long the step may run before it is stopped, in seconds. Absent is
+    /// this deployment's default for the kind of run: fifteen minutes for a
+    /// fold, an hour for one that asks a judge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(minimum = 60, maximum = 86400)]
+    pub timeout_seconds: Option<u64>,
+    /// How many questions are put to a judge at once. Absent is the
+    /// deployment's `AIWATCHER_JUDGE_CONCURRENCY`, which is also the most a
+    /// run may ask for: a provider's rate limit is the operator's to know.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(minimum = 1, maximum = 64)]
+    pub concurrency: Option<u32>,
+}
+
+impl RunSettings {
+    /// Whether nothing was chosen, so the declaration's address stays the one
+    /// it had before settings existed.
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+
+    fn validate(&self) -> Result<()> {
+        if let Some(seconds) = self.timeout_seconds {
+            require(
+                (MIN_RUN_TIMEOUT_SECONDS..=MAX_RUN_TIMEOUT_SECONDS).contains(&seconds),
+                "run.settings.timeout_seconds",
+                "is between 60 seconds and a day",
+            )?;
+        }
+        if let Some(count) = self.concurrency {
+            require(
+                (1..=MAX_RUN_CONCURRENCY).contains(&count),
+                "run.settings.concurrency",
+                "is between 1 and 64 questions at once",
+            )?;
+        }
+        Ok(())
+    }
+}
+
 /// What a run of saved answers measures, and what it measures it on.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
@@ -200,6 +260,10 @@ pub struct ScoringRun {
     /// the content address then, so a declaration from before judges keeps it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub judge: Option<JudgeDeclaration>,
+    /// The deadline and the pace. Absent when nothing was chosen, and absent
+    /// from the content address then.
+    #[serde(default, skip_serializing_if = "RunSettings::is_default")]
+    pub settings: RunSettings,
 }
 
 impl ScoringRun {
@@ -220,9 +284,15 @@ impl ScoringRun {
             "run.cohort.expectations_schema",
         )?;
         self.scorecard.validate("run.scorecard")?;
+        self.settings.validate()?;
         if let Some(judge) = &self.judge {
             judge.validate()?;
         }
+        require(
+            self.settings.concurrency.is_none() || self.judge.is_some(),
+            "run.settings.concurrency",
+            "is how many questions a judge is asked at once, and this run asks no judge",
+        )?;
         let conversations = self.variant.dataset.kind == DatasetKind::Conversations;
         match &self.answers {
             Answers::Recording(recording) => {
@@ -895,6 +965,7 @@ mod tests {
             },
             answers,
             judge: None,
+            settings: RunSettings::default(),
         }
     }
 
@@ -944,6 +1015,53 @@ mod tests {
         assert!(
             malformed.to_string().contains("missing field"),
             "the artifact's own refusal, not \"matched no variant\": {malformed}"
+        );
+    }
+
+    #[test]
+    fn settings_nobody_chose_leave_a_declarations_address_where_it_was() {
+        let declared = run(DatasetKind::Curation, Answers::Recording(recording()));
+        let wire = serde_json::to_value(&declared).expect("a declaration encodes");
+        assert!(wire.get("settings").is_none(), "{wire}");
+
+        let mut paced = declared.clone();
+        paced.settings.timeout_seconds = Some(600);
+        assert!(paced.validate().is_ok());
+        assert_ne!(
+            paced.id().unwrap(),
+            declared.id().unwrap(),
+            "a run with its own deadline is its own declaration: a retry reads that deadline"
+        );
+        // And the same measurement: nothing about the manifest moves.
+        let card = card(Scorer::ExactMatch {
+            ignore_case: false,
+            trim: false,
+        });
+        let mut card = card;
+        card.scorers[0].expected_path = "/answer".into();
+        assert_eq!(
+            paced
+                .manifest(&card, &Rubrics::default(), None, None)
+                .unwrap(),
+            declared
+                .manifest(&card, &Rubrics::default(), None, None)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn a_setting_outside_its_bounds_or_with_nothing_to_pace_is_refused_by_name() {
+        let mut quick = run(DatasetKind::Curation, Answers::Recording(recording()));
+        quick.settings.timeout_seconds = Some(5);
+        let refused = quick.validate().unwrap_err().to_string();
+        assert!(refused.contains("timeout_seconds"), "{refused}");
+
+        let mut crowded = run(DatasetKind::Curation, Answers::Recording(recording()));
+        crowded.settings.concurrency = Some(4);
+        let refused = crowded.validate().unwrap_err().to_string();
+        assert!(
+            refused.contains("concurrency") && refused.contains("no judge"),
+            "{refused}"
         );
     }
 

@@ -190,6 +190,7 @@ impl Fixture {
             query_engine: aiwatcher_datasets::QueryEngine::Flow,
             query_step_timeout_seconds: None,
             judge_provider: None,
+            judge_concurrency: 2,
             read_model: Arc::clone(&read_model),
             live: Arc::clone(&live),
             source: Arc::clone(&bus) as _,
@@ -7899,6 +7900,32 @@ async fn a_judged_scoring_run_starts_only_where_a_judge_of_its_profile_is() {
     );
 
     fixture.state.judge_provider = Some("llamacpp".into());
+    // A pace past the operator's is refused rather than quietly lowered, and
+    // the declaration carrying it admits under the same pair: settings are
+    // how a run goes, never what it measures.
+    let mut crowded = declared["declaration"]["run"].clone();
+    crowded["settings"] = json!({"concurrency": 8, "timeout_seconds": 600});
+    let (status, paced) = fixture.post("/api/v1/evaluation-runs", crowded).await;
+    assert_eq!(status, StatusCode::OK, "{paced}");
+    assert_eq!(paced["manifest"], published, "the same measurement");
+    assert_eq!(paced["admitted"], true);
+    let (status, refusal) = fixture
+        .post(
+            &format!(
+                "/api/v1/evaluation-runs/{}/start",
+                paced["declaration"]["id"].as_str().unwrap()
+            ),
+            json!({}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refusal}");
+    assert!(
+        refusal
+            .to_string()
+            .contains("AIWATCHER_JUDGE_CONCURRENCY allows 2"),
+        "{refusal}"
+    );
+
     let (status, accepted) = fixture.post(&start, json!({})).await;
     assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
     assert_eq!(

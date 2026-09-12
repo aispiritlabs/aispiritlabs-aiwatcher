@@ -808,6 +808,7 @@ async fn the_archives_own_answers_are_scored_under_an_admins_approval_and_stay_s
         },
         answers: Answers::Archive(ArchiveWord::Archive),
         judge: None,
+        settings: Default::default(),
     };
 
     // Over the archive, an expectation is the very response being measured.
@@ -1081,6 +1082,7 @@ async fn a_judge_over_the_archive_is_sent_its_words_under_a_context_that_says_so
                 version: calibration.version.clone(),
             },
         }),
+        settings: Default::default(),
     };
     let declared = deployment
         .declare_scoring_run(&run, "ada", now())

@@ -200,7 +200,7 @@ async fn get_scoring_run(
     params(("id" = String, Path, description = "The declaration address")),
     responses((status = 202, body = ScoringAccepted), (status = 403, body = crate::error::ErrorBody),
     (status = 404, body = crate::error::ErrorBody),
-    (status = 422, body = crate::error::ErrorBody, description = "The run asks a judge profile this deployment does not have"),
+    (status = 422, body = crate::error::ErrorBody, description = "The run asks a judge profile this deployment does not have, or more questions at once than it allows"),
     (status = 409, body = crate::error::ErrorBody, description = "`pair_not_admitted`: no operator has admitted this pair yet; the message names the approval"),
     (status = 501, body = crate::error::ErrorBody), (status = 503, body = crate::error::ErrorBody)),
     tag = "evaluation")]
@@ -222,13 +222,28 @@ async fn start_scoring_run(
             .judge_provider
             .as_deref()
             .ok_or(ApiError::JudgeDisabled)?;
+        let mut problems = Vec::new();
         if judge.provider != deployed {
+            problems.push(format!(
+                "declared for judge profile {}, and AIWATCHER_JUDGE_PROVIDER is {deployed}",
+                judge.provider
+            ));
+        }
+        // More at once than the operator allows is refused rather than quietly
+        // lowered: a run that says eight and asks two is a setting that lied.
+        if let Some(asked) = viewed.declaration.run.settings.concurrency
+            && usize::try_from(asked).unwrap_or(usize::MAX) > state.judge_concurrency
+        {
+            problems.push(format!(
+                "declared to ask {asked} questions at once, and AIWATCHER_JUDGE_CONCURRENCY allows \
+                 {}",
+                state.judge_concurrency
+            ));
+        }
+        if !problems.is_empty() {
             return Err(ApiError::PlanRefused {
                 summary: "this run asks a judge this deployment does not have".to_owned(),
-                problems: vec![format!(
-                    "declared for judge profile {}, and AIWATCHER_JUDGE_PROVIDER is {deployed}",
-                    judge.provider
-                )],
+                problems,
             });
         }
     }
@@ -320,7 +335,7 @@ fn plan_for(declared: &DeclaredRun) -> ExecutionPlan {
     let spec = ScoreEvaluationSpec {
         declaration: declared.id.clone(),
     };
-    let (runtime, timeout_seconds) = if declared.run.judge.is_some() {
+    let (runtime, default_timeout) = if declared.run.judge.is_some() {
         (
             RuntimeBinding::JudgeEvaluation(spec),
             JUDGED_TIMEOUT_SECONDS,
@@ -331,6 +346,14 @@ fn plan_for(declared: &DeclaredRun) -> ExecutionPlan {
             SCORING_TIMEOUT_SECONDS,
         )
     };
+    // The declaration's own deadline when it chose one. Read from the
+    // declaration rather than from the start request, so the plan — and so the
+    // run a repeated start lands on — is a function of the declaration alone.
+    let timeout_seconds = declared
+        .run
+        .settings
+        .timeout_seconds
+        .unwrap_or(default_timeout);
     ExecutionPlan::seal(
         DefinitionKind::Evaluation,
         declared.run.evaluation_id.clone(),
@@ -350,4 +373,78 @@ fn plan_for(declared: &DeclaredRun) -> ExecutionPlan {
 
 fn now() -> i64 {
     time::OffsetDateTime::now_utc().unix_timestamp()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn declared(settings: aiwatcher_evaluation::RunSettings, judged: bool) -> DeclaredRun {
+        let manifest: aiwatcher_evaluation::EvaluationManifest = serde_json::from_str(
+            include_str!("../../../contracts/fixtures/evaluation-v1/manifest.json"),
+        )
+        .expect("the contract fixture parses");
+        let judge = judged.then(|| aiwatcher_evaluation::JudgeDeclaration {
+            provider: "llamacpp".into(),
+            model: aiwatcher_evaluation::VersionReference {
+                name: "gemma".into(),
+                version: "q4".into(),
+            },
+            settings: aiwatcher_evaluation::JudgeSettings::default(),
+            calibration: aiwatcher_evaluation::VersionReference {
+                name: "people".into(),
+                version: "c".repeat(64),
+            },
+        });
+        DeclaredRun {
+            id: "d".repeat(64),
+            run: ScoringRun {
+                evaluation_id: "paced".into(),
+                repetition_id: "measurement-1".into(),
+                variant: manifest.variant,
+                cohort: aiwatcher_evaluation::Cohort {
+                    case_manifest: manifest.context.case_manifest,
+                    case_count: 2,
+                    split: manifest.context.split,
+                    input_schema: manifest.context.input_schema,
+                    expectations_schema: manifest.context.expectations_schema,
+                },
+                scorecard: aiwatcher_evaluation::VersionReference {
+                    name: "card".into(),
+                    version: "a".repeat(64),
+                },
+                answers: aiwatcher_evaluation::Answers::Archive(
+                    aiwatcher_evaluation::ArchiveWord::Archive,
+                ),
+                judge,
+                settings,
+            },
+            declared_by: "ada".into(),
+            declared_at: 0,
+        }
+    }
+
+    #[test]
+    fn a_declared_deadline_is_the_steps_and_none_is_the_kinds_default() {
+        let chosen = aiwatcher_evaluation::RunSettings {
+            timeout_seconds: Some(600),
+            concurrency: None,
+        };
+        assert_eq!(
+            plan_for(&declared(chosen.clone(), false)).steps[0].timeout_seconds,
+            600
+        );
+        assert_eq!(
+            plan_for(&declared(chosen, true)).steps[0].timeout_seconds,
+            600
+        );
+        assert_eq!(
+            plan_for(&declared(Default::default(), false)).steps[0].timeout_seconds,
+            SCORING_TIMEOUT_SECONDS
+        );
+        assert_eq!(
+            plan_for(&declared(Default::default(), true)).steps[0].timeout_seconds,
+            JUDGED_TIMEOUT_SECONDS
+        );
+    }
 }

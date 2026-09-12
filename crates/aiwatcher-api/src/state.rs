@@ -134,6 +134,10 @@ pub struct AppState {
     /// declared for another profile, or on a deployment with none, is refused
     /// when it is started rather than left for nothing to claim.
     pub judge_provider: Option<String>,
+    /// The most questions a judged run may put to that judge at once
+    /// (`AIWATCHER_JUDGE_CONCURRENCY`). Read by the same start, so a run
+    /// declared to ask more is refused rather than quietly slowed.
+    pub judge_concurrency: usize,
     /// Vector image annotations and the training exports built from them.
     /// Same store, third prefix, and the same reason all three are here rather
     /// than on the log: a training label has to outlive every run that used
@@ -325,6 +329,7 @@ impl std::fmt::Debug for AppState {
                 &self.pod_templates.as_ref().map(|templates| templates.len()),
             )
             .field("judge_provider", &self.judge_provider)
+            .field("judge_concurrency", &self.judge_concurrency)
             .field("workflow_runner", &self.runner)
             .field("editor", &self.editor)
             .field("auth", &self.auth)

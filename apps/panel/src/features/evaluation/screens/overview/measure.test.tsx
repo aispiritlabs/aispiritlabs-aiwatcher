@@ -174,6 +174,9 @@ it('declares a run like a published one, renamed, over the recording it staged',
   await userEvent.type(experiment, 'candidate');
   await userEvent.type(screen.getByLabelText('Evaluation ID'), 'candidate-1');
   await userEvent.upload(screen.getByLabelText('Recording'), recordingFile());
+  await userEvent.type(screen.getByLabelText('Timeout in minutes'), '10');
+  // A card that asks nothing has nothing to put at once.
+  expect(screen.queryByLabelText('Judge concurrency')).toBeNull();
   await userEvent.click(screen.getByRole('button', { name: 'Declare' }));
 
   await waitFor(() => expect(onDeclared).toHaveBeenCalledWith(DECLARATION));
@@ -186,6 +189,7 @@ it('declares a run like a published one, renamed, over the recording it staged',
   // Nothing the server derives is sent: no metrics, and no judge the card did not ask for.
   expect(declared.metrics).toBeUndefined();
   expect(declared.judge).toBeUndefined();
+  expect(declared.settings).toEqual({ timeout_seconds: 600 });
 });
 
 it('answers a conversation cohort from the archive, and offers nothing else', async () => {

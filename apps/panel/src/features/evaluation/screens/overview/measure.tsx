@@ -137,6 +137,9 @@ function Draft({ onDeclared }: { onDeclared: (declaration: string) => void }) {
     instructions: '',
   });
   const [calibration, setCalibration] = React.useState<CalibrationVersion | undefined>();
+  // How the run goes rather than what it measures: neither reaches the
+  // manifest, and blank is the deployment's own answer.
+  const [pace, setPace] = React.useState({ timeout: '', concurrency: '' });
 
   const head = cards.data?.scorecards.find((card) => card.name === cardName);
   const card = useQuery({
@@ -211,6 +214,12 @@ function Draft({ onDeclared }: { onDeclared: (declaration: string) => void }) {
         },
         scorecard: { name: head.name, version: head.version },
         answers: staged,
+        settings: {
+          ...(pace.timeout.trim() ? { timeout_seconds: Number(pace.timeout) * 60 } : {}),
+          ...(asksJudge && pace.concurrency.trim()
+            ? { concurrency: Number(pace.concurrency) }
+            : {}),
+        },
         judge:
           asksJudge && calibration
             ? {
@@ -461,6 +470,45 @@ function Draft({ onDeclared }: { onDeclared: (declaration: string) => void }) {
         </fieldset>
       ) : null}
 
+      <fieldset className="grid gap-2 rounded border border-border p-3 md:col-span-2 md:grid-cols-2">
+        <legend>How it runs</legend>
+        <label className="flex flex-col gap-1">
+          Timeout, minutes
+          <input
+            aria-label="Timeout in minutes"
+            type="number"
+            min={1}
+            max={1440}
+            placeholder={asksJudge ? '60, for a run that asks a judge' : '15, for a fold'}
+            className={FIELD}
+            value={pace.timeout}
+            onChange={(event) => setPace({ ...pace, timeout: event.target.value })}
+          />
+          <span className="text-muted-foreground">
+            Past it the step is stopped and retried like any timeout. Blank is the
+            deployment&apos;s.
+          </span>
+        </label>
+        {asksJudge ? (
+          <label className="flex flex-col gap-1">
+            Questions at once
+            <input
+              aria-label="Judge concurrency"
+              type="number"
+              min={1}
+              max={64}
+              placeholder="the deployment's"
+              className={FIELD}
+              value={pace.concurrency}
+              onChange={(event) => setPace({ ...pace, concurrency: event.target.value })}
+            />
+            <span className="text-muted-foreground">
+              More than AIWATCHER_JUDGE_CONCURRENCY allows is refused when the run starts.
+            </span>
+          </label>
+        ) : null}
+      </fieldset>
+
       <div className="flex flex-wrap items-center gap-2 md:col-span-2">
         <Button
           size="sm"
@@ -646,6 +694,17 @@ function Declared({
           {run.answers === 'archive'
             ? "the archive's own responses"
             : `${run.answers.name} (${pinchId(run.answers.digest, 8, 6)})`}
+        </dd>
+        <dt className="text-muted-foreground">Runs</dt>
+        <dd>
+          {run.settings?.timeout_seconds
+            ? `stopped after ${Math.round(run.settings.timeout_seconds / 60)} min`
+            : "the deployment's timeout"}
+          {run.judge
+            ? ` · ${run.settings?.concurrency ?? "the deployment's number of"} question${
+                run.settings?.concurrency === 1 ? '' : 's'
+              } at once`
+            : ''}
         </dd>
         {run.judge ? (
           <>

@@ -6980,7 +6980,36 @@ export type ScoringRun = {
      * a started run measures between one attempt and the next.
      */
     scorecard: VersionReference;
+    /**
+     * The deadline and the pace. Absent when nothing was chosen, and absent
+     * from the content address then.
+     */
+    settings?: ScoringRunSettings;
     variant: VariantManifest;
+};
+
+/**
+ * How a run is carried out, as opposed to what it measures.
+ *
+ * Neither setting reaches the manifest: a result measured in ten minutes and
+ * the same one measured in an hour are one measurement, and two contexts for
+ * them would make the second incomparable with the first for no reason. They
+ * are part of the declaration, because a declaration is the run and a retry
+ * must read the deadline the first attempt had.
+ */
+export type ScoringRunSettings = {
+    /**
+     * How many questions are put to a judge at once. Absent is the
+     * deployment's `AIWATCHER_JUDGE_CONCURRENCY`, which is also the most a
+     * run may ask for: a provider's rate limit is the operator's to know.
+     */
+    concurrency?: number | null;
+    /**
+     * How long the step may run before it is stopped, in seconds. Absent is
+     * this deployment's default for the kind of run: fifteen minutes for a
+     * fold, an hour for one that asks a judge.
+     */
+    timeout_seconds?: number | null;
 };
 
 /**
@@ -10809,7 +10838,7 @@ export type StartScoringRunErrors = {
      */
     409: ErrorBody;
     /**
-     * The run asks a judge profile this deployment does not have
+     * The run asks a judge profile this deployment does not have, or more questions at once than it allows
      */
     422: ErrorBody;
     501: ErrorBody;

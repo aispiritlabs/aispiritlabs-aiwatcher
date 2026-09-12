@@ -186,6 +186,7 @@ async fn declared_under(
                 version: calibration.version.clone(),
             },
         }),
+        settings: Default::default(),
     };
     registry
         .declare_scoring_run(&run, "ada", now())

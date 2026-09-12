@@ -237,6 +237,19 @@ class CalibrationRequest(TypedDict):
     rubrics: list[VersionReference]
 
 
+class RunSettings(TypedDict, total=False):
+    """How a run goes, never what it measures: neither reaches the manifest.
+
+    ``timeout_seconds`` is between 60 and a day, and absent is the deployment's
+    default for the kind of run. ``concurrency`` is how many questions a judge
+    is asked at once, refused for a run that asks none and refused at start
+    past the deployment's ``AIWATCHER_JUDGE_CONCURRENCY``.
+    """
+
+    timeout_seconds: int
+    concurrency: int
+
+
 class ScoringRun(TypedDict):
     evaluation_id: str
     repetition_id: str
@@ -250,6 +263,7 @@ class ScoringRun(TypedDict):
     answers: ArtifactReference | Literal["archive"]
     #: Required exactly when the card asks a judge, and refused otherwise.
     judge: NotRequired[JudgeDeclaration]
+    settings: NotRequired[RunSettings]
 
 
 class CaseMeasurement(TypedDict):

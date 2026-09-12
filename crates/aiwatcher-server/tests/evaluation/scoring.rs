@@ -91,6 +91,7 @@ fn declaration(evaluation_id: &str, version: &str) -> ScoringRun {
         },
         answers: Answers::Recording(manifest.context.case_manifest.clone()),
         judge: None,
+        settings: Default::default(),
     }
 }
 
