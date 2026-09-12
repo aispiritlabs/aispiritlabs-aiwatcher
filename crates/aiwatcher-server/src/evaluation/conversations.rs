@@ -121,6 +121,7 @@ impl LocalSource {
             inputs: BTreeMap::new(),
             expires_at: Some(source.expires_at.unix_timestamp()),
             bundle_digest: None,
+            earlier_bundle_digest: None,
         })
     }
 }

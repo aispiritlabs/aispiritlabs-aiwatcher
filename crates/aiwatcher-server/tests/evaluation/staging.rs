@@ -73,6 +73,35 @@ async fn a_staged_bundle_admits_a_pair_on_an_instance_with_no_directory() {
         EvidenceState::Complete
     );
 
+    // The second run of the same pair stages its own manifest, which differs
+    // only in which run wrote it. That is not a change to what was admitted:
+    // the first result keeps reading, and admitting the pair again is the
+    // approval it already has.
+    let mut second = manifest.clone();
+    second.origin.evaluation_id = format!("{id}-again");
+    second.origin.repetition_id = "measurement-2".into();
+    adapter
+        .stage(
+            &approval,
+            "manifest.json",
+            serde_json::to_vec_pretty(&second).unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        evidence(&registry, &receipt, "viewer", 102).await,
+        EvidenceState::Complete
+    );
+    assert_eq!(
+        registry
+            .approve(&second, "operator", 102)
+            .await
+            .unwrap()
+            .record
+            .approval_id,
+        approval
+    );
+
     // A path is not a name, in either adapter.
     for name in ["../manifest.json", "nested/file.json", ".hidden"] {
         assert!(matches!(

@@ -357,6 +357,9 @@ impl ApiError {
                 aiwatcher_evaluation::EvaluationError::NotAdmitted(_) => {
                     (StatusCode::CONFLICT, "pair_not_admitted")
                 }
+                aiwatcher_evaluation::EvaluationError::AdmittedOtherBytes(_) => {
+                    (StatusCode::CONFLICT, "admitted_other_bytes")
+                }
                 aiwatcher_evaluation::EvaluationError::Unavailable(
                     aiwatcher_evaluation::EvidenceState::Forbidden,
                 ) => (StatusCode::FORBIDDEN, "evidence_forbidden"),

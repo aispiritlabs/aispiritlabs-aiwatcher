@@ -4099,7 +4099,7 @@
             }
           },
           "409": {
-            "description": "",
+            "description": "`admitted_other_bytes`: the pair is admitted already, over other bundle bytes; the message names the approval",
             "content": {
               "application/json": {
                 "schema": {
@@ -11419,7 +11419,7 @@
               "string",
               "null"
             ],
-            "description": "What the deployment adapter verified *beyond* the manifest's own pinned\ndigests — a model package, whose historical ID binds artifacts and not\nthe whole declaration. `None` where an adapter has nothing to add."
+            "description": "What the deployment adapter verified *beyond* the manifest's own pinned\ndigests — a model package, whose historical ID binds artifacts and not\nthe whole declaration. `None` where an adapter has nothing to add. A\nrecord written before [`bundle_digest`] holds the digest of the whole\nstaged declaration instead, and still admits while those bytes stand."
           },
           "context_id": {
             "type": "string"

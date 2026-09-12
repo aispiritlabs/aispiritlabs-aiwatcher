@@ -2002,6 +2002,16 @@ the review.
   records its digest, so bytes that arrive after one stop that pair reading
   until they are what was admitted. A member's name is one segment or the one
   folder a bundle has; anything else is refused rather than resolved as a path.
+- **Never digest a bundle's `manifest.json` into what an approval admits.** The
+  pair it declares is the approval's own address, and the rest of it names the
+  run that wrote it — so a digest over its bytes moved with every run of the
+  pair, and staging the second run's manifest hid every result the first had
+  published, with "evaluation ID already belongs to a different result" as the
+  answer to admitting it again. `bundle_digest` covers what a bundle adds beyond
+  the pins, by content (today a model package), and is `None` when that is
+  nothing. An approval recorded over the whole declaration still admits against
+  `SourceEvidence::earlier_bundle_digest` while those bytes stand, and a pair
+  admitted over other bytes answers 409 `admitted_other_bytes` naming it.
 - **Never read absence of an approval as a withdrawal.** Publication requires a
   record; a read requires only that no withdrawal marker exists. Evidence
   published before an instance kept approvals stays readable, and the adapter

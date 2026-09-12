@@ -40,6 +40,18 @@ pub struct StagedFile {
     pub size_bytes: u64,
 }
 
+/// What an adapter records for the bytes a bundle adds beyond the manifest's
+/// own pins, as a content address over their parsed form.
+///
+/// Over what they *say*, so re-staging the same declaration in other whitespace
+/// is not a change. And never over the bundle's `manifest.json`: the pair it
+/// declares is already the approval's address, and the rest of it — which run
+/// wrote it — differs for every run of that pair, so digesting it made staging
+/// the second run's manifest hide every result the pair had published.
+pub fn bundle_digest<T: Serialize>(added: &T) -> Result<String> {
+    digest(&(SCHEMA_VERSION, "evaluation.bundle", added))
+}
+
 /// The content address of a pinned pair. Derived, never generated: a redelivered
 /// approval of one declaration lands on the approval it already made.
 pub fn approval_id(variant_id: &str, context_id: &str) -> Result<String> {
@@ -61,7 +73,9 @@ pub struct ApprovalRecord {
     pub context_id: String,
     /// What the deployment adapter verified *beyond* the manifest's own pinned
     /// digests — a model package, whose historical ID binds artifacts and not
-    /// the whole declaration. `None` where an adapter has nothing to add.
+    /// the whole declaration. `None` where an adapter has nothing to add. A
+    /// record written before [`bundle_digest`] holds the digest of the whole
+    /// staged declaration instead, and still admits while those bytes stand.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bundle_digest: Option<String>,
     pub approved_by: String,

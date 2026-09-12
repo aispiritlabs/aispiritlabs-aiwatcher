@@ -41,6 +41,11 @@ pub struct SourceEvidence {
     /// What this adapter admitted beyond the manifest's own pinned digests.
     /// An approval records it, so bytes cannot change under an admitted pair.
     pub bundle_digest: Option<String>,
+    /// The digest this adapter recorded for the same bundle before it digested
+    /// only what the bundle adds (see [`crate::bundle_digest`]). An approval
+    /// written then holds it, and still admits while those bytes stand; a new
+    /// approval records `bundle_digest`.
+    pub earlier_bundle_digest: Option<String>,
 }
 
 /// One catalogue row, as published.
@@ -68,6 +73,13 @@ fn row(receipt: EvaluationReceipt, state: EvidenceState) -> DurableEvaluation {
         reproducible: true,
         judge: None,
     }
+}
+
+/// Whether the bytes an approval admitted are the bytes the adapter holds now,
+/// under the digest the approval was recorded with.
+fn same_bundle(record: &ApprovalRecord, source: &SourceEvidence) -> bool {
+    record.bundle_digest == source.bundle_digest
+        || (record.bundle_digest.is_some() && record.bundle_digest == source.earlier_bundle_digest)
 }
 
 /// What one collection pass removed, and what it found missing.
@@ -300,7 +312,7 @@ impl Registry {
             approval_id: id.clone(),
             variant_id: prepared.variant_id().into(),
             context_id: prepared.context_id().into(),
-            bundle_digest: source.bundle_digest,
+            bundle_digest: source.bundle_digest.clone(),
             approved_by: subject.into(),
             approved_at: now,
         };
@@ -309,8 +321,8 @@ impl Registry {
             .approval(&id)
             .await?
             .ok_or(EvaluationError::Unavailable(EvidenceState::MissingArtifact))?;
-        if approval.record.bundle_digest != record.bundle_digest {
-            return Err(EvaluationError::Conflict);
+        if !same_bundle(&approval.record, &source) {
+            return Err(EvaluationError::AdmittedOtherBytes(id));
         }
         Ok(approval)
     }
@@ -529,7 +541,7 @@ impl Registry {
         // rather than arriving as "nobody approved this" and sending somebody
         // to approve a pair whose bytes are not there to admit.
         let approval = self.admitted(&prepared, true).await?;
-        if approval.is_some_and(|approval| approval.record.bundle_digest != source.bundle_digest) {
+        if approval.is_some_and(|approval| !same_bundle(&approval.record, &source)) {
             return Err(EvaluationError::Unavailable(EvidenceState::Forbidden));
         }
         let expires_at = source
@@ -983,7 +995,7 @@ impl Registry {
     ) -> Result<Option<i64>> {
         let approval = self.admitted(prepared, false).await?;
         let source = self.authority.resolve(manifest, subject).await?;
-        if approval.is_some_and(|approval| approval.record.bundle_digest != source.bundle_digest) {
+        if approval.is_some_and(|approval| !same_bundle(&approval.record, &source)) {
             return Err(EvaluationError::Unavailable(EvidenceState::Forbidden));
         }
         Ok(source.expires_at)

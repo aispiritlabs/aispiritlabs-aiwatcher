@@ -269,7 +269,9 @@ export type ApprovalRecord = {
     /**
      * What the deployment adapter verified *beyond* the manifest's own pinned
      * digests — a model package, whose historical ID binds artifacts and not
-     * the whole declaration. `None` where an adapter has nothing to add.
+     * the whole declaration. `None` where an adapter has nothing to add. A
+     * record written before [`bundle_digest`] holds the digest of the whole
+     * staged declaration instead, and still admits while those bytes stand.
      */
     bundle_digest?: string | null;
     context_id: string;
@@ -10179,6 +10181,9 @@ export type ApproveSourceData = {
 export type ApproveSourceErrors = {
     400: ErrorBody;
     403: ErrorBody;
+    /**
+     * `admitted_other_bytes`: the pair is admitted already, over other bundle bytes; the message names the approval
+     */
     409: ErrorBody;
     501: ErrorBody;
 };

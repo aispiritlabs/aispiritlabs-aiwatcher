@@ -76,6 +76,7 @@ impl LocalSource {
             inputs,
             expires_at: None,
             bundle_digest: None,
+            earlier_bundle_digest: None,
         })
     }
 }

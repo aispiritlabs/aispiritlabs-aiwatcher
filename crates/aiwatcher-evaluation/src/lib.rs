@@ -19,6 +19,7 @@ mod store;
 pub use aiwatcher_core::Comparability;
 pub use approval::{
     Approval, ApprovalBundles, ApprovalPage, ApprovalRecord, StagedFile, Withdrawal, approval_id,
+    bundle_digest,
 };
 pub use assessment::{
     Assessment, AssessmentHistory, AssessmentPage, AssessmentRequest, AssessmentSource,
@@ -76,6 +77,15 @@ pub enum EvaluationError {
     /// would, because that address is the one thing an operator needs next.
     #[error("no operator has admitted this pair yet: approval {0}")]
     NotAdmitted(String),
+    /// The pair is admitted already, over other bundle bytes than the ones
+    /// staged now. An approval is made once, so the way on is the bytes it
+    /// admitted — not a second approval, and not the conflict of two results
+    /// under one ID this used to be reported as.
+    #[error(
+        "approval {0} already admitted this pair over other bundle bytes; stage the bytes it \
+         admitted"
+    )]
+    AdmittedOtherBytes(String),
     #[error("evaluation evidence is {0:?}")]
     Unavailable(EvidenceState),
     #[error("storage: {0}")]

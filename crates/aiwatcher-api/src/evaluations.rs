@@ -464,7 +464,8 @@ async fn get_cases(
 /// an admitted pair conflicts rather than moving what earlier results mean.
 #[utoipa::path(post, path = "/api/v1/evaluation-approvals", request_body = EvaluationManifest,
     responses((status = 200, body = Approval), (status = 400, body = crate::error::ErrorBody),
-    (status = 403, body = crate::error::ErrorBody), (status = 409, body = crate::error::ErrorBody),
+    (status = 403, body = crate::error::ErrorBody),
+    (status = 409, body = crate::error::ErrorBody, description = "`admitted_other_bytes`: the pair is admitted already, over other bundle bytes; the message names the approval"),
     (status = 501, body = crate::error::ErrorBody)), tag = "evaluation")]
 async fn approve_source(
     State(state): State<AppState>,

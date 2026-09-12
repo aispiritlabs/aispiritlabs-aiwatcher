@@ -360,9 +360,13 @@ impl SourceAuthority for LocalSource {
         let asked = Evaluation::prepare(manifest.clone())?;
         let approval = aiwatcher_evaluation::approval_id(asked.variant_id(), asked.context_id())?;
         let (root, declaration) = self.bundle(&approval).await?;
-        let mut bundle = Sha256::new();
-        bundle.update(b"aiwatcher.evaluation.bundle.v1");
-        bundle.update(&declaration);
+        // What the bundle adds beyond the pins, and — for an approval recorded
+        // before that — the digest of every byte of its declaration, which
+        // named the run that wrote it and so moved with every run of the pair.
+        let mut added = None;
+        let mut earlier = Sha256::new();
+        earlier.update(b"aiwatcher.evaluation.bundle.v1");
+        earlier.update(&declaration);
         let approved =
             Evaluation::prepare(serde_json::from_slice::<EvaluationManifest>(&declaration)?)?;
         if approved.variant_id() != asked.variant_id()
@@ -387,12 +391,13 @@ impl SourceAuthority for LocalSource {
             // Historical model IDs bind artifact digests, not the whole package.
             // The operator approves its full declaration separately; no URI is fetched.
             let declared = root.bytes("model-package.json", 1024 * 1024).await?;
-            bundle.update(&declared);
+            earlier.update(&declared);
             let approved: aiwatcher_training::ModelPackage = serde_json::from_slice(&declared)
                 .map_err(|_| unavailable(EvidenceState::CorruptArtifact))?;
             if serde_json::to_value(&approved)? != serde_json::to_value(&package)? {
                 return Err(unavailable(EvidenceState::Forbidden));
             }
+            added = Some(aiwatcher_evaluation::bundle_digest(&approved)?);
             let artifacts = root.within("model-artifacts").await?;
             let mut remaining = 100 * 1024 * 1024;
             for artifact in &package.artifacts {
@@ -459,15 +464,18 @@ impl SourceAuthority for LocalSource {
         if c.dataset.kind == DatasetKind::External && c.dataset.version != c.case_manifest.digest {
             return Err(unavailable(EvidenceState::CorruptArtifact));
         }
-        let bundle_digest = Some(hex::encode(bundle.finalize()));
+        let bundle_digest = added;
+        let earlier_bundle_digest = Some(hex::encode(earlier.finalize()));
         if c.dataset.kind == DatasetKind::Conversations {
             let mut evidence = self.conversation_cases(&root, c).await?;
             evidence.bundle_digest = bundle_digest;
+            evidence.earlier_bundle_digest = earlier_bundle_digest;
             return Ok(evidence);
         }
         if c.dataset.kind == DatasetKind::Annotations {
             let mut evidence = self.annotation_cases(&root, c).await?;
             evidence.bundle_digest = bundle_digest;
+            evidence.earlier_bundle_digest = earlier_bundle_digest;
             return Ok(evidence);
         }
         let cases: Cases = serde_json::from_slice(
@@ -521,6 +529,7 @@ impl SourceAuthority for LocalSource {
             inputs,
             expires_at: None,
             bundle_digest,
+            earlier_bundle_digest,
         })
     }
 }

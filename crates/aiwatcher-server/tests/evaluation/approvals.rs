@@ -235,3 +235,81 @@ async fn an_admitted_pair_refuses_a_bundle_that_changed_underneath_it() {
         .unwrap();
     tokio::fs::remove_dir_all(root).await.unwrap();
 }
+
+/// A source whose digests the test sets: what an adapter reports as the bytes a
+/// bundle adds, and what it would have reported before it digested only those.
+#[derive(Debug, Default)]
+struct Digests(std::sync::Mutex<(Option<String>, Option<String>)>);
+
+impl Digests {
+    fn report(&self, current: Option<&str>, earlier: Option<&str>) {
+        *self.0.lock().unwrap() = (current.map(Into::into), earlier.map(Into::into));
+    }
+}
+
+#[async_trait]
+impl SourceAuthority for Digests {
+    async fn resolve(&self, manifest: &EvaluationManifest, _: &str) -> Result<SourceEvidence> {
+        let (bundle_digest, earlier_bundle_digest) = self.0.lock().unwrap().clone();
+        Ok(SourceEvidence {
+            expected: (0..manifest.context.case_count)
+                .map(|n| (format!("case-{n:05}"), serde_json::json!({"answer": ""})))
+                .collect(),
+            bundle_digest,
+            earlier_bundle_digest,
+            ..Default::default()
+        })
+    }
+}
+
+#[tokio::test]
+async fn an_approval_recorded_over_a_whole_declaration_still_admits_until_its_bytes_change() {
+    let source = Arc::new(Digests::default());
+    let registry = Registry::new(
+        Arc::new(MemoryObjectStore::new()),
+        source.clone(),
+        RegistryConfig::default(),
+    )
+    .unwrap();
+    let request = request("admitted-before", 2);
+
+    // Admitted by the adapter as it was: the digest of the whole declaration.
+    source.report(Some("whole-declaration"), None);
+    let approval = registry
+        .approve(&request.manifest, "operator", 100)
+        .await
+        .unwrap();
+    registry
+        .publish(request.clone(), "producer", 100)
+        .await
+        .unwrap();
+
+    // The adapter now digests only what a bundle adds, and adds nothing here;
+    // the bytes that approval covered are still the ones staged.
+    source.report(None, Some("whole-declaration"));
+    assert_eq!(
+        state(&registry, "admitted-before", 101).await,
+        EvidenceState::Complete
+    );
+    registry
+        .approve(&request.manifest, "operator", 101)
+        .await
+        .expect("admitting it again is the approval it already has");
+
+    // Those bytes changed: the pair stops reading, and admitting it again says
+    // which approval holds it rather than reporting two results under one ID.
+    source.report(None, Some("another-declaration"));
+    assert_eq!(
+        state(&registry, "admitted-before", 102).await,
+        EvidenceState::Forbidden
+    );
+    let refused = registry
+        .approve(&request.manifest, "operator", 102)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&refused, EvaluationError::AdmittedOtherBytes(named) if *named == approval.record.approval_id),
+        "{refused}"
+    );
+    assert!(refused.to_string().contains("stage the bytes it admitted"));
+}
