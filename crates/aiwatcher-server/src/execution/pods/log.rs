@@ -105,6 +105,25 @@ impl Tail {
     }
 }
 
+/// The last `at_most` bytes of what was already kept, counting the rest as
+/// skipped.
+///
+/// For a backend that holds the bytes itself rather than streaming them: the
+/// tail was taken at [`TAIL_BYTES`] and every caller asks for that, so this is
+/// the cut nobody is expected to need — and keeping the wrong end of a log is
+/// exactly the mistake [`Tail`] exists to prevent.
+#[must_use]
+pub fn bounded(kept: Kept, at_most: usize) -> Kept {
+    if kept.bytes.len() <= at_most {
+        return kept;
+    }
+    let over = kept.bytes.len() - at_most;
+    Kept {
+        bytes: kept.bytes[over..].to_vec(),
+        skipped: kept.skipped + over as u64,
+    }
+}
+
 /// What the stored object says before the pod's own first byte.
 ///
 /// Only when something was dropped. A header on a log that is complete would
@@ -240,6 +259,21 @@ mod tests {
         let kept = tail_of(4, &["ab", "0123456789"]);
         assert_eq!(kept.bytes, b"6789");
         assert_eq!(kept.skipped, 8, "the two held bytes and the six dropped");
+    }
+
+    #[test]
+    fn a_log_asked_for_in_less_than_it_holds_keeps_its_end() {
+        // The mistake `Tail` exists to prevent, in the one place a backend
+        // holding the bytes itself could make it again.
+        let kept = bounded(
+            Kept {
+                bytes: b"0123456789".to_vec(),
+                skipped: 2,
+            },
+            4,
+        );
+        assert_eq!(kept.bytes, b"6789");
+        assert_eq!(kept.skipped, 8, "the two it never had and the six it cut");
     }
 
     #[test]

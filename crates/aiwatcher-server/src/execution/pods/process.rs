@@ -38,8 +38,8 @@ use tokio_util::sync::CancellationToken;
 
 use aiwatcher_execution::AttemptKey;
 
-use super::log::{Kept, Tail};
-use super::manifest;
+use super::log::{Kept, Tail, bounded};
+use super::manifest::{self, Program};
 use super::{Cluster, ClusterError, Created, Observed, Phase};
 
 /// How many of this host's processes may run at once.
@@ -58,10 +58,6 @@ pub const DEFAULT_LIMIT: usize = 4;
 /// reading `AIWATCHER_WORKFLOW_STORE` or `AIWATCHER_POD_TEMPLATES` is a worker
 /// configured as a server. The three the manifest sets are applied after this.
 const NOT_INHERITED: &str = "AIWATCHER_";
-
-/// The one downward-API field a process can answer: the pod's own name, which
-/// here is the Job's, and which is what the claim is held under.
-const NAME_FIELD: &str = "metadata.name";
 
 /// This host, as a cluster of one.
 #[derive(Debug)]
@@ -96,16 +92,6 @@ enum Stage {
         reason: String,
         printed: Kept,
     },
-}
-
-/// What one Job runs here, read off the manifest's container.
-#[derive(Clone, Debug)]
-struct Program {
-    /// The container's `command`: the program and its arguments. A template
-    /// may set no `args`, so this is the whole line.
-    command: Vec<String>,
-    environment: Vec<(String, String)>,
-    directory: Option<String>,
 }
 
 impl ProcessCluster {
@@ -325,10 +311,10 @@ impl Cluster for ProcessCluster {
             .and_then(Value::as_str)
             .ok_or_else(|| ClusterError::Refused("the manifest has no name".to_owned()))?
             .to_owned();
-        let key = manifest::attempt_of(&annotations(manifest)).ok_or_else(|| {
+        let key = manifest::attempt_of(&manifest::annotations_of(manifest)).ok_or_else(|| {
             ClusterError::Refused("the manifest does not say which attempt it is for".to_owned())
         })?;
-        let program = program(manifest).map_err(ClusterError::Refused)?;
+        let program = manifest::program(manifest, &name).map_err(ClusterError::Refused)?;
         let mut started = self.started.lock().await;
         sweep(&mut started, self.limit).await;
         if started.contains_key(&name) {
@@ -352,7 +338,9 @@ impl Cluster for ProcessCluster {
             name,
             Started {
                 key,
-                template: label(manifest, manifest::TEMPLATE_LABEL),
+                template: manifest::labels_of(manifest)
+                    .get(manifest::TEMPLATE_LABEL)
+                    .cloned(),
                 created_at: OffsetDateTime::now_utc(),
                 stage,
             },
@@ -416,153 +404,6 @@ impl Cluster for ProcessCluster {
         sweep(&mut started, self.limit).await;
         Ok(())
     }
-}
-
-/// The last `at_most` bytes of what was kept, counting the rest as skipped.
-///
-/// A tail is taken at [`super::log::TAIL_BYTES`] and every caller asks for
-/// that, so this is the cut nobody is expected to need — and keeping the wrong
-/// end of a log is exactly the mistake [`Tail`] exists to prevent.
-fn bounded(kept: Kept, at_most: usize) -> Kept {
-    if kept.bytes.len() <= at_most {
-        return kept;
-    }
-    let over = kept.bytes.len() - at_most;
-    Kept {
-        bytes: kept.bytes[over..].to_vec(),
-        skipped: kept.skipped + over as u64,
-    }
-}
-
-fn annotations(manifest: &Value) -> BTreeMap<String, String> {
-    manifest
-        .pointer("/metadata/annotations")
-        .and_then(Value::as_object)
-        .map(|written| {
-            written
-                .iter()
-                .filter_map(|(name, value)| Some((name.clone(), value.as_str()?.to_owned())))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn label(manifest: &Value, name: &str) -> Option<String> {
-    Some(
-        manifest
-            .pointer("/metadata/labels")?
-            .get(name)?
-            .as_str()?
-            .to_owned(),
-    )
-}
-
-/// What the manifest's container says to run, or why this host will not.
-///
-/// Everything refused here is something the *program* would read or
-/// authenticate as, and running it without would be running something else
-/// under a step's name. What is ignored is named in this module's own
-/// documentation rather than per attempt: a warning on every pod of every run
-/// is a warning nobody reads.
-fn program(manifest: &Value) -> Result<Program, String> {
-    let pod = manifest
-        .pointer("/spec/template/spec")
-        .ok_or_else(|| "the manifest carries no pod spec".to_owned())?;
-    if listed(pod, "volumes") {
-        return Err(
-            "a process on this host mounts no volumes, and this template asks for one; \
-                    run it on a cluster, or take the volume out"
-                .to_owned(),
-        );
-    }
-    let container = pod
-        .pointer("/containers/0")
-        .ok_or_else(|| "the pod spec has no container".to_owned())?;
-    if listed(container, "volumeMounts") {
-        return Err(
-            "a process on this host mounts no volumes, and this template's container \
-                    asks for one"
-                .to_owned(),
-        );
-    }
-    if listed(container, "envFrom") {
-        return Err(
-            "a process on this host cannot read the Secret or ConfigMap this \
-                    template's `envFrom` names; give the value in `env`, or run it on a cluster"
-                .to_owned(),
-        );
-    }
-    let command = container
-        .get("command")
-        .and_then(Value::as_array)
-        .map(|line| {
-            line.iter()
-                .map(|part| part.as_str().map(str::to_owned))
-                .collect::<Option<Vec<_>>>()
-        })
-        .ok_or_else(|| "the container names no command".to_owned())?
-        .ok_or_else(|| "the container's command is not a list of words".to_owned())?;
-    if command.is_empty() {
-        return Err("the container's command is empty".to_owned());
-    }
-    let name = manifest
-        .pointer("/metadata/name")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    Ok(Program {
-        command,
-        environment: environment(container, name)?,
-        directory: container
-            .get("workingDir")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    })
-}
-
-/// The container's environment, with the downward API's own name answered.
-///
-/// `metadata.name` is the pod's name and here the Job's, which is the name the
-/// claim is held under — the one field a process can answer truthfully. Any
-/// other source is a refusal rather than an empty string: a worker told its
-/// name is `""` claims under a name nobody can find, and one whose credential
-/// silently went missing fails somewhere else entirely.
-fn environment(container: &Value, name: &str) -> Result<Vec<(String, String)>, String> {
-    let mut environment = Vec::new();
-    for entry in container
-        .get("env")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        let variable = entry
-            .get("name")
-            .and_then(Value::as_str)
-            .ok_or_else(|| "an environment entry has no name".to_owned())?;
-        if let Some(value) = entry.get("value").and_then(Value::as_str) {
-            environment.push((variable.to_owned(), value.to_owned()));
-            continue;
-        }
-        let field = entry
-            .pointer("/valueFrom/fieldRef/fieldPath")
-            .and_then(Value::as_str);
-        if field == Some(NAME_FIELD) {
-            environment.push((variable.to_owned(), name.to_owned()));
-            continue;
-        }
-        return Err(format!(
-            "a process on this host cannot read what '{variable}' is set from; only \
-             a plain value and the downward API's {NAME_FIELD} are answerable here"
-        ));
-    }
-    Ok(environment)
-}
-
-/// Whether `field` is present and holds at least one entry.
-fn listed(value: &Value, field: &str) -> bool {
-    value
-        .get(field)
-        .and_then(Value::as_array)
-        .is_some_and(|entries| !entries.is_empty())
 }
 
 #[cfg(test)]
@@ -909,20 +750,5 @@ mod tests {
                 "{error}"
             );
         }
-    }
-
-    #[test]
-    fn a_log_asked_for_in_less_than_it_holds_keeps_its_end() {
-        // The mistake `Tail` exists to prevent, in the one place a backend
-        // holding the bytes itself could make it again.
-        let kept = bounded(
-            Kept {
-                bytes: b"0123456789".to_vec(),
-                skipped: 2,
-            },
-            4,
-        );
-        assert_eq!(kept.bytes, b"6789");
-        assert_eq!(kept.skipped, 8, "the two it never had and the six it cut");
     }
 }

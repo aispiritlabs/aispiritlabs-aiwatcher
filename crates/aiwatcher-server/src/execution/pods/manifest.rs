@@ -126,6 +126,154 @@ pub fn attempt_of(annotations: &BTreeMap<String, String>) -> Option<AttemptKey> 
     ))
 }
 
+/// The one downward-API field a backend outside a cluster can answer: the
+/// pod's own name, which for those backends is the Job's.
+pub const NAME_FIELD: &str = "metadata.name";
+
+/// What one container runs, read back off a manifest.
+///
+/// The reading half of this file, and it exists because a backend that is not
+/// a cluster is sent the same manifest: a pod spec already says what to run,
+/// with what environment, in which directory, so a second shape describing the
+/// same thing would be two authored representations free to drift. `Cluster`
+/// implementations read this; only [`super::kubernetes`] sends the JSON on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Program {
+    /// The container's `command`: the program and its arguments. A template
+    /// may set no `args`, so this is the whole line.
+    pub command: Vec<String>,
+    pub environment: Vec<(String, String)>,
+    pub directory: Option<String>,
+}
+
+/// What the manifest's container says to run, or why a backend outside a
+/// cluster will not.
+///
+/// Everything refused here is something the *program* would read or
+/// authenticate as, and running it without would be running something else
+/// under a step's name. What a backend *ignores* is named in that backend's own
+/// documentation rather than per attempt: a warning on every pod of every run
+/// is a warning nobody reads.
+///
+/// # Errors
+///
+/// Why this manifest cannot be run outside a cluster, in the words the attempt
+/// ends with.
+pub fn program(manifest: &Value, pod_name: &str) -> Result<Program, String> {
+    let pod = manifest
+        .pointer("/spec/template/spec")
+        .ok_or_else(|| "the manifest carries no pod spec".to_owned())?;
+    if listed(pod, "volumes") {
+        return Err("a pod spec's volumes are a cluster's, and this backend mounts none;                     run it on a cluster, or take the volume out"
+            .to_owned());
+    }
+    let container = pod
+        .pointer("/containers/0")
+        .ok_or_else(|| "the pod spec has no container".to_owned())?;
+    if listed(container, "volumeMounts") {
+        return Err("a pod spec's volumes are a cluster's, and this backend mounts none,                     so this template's container has nothing to mount"
+            .to_owned());
+    }
+    if listed(container, "envFrom") {
+        return Err("nothing outside a cluster can read the Secret or ConfigMap this                     template's `envFrom` names; give the value in `env`, or run it on a cluster"
+            .to_owned());
+    }
+    let command = container
+        .get("command")
+        .and_then(Value::as_array)
+        .map(|line| {
+            line.iter()
+                .map(|part| part.as_str().map(str::to_owned))
+                .collect::<Option<Vec<_>>>()
+        })
+        .ok_or_else(|| "the container names no command".to_owned())?
+        .ok_or_else(|| "the container's command is not a list of words".to_owned())?;
+    if command.is_empty() {
+        return Err("the container's command is empty".to_owned());
+    }
+    Ok(Program {
+        command,
+        environment: environment(container, pod_name)?,
+        directory: container
+            .get("workingDir")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    })
+}
+
+/// The container's environment, with the downward API's own name answered.
+///
+/// [`NAME_FIELD`] is the pod's name and there the Job's, which is the name the
+/// claim is held under — the one field these backends can answer truthfully.
+/// Any other source is a refusal rather than an empty string: a worker told its
+/// name is `""` claims under a name nobody can find, and one whose credential
+/// silently went missing fails somewhere else entirely.
+fn environment(container: &Value, pod_name: &str) -> Result<Vec<(String, String)>, String> {
+    let mut environment = Vec::new();
+    for entry in container
+        .get("env")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let variable = entry
+            .get("name")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "an environment entry has no name".to_owned())?;
+        if let Some(value) = entry.get("value").and_then(Value::as_str) {
+            environment.push((variable.to_owned(), value.to_owned()));
+            continue;
+        }
+        if entry
+            .pointer("/valueFrom/fieldRef/fieldPath")
+            .and_then(Value::as_str)
+            == Some(NAME_FIELD)
+        {
+            environment.push((variable.to_owned(), pod_name.to_owned()));
+            continue;
+        }
+        return Err(format!(
+            "nothing outside a cluster can read what '{variable}' is set from; only a plain \
+             value and the downward API's {NAME_FIELD} are answerable there"
+        ));
+    }
+    Ok(environment)
+}
+
+/// Every annotation the manifest carries, as [`attempt_of`] reads them.
+#[must_use]
+pub fn annotations_of(manifest: &Value) -> BTreeMap<String, String> {
+    labelling(manifest, "annotations")
+}
+
+/// Every label the manifest carries, [`TEMPLATE_LABEL`] among them.
+#[must_use]
+pub fn labels_of(manifest: &Value) -> BTreeMap<String, String> {
+    labelling(manifest, "labels")
+}
+
+fn labelling(manifest: &Value, kind: &str) -> BTreeMap<String, String> {
+    manifest
+        .pointer("/metadata")
+        .and_then(|metadata| metadata.get(kind))
+        .and_then(Value::as_object)
+        .map(|written| {
+            written
+                .iter()
+                .filter_map(|(name, value)| Some((name.clone(), value.as_str()?.to_owned())))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Whether `field` is present and holds at least one entry.
+fn listed(value: &Value, field: &str) -> bool {
+    value
+        .get(field)
+        .and_then(Value::as_array)
+        .is_some_and(|entries| !entries.is_empty())
+}
+
 /// The operator's pod, with aiwatcher's fields filled in.
 fn pod_spec(request: &JobRequest<'_>) -> Value {
     let mut spec = request.template.pod.clone();
@@ -160,7 +308,7 @@ fn pod_spec(request: &JobRequest<'_>) -> Value {
         // name its claim is held under and a person finds it by.
         json!({
             "name": "AIWATCHER_WORKER_NAME",
-            "valueFrom": { "fieldRef": { "fieldPath": "metadata.name" } },
+            "valueFrom": { "fieldRef": { "fieldPath": NAME_FIELD } },
         }),
     ];
     if let Some(Value::Array(theirs)) = container.remove("env") {

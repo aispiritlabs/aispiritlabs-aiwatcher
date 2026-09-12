@@ -22,6 +22,7 @@
 //! that reaches a real one is behind the `kube` feature.
 
 pub mod cluster;
+pub mod docker;
 pub mod log;
 pub mod manifest;
 pub mod process;
@@ -675,6 +676,48 @@ pub fn spawn_processes(
                 ExecutionHandler::new(store),
                 templates,
                 Arc::new(cluster),
+                settings,
+                keeper,
+            ),
+            shutdown,
+        )
+        .await;
+    })
+}
+
+/// Start the launcher against this machine's container engine.
+///
+/// The engine is asked what it is here rather than on the first attempt, so an
+/// absent client or a daemon that is not running is one line naming it instead
+/// of a warning every pass about a call that never had a chance.
+#[must_use]
+pub fn spawn_docker(
+    store: Arc<dyn WorkflowStore>,
+    templates: Arc<PodTemplates>,
+    settings: Settings,
+    keeper: Option<Keeper>,
+    shutdown: tokio_util::sync::CancellationToken,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        match docker::DockerCluster::version().await {
+            Ok(version) => tracing::info!(
+                engine = %version,
+                templates = templates.len(),
+                api = %settings.api_url,
+                logs = keeper.is_some(),
+                "step pods are containers on this host: the image and its limits are kept, \
+                 a node, a service account, a volume and a Secret are not"
+            ),
+            Err(error) => tracing::error!(
+                %error,
+                "no container can be started until this host's engine answers"
+            ),
+        }
+        run(
+            Launcher::new(
+                ExecutionHandler::new(store),
+                templates,
+                Arc::new(docker::DockerCluster::new()),
                 settings,
                 keeper,
             ),
