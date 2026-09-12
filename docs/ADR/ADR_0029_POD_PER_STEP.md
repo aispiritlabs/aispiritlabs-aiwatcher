@@ -327,3 +327,40 @@ does not match the string a badge is drawn from.
 *back* off the cluster: an execution id comes from a request and a step id from
 a canvas, and neither is checked against a path grammar anywhere, so
 `<execution>/<step>/<attempt>` is a string to write and not one to parse.
+
+## Amendment, 2026-09-12: what a real cluster said
+
+Everything above was built and tested against a stand-in `Cluster`, and AW-4's
+2.5 ran it against a real one — four stages of one import as four pods, with
+`just e2e-pods`. Two things came out of that which belong here rather than only
+in the gate.
+
+**A process names its own crypto provider.** The client could not connect to
+anything at all: reqwest's `rustls` feature selects `aws-lc-rs` and this asked
+kube for `ring`, so rustls had two providers, refused to name a process-level
+default, and panicked on the first call — taking the launcher's task with it, in
+a build that compiled, clippied and passed every test, because a stand-in
+cluster opens no connection. kube's feature is `aws-lc-rs` now, matching
+reqwest's; and because `iggy` brings `ring` back whenever `laser` is on, the
+provider is also installed explicitly before a client is built. A library may
+not decide this for a process, and the features cannot: an optional backend
+would decide it by being switched on.
+
+**The grant is asked about, not read.** A launcher running on somebody's
+kubeconfig is an administrator, so nothing about the Role this chart writes is
+exercised by a gate that uses one. The gate applies the chart's RBAC and asks
+the cluster — `kubectl auth can-i`, as that service account — for each call the
+client makes, and for four it must never make: creating or deleting a pod
+directly, reading a secret, and creating a Job in another namespace. A pod runs
+a step's code, so a credential that could create one outside a Job is the whole
+boundary gone.
+
+The rest held as written. A dead pod's attempt ends as `Infrastructure` with the
+cluster's own word — `OOMKilled (exit 137)`, on a stage taking more memory than
+its limit — the budget starts the next attempt in a new pod, the stages before
+it stand and the one after it never starts; a cancel deletes the running pod's
+Job and the run reaches `cancelled` in seconds; and each pod's log is in the
+object store, read after its attempt ended and before its Job was deleted. One
+consequence of naming a log by the hash of its own bytes is worth writing down:
+identical output is one object, so pods cannot be counted by counting logs.
+

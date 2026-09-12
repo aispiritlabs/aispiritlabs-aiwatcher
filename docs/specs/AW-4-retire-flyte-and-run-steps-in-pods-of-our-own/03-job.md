@@ -248,6 +248,58 @@ outline below is what the spec already fixes.
   - a `fail` unless the store is `postgres`.
 
   The release image and `build-images.sh` build with `aiwatcher-server/kube`.
+- **The crypto provider is the process's to name, and the features cannot**
+  (2.5, and the thing 2.5 was for). reqwest's `rustls` feature selects
+  `aws-lc-rs`; kube was asked for `ring`. Two providers in one rustls means
+  rustls will not name a process-level default, so *every* call to a cluster
+  panicked inside it — in a build that compiled, clippied and passed every test,
+  because until now nothing had ever opened a connection to one. kube's feature
+  is `aws-lc-rs` now, and the client installs the provider explicitly as well,
+  because `iggy` brings `ring` back whenever `laser` is on.
+- **The gate runs the launcher on the host and the pods in the cluster** (2.5).
+  What had never been exercised is `kubernetes.rs` against a real API server,
+  and a server started here with a real kubeconfig exercises all of it for the
+  price of a `cargo build` rather than an image. What that leaves out is an
+  in-cluster client reading its own service account, which is kube-rs's code —
+  and the grant such a client would hold is asked about directly instead.
+- **The server the gate starts sees one cluster** (2.5). `try_default` reads
+  whichever context is current and this kubeconfig has production EKS in it, so
+  the gate hands it a minified copy holding the one local context. ADR_0006's
+  rule, a layer further down than the Tiltfile's.
+- **An unreachable API is refused by a probe pod** (2.5), before anything is
+  registered. A host address that is right here and wrong in the cluster
+  otherwise arrives as four attempts that never claimed, one start allowance
+  later, and reads as a broken launcher.
+- **The four stages are aiwatcher's own, in planner's shape** (2.5):
+  `acquire → normalize → analyze → persist`, three artifact edges, a review at
+  the end, in `sdk/python/examples/pod_stages.py` and an image of their own.
+  The spec scoped planner's commit out, and a gate that needed planner's image
+  could not run anywhere else — what it costs is stated rather than hidden: the
+  review compared is this workflow's, not the house import's.
+- **Byte-identity is the digest the route computed over the stored bytes**
+  (2.5), per stage rather than only at the end. And *who* ran each stage is a
+  separate artifact, asserted to **differ** — four distinct pod names against
+  one worker's — because two identical reviews would also pass a comparison of
+  one path with itself.
+- **The long-lived worker is up for every phase** (2.5), registered for all four
+  tasks and polling the queue the pods' attempts are on. Nothing but the
+  key-only claim rule keeps it off them, so a gate that stopped it while the
+  pods ran would be testing the launcher with that rule switched off.
+- **A log is named by the hash of its own bytes, so stored logs cannot be
+  counted** (2.5). The first version of this assertion counted objects and found
+  two for seven pods: the stages printed nothing, and every empty log is one
+  object. Each stage prints its own name now, and what is asserted is that a
+  pod's words are in the store after the pod is gone.
+- **The chart's Role is asked about rather than read** (2.5). The gate's server
+  is an administrator through the kubeconfig, so the Role is exactly the thing
+  that would be wrong in a deployment and cannot be wrong here: the chart's RBAC
+  is applied and `kubectl auth can-i` asked, as that service account, for each
+  call the launcher makes and for four it must never make.
+- **The gate builds its own binary** (2.5, found by running it). The launcher is
+  not in the default build, and any plain `cargo build` or `cargo test` in this
+  repository replaces `target/debug/aiwatcher` with one that has no launcher —
+  after which the gate fails at start-up with a refusal about a variable nobody
+  set.
 
 ## Tasks
 
@@ -297,7 +349,9 @@ outline below is what the spec already fixes.
 - [x] 2.4 Cancel deletes the Job; the watch ends a dead pod's attempt with its
       reason; the log is read back into the catalog — *a cancel reaches a
       running pod*, *a pod's log is kept*
-- [ ] 2.5 planner's four stages on a local cluster, byte-identical
+- [x] 2.5 planner's four stages on a local cluster, byte-identical — *the shape,
+      in aiwatcher's own gate (`just e2e-pods`); naming a template on planner's
+      own four is planner's commit*
 
 ## Log
 - 2026-09-11 12:50 — job planned: Part 1 in three passes cut where other sessions' work sits, five decisions, ten tasks; Part 2 outlined
@@ -309,3 +363,4 @@ outline below is what the spec already fixes.
 - 2026-09-11 15:13 — 2.2 built (`c4fc124`): `RuntimeBinding::ContainerJob` under `container_job`; the step`s `pod` field, absent from every older digest; `aiwatcher_execution::pods` with the templates file, the exact-repository image match, Kubernetes quantities and the refusals of fields aiwatcher fills in; a 422 at registration naming step, value and template; `AIWATCHER_POD_TEMPLATES` read by the serve role and refused where no launcher exists; the SDK `PodRequest`. Clippy -Dwarnings and the three crates suites green, `just sdk-check` 423, the panel build green, the contract regenerated
 - 2026-09-12 00:32 — 2.3 built, and swept into another session's `26be55e` before it could be committed on its own: the key-only claim rule in `ClaimFilter` and in the PostgreSQL claim, `claimable_attempts` in four adapters with a contract property, the launcher and its Job manifest in `aiwatcher-server/src/execution/pods` — the loop and the manifest in every build, kube-rs behind `kube` — a refused launch reported as a `StepFailed` the way a reactor reports, `PERFORMABLE` and `recorded_result` widened so a pod's report is acknowledged, the chart's templates file, launcher RBAC, mounts and network rule, `AIWATCHER_POD_API_URL` and `AIWATCHER_POD_NAMESPACE`, the SDK reading `AIWATCHER_ATTEMPT` and `AIWATCHER_WORKER_NAME`, and `aiwatcher-server/kube` in the release image. Clippy -Dwarnings with every feature, the execution, API and server suites, `just sdk-check` 424, `just chart-check` plus renders with templates set, the postgres and duckdb store contracts, `cargo deny` and `just openapi-check` green
 - 2026-09-12 01:10 — 2.4 built (`c713a1e`): the launcher's pass gained a watch — the cluster's own Jobs and pods listing, read once each per pass — which ends a dead pod's attempt as `Infrastructure` with the cluster's own reason (`OOMKilled`, `DeadlineExceeded`, an exit code), ends and deletes a Job no pod claimed within its template's start allowance, and stops a cancelling or already-ended run's pods as `Policy` so the cancel completes rather than waiting out a lease; the attempt rides as three annotations so it can be read back; the log is the last 256 KiB through a `Tail` that compiles in every build, stored under the artifacts prefix and recorded in the catalog against the attempt, after which the Job is deleted (`DeleteParams::background()`, or the pod outlives it); a log that could not be read or stored leaves the Job for the next pass. `RunState::cancelling()`/`is_cancelling()` replace matching a badge's string, and the cancel that left a dispatched attempt in the claim table for ever — `StepSkipped` retiring attempt `0` — is fixed in the handler. Clippy `-Dwarnings --all-features`, execution 160 + 13 + 23 + 14 + 15 + 12, server 93 + 38 and 93 with `kube`, API 156 + 24, the postgres (5 + 7) and duckdb (4) store contracts, `just chart-check`, `cargo deny` and `just openapi-check` green
+- 2026-09-12 07:55 — 2.5 built (`0ec11aa`, `409ec5d`), and AW-4's exit is green on a real cluster: `just e2e-pods` runs an import's four stages as four pods on the local Kubernetes and the same four through one long-lived worker, and compares them — every stage's output has one digest across both paths, while the artifacts saying who ran each stage differ, four pod names against one worker's. Beside it: the chart's Role covers each call the launcher makes and refuses four it must not, a cancel deleted `analyze`'s Job and reached `cancelled` in 2.3s with `persist` never started, a stage taking 512MiB against its 192Mi limit failed twice as `infrastructure` with the cluster's own `OOMKilled (exit 137)` while the stages before it stood, and every pod's log was in the store with no Job left behind. It found the bug that mattered: two rustls crypto providers in one process meant the launcher panicked on its first call to any cluster, in a build that was green everywhere else. Clippy `-Dwarnings --all-features`, `cargo test --workspace --all-targets` (47 suites), server 93 + 38 with `kube`, `just sdk-check` 450, `just chart-check`, `just openapi-check` and `cargo deny` green

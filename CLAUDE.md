@@ -59,6 +59,7 @@ just seed-annotations # six synthetic plans, three families, an export, a traini
 just seed-import      # stage a corpus in pages, import it with the queued job
 just run-conversations # the server with the encrypted conversation archive on
 just seed-conversations # one reviewed exchange, an export job, an immutable corpus
+just e2e-pods         # four stages as four pods on a local cluster, against the same four in one worker
 just e2e-train        # the whole chain: annotate → export → fit a real tiny model → promote
 just serve-model      # verify the promoted package's digests, load it, serve it, watch the label
 just onnx-version     # re-express that model as an ONNX graph, check it agrees, move the label
@@ -336,8 +337,13 @@ area.
    own reason, a Job no pod claimed within its start allowance ended and
    deleted, a cancelling or already-ended run's pods stopped as `Policy` so a
    cancel completes in seconds rather than in a lease, and the pod's last
-   256 KiB kept against its attempt in the catalog before its Job goes. 2.5 is
-   what is left: planner's four stages on a local cluster, byte-identical.
+   256 KiB kept against its attempt in the catalog before its Job goes. All of
+   that is **proven on a real cluster** by `just e2e-pods`: four stages of one
+   import as four pods and the same four through one long-lived worker, whose
+   every output has one digest across both paths while the artifacts naming who
+   ran them differ. It is what found the launcher's one fatal defect — two
+   rustls crypto providers in one process, so every call to a cluster panicked
+   in a build that was green everywhere else.
 
 14. **An annotation is authored, vector-first, and split by family**
    ([ADR_0017](docs/ADR/ADR_0017_IMAGE_ANNOTATION.md),
@@ -1282,6 +1288,16 @@ the review.
   reads; a second copy answers no question and grows with every step of every
   run. The `file` adapter rewrites the whole outbox on each publish, so
   remembering was quadratic. Section 43.16.
+- **Never leave a process's crypto provider to the features.** rustls asks the
+  *process* which one to use and refuses to guess when more than one is compiled
+  in — and more than one is, whenever two dependencies each pick their own:
+  reqwest's `rustls` feature selects `aws-lc-rs` and `iggy` selects `ring`. Left
+  unsaid, every call the pod launcher made to a cluster panicked inside rustls
+  rather than failing as a port error, and the launcher's task died with it — in
+  a build that compiled, clippied and passed every test, because a stand-in
+  cluster opens no connection. `KubeCluster::connect` installs one before it
+  builds a client, and an `Err` there means somebody installed one first, which
+  answers the same question.
 - **Never spend the budget for attempts at the work on a runtime that declined
   it.** `Transient` is a refused connection or a 503 — nothing ran, so running
   it again costs one call and gets ten attempts over ten minutes. `Timeout` and

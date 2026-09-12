@@ -1,47 +1,25 @@
 //! The pod launcher: one Job per `container_job` attempt, and nothing more
-//! (ADR_0029).
+//! (ADR_0029, whose amendments carry the reasoning this summarises).
 //!
 //! It reads the attempts somebody may take, asks the cluster for a pod for
-//! each, and claims none of them. The pod is the worker: it claims its
-//! attempt by key through the routes every worker uses, where it meets
-//! `Reactor::take` and `Reactor::settle` like any other. So once a Job
-//! exists, correctness needs nothing from this loop — a pod that never comes
-//! back is a lease that lapses. Exactly one Job per attempt comes from the
-//! Job's name, derived from the key: a second launcher is told the Job already
-//! exists, which is Kubernetes' name uniqueness doing the work a lease would.
-//!
-//! The one thing it decides is whether a pod may be started at all. The
-//! templates are configuration and may have changed since a definition was
-//! saved, so the check registration made is made again, and an attempt whose
-//! template or image has stopped being allowed fails as `UserCode` — every
-//! retry would get the same answer. That is reported the way a reactor
-//! reports: a fact about the attempt, under an id derived from it.
+//! each, and claims none of them. The pod is the worker: it claims its attempt
+//! by key through the routes every worker uses. So once a Job exists,
+//! correctness needs nothing from this loop — a pod that never comes back is a
+//! lease that lapses. Exactly one Job per attempt comes from the Job's name,
+//! derived from the key: a second launcher is told it already exists. The one
+//! thing it decides is whether a pod may be started at all, because templates
+//! are configuration and may have changed since a definition was saved.
 //!
 //! The other half of the pass is the **watch**, which adds nothing to
-//! correctness and three things to how long it takes and how much it says:
-//!
-//! - **A pod that ended while its attempt was unfinished ends it now**, as
-//!   `Infrastructure` and with the cluster's own word for it — `OOMKilled`,
-//!   `DeadlineExceeded`, an exit code — where a lapsed lease would say
-//!   "crashed" a lease later and say nothing about why.
-//! - **A Job no pod claimed within its template's start allowance is ended and
-//!   deleted.** A refused image pull, an unschedulable pod, a crash before the
-//!   claim: nothing ran, so the retry budget decides. The Job's own
-//!   `activeDeadlineSeconds` cannot answer this, because it is the allowance
-//!   *plus* the step's timeout.
-//! - **A run that is no longer running has its pods stopped**, as `Policy`,
-//!   which is the class whose own words are "cancelled" and which nothing
-//!   retries. A cancel is cooperative — the decider asks what is in flight to
-//!   stop — and for a pod this loop is what asking means.
-//!
-//! And once a Job has been read, its log is kept and the Job is deleted. The
-//! log is never in the stream and never an output ([`log`]): the attempt ends
-//! first and is read after.
-//!
-//! The loop, the manifest and the watch's decisions are in every build and
-//! tested against a stand-in [`Cluster`]; only the client that reaches a real
-//! one is behind the `kube` feature, the shape `laser` has in
-//! `aiwatcher-bus`.
+//! correctness and three things to speed and explanation: a pod that ended
+//! while its attempt was unfinished ends it now as `Infrastructure`, carrying
+//! the cluster's own word for it; a Job no pod claimed within its template's
+//! start allowance is ended and deleted; and a run that is no longer running
+//! has its pods stopped as `Policy`, which is what asking a pod to stop means.
+//! Then the Job's log is kept and the Job is deleted — the log is never in the
+//! stream and never an output ([`log`]), so the attempt ends first. All of it
+//! is in every build and tested against a stand-in [`Cluster`]; only the client
+//! that reaches a real one is behind the `kube` feature.
 
 pub mod cluster;
 pub mod log;
