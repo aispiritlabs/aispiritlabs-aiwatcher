@@ -1576,7 +1576,9 @@ impl Registry {
     /// # Errors
     ///
     /// [`EvaluationError::Invalid`] when a reference or a pinned artifact is
-    /// unusable, and [`EvaluationError::Storage`] when the store cannot be
+    /// unusable or the card cannot measure these answers,
+    /// [`EvaluationError::Unavailable`] when nobody published the card at that
+    /// version, and [`EvaluationError::Storage`] when the store cannot be
     /// reached.
     pub async fn declare_scoring_run(
         &self,
@@ -1584,6 +1586,12 @@ impl Registry {
         declared_by: &str,
         now: i64,
     ) -> Result<crate::DeclaredRun> {
+        run.validate()?;
+        let card = self
+            .scorecard(&run.scorecard.name, Some(&run.scorecard.version))
+            .await?
+            .ok_or(EvaluationError::Unavailable(EvidenceState::MissingArtifact))?;
+        run.check(&card.scorecard)?;
         crate::scoring::declare(&self.store, run, declared_by, now).await
     }
 
@@ -1698,7 +1706,32 @@ impl Registry {
         manifest: &EvaluationManifest,
         subject: &str,
     ) -> Result<BTreeMap<String, serde_json::Value>> {
+        // Before the adapter, as publication does: a conversation cohort's
+        // expectations are content, and reading them is the thing the gate is
+        // about rather than something it checks afterwards.
+        self.protected(manifest)?;
         Ok(self.authority.resolve(manifest, subject).await?.expected)
+    }
+
+    /// The answers a declaration reads, from wherever it said they are.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Unavailable`] when a recording's bytes are gone or
+    /// are not what the declaration pinned.
+    pub async fn answers(
+        &self,
+        run: &crate::ScoringRun,
+        cohort: &BTreeMap<String, serde_json::Value>,
+    ) -> Result<Vec<crate::RecordedAnswer>> {
+        match &run.answers {
+            crate::Answers::Recording(recording) => {
+                Ok(crate::scoring::recorded(&self.store, recording)
+                    .await?
+                    .answers)
+            }
+            crate::Answers::Archive(_) => Ok(crate::archived(cohort)),
+        }
     }
 
     /// Record one judgement. The caller is who filed it, always.

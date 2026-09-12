@@ -44,8 +44,9 @@ pub use scorecard::{
     Score, Scorecard, ScorecardHead, ScorecardPage, ScorecardVersion, Scorer, ScorerSpec,
 };
 pub use scoring::{
-    Cohort, DeclaredRun, RecordedAnswer, RecordedAnswers, SCORING_ENGINE, SCORING_VERSION, Scored,
-    ScoringRun, ScoringRunView, StepOrigin, score, scoring_engine,
+    Answers, ArchiveWord, Cohort, DeclaredRun, RecordedAnswer, RecordedAnswers, SCORING_ENGINE,
+    SCORING_VERSION, Scored, ScoringRun, ScoringRunView, StepOrigin, archived, score,
+    scoring_engine,
 };
 
 use serde::Serialize;

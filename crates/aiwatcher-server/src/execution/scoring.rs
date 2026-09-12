@@ -14,12 +14,19 @@
 //! **Publication still needs an admitted pair.** Nothing here approves
 //! anything: a run whose variant and context nobody admitted is refused by the
 //! registry, in the same words a producer's publication is.
+//!
+//! **And the approval is what opens the archive.** A conversation cohort's
+//! cases are content, which a request reads only for an admin. Nobody's session
+//! is here to ask, and asking the person who pressed start would make an
+//! editor's click a way to read it — so the gate is asked first, and only a
+//! pair an admin admitted, content and all, is read with content access.
 
 use std::sync::Arc;
 
 use aiwatcher_api::state::AppState;
 use aiwatcher_evaluation::{
-    EvaluationError, EvidenceState, PublishEvaluation, Registry as Evaluations, StepOrigin, score,
+    DatasetKind, EvaluationError, EvidenceState, PublishEvaluation, Registry as Evaluations,
+    StepOrigin, score,
 };
 use aiwatcher_execution::{
     ActivityCommand, ActivityContext, ActivityError, ActivityExecutor, ActivityResult,
@@ -40,14 +47,19 @@ pub fn executors(state: &AppState) -> ExecutorRegistry {
         return registry;
     };
     tracing::info!("the serve role scores recorded answers");
-    registry.with(Arc::new(ScoreExecutor {
-        evaluations: Arc::clone(evaluations),
-    }))
+    registry.with(Arc::new(ScoreExecutor::new(Arc::clone(evaluations))))
 }
 
 #[derive(Debug)]
 pub struct ScoreExecutor {
     evaluations: Arc<Evaluations>,
+}
+
+impl ScoreExecutor {
+    #[must_use]
+    pub const fn new(evaluations: Arc<Evaluations>) -> Self {
+        Self { evaluations }
+    }
 }
 
 #[async_trait]
@@ -101,23 +113,25 @@ impl ActivityExecutor for ScoreExecutor {
         // what the source's rights are resolved against, and repeating one is
         // how two people reach the same run at all.
         let subject = declared.declared_by.clone();
-        let cohort = self
+        // Asked before anything is read rather than left to publication: for
+        // a conversation cohort, the admission is the only authority there is
+        // to read it under.
+        self.evaluations
+            .admission(&manifest)
+            .await
+            .map_err(refusal)?;
+        let evaluations = self
             .evaluations
+            .as_ref()
+            .clone()
+            .with_content_access(manifest.context.dataset.kind == DatasetKind::Conversations);
+        let cohort = evaluations
             .cohort(&manifest, &subject)
             .await
             .map_err(refusal)?;
-        let recorded = self
-            .evaluations
-            .recording(&run.answers)
-            .await
-            .map_err(refusal)?;
+        let answers = evaluations.answers(run, &cohort).await.map_err(refusal)?;
 
-        let scored = score(
-            &card.scorecard,
-            &cohort,
-            &recorded.answers,
-            &run.repetition_id,
-        );
+        let scored = score(&card.scorecard, &cohort, &answers, &run.repetition_id);
         let (status, measured, failed) = (
             scored.status,
             scored.cases.len(),
@@ -127,8 +141,7 @@ impl ActivityExecutor for ScoreExecutor {
                 .filter(|case| case.error.is_some())
                 .count(),
         );
-        let receipt = self
-            .evaluations
+        let receipt = evaluations
             .publish(
                 PublishEvaluation {
                     manifest,
@@ -267,7 +280,7 @@ mod tests {
                 name: "answer-quality".into(),
                 version: version.into(),
             },
-            answers,
+            answers: aiwatcher_evaluation::Answers::Recording(answers),
         }
     }
 

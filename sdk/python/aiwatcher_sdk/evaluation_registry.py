@@ -195,7 +195,11 @@ class ScoringRun(TypedDict):
     variant: VariantManifest
     cohort: Cohort
     scorecard: VersionReference
-    answers: ArtifactReference
+    #: A staged recording, or ``"archive"`` for a conversation cohort: its
+    #: answers are the archive's own responses, read under the pair's approval
+    #: and never staged in the clear. Over the archive a card may read no
+    #: expectation, because the expectation is the response being measured.
+    answers: ArtifactReference | Literal["archive"]
 
 
 class CaseMeasurement(TypedDict):
@@ -423,7 +427,7 @@ class EvaluationRegistry:
         )
 
     def declare_scoring_run(self, run: ScoringRun) -> dict[str, Any]:
-        """Declare a measurement of a staged recording, without starting it.
+        """Declare a measurement of saved answers, without starting it.
 
         The answer carries the manifest a result will publish and the
         ``approval_id`` that admits it. Admit that manifest — it is derived, and

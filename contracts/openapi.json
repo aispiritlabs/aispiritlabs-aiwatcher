@@ -23384,6 +23384,26 @@
           }
         }
       },
+      "ScoringAnswers": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ArtifactRef",
+            "description": "A staged recording, pinned by the digest of its bytes."
+          },
+          {
+            "$ref": "#/components/schemas/ScoringArchive",
+            "description": "What the conversation archive says was answered: each case of a\nconversation cohort is an assistant turn, and its answer is that turn's\nresponse. Read through the archive's owner under the approval that\nadmitted the pair, sealed like every result from that source, and never\nstaged anywhere in the clear."
+          }
+        ],
+        "description": "Where a run's answers are read from.\n\nOn the wire a recording is the artifact reference it always was — so a\ndeclaration written before the archive was a source keeps its content\naddress — and the archive is the one word `\"archive\"`.\n\nBoth names carry the scoring run they belong to in the contract: a gate's\nanswers and the conversation archive are other domains' words."
+      },
+      "ScoringArchive": {
+        "type": "string",
+        "description": "The one word that names the archive as a run's answers.",
+        "enum": [
+          "archive"
+        ]
+      },
       "ScoringRun": {
         "type": "object",
         "description": "What a run of saved answers measures, and what it measures it on.",
@@ -23397,8 +23417,8 @@
         ],
         "properties": {
           "answers": {
-            "$ref": "#/components/schemas/ArtifactRef",
-            "description": "The recording. Pinned by digest, so the answers cannot change under a\nretry — which is what makes re-running one cheap and honest."
+            "$ref": "#/components/schemas/ScoringAnswers",
+            "description": "The recording, or the archive. Pinned either way — a recording by the\ndigest of its bytes and the archive by the corpus version the variant\nnames — so the answers cannot change under a retry, which is what makes\nre-running one cheap and honest."
           },
           "cohort": {
             "$ref": "#/components/schemas/Cohort"

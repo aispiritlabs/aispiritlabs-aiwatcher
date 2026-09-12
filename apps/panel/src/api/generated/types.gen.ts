@@ -6723,14 +6723,38 @@ export type ScoringAccepted = {
 };
 
 /**
+ * Where a run's answers are read from.
+ *
+ * On the wire a recording is the artifact reference it always was — so a
+ * declaration written before the archive was a source keeps its content
+ * address — and the archive is the one word `"archive"`.
+ *
+ * Both names carry the scoring run they belong to in the contract: a gate's
+ * answers and the conversation archive are other domains' words.
+ */
+export type ScoringAnswers = ArtifactRef | ScoringArchive;
+
+/**
+ * The one word that names the archive as a run's answers.
+ */
+export const ScoringArchive = { ARCHIVE: 'archive' } as const;
+
+/**
+ * The one word that names the archive as a run's answers.
+ */
+export type ScoringArchive = typeof ScoringArchive[keyof typeof ScoringArchive];
+
+/**
  * What a run of saved answers measures, and what it measures it on.
  */
 export type ScoringRun = {
     /**
-     * The recording. Pinned by digest, so the answers cannot change under a
-     * retry — which is what makes re-running one cheap and honest.
+     * The recording, or the archive. Pinned either way — a recording by the
+     * digest of its bytes and the archive by the corpus version the variant
+     * names — so the answers cannot change under a retry, which is what makes
+     * re-running one cheap and honest.
      */
-    answers: ArtifactRef;
+    answers: ScoringAnswers;
     cohort: Cohort;
     /**
      * The logical result this run produces. A technical retry reuses it.

@@ -11,12 +11,12 @@
 //! land on one document. Nothing here reads a clock or opens a socket.
 
 use aiwatcher_core::{ArtifactKind, ArtifactRef};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeMap;
 
 use crate::{
-    CaseMeasurement, EvaluationContext, EvaluationManifest, EvaluationOrigin, Result, ResultStatus,
-    SCHEMA_VERSION, Scorecard, VariantManifest, VersionReference, digest,
+    CaseMeasurement, DatasetKind, EvaluationContext, EvaluationManifest, EvaluationOrigin, Result,
+    ResultStatus, SCHEMA_VERSION, Scorecard, VariantManifest, VersionReference, digest,
     reference::artifact,
     require,
     scorecard::Score,
@@ -97,6 +97,86 @@ pub struct RecordedAnswers {
     pub answers: Vec<RecordedAnswer>,
 }
 
+/// Where a run's answers are read from.
+///
+/// On the wire a recording is the artifact reference it always was — so a
+/// declaration written before the archive was a source keeps its content
+/// address — and the archive is the one word `"archive"`.
+///
+/// Both names carry the scoring run they belong to in the contract: a gate's
+/// answers and the conversation archive are other domains' words.
+#[derive(Clone, Debug, PartialEq, Serialize, utoipa::ToSchema)]
+#[schema(as = ScoringAnswers)]
+#[serde(untagged)]
+pub enum Answers {
+    /// A staged recording, pinned by the digest of its bytes.
+    Recording(ArtifactRef),
+    /// What the conversation archive says was answered: each case of a
+    /// conversation cohort is an assistant turn, and its answer is that turn's
+    /// response. Read through the archive's owner under the approval that
+    /// admitted the pair, sealed like every result from that source, and never
+    /// staged anywhere in the clear.
+    Archive(ArchiveWord),
+}
+
+/// The one word that names the archive as a run's answers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[schema(as = ScoringArchive)]
+#[serde(rename_all = "snake_case")]
+pub enum ArchiveWord {
+    Archive,
+}
+
+impl<'de> Deserialize<'de> for Answers {
+    /// By shape rather than by trying each variant in turn: an untagged
+    /// derive reports a malformed recording as "matched no variant", and the
+    /// artifact's own refusal is the one that says what is wrong with it.
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        use serde::de::Error;
+        match serde_json::Value::deserialize(deserializer)? {
+            serde_json::Value::String(word) if word == "archive" => {
+                Ok(Self::Archive(ArchiveWord::Archive))
+            }
+            serde_json::Value::String(word) => Err(D::Error::custom(format!(
+                "answers: `{word}` names no source; a recording is an artifact reference, \
+                 and the archive is \"archive\""
+            ))),
+            value => ArtifactRef::deserialize(value)
+                .map(Self::Recording)
+                .map_err(D::Error::custom),
+        }
+    }
+}
+
+impl Answers {
+    /// The staged recording, when that is where the answers are.
+    #[must_use]
+    pub const fn recording(&self) -> Option<&ArtifactRef> {
+        match self {
+            Self::Recording(artifact) => Some(artifact),
+            Self::Archive(_) => None,
+        }
+    }
+}
+
+/// The archive's own responses, as the answers to the cases they are.
+///
+/// A conversation cohort's expectation for a case *is* the reviewed response
+/// of that assistant turn, so the answers are read from the same place — which
+/// is also why a card over them may read no expectation.
+#[must_use]
+pub fn archived(cohort: &BTreeMap<String, serde_json::Value>) -> Vec<RecordedAnswer> {
+    cohort
+        .iter()
+        .map(|(case_id, response)| RecordedAnswer {
+            case_id: case_id.clone(),
+            answer: response.clone(),
+            trace_id: None,
+            span_id: None,
+        })
+        .collect()
+}
+
 /// What a run of saved answers measures, and what it measures it on.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(deny_unknown_fields)]
@@ -110,9 +190,11 @@ pub struct ScoringRun {
     /// The card, at a concrete version. A head would let a rewrite change what
     /// a started run measures between one attempt and the next.
     pub scorecard: VersionReference,
-    /// The recording. Pinned by digest, so the answers cannot change under a
-    /// retry — which is what makes re-running one cheap and honest.
-    pub answers: ArtifactRef,
+    /// The recording, or the archive. Pinned either way — a recording by the
+    /// digest of its bytes and the archive by the corpus version the variant
+    /// names — so the answers cannot change under a retry, which is what makes
+    /// re-running one cheap and honest.
+    pub answers: Answers,
 }
 
 impl ScoringRun {
@@ -133,7 +215,55 @@ impl ScoringRun {
             "run.cohort.expectations_schema",
         )?;
         self.scorecard.validate("run.scorecard")?;
-        artifact(&self.answers, "run.answers")
+        let conversations = self.variant.dataset.kind == DatasetKind::Conversations;
+        match &self.answers {
+            Answers::Recording(recording) => {
+                artifact(recording, "run.answers")?;
+                // Answers to questions the archive holds, kept in a staged
+                // object with no seal, no retention clock and no erasure.
+                require(
+                    !conversations,
+                    "run.answers",
+                    "a conversation cohort's answers are read from the archive, never staged in \
+                     the clear; declare \"archive\"",
+                )
+            }
+            Answers::Archive(_) => require(
+                conversations,
+                "run.answers",
+                "only a conversation cohort has answers in the archive",
+            ),
+        }
+    }
+
+    /// Whether this card can measure these answers at all.
+    ///
+    /// The archive's answer to a case is the response its expectation was
+    /// read from, so a scorer comparing the two measures a response against
+    /// itself and would report perfect agreement about nothing.
+    pub fn check(&self, card: &Scorecard) -> Result<()> {
+        require(
+            card.name == self.scorecard.name,
+            "run.scorecard.name",
+            "names a different card from the one resolved",
+        )?;
+        if matches!(self.answers, Answers::Archive(_))
+            && let Some(spec) = card
+                .scorers
+                .iter()
+                .find(|spec| spec.scorer.reads_expected())
+        {
+            return Err(crate::EvaluationError::Invalid {
+                field: "run.scorecard".into(),
+                reason: format!(
+                    "`{}` compares an answer with its expectation, and the archive's answer is \
+                     the response its expectation is; score it with scorers that read no \
+                     expectation",
+                    spec.metric
+                ),
+            });
+        }
+        Ok(())
     }
 
     /// The content address of this declaration.
@@ -151,11 +281,7 @@ impl ScoringRun {
         card: &Scorecard,
         ran_by: Option<&StepOrigin>,
     ) -> Result<EvaluationManifest> {
-        require(
-            card.name == self.scorecard.name,
-            "run.scorecard.name",
-            "names a different card from the one resolved",
-        )?;
+        self.check(card)?;
         Ok(EvaluationManifest {
             schema_version: SCHEMA_VERSION,
             origin: EvaluationOrigin {
@@ -410,4 +536,140 @@ pub(crate) async fn recorded(store: &Store, answers: &ArtifactRef) -> Result<Rec
     }
     serde_json::from_slice(&bytes)
         .map_err(|_| crate::EvaluationError::Unavailable(crate::EvidenceState::CorruptArtifact))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Scorer, ScorerSpec};
+    use serde_json::json;
+
+    fn run(kind: DatasetKind, answers: Answers) -> ScoringRun {
+        let manifest: EvaluationManifest = serde_json::from_str(include_str!(
+            "../../../contracts/fixtures/evaluation-v1/manifest.json"
+        ))
+        .expect("the contract fixture parses");
+        let mut variant = manifest.variant;
+        variant.dataset.kind = kind;
+        ScoringRun {
+            evaluation_id: "scored".into(),
+            repetition_id: "measurement-1".into(),
+            variant,
+            cohort: Cohort {
+                case_manifest: manifest.context.case_manifest.clone(),
+                case_count: 2,
+                split: "test".into(),
+                input_schema: manifest.context.input_schema,
+                expectations_schema: manifest.context.expectations_schema,
+            },
+            scorecard: VersionReference {
+                name: "answer-quality".into(),
+                version: "a".repeat(64),
+            },
+            answers,
+        }
+    }
+
+    fn card(scorer: Scorer) -> Scorecard {
+        Scorecard {
+            name: "answer-quality".into(),
+            description: String::new(),
+            scorers: vec![ScorerSpec {
+                metric: "measured".into(),
+                answer_path: "/answer".into(),
+                expected_path: String::new(),
+                scorer,
+            }],
+        }
+    }
+
+    fn recording() -> ArtifactRef {
+        ArtifactRef {
+            name: "answers.json".into(),
+            uri: format!("evaluation://recordings/{}", "b".repeat(64)),
+            digest: "b".repeat(64),
+            size_bytes: Some(10),
+            content_type: "application/json".into(),
+            kind: ArtifactKind::Blob,
+            schema_ref: None,
+        }
+    }
+
+    #[test]
+    fn a_recording_is_written_as_the_reference_it_always_was_so_its_address_does_not_move() {
+        let declared = run(DatasetKind::Curation, Answers::Recording(recording()));
+        let wire = serde_json::to_value(&declared).expect("a declaration encodes");
+        assert_eq!(
+            wire["answers"],
+            serde_json::to_value(recording()).expect("a reference encodes"),
+            "a declaration from before the archive was a source keeps its content address"
+        );
+        let read: ScoringRun = serde_json::from_value(wire).expect("and reads back");
+        assert_eq!(read.id().unwrap(), declared.id().unwrap());
+
+        let archive: Answers = serde_json::from_value(json!("archive")).expect("one word");
+        assert_eq!(archive, Answers::Archive(ArchiveWord::Archive));
+        let refused = serde_json::from_value::<Answers>(json!("elsewhere")).unwrap_err();
+        assert!(refused.to_string().contains("elsewhere"), "{refused}");
+        let malformed = serde_json::from_value::<Answers>(json!({"name": "x"})).unwrap_err();
+        assert!(
+            malformed.to_string().contains("missing field"),
+            "the artifact's own refusal, not \"matched no variant\": {malformed}"
+        );
+    }
+
+    #[test]
+    fn a_conversation_cohort_is_answered_from_the_archive_and_nothing_else_is() {
+        assert!(
+            run(
+                DatasetKind::Conversations,
+                Answers::Archive(ArchiveWord::Archive)
+            )
+            .validate()
+            .is_ok()
+        );
+        let staged = run(DatasetKind::Conversations, Answers::Recording(recording()))
+            .validate()
+            .unwrap_err();
+        assert!(staged.to_string().contains("archive"), "{staged}");
+        let elsewhere = run(
+            DatasetKind::Curation,
+            Answers::Archive(ArchiveWord::Archive),
+        )
+        .validate()
+        .unwrap_err();
+        assert!(
+            elsewhere.to_string().contains("conversation"),
+            "{elsewhere}"
+        );
+    }
+
+    #[test]
+    fn the_archive_is_never_measured_against_the_response_its_expectation_is() {
+        let declared = run(
+            DatasetKind::Conversations,
+            Answers::Archive(ArchiveWord::Archive),
+        );
+        let refused = declared
+            .check(&card(Scorer::ExactMatch {
+                ignore_case: false,
+                trim: false,
+            }))
+            .unwrap_err();
+        assert!(refused.to_string().contains("measured"), "{refused}");
+        assert!(
+            declared
+                .check(&card(Scorer::Forbidden {
+                    text: "pesel".into(),
+                    ignore_case: true,
+                }))
+                .is_ok()
+        );
+        let answers = archived(&BTreeMap::from([(
+            "turn-1".to_owned(),
+            json!({"answer": "hello"}),
+        )]));
+        assert_eq!(answers[0].case_id, "turn-1");
+        assert_eq!(answers[0].answer, json!({"answer": "hello"}));
+    }
 }

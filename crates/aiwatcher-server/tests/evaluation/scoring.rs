@@ -87,7 +87,7 @@ fn declaration(evaluation_id: &str, version: &str) -> ScoringRun {
             name: "answer-quality".into(),
             version: version.into(),
         },
-        answers: manifest.context.case_manifest.clone(),
+        answers: Answers::Recording(manifest.context.case_manifest.clone()),
     }
 }
 
@@ -369,7 +369,19 @@ async fn an_answer_the_cohort_does_not_select_is_not_part_of_this_measurement() 
 #[tokio::test]
 async fn declaring_one_intention_twice_is_one_document_and_a_second_run_is_not() {
     let registry = store(cohort());
-    let run = declaration("scored-6", "b".repeat(64).as_str());
+    // A card nobody published is refused before anything is written, because a
+    // declaration naming it could only ever fail when started.
+    let unpublished = declaration("scored-6", "b".repeat(64).as_str());
+    assert!(matches!(
+        registry.declare_scoring_run(&unpublished, "ada", 100).await,
+        Err(EvaluationError::Unavailable(EvidenceState::MissingArtifact))
+    ));
+    let version = registry
+        .publish_scorecard(&card(), "ada", 100)
+        .await
+        .unwrap()
+        .version;
+    let run = declaration("scored-6", &version);
     let first = registry
         .declare_scoring_run(&run, "ada", 100)
         .await

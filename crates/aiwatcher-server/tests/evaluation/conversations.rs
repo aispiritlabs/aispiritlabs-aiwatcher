@@ -743,3 +743,215 @@ async fn sealed_content_rejects_plaintext_downgrades_and_concurrent_retries_keep
         EvidenceState::Complete
     );
 }
+
+/// One attempt at a scoring step, the way the reactor hands it to an executor.
+fn attempt(
+    declaration: &str,
+) -> (
+    aiwatcher_execution::ActivityCommand,
+    aiwatcher_execution::ActivityContext,
+) {
+    use aiwatcher_execution::plan::{
+        CachePolicy, DefinitionKind, DefinitionRevision, ExecutionPlan, PlanStep, RetryPolicy,
+        ScoreEvaluationSpec,
+    };
+    let step = PlanStep {
+        id: "score".to_owned(),
+        runtime: aiwatcher_execution::RuntimeBinding::ScoreEvaluation(ScoreEvaluationSpec {
+            declaration: declaration.to_owned(),
+        }),
+        inputs: Vec::new(),
+        outputs: Vec::new(),
+        retry: RetryPolicy::default(),
+        timeout_seconds: 60,
+        cache: CachePolicy::Never,
+    };
+    let plan = ExecutionPlan::seal(
+        DefinitionKind::Evaluation,
+        "archive-scored".to_owned(),
+        DefinitionRevision(declaration.to_owned()),
+        vec![step.clone()],
+        Vec::new(),
+    );
+    (
+        aiwatcher_execution::ActivityCommand {
+            key: aiwatcher_execution::AttemptKey::new(
+                aiwatcher_execution::ExecutionId::new("exec-archive".to_owned()),
+                "score",
+                1,
+            ),
+            command_id: aiwatcher_core::MessageId::new("dispatch-archive".to_owned()),
+            step,
+            inputs: Vec::new(),
+            parameters: BTreeMap::new(),
+            answers: Vec::new(),
+        },
+        aiwatcher_execution::ActivityContext {
+            owner: "serve".to_owned(),
+            timeout: std::time::Duration::from_secs(60),
+            context_id: "exec-archive/score/1".to_owned(),
+            plan: Arc::new(plan),
+        },
+    )
+}
+
+/// What the archive says was answered is measured by a run, read only under
+/// the approval an admin gave that pair, and kept as sealed as the archive.
+#[tokio::test]
+async fn the_archives_own_answers_are_scored_under_an_admins_approval_and_stay_sealed() {
+    use aiwatcher_execution::{ActivityExecutor, FailureClass};
+    use aiwatcher_server::execution::scoring::ScoreExecutor;
+
+    let mut f = Fixture::new("conversation-scoring").await;
+    let archive = owner(f.store.clone());
+    pin(&mut f, &archive).await;
+    // The registry the serve role holds: the archive's cipher, and no content
+    // access of its own — nobody's session is there to have granted it.
+    let deployment = Arc::new(registry(&f, archive.clone()).with_content_access(false));
+    let admin = registry(&f, archive);
+
+    let spec = |metric: &str, scorer: Scorer| ScorerSpec {
+        metric: metric.into(),
+        answer_path: "/answer".into(),
+        expected_path: String::new(),
+        scorer,
+    };
+    let card = Scorecard {
+        name: "archive-hygiene".into(),
+        description: String::new(),
+        scorers: vec![
+            spec(
+                "leaked",
+                Scorer::Forbidden {
+                    text: "answer_one".into(),
+                    ignore_case: true,
+                },
+            ),
+            spec(
+                "synthetic",
+                Scorer::RegexMatch {
+                    pattern: "^SYNTHETIC_".into(),
+                },
+            ),
+        ],
+    };
+    let version = deployment
+        .publish_scorecard(&card, "ada", now())
+        .await
+        .unwrap()
+        .version;
+    let context = f.request.manifest.context.clone();
+    let mut run = ScoringRun {
+        evaluation_id: "archive-scored".into(),
+        repetition_id: "measurement-1".into(),
+        variant: f.request.manifest.variant.clone(),
+        cohort: Cohort {
+            case_manifest: context.case_manifest.clone(),
+            case_count: context.case_count,
+            split: context.split.clone(),
+            input_schema: context.input_schema.clone(),
+            expectations_schema: context.expectations_schema.clone(),
+        },
+        scorecard: VersionReference {
+            name: card.name.clone(),
+            version,
+        },
+        answers: Answers::Archive(ArchiveWord::Archive),
+    };
+
+    // Over the archive, an expectation is the very response being measured.
+    let mut comparing = card.clone();
+    comparing.name = "archive-exact".into();
+    comparing.scorers.push(spec(
+        "exact",
+        Scorer::ExactMatch {
+            ignore_case: false,
+            trim: false,
+        },
+    ));
+    run.scorecard = VersionReference {
+        name: comparing.name.clone(),
+        version: deployment
+            .publish_scorecard(&comparing, "ada", now())
+            .await
+            .unwrap()
+            .version,
+    };
+    let refused = deployment
+        .declare_scoring_run(&run, "ada", now())
+        .await
+        .unwrap_err();
+    assert!(refused.to_string().contains("`exact`"), "{refused}");
+    run.scorecard = VersionReference {
+        name: card.name.clone(),
+        version: deployment
+            .publish_scorecard(&card, "ada", now())
+            .await
+            .unwrap()
+            .version,
+    };
+
+    let declared = deployment
+        .declare_scoring_run(&run, "ada", now())
+        .await
+        .unwrap();
+    let manifest = declared.run.manifest(&card, None).unwrap();
+    let executor = ScoreExecutor::new(deployment.clone());
+    let (command, attempt) = attempt(&declared.id);
+
+    // Before an admin admitted the pair there is no authority to read it under,
+    // so the step reads nothing and publishes nothing.
+    let unadmitted = executor.execute(&command, &attempt).await.unwrap_err();
+    assert_eq!(unadmitted.class, FailureClass::UserCode);
+    assert!(
+        unadmitted.message.contains("approval"),
+        "{}",
+        unadmitted.message
+    );
+    assert!(f.store.list("evaluations/").await.unwrap().is_empty());
+
+    f.approve(&manifest).await;
+    admin.approve(&manifest, "admin", now()).await.unwrap();
+    let reported = executor
+        .execute(&command, &attempt)
+        .await
+        .expect("the archive scores under the approval")
+        .result
+        .expect("a scoring step reports what it did");
+    assert_eq!(reported["status"], "succeeded");
+    assert_eq!(
+        (reported["selected"].clone(), reported["scored"].clone()),
+        (json!(2), json!(2))
+    );
+
+    for entry in f.store.list("evaluations/").await.unwrap() {
+        let bytes = f.store.get(&entry.key).await.unwrap().unwrap();
+        assert!(
+            !String::from_utf8_lossy(&bytes).contains("SYNTHETIC_PRIVATE"),
+            "{} holds the archive's words in the clear",
+            entry.key
+        );
+    }
+    let evidence = admin
+        .get("archive-scored", "admin", now())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        evidence.metrics["leaked"], 0.5,
+        "one of two answers said it"
+    );
+    assert_eq!(evidence.metrics["synthetic"], 1.0);
+    let origin = evidence.manifest.unwrap().origin;
+    assert_eq!(origin.execution_id.as_deref(), Some("exec-archive"));
+    assert_eq!(
+        deployment
+            .get("archive-scored", "editor", now())
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        EvidenceState::Forbidden,
+        "running the step granted this process nothing it keeps"
+    );
+}
