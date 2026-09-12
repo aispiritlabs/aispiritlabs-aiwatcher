@@ -473,6 +473,14 @@ e2e-train:
 e2e-pods *args:
     ./scripts/e2e-pod-steps.py {{args}}
 
+# The same four stages as four *processes* on this host, for a machine with no
+# cluster: the same launcher, the same derived name, the same claim by key, the
+# same log in the store — and no image, no resource limit and no namespace, so
+# the memory phase is not asked. It builds the plain binary, needing neither
+# the `kube` feature nor Docker nor a kubeconfig, which is the point.
+e2e-processes *args:
+    ./scripts/e2e-pod-steps.py --runtime process {{args}}
+
 # One managed run that evaluates a prompt, optimises it, evaluates the
 # candidate on held-out cases, records the server's verdict and asks an admin —
 # three times: approved, kept back, and rejected before anybody is asked. Starts

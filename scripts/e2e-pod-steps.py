@@ -40,11 +40,19 @@ What it proves, in order:
    stored and recorded, so no Job left behind *is* the assertion — and the
    stored objects are counted beside it.
 
-It starts **its own** aiwatcher, on a free port with every byte under a
-temporary directory, so the one on :8080 is not touched. It needs the `kube`
-feature, which the default build does not carry:
+The same five against the other backend: `--runtime process` runs each attempt
+as a **process on this host** (`just e2e-processes`), which needs no cluster and
+no image and not even the `kube` feature — a plain `cargo build`. Everything
+above holds there and is asserted the same way, except the memory phase, which
+is not asked: a process has no limit to go over. What a Job listing answers in
+a cluster is answered there by the launcher's own log, because a step's process
+lives inside the server and no `kubectl` can see it.
 
-    cargo build --bin aiwatcher --features aiwatcher-server/kube
+It starts **its own** aiwatcher, on a free port with every byte under a
+temporary directory, so the one on :8080 is not touched. The cluster backend
+needs the `kube` feature, which the default build does not carry — and this
+builds it:
+
     just e2e-pods
 
 Two things about the cluster. Its kubeconfig is a **minified copy** holding one
@@ -104,6 +112,11 @@ CANCEL_WITHIN = 60
 
 BASE = ""
 
+#: How a step's process is recognised on this host, for the two assertions that
+#: are about a process being *gone*. The launcher's own record says which
+#: attempt each one was for; this says whether any is still running.
+PROCESS_PATTERN = "aiwatcher_sdk.worker run-attempt"
+
 
 # ── the cluster ──────────────────────────────────────────────────────────────
 
@@ -154,6 +167,23 @@ class Cluster:
         items = json.loads(listing).get("items", [])
         return [item for item in items if isinstance(item, dict)]
 
+    def alive(self, held: set[str] | None = None) -> set[str]:
+        """Which Jobs are still there, narrowed to `held` when it is given."""
+        names = {str(job.get("metadata", {}).get("name")) for job in self.jobs()}
+        return names if held is None else held & names
+
+    def server_environment(self) -> dict[str, str]:
+        """What the launcher needs to reach this cluster and no other."""
+        return {
+            "AIWATCHER_POD_NAMESPACE": self.namespace,
+            "KUBECONFIG": str(self.kubeconfig),
+        }
+
+    #: Every interface, because the pods are not on this host's loopback.
+    listen = "0.0.0.0"
+    #: The isolation a limit buys, which is what the memory phase is about.
+    bounds_memory = True
+
     def teardown(self) -> None:
         if not self.ours:
             print(f"  · leaving namespace {self.namespace} alone: it was not ours to create")
@@ -201,6 +231,77 @@ def open_namespace(kubeconfig: Path, namespace: str) -> Cluster:
     if not phase:
         run("kubectl", "--kubeconfig", str(kubeconfig), "create", "namespace", namespace)
     return Cluster(kubeconfig=kubeconfig, namespace=namespace, ours=not phase)
+
+
+@dataclass
+class Host:
+    """This machine, standing where a cluster stands.
+
+    Nothing here lists anything: a step's process lives inside the server, so
+    the record of what was started is the launcher's own log — the same line
+    the cluster path writes beside the Job it created, read back into the shape
+    a Job listing has. Every assertion about *which* attempt ran where is then
+    the same assertion on both backends, and the two that are about a process
+    being gone ask this host directly.
+    """
+
+    log: Path
+
+    listen = "127.0.0.1"
+    #: No image, no cgroup, no limit: a stage over its memory ask takes this
+    #: host's memory, so the phase that proves the kernel stops it is not asked.
+    bounds_memory = False
+
+    def jobs(self) -> list[dict[str, Any]]:
+        found: list[dict[str, Any]] = []
+        for line in self.log.read_text(errors="replace").splitlines():
+            if "a pod was asked for" not in line:
+                continue
+            try:
+                fields = json.loads(line).get("fields", {})
+            except json.JSONDecodeError:
+                continue
+            execution, _, rest = str(fields.get("attempt", "")).partition("/")
+            step, _, attempt = rest.rpartition("/")
+            found.append(
+                {
+                    "metadata": {
+                        "name": fields.get("job", ""),
+                        "annotations": {
+                            "aiwatcher.dev/execution": execution,
+                            "aiwatcher.dev/step": step,
+                            "aiwatcher.dev/attempt": attempt,
+                        },
+                        "labels": {"aiwatcher.dev/template": fields.get("template", "")},
+                    }
+                }
+            )
+        return found
+
+    def alive(self, held: set[str] | None = None) -> set[str]:
+        """Which step processes are still running.
+
+        `held` is not asked about and cannot be: which attempt a process holds
+        is the server's record, not this host's. The phases that ask this run a
+        workflow whose stages go one after another, so any step process alive
+        is the one being asked about.
+        """
+        return {f"pid {pid}" for pid in run("pgrep", "-f", PROCESS_PATTERN, check=False).split()}
+
+    def server_environment(self) -> dict[str, str]:
+        return {"AIWATCHER_POD_RUNTIME": "process"}
+
+    def teardown(self) -> None:
+        """Kill anything the server left behind.
+
+        It stops its own processes when it is asked to stop, and a `SIGKILL`
+        runs no destructor — so this is the backstop, and a run that needed it
+        says so.
+        """
+        left = self.alive()
+        if left:
+            print(f"  · killing {len(left)} step processes the server left behind")
+            run("pkill", "-f", PROCESS_PATTERN, check=False)
 
 
 def reachable(cluster: Cluster, api_url: str) -> None:
@@ -257,30 +358,44 @@ def build_image() -> None:
     run("docker", "build", "-f", "deploy/Dockerfile.worker", "-t", IMAGE, ".", cwd=ROOT)
 
 
-def build_server() -> None:
-    """The binary, with the launcher in it.
+def build_server(runtime: str) -> None:
+    """The binary, with the launcher this run needs in it.
 
-    Built here rather than asked for, because the feature is not the default
-    and any plain `cargo build` or `cargo test` in this repository overwrites
-    `target/debug/aiwatcher` with one that has no launcher — a run that then
-    fails at start-up with a refusal about a variable nobody set. Current, it
-    costs a cargo no-op.
+    Built here rather than asked for, because reaching a cluster is a cargo
+    feature that is not the default and any plain `cargo build` or `cargo test`
+    in this repository overwrites `target/debug/aiwatcher` with one that has no
+    client — a run that then fails at start-up with a refusal about a variable
+    nobody set. Current, it costs a cargo no-op.
+
+    The process backend is deliberately built **without** the feature: the
+    plainest build there is starts a step's pod on this host.
     """
-    print("· building the server with its launcher")
-    run("cargo", "build", "--bin", "aiwatcher", "--features", "aiwatcher-server/kube", cwd=ROOT)
+    feature = ["--features", "aiwatcher-server/kube"] if runtime == "pods" else []
+    print(f"· building the server{' with its cluster client' if feature else ''}")
+    run("cargo", "build", "--bin", "aiwatcher", *feature, cwd=ROOT)
 
 
-def templates_file(home: Path) -> Path:
+def templates_file(home: Path, runtime: str) -> Path:
     """The operator's file, as a deployment's chart values would render it.
 
     One template for all four stages: its command registers every task and
     `run-attempt` runs whichever attempt the pod was told. `imagePullPolicy`
     is the template's to set and is set, because the image is built here and
     was never pushed anywhere to pull it from.
+
+    Two things differ by backend and nothing else does. In a pod the command is
+    the image's own interpreter and the image sets `PYTHONPATH`; on this host
+    it is the interpreter this script runs under — which has the SDK, because
+    this script declares it — and the examples directory is named in the
+    template's own environment, where a template may write one.
     """
-    command = ["python", "-m", "aiwatcher_sdk.worker", "run-attempt", "--queue", QUEUE]
+    interpreter = "python" if runtime == "pods" else sys.executable
+    command = [interpreter, "-m", "aiwatcher_sdk.worker", "run-attempt", "--queue", QUEUE]
     for stage in pod_stages.STAGES:
         command += ["--task", f"pod_stages:{stage}"]
+    container: dict[str, Any] = {"imagePullPolicy": "IfNotPresent"}
+    if runtime != "pods":
+        container["env"] = [{"name": "PYTHONPATH", "value": str(ROOT / "sdk" / "python" / "examples")}]
     path = home / "pod-templates.json"
     path.write_text(
         json.dumps(
@@ -296,7 +411,7 @@ def templates_file(home: Path) -> Path:
                     # Short: nothing here pulls an image, so a pod that has not
                     # claimed in a minute is a pod that is not going to.
                     "start_allowance_seconds": 60,
-                    "pod": {"containers": [{"imagePullPolicy": "IfNotPresent"}]},
+                    "pod": {"containers": [container]},
                 }
             },
             indent=2,
@@ -412,26 +527,24 @@ def grant(cluster: Cluster) -> None:
 
 
 def serve(
-    home: Path, cluster: Cluster, templates: Path, api_host: str
+    home: Path, backend: Cluster | Host, templates: Path, api_host: str
 ) -> tuple[subprocess.Popen[bytes], str]:
     """An aiwatcher of our own, listening where a pod can reach it."""
     global BASE
     binary = Path(os.environ.get("AIWATCHER_BINARY", ROOT / "target" / "debug" / "aiwatcher"))
     if not binary.exists():
-        raise SystemExit(
-            f"no server binary at {binary}: "
-            "`cargo build --bin aiwatcher --features aiwatcher-server/kube`"
-        )
+        raise SystemExit(f"no server binary at {binary}: `cargo build --bin aiwatcher`")
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
+    # The launcher's own record is read back out of this, so it is read rather
+    # than only kept for a failure.
     api_url = f"http://{api_host}:{port}"
     # Nothing inherited: an AIWATCHER_AUTH_MODE in somebody's shell would make
     # this a different test.
     env = {name: value for name, value in os.environ.items() if not name.startswith("AIWATCHER_")}
     env |= {
-        # Every interface, because the pods are not on this host's loopback.
-        "AIWATCHER_LISTEN": f"0.0.0.0:{port}",
+        "AIWATCHER_LISTEN": f"{backend.listen}:{port}",
         "AIWATCHER_DATA_DIR": str(home / ".data"),
         "AIWATCHER_BUS": "wal",
         # The pods and the local worker are other processes claiming over HTTP,
@@ -440,11 +553,13 @@ def serve(
         "AIWATCHER_INGEST_ENABLED": "true",
         "AIWATCHER_SEED_FILE": "none",
         "AIWATCHER_POD_TEMPLATES": str(templates),
-        "AIWATCHER_POD_NAMESPACE": cluster.namespace,
         "AIWATCHER_POD_API_URL": api_url,
-        "KUBECONFIG": str(cluster.kubeconfig),
         "AIWATCHER_LOG": "warn,aiwatcher_server::execution::pods=info",
+        # Read back as the launcher's record of what it started, which is the
+        # only listing there is when a step's pod is a process.
+        "AIWATCHER_LOG_FORMAT": "json",
     }
+    env |= backend.server_environment()
     log = (home / "server.log").open("wb")
     process = subprocess.Popen(  # noqa: S603 — the binary this repository builds
         [str(binary)], cwd=home, env=env, stdout=log, stderr=subprocess.STDOUT
@@ -499,7 +614,7 @@ def decoded(raw: bytes) -> Any:
 
 @dataclass
 class Seen:
-    """What the cluster showed while one execution ran.
+    """What ran the pods of one execution, as it was running.
 
     Accumulated rather than read at the end, because the launcher deletes every
     Job it has read: by the time a run is over there is nothing left to list,
@@ -508,8 +623,8 @@ class Seen:
 
     jobs: dict[str, dict[str, str]] = field(default_factory=dict)
 
-    def take(self, cluster: Cluster) -> None:
-        for job in cluster.jobs():
+    def take(self, backend: Cluster | Host) -> None:
+        for job in backend.jobs():
             metadata = job.get("metadata", {})
             name = metadata.get("name")
             if not isinstance(name, str):
@@ -529,18 +644,20 @@ class Seen:
         }
 
 
-def watch(execution_id: str, cluster: Cluster, *, within: int) -> tuple[dict[str, Any], Seen]:
-    """Wait for one execution, watching the cluster while it runs."""
+def watch(
+    execution_id: str, backend: Cluster | Host, *, within: int
+) -> tuple[dict[str, Any], Seen]:
+    """Wait for one execution, watching what runs its pods while it runs."""
     seen = Seen()
     deadline = time.monotonic() + within
     while time.monotonic() < deadline:
-        seen.take(cluster)
+        seen.take(backend)
         status, view = call("GET", f"/api/v1/executions/{execution_id}")
         if status != 200:
             raise SystemExit(f"reading execution {execution_id}: {status} {view}")
         state = view["execution"]["state"]["state_type"]
         if state in ("completed", "failed", "cancelled", "crashed"):
-            seen.take(cluster)
+            seen.take(backend)
             return view, seen
         time.sleep(1)
     raise SystemExit(f"execution {execution_id} did not finish within {within}s")
@@ -593,10 +710,10 @@ def rows_of(home: Path, artifact: dict[str, Any]) -> Any:
 # ── the phases ───────────────────────────────────────────────────────────────
 
 
-def pod_phase(runtime: Runtime, cluster: Cluster, workflow: Workflow) -> tuple[str, Seen]:
+def pod_phase(runtime: Runtime, backend: Cluster | Host, workflow: Workflow) -> tuple[str, Seen]:
     print("· four stages, four pods")
     handle = runtime.run(workflow)
-    view, seen = watch(handle.execution_id, cluster, within=RUN_WITHIN)
+    view, seen = watch(handle.execution_id, backend, within=RUN_WITHIN)
     state = view["execution"]["state"]
     if state["state_type"] != "completed":
         raise SystemExit(f"the pod run ended {state}:\n{json.dumps(view, indent=2)[:4000]}")
@@ -609,21 +726,21 @@ def pod_phase(runtime: Runtime, cluster: Cluster, workflow: Workflow) -> tuple[s
         raise SystemExit(f"expected {len(pod_stages.STAGES)} Jobs, saw {jobs}")
     for name, step in jobs.items():
         if not name.startswith("aiwatcher-"):
-            raise SystemExit(f"Job {name} for {step} is not named from its key")
-    print(f"  ✓ {len(jobs)} Jobs, one per stage, each named from its attempt")
+            raise SystemExit(f"the pod {name} for {step} is not named from its key")
+    print(f"  ✓ {len(jobs)} pods, one per stage, each named from its attempt")
     return handle.execution_id, seen
 
 
-def direct_phase(runtime: Runtime, cluster: Cluster, workflow: Workflow) -> str:
+def direct_phase(runtime: Runtime, backend: Cluster | Host, workflow: Workflow) -> str:
     print("· the same four stages, one long-lived worker")
     handle = runtime.run(workflow)
-    view, seen = watch(handle.execution_id, cluster, within=RUN_WITHIN)
+    view, seen = watch(handle.execution_id, backend, within=RUN_WITHIN)
     state = view["execution"]["state"]
     if state["state_type"] != "completed":
         raise SystemExit(f"the direct run ended {state}:\n{json.dumps(view, indent=2)[:4000]}")
     if seen.steps(handle.execution_id):
         raise SystemExit("a step naming no template was given a pod")
-    print("  ✓ completed, and no Job was created for it")
+    print("  ✓ completed, and no pod was started for it")
     return handle.execution_id
 
 
@@ -677,14 +794,14 @@ def compare(home: Path, pods: str, direct: str) -> set[str]:
     return pod_names
 
 
-def cancel_phase(runtime: Runtime, cluster: Cluster, workflow: Workflow) -> None:
+def cancel_phase(runtime: Runtime, backend: Cluster | Host, workflow: Workflow) -> None:
     print("· a cancel reaches a running pod")
     handle = runtime.run(workflow)
     # Wait for `analyze`'s own pod, not just for any: the two stages before it
     # have to have run for the cancel to be about a pod holding work.
     seen, deadline = Seen(), time.monotonic() + RUN_WITHIN
     while time.monotonic() < deadline:
-        seen.take(cluster)
+        seen.take(backend)
         if "analyze" in seen.steps(handle.execution_id).values():
             break
         time.sleep(1)
@@ -693,7 +810,7 @@ def cancel_phase(runtime: Runtime, cluster: Cluster, workflow: Workflow) -> None
     held = {name for name, step in seen.steps(handle.execution_id).items() if step == "analyze"}
     started = time.monotonic()
     handle.cancel("a gate cancelling a running pod")
-    view, after = watch(handle.execution_id, cluster, within=CANCEL_WITHIN)
+    view, after = watch(handle.execution_id, backend, within=CANCEL_WITHIN)
     took = time.monotonic() - started
     state = view["execution"]["state"]
     if state["state_type"] != "cancelled":
@@ -703,19 +820,19 @@ def cancel_phase(runtime: Runtime, cluster: Cluster, workflow: Workflow) -> None
     # was holding is deleted.
     live = held
     while time.monotonic() < started + CANCEL_WITHIN and live:
-        live = held & {job.get("metadata", {}).get("name") for job in cluster.jobs()}
+        live = backend.alive(held)
         if live:
             time.sleep(1)
     if live:
-        raise SystemExit(f"analyze's Job outlived the cancel: {live}")
+        raise SystemExit(f"analyze's pod outlived the cancel: {live}")
     steps = {step["step_id"]: step["state"]["state_type"] for step in view["execution"]["steps"]}
     if steps.get("persist") in ("running", "completed"):
         raise SystemExit(f"a step after the cancelled one ran: {steps}")
-    print(f"  ✓ cancelled in {took:.1f}s; analyze's Job is gone and persist never started")
-    after.take(cluster)
+    print(f"  ✓ cancelled in {took:.1f}s; analyze's pod is gone and persist never started")
+    after.take(backend)
 
 
-def oom_phase(runtime: Runtime, cluster: Cluster, workflow: Workflow) -> None:
+def oom_phase(runtime: Runtime, backend: Cluster | Host, workflow: Workflow) -> None:
     """One stage over its limit fails that stage, and the budget decides next.
 
     The isolation this whole design is for. Nothing here stands in for
@@ -723,8 +840,11 @@ def oom_phase(runtime: Runtime, cluster: Cluster, workflow: Workflow) -> None:
     why, and the word in the attempt's error is the cluster's own.
     """
     print("· one stage over its memory limit")
+    if not backend.bounds_memory:
+        print("  · not asked: a process on this host has no limit to go over")
+        return
     handle = runtime.run(workflow)
-    view, seen = watch(handle.execution_id, cluster, within=RUN_WITHIN)
+    view, seen = watch(handle.execution_id, backend, within=RUN_WITHIN)
     state = view["execution"]["state"]
     if state["state_type"] != "failed":
         raise SystemExit(f"a run whose stage cannot fit ended {state}")
@@ -753,27 +873,30 @@ def oom_phase(runtime: Runtime, cluster: Cluster, workflow: Workflow) -> None:
     )
 
 
-def logs_kept(home: Path, cluster: Cluster, pods: set[str]) -> None:
+def logs_kept(home: Path, backend: Cluster | Host, pods: set[str]) -> None:
     """Every pod's own words, in the store, after the pod itself is gone.
 
-    Two halves. No Job left behind is the behavioural one: the launcher keeps a
-    log and *then* deletes the Job, so a Job that is gone is a log that was
-    stored and recorded — on the pass after the attempt ended, which is why
-    this waits rather than reading once. And the stored objects are read, each
-    pod looked for by the name it printed, because a log is named by the hash
-    of its own bytes: counting them counts *distinct* output, and seven pods
-    that printed the same thing are one object.
+    Two halves, and what the first one proves depends on the backend. Nothing
+    left running is the whole of it on this host; in a cluster it is stronger,
+    because the launcher keeps a log and *then* deletes the Job, so a Job that
+    is gone is a log that was stored and recorded. Either way it is waited for
+    rather than read once: it happens on the pass after the attempt ended.
+
+    The second half is the same on both. The stored objects are read and each
+    pod is looked for by the name it printed, because a log is named by the
+    hash of its own bytes: counting them counts *distinct* output, and seven
+    pods that printed the same thing are one object.
     """
     print("· every pod's log")
     deadline = time.monotonic() + 120
-    left: set[str | None] = set()
+    left: set[str] = set()
     while time.monotonic() < deadline:
-        left = {job.get("metadata", {}).get("name") for job in cluster.jobs()}
+        left = backend.alive()
         if not left:
             break
         time.sleep(2)
     if left:
-        raise SystemExit(f"Jobs the launcher never finished with: {left} — its log is why")
+        raise SystemExit(f"pods the launcher never finished with: {left} — its log is why")
     stored = sorted((home / ".data" / "prompts" / "artifacts" / "log").glob("*/*/data"))
     kept = [path.read_text(errors="replace") for path in stored]
     missing = {pod for pod in pods if not any(pod in text for text in kept)}
@@ -781,7 +904,8 @@ def logs_kept(home: Path, cluster: Cluster, pods: set[str]) -> None:
         raise SystemExit(f"nothing in the store holds what these pods printed: {sorted(missing)}")
     size = sum(path.stat().st_size for path in stored)
     print(
-        f"  ✓ no Job left; {len(stored)} logs stored ({size} bytes), all {len(pods)} pods in them"
+        f"  ✓ nothing left running; {len(stored)} logs stored ({size} bytes), "
+        f"all {len(pods)} pods in them"
     )
 
 
@@ -799,36 +923,54 @@ def run(*args: str, check: bool = True, cwd: Path | None = None) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--runtime",
+        choices=("pods", "process"),
+        default="pods",
+        help="what a step's pod is: a Job in the local cluster, or a process on this host",
+    )
     parser.add_argument("--namespace", default="aiwatcher-pod-e2e")
-    parser.add_argument("--api-host", default=HOST_ALIAS, help="how a pod reaches this host")
+    parser.add_argument("--api-host", default=None, help="how a pod reaches this host")
     parser.add_argument(
         "--no-build", action="store_true", help="use the image and binary that are there"
     )
     parser.add_argument("--keep", action="store_true", help="leave the namespace and the data")
     arguments = parser.parse_args()
 
-    context = current_context()
-    if not local(context):
-        raise SystemExit(
-            f"refusing to run against {context!r}: it is not a known-local cluster. "
-            "This kubeconfig has production clusters in it; switch with "
-            "`kubectl config use-context orbstack`."
-        )
-    print(f"· cluster {context}")
+    in_cluster = arguments.runtime == "pods"
+    context = ""
+    if in_cluster:
+        context = current_context()
+        if not local(context):
+            raise SystemExit(
+                f"refusing to run against {context!r}: it is not a known-local cluster. "
+                "This kubeconfig has production clusters in it; switch with "
+                "`kubectl config use-context orbstack`."
+            )
+        print(f"· cluster {context}")
+    else:
+        print("· this host, one process per attempt")
+    api_host = arguments.api_host or (HOST_ALIAS if in_cluster else "127.0.0.1")
 
     if not arguments.no_build:
-        build_server()
-        build_image()
+        build_server(arguments.runtime)
+        if in_cluster:
+            build_image()
 
     home = Path(tempfile.mkdtemp(prefix="aiwatcher-pods-"))
     server: subprocess.Popen[bytes] | None = None
-    cluster: Cluster | None = None
+    backend: Cluster | Host | None = None
     try:
-        cluster = open_namespace(kubeconfig_for(context, home), arguments.namespace)
-        print(f"· namespace {cluster.namespace}")
-        grant(cluster)
-        server, api_url = serve(home, cluster, templates_file(home), arguments.api_host)
-        reachable(cluster, api_url)
+        if in_cluster:
+            backend = open_namespace(kubeconfig_for(context, home), arguments.namespace)
+            print(f"· namespace {backend.namespace}")
+            grant(backend)
+        else:
+            backend = Host(log=home / "server.log")
+        templates = templates_file(home, arguments.runtime)
+        server, api_url = serve(home, backend, templates, api_host)
+        if isinstance(backend, Cluster):
+            reachable(backend, api_url)
 
         # 192Mi is the step's own ask, which is its request and its limit both,
         # so a `hog_mb` above it is a pod the kernel stops.
@@ -852,12 +994,12 @@ def main() -> None:
             # the pods' attempts are on. Nothing but the key-only claim rule
             # keeps it off them.
             runtime.start()
-            in_pods_id, _ = pod_phase(runtime, cluster, in_pods)
-            direct_id = direct_phase(runtime, cluster, direct)
+            in_pods_id, _ = pod_phase(runtime, backend, in_pods)
+            direct_id = direct_phase(runtime, backend, direct)
             pods = compare(home, in_pods_id, direct_id)
-            cancel_phase(runtime, cluster, holding)
-            oom_phase(runtime, cluster, hogging)
-        logs_kept(home, cluster, pods)
+            cancel_phase(runtime, backend, holding)
+            oom_phase(runtime, backend, hogging)
+        logs_kept(home, backend, pods)
     finally:
         if server is not None and server.poll() is None:
             server.terminate()
@@ -865,13 +1007,15 @@ def main() -> None:
                 server.wait(timeout=15)
             except subprocess.TimeoutExpired:
                 server.kill()
-        if cluster is not None and not arguments.keep:
-            cluster.teardown()
+        if backend is not None and not arguments.keep:
+            backend.teardown()
         if arguments.keep:
             print(f"· kept {home}")
+    where = "four pods" if in_cluster else "four processes on this host"
+    stopped = ", a stage the kernel stopped" if in_cluster else ""
     print(
-        "\n✓ four stages in four pods, the same review, a cancel that arrived, "
-        "a stage the kernel stopped, every log kept"
+        f"\n✓ four stages in {where}, the same review, a cancel that arrived"
+        f"{stopped}, every log kept"
     )
 
 
