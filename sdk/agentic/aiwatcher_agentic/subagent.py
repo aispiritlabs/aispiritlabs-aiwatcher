@@ -151,6 +151,13 @@ class Subagent[T]:
         return self._agent
 
     def run(self, task: str | Message) -> SubagentResult[T]:
+        """Run the sub-task to an answer.
+
+        A capability that answered `Ask` suspends this the same way it suspends
+        a bare agent: `ToolApprovalRequired` leaves through here, with the turn
+        lock released. Catching it to keep going would mean answering from a
+        tool result nobody produced.
+        """
         usage = RunUsage()
         turns: list[Message] = []
         tool_runs: list[ToolRun] = []

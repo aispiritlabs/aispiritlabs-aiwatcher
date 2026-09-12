@@ -7,7 +7,14 @@ from typing import Any, overload
 
 import structlog
 
-from aiwatcher_agentic.capabilities import AbstractCapability, Allow, Deny, HookContext
+from aiwatcher_agentic.capabilities import (
+    AbstractCapability,
+    Allow,
+    Ask,
+    Deny,
+    HookContext,
+    ToolApprovalRequired,
+)
 from aiwatcher_agentic.exceptions import ModelRetry, ToolValidationError
 from aiwatcher_agentic.tracer import LLMTracer, NoopLLMTracer
 from aiwatcher_agentic.workflow.trace import TraceSnapshot
@@ -38,6 +45,12 @@ class ToolRunStatus(StrEnum):
     RETRY = "retry"
     #: A capability refused the call. The tool never ran.
     DENIED = "denied"
+    #: A capability sent the call out for a decision. The tool has not run, and
+    #: no `ToolRunResult` ever carries this: execution raises
+    #: `ToolApprovalRequired` instead, because a run waiting on someone else has
+    #: nothing to hand the model. It exists so the span can say *waiting* in the
+    #: same vocabulary as the rest, rather than in a string invented on the spot.
+    AWAITING = "awaiting"
 
 
 #: How each status annotates the span: the level it reports, and the key its
@@ -47,6 +60,9 @@ _SPAN_ANNOTATION: dict[ToolRunStatus, tuple[str | None, str]] = {
     ToolRunStatus.ERROR: ("ERROR", "error"),
     ToolRunStatus.DENIED: ("ERROR", "error"),
     ToolRunStatus.RETRY: ("WARNING", "retry"),
+    # No level: a call waiting for a person has not failed, and marking it ERROR
+    # would leave the panel showing a failure for as long as the approval takes.
+    ToolRunStatus.AWAITING: (None, "awaiting"),
 }
 
 
@@ -216,7 +232,18 @@ class Toolsets(Sequence[Toolset]):
         return message if cls.is_tool_error(message) else f"Error: {message}"
 
     @staticmethod
+    def _annotate(span: SpanHandle, message: str, status: ToolRunStatus) -> None:
+        """Say on the span how this call ended, in the one vocabulary the panel reads."""
+        level, key = _SPAN_ANNOTATION[status]
+        span.update(
+            level=level,
+            output={key: message[:500]},
+            metadata={"agentic.tool_status": status.value},
+        )
+
+    @classmethod
     def _settle(
+        cls,
         span: SpanHandle,
         tool_call: ToolCall,
         output: str,
@@ -231,12 +258,7 @@ class Toolsets(Sequence[Toolset]):
         and they differ wherever the model needs the "Error: " prefix and the
         panel needs the cause without it.
         """
-        level, key = _SPAN_ANNOTATION[status]
-        span.update(
-            level=level,
-            output={key: (reason if reason is not None else output)[:500]},
-            metadata={"agentic.tool_status": status.value},
-        )
+        cls._annotate(span, reason if reason is not None else output, status)
         return ToolRunResult(
             tool_call=tool_call,
             output=output,
@@ -270,7 +292,36 @@ class Toolsets(Sequence[Toolset]):
         capability: AbstractCapability | None = None,
         hook_context: HookContext | None = None,
     ) -> ToolRunResult:
-        """Execute an already-parsed Command."""
+        """Execute an already-parsed Command.
+
+        Raises `ToolApprovalRequired` when a capability answered `Ask`: the call
+        is suspended, not finished, so there is no result to return.
+        """
+        outcome = self._execute(
+            command,
+            tool_context=tool_context,
+            tracer=tracer,
+            capability=capability,
+            hook_context=hook_context,
+        )
+        if isinstance(outcome, ToolApprovalRequired):
+            # Raised out here, once the tool's span has closed as a call that is
+            # waiting. Raised inside it, the tracer would see an exception
+            # crossing the scope and emit `tool.failed` — so every pending
+            # approval would read in the panel as a tool that broke, for as long
+            # as the approval takes. Waiting is not failing.
+            raise outcome
+        return outcome
+
+    def _execute(
+        self,
+        command: Command,
+        *,
+        tool_context: ToolContext | None = None,
+        tracer: LLMTracer | None = None,
+        capability: AbstractCapability | None = None,
+        hook_context: HookContext | None = None,
+    ) -> ToolRunResult | ToolApprovalRequired:
         resolved_tracer = tracer or NoopLLMTracer()
         if isinstance(command, ToolCallCommand):
             function_name = command.function_name
@@ -298,6 +349,9 @@ class Toolsets(Sequence[Toolset]):
                 except Exception as error:
                     capability.on_error(error, hook_context)
                     raise
+                if isinstance(decision, Ask):
+                    self._annotate(span, decision.handle, ToolRunStatus.AWAITING)
+                    return ToolApprovalRequired(function_name, params, decision)
                 if isinstance(decision, Deny):
                     return self._settle(
                         span,

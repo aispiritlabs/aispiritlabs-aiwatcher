@@ -23,9 +23,11 @@ Example::
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
+
+from aiwatcher_agentic.exceptions import AgenticError
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,10 +54,56 @@ class Deny:
     reason: str
 
 
+@dataclass(frozen=True, slots=True)
+class Ask:
+    """The decision is not ours. Suspend the run until someone else makes it.
+
+    This is the third answer because the first two both end the question here:
+    :class:`Allow` runs the tool now and :class:`Deny` hands the model a reason
+    now. An approval arrives later — minutes later, from a human, in another
+    process, after this one has exited. There is nothing to tell the model in
+    the meantime, so the call raises :class:`ToolApprovalRequired` rather than
+    returning a result, and the caller persists what it carries.
+
+    ``handle`` is the capability's own name for the pending decision — a row id,
+    an action id, whatever it will look the answer up by. ``detail`` is what a
+    person is being asked to approve when the parameters alone do not say it:
+    a rendered preview, a payload digest, a recipient.
+    """
+
+    handle: str
+    detail: Mapping[str, Any] = field(default_factory=dict)
+
+
+class ToolApprovalRequired(AgenticError):  # noqa: N818 - a suspension, not a failure
+    """Raised out of tool execution when a capability answered :class:`Ask`.
+
+    Raised rather than returned on purpose. A `ToolRunResult` is defined as
+    what the model reads next, and a suspended run has no next: `Subagent`
+    would count a pending approval as a failed tool and retry it, and a caller
+    looping on tool calls would feed the model a "waiting" string it can only
+    guess from. An exception is the one thing that stops every caller in the
+    loop without any of them agreeing to.
+
+    **Resuming is an ordinary run.** The same capability, now able to read the
+    answer its ``handle`` names, returns :class:`Allow` or :class:`Deny` and
+    execution goes down the path it always did. There is no resume entry point,
+    because a second entry point is a second state machine — which is the thing
+    this hook exists to stop the application from owning.
+    """
+
+    def __init__(self, tool_name: str, parameters: Mapping[str, Any], ask: Ask) -> None:
+        self.tool_name = tool_name
+        self.parameters = dict(parameters)
+        self.handle = ask.handle
+        self.detail = dict(ask.detail)
+        super().__init__(f"{tool_name!r} is waiting for a decision ({ask.handle}).")
+
+
 #: What `before_tool_execute` may answer. A bare ``dict`` still means
 #: :class:`Allow` with those parameters, because that is what every capability
 #: written before this returned.
-type ToolDecision = Allow | Deny | dict[str, Any]
+type ToolDecision = Allow | Deny | Ask | dict[str, Any]
 
 
 class AbstractCapability:
@@ -78,11 +126,12 @@ class AbstractCapability:
     ) -> ToolDecision:
         """Called before executing a tool.
 
-        Return :class:`Allow` (or plain parameters) to run it, or :class:`Deny`
-        to refuse it. Refusing is the point: a hook that can only rewrite
-        arguments cannot express a policy, a budget or an approval, so every
-        caller that needed one had to build the gate outside the agent and then
-        keep the two in step.
+        Return :class:`Allow` (or plain parameters) to run it, :class:`Deny`
+        to refuse it, or :class:`Ask` to suspend the run until someone outside
+        it decides. Answering something other than parameters is the point: a
+        hook that can only rewrite arguments cannot express a policy, a budget
+        or an approval, so every caller that needed one had to build the gate
+        outside the agent and then keep the two in step.
         """
         return parameters
 
@@ -129,10 +178,15 @@ class CombinedCapability(AbstractCapability):
 
         Asking them would mean running the `before` half of a middleware whose
         `after` half never comes, for a call that is not going to happen.
+
+        The first :class:`Ask` stops the chain for the same reason, and the
+        order is what decides between them: a policy that refuses outright
+        belongs before an approval gate, because there is no sense sending a
+        person a decision the run would throw away either way.
         """
         for cap in self._capabilities:
             decision = cap.before_tool_execute(tool_name, parameters, context)
-            if isinstance(decision, Deny):
+            if isinstance(decision, Deny | Ask):
                 return decision
             parameters = decision.parameters if isinstance(decision, Allow) else decision
         return parameters

@@ -525,6 +525,13 @@ class Agent:
         run_id: str | None = None,
         turn: int = 0,
     ) -> ToolRunResult | None:
+        """Run one tool the model asked for.
+
+        Raises `ToolApprovalRequired` when a capability answered `Ask`. That is
+        not a failure and not a result: the run is suspended until whoever owns
+        the decision makes it, and resuming means running again with the same
+        capability, which by then can answer `Allow` or `Deny`.
+        """
         hook_context = self.make_hook_context(run_id, turn=turn)
         return self._toolsets.run_tool(
             payload,

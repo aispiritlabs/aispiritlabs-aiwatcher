@@ -12,7 +12,14 @@ from aiwatcher_sdk.integrations.agentic import tracer as tracer_module
 from aiwatcher_sdk.integrations.agentic.tracer import current_attempt
 
 from aiwatcher_agentic.agent import Agent
-from aiwatcher_agentic.capabilities import AbstractCapability, Allow, Deny, HookContext
+from aiwatcher_agentic.capabilities import (
+    AbstractCapability,
+    Allow,
+    Ask,
+    Deny,
+    HookContext,
+    ToolApprovalRequired,
+)
 from aiwatcher_agentic.exceptions import ModelRetry, ToolValidationError
 from aiwatcher_agentic.model import TextModel
 from aiwatcher_agentic.prompts import GemmaPromptBuilder
@@ -414,3 +421,49 @@ def test_a_capability_refuses_a_call_and_the_refusal_is_a_tool_span() -> None:
     assert granted is not None and granted.success
     assert calls == ["panels site:example.org"]
     assert granted.tool_call == ("search", {"query": "panels site:example.org"})
+
+
+def test_a_call_waiting_for_a_decision_is_a_tool_span_that_did_not_fail() -> None:
+    """The pending call is visible, and it is not reported as a broken tool.
+
+    The suspension leaves as an exception, so the easy implementation raises it
+    from inside the tool's scope — and then the tracer, which turns any
+    exception crossing a scope into `tool.failed`, marks every approval anyone
+    is still waiting on as a failure. The span closes first for that reason.
+    """
+
+    class WaitForOperator(AbstractCapability):
+        def before_tool_execute(
+            self, tool_name: str, parameters: dict[str, Any], context: HookContext
+        ) -> Ask:
+            return Ask("action-7c1f", detail={"preview": "publish to oferteo.pl"})
+
+    calls: list[str] = []
+
+    def search(query: str) -> str:
+        calls.append(query)
+        return "found"
+
+    transport = RecordingTransport()
+    client = AiwatcherClient(service="test", transport=transport)
+    tracer = AiwatcherTracer(client=client)
+    agent = Agent(
+        model_provider=NoModels(),
+        prompt_builder=GemmaPromptBuilder(system_prompt="p"),
+        tools=[search],
+        capabilities=[WaitForOperator()],
+    )
+    with (
+        tracer.workflow(name="scout", session_id="session"),
+        tracer.agent(name="scout"),
+        pytest.raises(ToolApprovalRequired) as raised,
+    ):
+        agent.run_tool(("search", {"query": "panels"}), tracer=tracer)
+    client.close()
+
+    assert calls == []
+    assert raised.value.handle == "action-7c1f"
+
+    tool_events = [e for e in transport.events if e["event_type"].startswith("tool.")]
+    assert [e["event_type"] for e in tool_events] == ["tool.started", "tool.completed"]
+    assert "error" not in tool_events[1]["data"]

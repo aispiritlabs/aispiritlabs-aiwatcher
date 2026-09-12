@@ -8,6 +8,7 @@ the one step that withholds the tools so the run ends in an answer.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any
@@ -15,6 +16,12 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
+from aiwatcher_agentic.capabilities import (
+    AbstractCapability,
+    Ask,
+    HookContext,
+    ToolApprovalRequired,
+)
 from aiwatcher_agentic.model import ModelResponse
 from aiwatcher_agentic.prompts import GemmaPromptBuilder
 from aiwatcher_agentic.structured_output import PydanticOutput
@@ -69,6 +76,21 @@ class ScriptedProvider:
     @contextmanager
     def session(self, name: str = "model") -> Generator[ScriptedModel, None, None]:
         yield self._model
+
+
+def _free_from_another_thread(lock: threading.RLock) -> bool:
+    """Whether a *different* caller could take this lock right now."""
+    taken: list[bool] = []
+
+    def probe() -> None:
+        if lock.acquire(blocking=False):
+            taken.append(True)
+            lock.release()
+
+    thread = threading.Thread(target=probe)
+    thread.start()
+    thread.join()
+    return taken == [True]
 
 
 def catalog(model: ScriptedModel, **kwargs: Any) -> Subagent[Price]:
@@ -220,3 +242,35 @@ def test_the_asking_step_stops_at_the_limit_it_was_given() -> None:
 
     assert result.steps == 3
     assert [run.output for run in result.tool_runs] == ["found:a", "found:b"]
+
+
+def test_a_call_sent_out_for_a_decision_leaves_the_subagent_and_releases_its_lock() -> None:
+    """A suspension is not a failed tool, and a subagent must not treat it as one.
+
+    `SubagentToolError` says "the tool broke and no attempt is left", which
+    would be a lie here — the tool has not run and can still run once someone
+    answers. Swallowing it would be worse: the answering step would then be
+    asked to produce a price out of a tool result that does not exist.
+    """
+
+    class WaitForOperator(AbstractCapability):
+        def before_tool_execute(
+            self, tool_name: str, parameters: dict[str, Any], context: HookContext
+        ) -> Ask:
+            return Ask(f"{tool_name}:{parameters['query']}")
+
+    model = ScriptedModel('{"name":"lookup","parameters":{"query":"beton"}}', '{"price":42}')
+    subagent = catalog(model, capabilities=[WaitForOperator()])
+
+    with pytest.raises(ToolApprovalRequired) as raised:
+        subagent.run("ile kosztuje beton")
+
+    assert raised.value.handle == "lookup:beton"
+    # One request: the answering step never happened, so the script still holds
+    # the reply it would have used.
+    assert len(model.requests) == 1
+    # The turn lock is the subagent's whole claim to a coherent sub-task. Held
+    # after a suspension, the next caller would block until the process died.
+    # Probed from another thread because the lock is reentrant: this one could
+    # take it again no matter what.
+    assert _free_from_another_thread(subagent.agent.turn_lock)
