@@ -1,6 +1,6 @@
 # FTI — rekomendacja zakresu i plan rozwoju
 
-Data: 2026-09-11. Status: A1–A4 i AR1 zaimplementowane; B1 zweryfikowane, trwały wycinek B2 i atomowe orphan GC nowych publikacji dostarczone; dodano weryfikowane adaptery Curation, promptów, modeli, Annotations i Conversations; B2/AR2 pozostają otwarte: B2e–B2h, w tym judge (sekcje 9–16). Wyniki odbioru A, ograniczenia i incydent seeda w sekcji 8. Przegląd planu z 2026-09-12 jest w sekcji 17; jego wnioski są wniesione do sekcji 2–7 — etap B ma punkty 8–11 i rozstrzygnięcia wizualne, tabela paczek B2e–B2i, a B3 zależy od B2e, B2f i B2i. Sekcja 19 zmniejsza ograniczenia z sekcji 18; sekcja 20 dostarcza stronę dowodową B3 — porównanie dwóch trwałych wyników; sekcja 21 dostarcza AR3 — wspólny przypadek użycia kompilacji i startu, wyjęty z modułu HTTP; sekcja 22 domyka jego ograniczenie — rejestr definicji rozróżnia niedostępny magazyn, uszkodzony rekord i odmówioną definicję; sekcja 23 dostarcza ostatnią część B3 — różnicę na poziomie przypadków; sekcja 24 dostarcza B4 — typowane oceny, rubryki i rewizje; sekcja 25 dostarcza pierwszą paczkę C0 — scoring zapisanych odpowiedzi jako zarządzany run publikujący własny dowód; sekcja 26 zamyka ograniczenia sekcji 25 — jeden status dla niezatwierdzonej pary, scorer ilościowy z jednostką, archiwum rozmów jako źródło odpowiedzi, judge jako scorer z regułą dopuszczenia z ADR 0030 i formularz startu w panelu.
+Data: 2026-09-11. Status: A1–A4 i AR1 zaimplementowane; B1 zweryfikowane, trwały wycinek B2 i atomowe orphan GC nowych publikacji dostarczone; dodano weryfikowane adaptery Curation, promptów, modeli, Annotations i Conversations; B2/AR2 pozostają otwarte: B2e–B2h, w tym judge (sekcje 9–16). Wyniki odbioru A, ograniczenia i incydent seeda w sekcji 8. Przegląd planu z 2026-09-12 jest w sekcji 17; jego wnioski są wniesione do sekcji 2–7 — etap B ma punkty 8–11 i rozstrzygnięcia wizualne, tabela paczek B2e–B2i, a B3 zależy od B2e, B2f i B2i. Sekcja 19 zmniejsza ograniczenia z sekcji 18; sekcja 20 dostarcza stronę dowodową B3 — porównanie dwóch trwałych wyników; sekcja 21 dostarcza AR3 — wspólny przypadek użycia kompilacji i startu, wyjęty z modułu HTTP; sekcja 22 domyka jego ograniczenie — rejestr definicji rozróżnia niedostępny magazyn, uszkodzony rekord i odmówioną definicję; sekcja 23 dostarcza ostatnią część B3 — różnicę na poziomie przypadków; sekcja 24 dostarcza B4 — typowane oceny, rubryki i rewizje; sekcja 25 dostarcza pierwszą paczkę C0 — scoring zapisanych odpowiedzi jako zarządzany run publikujący własny dowód; sekcja 26 zamyka ograniczenia sekcji 25 — jeden status dla niezatwierdzonej pary, scorer ilościowy z jednostką, archiwum rozmów jako źródło odpowiedzi, judge jako scorer z regułą dopuszczenia z ADR 0030 i formularz startu w panelu. Sekcja 27 poprawia ograniczenia sekcji 26 — ponowienie próby judge'a nie pyta drugi raz i nie kończy się konfliktem, wynik mówi, co obsłużył dostawca, judge widzi pytanie przypadku, próg poziomu z przedziałem zgodności, a panel śledzi uruchomiony run.
 
 Podstawa: [katalog funkcji](FTI_FEATURE_CATALOG.md), [analiza braków](FTI_FEATURE_GAPS.md), [plan UX](FTI_UX_WANDB_PLAN.md), [przegląd dokumentacji Langfuse i MLflow](FTI_LANGFUSE_MLFLOW_ANALYSIS.md), [ocena architektury](FTI_ARCHITECTURE_REVIEW.md) oraz aktualny kod. Ocena dotyczy obecności i kontraktów implementacji; nie potwierdza działania konkretnego wdrożenia. Katalog opisuje zakres docelowy, więc liczba jego pozycji nie jest miarą ukończenia produktu.
 
@@ -1732,5 +1732,146 @@ Po odbiorze nic nie nasłuchuje na 8080, 18080, 19085, 19086 ani 5182.
 - **Panel**: kohorta i wariant pochodzą wyłącznie z opublikowanego wyniku; karty i
   rubryki dalej tylko przez API; lista wyników nie odświeża się sama w trakcie runu
   (odświeża ją „Open the result").
+- Dalej otwarte na AW-6: **C1** — szablon `generate_and_score`; z B3 — kontekst
+  wariantu w obserwacjach.
+
+## 27. Poprawki ograniczeń sekcji 26
+
+Przegląd listy „Co zostaje" z 26.7 w kodzie: co da się poprawić bez nowej decyzji,
+co jest decyzją, a co należy do C1. Pięć paczek, każda osobnym commitem: `063b567`
+(zapamiętane odpowiedzi judge'a), `704d776` (co obsłużył dostawca), `0f182b6`
+(judge widzi wejście przypadku), `affb020` (próg poziomu i przedział zgodności),
+`5ada6cc` (panel śledzi uruchomiony run). Reguły są w
+[ADR 0030](ADR/ADR_0030_EVALUATION_EVIDENCE.md), poprawka „what a judge is shown,
+what it said, and what that proves", i w Guardrails `CLAUDE.md`. Żadna karta,
+kontekst ani deklaracja sprzed tych zmian nie zmienia adresu, a `SCORING_VERSION`
+zostaje `1`: nowe pola są opcjonalne w karcie albo dopisane do raportu.
+
+### 27.1 Ponowienie próby judge'a nie pyta drugi raz — i nie kończy się konfliktem
+
+26.7 opisywało to jako koszt: ponowiona próba pyta od nowa o wszystko. Przegląd
+kodu pokazał, że to także błąd poprawności. Próba, która opublikowała wynik i
+straciła rozliczenie (awaria między publikacją a raportem do reaktora), wracała,
+pytała model ponownie, dostawała inne odpowiedzi, fold dawał inne bajty — a
+pierwsza publikacja tego ID odmawiała jej jako `Conflict`, mapowanego na
+`user_code`. Run kończył się porażką obok wyniku, który sam opublikował.
+
+Teraz każda odpowiedź jest zapisywana przed użyciem pod
+`evaluation-judges/replies/{deklaracja}/{skrót pytania}.json` (skrót z całego
+wywołania, wygrywa pierwszy zapis), a wykonawca pyta przez `Remembering`, które
+najpierw czyta zapis. Próba po awarii pyta tylko o to, na co nikt nie odpowiedział;
+próba po publikacji składa te same bajty i trafia w istniejący wynik. Zapisy żyją
+jak nagranie i deklaracja — bez retencji. Test integracyjny bez tej zmiany upada.
+
+### 27.2 Co obsłużył dostawca
+
+Rewizja modelu dalej jest deklaracją autora, bo nic jej nie sprawdzi. Każda
+odpowiedź zachowuje jednak słowa dostawcy — pole `model` i `system_fingerprint`
+odpowiedzi — a raport liczy je w `served` (w stałej kolejności, bo raport jest
+częścią adresu wyniku). Nic nie jest porównywane z deklaracją: dostawca nazywa model
+aliasem, plikiem albo datowanym snapshotem, więc odmowa po pisowni odmawiałaby
+uczciwym. Dwa wiersze mówią, że odpowiedzi runu przyszły z dwóch backendów. Panel
+pokazuje to w nocie judge'a.
+
+### 27.3 Judge widzi pytanie
+
+Scorer `judge` może wskazać `input_path` — JSON Pointer w wejście przypadku (pusty
+to całe wejście). Wejście idzie przed odpowiedzią. Adapter źródła oddaje wejścia
+obok oczekiwań (`SourceEvidence::inputs`: lokalne źródło z `cases.json`, adnotacje
+z obrazu, rozmowy — nic), a do shardów wyniku nie trafiają. Pozycja kalibracyjna
+dostaje wejście ze źródła swojego wyniku, rozwiązywanego tylko wtedy, gdy karta
+czegoś pokazuje. Przypadek bez wejścia pod ścieżką upada z nazwą ścieżki; pozycja
+kalibracyjna bez niego nie jest zadawana i liczy się przeciw zgodności, tak jak
+odmowa odpowiedzi. Karta bez `input_path` wysyła dokładnie to, co wcześniej.
+
+### 27.4 Próg poziomu i przedział zgodności
+
+Na rubryce z poziomami karta może wskazać `pass_level`: metryka to odsetek
+przypadków na tym poziomie albo po lepszej stronie według kierunku rubryki (`rate`,
+`ratio`), zamiast średniej pozycji zakładającej równe odstępy. Odpowiedź judge'a i
+ocena człowieka przechodzą przez to samo odwzorowanie, więc zgodność dotyczy
+liczby, którą wynik publikuje — judge i człowiek różniący się o poziom, obaj ponad
+progiem, są zgodni. Próg na fladze, liczbie, nieznanym poziomie albo rubryce bez
+kierunku jest odmawiany przy publikacji karty.
+
+Progu liczności zbioru kalibracyjnego nadal nie ma i nie powinno go wymyślać to
+repozytorium. Zgodność niesie za to 95% przedział Wilsona (`agreement_interval`):
+3 z 3 to 100% z dolną granicą 44%, 100 ze 100 — powyżej 96%. Panel pokazuje
+przedział obok odsetka.
+
+### 27.5 Panel śledzi run
+
+Formularz Measure pokazuje uruchomiony run wspólną kartą `ManagedRunCard` —
+stan, krok, próby i komendy, na które pozwala serwer — i odświeża katalog wyników
+przy każdej zmianie runu, bez listy stanów końcowych w TypeScripcie. Run, którego
+już nie ma, można zapomnieć z URL. Opis tego, co judge zobaczy z pytania, jest w
+sekcji Judge formularza.
+
+### 27.6 Odbiór
+
+`rtk just check` 23/23 po `5ada6cc`, czyli po wszystkich pięciu paczkach. Nowe
+testy:
+
+- 1 integracyjny przy zapamiętanych odpowiedziach — bez tej zmiany upada;
+- 2 jednostkowe przy `served` i nazwie dostawcy, plus asercja w istniejącym teście
+  integracyjnym;
+- 1 jednostkowy przy `input_path`, 2 integracyjne (pytanie pokazane; brak wejścia
+  pod ścieżką), asercje w teście promptu judge'a i w teście lokalnego źródła;
+- 3 jednostkowe (próg w definicji metryki, przedział Wilsona, odwzorowanie progu
+  dla obu kierunków) i 1 integracyjny (próg z kalibracją na poziomach);
+- 2 w panelu: wybór wejścia w formularzu i śledzenie runu — ten drugi bez
+  odświeżania katalogu upada. Nota judge'a ma asercje na `served` i przedział.
+
+Odbiór na żywo na `127.0.0.1:19085` z własnym katalogiem danych i `llama-server`
+z `gemma-4-e2b` (Q4, `--alias gemma-4-e2b`) na `127.0.0.1:19086`, po odbiorze
+zatrzymane po PID i usunięte:
+
+- dwie rubryki: „correct" (flaga) i „quality" (`wrong`, `partial`, `right`);
+  wcześniejszy wynik z odpowiedziami **bez pytań** (`Warsaw`, `5`, `Blue`),
+  6 ocen ludzi, zbiór kalibracyjny z 6 pozycjami;
+- karta z dwoma judge'ami, oba z `input_path: /question`, drugi z
+  `pass_level: partial`; próg na fladze → 400 z nazwą pola;
+- kandydat (`Kraków`, `4`, pusty tekst) → krok `judge_evaluation`, 3,6 s,
+  12 pytań; dowód `complete`, `correct = good_enough = 0,67` — model ocenił
+  pusty tekst jako poprawną odpowiedź na „Return an empty string.", czego bez
+  pytania nie miałby z czego wywnioskować;
+- zgodność z ludźmi 3/3 dla obu metryk, przedział 44–100%; `served`:
+  `gemma-4-e2b`, `b10809-5266f24da`, 12 odpowiedzi; 12 zapamiętanych odpowiedzi
+  pod deklaracją;
+- awaria dostawcy: `llama-server` zatrzymany, start drugiego runu → próba 1
+  `Transient`, krok `AwaitingRetry`; po ponownym starcie modelu próba 2
+  opublikowała te same liczby i te same 12 odpowiedzi;
+- panel na `:5182`: karta runu w formularzu (completed, `judge_evaluation`,
+  attempt 2), nota judge'a z przedziałem i z tym, co obsłużył dostawca, oraz w
+  sekcji Judge: „correct sees the case's input at /question".
+
+**Znalezisko przy okazji, niezmienione.** Pierwsza wersja skryptu awarii
+przestage'owała `manifest.json` drugiej deklaracji pod już zatwierdzoną parą.
+Manifest różni się tylko `origin`, ale skrót bundle'a obejmuje jego bajty: para
+przestała się czytać (403 także dla już opublikowanego wyniku), ponowne
+zatwierdzenie odmówiło z mylącym „evaluation ID already belongs to a different
+result", a run po awarii upadł przy publikacji. Przywrócenie pierwotnych bajtów
+przywróciło odczyt. To reguła z B2 („bajty, które przyjdą po zatwierdzeniu,
+zatrzymują parę") i panel na nią nie trafia, bo dla dopuszczonej pary nie
+proponuje stage'owania — ale przez API łatwo w nią wejść.
+
+### 27.7 Co zostaje
+
+- **Rewizja modelu dalej nie jest sprawdzana.** `served` to słowa dostawcy, nie
+  dowód: llama.cpp zwraca alias podany operatorowi w `--alias`, a hosted API —
+  datowany snapshot.
+- **Judge nad archiwum jest dalej odmawiany.** Dopuszczenie judge'a działającego w
+  granicy wdrożenia (np. llama.cpp w klastrze) byłoby deklaracją operatora, której
+  kod nie sprawdzi; to decyzja do ADR 0021 i 0030, nie poprawka.
+- **Archiwum jako odpowiedzi to dalej odpowiedzi korpusu kohorty.** Zmierzenie
+  nowej wersji aplikacji na tych samych turach to generowanie odpowiedzi — C1.
+- **Zapamiętane odpowiedzi nie mają retencji**, tak jak nagrania i deklaracje.
+- **Pozycja kalibracyjna bez wejścia liczy się przeciw zgodności**, a nie jest
+  odmawiana przy deklaracji — nic nie wie o wejściach przed rozwiązaniem źródła.
+- **Próg jest tylko dla poziomów**; dla skali liczbowej zostaje średnia.
+- **Bundle pod zatwierdzeniem obejmuje `origin` manifestu** (27.6), a odmowa
+  ponownego zatwierdzenia ma komunikat konfliktu ID.
+- **Panel**: karty i rubryki dalej tylko przez API; kohorta i wariant tylko z
+  opublikowanego wyniku — plik przypadków i schematy są w bundle'u operatora.
 - Dalej otwarte na AW-6: **C1** — szablon `generate_and_score`; z B3 — kontekst
   wariantu w obserwacjach.

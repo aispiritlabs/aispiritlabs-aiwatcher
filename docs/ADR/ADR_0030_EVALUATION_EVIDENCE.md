@@ -2,8 +2,8 @@
 
 - **Status**: accepted; B1 contract and B2 persistence implemented, amended
   2026-09-12 with approvals as a resource, the read/verify split, restore, and
-  the admission rule a judge will need, and the adapter for a judge this
-  deployment asks
+  the admission rule a judge will need, the adapter for a judge this
+  deployment asks, and what that judge is shown and keeps
 - **Date**: 2026-09-11
 
 ## Context
@@ -825,3 +825,42 @@ agreement.
 A scorer measuring a quantity arrived too: `absolute_error`, a mean distance
 whose unit is the author's one word about its metric — the scorer sees two
 numbers and never what they count — while its direction stays derived.
+
+## Amendment (2026-09-12, later): what a judge is shown, what it said, and what that proves
+
+Four of the judge's stated limits, taken back up. Each is opt-in for a card or
+additive for a report, so no card, context or declaration written before it
+changes its address, and `SCORING_VERSION` stays `1`.
+
+**A reply is kept before it is used.** The amendment above said a retried attempt
+asks every question again, and called that a cost. It was also a defect: an
+attempt whose settlement was lost after it published re-asked, the model
+answered differently, the fold wrote different bytes, and the first publication
+of that ID refused the attempt as a conflict — a failed run beside the result it
+had published. Every reply is now kept under the declaration and the digest of
+the exact question, first write winning, and the fold reads the kept one. An
+attempt after an outage asks only what nobody answered; an attempt after a
+publication lands on it.
+
+**What served a reply is recorded, and compared with nothing.** The declared
+model and revision stay the author's word. Each reply keeps the provider's own
+`model` and `system_fingerprint`, and the report counts them into `served`. A
+provider names a model by alias, file or dated snapshot, so refusing on a
+mismatch would refuse the honest ones; two rows are what says the run's answers
+came from two backends.
+
+**A judge may be shown what the case asked.** A judge scorer may name
+`input_path`, a pointer into the case's input, which is sent before the answer.
+The source adapter hands inputs over beside expectations and never into a
+shard, and a calibration item's comes from its own result's source. A case
+without the input fails naming the path; a calibration item without it counts
+against the agreement, under the same over-every-item rule as a declined one.
+
+**A level to reach, and how little a small set proves.** On named levels a card
+may name `pass_level`: the metric is the fraction at that level or on the
+rubric's better side of it — a rate, which ordered levels support — instead of a
+mean of positions, which assumes even spacing. The judge's reply and the
+person's judgement go through that one mapping, so agreement is about the
+number the result publishes. No floor decides how many calibration items are
+enough; the agreement carries its 95% Wilson interval instead, so three of three
+reads as 100% reaching down to 44%.

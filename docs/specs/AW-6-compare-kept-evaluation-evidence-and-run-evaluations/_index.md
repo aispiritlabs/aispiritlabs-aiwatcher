@@ -138,3 +138,16 @@ The comparison itself followed in section 20.
   `reproducible: false`, claimed in the work role. Live against gemma-4-e2b the
   judge answered `"false"` in quotes until every call carried the scale as a JSON
   Schema. And the panel starts a measurement, deriving nothing
+- 2026-09-12 — section 26's limits reworked (plan section 27), five packages.
+  Reading the judge's retry path found a defect behind the stated cost: an
+  attempt that published and lost its settlement re-asked the model, folded
+  different bytes and met its own publication as a conflict. Replies are now
+  kept per declaration and question. A result says what the provider said
+  served it; a judge may be shown the case's question (`input_path`); on named
+  levels a card may count the answers that reached one (`pass_level`), and
+  agreement carries its 95% Wilson interval. The panel follows the run it
+  started. Live against gemma-4-e2b the judge, shown the questions, marked an
+  empty answer to "Return an empty string." correct; an outage retried and
+  published the same numbers. Found and left: re-staging a second
+  declaration's manifest under an admitted pair changes the bundle digest and
+  hides the pair's results
