@@ -29,7 +29,7 @@ import { useRoleDecision } from '@/shared/lib/auth';
 import { ApiFailure, answerOf } from '@/shared/lib/result';
 import { cn, formatTime, pinchId } from '@/shared/lib/utils';
 
-import { Comparison } from './comparison';
+import { type CaseFilterChoice, Comparison } from './comparison';
 
 const EVIDENCE_PAGE = 50;
 
@@ -233,11 +233,15 @@ export function EvidencePane({
   gaps,
   baseline,
   onCompare,
+  cases,
+  onCases,
 }: {
   evaluationId: string;
   gaps?: RetentionReport | undefined;
   baseline: string | undefined;
   onCompare: (baseline: string | undefined) => void;
+  cases: CaseFilterChoice | undefined;
+  onCases: (cases: CaseFilterChoice | undefined) => void;
 }) {
   const evidence = useQuery({
     queryKey: ['evaluation-evidence', evaluationId],
@@ -271,7 +275,14 @@ export function EvidencePane({
     );
   }
   return (
-    <Evidence evidence={evidence.data} gaps={gaps} baseline={baseline} onCompare={onCompare} />
+    <Evidence
+      evidence={evidence.data}
+      gaps={gaps}
+      baseline={baseline}
+      onCompare={onCompare}
+      cases={cases}
+      onCases={onCases}
+    />
   );
 }
 
@@ -280,11 +291,15 @@ export function Evidence({
   gaps,
   baseline,
   onCompare,
+  cases,
+  onCases,
 }: {
   evidence: DurableEvaluation;
   gaps?: RetentionReport | undefined;
   baseline?: string | undefined;
   onCompare?: ((baseline: string | undefined) => void) | undefined;
+  cases?: CaseFilterChoice | undefined;
+  onCases?: ((cases: CaseFilterChoice | undefined) => void) | undefined;
 }) {
   const { receipt, state, manifest, counts } = evidence;
   return (
@@ -355,7 +370,13 @@ export function Evidence({
           somebody came for, and a pane that simply stopped offering it would
           look like a screen that had never had the feature. */}
       {onCompare ? (
-        <Comparison evidence={evidence} baseline={baseline} onSelect={onCompare} />
+        <Comparison
+          evidence={evidence}
+          baseline={baseline}
+          onSelect={onCompare}
+          cases={cases}
+          onCases={onCases}
+        />
       ) : null}
 
       {readable(state) ? (

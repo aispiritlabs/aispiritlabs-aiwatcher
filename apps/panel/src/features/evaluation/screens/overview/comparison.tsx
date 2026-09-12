@@ -13,21 +13,39 @@
  * of the candidates is the baseline is somebody's decision rather than a
  * default they might not notice.
  */
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 
-import { compareResults, listResults } from '@/api/generated/sdk.gen';
+import { compareCases, compareResults, listResults } from '@/api/generated/sdk.gen';
 import type {
+  CaseChange,
   DurableEvaluation,
+  EvidenceCaseDelta,
   EvidenceComparison,
   EvidenceMetricDelta,
 } from '@/api/generated/types.gen';
-import { Card, EmptyState, IdChip, Spinner } from '@/shared/components/ui/primitives';
+import { Badge, Card, EmptyState, IdChip, Spinner } from '@/shared/components/ui/primitives';
 import { answerOf } from '@/shared/lib/result';
 import { cn, pinchId } from '@/shared/lib/utils';
 
 import { ComparabilityControl } from './comparability';
 
 const CANDIDATES = 50;
+const DIFF_PAGE = 100;
+
+/**
+ * What the URL holds, which is one value more than the server's filter.
+ *
+ * Absent means the diff is closed, so "open it and filter nothing out" needs a
+ * word of its own — `all`, which sends no `only` at all.
+ */
+export type CaseFilterChoice = 'worse' | 'better' | 'changed' | 'all';
+
+const CHOICES: { value: CaseFilterChoice; label: string }[] = [
+  { value: 'worse', label: 'Lost something' },
+  { value: 'better', label: 'Gained something' },
+  { value: 'changed', label: 'Moved at all' },
+  { value: 'all', label: 'Every case' },
+];
 
 function nameOf(evidence: DurableEvaluation): string {
   return evidence.manifest?.variant.experiment_id ?? evidence.receipt.evaluation_id;
@@ -37,10 +55,14 @@ export function Comparison({
   evidence,
   baseline,
   onSelect,
+  cases,
+  onCases,
 }: {
   evidence: DurableEvaluation;
   baseline: string | undefined;
   onSelect: (baseline: string | undefined) => void;
+  cases?: CaseFilterChoice | undefined;
+  onCases?: ((cases: CaseFilterChoice | undefined) => void) | undefined;
 }) {
   const candidates = useQuery({
     queryKey: ['evaluation-comparable', evidence.receipt.context_id],
@@ -85,14 +107,19 @@ export function Comparison({
         </label>
       </div>
       {baseline ? (
-        <Comparand id={evidence.receipt.evaluation_id} baseline={baseline} />
+        <Comparand
+          id={evidence.receipt.evaluation_id}
+          baseline={baseline}
+          cases={cases}
+          onCases={onCases}
+        />
       ) : candidates.isLoading ? (
         <Spinner />
       ) : offered.length === 0 ? (
         <p className="mt-2 text-muted-foreground">
           Nothing else has been published under this pinned context. A comparison needs a second
-          result measured the same way — the same cases, split, suite, scorer and metric
-          definitions — which is what the context ID above is the address of.
+          result measured the same way — the same cases, split, suite, scorer and metric definitions
+          — which is what the context ID above is the address of.
         </p>
       ) : (
         <p className="mt-2 text-muted-foreground">
@@ -104,7 +131,17 @@ export function Comparison({
   );
 }
 
-function Comparand({ id, baseline }: { id: string; baseline: string }) {
+function Comparand({
+  id,
+  baseline,
+  cases,
+  onCases,
+}: {
+  id: string;
+  baseline: string;
+  cases?: CaseFilterChoice | undefined;
+  onCases?: ((cases: CaseFilterChoice | undefined) => void) | undefined;
+}) {
   const comparison = useQuery({
     queryKey: ['evaluation-comparison', id, baseline],
     queryFn: async () =>
@@ -123,10 +160,18 @@ function Comparand({ id, baseline }: { id: string; baseline: string }) {
       />
     );
   }
-  return <Verdict comparison={comparison.data} />;
+  return <Verdict comparison={comparison.data} cases={cases} onCases={onCases} />;
 }
 
-function Verdict({ comparison }: { comparison: EvidenceComparison }) {
+function Verdict({
+  comparison,
+  cases,
+  onCases,
+}: {
+  comparison: EvidenceComparison;
+  cases?: CaseFilterChoice | undefined;
+  onCases?: ((cases: CaseFilterChoice | undefined) => void) | undefined;
+}) {
   return (
     <div className="mt-2 flex flex-col gap-2">
       <ComparabilityControl value={comparison.comparability} />
@@ -159,11 +204,221 @@ function Verdict({ comparison }: { comparison: EvidenceComparison }) {
       ) : null}
       <Deltas metrics={comparison.metrics} />
       {/* Stated rather than left to be discovered: the two headers are what a
-          comparison costs, and the cases behind them are two full reads. */}
+          comparison costs, and the cases behind them are two full reads —
+          which is why the next section is opened rather than fetched. */}
       <p className="text-muted-foreground">
-        Metrics come from each result's own header. Which cases regressed is a read of both results
-        in full and is not on this screen.
+        Metrics come from each result's own header, whatever number of cases is behind them.
       </p>
+      {onCases && comparison.comparability !== 'incompatible' ? (
+        <CaseDiff
+          id={comparison.current.receipt.evaluation_id}
+          baseline={comparison.baseline.receipt.evaluation_id}
+          only={cases}
+          onSelect={onCases}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Which cases moved, behind a click.
+ *
+ * The comparison above reads two headers and costs what two summaries cost;
+ * this reads both results in full, so it is not fetched because somebody opened
+ * a result — it is fetched because they asked. The filter is the server's and
+ * lives in the URL, so a link to "the cases that lost something" lands the next
+ * reader on the same question rather than on a screen they have to redrive.
+ *
+ * Nothing is classified here. Whether a case regressed is a question about the
+ * directions the pinned context declared, answered where those declarations
+ * are; a browser deciding it from the sign of a delta would be guessing at
+ * exactly the thing the context exists to state.
+ */
+function CaseDiff({
+  id,
+  baseline,
+  only,
+  onSelect,
+}: {
+  id: string;
+  baseline: string;
+  only: CaseFilterChoice | undefined;
+  onSelect: (only: CaseFilterChoice | undefined) => void;
+}) {
+  return (
+    <div className="mt-1 border-t border-border/60 pt-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-medium">Which cases moved</span>
+        {CHOICES.map((choice) => (
+          <button
+            key={choice.value}
+            type="button"
+            className={cn(
+              'rounded-full border px-2 py-0.5',
+              only === choice.value
+                ? 'border-primary bg-primary/10 text-primary'
+                : 'border-border text-muted-foreground',
+            )}
+            onClick={() => onSelect(only === choice.value ? undefined : choice.value)}
+          >
+            {choice.label}
+          </button>
+        ))}
+      </div>
+      {only === undefined ? (
+        <p className="mt-2 text-muted-foreground">
+          Reads both results in full, a page at a time. Everything above is two headers.
+        </p>
+      ) : (
+        <MovedCases id={id} baseline={baseline} only={only} />
+      )}
+    </div>
+  );
+}
+
+function MovedCases({
+  id,
+  baseline,
+  only,
+}: {
+  id: string;
+  baseline: string;
+  only: CaseFilterChoice;
+}) {
+  const diff = useInfiniteQuery({
+    queryKey: ['evaluation-case-diff', id, baseline, only],
+    initialPageParam: undefined as string | undefined,
+    queryFn: async ({ pageParam }) =>
+      answerOf(
+        await compareCases({
+          path: { evaluation_id: id },
+          query: {
+            baseline,
+            cursor: pageParam,
+            limit: DIFF_PAGE,
+            ...(only === 'all' ? {} : { only }),
+          },
+        }),
+        'could not read which cases moved',
+      ),
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
+    retry: false,
+  });
+
+  if (diff.isLoading) return <Spinner />;
+  const pages = diff.data?.pages ?? [];
+  const rows = pages.flatMap((page) => page.cases);
+  const damaged = pages.find((page) => page.state !== 'complete' && page.state !== 'partial');
+  if (pages.length === 0) {
+    return (
+      <EmptyState
+        title="These cases could not be read"
+        hint="One of the two results is no longer in the catalogue."
+      />
+    );
+  }
+  return (
+    <div className="mt-2 flex flex-col gap-2">
+      {damaged ? (
+        <p className="text-danger">
+          The evidence behind this page is {damaged.state.replace(/_/g, ' ')}, so no rows are shown
+          rather than some of them.
+        </p>
+      ) : null}
+      {rows.length === 0 ? (
+        <p className="text-muted-foreground">
+          No case matched on the pages read so far
+          {diff.hasNextPage ? ', and there are more to read' : ''}.
+        </p>
+      ) : (
+        <table className="w-full">
+          <thead className="text-muted-foreground">
+            <tr>
+              <th className="text-left font-normal">Case</th>
+              <th className="text-left font-normal">Change</th>
+              <th className="text-left font-normal">Metrics</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.case_id} className="border-t border-border/40 align-top">
+                <td className="py-1 pr-2 font-mono">{row.case_id}</td>
+                <td className="py-1 pr-2">
+                  <ChangeBadge change={row.change} />
+                </td>
+                <td className="py-1">
+                  <CaseMetrics row={row} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {/* A page of a narrowed diff ends at the rows asked for or at the cases
+          it was allowed to walk, so "more" here means more cases rather than
+          more matches — the same promise the catalogue narrowed by context
+          makes, for the same reason. */}
+      {diff.hasNextPage ? (
+        <button
+          type="button"
+          className="self-start text-primary underline"
+          onClick={() => void diff.fetchNextPage()}
+          disabled={diff.isFetchingNextPage}
+        >
+          {diff.isFetchingNextPage ? 'reading…' : 'read further into both results'}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+const CHANGES: Record<
+  CaseChange,
+  { label: string; tone: 'danger' | 'success' | 'warning' | 'neutral' }
+> = {
+  regressed: { label: 'regressed', tone: 'danger' },
+  improved: { label: 'improved', tone: 'success' },
+  mixed: { label: 'mixed', tone: 'warning' },
+  unchanged: { label: 'unchanged', tone: 'neutral' },
+  unmeasured: { label: 'unmeasured', tone: 'neutral' },
+};
+
+function ChangeBadge({ change }: { change: CaseChange }) {
+  const shown = CHANGES[change];
+  return <Badge tone={shown.tone}>{shown.label}</Badge>;
+}
+
+/**
+ * One case's numbers, and the sentence a number cannot carry.
+ *
+ * A case that failed reports no score at all, so its row has one side of a
+ * metric and no delta — which is the movement worth reading, and the reason the
+ * error is shown beside the numbers rather than instead of them.
+ */
+function CaseMetrics({ row }: { row: EvidenceCaseDelta }) {
+  const failed = row.current?.error;
+  const was = row.baseline?.error;
+  return (
+    <div className="flex flex-col gap-0.5">
+      {row.metrics.map((metric) => (
+        <div key={metric.name} className="tabular-nums">
+          <span className="text-muted-foreground">{metric.name}</span> {number(metric.current)}{' '}
+          <span className="text-muted-foreground">was</span> {number(metric.baseline)}{' '}
+          <span className={tone(metric)}>
+            {metric.delta === undefined || metric.delta === null
+              ? ''
+              : `${metric.delta > 0 ? '+' : ''}${metric.delta.toFixed(4)}`}
+          </span>
+        </div>
+      ))}
+      {failed ? <p className="text-danger">{failed}</p> : null}
+      {was && !failed ? <p className="text-muted-foreground">previously: {was}</p> : null}
+      {row.change === 'unmeasured' ? (
+        <p className="text-muted-foreground">
+          {row.current ? 'the baseline' : 'this result'} never measured this case
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -194,9 +449,7 @@ function Deltas({ metrics }: { metrics: EvidenceMetricDelta[] }) {
           <tr key={metric.name}>
             <td className="truncate">
               {metric.name}
-              {metric.unit ? (
-                <span className="text-muted-foreground"> ({metric.unit})</span>
-              ) : null}
+              {metric.unit ? <span className="text-muted-foreground"> ({metric.unit})</span> : null}
             </td>
             <td className="text-right tabular-nums">{number(metric.current)}</td>
             <td className="text-right tabular-nums">{number(metric.baseline)}</td>

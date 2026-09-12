@@ -4762,6 +4762,107 @@
         }
       }
     },
+    "/api/v1/evaluation-results/{evaluation_id}/comparison/cases": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Which cases moved between one published result and another named one.",
+        "description": "The comparison beside this one reads two headers; this reads both results,\nso it pages, it is narrowed here rather than in the browser, and one\nrequest walks a bounded number of cases. The verdict rides along, so a pair\nthis server will not subtract is refused in the same sentence the header\ncomparison uses rather than as an empty list — and an unverified pair keeps\nits rows, because the cases that failed are what somebody opens this for.",
+        "operationId": "compare_cases",
+        "parameters": [
+          {
+            "name": "evaluation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "baseline",
+            "in": "query",
+            "description": "Explicit. A baseline nobody chose is a baseline nobody checked.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Both sides' offsets and both versions. A page of a narrowed diff ends\nat the rows asked for or at the cases it was allowed to walk, so this\npromises another case rather than another match.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          },
+          {
+            "name": "only",
+            "in": "query",
+            "description": "The question being asked, not the verdict a case was given: `worse` is\nwhat a release gate reads and includes the cases that lost something\nand gained something else.",
+            "required": false,
+            "schema": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/components/schemas/CaseFilter"
+                }
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaseDiffPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/evaluation-suites": {
       "get": {
         "tags": [
@@ -11197,6 +11298,17 @@
         },
         "additionalProperties": false
       },
+      "CaseChange": {
+        "type": "string",
+        "description": "What one case did between two comparable results.\n\nFive words rather than the two lists the folded half keeps, because the\nevidence underneath is not the same. There a producer sent `passed` per\ncase and a regression is that boolean flipping; here a case carries the\ndeclared metrics and the pinned context declares which way each of them is\nbetter. So a case can lose accuracy and gain latency at once — the state a\nsingle verdict would have to hide, and the one most worth arguing about\nbefore a release.",
+        "enum": [
+          "regressed",
+          "improved",
+          "mixed",
+          "unchanged",
+          "unmeasured"
+        ]
+      },
       "CaseDelta": {
         "type": "object",
         "required": [
@@ -11221,6 +11333,53 @@
             "format": "double"
           }
         }
+      },
+      "CaseDiffPage": {
+        "type": "object",
+        "description": "One page of the diff, with the verdict that decided there was one.",
+        "required": [
+          "comparability",
+          "reasons",
+          "cases",
+          "state"
+        ],
+        "properties": {
+          "cases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EvidenceCaseDelta"
+            }
+          },
+          "comparability": {
+            "$ref": "#/components/schemas/Comparability",
+            "description": "The same answer `GET .../comparison` gives, because it is the same\nquestion: rows are produced only where the two may be subtracted, and a\ndiff over a pair the server has just refused to subtract would be the\nsecond answer to it."
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Another *case*, not another match: a filtered page stops at the rows it\nwas asked for or the cases it was allowed to walk, whichever comes\nfirst. The catalogue narrowed by context already has this property, and\nfor the same reason — the order belongs to the cases, not to the filter."
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "state": {
+            "$ref": "#/components/schemas/EvidenceState"
+          }
+        }
+      },
+      "CaseFilter": {
+        "type": "string",
+        "description": "Which cases to keep, as the *question* a reader is asking rather than as\nthe verdict a case was given.\n\n`worse` is what a release gate reads, and it includes `mixed` deliberately:\na gate that hid the cases which lost something *and* gained something would\nhide the ones somebody has to decide about.",
+        "enum": [
+          "worse",
+          "better",
+          "changed"
+        ]
       },
       "CaseMeasurement": {
         "type": "object",
@@ -11268,6 +11427,31 @@
           }
         },
         "additionalProperties": false
+      },
+      "CaseOutcome": {
+        "type": "object",
+        "description": "What one side recorded for a case.\n\nIts *answer* is not here. A diff is read to find which cases moved, and the\ncase page beside it is where what a case said is read — carrying both\nresponses here would make the one route that already has to walk both\nresults carry both of their contents as well.",
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Present where the case was attempted and failed. A failed case carries\nno metrics, which is why it is the one movement a diff cannot express\nas a number."
+          },
+          "span_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "trace_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
       },
       "CasePage": {
         "type": "object",
@@ -14015,6 +14199,51 @@
           "expected": {},
           "measurement": {
             "$ref": "#/components/schemas/CaseMeasurement"
+          }
+        }
+      },
+      "EvidenceCaseDelta": {
+        "type": "object",
+        "description": "One case on both sides. Named for the evidence it comes from, because the\nfolded half already has a `CaseDelta` and the contract's components block is\none global namespace.",
+        "required": [
+          "case_id",
+          "change",
+          "metrics"
+        ],
+        "properties": {
+          "baseline": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CaseOutcome"
+              }
+            ]
+          },
+          "case_id": {
+            "type": "string"
+          },
+          "change": {
+            "$ref": "#/components/schemas/CaseChange"
+          },
+          "current": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CaseOutcome",
+                "description": "Absent where this side never measured the case at all."
+              }
+            ]
+          },
+          "metrics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EvidenceMetricDelta"
+            },
+            "description": "Every declared metric at least one side reported, in the order the\ncontext declares them. Empty for a case that failed on both sides."
           }
         }
       },

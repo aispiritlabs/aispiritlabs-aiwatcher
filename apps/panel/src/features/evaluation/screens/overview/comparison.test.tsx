@@ -2,7 +2,9 @@ import { render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 
 import type {
+  CaseDiffPage,
   DurableEvaluation,
+  EvidenceCaseDelta,
   EvidenceComparison,
   EvidenceMetricDelta,
 } from '@/api/generated/types.gen';
@@ -165,4 +167,149 @@ it('still asks about a baseline the URL named that this context does not offer',
   expect(await screen.findByText('Different split')).toBeTruthy();
   const chooser = screen.getByLabelText('Baseline') as HTMLSelectElement;
   expect(chooser.value).toBe('elsewhere');
+});
+
+// ── Which cases moved ────────────────────────────────────────────────────────
+
+function moved(cases: EvidenceCaseDelta[], next: string | null = null): CaseDiffPage {
+  return { comparability: 'comparable', reasons: [], cases, next_cursor: next, state: 'complete' };
+}
+
+function withCases(page: CaseDiffPage) {
+  serve([
+    { method: 'GET', path: '/auth/config', answer: { status: 200, body: { enabled: false } } },
+    {
+      method: 'GET',
+      path: '/evaluation-results',
+      answer: { status: 200, body: { evaluations: [result('before')], next_cursor: null } },
+    },
+    {
+      method: 'GET',
+      path: '/comparison/cases',
+      answer: { status: 200, body: page },
+    },
+    {
+      method: 'GET',
+      path: '/comparison',
+      answer: {
+        status: 200,
+        body: comparison([
+          { name: 'accuracy', current: 0.66, baseline: 1.0, delta: -0.34, direction: 'higher' },
+        ]),
+      },
+    },
+  ]);
+}
+
+it('does not read both results until somebody asks which cases moved', async () => {
+  const server = serve([
+    { method: 'GET', path: '/auth/config', answer: { status: 200, body: { enabled: false } } },
+    {
+      method: 'GET',
+      path: '/evaluation-results',
+      answer: { status: 200, body: { evaluations: [result('before')], next_cursor: null } },
+    },
+    {
+      method: 'GET',
+      path: '/comparison',
+      answer: { status: 200, body: comparison([]) },
+    },
+  ]);
+  render(
+    withQueries(
+      <Comparison
+        evidence={result('after')}
+        baseline="before"
+        onSelect={() => {}}
+        cases={undefined}
+        onCases={() => {}}
+      />,
+    ),
+  );
+  expect(await screen.findByText(/Reads both results in full/)).toBeTruthy();
+  // The comparison above it is two headers; this one is two whole results, and
+  // opening a result must not pay for it.
+  expect(server.countOf('GET', '/comparison/cases')).toBe(0);
+});
+
+it('shows a case that stopped being measurable with its error and no invented delta', async () => {
+  withCases(
+    moved([
+      {
+        case_id: 'two-plus-two',
+        change: 'regressed',
+        current: { error: 'the model timed out' },
+        baseline: {},
+        metrics: [{ name: 'accuracy', baseline: 1, direction: 'higher', unit: 'ratio' }],
+      },
+    ]),
+  );
+  render(
+    withQueries(
+      <Comparison
+        evidence={result('after')}
+        baseline="before"
+        onSelect={() => {}}
+        cases="worse"
+        onCases={() => {}}
+      />,
+    ),
+  );
+  expect(await screen.findByText('two-plus-two')).toBeTruthy();
+  expect(screen.getByText('regressed')).toBeTruthy();
+  expect(screen.getByText('the model timed out')).toBeTruthy();
+  // One side has a number and the other has none, so there is no difference to
+  // show — and a zero there would say the case scored the same.
+  const row = screen.getByText('two-plus-two').closest('tr');
+  expect(row?.textContent).toContain('1.0000');
+  expect(row?.textContent).toContain('—');
+  expect(row?.textContent).not.toMatch(/0\.0000/);
+});
+
+it('renders what the server narrowed to rather than narrowing it again here', async () => {
+  // Under "lost something" the server answered with a case it calls unchanged.
+  // The browser shows it: which cases moved is decided where the pinned
+  // context's declared directions are, and a second rule here would be free to
+  // disagree with the one that produced the page.
+  withCases(
+    moved([
+      {
+        case_id: 'capital-pl',
+        change: 'unchanged',
+        current: {},
+        baseline: {},
+        metrics: [],
+      },
+    ]),
+  );
+  render(
+    withQueries(
+      <Comparison
+        evidence={result('after')}
+        baseline="before"
+        onSelect={() => {}}
+        cases="worse"
+        onCases={() => {}}
+      />,
+    ),
+  );
+  expect(await screen.findByText('capital-pl')).toBeTruthy();
+  expect(screen.getByText('unchanged')).toBeTruthy();
+});
+
+it('says another page means another case rather than another match', async () => {
+  withCases(moved([], 'v-after:100:v-before:100'));
+  render(
+    withQueries(
+      <Comparison
+        evidence={result('after')}
+        baseline="before"
+        onSelect={() => {}}
+        cases="worse"
+        onCases={() => {}}
+      />,
+    ),
+  );
+  expect(await screen.findByText(/there are more to read/)).toBeTruthy();
+  expect(screen.getByRole('button', { name: /read further into both results/ })).toBeTruthy();
 });

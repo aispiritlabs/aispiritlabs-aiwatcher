@@ -15,7 +15,10 @@ pub use aiwatcher_core::Comparability;
 pub use approval::{
     Approval, ApprovalBundles, ApprovalPage, ApprovalRecord, StagedFile, Withdrawal, approval_id,
 };
-pub use comparison::{EvidenceComparison, EvidenceMetricDelta};
+pub use comparison::{
+    CaseChange, CaseDiffPage, CaseFilter, CaseOutcome, DiffQuery, EvidenceCaseDelta,
+    EvidenceComparison, EvidenceMetricDelta,
+};
 pub use registry::{
     CollectionReport, PUBLICATION_GRACE_SECONDS, Registry, RegistryConfig, SourceAuthority,
     SourceEvidence,

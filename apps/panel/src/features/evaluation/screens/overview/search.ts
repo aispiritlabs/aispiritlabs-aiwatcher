@@ -55,5 +55,15 @@ export const searchSchema = z.object({
    * for two rules would be the control that quietly does something else.
    */
   compare: z.string().optional(),
+  /**
+   * Which cases the open comparison is showing, and whether it is showing any.
+   *
+   * Absent means closed, which is the default because the diff is a full read
+   * of both results where everything else on the screen is a read of two
+   * headers. `all` is the fourth value for the same reason `worse` is the
+   * first: absent already means something, so "open with nothing filtered out"
+   * needs a word of its own.
+   */
+  cases: z.enum(['worse', 'better', 'changed', 'all']).optional(),
   metrics: z.string().optional(),
 });

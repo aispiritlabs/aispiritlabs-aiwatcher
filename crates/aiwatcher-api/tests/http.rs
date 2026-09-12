@@ -7192,6 +7192,108 @@ async fn a_published_comparison_is_the_servers_answer_and_names_its_two_results(
     );
 }
 
+/// One variant of one pinned context, with each case's score spelled out.
+fn scored_request(id: &str, experiment: &str, scores: [f64; 3]) -> Value {
+    let mut request = durable_request(id);
+    request["manifest"]["variant"]["experiment_id"] = json!(experiment);
+    for (case, score) in request["cases"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .zip(scores)
+    {
+        case["metrics"]["accuracy"] = json!(score);
+    }
+    request
+}
+
+#[tokio::test]
+async fn which_cases_moved_is_the_servers_answer_and_a_gate_reads_only_the_ones_that_lost() {
+    let mut fixture = Fixture::new(false);
+    fixture.state.evaluations = Some(Arc::new(
+        aiwatcher_evaluation::Registry::new(
+            Arc::new(MemoryObjectStore::new()),
+            Arc::new(EvaluationSource::default()),
+            Default::default(),
+        )
+        .unwrap(),
+    ));
+    // capital-pl, two-plus-two, empty — published sorted by case id, which is
+    // what makes the diff a merge of two ordered streams rather than a join.
+    for request in [
+        scored_request("before", "prompt-v1", [1.0, 1.0, 0.0]),
+        scored_request("after", "prompt-v2", [1.0, 0.0, 1.0]),
+    ] {
+        let (status, body) = fixture
+            .post("/api/v1/evaluation-approvals", request["manifest"].clone())
+            .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (status, body) = fixture.post("/api/v1/evaluation-results", request).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+
+    let (status, page) = fixture
+        .get("/api/v1/evaluation-results/after/comparison/cases?baseline=before")
+        .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["comparability"], "comparable");
+    let ids: Vec<&str> = page["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|case| case["case_id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["capital-pl", "empty", "two-plus-two"]);
+    assert_eq!(page["cases"][0]["change"], "unchanged");
+    assert!(page["next_cursor"].is_null());
+
+    // The release gate: the cases that lost something, narrowed by the server
+    // rather than by a browser paging past every case that did not move.
+    let (_, worse) = fixture
+        .get("/api/v1/evaluation-results/after/comparison/cases?baseline=before&only=worse")
+        .await;
+    assert_eq!(worse["cases"].as_array().unwrap().len(), 1);
+    assert_eq!(worse["cases"][0]["case_id"], "two-plus-two");
+    assert_eq!(worse["cases"][0]["change"], "regressed");
+    assert_eq!(worse["cases"][0]["metrics"][0]["delta"], -1.0);
+    // Which way that is worse is the pinned context's declaration, not a guess
+    // made from the sign of a number.
+    assert_eq!(worse["cases"][0]["metrics"][0]["direction"], "higher");
+
+    let (_, better) = fixture
+        .get("/api/v1/evaluation-results/after/comparison/cases?baseline=before&only=better")
+        .await;
+    assert_eq!(better["cases"].as_array().unwrap().len(), 1);
+    assert_eq!(better["cases"][0]["case_id"], "empty");
+
+    // A page of one promises another case, and the cursor belongs to both
+    // immutable results rather than to either alone.
+    let (_, head) = fixture
+        .get("/api/v1/evaluation-results/after/comparison/cases?baseline=before&limit=1")
+        .await;
+    let cursor = head["next_cursor"].as_str().unwrap().to_owned();
+    let (_, rest) = fixture
+        .get(&format!(
+            "/api/v1/evaluation-results/after/comparison/cases?baseline=before&cursor={cursor}"
+        ))
+        .await;
+    assert_eq!(rest["cases"][0]["case_id"], "empty");
+    assert_eq!(
+        fixture
+            .get("/api/v1/evaluation-results/after/comparison/cases?baseline=before&cursor=nope")
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        fixture
+            .get("/api/v1/evaluation-results/after/comparison/cases?baseline=never")
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+}
+
 #[tokio::test]
 async fn durable_publication_requires_editor_and_a_source_authority() {
     let mut fixture = Fixture::behind_a_proxy(false).await;

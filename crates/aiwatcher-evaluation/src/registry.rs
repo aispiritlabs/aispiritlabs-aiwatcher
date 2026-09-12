@@ -1,9 +1,11 @@
 //! Durable publication, access and retention behind the domain facade.
 use crate::{
-    Aggregation, Approval, ApprovalRecord, CaseMeasurement, CasePage, DurableEvaluation,
-    DurablePage, Evaluation, EvaluationError, EvaluationManifest, EvaluationReceipt, EvidenceCase,
-    EvidenceState, PreparedEvaluation, PublishEvaluation, Result, ResultCounts, ResultStatus,
-    RetentionReport, Withdrawal, approval_id, canonical, require,
+    Aggregation, Approval, ApprovalRecord, CaseDiffPage, CaseMeasurement, CasePage, Comparability,
+    DiffQuery, DurableEvaluation, DurablePage, Evaluation, EvaluationError, EvaluationManifest,
+    EvaluationReceipt, EvidenceCase, EvidenceState, PreparedEvaluation, PublishEvaluation, Result,
+    ResultCounts, ResultStatus, RetentionReport, Withdrawal, approval_id, canonical,
+    comparison::{comparability, diff_case, merged},
+    require,
     store::{self, Claim, Pending, Store},
     text,
 };
@@ -124,6 +126,73 @@ struct Shard {
 /// is remembered; a transport failure is not one.
 #[derive(Debug, Default)]
 struct Sources(BTreeMap<String, std::result::Result<Option<i64>, EvidenceState>>);
+
+/// How many cases one request may walk to fill a page of the diff.
+///
+/// Without it, a pair whose ten thousand cases hold twelve regressions would
+/// be one request reading every shard of both sides. A page ends at whichever
+/// comes first — the rows it was asked for, or this — and says so with a
+/// cursor.
+const DIFF_SCAN: usize = 2_000;
+
+/// One side of a case diff, read a shard at a time.
+///
+/// Both sides were sorted by `case_id` before they were sharded, so the diff
+/// is a merge of two ordered streams and its cursor is a pair of offsets — the
+/// same number a case page's own cursor holds, once per side.
+struct Side {
+    id: String,
+    protected: bool,
+    shards: Vec<Shard>,
+    offset: usize,
+    /// The shard `offset` falls in once it has been read: its index, the
+    /// offset of its first case, and its measurements.
+    loaded: Option<(usize, usize, Vec<CaseMeasurement>)>,
+}
+
+impl Side {
+    fn new(id: &str, protected: bool, shards: Vec<Shard>, offset: usize) -> Self {
+        Self {
+            id: id.to_owned(),
+            protected,
+            shards,
+            offset,
+            loaded: None,
+        }
+    }
+
+    fn total(&self) -> usize {
+        self.shards.iter().map(|shard| shard.count).sum()
+    }
+
+    fn done(&self) -> bool {
+        self.offset >= self.total()
+    }
+
+    /// Read the shard `offset` falls in, unless it is already in hand.
+    async fn load(&mut self, registry: &Registry) -> Result<()> {
+        let mut start = 0;
+        for (index, shard) in self.shards.iter().enumerate() {
+            if self.offset < start + shard.count {
+                if self.loaded.as_ref().is_none_or(|(held, ..)| *held != index) {
+                    let rows = registry
+                        .read_measurements(&self.id, shard, self.protected)
+                        .await?;
+                    self.loaded = Some((index, start, rows));
+                }
+                return Ok(());
+            }
+            start += shard.count;
+        }
+        self.loaded = None;
+        Ok(())
+    }
+
+    fn peek(&self) -> Option<&CaseMeasurement> {
+        let (_, start, rows) = self.loaded.as_ref()?;
+        rows.get(self.offset.saturating_sub(*start))
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Metadata {
@@ -517,6 +586,150 @@ impl Registry {
         Ok(Some(crate::comparison::compare(current, baseline)))
     }
 
+    /// Which cases moved, between one result and another named one.
+    ///
+    /// The comparison beside this reads two headers and costs what two
+    /// summaries cost. This is the other question and is a full read of both
+    /// sides, which is why it is paged, narrowed by the server rather than by
+    /// a browser, and bounded in how far one request may walk. A pair the server calls
+    /// incompatible gets no rows — a diff over two results it has just
+    /// declined to subtract would be a second answer to whether it may — and
+    /// an unverified one keeps them, because the cases that failed are exactly
+    /// what a reader opens this to find.
+    pub async fn compare_cases(
+        &self,
+        id: &str,
+        baseline_id: &str,
+        query: DiffQuery<'_>,
+        subject: &str,
+        now: i64,
+    ) -> Result<Option<CaseDiffPage>> {
+        let mut sources = Sources::default();
+        let Some((current, current_metadata)) = self.read(id, subject, now, &mut sources).await?
+        else {
+            return Ok(None);
+        };
+        let Some((baseline, baseline_metadata)) =
+            self.read(baseline_id, subject, now, &mut sources).await?
+        else {
+            return Ok(None);
+        };
+        let (verdict, reasons) = comparability(&current, &baseline);
+        let mut page = CaseDiffPage {
+            comparability: verdict,
+            reasons,
+            cases: Vec::new(),
+            next_cursor: None,
+            state: merged(current.state, baseline.state),
+        };
+        let (Some(current_metadata), Some(baseline_metadata)) =
+            (current_metadata, baseline_metadata)
+        else {
+            return Ok(Some(page));
+        };
+        // Only a pair that may not be subtracted at all. `Unverified` keeps
+        // its rows, and this is the one place the two halves of a comparison
+        // part company: the header withholds its delta there because an
+        // aggregate over cases that failed or went unscored is a number about
+        // a denominator nobody agreed on, while a case's own delta subtracts
+        // two measurements of that same case and is sound whatever happened to
+        // the others. Cases that failed are what somebody opens this to read.
+        if verdict == Comparability::Incompatible {
+            return Ok(Some(page));
+        }
+        let limit = query.limit.unwrap_or(self.config.page_size);
+        require(limit > 0 && limit <= 200, "limit", "must be 1..200")?;
+        let (left, right) = match query.cursor {
+            None => (0, 0),
+            Some(cursor) => match *cursor.split(':').collect::<Vec<_>>().as_slice() {
+                [version, left, baseline_version, right]
+                    if version == current.receipt.version
+                        && baseline_version == baseline.receipt.version =>
+                {
+                    left.parse::<usize>().ok().zip(right.parse::<usize>().ok())
+                }
+                _ => None,
+            }
+            .ok_or_else(|| EvaluationError::Invalid {
+                field: "cursor".into(),
+                reason: "must belong to both immutable results".into(),
+            })?,
+        };
+        // Both sides share the context — that equality is what made them
+        // comparable — so which of the two declares the metrics is arbitrary.
+        let declared = current_metadata.manifest.context.metrics.clone();
+        let mut sides = (
+            Side::new(
+                id,
+                self.protected(&current_metadata.manifest)?,
+                current_metadata.shards,
+                left,
+            ),
+            Side::new(
+                baseline_id,
+                self.protected(&baseline_metadata.manifest)?,
+                baseline_metadata.shards,
+                right,
+            ),
+        );
+        require(
+            left <= sides.0.total() && right <= sides.1.total(),
+            "cursor",
+            "beyond result",
+        )?;
+
+        let mut walked = 0;
+        while page.cases.len() < limit && walked < DIFF_SCAN {
+            // A damaged shard is this page's state, not an error and never a
+            // short page: the headers are intact and say how many cases there
+            // are, so rows simply missing would read as cases that agreed.
+            for side in [&mut sides.0, &mut sides.1] {
+                match side.load(self).await {
+                    Ok(()) => {}
+                    Err(EvaluationError::Unavailable(state)) => {
+                        page.cases.clear();
+                        page.next_cursor = None;
+                        page.state = state;
+                        return Ok(Some(page));
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            let order = match (sides.0.peek(), sides.1.peek()) {
+                (None, None) => break,
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (Some(now), Some(then)) => now.case_id.cmp(&then.case_id),
+            };
+            let delta = diff_case(
+                &declared,
+                (order != std::cmp::Ordering::Greater)
+                    .then(|| sides.0.peek())
+                    .flatten(),
+                (order != std::cmp::Ordering::Less)
+                    .then(|| sides.1.peek())
+                    .flatten(),
+            );
+            if order != std::cmp::Ordering::Greater {
+                sides.0.offset += 1;
+            }
+            if order != std::cmp::Ordering::Less {
+                sides.1.offset += 1;
+            }
+            walked += 1;
+            if query.only.is_none_or(|filter| filter.keeps(delta.change)) {
+                page.cases.push(delta);
+            }
+        }
+        if !sides.0.done() || !sides.1.done() {
+            page.next_cursor = Some(format!(
+                "{}:{}:{}:{}",
+                current.receipt.version, sides.0.offset, baseline.receipt.version, sides.1.offset
+            ));
+        }
+        Ok(Some(page))
+    }
+
     /// The summary, and the metadata it was read from when there was one.
     ///
     /// Everything a header says is in that one object. The shards behind it are
@@ -663,21 +876,39 @@ impl Registry {
         Ok(source.expires_at)
     }
 
+    /// One shard's measurements, without the expectations beside them.
+    ///
+    /// A diff reads this half only: the expectations are the cohort, which a
+    /// comparable pair shares by construction, so subtracting two results
+    /// costs half of what reading either one's cases does.
+    async fn read_measurements(
+        &self,
+        id: &str,
+        shard: &Shard,
+        protected: bool,
+    ) -> Result<Vec<CaseMeasurement>> {
+        let actual: Vec<CaseMeasurement> = self
+            .store
+            .verified_protected(id, &shard.actual, protected)
+            .await?;
+        if actual.len() != shard.count {
+            return Err(EvaluationError::Unavailable(EvidenceState::CorruptArtifact));
+        }
+        Ok(actual)
+    }
+
     async fn read_shard(
         &self,
         id: &str,
         shard: &Shard,
         protected: bool,
     ) -> Result<Vec<EvidenceCase>> {
-        let actual: Vec<CaseMeasurement> = self
-            .store
-            .verified_protected(id, &shard.actual, protected)
-            .await?;
+        let actual = self.read_measurements(id, shard, protected).await?;
         let expected: Vec<serde_json::Value> = self
             .store
             .verified_protected(id, &shard.expected, protected)
             .await?;
-        if actual.len() != shard.count || expected.len() != shard.count {
+        if expected.len() != shard.count {
             return Err(EvaluationError::Unavailable(EvidenceState::CorruptArtifact));
         }
         Ok(actual

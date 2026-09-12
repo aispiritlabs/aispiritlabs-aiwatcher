@@ -7,9 +7,9 @@
 use crate::auth::Caller;
 use aiwatcher_auth::Role;
 use aiwatcher_evaluation::{
-    Approval, ApprovalBundles, ApprovalPage, CasePage, DurableEvaluation, DurablePage,
-    EvaluationManifest, EvaluationReceipt, EvidenceComparison, EvidenceState, PublishEvaluation,
-    ResultStatus, StagedFile,
+    Approval, ApprovalBundles, ApprovalPage, CaseDiffPage, CaseFilter, CasePage, DiffQuery,
+    DurableEvaluation, DurablePage, EvaluationManifest, EvaluationReceipt, EvidenceComparison,
+    EvidenceState, PublishEvaluation, ResultStatus, StagedFile,
 };
 use axum::extract::{Path, Query, State};
 use axum::routing::{delete, get, post, put};
@@ -32,6 +32,7 @@ use crate::state::AppState;
     get_result,
     get_cases,
     compare_results,
+    compare_cases,
     forget_result,
     approve_source,
     list_approvals,
@@ -85,6 +86,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/evaluation-results/{evaluation_id}/comparison",
             get(compare_results),
+        )
+        .route(
+            "/api/v1/evaluation-results/{evaluation_id}/comparison/cases",
+            get(compare_cases),
         )
         .route("/api/v1/evaluations", get(list_evaluations))
         .route("/api/v1/evaluations/{evaluation_id}", get(get_evaluation))
@@ -264,6 +269,21 @@ struct ComparisonQuery {
 }
 #[derive(serde::Deserialize, utoipa::IntoParams)]
 #[serde(deny_unknown_fields)]
+struct CaseComparisonQuery {
+    /// Explicit. A baseline nobody chose is a baseline nobody checked.
+    baseline: String,
+    /// Both sides' offsets and both versions. A page of a narrowed diff ends
+    /// at the rows asked for or at the cases it was allowed to walk, so this
+    /// promises another case rather than another match.
+    cursor: Option<String>,
+    limit: Option<usize>,
+    /// The question being asked, not the verdict a case was given: `worse` is
+    /// what a release gate reads and includes the cases that lost something
+    /// and gained something else.
+    only: Option<CaseFilter>,
+}
+#[derive(serde::Deserialize, utoipa::IntoParams)]
+#[serde(deny_unknown_fields)]
 struct CasesQuery {
     version: String,
     cursor: Option<String>,
@@ -357,6 +377,44 @@ async fn compare_results(
         .clone()
         .with_content_access(caller.require(Role::Admin).is_ok())
         .compare(&id, &query.baseline, &caller.identity().subject, now())
+        .await?
+        .map(Json)
+        .ok_or_else(|| ApiError::NotFound(format!("{id} or baseline {}", query.baseline)))
+}
+
+/// Which cases moved between one published result and another named one.
+///
+/// The comparison beside this one reads two headers; this reads both results,
+/// so it pages, it is narrowed here rather than in the browser, and one
+/// request walks a bounded number of cases. The verdict rides along, so a pair
+/// this server will not subtract is refused in the same sentence the header
+/// comparison uses rather than as an empty list — and an unverified pair keeps
+/// its rows, because the cases that failed are what somebody opens this for.
+#[utoipa::path(get, path = "/api/v1/evaluation-results/{evaluation_id}/comparison/cases",
+    params(("evaluation_id" = String, Path), CaseComparisonQuery),
+    responses((status = 200, body = CaseDiffPage), (status = 400, body = crate::error::ErrorBody),
+    (status = 404, body = crate::error::ErrorBody)), tag = "evaluation")]
+async fn compare_cases(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+    Query(query): Query<CaseComparisonQuery>,
+) -> ApiResult<Json<CaseDiffPage>> {
+    caller.require(Role::Viewer)?;
+    registry(&state)?
+        .clone()
+        .with_content_access(caller.require(Role::Admin).is_ok())
+        .compare_cases(
+            &id,
+            &query.baseline,
+            DiffQuery {
+                cursor: query.cursor.as_deref(),
+                limit: query.limit,
+                only: query.only,
+            },
+            &caller.identity().subject,
+            now(),
+        )
         .await?
         .map(Json)
         .ok_or_else(|| ApiError::NotFound(format!("{id} or baseline {}", query.baseline)))

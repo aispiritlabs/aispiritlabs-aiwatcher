@@ -56,6 +56,11 @@ use utoipa::OpenApi;
         aiwatcher_projector::EvaluationStatus,
         aiwatcher_projector::evaluations::MetricDelta,
         aiwatcher_projector::evaluations::CaseDelta,
+        // The one durable-evaluation type listed here: everything else in that
+        // crate is reached from a response body and collected with it, while
+        // this is only ever a query parameter — which emits a `$ref` and
+        // registers nothing, so the generated client silently loses the type.
+        aiwatcher_evaluation::CaseFilter,
         aiwatcher_projector::SuitePage,
         aiwatcher_projector::SuiteSummary,
         aiwatcher_projector::WorkflowPage,

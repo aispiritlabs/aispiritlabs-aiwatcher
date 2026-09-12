@@ -337,7 +337,9 @@ export function EvaluationPage() {
             evaluationId={search.evidence}
             gaps={damaged.has(search.evidence) ? (retention ?? undefined) : undefined}
             baseline={search.compare}
-            onCompare={(compare) => select({ compare })}
+            onCompare={(compare) => select({ compare, cases: undefined })}
+            cases={search.cases}
+            onCases={(cases) => select({ cases })}
           />
         ) : (
           <ReportPane

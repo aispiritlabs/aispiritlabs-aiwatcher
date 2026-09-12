@@ -748,11 +748,90 @@ export type CancelTimerBody = {
     timer_id: string;
 };
 
+/**
+ * What one case did between two comparable results.
+ *
+ * Five words rather than the two lists the folded half keeps, because the
+ * evidence underneath is not the same. There a producer sent `passed` per
+ * case and a regression is that boolean flipping; here a case carries the
+ * declared metrics and the pinned context declares which way each of them is
+ * better. So a case can lose accuracy and gain latency at once — the state a
+ * single verdict would have to hide, and the one most worth arguing about
+ * before a release.
+ */
+export const CaseChange = {
+    REGRESSED: 'regressed',
+    IMPROVED: 'improved',
+    MIXED: 'mixed',
+    UNCHANGED: 'unchanged',
+    UNMEASURED: 'unmeasured'
+} as const;
+
+/**
+ * What one case did between two comparable results.
+ *
+ * Five words rather than the two lists the folded half keeps, because the
+ * evidence underneath is not the same. There a producer sent `passed` per
+ * case and a regression is that boolean flipping; here a case carries the
+ * declared metrics and the pinned context declares which way each of them is
+ * better. So a case can lose accuracy and gain latency at once — the state a
+ * single verdict would have to hide, and the one most worth arguing about
+ * before a release.
+ */
+export type CaseChange = typeof CaseChange[keyof typeof CaseChange];
+
 export type CaseDelta = {
     baseline_score?: number | null;
     case_id: string;
     current_score?: number | null;
 };
+
+/**
+ * One page of the diff, with the verdict that decided there was one.
+ */
+export type CaseDiffPage = {
+    cases: Array<EvidenceCaseDelta>;
+    /**
+     * The same answer `GET .../comparison` gives, because it is the same
+     * question: rows are produced only where the two may be subtracted, and a
+     * diff over a pair the server has just refused to subtract would be the
+     * second answer to it.
+     */
+    comparability: Comparability;
+    /**
+     * Another *case*, not another match: a filtered page stops at the rows it
+     * was asked for or the cases it was allowed to walk, whichever comes
+     * first. The catalogue narrowed by context already has this property, and
+     * for the same reason — the order belongs to the cases, not to the filter.
+     */
+    next_cursor?: string | null;
+    reasons: Array<string>;
+    state: EvidenceState;
+};
+
+/**
+ * Which cases to keep, as the *question* a reader is asking rather than as
+ * the verdict a case was given.
+ *
+ * `worse` is what a release gate reads, and it includes `mixed` deliberately:
+ * a gate that hid the cases which lost something *and* gained something would
+ * hide the ones somebody has to decide about.
+ */
+export const CaseFilter = {
+    WORSE: 'worse',
+    BETTER: 'better',
+    CHANGED: 'changed'
+} as const;
+
+/**
+ * Which cases to keep, as the *question* a reader is asking rather than as
+ * the verdict a case was given.
+ *
+ * `worse` is what a release gate reads, and it includes `mixed` deliberately:
+ * a gate that hid the cases which lost something *and* gained something would
+ * hide the ones somebody has to decide about.
+ */
+export type CaseFilter = typeof CaseFilter[keyof typeof CaseFilter];
 
 /**
  * Producer measurements only. Expected answers are resolved from the source.
@@ -765,6 +844,25 @@ export type CaseMeasurement = {
         [key: string]: number;
     };
     repetition_id: string;
+    span_id?: string | null;
+    trace_id?: string | null;
+};
+
+/**
+ * What one side recorded for a case.
+ *
+ * Its *answer* is not here. A diff is read to find which cases moved, and the
+ * case page beside it is where what a case said is read — carrying both
+ * responses here would make the one route that already has to walk both
+ * results carry both of their contents as well.
+ */
+export type CaseOutcome = {
+    /**
+     * Present where the case was attempted and failed. A failed case carries
+     * no metrics, which is why it is the one movement a diff cannot express
+     * as a number.
+     */
+    error?: string | null;
     span_id?: string | null;
     trace_id?: string | null;
 };
@@ -2113,6 +2211,23 @@ export type EventType = 'RunStarted' | 'RunCompleted' | 'RunFailed' | 'AgentStar
 export type EvidenceCase = {
     expected: unknown;
     measurement: CaseMeasurement;
+};
+
+/**
+ * One case on both sides. Named for the evidence it comes from, because the
+ * folded half already has a `CaseDelta` and the contract's components block is
+ * one global namespace.
+ */
+export type EvidenceCaseDelta = {
+    baseline?: null | CaseOutcome;
+    case_id: string;
+    change: CaseChange;
+    current?: null | CaseOutcome;
+    /**
+     * Every declared metric at least one side reported, in the order the
+     * context declares them. Empty for a case that failed on both sides.
+     */
+    metrics: Array<EvidenceMetricDelta>;
 };
 
 /**
@@ -9670,6 +9785,46 @@ export type CompareResultsResponses = {
 };
 
 export type CompareResultsResponse = CompareResultsResponses[keyof CompareResultsResponses];
+
+export type CompareCasesData = {
+    body?: never;
+    path: {
+        evaluation_id: string;
+    };
+    query: {
+        /**
+         * Explicit. A baseline nobody chose is a baseline nobody checked.
+         */
+        baseline: string;
+        /**
+         * Both sides' offsets and both versions. A page of a narrowed diff ends
+         * at the rows asked for or at the cases it was allowed to walk, so this
+         * promises another case rather than another match.
+         */
+        cursor?: string | null;
+        limit?: number | null;
+        /**
+         * The question being asked, not the verdict a case was given: `worse` is
+         * what a release gate reads and includes the cases that lost something
+         * and gained something else.
+         */
+        only?: null | CaseFilter;
+    };
+    url: '/api/v1/evaluation-results/{evaluation_id}/comparison/cases';
+};
+
+export type CompareCasesErrors = {
+    400: ErrorBody;
+    404: ErrorBody;
+};
+
+export type CompareCasesError = CompareCasesErrors[keyof CompareCasesErrors];
+
+export type CompareCasesResponses = {
+    200: CaseDiffPage;
+};
+
+export type CompareCasesResponse = CompareCasesResponses[keyof CompareCasesResponses];
 
 export type ListEvaluationSuitesData = {
     body?: never;
