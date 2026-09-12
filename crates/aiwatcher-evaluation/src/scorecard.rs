@@ -84,6 +84,26 @@ pub enum Scorer {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pass_level: Option<String>,
     },
+    /// A metric a scorer framework implements, measured by the scorer service
+    /// this deployment runs — DeepEval's, Opik's, or any adapter's there.
+    ///
+    /// Named, like every other scorer: the adapter, its metric and the
+    /// parameters the service's catalog says that metric takes. What the metric
+    /// *is* — its unit, which way is better, the framework's version and the
+    /// model it grades with — is `declared`, filled from the catalog when the
+    /// card is published and part of the card's version from then on. See
+    /// [`crate::external`].
+    External {
+        adapter: String,
+        metric: String,
+        #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+        #[schema(value_type = Object)]
+        parameters: serde_json::Map<String, serde_json::Value>,
+        /// The catalog's description, pinned. An author may leave it out, and a
+        /// card that brings one is held to what the catalog says now.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        declared: Option<crate::ExternalDeclaration>,
+    },
 }
 
 /// The rubric versions a card's judges ask, resolved from the registry.
@@ -108,6 +128,15 @@ impl Rubrics {
     }
 }
 
+/// An external scorer's words, borrowed from the card.
+#[derive(Clone, Copy, Debug)]
+pub struct External<'a> {
+    pub adapter: &'a str,
+    pub metric: &'a str,
+    pub parameters: &'a serde_json::Map<String, serde_json::Value>,
+    pub declared: Option<&'a crate::ExternalDeclaration>,
+}
+
 /// One scorer's answer about one case.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Score {
@@ -119,16 +148,54 @@ pub enum Score {
 
 impl Scorer {
     /// Whether this scorer reads the case's expected answer at all.
+    ///
+    /// An external metric reads what its catalog said it reads, and one the
+    /// catalog has not described yet may read anything its card points it at.
     #[must_use]
-    pub const fn reads_expected(&self) -> bool {
-        matches!(
-            self,
+    pub fn reads_expected(&self) -> bool {
+        match self {
+            Self::External { declared, .. } => declared
+                .as_ref()
+                .is_none_or(|declared| declared.reads(crate::CaseSide::Expected)),
             Self::ExactMatch { .. }
-                | Self::Contains { .. }
-                | Self::NumericWithin { .. }
-                | Self::AbsoluteError { .. }
-                | Self::Judge { .. }
-        )
+            | Self::Contains { .. }
+            | Self::NumericWithin { .. }
+            | Self::AbsoluteError { .. }
+            | Self::Judge { .. } => true,
+            Self::RegexMatch { .. } | Self::Forbidden { .. } => false,
+        }
+    }
+
+    /// Whether this scorer is shown what the case asked.
+    #[must_use]
+    pub fn reads_input(&self) -> bool {
+        match self {
+            Self::Judge { .. } => true,
+            Self::External { declared, .. } => declared
+                .as_ref()
+                .is_none_or(|declared| declared.reads(crate::CaseSide::Input)),
+            _ => false,
+        }
+    }
+
+    /// The adapter and metric this scorer asks a scorer service, with what the
+    /// card pinned about it.
+    #[must_use]
+    pub fn external(&self) -> Option<External<'_>> {
+        match self {
+            Self::External {
+                adapter,
+                metric,
+                parameters,
+                declared,
+            } => Some(External {
+                adapter,
+                metric,
+                parameters,
+                declared: declared.as_ref(),
+            }),
+            _ => None,
+        }
     }
 
     /// The rubric this scorer asks, when it is a judge.
@@ -163,6 +230,15 @@ impl Scorer {
     /// nothing else can. `None` for a judge whose rubric was not resolved.
     fn defines(&self, rubric: Option<&Rubric>) -> Option<(String, MetricDirection, Aggregation)> {
         Some(match self {
+            // The catalog's word, pinned when the card was published.
+            Self::External { declared, .. } => {
+                let declared = declared.as_ref()?;
+                (
+                    declared.unit.clone(),
+                    declared.direction,
+                    declared.aggregation,
+                )
+            }
             Self::AbsoluteError { unit } => {
                 (unit.clone(), MetricDirection::Lower, Aggregation::Mean)
             }
@@ -230,11 +306,17 @@ impl Scorer {
                     None => Ok(()),
                 }
             }
+            Self::External {
+                adapter, metric, ..
+            } => {
+                text(adapter, &format!("{field}.adapter"))?;
+                text(metric, &format!("{field}.metric"))
+            }
             Self::ExactMatch { .. } | Self::Contains { .. } => Ok(()),
         }
     }
 
-    fn score(&self, answer: &serde_json::Value, expected: &serde_json::Value) -> Score {
+    pub(crate) fn score(&self, answer: &serde_json::Value, expected: &serde_json::Value) -> Score {
         match self {
             Self::ExactMatch { ignore_case, trim } => match (answer.as_str(), expected.as_str()) {
                 (Some(answer), Some(expected)) => {
@@ -281,6 +363,9 @@ impl Scorer {
             // A model is asked before the fold and its answer handed in; the
             // fold itself opens no socket.
             Self::Judge { .. } => Score::Unscored("nobody asked the judge about this case".into()),
+            Self::External { .. } => {
+                Score::Unscored("nobody asked the scorer service about this case".into())
+            }
         }
     }
 }
@@ -335,9 +420,9 @@ impl ScorerSpec {
         if let Some(path) = &self.input_path {
             pointer(path, &format!("{field}.input_path"))?;
             require(
-                self.scorer.rubric().is_some(),
+                self.scorer.reads_input(),
                 &format!("{field}.input_path"),
-                "only a judge is shown the case's input",
+                "only a judge, or an external metric that reads it, is shown the case's input",
             )?;
         }
         self.scorer.validate(&format!("{field}.scorer"))
@@ -378,6 +463,44 @@ impl ScorerSpec {
             Scorer::Judge { .. } => !self.expected_path.is_empty(),
             _ => self.scorer.reads_expected(),
         }
+    }
+
+    /// The case an external metric is asked about, or why it cannot be asked.
+    ///
+    /// Each side the catalog says it reads is read where the card points: the
+    /// answer and the expectation always have a path (empty for the whole
+    /// value), and the input is sent only where `input_path` points — a
+    /// metric that reads the question and a card that shows none of it is a
+    /// case this cannot ask about, said per case.
+    pub(crate) fn external_case(
+        &self,
+        declared: &crate::ExternalDeclaration,
+        input: Option<&serde_json::Value>,
+        answer: &serde_json::Value,
+        expected: &serde_json::Value,
+    ) -> std::result::Result<crate::ExternalCase, String> {
+        let (answer, expected) = self.sides(answer, expected)?;
+        let input = if declared.reads(crate::CaseSide::Input) {
+            match self.shown_input(input)? {
+                Some(input) => Some(input.clone()),
+                None => {
+                    return Err(
+                        "this metric reads what the case asked, and the card points it nowhere \
+                         (input_path)"
+                            .to_owned(),
+                    );
+                }
+            }
+        } else {
+            None
+        };
+        Ok(crate::ExternalCase {
+            input,
+            answer: answer.clone(),
+            expected: declared
+                .reads(crate::CaseSide::Expected)
+                .then(|| expected.clone()),
+        })
     }
 
     /// What this scorer measured about one case.
@@ -433,13 +556,29 @@ impl ScorerSpec {
                 .defines(rubric)
                 .ok_or_else(|| EvaluationError::Invalid {
                     field: format!("scorecard.scorers.{}", self.metric),
-                    reason: "names a rubric version this registry has not published".into(),
+                    reason: if self.scorer.external().is_some() {
+                        "names an external metric no scorer service has described to this \
+                         deployment"
+                            .into()
+                    } else {
+                        "names a rubric version this registry has not published".into()
+                    },
                 })?;
         Ok(MetricDefinition {
             name: self.metric.clone(),
             unit,
             direction,
             aggregation,
+            measured_by: self.scorer.external().and_then(|external| {
+                external.declared.map(|declared| crate::ExternalMeasure {
+                    adapter: VersionReference {
+                        name: external.adapter.to_owned(),
+                        version: declared.version.clone(),
+                    },
+                    metric: external.metric.to_owned(),
+                    model: declared.model.clone(),
+                })
+            }),
         })
     }
 }
@@ -512,6 +651,52 @@ impl Scorecard {
             .iter()
             .map(|spec| spec.metric(rubrics))
             .collect()
+    }
+
+    /// Whether any of this card's metrics is measured by a scorer service.
+    #[must_use]
+    pub fn asks_a_scorer_service(&self) -> bool {
+        self.scorers
+            .iter()
+            .any(|spec| spec.scorer.external().is_some())
+    }
+
+    /// The same card with every external metric's declaration read from a
+    /// catalog: what publication pins.
+    ///
+    /// # Errors
+    ///
+    /// Every metric the catalog cannot measure, as one refusal per metric —
+    /// the first of them, with its reasons — and a card that asks a scorer
+    /// service on a deployment none has described itself to.
+    pub fn declared_against(&self, catalog: Option<&crate::ScorerCatalog>) -> Result<Self> {
+        let mut card = self.clone();
+        for (index, spec) in card.scorers.iter_mut().enumerate() {
+            let field = format!("scorecard.scorers[{index}].scorer");
+            if let Scorer::External {
+                adapter,
+                metric,
+                parameters,
+                declared,
+            } = &mut spec.scorer
+            {
+                let catalog = catalog.ok_or_else(|| EvaluationError::Invalid {
+                    field: field.clone(),
+                    reason: "no scorer service has described its metrics to this deployment \
+                             (AIWATCHER_SCORER_URL, on the process that claims its runs)"
+                        .into(),
+                })?;
+                *declared = Some(crate::external::resolve(
+                    catalog,
+                    &field,
+                    adapter,
+                    metric,
+                    parameters,
+                    declared.as_ref(),
+                )?);
+            }
+        }
+        Ok(card)
     }
 
     /// The rubric versions this card's judges ask, each once.

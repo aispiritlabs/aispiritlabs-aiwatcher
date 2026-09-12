@@ -26,6 +26,9 @@ mod scoring;
 #[path = "evaluation/judge.rs"]
 mod judge;
 
+#[path = "evaluation/external.rs"]
+mod external;
+
 #[path = "evaluation/cost.rs"]
 mod cost;
 

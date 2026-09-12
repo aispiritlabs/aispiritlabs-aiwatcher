@@ -529,9 +529,9 @@ it("holds admitting and starting until the server's warning about the archive is
   const admit = screen.getByRole('button', { name: 'Stage and admit' }) as HTMLButtonElement;
   expect(start.disabled).toBe(true);
   expect(admit.disabled).toBe(true);
-  expect(screen.getByText('Acknowledge what this judge is sent first.')).toBeTruthy();
+  expect(screen.getByText('Acknowledge the warnings first.')).toBeTruthy();
 
-  await userEvent.click(screen.getByLabelText('Acknowledge what this judge is sent'));
+  await userEvent.click(screen.getByLabelText('Acknowledge the warnings'));
   expect(start.disabled).toBe(false);
   await userEvent.click(start);
   await waitFor(() => expect(onStarted).toHaveBeenCalledWith('e-2'));

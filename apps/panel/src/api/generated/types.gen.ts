@@ -1083,6 +1083,20 @@ export type CasePage = {
 };
 
 /**
+ * What part of a case a metric reads.
+ */
+export const CaseSide = {
+    INPUT: 'input',
+    ANSWER: 'answer',
+    EXPECTED: 'expected'
+} as const;
+
+/**
+ * What part of a case a metric reads.
+ */
+export type CaseSide = typeof CaseSide[keyof typeof CaseSide];
+
+/**
  * One artifact as the catalog holds it: the pointer, who made it, and what it
  * was made from.
  */
@@ -3078,6 +3092,36 @@ export type ExportVersionSummary = {
 };
 
 /**
+ * What a card version pins about one external metric: the catalog's word at
+ * the moment the card was published, and never the author's.
+ */
+export type ExternalDeclaration = {
+    aggregation: Aggregation;
+    direction: MetricDirection;
+    model?: null | VersionReference;
+    range?: Array<number> | null;
+    reads: Array<CaseSide>;
+    unit: string;
+    /**
+     * The adapter's version the card measures with.
+     */
+    version: string;
+};
+
+/**
+ * A metric a scorer framework measured, named where a reader of the result
+ * sees the number.
+ */
+export type ExternalMeasure = {
+    /**
+     * The adapter and the framework release it ran: `deepeval` at `4.2.2`.
+     */
+    adapter: VersionReference;
+    metric: string;
+    model?: null | VersionReference;
+};
+
+/**
  * Why an attempt did not succeed, and therefore whether to try again.
  *
  * The classification is the caller's claim about the error, exactly as
@@ -4414,6 +4458,7 @@ export type MessageMetadata = {
 export type MetricDefinition = {
     aggregation: Aggregation;
     direction: MetricDirection;
+    measured_by?: null | ExternalMeasure;
     name: string;
     unit: string;
 };
@@ -4940,6 +4985,22 @@ export const OverlapPolicy = { SKIP: 'skip', ALLOW: 'allow' } as const;
  * What to do when a slot comes round and the last one is still going.
  */
 export type OverlapPolicy = typeof OverlapPolicy[keyof typeof OverlapPolicy];
+
+/**
+ * The JSON a parameter takes.
+ */
+export const ParameterKind = {
+    STRING: 'string',
+    NUMBER: 'number',
+    INTEGER: 'integer',
+    BOOLEAN: 'boolean',
+    STRING_LIST: 'string_list'
+} as const;
+
+/**
+ * The JSON a parameter takes.
+ */
+export type ParameterKind = typeof ParameterKind[keyof typeof ParameterKind];
 
 /**
  * One part's shape, with none of its content.
@@ -5631,6 +5692,19 @@ export type RecordTurnsBody = {
      * `Registry::record_batch`.
      */
     turns: Array<RecordTurnRequest>;
+};
+
+/**
+ * A catalog as the work role last read it from the service, kept where the
+ * serve role — which opens no socket to a scorer — resolves a card against it.
+ */
+export type RecordedCatalog = {
+    catalog: ScorerCatalog;
+    recorded_at: number;
+    /**
+     * The process that read it.
+     */
+    recorded_by: string;
 };
 
 /**
@@ -6553,6 +6627,8 @@ export type RuntimeBinding = (QueryStepSpec & {
     runtime: 'score_evaluation';
 }) | (ScoreEvaluationSpec & {
     runtime: 'judge_evaluation';
+}) | (ScoreEvaluationSpec & {
+    runtime: 'external_evaluation';
 }) | (HumanInputSpec & {
     runtime: 'human_input';
 });
@@ -6570,6 +6646,7 @@ export const RuntimeKind = {
     CONTAINER_JOB: 'container_job',
     SCORE_EVALUATION: 'score_evaluation',
     JUDGE_EVALUATION: 'judge_evaluation',
+    EXTERNAL_EVALUATION: 'external_evaluation',
     HUMAN_INPUT: 'human_input'
 } as const;
 
@@ -6920,6 +6997,70 @@ export type Scorer = {
      */
     pass_level?: string | null;
     rubric: VersionReference;
+} | {
+    adapter: string;
+    declared?: null | ExternalDeclaration;
+    kind: 'external';
+    metric: string;
+    parameters?: {
+        [key: string]: unknown;
+    };
+};
+
+/**
+ * Everything a scorer service measures.
+ */
+export type ScorerCatalog = {
+    adapters: Array<ScorerCatalogAdapter>;
+    contract: number;
+};
+
+/**
+ * One framework, as the service runs it.
+ */
+export type ScorerCatalogAdapter = {
+    metrics: Array<ScorerCatalogMetric>;
+    model?: null | VersionReference;
+    /**
+     * What a card names: `deepeval`, `opik`.
+     */
+    name: string;
+    /**
+     * The framework's own release, as installed. A card pins it.
+     */
+    version: string;
+};
+
+/**
+ * One metric, as the adapter that implements it describes it.
+ */
+export type ScorerCatalogMetric = {
+    aggregation: Aggregation;
+    description?: string;
+    direction: MetricDirection;
+    metric: string;
+    /**
+     * Whether a model grades it — the adapter's `model`, then.
+     */
+    model_graded?: boolean;
+    parameters?: {
+        [key: string]: ScorerParameter;
+    };
+    /**
+     * The least and most a case may score, when the metric bounds it.
+     */
+    range?: Array<number> | null;
+    /**
+     * The sides of a case it reads. `answer` always.
+     */
+    reads: Array<CaseSide>;
+    unit: string;
+};
+
+export type ScorerParameter = {
+    description?: string;
+    kind: ParameterKind;
+    required?: boolean;
 };
 
 /**
@@ -11011,6 +11152,26 @@ export type GetScorecardResponses = {
 };
 
 export type GetScorecardResponse = GetScorecardResponses[keyof GetScorecardResponses];
+
+export type GetScorerCatalogData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/evaluation-scorers';
+};
+
+export type GetScorerCatalogErrors = {
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type GetScorerCatalogError = GetScorerCatalogErrors[keyof GetScorerCatalogErrors];
+
+export type GetScorerCatalogResponses = {
+    200: RecordedCatalog;
+};
+
+export type GetScorerCatalogResponse = GetScorerCatalogResponses[keyof GetScorerCatalogResponses];
 
 export type ListEvaluationSuitesData = {
     body?: never;

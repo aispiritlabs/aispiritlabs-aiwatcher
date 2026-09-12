@@ -560,6 +560,20 @@ pub struct Config {
     pub judge_concurrency: usize,
     /// How long one question to the judge may take.
     pub judge_timeout: Duration,
+    /// The scorer service a scorecard's external metrics are measured by, for
+    /// an `external_evaluation` step: the base address of a service speaking
+    /// the contract in `services/scorers`. Absent, this process registers no
+    /// such executor and claims no such attempt, and nothing records a catalog
+    /// a card could name a framework's metric against.
+    pub scorer_url: Option<String>,
+    /// A bearer credential for that service, when it wants one.
+    pub scorer_token: Option<String>,
+    /// How many cases are put to the scorer service at once. A graded metric
+    /// asks its model for each, so this is the model's rate limit too.
+    pub scorer_concurrency: usize,
+    /// How long one case may take. Longer than a judge's question: one graded
+    /// metric of a framework is several calls to its model.
+    pub scorer_timeout: Duration,
     /// How long a managed query step may run, in seconds, whichever engine
     /// runs it. `None` keeps the compiler's five minutes, which fits a query
     /// over the read model and not one over a corpus on disk. Raise it with
@@ -706,6 +720,10 @@ impl Default for Config {
             judge_token: None,
             judge_concurrency: 2,
             judge_timeout: Duration::from_secs(120),
+            scorer_url: None,
+            scorer_token: None,
+            scorer_concurrency: 2,
+            scorer_timeout: Duration::from_secs(300),
             query_step_timeout_seconds: None,
             reactor_owner: None,
             // A second. Shorter than the conversation and import queues'
@@ -1031,6 +1049,31 @@ impl Config {
                 .map(Duration::from_secs)
                 .ok_or(ConfigError::Invalid {
                     name: "AIWATCHER_JUDGE_TIMEOUT_SECONDS",
+                    value: raw,
+                    expected: "whole number of seconds above nought",
+                })?;
+        }
+        config.scorer_url = var("AIWATCHER_SCORER_URL");
+        config.scorer_token = var("AIWATCHER_SCORER_TOKEN");
+        if let Some(raw) = var("AIWATCHER_SCORER_CONCURRENCY") {
+            config.scorer_concurrency =
+                raw.parse()
+                    .ok()
+                    .filter(|count| *count > 0)
+                    .ok_or(ConfigError::Invalid {
+                        name: "AIWATCHER_SCORER_CONCURRENCY",
+                        value: raw,
+                        expected: "whole number of cases above nought",
+                    })?;
+        }
+        if let Some(raw) = var("AIWATCHER_SCORER_TIMEOUT_SECONDS") {
+            config.scorer_timeout = raw
+                .parse()
+                .ok()
+                .filter(|seconds| *seconds > 0)
+                .map(Duration::from_secs)
+                .ok_or(ConfigError::Invalid {
+                    name: "AIWATCHER_SCORER_TIMEOUT_SECONDS",
                     value: raw,
                     expected: "whole number of seconds above nought",
                 })?;

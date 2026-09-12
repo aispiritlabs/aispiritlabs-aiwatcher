@@ -246,7 +246,13 @@ function Admit({ disabled }: { disabled: boolean }) {
               ?.text()
               .then((text) => {
                 const manifest = JSON.parse(text) as EvaluationManifest;
-                setReadsArchive(manifest.context?.judge?.reads_archive === true);
+                // Either field says the archive's words leave it: a judge that
+                // reads it, or a scorer service measuring a conversation cohort.
+                setReadsArchive(
+                  manifest.context?.judge?.reads_archive === true ||
+                    (manifest.context?.dataset.kind === 'conversations' &&
+                      (manifest.context?.metrics ?? []).some((metric) => metric.measured_by)),
+                );
               })
               // Unreadable here is refused by the server on submit, with why.
               .catch(() => setReadsArchive(false));
@@ -257,18 +263,18 @@ function Admit({ disabled }: { disabled: boolean }) {
       {readsArchive ? (
         <div role="alert" className="flex w-full flex-col gap-1 text-danger">
           <p>
-            This declaration&apos;s judge is sent words from the conversation archive. Admitting it
-            lets every run of this pair send them to that provider, outside the archive&apos;s
+            This declaration sends words from the conversation archive to a judge or a scorer
+            service. Admitting it lets every run of this pair send them, outside the archive&apos;s
             encryption, retention and erasure.
           </p>
           <label className="flex items-center gap-2 text-foreground">
             <input
               type="checkbox"
-              aria-label="Acknowledge what this judge is sent"
+              aria-label="Acknowledge what this pair sends"
               checked={acknowledged}
               onChange={(event) => setAcknowledged(event.target.checked)}
             />
-            I understand what this judge is sent.
+            I understand what this pair sends.
           </label>
         </div>
       ) : null}

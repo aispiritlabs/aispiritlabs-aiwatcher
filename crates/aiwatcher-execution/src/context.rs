@@ -229,6 +229,7 @@ fn allowed_for(
         | RuntimeKind::ContainerJob
         | RuntimeKind::ScoreEvaluation
         | RuntimeKind::JudgeEvaluation
+        | RuntimeKind::ExternalEvaluation
         | RuntimeKind::HumanInput => Vec::new(),
     };
 

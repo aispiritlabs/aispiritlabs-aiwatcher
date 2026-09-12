@@ -363,7 +363,10 @@ export function Evidence({
         </div>
 
         <StateNote state={state} counts={counts ?? undefined} />
-        {evidence.reproducible ? null : <JudgeNote evidence={evidence} />}
+        {evidence.reproducible || !judgedByARubric(evidence) ? null : (
+          <JudgeNote evidence={evidence} />
+        )}
+        <FrameworkNote evidence={evidence} />
         {gaps ? <GapNote report={gaps} /> : null}
       </Card>
 
@@ -421,6 +424,62 @@ function StateNote({ state, counts }: { state: EvidenceState; counts?: ResultCou
       ) : null}
       {state === 'forbidden' ? <ForbiddenCauses mayReadContent={mayReadContent} /> : null}
       {note.next ? <p className="mt-1">{note.next}</p> : null}
+    </div>
+  );
+}
+
+/**
+ * Whether a result that re-reading will not reproduce was judged by a rubric
+ * judge — as opposed to only by a framework's model, which carries no
+ * calibration and says so in its own note.
+ */
+function judgedByARubric(evidence: DurableEvaluation): boolean {
+  if (evidence.judge || evidence.manifest?.context.judge) return true;
+  return !(evidence.manifest?.context.metrics ?? []).some((metric) => metric.measured_by?.model);
+}
+
+/**
+ * Metrics a scorer framework measured, named where the numbers are.
+ *
+ * The framework and its release are the server's word, pinned when the card
+ * was published. A metric a model graded is a model's word nobody calibrated:
+ * a rubric judge carries its agreement with people, and this carries none, so
+ * the note says that rather than leaving a gap to be read as agreement.
+ */
+function FrameworkNote({ evidence }: { evidence: DurableEvaluation }) {
+  const context = evidence.manifest?.context;
+  const measured = (context?.metrics ?? []).filter((metric) => metric.measured_by);
+  if (!context || measured.length === 0) return null;
+  const graded = measured.some((metric) => metric.measured_by?.model);
+  return (
+    <div
+      className={cn(
+        'mt-3 rounded-md p-3 text-xs',
+        graded ? 'border border-warning/40 bg-warning/5' : 'bg-muted/60 text-muted-foreground',
+      )}
+    >
+      <ul className="flex flex-col gap-1">
+        {measured.map((metric) => {
+          const by = metric.measured_by;
+          if (!by) return null;
+          return (
+            <li key={metric.name}>
+              <span className="font-medium">{metric.name}</span> was measured by {by.adapter.name}{' '}
+              {by.adapter.version} ({by.metric})
+              {by.model
+                ? `, graded by ${by.model.name} @ ${by.model.version} — a model's word, which re-reading will not reproduce and whose agreement with people nothing measured.`
+                : '.'}
+            </li>
+          );
+        })}
+      </ul>
+      {context.dataset.kind === 'conversations' ? (
+        <p className="mt-1 text-danger">
+          The scorer service was sent words from the conversation archive
+          {graded ? ', and its graded metrics sent them on to their model’s provider' : ''} —
+          outside the archive&apos;s encryption, retention and erasure.
+        </p>
+      ) : null}
     </div>
   );
 }

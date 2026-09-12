@@ -191,6 +191,7 @@ impl Fixture {
             query_step_timeout_seconds: None,
             judge_provider: None,
             judge_concurrency: 2,
+            scorer_concurrency: None,
             read_model: Arc::clone(&read_model),
             live: Arc::clone(&live),
             source: Arc::clone(&bus) as _,
@@ -8002,6 +8003,123 @@ async fn a_judged_scoring_run_starts_only_where_a_judge_of_its_profile_is() {
         .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
     assert_eq!(refused["code"], "measured_here");
+}
+
+/// A card's framework metrics are measured where the scorer service is, and a
+/// deployment without one refuses the start rather than leaving a run nothing
+/// claims — the judge's rule, for the other kind of question.
+#[tokio::test]
+async fn a_run_asking_a_scorer_service_starts_only_where_there_is_one() {
+    let mut fixture = Fixture::new(false);
+    let registry = Arc::new(
+        aiwatcher_evaluation::Registry::new(
+            Arc::new(MemoryObjectStore::new()),
+            Arc::new(EvaluationSource::default()),
+            Default::default(),
+        )
+        .unwrap(),
+    );
+    fixture.state.evaluations = Some(Arc::clone(&registry));
+
+    let (status, missing) = fixture.get("/api/v1/evaluation-scorers").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{missing}");
+    assert!(
+        missing.to_string().contains("AIWATCHER_SCORER_URL"),
+        "{missing}"
+    );
+
+    let catalog: aiwatcher_evaluation::ScorerCatalog = serde_json::from_value(json!({
+        "contract": 1,
+        "adapters": [{"name": "opik", "version": "2.2.59", "metrics": [
+            {"metric": "levenshtein_ratio", "unit": "score", "direction": "higher",
+             "aggregation": "mean", "reads": ["answer", "expected"], "range": [0.0, 1.0]}
+        ]}]
+    }))
+    .unwrap();
+    registry
+        .record_scorer_catalog(&catalog, "work-1", 1)
+        .await
+        .unwrap();
+    let (status, read) = fixture.get("/api/v1/evaluation-scorers").await;
+    assert_eq!(status, StatusCode::OK, "{read}");
+    assert_eq!(read["catalog"]["adapters"][0]["name"], "opik");
+
+    let (status, card) = fixture
+        .post(
+            "/api/v1/evaluation-scorecards",
+            json!({"name": "close-enough", "scorers": [{"metric": "similarity", "answer_path": "/text",
+                   "expected_path": "/text",
+                   "scorer": {"kind": "external", "adapter": "opik", "metric": "levenshtein_ratio"}}]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{card}");
+    assert_eq!(
+        card["scorecard"]["scorers"][0]["scorer"]["declared"]["version"], "2.2.59",
+        "publication pinned what the catalog said"
+    );
+    let (status, recording) = fixture
+        .put(
+            "/api/v1/evaluation-recordings/answers.json",
+            json!({"answers": [{"case_id": "capital-pl", "answer": {"text": "Warsaw"}}]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{recording}");
+    let manifest = durable_request("unused")["manifest"].clone();
+    let (status, declared) = fixture
+        .post(
+            "/api/v1/evaluation-runs",
+            json!({
+                "evaluation_id": "close-enough-run",
+                "repetition_id": "measurement-1",
+                "variant": manifest["variant"],
+                "cohort": {
+                    "case_manifest": manifest["context"]["case_manifest"],
+                    "case_count": 3,
+                    "split": manifest["context"]["split"],
+                    "input_schema": manifest["context"]["input_schema"],
+                    "expectations_schema": manifest["context"]["expectations_schema"]
+                },
+                "scorecard": {"name": "close-enough", "version": card["version"]},
+                "answers": recording,
+                "settings": {"concurrency": 4}
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{declared}");
+    assert_eq!(
+        declared["manifest"]["context"]["metrics"][0]["measured_by"]["adapter"]["name"],
+        "opik"
+    );
+    let (status, _) = fixture
+        .post("/api/v1/evaluation-approvals", declared["manifest"].clone())
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let start = format!(
+        "/api/v1/evaluation-runs/{}/start",
+        declared["declaration"]["id"].as_str().unwrap()
+    );
+    let (status, refusal) = fixture.post(&start, json!({})).await;
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{refusal}");
+    assert_eq!(refusal["code"], "scorers_disabled");
+
+    fixture.state.scorer_concurrency = Some(2);
+    let (status, refusal) = fixture.post(&start, json!({})).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refusal}");
+    assert!(
+        refusal
+            .to_string()
+            .contains("AIWATCHER_SCORER_CONCURRENCY allows 2"),
+        "{refusal}"
+    );
+
+    fixture.state.scorer_concurrency = Some(8);
+    let (status, accepted) = fixture.post(&start, json!({})).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
+    assert_eq!(
+        accepted["execution"]["steps"][0]["runtime"], "external_evaluation",
+        "claimed where the scorer service is"
+    );
 }
 
 /// Not yet admitted is one answer whoever asks, and it is not the answer a

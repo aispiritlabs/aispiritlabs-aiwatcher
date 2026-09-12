@@ -14,6 +14,7 @@ __all__ = [
     "EvaluationContext",
     "EvaluationManifest",
     "EvaluationOrigin",
+    "ExternalMeasure",
     "JudgeConfiguration",
     "MetricDefinition",
     "VariantManifest",
@@ -42,11 +43,22 @@ class DatasetReference(TypedDict):
     version: str
 
 
+class ExternalMeasure(TypedDict):
+    """A metric a scorer framework measured, through the deployment's scorer service."""
+
+    adapter: VersionReference
+    metric: str
+    #: The model that graded it; its numbers are not reproduced by re-reading.
+    model: NotRequired[VersionReference | None]
+
+
 class MetricDefinition(TypedDict):
     name: str
     unit: str
     direction: Literal["higher", "lower", "none"]
     aggregation: Literal["mean", "sum", "min", "max", "rate", "none"]
+    #: Derived by the server for a framework's metric; absent otherwise.
+    measured_by: NotRequired[ExternalMeasure | None]
 
 
 class JudgeConfiguration(TypedDict):

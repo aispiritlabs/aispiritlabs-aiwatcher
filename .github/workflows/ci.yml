@@ -305,6 +305,26 @@ jobs:
           python3 examples/build_seed.py --check
           python3 examples/titanic/build_bundle.py --check
 
+  scorers:
+    name: Scorer service
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          version: '0.12.7'
+          enable-cache: true
+          cache-dependency-glob: services/scorers/uv.lock
+      - uses: extractions/setup-just@v3
+
+      # An `external_evaluation` step runs through this service, and its
+      # adapters are tested against the frameworks they wrap: DeepEval's and
+      # Opik's heuristics really run here, and a graded metric is checked for
+      # the model it is built with. The contract fixtures are the Rust half's.
+      - name: ruff, mypy and pytest, with both frameworks
+        run: just scorers-check
+
   k8s:
     name: Kubernetes manifests
     runs-on: ubuntu-latest

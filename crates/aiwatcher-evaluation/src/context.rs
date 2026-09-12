@@ -31,6 +31,26 @@ pub struct MetricDefinition {
     pub unit: String,
     pub direction: MetricDirection,
     pub aggregation: Aggregation,
+    /// Who measured this metric, when it was a scorer framework rather than
+    /// the scorers compiled in: the adapter at its version, its metric, and the
+    /// model it graded with when a model did. Absent from every metric
+    /// measured otherwise, so no context from before it moves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measured_by: Option<ExternalMeasure>,
+}
+
+/// A metric a scorer framework measured, named where a reader of the result
+/// sees the number.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalMeasure {
+    /// The adapter and the framework release it ran: `deepeval` at `4.2.2`.
+    pub adapter: VersionReference,
+    pub metric: String,
+    /// The model that graded it. A number a model gave is not reproduced by
+    /// re-reading, and nothing measured how often this one agrees with people.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<VersionReference>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]

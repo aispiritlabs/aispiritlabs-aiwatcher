@@ -24,11 +24,21 @@ export interface DatasetReference {
   version: string;
 }
 
+/** A metric a scorer framework measured, through the deployment's scorer service. */
+export interface ExternalMeasure {
+  adapter: VersionReference;
+  metric: string;
+  /** The model that graded it; its numbers are not reproduced by re-reading. */
+  model?: VersionReference | null;
+}
+
 export interface MetricDefinition {
   name: string;
   unit: string;
   direction: 'higher' | 'lower' | 'none';
   aggregation: 'mean' | 'sum' | 'min' | 'max' | 'rate' | 'none';
+  /** Derived by the server for a framework's metric; absent otherwise. */
+  measured_by?: ExternalMeasure | null;
 }
 
 export interface JudgeConfiguration {

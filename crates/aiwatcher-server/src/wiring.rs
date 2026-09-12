@@ -775,6 +775,10 @@ pub async fn build(config: Config) -> Result<Runtime> {
         query_step_timeout_seconds: config.query_step_timeout_seconds,
         judge_provider: config.judge_url.as_ref().and(config.judge_provider.clone()),
         judge_concurrency: config.judge_concurrency,
+        scorer_concurrency: config
+            .scorer_url
+            .as_ref()
+            .map(|_| config.scorer_concurrency),
         // The same object store the definitions live in, under its own prefix.
         workflow_definitions: registries.objects.as_ref().map(|store| {
             Arc::new(aiwatcher_execution::definition::DefinitionRegistry::new(

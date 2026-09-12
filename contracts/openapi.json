@@ -5980,6 +5980,48 @@
         }
       }
     },
+    "/api/v1/evaluation-scorers": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "What the scorer service says it measures, as the work role last recorded it.",
+        "description": "The vocabulary a card's external metrics are named from: each adapter at the\nrelease it runs, the model its graded metrics ask, and every metric with its\nunit, direction, what it reads and the parameters it takes. A card is pinned\nagainst this when it is published.",
+        "operationId": "get_scorer_catalog",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordedCatalog"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/evaluation-suites": {
       "get": {
         "tags": [
@@ -13054,6 +13096,15 @@
           }
         }
       },
+      "CaseSide": {
+        "type": "string",
+        "description": "What part of a case a metric reads.",
+        "enum": [
+          "input",
+          "answer",
+          "expected"
+        ]
+      },
       "CatalogedArtifact": {
         "type": "object",
         "description": "One artifact as the catalog holds it: the pointer, who made it, and what it\nwas made from.",
@@ -17081,6 +17132,88 @@
           }
         }
       },
+      "ExternalDeclaration": {
+        "type": "object",
+        "description": "What a card version pins about one external metric: the catalog's word at\nthe moment the card was published, and never the author's.",
+        "required": [
+          "version",
+          "unit",
+          "direction",
+          "aggregation",
+          "reads"
+        ],
+        "properties": {
+          "aggregation": {
+            "$ref": "#/components/schemas/Aggregation"
+          },
+          "direction": {
+            "$ref": "#/components/schemas/MetricDirection"
+          },
+          "model": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VersionReference"
+              }
+            ]
+          },
+          "range": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "reads": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CaseSide"
+            }
+          },
+          "unit": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string",
+            "description": "The adapter's version the card measures with."
+          }
+        },
+        "additionalProperties": false
+      },
+      "ExternalMeasure": {
+        "type": "object",
+        "description": "A metric a scorer framework measured, named where a reader of the result\nsees the number.",
+        "required": [
+          "adapter",
+          "metric"
+        ],
+        "properties": {
+          "adapter": {
+            "$ref": "#/components/schemas/VersionReference",
+            "description": "The adapter and the framework release it ran: `deepeval` at `4.2.2`."
+          },
+          "metric": {
+            "type": "string"
+          },
+          "model": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VersionReference",
+                "description": "The model that graded it. A number a model gave is not reproduced by\nre-reading, and nothing measured how often this one agrees with people."
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "FailureClass": {
         "type": "string",
         "description": "Why an attempt did not succeed, and therefore whether to try again.\n\nThe classification is the caller's claim about the error, exactly as\n`aiwatcher_jobs::after_failure` takes `retryable` rather than deciding it:\nan unreachable notebook runtime is worth coming back for and a Flow parse\nerror will not parse on the third attempt either.",
@@ -19386,6 +19519,17 @@
           "direction": {
             "$ref": "#/components/schemas/MetricDirection"
           },
+          "measured_by": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ExternalMeasure",
+                "description": "Who measured this metric, when it was a scorer framework rather than\nthe scorers compiled in: the adapter at its version, its metric, and the\nmodel it graded with when a model did. Absent from every metric\nmeasured otherwise, so no context from before it moves."
+              }
+            ]
+          },
           "name": {
             "type": "string"
           },
@@ -20407,6 +20551,17 @@
         "enum": [
           "skip",
           "allow"
+        ]
+      },
+      "ParameterKind": {
+        "type": "string",
+        "description": "The JSON a parameter takes.",
+        "enum": [
+          "string",
+          "number",
+          "integer",
+          "boolean",
+          "string_list"
         ]
       },
       "PartSummary": {
@@ -21617,6 +21772,28 @@
           }
         },
         "additionalProperties": false
+      },
+      "RecordedCatalog": {
+        "type": "object",
+        "description": "A catalog as the work role last read it from the service, kept where the\nserve role — which opens no socket to a scorer — resolves a card against it.",
+        "required": [
+          "catalog",
+          "recorded_at",
+          "recorded_by"
+        ],
+        "properties": {
+          "catalog": {
+            "$ref": "#/components/schemas/ScorerCatalog"
+          },
+          "recorded_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "recorded_by": {
+            "type": "string",
+            "description": "The process that read it."
+          }
+        }
       },
       "RecordedEvent": {
         "type": "object",
@@ -23215,6 +23392,29 @@
           {
             "allOf": [
               {
+                "$ref": "#/components/schemas/ScoreEvaluationSpec",
+                "description": "The same measurement when its card asks a scorer service — DeepEval's\nmetrics, Opik's, any adapter's there. A kind of its own for the judge's\nreason: the service is a socket, and it is claimed where\n`AIWATCHER_SCORER_URL` is, with a judge beside it when the card asks one."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "runtime"
+                ],
+                "properties": {
+                  "runtime": {
+                    "type": "string",
+                    "enum": [
+                      "external_evaluation"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "The same measurement when its card asks a scorer service — DeepEval's\nmetrics, Opik's, any adapter's there. A kind of its own for the judge's\nreason: the service is a socket, and it is claimed where\n`AIWATCHER_SCORER_URL` is, with a judge beside it when the card asks one."
+          },
+          {
+            "allOf": [
+              {
                 "$ref": "#/components/schemas/HumanInputSpec",
                 "description": "Nobody runs it. It waits for somebody to answer."
               },
@@ -23251,6 +23451,7 @@
           "container_job",
           "score_evaluation",
           "judge_evaluation",
+          "external_evaluation",
           "human_input"
         ]
       },
@@ -24006,9 +24207,179 @@
                 "$ref": "#/components/schemas/VersionReference"
               }
             }
+          },
+          {
+            "type": "object",
+            "description": "A metric a scorer framework implements, measured by the scorer service\nthis deployment runs — DeepEval's, Opik's, or any adapter's there.\n\nNamed, like every other scorer: the adapter, its metric and the\nparameters the service's catalog says that metric takes. What the metric\n*is* — its unit, which way is better, the framework's version and the\nmodel it grades with — is `declared`, filled from the catalog when the\ncard is published and part of the card's version from then on. See\n[`crate::external`].",
+            "required": [
+              "adapter",
+              "metric",
+              "kind"
+            ],
+            "properties": {
+              "adapter": {
+                "type": "string"
+              },
+              "declared": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ExternalDeclaration",
+                    "description": "The catalog's description, pinned. An author may leave it out, and a\ncard that brings one is held to what the catalog says now."
+                  }
+                ]
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "external"
+                ]
+              },
+              "metric": {
+                "type": "string"
+              },
+              "parameters": {
+                "type": "object"
+              }
+            }
           }
         ],
         "description": "The scorers this deployment implements, and what each one takes.\n\nThe enum is the implementation: a name reaches a `match` arm and never a\ncallable, so the vocabulary cannot grow without code that knows what the\nnew word means."
+      },
+      "ScorerCatalog": {
+        "type": "object",
+        "description": "Everything a scorer service measures.",
+        "required": [
+          "contract",
+          "adapters"
+        ],
+        "properties": {
+          "adapters": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScorerCatalogAdapter"
+            }
+          },
+          "contract": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "ScorerCatalogAdapter": {
+        "type": "object",
+        "description": "One framework, as the service runs it.",
+        "required": [
+          "name",
+          "version",
+          "metrics"
+        ],
+        "properties": {
+          "metrics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScorerCatalogMetric"
+            }
+          },
+          "model": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VersionReference",
+                "description": "The model its graded metrics ask, as the service is configured. Absent\nwhen it has none, and then it offers no graded metric."
+              }
+            ]
+          },
+          "name": {
+            "type": "string",
+            "description": "What a card names: `deepeval`, `opik`."
+          },
+          "version": {
+            "type": "string",
+            "description": "The framework's own release, as installed. A card pins it."
+          }
+        }
+      },
+      "ScorerCatalogMetric": {
+        "type": "object",
+        "description": "One metric, as the adapter that implements it describes it.",
+        "required": [
+          "metric",
+          "unit",
+          "direction",
+          "aggregation",
+          "reads"
+        ],
+        "properties": {
+          "aggregation": {
+            "$ref": "#/components/schemas/Aggregation"
+          },
+          "description": {
+            "type": "string"
+          },
+          "direction": {
+            "$ref": "#/components/schemas/MetricDirection"
+          },
+          "metric": {
+            "type": "string"
+          },
+          "model_graded": {
+            "type": "boolean",
+            "description": "Whether a model grades it — the adapter's `model`, then."
+          },
+          "parameters": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ScorerParameter"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "range": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "number",
+              "format": "double"
+            },
+            "description": "The least and most a case may score, when the metric bounds it."
+          },
+          "reads": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CaseSide"
+            },
+            "description": "The sides of a case it reads. `answer` always."
+          },
+          "unit": {
+            "type": "string"
+          }
+        }
+      },
+      "ScorerParameter": {
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ParameterKind"
+          },
+          "required": {
+            "type": "boolean"
+          }
+        }
       },
       "ScorerSpec": {
         "type": "object",

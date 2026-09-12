@@ -311,7 +311,8 @@ fn node_kind(runtime: &RuntimeBinding) -> &'static str {
         | RuntimeBinding::ContainerJob(_) => "chain",
         RuntimeBinding::PublishDataset(_)
         | RuntimeBinding::ScoreEvaluation(_)
-        | RuntimeBinding::JudgeEvaluation(_) => "chain",
+        | RuntimeBinding::JudgeEvaluation(_)
+        | RuntimeBinding::ExternalEvaluation(_) => "chain",
         RuntimeBinding::HumanInput(_) => "guardrail",
     }
 }

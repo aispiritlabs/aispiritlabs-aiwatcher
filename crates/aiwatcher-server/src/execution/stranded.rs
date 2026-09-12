@@ -57,6 +57,9 @@ pub struct Wiring {
     /// The judge's address and profile, which a judged scoring run needs both
     /// of and an evaluation registry beside them.
     pub judge: bool,
+    /// The scorer service's address, which a run whose card asks one needs
+    /// with an evaluation registry beside it.
+    pub scorer: bool,
     /// Both executors write a step's rows to the object store, and neither is
     /// built without one, whatever address it was given.
     pub object_store: bool,
@@ -71,6 +74,7 @@ impl Wiring {
             query_url: config.query_url.is_some(),
             ml_pipeline_url: config.ml_pipeline_url.is_some(),
             judge: config.judge_url.is_some() && config.judge_provider.is_some(),
+            scorer: config.scorer_url.is_some(),
             object_store,
         }
     }
@@ -88,7 +92,8 @@ const fn claimed_by_the_work_role(kind: RuntimeKind) -> bool {
         | RuntimeKind::DataFusion
         | RuntimeKind::DuckDb
         | RuntimeKind::Marimo
-        | RuntimeKind::JudgeEvaluation => true,
+        | RuntimeKind::JudgeEvaluation
+        | RuntimeKind::ExternalEvaluation => true,
         // The serve role's reactor, a worker by its queue, a pod by its key —
         // the work role starts the pod and claims nothing (ADR_0029) — and a
         // wait.
@@ -209,6 +214,15 @@ pub fn explain(stranded: Stranded, wiring: &Wiring) -> String {
                 "AIWATCHER_JUDGE_URL or AIWATCHER_JUDGE_PROVIDER is unset"
             },
         ),
+        None if runtime == RuntimeKind::ExternalEvaluation => format!(
+            "{head}: {}. Unless another work process holds a scorer service, {pending}",
+            if wiring.scorer {
+                "AIWATCHER_SCORER_URL is set, and there is no evaluation registry or its client \
+                 did not build (see the error logged at start-up)"
+            } else {
+                "AIWATCHER_SCORER_URL is unset"
+            },
+        ),
         None => format!(
             "{head}: no {} executor is registered in this process. Unless another work process \
              holds one, {pending}",
@@ -314,6 +328,7 @@ mod tests {
             query_url: true,
             ml_pipeline_url: false,
             judge: false,
+            scorer: false,
             object_store: true,
         }
     }

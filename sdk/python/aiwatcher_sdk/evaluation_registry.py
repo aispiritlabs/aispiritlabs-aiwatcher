@@ -173,7 +173,33 @@ class Judge(TypedDict):
     pass_level: NotRequired[str]
 
 
-Scorer = ExactMatch | Contains | RegexMatch | NumericWithin | AbsoluteError | Forbidden | Judge
+class External(TypedDict):
+    """A metric a scorer framework implements, measured by the scorer service.
+
+    ``adapter`` and ``metric`` are names from ``get_scorer_catalog()``, with the
+    ``parameters`` that metric takes. What it is — the framework release, the
+    model it grades with, its unit and which way is better — is pinned from the
+    catalog when the card is published; a card read back carries it as
+    ``declared``.
+    """
+
+    kind: Literal["external"]
+    adapter: str
+    metric: str
+    parameters: NotRequired[dict[str, Any]]
+    declared: NotRequired[dict[str, Any]]
+
+
+Scorer = (
+    ExactMatch
+    | Contains
+    | RegexMatch
+    | NumericWithin
+    | AbsoluteError
+    | Forbidden
+    | Judge
+    | External
+)
 
 
 class ScorerSpec(TypedDict):
@@ -184,7 +210,8 @@ class ScorerSpec(TypedDict):
     answer_path: NotRequired[str]
     expected_path: NotRequired[str]
     #: A JSON Pointer into the case's input, shown to a judge before the
-    #: answer; ``""`` shows all of it. Refused for any scorer but a judge.
+    #: answer, or sent to an external metric that reads it; ``""`` shows all
+    #: of it. Refused for any other scorer.
     input_path: NotRequired[str]
 
 
@@ -530,6 +557,15 @@ class EvaluationRegistry:
                 "POST", "/api/v1/evaluation-cohorts", dict(request), idempotent=True
             )
         )
+
+    def get_scorer_catalog(self) -> dict[str, Any]:
+        """What the deployment's scorer service measures, as last recorded.
+
+        Every adapter at the release it runs, the model its graded metrics ask,
+        and each metric with its unit, direction, what it reads and the
+        parameters it takes — the names an :class:`External` scorer uses.
+        """
+        return self._object(self._transport.send("GET", "/api/v1/evaluation-scorers"))
 
     def get_derived_cohort(self, cases: str) -> dict[str, Any]:
         """Where the cases under this digest were derived from."""

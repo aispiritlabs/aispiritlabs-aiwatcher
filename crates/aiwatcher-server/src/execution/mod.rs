@@ -33,6 +33,7 @@ pub mod pods;
 pub mod publish;
 pub mod query;
 pub mod scheduler;
+pub mod scorers;
 pub mod scoring;
 pub mod stranded;
 pub mod timers;
@@ -78,6 +79,9 @@ pub struct Tasks {
     /// The loop that starts one Job per pod's attempt (ADR_0029). Only where
     /// there are templates and a build that can reach a cluster.
     pub launcher: Option<JoinHandle<()>>,
+    /// The loop that records the scorer service's catalog for the serve role.
+    /// Aborted on shutdown: it holds nothing, and the last catalog stands.
+    pub scorer_catalog: Option<JoinHandle<()>>,
     pub reactors: Vec<(&'static str, JoinHandle<()>)>,
 }
 
@@ -133,6 +137,10 @@ impl Tasks {
         }
         if let Some(task) = self.stranded {
             // One read, holding nothing and deciding nothing.
+            task.abort();
+        }
+        if let Some(task) = self.scorer_catalog {
+            // One read and one overwrite; the catalog it last wrote stands.
             task.abort();
         }
         if let Some(task) = self.retention {
@@ -273,9 +281,31 @@ pub fn spawn(
         // working state" stays local to it, and a deployment may run managed
         // query steps and no notebooks or the other way round. The query half
         // is the one engine `AIWATCHER_QUERY_ENGINE` names.
+        // One client for both of the scorer service's readers: the executor
+        // that asks it about cases, and the loop that records what it says it
+        // measures where the serve role pins cards against it.
+        let scorer_service: Option<Arc<dyn aiwatcher_evaluation::ExternalScorers>> =
+            match scorers::ScorerService::from_config(config) {
+                Ok(service) => service.map(|service| {
+                    Arc::new(service) as Arc<dyn aiwatcher_evaluation::ExternalScorers>
+                }),
+                Err(error) => {
+                    tracing::error!(%error, "the scorer service client did not build");
+                    None
+                }
+            };
+        if let (Some(service), Some(evaluations)) = (&scorer_service, &state.evaluations) {
+            tasks.scorer_catalog = Some(scorers::spawn_catalog(
+                Arc::clone(service),
+                Arc::clone(evaluations),
+                owner_of(config, "work"),
+                shutdown.clone(),
+            ));
+        }
         let executors = query::executors(config, artifacts)
             .merge(marimo::executors(config, artifacts))
-            .merge(scoring::judged(state, config));
+            .merge(scoring::judged(state, config))
+            .merge(scoring::external(state, config, scorer_service.as_ref()));
         // Judged against the registry the claim filter is built from, so the
         // two cannot disagree about what this process performs. Started even
         // when that registry is empty, which is when it has the most to say.
@@ -287,7 +317,8 @@ pub fn spawn(
         if executors.is_empty() {
             tracing::info!(
                 "the work role holds no runtime executor; nothing is claimed \
-                 (AIWATCHER_QUERY_URL, AIWATCHER_ML_PIPELINE_URL, AIWATCHER_JUDGE_URL)"
+                 (AIWATCHER_QUERY_URL, AIWATCHER_ML_PIPELINE_URL, AIWATCHER_JUDGE_URL, \
+                 AIWATCHER_SCORER_URL)"
             );
         } else {
             tasks.reactors.push((

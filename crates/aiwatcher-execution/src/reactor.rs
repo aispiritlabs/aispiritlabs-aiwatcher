@@ -23,16 +23,6 @@
 //! whether their call finished. [`ActivityExecutor::lookup`] is asked first,
 //! and only `Absent` justifies running it again.
 //!
-//! **A running attempt is watched, and stopped when its run stops.** While an
-//! executor works, the reactor reads the run's projection every
-//! [`Watch::every`] and its own clock against the step's timeout. A run that is
-//! cancelling or has ended, or a deadline that passed, sets the attempt's
-//! [`StopSignal`](crate::activity::StopSignal), asks the runtime through
-//! [`ActivityExecutor::cancel`], and gives the executor [`Watch::grace`] to
-//! return before the attempt is abandoned. The pod launcher does the same for
-//! a pod; without it, a cancel of a run whose step runs here waited for that
-//! step to finish on its own.
-//!
 //! **The reactor never decides.** It reports `StepStarted`, `StepCompleted` or
 //! `StepFailed` through [`ExecutionHandler`] and the decider works out what
 //! follows — the retry, the next step, the end of the run. A reactor that
@@ -108,6 +98,14 @@ pub enum Taken {
 }
 
 /// How a reactor watches an attempt it is performing.
+///
+/// While an executor works, the reactor reads the run's projection every
+/// `every` and its own clock against the step's timeout. A run that is
+/// cancelling or has ended, or a deadline that passed, sets the attempt's
+/// [`StopSignal`](crate::activity::StopSignal), asks the runtime through
+/// [`ActivityExecutor::cancel`], and gives the executor `grace` to return
+/// before the attempt is abandoned — the pod launcher's rule for a pod. Without
+/// it, a cancel of a run whose step ran here waited for that step to finish.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Watch {
     /// How often the run is read to learn whether it is still running.

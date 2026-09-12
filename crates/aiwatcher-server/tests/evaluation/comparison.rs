@@ -378,6 +378,7 @@ fn with_latency(request: &mut PublishEvaluation, values: &[f64]) {
         unit: "ms".into(),
         direction: MetricDirection::Lower,
         aggregation: Aggregation::Mean,
+        measured_by: None,
     });
     for (case, value) in request.cases.iter_mut().zip(values) {
         if case.error.is_none() {

@@ -825,6 +825,35 @@ ml-pipeline-check:
     uv run --locked mypy
     uv run --locked pytest -q
 
+# ── Scorer service (Python) ──────────────────────────────────────────────────
+#
+# Optional, like the notebook runtime. It runs the framework metrics a scorecard
+# may name — DeepEval's and Opik's — behind one contract, for the work role's
+# `external_evaluation` step. Point AIWATCHER_SCORER_URL at it. See
+# services/scorers/README.md and ADR_0030's amendment.
+
+scorers := "services/scorers"
+
+# Install the service with both frameworks. `uv sync --extra opik` for one.
+scorers-install:
+    cd {{scorers}} && uv sync --all-extras --all-groups
+
+# The service on :8083. Heuristic metrics only, unless AIWATCHER_SCORERS_MODEL_*
+# names a model for the graded ones. Binds to localhost: it is sent the cases.
+scorers-serve port="8083":
+    cd {{scorers}} && AIWATCHER_SCORERS_PORT={{port}} uv run --all-extras python -m aiwatcher_scorers
+
+# Everything the scorer service has to pass, with both frameworks installed —
+# the adapters' tests run DeepEval's and Opik's heuristics for real.
+scorers-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd {{scorers}}
+    uv run --locked --all-extras ruff format --check .
+    uv run --locked --all-extras ruff check .
+    uv run --locked --all-extras mypy
+    uv run --locked --all-extras pytest -q
+
 # Open http://localhost:5173/data-curation/pipeline and load an example: PII
 # detection, Titanic features, or — the one that needs no notebook runtime —
 # Titanic survival rates. The Recipe view beside it ships the same corpus as

@@ -23,8 +23,8 @@
 use aiwatcher_auth::Role;
 use aiwatcher_core::ArtifactRef;
 use aiwatcher_evaluation::{
-    CalibrationRequest, CalibrationVersion, CohortRequest, DeclaredRun, DerivedCohort, ScoringRun,
-    ScoringRunView,
+    CalibrationRequest, CalibrationVersion, CohortRequest, DeclaredRun, DerivedCohort,
+    RecordedCatalog, ScoringRun, ScoringRunView,
 };
 use aiwatcher_execution::message::RunProjection;
 use aiwatcher_execution::plan::{
@@ -80,7 +80,8 @@ pub struct ScoringAccepted {
     take_calibration,
     get_calibration,
     derive_cohort,
-    get_derived_cohort
+    get_derived_cohort,
+    get_scorer_catalog
 ))]
 struct Api;
 
@@ -108,6 +109,7 @@ pub fn router() -> Router<AppState> {
             get(get_calibration),
         )
         .route("/api/v1/evaluation-cohorts", post(derive_cohort))
+        .route("/api/v1/evaluation-scorers", get(get_scorer_catalog))
         .route(
             "/api/v1/evaluation-cohorts/{cases}",
             get(get_derived_cohort),
@@ -224,7 +226,25 @@ async fn start_scoring_run(
     // same 403 a producer's publication of that pair gets.
     evaluations.admission(&viewed.manifest).await?;
     // Before a run exists rather than after: a judged run on a deployment with
-    // no judge, or with another profile, is one nothing would ever claim.
+    // no judge, or with another profile, is one nothing would ever claim — and
+    // a run whose card asks a scorer service, on a deployment with none.
+    let external = asks_a_scorer_service(&viewed.manifest);
+    let asked = viewed.declaration.run.settings.concurrency;
+    if external {
+        let ceiling = state.scorer_concurrency.ok_or(ApiError::ScorersDisabled)?;
+        if let Some(asked) = asked
+            && usize::try_from(asked).unwrap_or(usize::MAX) > ceiling
+        {
+            return Err(ApiError::PlanRefused {
+                summary: "this run asks more of the scorer service than this deployment allows"
+                    .to_owned(),
+                problems: vec![format!(
+                    "declared to score {asked} cases at once, and AIWATCHER_SCORER_CONCURRENCY \
+                     allows {ceiling}"
+                )],
+            });
+        }
+    }
     if let Some(judge) = &viewed.declaration.run.judge {
         let deployed = state
             .judge_provider
@@ -239,7 +259,7 @@ async fn start_scoring_run(
         }
         // More at once than the operator allows is refused rather than quietly
         // lowered: a run that says eight and asks two is a setting that lied.
-        if let Some(asked) = viewed.declaration.run.settings.concurrency
+        if let Some(asked) = asked
             && usize::try_from(asked).unwrap_or(usize::MAX) > state.judge_concurrency
         {
             problems.push(format!(
@@ -258,7 +278,7 @@ async fn start_scoring_run(
     let started = state
         .executions()
         .start(
-            plan_for(&viewed.declaration),
+            plan_for(&viewed.declaration, external),
             StartRun {
                 // The declaration is the content address of the intention, so
                 // starting one twice is one run by construction and no header
@@ -373,6 +393,33 @@ async fn get_derived_cohort(
         .ok_or_else(|| ApiError::NotFound(format!("a cohort derived with cases {cases}")))
 }
 
+/// What the scorer service says it measures, as the work role last recorded it.
+///
+/// The vocabulary a card's external metrics are named from: each adapter at the
+/// release it runs, the model its graded metrics ask, and every metric with its
+/// unit, direction, what it reads and the parameters it takes. A card is pinned
+/// against this when it is published.
+#[utoipa::path(get, path = "/api/v1/evaluation-scorers",
+    responses((status = 200, body = RecordedCatalog), (status = 404, body = crate::error::ErrorBody),
+    (status = 501, body = crate::error::ErrorBody)), tag = "evaluation")]
+async fn get_scorer_catalog(
+    State(state): State<AppState>,
+    caller: Caller,
+) -> ApiResult<Json<RecordedCatalog>> {
+    caller.require(Role::Viewer)?;
+    registry(&state)?
+        .scorer_catalog()
+        .await?
+        .map(Json)
+        .ok_or_else(|| {
+            ApiError::NotFound(
+                "a scorer catalog: no scorer service has described itself to this deployment \
+                 (AIWATCHER_SCORER_URL, on the work role)"
+                    .to_owned(),
+            )
+        })
+}
+
 async fn view(evaluations: &aiwatcher_evaluation::Registry, id: &str) -> ApiResult<ScoringRunView> {
     evaluations
         .scoring_run_view(id)
@@ -385,11 +432,19 @@ async fn view(evaluations: &aiwatcher_evaluation::Registry, id: &str) -> ApiResu
 /// Sealed here rather than compiled from a name, because there is no name: a
 /// declaration is addressed by its content, and that address is both the plan's
 /// revision and the only thing its step carries.
-fn plan_for(declared: &DeclaredRun) -> ExecutionPlan {
+fn plan_for(declared: &DeclaredRun, external: bool) -> ExecutionPlan {
     let spec = ScoreEvaluationSpec {
         declaration: declared.id.clone(),
     };
-    let (runtime, default_timeout) = if declared.run.judge.is_some() {
+    // Where it runs is decided by the most any metric needs: a scorer service
+    // is a socket the work role holds, with a judge beside it when the card
+    // asks one too.
+    let (runtime, default_timeout) = if external {
+        (
+            RuntimeBinding::ExternalEvaluation(spec),
+            JUDGED_TIMEOUT_SECONDS,
+        )
+    } else if declared.run.judge.is_some() {
         (
             RuntimeBinding::JudgeEvaluation(spec),
             JUDGED_TIMEOUT_SECONDS,
@@ -423,6 +478,15 @@ fn plan_for(declared: &DeclaredRun) -> ExecutionPlan {
         }],
         Vec::new(),
     )
+}
+
+/// Whether any metric this manifest publishes is measured by a scorer service.
+fn asks_a_scorer_service(manifest: &aiwatcher_evaluation::EvaluationManifest) -> bool {
+    manifest
+        .context
+        .metrics
+        .iter()
+        .any(|metric| metric.measured_by.is_some())
 }
 
 fn now() -> i64 {
@@ -485,20 +549,25 @@ mod tests {
             concurrency: None,
         };
         assert_eq!(
-            plan_for(&declared(chosen.clone(), false)).steps[0].timeout_seconds,
+            plan_for(&declared(chosen.clone(), false), false).steps[0].timeout_seconds,
             600
         );
         assert_eq!(
-            plan_for(&declared(chosen, true)).steps[0].timeout_seconds,
+            plan_for(&declared(chosen, true), false).steps[0].timeout_seconds,
             600
         );
         assert_eq!(
-            plan_for(&declared(Default::default(), false)).steps[0].timeout_seconds,
+            plan_for(&declared(Default::default(), false), false).steps[0].timeout_seconds,
             SCORING_TIMEOUT_SECONDS
         );
         assert_eq!(
-            plan_for(&declared(Default::default(), true)).steps[0].timeout_seconds,
+            plan_for(&declared(Default::default(), true), false).steps[0].timeout_seconds,
             JUDGED_TIMEOUT_SECONDS
+        );
+        let external = plan_for(&declared(Default::default(), false), true);
+        assert_eq!(
+            external.steps[0].runtime.kind().as_str(),
+            "external_evaluation"
         );
     }
 }

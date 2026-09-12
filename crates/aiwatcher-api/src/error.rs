@@ -72,6 +72,11 @@ pub enum ApiError {
     #[error("this instance asks no judge (AIWATCHER_JUDGE_URL, AIWATCHER_JUDGE_PROVIDER)")]
     JudgeDisabled,
 
+    /// A scoring run whose card asks a scorer service, on a deployment that has
+    /// none. The judge's refusal, for the other kind of question.
+    #[error("this instance has no scorer service (AIWATCHER_SCORER_URL)")]
+    ScorersDisabled,
+
     /// Evidence this deployment measures, sent to the route a producer uses.
     ///
     /// The run that measured it publishes it, through the registry, with the
@@ -302,6 +307,7 @@ impl ApiError {
             // report success for a rerun that never happened.
             Self::RunnerDisabled => (StatusCode::NOT_IMPLEMENTED, "runner_disabled"),
             Self::JudgeDisabled => (StatusCode::NOT_IMPLEMENTED, "judge_disabled"),
+            Self::ScorersDisabled => (StatusCode::NOT_IMPLEMENTED, "scorers_disabled"),
             Self::MeasuredHere => (StatusCode::FORBIDDEN, "measured_here"),
             Self::EditorDisabled => (StatusCode::NOT_IMPLEMENTED, "editor_disabled"),
             Self::Editor(error) => match error {

@@ -18,13 +18,17 @@
 //! model is a socket and a credential, so that kind is `judge_evaluation`,
 //! claimed where `AIWATCHER_JUDGE_URL` is. Every question is put before the
 //! fold runs, so the fold still opens nothing.
+//!
+//! **So is a card that asks a scorer service** (`external_evaluation`, where
+//! `AIWATCHER_SCORER_URL` is), held to the release and model the card pinned.
 
 use std::sync::Arc;
 
 use aiwatcher_api::state::AppState;
 use aiwatcher_evaluation::{
-    DatasetKind, EvaluationError, EvidenceState, JudgeFailure, JudgeModel, Judged,
-    PublishEvaluation, Registry as Evaluations, StepOrigin, questions, replies, score_with,
+    DatasetKind, EvaluationError, EvidenceState, ExternalScorers, JudgeFailure, JudgeModel, Judged,
+    PublishEvaluation, Registry as Evaluations, ScorerFailure, StepOrigin, external_questions,
+    external_replies, questions, replies, score_with,
 };
 use aiwatcher_execution::{
     ActivityCommand, ActivityContext, ActivityError, ActivityExecutor, ActivityResult,
@@ -73,10 +77,38 @@ pub fn judged(state: &AppState, config: &crate::config::Config) -> ExecutorRegis
     ))
 }
 
+/// The executor for runs whose card asks a scorer service, if this deployment
+/// has a registry and a service — asking a judge too, when it has one.
+#[must_use]
+pub fn external(
+    state: &AppState,
+    config: &crate::config::Config,
+    scorers: Option<&Arc<dyn ExternalScorers>>,
+) -> ExecutorRegistry {
+    let registry = ExecutorRegistry::new();
+    let (Some(evaluations), Some(scorers)) = (state.evaluations.as_ref(), scorers) else {
+        return registry;
+    };
+    let mut executor = ScoreExecutor::new(Arc::clone(evaluations))
+        .scored_by(Arc::clone(scorers), config.scorer_concurrency);
+    match super::judge::OpenAiJudge::from_config(config) {
+        Ok(Some(judge)) => {
+            executor = executor.judged_by(Arc::new(judge), config.judge_concurrency);
+        }
+        Ok(None) => {}
+        Err(error) => {
+            tracing::error!(%error, "the judge client did not build; a card asking one fails here");
+        }
+    }
+    tracing::info!("the work role asks a scorer service");
+    registry.with(Arc::new(executor))
+}
+
 #[derive(Debug)]
 pub struct ScoreExecutor {
     evaluations: Arc<Evaluations>,
     judge: Option<(Arc<dyn JudgeModel>, usize)>,
+    scorers: Option<(Arc<dyn ExternalScorers>, usize)>,
 }
 
 impl ScoreExecutor {
@@ -85,7 +117,16 @@ impl ScoreExecutor {
         Self {
             evaluations,
             judge: None,
+            scorers: None,
         }
+    }
+
+    /// The same executor, putting cases to this scorer service this many at a
+    /// time — and so performing `external_evaluation`.
+    #[must_use]
+    pub fn scored_by(mut self, scorers: Arc<dyn ExternalScorers>, concurrency: usize) -> Self {
+        self.scorers = Some((scorers, concurrency));
+        self
     }
 
     /// The same executor, asking this judge this many questions at a time —
@@ -100,7 +141,9 @@ impl ScoreExecutor {
 #[async_trait]
 impl ActivityExecutor for ScoreExecutor {
     fn runtime(&self) -> RuntimeKind {
-        if self.judge.is_some() {
+        if self.scorers.is_some() {
+            RuntimeKind::ExternalEvaluation
+        } else if self.judge.is_some() {
             RuntimeKind::JudgeEvaluation
         } else {
             RuntimeKind::ScoreEvaluation
@@ -112,8 +155,9 @@ impl ActivityExecutor for ScoreExecutor {
         command: &ActivityCommand,
         context: &ActivityContext,
     ) -> Result<ActivityResult, ActivityError> {
-        let (RuntimeBinding::ScoreEvaluation(spec) | RuntimeBinding::JudgeEvaluation(spec)) =
-            &command.step.runtime
+        let (RuntimeBinding::ScoreEvaluation(spec)
+        | RuntimeBinding::JudgeEvaluation(spec)
+        | RuntimeBinding::ExternalEvaluation(spec)) = &command.step.runtime
         else {
             return Err(ActivityError::user_code("this step does not score"));
         };
@@ -212,6 +256,58 @@ impl ActivityExecutor for ScoreExecutor {
             .map_err(refusal)?;
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
 
+        // A scorer service's numbers, before the judge's: both are handed to
+        // the fold in one map, and neither asks anything of the other.
+        let (scored_elsewhere, external_asked) = if card.scorecard.asks_a_scorer_service() {
+            let Some((scorers, ceiling)) = &self.scorers else {
+                return Err(ActivityError::user_code(
+                    "this card asks a scorer service, and this process holds none",
+                ));
+            };
+            context.stop.check()?;
+            // Held to the card before anything is asked: a service now running
+            // another release, or grading with another model, would measure
+            // something else under this card's name.
+            let live = scorers.catalog().await.map_err(scorer_failure)?;
+            for (index, spec) in card.scorecard.scorers.iter().enumerate() {
+                if let Some(external) = spec.scorer.external() {
+                    aiwatcher_evaluation::resolve_external(
+                        &live,
+                        &format!("scorecard.scorers[{index}].scorer"),
+                        external.adapter,
+                        external.metric,
+                        external.parameters,
+                        external.declared,
+                    )
+                    .map_err(|error| ActivityError::user_code(error.to_string()))?;
+                }
+            }
+            let asking = external_questions(&card.scorecard, &cohort, &answers);
+            let remembering: Arc<dyn ExternalScorers> = Arc::new(super::scorers::Remembering::new(
+                Arc::clone(scorers),
+                Arc::clone(&self.evaluations),
+                spec.declaration.clone(),
+            ));
+            let replies = super::scorers::score_all(
+                &remembering,
+                asking
+                    .questions
+                    .iter()
+                    .map(|question| question.call.clone())
+                    .collect(),
+                paced(run.settings.concurrency, *ceiling),
+                &context.stop,
+            )
+            .await
+            .map_err(|failure| match context.stop.requested() {
+                Some(reason) => reason.as_error(),
+                None => scorer_failure(failure),
+            })?;
+            (external_replies(&asking, &replies), asking.questions.len())
+        } else {
+            (Judged::new(), 0)
+        };
+
         let (judged, report, asked) = match (&run.judge, &self.judge) {
             (None, _) => (Judged::new(), None, 0),
             (Some(_), None) => {
@@ -265,13 +361,7 @@ impl ActivityExecutor for ScoreExecutor {
                         .iter()
                         .map(|question| question.call.clone())
                         .collect(),
-                    // The declaration's pace, never past the deployment's:
-                    // the start refused a run asking for more, and a
-                    // declaration read back here is held to the same line.
-                    run.settings
-                        .concurrency
-                        .and_then(|asked| usize::try_from(asked).ok())
-                        .map_or(*concurrency, |asked| asked.min(*concurrency)),
+                    paced(run.settings.concurrency, *concurrency),
                     &context.stop,
                 )
                 .await
@@ -304,6 +394,8 @@ impl ActivityExecutor for ScoreExecutor {
         // publication stopped halfway is worth less than one finished a few
         // seconds after a cancel: the reactor's grace is for exactly this.
         context.stop.check()?;
+        let mut judged = judged;
+        judged.extend(scored_elsewhere);
         let scored = score_with(
             &card.scorecard,
             &cohort.expected,
@@ -347,12 +439,29 @@ impl ActivityExecutor for ScoreExecutor {
                 "failed": failed,
                 "unscored": cohort.expected.len() - measured,
                 "judge_questions": asked,
+                "scorer_questions": external_asked,
                 "judge": report,
             })),
             diagnostics: None,
             awaiting: None,
             ..ActivityResult::default()
         })
+    }
+}
+
+/// The declaration's pace, never past the deployment's: the start refused a run
+/// asking for more, and a declaration read back here is held to the same line.
+fn paced(declared: Option<u32>, ceiling: usize) -> usize {
+    declared
+        .and_then(|asked| usize::try_from(asked).ok())
+        .map_or(ceiling, |asked| asked.min(ceiling))
+}
+
+/// A scorer service's failure, as the class that decides whether to retry.
+fn scorer_failure(failure: ScorerFailure) -> ActivityError {
+    match failure {
+        ScorerFailure::Unavailable(_) => ActivityError::transient(failure.to_string()),
+        ScorerFailure::Refused(_) => ActivityError::user_code(failure.to_string()),
     }
 }
 

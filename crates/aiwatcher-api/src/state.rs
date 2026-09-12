@@ -138,6 +138,11 @@ pub struct AppState {
     /// (`AIWATCHER_JUDGE_CONCURRENCY`). Read by the same start, so a run
     /// declared to ask more is refused rather than quietly slowed.
     pub judge_concurrency: usize,
+    /// How many cases a run may put to the scorer service at once
+    /// (`AIWATCHER_SCORER_CONCURRENCY`), when this deployment has one
+    /// (`AIWATCHER_SCORER_URL`). `None` is a deployment with none, whose
+    /// start of a run that asks one is refused naming the variable.
+    pub scorer_concurrency: Option<usize>,
     /// Vector image annotations and the training exports built from them.
     /// Same store, third prefix, and the same reason all three are here rather
     /// than on the log: a training label has to outlive every run that used
@@ -330,6 +335,7 @@ impl std::fmt::Debug for AppState {
             )
             .field("judge_provider", &self.judge_provider)
             .field("judge_concurrency", &self.judge_concurrency)
+            .field("scorer_concurrency", &self.scorer_concurrency)
             .field("workflow_runner", &self.runner)
             .field("editor", &self.editor)
             .field("auth", &self.auth)

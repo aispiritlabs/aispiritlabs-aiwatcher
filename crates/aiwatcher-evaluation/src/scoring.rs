@@ -288,11 +288,7 @@ impl ScoringRun {
         if let Some(judge) = &self.judge {
             judge.validate()?;
         }
-        require(
-            self.settings.concurrency.is_none() || self.judge.is_some(),
-            "run.settings.concurrency",
-            "is how many questions a judge is asked at once, and this run asks no judge",
-        )?;
+
         let conversations = self.variant.dataset.kind == DatasetKind::Conversations;
         match &self.answers {
             Answers::Recording(recording) => {
@@ -328,6 +324,14 @@ impl ScoringRun {
             card.name == self.scorecard.name,
             "run.scorecard.name",
             "names a different card from the one resolved",
+        )?;
+        require(
+            self.settings.concurrency.is_none()
+                || self.judge.is_some()
+                || card.asks_a_scorer_service(),
+            "run.settings.concurrency",
+            "is how many questions a judge or a scorer service is asked at once, and this run \
+             asks neither",
         )?;
         let asks_a_judge = !card.judges().is_empty();
         require(
@@ -480,6 +484,82 @@ pub fn warnings(
     card: &Scorecard,
     calibration: Option<&CalibrationSet>,
 ) -> Vec<String> {
+    let mut said = judge_warnings(manifest, card, calibration);
+    said.extend(external_warnings(manifest, card));
+    said
+}
+
+/// What a run that asks a scorer service commits people to.
+///
+/// Two things, said separately because either can be true without the other.
+/// A metric a model graded is a model's word whose agreement with people
+/// nobody measured — a rubric judge is calibrated, and a framework's metric is
+/// not. And over a conversation cohort, the scorer service is sent the
+/// archive's words, and a graded metric sends them on to its model's provider.
+fn external_warnings(manifest: &EvaluationManifest, card: &Scorecard) -> Vec<String> {
+    let mut said = Vec::new();
+    let measured: Vec<&crate::ExternalMeasure> = manifest
+        .context
+        .metrics
+        .iter()
+        .filter_map(|metric| metric.measured_by.as_ref())
+        .collect();
+    for metric in &manifest.context.metrics {
+        if let Some(measure) = &metric.measured_by
+            && let Some(model) = &measure.model
+        {
+            said.push(format!(
+                "`{}` is graded by {} {} through {} {}: a model's word, which re-reading will not \
+                 reproduce and whose agreement with people nothing here measured.",
+                metric.name,
+                model.name,
+                model.version,
+                measure.adapter.name,
+                measure.adapter.version
+            ));
+        }
+    }
+    if manifest.context.dataset.kind == DatasetKind::Conversations && !measured.is_empty() {
+        let mut sent = vec!["each assistant response this run scores"];
+        if card
+            .scorers
+            .iter()
+            .any(|spec| spec.scorer.external().is_some() && spec.input_path.is_some())
+        {
+            sent.push("what was said to the assistant before each one");
+        }
+        let graded = measured.iter().filter_map(|measure| measure.model.as_ref());
+        let providers: std::collections::BTreeSet<String> = graded
+            .map(|model| format!("{} {}", model.name, model.version))
+            .collect();
+        let adapters: std::collections::BTreeSet<&str> = measured
+            .iter()
+            .map(|measure| measure.adapter.name.as_str())
+            .collect();
+        said.push(format!(
+            "This run sends words from the conversation archive to the scorer service ({}): {}.{} \
+             What leaves the archive is outside its encryption, retention and erasure, and \
+             nothing here can take it back.",
+            adapters.into_iter().collect::<Vec<_>>().join(", "),
+            sent.join("; "),
+            if providers.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " Its graded metrics send them on to the provider of {}.",
+                    providers.into_iter().collect::<Vec<_>>().join(", ")
+                )
+            }
+        ));
+    }
+    said
+}
+
+fn judge_warnings(
+    manifest: &EvaluationManifest,
+    card: &Scorecard,
+    calibration: Option<&CalibrationSet>,
+) -> Vec<String> {
     let Some(judge) = manifest
         .context
         .judge
@@ -619,15 +699,16 @@ fn measure(
 ) -> std::result::Result<BTreeMap<String, f64>, String> {
     let mut metrics = BTreeMap::new();
     for spec in &card.scorers {
-        let score = match (spec.scorer.rubric(), spec.sides(&answer.answer, expected)) {
+        let asked_elsewhere = spec.scorer.rubric().is_some() || spec.scorer.external().is_some();
+        let score = match (asked_elsewhere, spec.sides(&answer.answer, expected)) {
             (_, Err(reason)) => Score::Unscored(reason),
-            (Some(_), Ok(_)) => judged
+            // A judge's reply or a scorer service's, handed in: the fold opens
+            // no socket for either.
+            (true, Ok(_)) => judged
                 .get(&(answer.case_id.clone(), spec.metric.clone()))
                 .cloned()
-                .unwrap_or_else(|| {
-                    Score::Unscored("nobody asked the judge about this case".into())
-                }),
-            (None, Ok(_)) => spec.measure(&answer.answer, expected),
+                .unwrap_or_else(|| spec.scorer.score(&answer.answer, expected)),
+            (false, Ok(_)) => spec.measure(&answer.answer, expected),
         };
         match score {
             Score::Measured(value) => {
@@ -856,6 +937,104 @@ pub fn replies(
     (judged, Some(report))
 }
 
+/// One case a run puts to a scorer service.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExternalQuestion {
+    pub case_id: String,
+    pub metric: String,
+    pub call: crate::ExternalCall,
+}
+
+/// The questions a run puts to its scorer service, and the cases it could not
+/// ask about, with why.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ExternalAsking {
+    pub questions: Vec<ExternalQuestion>,
+    pub refused: Judged,
+}
+
+/// Every question a run's external metrics are asked.
+///
+/// One per external metric for each case the fold will score, as the judge's
+/// questions are: a case answered twice is not asked about, a case whose
+/// answer has nothing where the card points is left to the fold to explain,
+/// and a case the metric cannot be asked about — it reads the question and
+/// the card shows none — carries its reason back. A metric the card has not
+/// pinned a declaration for is asked nothing, and the fold says so.
+#[must_use]
+pub fn external_questions(
+    card: &Scorecard,
+    cohort: &CohortCases,
+    answers: &[RecordedAnswer],
+) -> ExternalAsking {
+    let mut asking = ExternalAsking::default();
+    let mut once: BTreeMap<&str, Vec<&RecordedAnswer>> = BTreeMap::new();
+    for answer in answers {
+        if cohort.expected.contains_key(&answer.case_id) {
+            once.entry(&answer.case_id).or_default().push(answer);
+        }
+    }
+    for spec in &card.scorers {
+        let Some(external) = spec.scorer.external() else {
+            continue;
+        };
+        let Some(declared) = external.declared else {
+            continue;
+        };
+        for (case_id, answered) in &once {
+            let [answer] = answered.as_slice() else {
+                continue;
+            };
+            let expected = &cohort.expected[*case_id];
+            if spec.sides(&answer.answer, expected).is_err() {
+                continue;
+            }
+            match spec.external_case(
+                declared,
+                cohort.inputs.get(*case_id),
+                &answer.answer,
+                expected,
+            ) {
+                Ok(case) => asking.questions.push(ExternalQuestion {
+                    case_id: (*case_id).to_owned(),
+                    metric: spec.metric.clone(),
+                    call: crate::ExternalCall {
+                        adapter: external.adapter.to_owned(),
+                        metric: external.metric.to_owned(),
+                        declared: declared.clone(),
+                        parameters: external.parameters.clone(),
+                        case,
+                    },
+                }),
+                Err(reason) => {
+                    asking.refused.insert(
+                        ((*case_id).to_owned(), spec.metric.clone()),
+                        Score::Unscored(reason),
+                    );
+                }
+            }
+        }
+    }
+    asking
+}
+
+/// What a scorer service's replies score, for the fold.
+///
+/// `replies` is in the order of the questions asked, and each is held to what
+/// the card pinned about its metric: a number outside the declared range, or a
+/// rate that is neither nought nor one, scores nothing.
+#[must_use]
+pub fn external_replies(asking: &ExternalAsking, replies: &[crate::ExternalReply]) -> Judged {
+    let mut judged = asking.refused.clone();
+    for (question, reply) in asking.questions.iter().zip(replies) {
+        judged.insert(
+            (question.case_id.clone(), question.metric.clone()),
+            reply.score(&question.call.declared),
+        );
+    }
+    judged
+}
+
 pub(crate) async fn declare(
     store: &Store,
     run: &ScoringRun,
@@ -1023,6 +1202,69 @@ mod tests {
         );
     }
 
+    fn external(reads: Vec<crate::CaseSide>, graded: bool) -> Scorer {
+        Scorer::External {
+            adapter: "deepeval".into(),
+            metric: "answer_relevancy".into(),
+            parameters: serde_json::Map::new(),
+            declared: Some(crate::ExternalDeclaration {
+                version: "4.2.2".into(),
+                model: graded.then(|| VersionReference {
+                    name: "gemma-4-e2b".into(),
+                    version: "q4".into(),
+                }),
+                unit: "score".into(),
+                direction: crate::MetricDirection::Higher,
+                aggregation: crate::Aggregation::Mean,
+                reads,
+                range: Some([0.0, 1.0]),
+            }),
+        }
+    }
+
+    #[test]
+    fn a_framework_metric_over_the_archive_is_told_to_everybody_and_one_reading_the_expectation_is_refused()
+     {
+        use crate::CaseSide::{Answer, Expected, Input};
+        let archived = run(
+            DatasetKind::Conversations,
+            Answers::Archive(ArchiveWord::Archive),
+        );
+        let mut graded = card(external(vec![Input, Answer], true));
+        graded.scorers[0].input_path = Some("/question".into());
+        let manifest = archived
+            .manifest(&graded, &Rubrics::default(), None, None)
+            .expect("a graded metric that reads the question and the answer is declared");
+        assert!(
+            manifest.context.metrics[0]
+                .measured_by
+                .as_ref()
+                .is_some_and(|measure| measure.model.is_some())
+        );
+        let said = warnings(&manifest, &graded, None);
+        assert_eq!(said.len(), 2, "{said:?}");
+        assert!(said[0].contains("`measured` is graded by gemma-4-e2b q4 through deepeval 4.2.2"));
+        assert!(
+            said[1].contains("to the scorer service (deepeval)")
+                && said[1].contains("what was said to the assistant")
+                && said[1].contains("provider of gemma-4-e2b q4"),
+            "{}",
+            said[1]
+        );
+
+        // A heuristic over a curation cohort sends nothing anywhere worth a word.
+        let plain = card(external(vec![Answer], false));
+        let quiet = run(DatasetKind::Curation, Answers::Recording(recording()))
+            .manifest(&plain, &Rubrics::default(), None, None)
+            .unwrap();
+        assert!(warnings(&quiet, &plain, None).is_empty());
+
+        // Over the archive, the expectation is the answer being measured.
+        let comparing = card(external(vec![Answer, Expected], false));
+        let refused = archived.check(&comparing).unwrap_err().to_string();
+        assert!(refused.contains("`measured`"), "{refused}");
+    }
+
     #[test]
     fn settings_nobody_chose_leave_a_declarations_address_where_it_was() {
         let declared = run(DatasetKind::Curation, Answers::Recording(recording()));
@@ -1063,9 +1305,15 @@ mod tests {
 
         let mut crowded = run(DatasetKind::Curation, Answers::Recording(recording()));
         crowded.settings.concurrency = Some(4);
-        let refused = crowded.validate().unwrap_err().to_string();
+        let refused = crowded
+            .check(&card(Scorer::Forbidden {
+                text: "ssn".into(),
+                ignore_case: false,
+            }))
+            .unwrap_err()
+            .to_string();
         assert!(
-            refused.contains("concurrency") && refused.contains("no judge"),
+            refused.contains("concurrency") && refused.contains("asks neither"),
             "{refused}"
         );
     }

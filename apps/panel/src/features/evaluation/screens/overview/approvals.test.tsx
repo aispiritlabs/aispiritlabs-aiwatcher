@@ -82,9 +82,11 @@ it("warns an admin whose declaration's judge reads the archive, and waits to be 
     text: async () => text,
   });
   await userEvent.upload(await screen.findByLabelText('Bundle files'), manifest);
-  expect(await screen.findByText(/judge is sent words from the conversation archive/)).toBeTruthy();
+  expect(
+    await screen.findByText(/sends words from the conversation archive to a judge or a scorer/),
+  ).toBeTruthy();
   const admit = screen.getByRole('button', { name: 'Stage and admit' }) as HTMLButtonElement;
   expect(admit.disabled).toBe(true);
-  await userEvent.click(screen.getByLabelText('Acknowledge what this judge is sent'));
+  await userEvent.click(screen.getByLabelText('Acknowledge what this pair sends'));
   expect(admit.disabled).toBe(false);
 });

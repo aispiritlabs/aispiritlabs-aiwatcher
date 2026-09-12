@@ -1,0 +1,16 @@
+{
+  "adapter": "deepeval",
+  "metric": "answer_relevancy",
+  "declared": {
+    "version": "4.2.2",
+    "model": {"name": "gemma-4-e2b", "version": "ud-q4-k-xl"},
+    "unit": "score",
+    "direction": "higher",
+    "aggregation": "mean",
+    "reads": ["input", "answer"],
+    "range": [0.0, 1.0]
+  },
+  "cases": [
+    {"input": "What is the capital of Poland?", "answer": "Warsaw"}
+  ]
+}

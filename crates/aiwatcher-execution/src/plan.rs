@@ -135,6 +135,11 @@ pub enum RuntimeBinding {
     /// credential, which belong to the work role, and a claim filter tells the
     /// two apart from the row without loading the declaration.
     JudgeEvaluation(ScoreEvaluationSpec),
+    /// The same measurement when its card asks a scorer service — DeepEval's
+    /// metrics, Opik's, any adapter's there. A kind of its own for the judge's
+    /// reason: the service is a socket, and it is claimed where
+    /// `AIWATCHER_SCORER_URL` is, with a judge beside it when the card asks one.
+    ExternalEvaluation(ScoreEvaluationSpec),
     /// Nobody runs it. It waits for somebody to answer.
     HumanInput(HumanInputSpec),
 }
@@ -154,6 +159,7 @@ pub enum RuntimeKind {
     ContainerJob,
     ScoreEvaluation,
     JudgeEvaluation,
+    ExternalEvaluation,
     HumanInput,
 }
 
@@ -170,6 +176,7 @@ impl RuntimeKind {
             Self::ContainerJob => "container_job",
             Self::ScoreEvaluation => "score_evaluation",
             Self::JudgeEvaluation => "judge_evaluation",
+            Self::ExternalEvaluation => "external_evaluation",
             Self::HumanInput => "human_input",
         }
     }
@@ -241,6 +248,7 @@ impl RuntimeKind {
             | Self::ContainerJob
             | Self::ScoreEvaluation
             | Self::JudgeEvaluation
+            | Self::ExternalEvaluation
             | Self::HumanInput => None,
         }
     }
@@ -257,6 +265,7 @@ impl RuntimeBinding {
             Self::PublishDataset(_) => RuntimeKind::PublishDataset,
             Self::ScoreEvaluation(_) => RuntimeKind::ScoreEvaluation,
             Self::JudgeEvaluation(_) => RuntimeKind::JudgeEvaluation,
+            Self::ExternalEvaluation(_) => RuntimeKind::ExternalEvaluation,
             Self::PythonTask(_) => RuntimeKind::PythonTask,
             Self::ContainerJob(_) => RuntimeKind::ContainerJob,
             Self::HumanInput(_) => RuntimeKind::HumanInput,
@@ -291,7 +300,8 @@ impl RuntimeBinding {
             Self::PythonTask(_)
             | Self::ContainerJob(_)
             | Self::ScoreEvaluation(_)
-            | Self::JudgeEvaluation(_) => None,
+            | Self::JudgeEvaluation(_)
+            | Self::ExternalEvaluation(_) => None,
         }
     }
 
@@ -313,6 +323,7 @@ impl RuntimeBinding {
             | Self::ContainerJob(_)
             | Self::ScoreEvaluation(_)
             | Self::JudgeEvaluation(_)
+            | Self::ExternalEvaluation(_)
             | Self::HumanInput(_) => None,
         }
     }

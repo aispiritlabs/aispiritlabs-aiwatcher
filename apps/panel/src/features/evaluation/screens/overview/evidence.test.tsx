@@ -305,3 +305,76 @@ it('says in words when the judge behind a result was sent the archive', async ()
     await screen.findByText(/This judge was sent words from the conversation archive/),
   ).toBeTruthy();
 });
+
+it('names the framework that measured a metric, and says a model graded it uncalibrated', async () => {
+  only([
+    {
+      method: 'GET',
+      path: '/cases',
+      answer: { status: 200, body: { version: 'ff00', cases: [], state: 'complete' } },
+    },
+  ]);
+  const artifact = (name: string) => ({
+    name,
+    uri: `file://${name}`,
+    digest: 'e'.repeat(64),
+    size_bytes: 10,
+    content_type: 'application/json',
+  });
+  const dataset = { kind: 'curation' as const, name: 'questions', version: 'v1' };
+  render(
+    withQueries(
+      <Evidence
+        evidence={evidence('complete', {
+          reproducible: false,
+          metrics: { equals: 1, relevancy: 0.75 },
+          manifest: {
+            schema_version: 1,
+            origin: { evaluation_id: 'framework', repetition_id: 'measurement-1' },
+            variant: {
+              schema_version: 1,
+              experiment_id: 'candidate',
+              dataset,
+              code: artifact('responses.py'),
+              generation_config: artifact('generation.json'),
+            },
+            context: {
+              dataset,
+              case_manifest: artifact('cases.json'),
+              case_count: 2,
+              split: 'test',
+              suite: { name: 'framework-metrics', version: 'c'.repeat(64) },
+              scorer: { name: 'aiwatcher.scoring', version: '1' },
+              input_schema: artifact('input-schema.json'),
+              expectations_schema: artifact('expectations-schema.json'),
+              metrics: [
+                {
+                  name: 'equals',
+                  unit: 'ratio',
+                  direction: 'higher',
+                  aggregation: 'rate',
+                  measured_by: { adapter: { name: 'opik', version: '2.2.59' }, metric: 'equals' },
+                },
+                {
+                  name: 'relevancy',
+                  unit: 'score',
+                  direction: 'higher',
+                  aggregation: 'mean',
+                  measured_by: {
+                    adapter: { name: 'deepeval', version: '4.2.2' },
+                    metric: 'answer_relevancy',
+                    model: { name: 'gemma-4-e2b', version: 'q4' },
+                  },
+                },
+              ],
+            },
+          },
+        })}
+      />,
+    ),
+  );
+  expect(await screen.findByText(/was measured by opik 2\.2\.59 \(equals\)\./)).toBeTruthy();
+  expect(screen.getByText(/graded by gemma-4-e2b @ q4 — a model's word/)).toBeTruthy();
+  // No rubric judge, so no calibration table and no "carries no agreement" alarm.
+  expect(screen.queryByText(/carries no agreement with its calibration set/)).toBeNull();
+});

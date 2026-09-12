@@ -143,6 +143,13 @@ pub(crate) fn calibration(version: &str) -> String {
 pub(crate) fn judge_reply(declaration: &str, question: &str) -> String {
     format!("evaluation-judges/replies/{declaration}/{question}.json")
 }
+/// The scorer service's catalog, as the work role last read it. Overwritten:
+/// it is what the service says now, and a card pins what it said then.
+pub(crate) const SCORER_CATALOG: &str = "evaluation-scorers/catalog.json";
+/// What a scorer service answered one exact question within one declared run.
+pub(crate) fn external_reply(declaration: &str, question: &str) -> String {
+    format!("evaluation-scorers/replies/{declaration}/{question}.json")
+}
 /// Where a derived cohort's cases came from, under the digest of those cases.
 pub(crate) fn derived_cohort(cases: &str) -> String {
     format!("evaluation-cohorts/{cases}.json")

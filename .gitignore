@@ -90,5 +90,9 @@ services/ml_pipeline/.venv/
 services/ml_pipeline/.data/
 services/query/.venv/
 services/query/contract/conformance/.data/
+# The scorer service's virtualenv, and the cache directory DeepEval makes in
+# whatever directory it is imported from. Neither holds anything a run needs.
+services/scorers/.venv/
+services/scorers/.deepeval/
 # and the source of every notebook revision a run may still pin.
 services/ml_pipeline/.revisions/

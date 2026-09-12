@@ -221,6 +221,35 @@
       ],
       "type": "object"
     },
+    "ExternalMeasure": {
+      "additionalProperties": false,
+      "description": "A metric a scorer framework measured, named where a reader of the result\nsees the number.",
+      "properties": {
+        "adapter": {
+          "$ref": "#/$defs/VersionReference",
+          "description": "The adapter and the framework release it ran: `deepeval` at `4.2.2`."
+        },
+        "metric": {
+          "type": "string"
+        },
+        "model": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/VersionReference",
+              "description": "The model that graded it. A number a model gave is not reproduced by\nre-reading, and nothing measured how often this one agrees with people."
+            }
+          ]
+        }
+      },
+      "required": [
+        "adapter",
+        "metric"
+      ],
+      "type": "object"
+    },
     "JudgeConfiguration": {
       "additionalProperties": false,
       "properties": {
@@ -257,6 +286,17 @@
         },
         "direction": {
           "$ref": "#/$defs/MetricDirection"
+        },
+        "measured_by": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/ExternalMeasure",
+              "description": "Who measured this metric, when it was a scorer framework rather than\nthe scorers compiled in: the adapter at its version, its metric, and the\nmodel it graded with when a model did. Absent from every metric\nmeasured otherwise, so no context from before it moves."
+            }
+          ]
         },
         "name": {
           "type": "string"

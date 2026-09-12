@@ -962,7 +962,15 @@ impl Registry {
                 result.status = Some(metadata.status);
                 result.counts = Some(metadata.counts.clone());
                 result.metrics = metadata.metrics.clone();
-                result.reproducible = metadata.manifest.context.judge.is_none();
+                // Neither a judge nor a model grading an external metric gives
+                // numbers that re-reading reproduces.
+                result.reproducible = metadata.manifest.context.judge.is_none()
+                    && metadata.manifest.context.metrics.iter().all(|metric| {
+                        metric
+                            .measured_by
+                            .as_ref()
+                            .is_none_or(|measure| measure.model.is_none())
+                    });
                 result.judge = metadata.judge.clone();
                 return Ok((result, Some(metadata)));
             }
@@ -1684,7 +1692,100 @@ impl Registry {
         now: i64,
     ) -> Result<crate::ScorecardVersion> {
         let rubrics = self.rubrics_for(scorecard).await?;
-        crate::scorecard::publish(&self.store, scorecard, &rubrics, published_by, now).await
+        // What each external metric is, pinned from the catalog now — so the
+        // card's version names the framework release and the model, and a
+        // later catalog changes no card already published.
+        let scorecard = if scorecard.asks_a_scorer_service() {
+            let recorded = self.scorer_catalog().await?;
+            scorecard.declared_against(recorded.as_ref().map(|recorded| &recorded.catalog))?
+        } else {
+            scorecard.clone()
+        };
+        crate::scorecard::publish(&self.store, &scorecard, &rubrics, published_by, now).await
+    }
+
+    /// Keep what a scorer service says it measures, for the role that opens no
+    /// socket to it.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Invalid`] for a catalog this build cannot pin a card
+    /// against, and [`EvaluationError::Storage`] when the store cannot be
+    /// reached.
+    pub async fn record_scorer_catalog(
+        &self,
+        catalog: &crate::ScorerCatalog,
+        recorded_by: &str,
+        now: i64,
+    ) -> Result<crate::RecordedCatalog> {
+        catalog.validate()?;
+        let recorded = crate::RecordedCatalog {
+            catalog: catalog.clone(),
+            recorded_at: now,
+            recorded_by: recorded_by.to_owned(),
+        };
+        self.store
+            .0
+            .put(crate::store::SCORER_CATALOG, crate::canonical(&recorded)?)
+            .await?;
+        Ok(recorded)
+    }
+
+    /// The scorer service's catalog, as it was last recorded.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Storage`] when the store cannot be reached.
+    pub async fn scorer_catalog(&self) -> Result<Option<crate::RecordedCatalog>> {
+        self.store.read(crate::store::SCORER_CATALOG).await
+    }
+
+    /// What a scorer service already answered to this question in this run.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Storage`] when the store cannot be reached.
+    pub async fn remembered_score(
+        &self,
+        declaration: &str,
+        call: &crate::ExternalCall,
+    ) -> Result<Option<crate::ExternalReply>> {
+        text(declaration, "run")?;
+        Ok(self
+            .store
+            .read::<crate::KeptScore>(&crate::store::external_reply(
+                declaration,
+                &call.question()?,
+            ))
+            .await?
+            .map(Into::into))
+    }
+
+    /// Keep what a scorer service answered, and hand back the reply that
+    /// stands: the first write wins, as a judge's does, so two attempts publish
+    /// the same bytes.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Storage`] when the store cannot be reached.
+    pub async fn remember_score(
+        &self,
+        declaration: &str,
+        call: &crate::ExternalCall,
+        reply: &crate::ExternalReply,
+    ) -> Result<crate::ExternalReply> {
+        text(declaration, "run")?;
+        let key = crate::store::external_reply(declaration, &call.question()?);
+        let kept = crate::KeptScore::from(reply);
+        if self.store.create(&key, &kept).await? {
+            return Ok(kept.into());
+        }
+        Ok(self
+            .store
+            .read::<crate::KeptScore>(&key)
+            .await?
+            .ok_or(EvaluationError::Unavailable(EvidenceState::MissingArtifact))?
+            .into())
     }
 
     /// The rubric versions a card's judges ask, resolved.

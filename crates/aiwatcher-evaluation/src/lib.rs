@@ -7,6 +7,7 @@ mod assessment;
 mod cohort;
 mod comparison;
 mod context;
+mod external;
 mod judge;
 mod manifest;
 mod reference;
@@ -42,7 +43,13 @@ pub use result::*;
 pub use store::EvidenceCipher;
 
 pub use context::{
-    Aggregation, EvaluationContext, JudgeConfiguration, MetricDefinition, MetricDirection,
+    Aggregation, EvaluationContext, ExternalMeasure, JudgeConfiguration, MetricDefinition,
+    MetricDirection,
+};
+pub use external::{
+    CaseSide, CatalogAdapter, CatalogMetric, ExternalCall, ExternalCase, ExternalDeclaration,
+    ExternalReply, ExternalScorers, KeptScore, Parameter, ParameterKind, RecordedCatalog,
+    SCORER_CONTRACT, ScorerCatalog, ScorerFailure, resolve as resolve_external,
 };
 pub use judge::{
     AgreementInterval, CalibrationItem, CalibrationRequest, CalibrationSet, CalibrationVersion,
@@ -54,13 +61,15 @@ pub use manifest::{EvaluationManifest, EvaluationOrigin, PreparedEvaluation, Var
 pub use reference::{DatasetKind, DatasetReference, VersionReference};
 pub use rubric::{AssessmentValue, Rubric, RubricHead, RubricPage, RubricVersion, Scale};
 pub use scorecard::{
-    Rubrics, Score, Scorecard, ScorecardHead, ScorecardPage, ScorecardVersion, Scorer, ScorerSpec,
+    External, Rubrics, Score, Scorecard, ScorecardHead, ScorecardPage, ScorecardVersion, Scorer,
+    ScorerSpec,
 };
 pub use scoring::{
     Answers, ArchiveWord, Asked, Asking, Calibrated, Cohort, CohortCases, DeclaredRun,
-    JudgeQuestion, Judged, MAX_RUN_CONCURRENCY, MAX_RUN_TIMEOUT_SECONDS, MIN_RUN_TIMEOUT_SECONDS,
-    RecordedAnswer, RecordedAnswers, RunSettings, SCORING_ENGINE, SCORING_VERSION, Scored,
-    ScoringRun, ScoringRunView, Shown, StepOrigin, archived, questions, replies, score, score_with,
+    ExternalAsking, ExternalQuestion, JudgeQuestion, Judged, MAX_RUN_CONCURRENCY,
+    MAX_RUN_TIMEOUT_SECONDS, MIN_RUN_TIMEOUT_SECONDS, RecordedAnswer, RecordedAnswers, RunSettings,
+    SCORING_ENGINE, SCORING_VERSION, Scored, ScoringRun, ScoringRunView, Shown, StepOrigin,
+    archived, external_questions, external_replies, questions, replies, score, score_with,
     scoring_engine, warnings,
 };
 

@@ -1,0 +1,61 @@
+[project]
+name = "aiwatcher-scorers"
+version = "0.1.0"
+description = "The scorer service behind aiwatcher's external metrics: DeepEval, Opik and any framework an adapter wraps, behind one contract."
+readme = "README.md"
+# 3.13: the floor both frameworks this ships adapters for publish wheels for.
+# The service is installed by `uv`, which fetches the interpreter, so this is a
+# statement about the adapters rather than about who imports it.
+requires-python = ">=3.13"
+license = "PolyForm-Noncommercial-1.0.0"
+# The service itself is the two routes and nothing else. A framework is an
+# extra, because a deployment that measures with Opik should not install
+# DeepEval's dependency tree to do it — and an adapter whose framework is not
+# installed is left out of the catalog rather than failing the start.
+dependencies = ["starlette>=0.47,<1", "uvicorn>=0.35,<1"]
+
+[project.optional-dependencies]
+deepeval = ["deepeval>=4.2,<4.3"]
+opik = ["opik>=2.2,<2.3"]
+
+[project.scripts]
+aiwatcher-scorers = "aiwatcher_scorers.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["aiwatcher_scorers"]
+
+[dependency-groups]
+dev = ["httpx>=0.28,<1", "mypy>=1.18,<2", "pytest>=8.4,<10", "ruff>=0.16.5,<0.17"]
+
+[tool.uv]
+required-version = ">=0.12.7,<0.13"
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "C4", "SIM", "RUF", "ASYNC", "PTH", "BLE", "N", "S"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S105", "S106", "S104"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+files = ["aiwatcher_scorers", "tests"]
+
+# The frameworks are imported inside their adapters and nowhere else, and
+# neither ships complete stubs; what the adapter reads off them is checked by
+# the adapter's own tests, against the framework installed.
+[[tool.mypy.overrides]]
+module = ["deepeval.*", "opik.*"]
+ignore_missing_imports = true
+follow_imports = "skip"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

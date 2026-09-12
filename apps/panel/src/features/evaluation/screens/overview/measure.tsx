@@ -187,6 +187,11 @@ function Draft({ onDeclared }: { onDeclared: (declaration: string) => void }) {
     spec.scorer.kind === 'judge' ? [spec.scorer.rubric] : [],
   );
   const asksJudge = rubrics.length > 0;
+  // A judge and a scorer service both answer a bounded number at a time, and
+  // the declaration's pace is for both.
+  const asksElsewhere =
+    asksJudge ||
+    (card.data?.scorecard.scorers ?? []).some((spec) => spec.scorer.kind === 'external');
   // What each judged metric is shown of the case's question, as the card says.
   const shownInputs = (card.data?.scorecard.scorers ?? []).flatMap((spec) =>
     spec.scorer.kind === 'judge' && spec.input_path !== undefined && spec.input_path !== null
@@ -277,7 +282,7 @@ function Draft({ onDeclared }: { onDeclared: (declaration: string) => void }) {
         answers: staged,
         settings: {
           ...(pace.timeout.trim() ? { timeout_seconds: Number(pace.timeout) * 60 } : {}),
-          ...(asksJudge && pace.concurrency.trim()
+          ...(asksElsewhere && pace.concurrency.trim()
             ? { concurrency: Number(pace.concurrency) }
             : {}),
         },
@@ -553,7 +558,7 @@ function Draft({ onDeclared }: { onDeclared: (declaration: string) => void }) {
             deployment&apos;s.
           </span>
         </label>
-        {asksJudge ? (
+        {asksElsewhere ? (
           <label className="flex flex-col gap-1">
             Questions at once
             <input
@@ -567,7 +572,8 @@ function Draft({ onDeclared }: { onDeclared: (declaration: string) => void }) {
               onChange={(event) => setPace({ ...pace, concurrency: event.target.value })}
             />
             <span className="text-muted-foreground">
-              More than AIWATCHER_JUDGE_CONCURRENCY allows is refused when the run starts.
+              Put to a judge or a scorer service at once. More than AIWATCHER_JUDGE_CONCURRENCY or
+              AIWATCHER_SCORER_CONCURRENCY allows is refused when the run starts.
             </span>
           </label>
         ) : null}
@@ -936,7 +942,7 @@ function Declared({
   const { run } = declaration;
   const warnings = view.data.warnings ?? [];
   const heeded = warnings.length === 0 || acknowledged;
-  const unheard = 'Acknowledge what this judge is sent first.';
+  const unheard = 'Acknowledge the warnings first.';
   return (
     <div className="flex flex-col gap-3 text-xs">
       <div className="flex flex-wrap items-center gap-2">
@@ -967,7 +973,13 @@ function Declared({
           {manifest.context.metrics
             .map(
               (metric) =>
-                `${metric.name} (${metric.unit}, ${metric.direction}, ${metric.aggregation})`,
+                `${metric.name} (${metric.unit}, ${metric.direction}, ${metric.aggregation}${
+                  metric.measured_by
+                    ? `, by ${metric.measured_by.adapter.name} ${metric.measured_by.adapter.version}${
+                        metric.measured_by.model ? ` on ${metric.measured_by.model.name}` : ''
+                      }`
+                    : ''
+                })`,
             )
             .join(', ')}
         </dd>
@@ -1026,11 +1038,12 @@ function Declared({
           <label className="flex items-center gap-2">
             <input
               type="checkbox"
-              aria-label="Acknowledge what this judge is sent"
+              aria-label="Acknowledge the warnings"
               checked={acknowledged}
               onChange={(event) => setAcknowledged(event.target.checked)}
             />
-            I understand what this judge is sent. Admitting this pair and starting the run send it.
+            I have read what this run sends and how its numbers are made. Admitting this pair and
+            starting the run commit to both.
           </label>
         </div>
       ) : null}
