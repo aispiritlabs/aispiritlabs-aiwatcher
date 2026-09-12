@@ -1,6 +1,6 @@
 # FTI — rekomendacja zakresu i plan rozwoju
 
-Data: 2026-09-11. Status: A1–A4 i AR1 zaimplementowane; B1 zweryfikowane, trwały wycinek B2 i atomowe orphan GC nowych publikacji dostarczone; dodano weryfikowane adaptery Curation, promptów, modeli, Annotations i Conversations; B2/AR2 pozostają otwarte: B2e–B2h, w tym judge (sekcje 9–16). Wyniki odbioru A, ograniczenia i incydent seeda w sekcji 8. Przegląd planu z 2026-09-12 jest w sekcji 17; jego wnioski są wniesione do sekcji 2–7 — etap B ma punkty 8–11 i rozstrzygnięcia wizualne, tabela paczek B2e–B2i, a B3 zależy od B2e, B2f i B2i.
+Data: 2026-09-11. Status: A1–A4 i AR1 zaimplementowane; B1 zweryfikowane, trwały wycinek B2 i atomowe orphan GC nowych publikacji dostarczone; dodano weryfikowane adaptery Curation, promptów, modeli, Annotations i Conversations; B2/AR2 pozostają otwarte: B2e–B2h, w tym judge (sekcje 9–16). Wyniki odbioru A, ograniczenia i incydent seeda w sekcji 8. Przegląd planu z 2026-09-12 jest w sekcji 17; jego wnioski są wniesione do sekcji 2–7 — etap B ma punkty 8–11 i rozstrzygnięcia wizualne, tabela paczek B2e–B2i, a B3 zależy od B2e, B2f i B2i. Sekcja 19 zmniejsza ograniczenia z sekcji 18; sekcja 20 dostarcza stronę dowodową B3 — porównanie dwóch trwałych wyników.
 
 Podstawa: [katalog funkcji](FTI_FEATURE_CATALOG.md), [analiza braków](FTI_FEATURE_GAPS.md), [plan UX](FTI_UX_WANDB_PLAN.md), [przegląd dokumentacji Langfuse i MLflow](FTI_LANGFUSE_MLFLOW_ANALYSIS.md), [ocena architektury](FTI_ARCHITECTURE_REVIEW.md) oraz aktualny kod. Ocena dotyczy obecności i kontraktów implementacji; nie potwierdza działania konkretnego wdrożenia. Katalog opisuje zakres docelowy, więc liczba jego pozycji nie jest miarą ukończenia produktu.
 
@@ -831,10 +831,131 @@ Instancja zatrzymana, katalog danych usunięty, wpis podglądu cofnięty.
 
 ### 19.7 Co zostaje
 
-- **B3, B4, AR3, C0** — bez zmian, karta AW-6.
+- **B3, B4, AR3, C0** — bez zmian, karta AW-6. (B3 dostarczone w sekcji 20.)
 - **Chart** wciąż wymaga `volume` przy `enabled`; po 19.3 to już tylko wartość
   do rozluźnienia, ale pliki `deploy/helm/**` są w tym tygodniu w rękach innej
   sesji i nie zostały ruszone.
 - **`known_ids`** (most do starych raportów) nadal chodzi po wszystkich claimach,
   bo musi widzieć też porzucone ID — indeks ich nie ma i nie powinien mieć.
 - **Judge** — reguła w ADR, adaptera nie ma.
+
+## 20. B3 — porównywanie trwałych dowodów
+
+Paczka B3 zakładała, że porównywalność trwałych wyników to reguła A3 zastosowana
+do innych danych. Po przeczytaniu kontraktu okazało się, że jest odwrotnie:
+[reguła A3](../crates/aiwatcher-projector/src/evaluations.rs) porównuje **pięć
+opcjonalnych napisów**, które producent mógł przysłać albo nie, i większość jej
+treści dotyczy nieobecności. Trwały dowód nie ma czego brakować —
+[`context_id`](../crates/aiwatcher-evaluation/src/lib.rs) jest adresem treści
+całego `EvaluationContext`: zbioru, manifestu przypadków, ich liczby, splitu,
+suite, scorera, obu schematów, konfiguracji judge'a i każdej definicji metryki z
+jej jednostką, kierunkiem i agregacją. Dwa wyniki albo mają ten sam adres, albo
+nie, i **ta równość jest regułą porównywalności**.
+
+### 20.1 Dwie reguły, jedno słownictwo
+
+Sklejenie ich w jedną funkcję wymagałoby zrzutowania przypiętego kontekstu na
+pięć opcjonalnych napisów — czyli utraty dokładnie tego, co czyni drugą regułę
+mocniejszą. Ale to, co czytelnik *robi* z odpowiedzią, jest identyczne po obu
+stronach ekranu, a dwa enumy o tych samych trzech nazwach to dwa słowniki
+oddalone o jedno wydanie. `Comparability` przeniesiono więc do
+[`aiwatcher_core::comparability`](../crates/aiwatcher-core/src/comparability.rs)
+— nad oba crate'y, biorąc wyłącznie trzy słowa, których każda powierzchnia
+potrzebuje. To jest powód istnienia `aiwatcher_core::human_input`, zastosowany do
+werdyktu zamiast do pytania. Panel rysuje **jedną** kontrolkę
+([`comparability.tsx`](../apps/panel/src/features/evaluation/screens/overview/comparability.tsx)),
+przeniesioną z `page.tsx`, więc wspólność jest strukturalna, a nie deklarowana.
+
+### 20.2 Co oddaje `GET .../{id}/comparison`
+
+Poza samym werdyktem odpowiedź mówi dwie rzeczy:
+
+- **co się zmieniło** — oba konteksty są w ręku, więc odmowa brzmi „Different
+  split”, a nie „inny kontekst”. Gdy jedna strona jest nagrobkiem (a nagrobek nie
+  trzyma manifestu), mówi uczciwie, że kontekst się różni, i nic o tym jak.
+- **czy dowód za liczbą da się jeszcze przeczytać**. Strona wygasła, wycofana
+  albo uszkodzona **nie jest niezgodna** — nic się w niej nie różni — tylko
+  `unverified`, tym samym słowem, którego używa połowa fałdowana.
+
+Dwie mniejsze decyzje, łatwe do pomylenia: **jeden wariant zmierzony dwa razy
+jest porównywalny**, a `same_variant` jest polem, nie powodem — delta jest
+prawdziwa i mierzy powtarzalność, czyli ile ta miara rusza się, gdy nic się nie
+zmieniło; jako „powód” pod `comparable` czytałaby się jak problem, a nieobecna —
+jak test A/B. I **delta jest wstrzymana widocznie**: obie liczby zostają na
+ekranie, bo każda jest faktem, a tylko różnica byłaby twierdzeniem, którego nikt
+nie zmierzył.
+
+### 20.3 Kandydaci pochodzą z serwera, nie z przeglądarki
+
+Nie ma automatycznego baseline'u. Połowa fałdowana ma go dlatego, że fałda logu
+nie ma jak inaczej zaproponować pary; tutaj odpowiada katalog —
+`GET /api/v1/evaluation-results?context_id=…` zwraca dokładnie te wyniki, które
+wolno ze sobą porównać, więc który z nich jest baseline'em, jest czyjąś decyzją,
+a nie domyślną wartością, której ktoś może nie zauważyć. Panel niczego nie
+filtruje: porównanie dwóch napisów w TypeScripcie byłoby drugą odpowiedzią na
+pytanie, czym jest porównanie. Filtr chodzi po opublikowanym indeksie, a nie po
+drugim indeksie po kontekście — strona kosztuje więc także wiersze, które
+minęła, a kursor strony filtrowanej obiecuje kolejny *wpis*, nie kolejne
+trafienie. Indeks po kontekście to ten sam kształt „głowa jest pochodna”, co
+`evaluations/index/`, i jest tani do dodania w dniu, w którym katalog będzie
+tego wymagał.
+
+### 20.4 Porównanie czyta dwa nagłówki
+
+Metryki, które odejmuje, są w metadanych, z jakimi każda strona została
+opublikowana, więc kosztuje tyle, co dwa podsumowania — niezależnie od liczby
+przypadków za nimi. **Które przypadki się popsuły** — „zdał na baseline, oblewa
+teraz”, widok, który trzeba przeczytać przed wydaniem — celowo tu nie ma: obie
+strony są sortowane po `case_id` przy publikacji, więc różnicę da się stronicować
+w zamku z granicą wysokiej wody (ten sam chwyt, co `mergeRows` w panelu), ale to
+nadal pełny odczyt obu stron i jest nazwany jako nieobecny zamiast po cichu
+podany przez trasę chodzącą po stu shardach.
+
+### 20.5 Delta bywa kolorowana — tu i nigdzie indziej
+
+Reguła panelu „nie kolorujemy delt metryk” miała jeden powód: nazwa metryki
+producenta nie mówi, czy wzrost to poprawa, czy rachunek. Przypięty kontekst
+**deklaruje** `MetricDirection` per metryka, więc kolor jest deklaracji, a nie
+zgadywaniem; metryka z `none` i metryka, której nikt nie zadeklarował, zostają
+czarne. Reguła w `CLAUDE.md` została **zmieniona, nie porzucona**, i nazywa
+połowę, której dotyczy.
+
+### 20.6 Odbiór
+
+`just check` 23/23 PASS; 6 nowych testów rejestru i 1 akceptacyjny HTTP po
+stronie Rusta, 8 nowych testów panelu (257 łącznie). Ręcznie na własnej
+instancji `127.0.0.1:19080`, z własnym katalogiem danych i **bez
+`AIWATCHER_EVALUATION_SOURCE_DIR`**: trzy pary dopuszczone i opublikowane przez
+API (dwa warianty jednego kontekstu i jeden na innym splicie).
+
+- kandydaci dla kontekstu kandydata: `['baseline-run', 'candidate-run']` —
+  wynik z innego splitu nie jest oferowany;
+- `candidate-run` vs `baseline-run`: `comparable`, `accuracy` 1.0 vs 0.6667,
+  delta `+0.3333`, `unit: ratio`, `direction: higher`;
+- `holdout-run` vs `candidate-run`: `incompatible`, powody `Different
+  evaluation context` i `Different split`, delta wstrzymana, obie liczby na
+  miejscu;
+- po wycofaniu zatwierdzenia baseline'u: `unverified`, stan baseline'u
+  `forbidden`, delta wstrzymana, liczba kandydata zostaje;
+- baseline, którego nikt nie opublikował: 404; stara trasa szczegółu nadal
+  odmawia porównania trwałych dowodów, ale mówi teraz, gdzie się to robi.
+
+Ekran sprawdzony w **obu motywach** przez własną kontrolkę Appearance panelu:
+kontrolka porównywalności, powody listą, nota o powtarzalności tylko tam, gdzie
+jest delta do przeczytania, i kolorowana delta czytelna w ciemnym. Jeden błąd
+znaleziony przy odbiorze i naprawiony: wklejony link z `compare=` wskazującym
+wynik spoza kontekstu pokazywał „nic tu nie ma do porównania” zamiast odpowiedzi
+serwera — panel sam decydował, żeby nie zapytać.
+
+Instancja zatrzymana, katalog danych usunięty, wpis podglądu cofnięty.
+
+### 20.7 Co zostaje z B3
+
+- **Różnica na poziomie przypadków** (regresje i naprawy) — projekt opisany w
+  20.4, nie zbudowany.
+- **Judge**: czwarty warunek z ADR 0030 — wynik nieodtwarzalny przez ponowny
+  odczyt — musi wejść do tej reguły razem z adapterem. Dziś `LocalSource`
+  odrzuca manifest z judge'em po nazwie, więc takich dowodów nie ma.
+- **Kontekst wariantu na obserwacjach** (druga połowa opisu B3 z tabeli paczek:
+  SDK, trace, projektor) — nie ruszone; ta paczka jest stroną dowodową.
+- **B4, AR3, C0** — bez zmian, karta AW-6.

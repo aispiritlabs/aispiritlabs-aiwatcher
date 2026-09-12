@@ -576,3 +576,84 @@ Until an adapter implements those four, `LocalSource` refuses a manifest
 carrying a judge **by name**, which is the behaviour today and is deliberate:
 an absent judge is a working state, and a judge admitted under the bytes rule
 would be evidence nobody could interpret.
+
+## Amendment (2026-09-12): comparing two published results
+
+B3 asked for "comparability for durable evidence", and the shape it wanted was
+the folded half's rule applied to published results. That rule compares five
+optional strings — dataset, dataset kind, dataset version, suite version,
+scorer version, split — pairwise, and most of it is about what a producer did
+not send: the three answers exist because a log fold has nothing better than
+what arrived on it.
+
+Published evidence has nothing missing to reason about. `context_id` is
+`sha256` over the whole `EvaluationContext`: the dataset, the case manifest,
+the case count, the split, the suite, the scorer, both schemas, the judge
+configuration and every metric definition with its unit, direction and
+aggregation. Two results either share that address or they do not, and the
+equality *is* the comparability rule. Everything else in
+`GET /api/v1/evaluation-results/{id}/comparison` is one of two things:
+
+- **which field moved**, for a reader who has to fix it. Both contexts are in
+  hand, so a refusal says "Different split" rather than "different context" —
+  and where one side is a tombstone, which keeps no manifest, it says the
+  context differs and honestly nothing about how.
+- **whether the evidence behind a number can still be read.** An expired,
+  withdrawn or damaged side is not *incompatible* — nothing about it differs —
+  it is `unverified`, which is the same word the folded half uses for a
+  judgement it cannot make.
+
+Three consequences follow, and each was a decision rather than a detail.
+
+**The rules stay two; the vocabulary becomes one.** Collapsing them into one
+function would mean projecting a pinned context down to five optional strings,
+which loses exactly what makes the second one stronger. What a reader does with
+`unverified` is identical on both halves, so `Comparability` moves to
+`aiwatcher_core::comparability` — above both crates, taking only the three
+words each surface needs — and the panel draws one control. This is
+`aiwatcher_core::human_input`'s reason, for a verdict rather than for a
+question.
+
+**There is no automatic baseline.** The folded half picks the previous success
+because a log fold has no other way to offer a pair. Here the catalogue answers
+it: `GET /api/v1/evaluation-results?context_id=…` returns exactly the results
+that may be compared with one another, so which of them is the baseline is a
+decision somebody makes rather than a default they might not notice. The filter
+walks the published index rather than a second one keyed by context — a page
+therefore costs the rows it passed over as well as the ones it carries, and a
+cursor on a filtered page promises another entry rather than another match. An
+index by context is the same derived-head shape as `evaluations/index/` and is
+cheap to add the day a catalogue is large enough to need it.
+
+**A comparison reads two headers, never two results.** The metrics it subtracts
+are in the metadata each side was published with, so it costs what two
+summaries cost however many cases sit behind them. Which cases regressed —
+"passed on the baseline, fails now", the view that has to be read before a
+release — is deliberately *not* here: both results are sorted by `case_id` at
+publication, so a diff can page them in lockstep with a high-water boundary,
+but it is still a full read of both sides and it is named as absent rather than
+served quietly by a route that walks a hundred shards.
+
+Two smaller rules are recorded here because they are easy to get wrong:
+
+- **One variant measured twice is comparable**, and it is a `same_variant`
+  field rather than a reason. The delta is real and it measures repetition —
+  how much this measurement moves when nothing changed — which is worth knowing
+  and is not the effect of a change. As a "reason" under `comparable` it would
+  read as a problem; absent, it would read as an A/B.
+- **A delta is withheld rather than absent.** Both numbers stay on screen when
+  the two are incompatible: each is a fact somebody measured, and only the
+  difference is a claim nobody did.
+
+And one that a metric's declaration finally settles: a delta may be
+**coloured** here. Elsewhere in the panel it may not, because a producer's
+metric name says nothing about whether a rise is an improvement or a bill;
+`MetricDefinition::direction` is declared as part of the pinned context, so the
+colour is the declaration's and a metric declaring `none` stays plain.
+
+**What this rule does not yet cover.** The four judge conditions above are the
+open edge: a judge's result is not reproducible by re-reading, so two
+judge-scored results sharing a context are *not* thereby proven comparable —
+the fourth condition's field has to enter this rule when the adapter lands.
+Until then `LocalSource` refuses a manifest carrying a judge by name, so no
+such evidence exists to compare.

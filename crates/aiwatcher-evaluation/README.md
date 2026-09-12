@@ -304,7 +304,7 @@ response function and exact scorer, and prints a receipt. The example is a
 regression contract test, not held-out promotion evidence.
 
 HTTP clients use `/api/v1/evaluation-results` (POST/list), `/{id}` (detail),
-and `/{id}/cases?version=…&cursor=…`. Python:
+`/{id}/cases?version=…&cursor=…`, and `/{id}/comparison?baseline=…`. Python:
 `aiwatcher_sdk.evaluation_registry.EvaluationRegistry`; TypeScript:
 `@aiwatcher/sdk/evaluation-registry`. Both raise on transport/refusal errors;
 read-state responses remain explicit data. Python uses the existing registry
@@ -314,8 +314,27 @@ Manifest-only imports and the old `record_evaluation` are unchanged.
 Legacy detail URLs prefer registry results and show a bounded first page.
 Legacy list/suite/automatic-baseline queries exclude registry-owned IDs, while
 the new durable list remains available after projection loss. This avoids using
-old telemetry to reintroduce revoked evidence. Durable comparison and the panel's
-full result browser follow in B3; explicit durable baselines are refused for now.
+old telemetry to reintroduce revoked evidence. The legacy detail route still
+refuses to compare durable evidence and names the route that does.
+
+## Comparing two published results
+
+`GET /api/v1/evaluation-results/{id}/comparison?baseline=<id>` answers whether
+two results may be subtracted, and returns both headers with a metric delta per
+name. Comparability is `context_id` equality: that address covers the dataset,
+the case manifest and count, the split, the suite, the scorer, both schemas, the
+judge configuration and every metric definition, so two results share a context
+or they do not. A differing context is `incompatible` and the reasons name which
+field moved; a side whose evidence is expired, withdrawn or damaged is
+`unverified`, because nothing differs — there is no longer evidence behind one
+of the numbers. A delta is withheld in both cases while both numbers remain.
+
+There is no automatic baseline. `GET /api/v1/evaluation-results?context_id=…`
+narrows the catalogue to exactly the results that may be compared with one
+another, which is where a caller gets its candidates. Two results of one variant
+compare and report `same_variant`: the delta measures repetition rather than the
+effect of a change. The comparison reads two headers and never the shards, so
+case-level regressions are not part of it.
 
 
 ## Governed Conversations

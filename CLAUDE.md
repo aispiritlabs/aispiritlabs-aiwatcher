@@ -816,7 +816,17 @@ what runs a real graph.
   canonicalised declaration, so `POST /api/v1/evaluation-approvals/address`
   answers it and a second implementation in TypeScript would be a second answer
   to what a pair is. Withdrawal asks first, because it hides every result
-  measured under that pair and is final.
+  measured under that pair and is final. It is also the one area that compares
+  two *published* results, and it decides neither half of that: which results
+  may be compared is `?context_id=`, the catalogue narrowed by the server, and
+  whether two of them are comparable is `GET
+  /api/v1/evaluation-results/{id}/comparison`. There is no automatic baseline
+  on that half — the folded one has one because a log fold has no other way to
+  offer a pair — and a withheld delta renders as withheld rather than absent.
+  It is the one place a delta may be **coloured**, because a pinned context
+  declares `MetricDirection` per metric; a folded report's metric is a name a
+  producer sent, so colouring one there would be guessing whether a rise is an
+  improvement or a bill.
 - `annotations` is the one area that draws. Its canvas puts an `<img>` and an
   `<svg>` in one transformed container, both sized to the image's *natural*
   pixels, so SVG user units are image coordinates and no shape ever carries a
@@ -1723,6 +1733,25 @@ the review.
 - **Never compare two evaluation reports across datasets.** `baseline_for`
   matches on suite *and* dataset. Two scores measured on different cases are two
   facts; a delta between them claims they are one.
+- **Never answer comparability twice in two vocabularies.** Two halves answer
+  it and the rules differ because the evidence does: a folded report compares
+  five optional strings a producer may not have sent, so most of that rule is
+  about absence, while published evidence compares one `context_id` — the
+  content address of the cohort, the split, the suite, the scorer and the
+  metric definitions together — so two results share a context or they do not.
+  Collapsing them into one function would cost the second everything that makes
+  it stronger. What a reader *does* with the answer is the same either way, so
+  the three words live once, in `aiwatcher_core::comparability` — `human_input`'s
+  reason, for a verdict rather than for a question — and the panel draws one
+  control. A delta is withheld rather than shown wrong, and `same_variant` is a
+  field rather than a reason: one variant measured twice is comparable, and it
+  measures repetition rather than the effect of a change.
+- **Never make a comparison read two results.** The metrics it subtracts are in
+  each side's own header, so it costs what two summaries cost however many
+  cases are behind them — the rule that made a catalogue page stop costing the
+  corpus, one layer up. Which cases regressed is the other question and is a
+  full read of both sides: it is named as absent rather than quietly served by
+  a route that walks a hundred shards.
 - **An evaluation report is not redacted.** The Collector strips
   `gen_ai.prompt` and `gen_ai.completion` from spans, and an evaluation forms no
   span, so nothing strips `data.report`. A producer that puts model output there
