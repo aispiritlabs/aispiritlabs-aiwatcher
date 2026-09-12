@@ -2,7 +2,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any
 
-from aiwatcher_agentic.agent import Agent
+from aiwatcher_agentic.agent import Agent, Context
 from aiwatcher_agentic.model import ModelResponse
 from aiwatcher_agentic.prompts import GemmaPromptBuilder
 from aiwatcher_agentic.tools import ToolCallCommand, Toolset, Toolsets
@@ -86,3 +86,44 @@ def test_toolsets_execute_returns_validation_error() -> None:
     tool_result = agent.toolsets.execute(command)
     assert "missing required parameters" in tool_result.output
     assert tool_result.retry is True
+
+
+class RecordingModel(FakeModel):
+    """A fake that keeps what it was sent, not only what it answered."""
+
+    def __init__(self, response_text: str) -> None:
+        super().__init__(response_text)
+        self.kwargs: list[dict[str, Any]] = []
+
+    def response(self, prompt: str | list[dict[str, str]], **kwargs: Any) -> ModelResponse:
+        self.kwargs.append(kwargs)
+        return super().response(prompt, **kwargs)
+
+
+def test_the_agent_sends_its_own_tools_so_nobody_writes_the_schema_twice() -> None:
+    model = RecordingModel('{"name":"add_note","parameters":{"note_name":"Pizza","note":"P"}}')
+    agent = Agent(
+        model_provider=FakeProvider(model),
+        prompt_builder=GemmaPromptBuilder(system_prompt="test"),
+        toolsets=Toolsets([Toolset([add_note])]),
+    )
+
+    agent.run("zapisz")
+
+    sent = model.kwargs[0]["tools"]
+    assert [tool["function"]["name"] for tool in sent] == ["add_note"]
+    assert sent[0]["function"]["parameters"]["required"] == ["note_name", "note"]
+
+
+def test_a_turn_that_withholds_tools_sends_none_of_them() -> None:
+    model = RecordingModel("nothing to save")
+    agent = Agent(
+        model_provider=FakeProvider(model),
+        prompt_builder=GemmaPromptBuilder(system_prompt="test"),
+        toolsets=Toolsets([Toolset([add_note])]),
+        context=Context(offer_tools=False),
+    )
+
+    agent.run("nie zapisuj")
+
+    assert "tools" not in model.kwargs[0]

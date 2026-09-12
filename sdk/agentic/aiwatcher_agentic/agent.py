@@ -71,6 +71,13 @@ class Context:
     add_history_to_context: bool = True
     max_history_messages: int = 20
     observability_tags: dict[str, Any] | None = None
+    #: Whether this turn may ask for a tool. A turn that offers tools cannot
+    #: also be held to a structured answer — both arrive as one constraint on
+    #: the request — so a run that ends in a typed result withholds the tools on
+    #: its last turn and sends the schema instead.
+    #: :class:`~aiwatcher_agentic.subagent.Subagent` is what normally flips this;
+    #: an application driving an agent turn by turn can flip it itself.
+    offer_tools: bool = True
 
 
 @dataclass(frozen=True)
@@ -246,6 +253,12 @@ class Agent:
         self._tracer = tracer or NoopLLMTracer()
         self._structured_output = structured_output
         self._response_parser = ResponseParser(self._toolsets, structured_output)
+        # A turn that offers tools is not held to the answer schema. Validating
+        # it would be the same mistake as constraining it: the model was invited
+        # to ask for a tool, and an answer that is not yet the final one is not a
+        # failed answer. Without this the agent retries a perfectly good "let me
+        # look that up" until the retry policy gives out.
+        self._tool_turn_parser = ResponseParser(self._toolsets, None)
         self._usage_limits = usage_limits or UNLIMITED
         self._run_usage = RunUsage()
         self._retry_policy = retry_policy
@@ -448,8 +461,9 @@ class Agent:
         prompt_artifacts: PromptArtifacts,
         trace: TraceSnapshot | None,
         generation_config_hash: str,
+        parser: ResponseParser | None = None,
     ) -> AgentResult:
-        parsed = self._response_parser.parse(model_response.text)
+        parsed = (parser or self._response_parser).parse(model_response.text)
         req_usage = self._request_usage_from_response(model_response)
         return AgentResult(
             content=parsed.content,
@@ -598,16 +612,32 @@ class Agent:
                         )
 
                     trace_messages = _build_trace_messages(current_message_text, prompt_artifacts)
-                    chat_tools = build_chat_tools(prompt_artifacts.tool_schema)
+                    # The agent's own tools, in the shape the endpoint takes
+                    # them. Until this went in, a caller who wanted a native tool
+                    # call had to write the same function down twice — once as
+                    # the callable the agent runs, once as a schema handed to the
+                    # model — and nothing kept the two descriptions in step.
+                    offered = (
+                        build_chat_tools(prompt_artifacts.tool_schema)
+                        if current_context.offer_tools
+                        else []
+                    )
+                    turn_kwargs = dict(model_kwargs)
+                    if offered:
+                        turn_kwargs["tools"] = offered
+                        # A response format is a grammar. With one in the request
+                        # the model can emit nothing but the answer schema, so it
+                        # could never ask for the tool being offered alongside it.
+                        turn_kwargs.pop("response_format", None)
 
                     model_response = self._tracer.llm(
                         name="llm-call",
                         model=getattr(self._model_provider, "_model_name", None) or "",
                         messages=trace_messages,
-                        tools=chat_tools,
+                        tools=offered,
                         extra_attributes={
                             "agentic.prompt_hash": prompt_artifacts.prompt_hash,
-                            "agentic.tool_count": len(prompt_artifacts.tool_schema),
+                            "agentic.tool_count": len(offered),
                             **(
                                 {"agentic.prompt_name": prompt_artifacts.prompt_name}
                                 if prompt_artifacts.prompt_name
@@ -619,8 +649,8 @@ class Agent:
                                 else {}
                             ),
                         },
-                        invoke=lambda artifacts=prompt_artifacts: self._call_model(
-                            artifacts.prompt, **model_kwargs
+                        invoke=lambda artifacts=prompt_artifacts, kwargs=turn_kwargs: (
+                            self._call_model(artifacts.prompt, **kwargs)
                         ),
                     )
 
@@ -646,6 +676,7 @@ class Agent:
                             generation_config_hash=hashlib.sha256(
                                 repr(sorted(model_kwargs.items())).encode("utf-8")
                             ).hexdigest(),
+                            parser=self._tool_turn_parser if offered else None,
                         )
                     except ModelRetry as error:
                         if self._capability is not None:
