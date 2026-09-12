@@ -32,10 +32,15 @@ admission and its own screen, and an instance holds many admitted pairs at once
 (plan sections 9–18, ADR_0030). What is left is the work those sections were
 building towards, and it is four things rather than one:
 
-- **B3 — comparing kept evidence.** Two results of one context and different
-  variants, compared on the server. Its inputs exist now; its rules are the ones
-  ADR_0030 states — status, cohort, split, suite, scorer, judge, schemas and
-  completeness, never a matching context hash alone.
+- **B3 — comparing kept evidence.** Its evidence side is **done** (plan section
+  20): `GET /api/v1/evaluation-results/{id}/comparison?baseline=…`, with the
+  candidates from `?context_id=`. The rule turned out to be the matching
+  context hash — that address already covers the cohort, split, suite, scorer,
+  judge and schemas — *plus* the two things it does not carry: whether the
+  measurement succeeded, and whether the evidence behind each number can still
+  be read. What is left is the case-level diff (regressed and fixed, a full
+  read of both sides), the judge's fourth ADR_0030 condition, and the variant
+  context on observations.
 - **B4 — assessments.** One trace, span, session or case measurement, with a
   rubric version, a typed value, an author and a rationale. Human and judge
   assessments coexist.
@@ -50,10 +55,14 @@ Both follow-ups that sat inside the first are done (plan section 19): the
 catalogue has an index and a published order, so its page costs 103 requests
 rather than 152 and the screen carries a period again; and an approval bundle is
 staged through the API, so a new variant needs nothing on the server's host.
-What is left inside B3 is the comparison itself.
+The comparison itself followed in section 20.
 
 ## Log
 - 2026-09-12 — card opened for the remainder of FTI; stage B closed by plan section 18
 - 2026-09-12 — four packages off the limitation list (plan section 19): gaps
   reported by the pass that already knew, a catalogue index with a published
   order, bundle upload over the API, and approvals on the screen
+- 2026-09-12 — B3's evidence side delivered (plan section 20): comparability is
+  `context_id` equality plus readability, `Comparability` moved to
+  `aiwatcher_core` so both halves speak one vocabulary, candidates come from the
+  catalogue narrowed by context, and the panel draws one control
