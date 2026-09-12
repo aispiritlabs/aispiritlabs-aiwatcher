@@ -517,6 +517,7 @@ mod tests {
                 Vec::new(),
                 Vec::new(),
             )),
+            stop: aiwatcher_execution::StopSignal::new(),
         }
     }
 

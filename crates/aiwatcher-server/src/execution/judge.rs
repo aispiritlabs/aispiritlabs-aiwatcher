@@ -226,13 +226,19 @@ fn forgetting(error: EvaluationError) -> JudgeFailure {
 /// Handed a [`Remembering`] judge, the attempt after it asks only what was not
 /// answered. The replies come back in the order the questions were asked.
 ///
+/// A stop ends it too, and sooner: the questions in flight are dropped, which
+/// closes their connections, and the ones not yet asked are never asked. What
+/// already came back was kept by the [`Remembering`] judge as it arrived.
+///
 /// # Errors
 ///
-/// The first [`JudgeFailure`] any question met.
+/// The first [`JudgeFailure`] any question met, or `Unavailable` once `stop`
+/// was requested — the caller reads the stop's own reason from the signal.
 pub async fn ask_all(
     judge: &Arc<dyn JudgeModel>,
     calls: Vec<JudgeCall>,
     concurrency: usize,
+    stop: &aiwatcher_execution::StopSignal,
 ) -> Result<Vec<JudgeReply>, JudgeFailure> {
     let permits = Arc::new(tokio::sync::Semaphore::new(concurrency.max(1)));
     let mut asking = tokio::task::JoinSet::new();
@@ -249,7 +255,18 @@ pub async fn ask_all(
         });
     }
     let mut replies: Vec<Option<JudgeReply>> = vec![None; total];
-    while let Some(joined) = asking.join_next().await {
+    loop {
+        let joined = tokio::select! {
+            biased;
+            _ = stop.stopped() => {
+                asking.abort_all();
+                return Err(JudgeFailure::Unavailable(
+                    "stopped before every question was answered".into(),
+                ));
+            }
+            joined = asking.join_next() => joined,
+        };
+        let Some(joined) = joined else { break };
         let (index, reply) =
             joined.map_err(|error| JudgeFailure::Unavailable(error.to_string()))??;
         replies[index] = Some(reply);
@@ -315,7 +332,7 @@ mod tests {
     async fn replies_come_back_in_the_order_the_questions_were_asked() {
         let judge: Arc<dyn JudgeModel> = Arc::new(Counting::default());
         let calls = (0..20).map(|n| call(&format!("answer {n}"))).collect();
-        let replies = ask_all(&judge, calls, 3)
+        let replies = ask_all(&judge, calls, 3, &aiwatcher_execution::StopSignal::new())
             .await
             .expect("every question answers");
         for (n, reply) in replies.iter().enumerate() {
@@ -328,9 +345,36 @@ mod tests {
         let judge: Arc<dyn JudgeModel> = Arc::new(Counting::default());
         let calls = vec![call("fine"), call("outage"), call("fine too")];
         assert!(matches!(
-            ask_all(&judge, calls, 1).await,
+            ask_all(&judge, calls, 1, &aiwatcher_execution::StopSignal::new()).await,
             Err(JudgeFailure::Unavailable(_))
         ));
+    }
+
+    /// A judge that never answers, the way a stalled provider does not.
+    #[derive(Debug)]
+    struct Silent;
+
+    #[async_trait]
+    impl JudgeModel for Silent {
+        fn provider(&self) -> &str {
+            "llamacpp"
+        }
+
+        async fn ask(&self, _call: &JudgeCall) -> Result<JudgeReply, JudgeFailure> {
+            std::future::pending().await
+        }
+    }
+
+    #[tokio::test]
+    async fn a_stop_ends_the_asking_without_waiting_for_the_questions_in_flight() {
+        let judge: Arc<dyn JudgeModel> = Arc::new(Silent);
+        let stop = aiwatcher_execution::StopSignal::new();
+        let calls = (0..5).map(|n| call(&format!("answer {n}"))).collect();
+        let (asked, ()) = tokio::join!(ask_all(&judge, calls, 2, &stop), async {
+            tokio::task::yield_now().await;
+            stop.stop(aiwatcher_execution::StopReason::RunStopping);
+        });
+        assert!(matches!(asked, Err(JudgeFailure::Unavailable(_))));
     }
 
     #[test]

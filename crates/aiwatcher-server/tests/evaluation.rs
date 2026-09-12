@@ -95,6 +95,7 @@ fn attempt(
             timeout: std::time::Duration::from_secs(60),
             context_id: format!("exec-{evaluation}/score/1"),
             plan: Arc::new(plan),
+            stop: aiwatcher_execution::StopSignal::new(),
         },
     )
 }

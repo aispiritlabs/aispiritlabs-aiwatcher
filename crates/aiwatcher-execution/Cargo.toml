@@ -48,7 +48,10 @@ time.workspace = true
 # about work that succeeded must not fail the step, and must not be silent
 # either. Nothing in the pure half logs.
 tracing.workspace = true
-tokio = { workspace = true, features = ["fs", "io-util", "sync"] }
+tokio = { workspace = true, features = ["fs", "io-util", "sync", "time", "macros"] }
+# The signal a reactor hands a running attempt when it should stop. The same
+# token every long task in the server binary is shut down with.
+tokio-util.workspace = true
 utoipa.workspace = true
 uuid.workspace = true
 time-tz = { version = "2.0.0", features = ["db"] }
@@ -61,7 +64,7 @@ aiwatcher-core.workspace = true
 aiwatcher-prompts.workspace = true
 aiwatcher-execution = { workspace = true, features = ["testing"] }
 aiwatcher-jobs.workspace = true
-tokio = { workspace = true, features = ["full"] }
+tokio = { workspace = true, features = ["full", "test-util"] }
 
 [lints]
 workspace = true

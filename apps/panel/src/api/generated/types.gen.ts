@@ -12392,6 +12392,9 @@ export type HeartbeatData = {
 
 export type HeartbeatErrors = {
     403: ErrorBody;
+    /**
+     * `lease_lost`, or `execution_stopping`: the run is cancelling or ended and the attempt was settled as stopped
+     */
     409: ErrorBody;
     501: ErrorBody;
 };

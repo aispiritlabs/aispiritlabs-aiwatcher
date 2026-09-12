@@ -23,6 +23,16 @@
 //! whether their call finished. [`ActivityExecutor::lookup`] is asked first,
 //! and only `Absent` justifies running it again.
 //!
+//! **A running attempt is watched, and stopped when its run stops.** While an
+//! executor works, the reactor reads the run's projection every
+//! [`Watch::every`] and its own clock against the step's timeout. A run that is
+//! cancelling or has ended, or a deadline that passed, sets the attempt's
+//! [`StopSignal`](crate::activity::StopSignal), asks the runtime through
+//! [`ActivityExecutor::cancel`], and gives the executor [`Watch::grace`] to
+//! return before the attempt is abandoned. The pod launcher does the same for
+//! a pod; without it, a cancel of a run whose step runs here waited for that
+//! step to finish on its own.
+//!
 //! **The reactor never decides.** It reports `StepStarted`, `StepCompleted` or
 //! `StepFailed` through [`ExecutionHandler`] and the decider works out what
 //! follows — the retry, the next step, the end of the run. A reactor that
@@ -36,7 +46,7 @@ use time::OffsetDateTime;
 
 use crate::activity::{
     ActivityCommand, ActivityContext, ActivityExecutor, ActivityResult, ExecutorRegistry,
-    PriorAttempt,
+    PriorAttempt, StopReason, StopSignal,
 };
 use crate::claim::AttemptRow;
 use crate::decide::{Now, replay};
@@ -97,6 +107,32 @@ pub enum Taken {
     Work(Box<Claimed>),
 }
 
+/// How a reactor watches an attempt it is performing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Watch {
+    /// How often the run is read to learn whether it is still running.
+    ///
+    /// Two seconds: one keyed read per running attempt, and a cancel that
+    /// takes effect in the time it takes somebody to look back at the page.
+    pub every: Duration,
+    /// How long an executor asked to stop has to return before its attempt is
+    /// abandoned.
+    ///
+    /// Thirty seconds, which is long enough for an executor that is writing
+    /// its result to finish writing it — a publication in progress is worth
+    /// more than a cancel a few seconds sooner.
+    pub grace: Duration,
+}
+
+impl Default for Watch {
+    fn default() -> Self {
+        Self {
+            every: Duration::from_secs(2),
+            grace: Duration::from_secs(30),
+        }
+    }
+}
+
 /// One process's reactors: what it can run, and the name it holds leases under.
 #[derive(Debug)]
 pub struct Reactor<S> {
@@ -108,6 +144,7 @@ pub struct Reactor<S> {
     /// deployment with no object store is in: deleting the index never loses
     /// an authoritative result, taken to its limit.
     catalog: Option<Arc<dyn crate::ArtifactCatalog>>,
+    watch: Watch,
 }
 
 impl<S: WorkflowStore> Reactor<S> {
@@ -123,7 +160,15 @@ impl<S: WorkflowStore> Reactor<S> {
             executors,
             owner,
             catalog: None,
+            watch: Watch::default(),
         }
+    }
+
+    /// Watch running attempts at another cadence, with another grace.
+    #[must_use]
+    pub const fn with_watch(mut self, watch: Watch) -> Self {
+        self.watch = watch;
+        self
     }
 
     /// Give it somewhere to look a hit up and record a result.
@@ -182,9 +227,7 @@ impl<S: WorkflowStore> Reactor<S> {
             });
         };
 
-        let outcome = self
-            .perform(executor, &claimed.command, &claimed.context, &claimed.row)
-            .await;
+        let outcome = self.watched(executor, &claimed).await;
         let finished_at =
             now + time::Duration::try_from(pass.elapsed()).unwrap_or(time::Duration::ZERO);
         self.settle_at(*claimed, outcome, now, finished_at).await
@@ -270,6 +313,7 @@ impl<S: WorkflowStore> Reactor<S> {
             // The plan this run pinned, not the definition's current head: an
             // attempt reads what its own execution was compiled from.
             plan: Arc::new(run.plan.clone()),
+            stop: StopSignal::new(),
         };
 
         // Before `step.started`, because a hit is not a start: there was no
@@ -368,6 +412,7 @@ impl<S: WorkflowStore> Reactor<S> {
             timeout: Duration::from_secs(command.step.timeout_seconds),
             context_id: command.idempotency_key(),
             plan: Arc::new(run.plan.clone()),
+            stop: StopSignal::new(),
         };
         let cache_key = run
             .step(&key.step_id)
@@ -537,6 +582,90 @@ impl<S: WorkflowStore> Reactor<S> {
                 attempt = %row.key,
                 "the artifact catalog could not record what this attempt produced"
             );
+        }
+    }
+
+    /// [`Self::perform`], stopped when its run stops or its deadline passes.
+    ///
+    /// The work and the watch race. The work finishing first is the ordinary
+    /// case and its outcome is reported as it was. The watch finishing first
+    /// asks the attempt to stop and then waits, a bounded time, for the work
+    /// to say how it ended — an executor that stops cooperatively reports its
+    /// own error, and one that finishes anyway reports its result, which the
+    /// decider reads like any completion of a cancelling run.
+    async fn watched(
+        &self,
+        executor: &Arc<dyn ActivityExecutor>,
+        claimed: &Claimed,
+    ) -> Result<ActivityResult, StepError> {
+        let perform = self.perform(executor, &claimed.command, &claimed.context, &claimed.row);
+        tokio::pin!(perform);
+        let reason = tokio::select! {
+            outcome = &mut perform => return outcome,
+            reason = self.stopping(&claimed.row.key.execution_id, claimed.context.timeout) => reason,
+        };
+
+        let attempt = &claimed.row.key;
+        tracing::info!(%attempt, ?reason, "asking a running attempt to stop");
+        claimed.context.stop.stop(reason);
+        if let Err(error) = executor.cancel(&claimed.command).await {
+            // Asking is best effort. The attempt still stops here.
+            tracing::warn!(%error, %attempt, "the runtime could not be asked to stop");
+        }
+        match tokio::time::timeout(self.watch.grace, &mut perform).await {
+            Ok(outcome) => outcome,
+            Err(_) => {
+                let stopped = reason.as_error();
+                tracing::warn!(
+                    %attempt,
+                    ?reason,
+                    grace_seconds = self.watch.grace.as_secs(),
+                    "an attempt asked to stop did not return within its grace; abandoned"
+                );
+                Err(StepError::new(
+                    stopped.class,
+                    format!(
+                        "{}; it had not returned {}s after it was asked, and was abandoned",
+                        stopped.message,
+                        self.watch.grace.as_secs()
+                    ),
+                ))
+            }
+        }
+    }
+
+    /// Resolves once the attempt should stop, and never otherwise.
+    ///
+    /// The deadline is measured on this process's monotonic clock from the
+    /// moment the work began, and `timeout_seconds == 0` is a step with no
+    /// deadline of its own. A projection that cannot be read decides nothing:
+    /// the next look may, and stopping work because a read failed would be a
+    /// cancel nobody asked for.
+    async fn stopping(&self, execution: &ExecutionId, timeout: Duration) -> StopReason {
+        let began = tokio::time::Instant::now();
+        loop {
+            let wait = if timeout.is_zero() {
+                self.watch.every
+            } else {
+                self.watch
+                    .every
+                    .min(timeout.saturating_sub(began.elapsed()))
+            };
+            tokio::time::sleep(wait).await;
+            if !timeout.is_zero() && began.elapsed() >= timeout {
+                return StopReason::TimedOut;
+            }
+            match self.handler.store().projection(execution).await {
+                Ok(Some(run))
+                    if run.state.is_cancelling() || run.state.state_type.is_terminal() =>
+                {
+                    return StopReason::RunStopping;
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::debug!(%error, %execution, "could not read whether a run is still running");
+                }
+            }
         }
     }
 

@@ -548,6 +548,12 @@ fn assignment(claimed: &Claimed) -> WorkAssignment {
 /// A 409 is the signal to stop rather than to try harder: the lease went, the
 /// attempt has been taken over, and whatever this worker is in the middle of
 /// will not be accepted.
+///
+/// It is also how a cancel reaches a worker. A heartbeat for an attempt whose
+/// run is cancelling, or ended around it, settles that attempt as stopped and
+/// answers 409 `execution_stopping` — the pod launcher's rule for a pod and the
+/// reactor's for a step in its own process — so a cancel completes at the
+/// worker's next heartbeat rather than when its work would have finished.
 #[utoipa::path(
     post,
     path = "/api/v1/worker/claims/{execution_id}/{step_id}/{attempt}/heartbeat",
@@ -560,7 +566,7 @@ fn assignment(claimed: &Claimed) -> WorkAssignment {
     responses(
         (status = 204, description = "still held"),
         (status = 403, body = crate::error::ErrorBody),
-        (status = 409, body = crate::error::ErrorBody),
+        (status = 409, body = crate::error::ErrorBody, description = "`lease_lost`, or `execution_stopping`: the run is cancelling or ended and the attempt was settled as stopped"),
         (status = 501, body = crate::error::ErrorBody),
     ),
     tag = "worker",
@@ -576,11 +582,28 @@ async fn heartbeat(
     // the lease. The renewal itself is the store's, and it refuses a caller
     // that is not the holder — so a lease that expired between the two is a
     // 409 rather than a renewal of somebody else's claim.
-    let (reactor, _) = held(&state, &caller, &body.worker, &key).await?;
+    let (reactor, claimed) = held(&state, &caller, &body.worker, &key).await?;
+    let now = time::OffsetDateTime::now_utc();
+    let stopping = reactor
+        .handler()
+        .store()
+        .projection(&key.execution_id)
+        .await
+        .map_err(aiwatcher_execution::HandleError::Store)
+        .map_err(ApiError::Execution)?
+        .is_some_and(|run| run.state.is_cancelling() || run.state.state_type.is_terminal());
+    if stopping {
+        let stopped = aiwatcher_execution::StopReason::RunStopping.as_error();
+        reactor
+            .settle(claimed, Err(stopped.as_step_error()), now)
+            .await
+            .map_err(ApiError::Execution)?;
+        return Err(ApiError::ExecutionStopping(key.idempotency_key()));
+    }
     let renewed = reactor
         .handler()
         .store()
-        .heartbeat(&key, &body.worker, time::OffsetDateTime::now_utc())
+        .heartbeat(&key, &body.worker, now)
         .await
         .map_err(aiwatcher_execution::HandleError::Store)
         .map_err(ApiError::Execution)?;

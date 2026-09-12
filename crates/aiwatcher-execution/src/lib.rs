@@ -57,7 +57,7 @@ pub mod testing;
 
 pub use activity::{
     ActivityCommand, ActivityContext, ActivityError, ActivityExecutor, ActivityResult,
-    ExecutorRegistry, PriorAttempt,
+    ExecutorRegistry, PriorAttempt, StopReason, StopSignal,
 };
 pub use artifact::{
     ArtifactCatalog, CacheEntry, CatalogedArtifact, MemoryArtifactCatalog, ObjectArtifactCatalog,
@@ -80,7 +80,7 @@ pub use plan::{
     DefinitionKind, DefinitionRevision, ExecutionPlan, PlanEdge, PlanId, PlanStep, RetryPolicy,
     RuntimeBinding, RuntimeKind,
 };
-pub use reactor::{Performed, Reactor};
+pub use reactor::{Performed, Reactor, Watch};
 pub use schedule::{
     Cadence, OverlapPolicy, Schedule, ScheduleReader, ScheduleStore, ScheduledDefinition,
     SlotAdmission, SlotAdmissionRequest, SlotKey, SlotOutcome, SlotRecord, SlotSettlement,

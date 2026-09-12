@@ -100,6 +100,93 @@ pub struct ActivityContext {
     /// of the step upstream. Copying it into the publish step at compile time
     /// would put one script in a plan twice and in `plan_id` twice.
     pub plan: std::sync::Arc<crate::plan::ExecutionPlan>,
+    /// Set by the reactor when this attempt should stop: its run is being
+    /// cancelled or has ended around it, or its own deadline passed.
+    ///
+    /// An executor that does long work in pieces looks at it between them and
+    /// returns [`StopSignal::check`]'s error. One that never looks is abandoned
+    /// once the reactor's grace runs out — its outcome is then the reactor's
+    /// word, and whatever it was in the middle of is left where it stopped.
+    pub stop: StopSignal,
+}
+
+/// Why a reactor asked an attempt to stop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StopReason {
+    /// The run is being cancelled, or ended while this step was running — a
+    /// sibling failed for the last time, and what is downstream will not run.
+    RunStopping,
+    /// The step ran past its own `timeout_seconds`.
+    TimedOut,
+}
+
+impl StopReason {
+    /// The failure an attempt stopped for this reason reports.
+    ///
+    /// `Policy` for a run that is stopping, because it is the class nothing
+    /// retries: a retried attempt would be work for a run that asked for none.
+    /// A timeout keeps its own class and its own budget, because the work may
+    /// have been nearly done.
+    #[must_use]
+    pub fn as_error(self) -> ActivityError {
+        match self {
+            Self::RunStopping => ActivityError::new(
+                FailureClass::Policy,
+                "stopped: the execution is no longer running",
+            ),
+            Self::TimedOut => ActivityError::timed_out("stopped: the step ran past its timeout"),
+        }
+    }
+}
+
+/// A reactor's request that one running attempt stop.
+///
+/// Cooperative first: the reactor sets it, asks the runtime through
+/// [`ActivityExecutor::cancel`], and waits a grace period for the executor to
+/// return. Only then is the attempt abandoned, which is the forced half — safe
+/// here because a dropped future stops what this process was doing, and every
+/// write an executor makes is ordered so that stopping between two of them
+/// leaves nothing that reads as finished.
+#[derive(Clone, Debug, Default)]
+pub struct StopSignal {
+    token: tokio_util::sync::CancellationToken,
+    reason: std::sync::Arc<std::sync::OnceLock<StopReason>>,
+}
+
+impl StopSignal {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Ask the attempt to stop. The first reason given is the one kept.
+    pub fn stop(&self, reason: StopReason) {
+        // The reason before the token, so whoever wakes on the token reads it.
+        let _ = self.reason.set(reason);
+        self.token.cancel();
+    }
+
+    /// Why the attempt was asked to stop, if it was.
+    #[must_use]
+    pub fn requested(&self) -> Option<StopReason> {
+        self.reason.get().copied()
+    }
+
+    /// Resolves once the attempt is asked to stop, and never otherwise.
+    pub async fn stopped(&self) -> StopReason {
+        self.token.cancelled().await;
+        self.requested().unwrap_or(StopReason::RunStopping)
+    }
+
+    /// Carry on, or the error an attempt that stopped here reports.
+    ///
+    /// # Errors
+    ///
+    /// [`StopReason::as_error`] once a stop was requested.
+    pub fn check(&self) -> Result<(), ActivityError> {
+        self.requested()
+            .map_or(Ok(()), |reason| Err(reason.as_error()))
+    }
 }
 
 /// What an attempt produced.

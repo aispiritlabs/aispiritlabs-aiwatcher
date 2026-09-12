@@ -9724,7 +9724,7 @@
           "worker"
         ],
         "summary": "Renew a claim.",
-        "description": "A 409 is the signal to stop rather than to try harder: the lease went, the\nattempt has been taken over, and whatever this worker is in the middle of\nwill not be accepted.",
+        "description": "A 409 is the signal to stop rather than to try harder: the lease went, the\nattempt has been taken over, and whatever this worker is in the middle of\nwill not be accepted.\n\nIt is also how a cancel reaches a worker. A heartbeat for an attempt whose\nrun is cancelling, or ended around it, settles that attempt as stopped and\nanswers 409 `execution_stopping` — the pod launcher's rule for a pod and the\nreactor's for a step in its own process — so a cancel completes at the\nworker's next heartbeat rather than when its work would have finished.",
         "operationId": "heartbeat",
         "parameters": [
           {
@@ -9782,7 +9782,7 @@
             }
           },
           "409": {
-            "description": "",
+            "description": "`lease_lost`, or `execution_stopping`: the run is cancelling or ended and the attempt was settled as stopped",
             "content": {
               "application/json": {
                 "schema": {

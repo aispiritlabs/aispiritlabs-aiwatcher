@@ -132,6 +132,12 @@ pub enum ApiError {
     /// call or to re-authenticate.
     #[error("this worker no longer holds {0}")]
     LeaseLost(String),
+    /// A worker's heartbeat for an attempt whose run is cancelling or already
+    /// ended. The attempt was settled as stopped by the same request, so this
+    /// is a 409 for the lease-lost reason — stop, discard, go back to claiming
+    /// — with its own code, because *why* it stopped is worth a log line.
+    #[error("{0} was stopped: its execution is no longer running")]
+    ExecutionStopping(String),
     #[error("attempt {0} already has a different recorded outcome")]
     WorkerReportConflict(String),
 
@@ -318,6 +324,7 @@ impl ApiError {
                 ),
             },
             Self::LeaseLost(_) => (StatusCode::CONFLICT, "lease_lost"),
+            Self::ExecutionStopping(_) => (StatusCode::CONFLICT, "execution_stopping"),
             Self::WorkerReportConflict(_) => (StatusCode::CONFLICT, "worker_report_conflict"),
             Self::ExecutionsDisabled => (StatusCode::NOT_IMPLEMENTED, "executions_disabled"),
             // The same 422 a refused pipeline gets, for the same reason: the

@@ -1500,6 +1500,12 @@ export const claim = <ThrowOnError extends boolean = false>(options: Options<Cla
  * A 409 is the signal to stop rather than to try harder: the lease went, the
  * attempt has been taken over, and whatever this worker is in the middle of
  * will not be accepted.
+ *
+ * It is also how a cancel reaches a worker. A heartbeat for an attempt whose
+ * run is cancelling, or ended around it, settles that attempt as stopped and
+ * answers 409 `execution_stopping` — the pod launcher's rule for a pod and the
+ * reactor's for a step in its own process — so a cancel completes at the
+ * worker's next heartbeat rather than when its work would have finished.
  */
 export const heartbeat = <ThrowOnError extends boolean = false>(options: Options<HeartbeatData, ThrowOnError>): RequestResult<HeartbeatResponses, HeartbeatErrors, ThrowOnError> => (options.client ?? client).post<HeartbeatResponses, HeartbeatErrors, ThrowOnError>({
     url: '/api/v1/worker/claims/{execution_id}/{step_id}/{attempt}/heartbeat',

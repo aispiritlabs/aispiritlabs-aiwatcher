@@ -934,3 +934,219 @@ async fn a_reactor_holding_no_executors_claims_nothing() {
             .is_claimable(at(10))
     );
 }
+
+/// A runtime that works for an hour unless it is asked to stop.
+///
+/// `cooperates` decides whether it looks at the signal. `entered` fires once
+/// the work began, so a test cancels a run whose step is running rather than
+/// one whose step has not been claimed yet.
+#[derive(Debug)]
+struct Patient {
+    cooperates: bool,
+    entered: tokio::sync::Notify,
+    asked_to_cancel: AtomicUsize,
+}
+
+impl Patient {
+    fn new(cooperates: bool) -> Arc<Self> {
+        Arc::new(Self {
+            cooperates,
+            entered: tokio::sync::Notify::new(),
+            asked_to_cancel: AtomicUsize::new(0),
+        })
+    }
+}
+
+#[async_trait]
+impl ActivityExecutor for Patient {
+    fn runtime(&self) -> RuntimeKind {
+        RuntimeKind::FlowPhp
+    }
+
+    async fn execute(
+        &self,
+        _command: &ActivityCommand,
+        context: &ActivityContext,
+    ) -> Result<ActivityResult, ActivityError> {
+        self.entered.notify_one();
+        let hour = tokio::time::sleep(std::time::Duration::from_secs(3600));
+        if !self.cooperates {
+            hour.await;
+            return Ok(ActivityResult::default());
+        }
+        tokio::select! {
+            reason = context.stop.stopped() => Err(reason.as_error()),
+            () = hour => Ok(ActivityResult::default()),
+        }
+    }
+
+    async fn cancel(&self, _command: &ActivityCommand) -> Result<(), ActivityError> {
+        self.asked_to_cancel.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+fn patient_reactor(
+    store: MemoryWorkflowStore,
+    patient: Arc<Patient>,
+) -> Reactor<MemoryWorkflowStore> {
+    Reactor::new(
+        ExecutionHandler::new(store),
+        ExecutorRegistry::new().with(patient),
+        "reactor-1".to_owned(),
+    )
+}
+
+async fn cancel(store: &MemoryWorkflowStore) {
+    ExecutionHandler::new(store.clone())
+        .handle(
+            &execution(),
+            WorkflowMessage::Command(WorkflowCommand::CancelExecution {
+                reason: "somebody pressed cancel".to_owned(),
+            }),
+            metadata("m-cancel"),
+            Now::at(at(11)),
+        )
+        .await
+        .expect("a cancel");
+}
+
+fn last_error(
+    store_state: &aiwatcher_execution::state::Execution,
+    step: &str,
+) -> aiwatcher_execution::state::StepError {
+    store_state
+        .step(step)
+        .expect("the step")
+        .attempts
+        .iter()
+        .rev()
+        .find_map(|attempt| attempt.error.clone())
+        .expect("a recorded failure")
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_cancelled_run_stops_the_attempt_it_is_running_rather_than_waiting_for_it() {
+    // The regression: a cancel was cooperative for pods and for nothing else,
+    // so a run whose step ran in this process sat `Cancelling` until that step
+    // finished on its own — an hour of a judge being asked questions nobody
+    // wanted answered any more.
+    let store = MemoryWorkflowStore::new();
+    started(&store).await;
+    let patient = Patient::new(true);
+    let reactor = patient_reactor(store.clone(), Arc::clone(&patient));
+
+    let began = tokio::time::Instant::now();
+    let (performed, ()) = tokio::join!(reactor.poll_once(at(10)), async {
+        patient.entered.notified().await;
+        cancel(&store).await;
+    });
+
+    assert_eq!(
+        performed.expect("a poll"),
+        Performed::Reported {
+            step_id: "extract".to_owned(),
+            attempt: 1,
+            succeeded: false,
+        }
+    );
+    assert!(
+        began.elapsed() <= aiwatcher_execution::Watch::default().every * 2,
+        "stopped within a look or two, not after the hour: {:?}",
+        began.elapsed()
+    );
+    assert_eq!(patient.asked_to_cancel.load(Ordering::SeqCst), 1);
+    let state = replay(store.load(&execution()).await.expect("a load").events());
+    let run = state.active().expect("an execution");
+    assert_eq!(run.state.state_type, StateType::Cancelled);
+    assert_eq!(last_error(run, "extract").class, FailureClass::Policy);
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_attempt_that_ignores_the_stop_is_abandoned_once_its_grace_runs_out() {
+    // Cooperative first, forced after: a runtime that never looks at the
+    // signal does not get to hold a cancelled run open for as long as it likes.
+    let store = MemoryWorkflowStore::new();
+    started(&store).await;
+    let patient = Patient::new(false);
+    let watch = aiwatcher_execution::Watch::default();
+    let reactor = patient_reactor(store.clone(), Arc::clone(&patient)).with_watch(watch);
+
+    let began = tokio::time::Instant::now();
+    let (performed, ()) = tokio::join!(reactor.poll_once(at(10)), async {
+        patient.entered.notified().await;
+        cancel(&store).await;
+    });
+
+    assert!(matches!(
+        performed.expect("a poll"),
+        Performed::Reported {
+            succeeded: false,
+            ..
+        }
+    ));
+    assert!(began.elapsed() >= watch.grace, "the grace was given");
+    assert!(began.elapsed() < std::time::Duration::from_secs(3600));
+    let state = replay(store.load(&execution()).await.expect("a load").events());
+    let run = state.active().expect("an execution");
+    assert_eq!(run.state.state_type, StateType::Cancelled);
+    let error = last_error(run, "extract");
+    assert_eq!(error.class, FailureClass::Policy);
+    assert!(error.message.contains("abandoned"), "{}", error.message);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_step_past_its_own_timeout_is_stopped_and_reported_as_a_timeout() {
+    // `timeout_seconds` was carried into every context and enforced by the
+    // executors that happened to pass it to an HTTP client. One that did not —
+    // the scoring step, and a judge waiting on a model — had no deadline at
+    // all.
+    let store = MemoryWorkflowStore::new();
+    started(&store).await;
+    let patient = Patient::new(true);
+    let reactor = patient_reactor(store.clone(), Arc::clone(&patient));
+
+    let began = tokio::time::Instant::now();
+    let performed = reactor.poll_once(at(10)).await.expect("a poll");
+
+    assert!(matches!(
+        performed,
+        Performed::Reported {
+            succeeded: false,
+            ..
+        }
+    ));
+    let elapsed = began.elapsed();
+    assert!(
+        elapsed >= std::time::Duration::from_secs(60)
+            && elapsed < std::time::Duration::from_secs(61),
+        "stopped at the step's sixty seconds: {elapsed:?}"
+    );
+    let state = replay(store.load(&execution()).await.expect("a load").events());
+    let run = state.active().expect("an execution");
+    let error = last_error(run, "extract");
+    assert_eq!(error.class, FailureClass::Timeout);
+    // A timeout keeps its own budget: the work may have been nearly done.
+    assert_eq!(run.step("extract").expect("the step").current_attempt, 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_step_with_no_deadline_of_its_own_runs_as_long_as_it_takes() {
+    let store = MemoryWorkflowStore::new();
+    let mut unbounded = plan();
+    for step in &mut unbounded.steps {
+        step.timeout_seconds = 0;
+    }
+    started_with(&store, unbounded).await;
+    let patient = Patient::new(true);
+    let reactor = patient_reactor(store.clone(), Arc::clone(&patient));
+
+    assert!(matches!(
+        reactor.poll_once(at(10)).await.expect("a poll"),
+        Performed::Reported {
+            succeeded: true,
+            ..
+        }
+    ));
+    assert_eq!(patient.asked_to_cancel.load(Ordering::SeqCst), 0);
+}

@@ -110,7 +110,7 @@ impl ActivityExecutor for ScoreExecutor {
     async fn execute(
         &self,
         command: &ActivityCommand,
-        _: &ActivityContext,
+        context: &ActivityContext,
     ) -> Result<ActivityResult, ActivityError> {
         let (RuntimeBinding::ScoreEvaluation(spec) | RuntimeBinding::JudgeEvaluation(spec)) =
             &command.step.runtime
@@ -198,6 +198,10 @@ impl ActivityExecutor for ScoreExecutor {
                  whose context says so"
             );
         }
+        // Between the pieces of work rather than inside them: a stop that
+        // arrives while the cohort is read is honoured before anybody is asked
+        // anything about it.
+        context.stop.check()?;
         let cohort = evaluations
             .cohort_cases(&manifest, &subject)
             .await
@@ -262,11 +266,21 @@ impl ActivityExecutor for ScoreExecutor {
                         .map(|question| question.call.clone())
                         .collect(),
                     *concurrency,
+                    &context.stop,
                 )
                 .await
-                .map_err(|failure| match failure {
-                    JudgeFailure::Unavailable(_) => ActivityError::transient(failure.to_string()),
-                    JudgeFailure::Refused(_) => ActivityError::user_code(failure.to_string()),
+                .map_err(|failure| {
+                    // A stop is reported as the stop, never as the outage the
+                    // dropped questions would otherwise read as.
+                    if let Some(reason) = context.stop.requested() {
+                        return reason.as_error();
+                    }
+                    match failure {
+                        JudgeFailure::Unavailable(_) => {
+                            ActivityError::transient(failure.to_string())
+                        }
+                        JudgeFailure::Refused(_) => ActivityError::user_code(failure.to_string()),
+                    }
                 })?;
                 let (judged, report) = replies(
                     run,
@@ -280,6 +294,10 @@ impl ActivityExecutor for ScoreExecutor {
             }
         };
 
+        // The last look. Past here the result is being published, and a
+        // publication stopped halfway is worth less than one finished a few
+        // seconds after a cancel: the reactor's grace is for exactly this.
+        context.stop.check()?;
         let scored = score_with(
             &card.scorecard,
             &cohort.expected,
@@ -480,6 +498,7 @@ mod tests {
                 timeout: std::time::Duration::from_secs(60),
                 context_id: "exec-1/score/1".to_owned(),
                 plan: Arc::new(plan),
+                stop: aiwatcher_execution::StopSignal::new(),
             },
         )
     }
@@ -571,6 +590,40 @@ mod tests {
         );
         assert_eq!(evidence.status, Some(ResultStatus::Succeeded));
         assert_eq!(evidence.metrics["exact"], 0.5);
+    }
+
+    #[tokio::test]
+    async fn a_run_asked_to_stop_publishes_nothing_and_says_it_was_stopped() {
+        // The executor looks between its pieces, and the last look is before
+        // anything is published: a cancelled measurement must not leave a
+        // result behind that reads as the one somebody asked for.
+        let registry = evaluations(cohort()).await;
+        let declaration = ready(
+            &registry,
+            json!({"answers": [
+                {"case_id": "two-plus-two", "answer": {"text": "four"}},
+                {"case_id": "capital-pl", "answer": {"text": "Warsaw"}}
+            ]}),
+        )
+        .await;
+
+        let (command, context) = attempt(&declaration);
+        context
+            .stop
+            .stop(aiwatcher_execution::StopReason::RunStopping);
+        let stopped = ScoreExecutor::new(Arc::clone(&registry))
+            .execute(&command, &context)
+            .await
+            .expect_err("a stopped run does not score");
+        assert_eq!(stopped.class, FailureClass::Policy, "{stopped}");
+        assert!(
+            registry
+                .get("scored-by-a-run", "reader", 200)
+                .await
+                .expect("the catalogue reads")
+                .is_none(),
+            "nothing was published"
+        );
     }
 
     /// A run admits nothing. It measures, and then asks to publish.

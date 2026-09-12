@@ -6020,6 +6020,69 @@ async fn a_worker_may_not_settle_an_attempt_it_does_not_hold() {
 }
 
 #[tokio::test]
+async fn a_cancel_reaches_a_worker_at_its_next_heartbeat_and_the_run_ends() {
+    // A worker holds its attempt for as long as its task takes, and before this
+    // a cancel waited for it: the run sat `cancelling` until the work finished
+    // or the lease lapsed. The heartbeat is the one call a worker makes while it
+    // works, so that is where it hears.
+    let fixture = Fixture::behind_a_proxy(false).await;
+    fixture.seed_worker_run("exec-w30").await;
+    fixture
+        .claim_as(
+            WORKER_SECRET,
+            json!({ "worker": "laptop-1", "tasks": ["stage@1"] }),
+        )
+        .await;
+
+    let (status, cancelling) = fixture
+        .send_with_token(
+            "POST",
+            "/api/v1/executions/exec-w30/commands/cancel",
+            WORKER_SECRET,
+            Some(json!({ "reason": "the corpus was withdrawn" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{cancelling}");
+    assert_eq!(
+        cancelling["execution"]["state"]["name"], "Cancelling",
+        "a step was running, so the cancel waits for it: {cancelling}"
+    );
+
+    let (status, stopped) = fixture
+        .send_with_token(
+            "POST",
+            "/api/v1/worker/claims/exec-w30/stage/1/heartbeat",
+            WORKER_SECRET,
+            Some(json!({ "worker": "laptop-1" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{stopped}");
+    assert_eq!(stopped["code"], "execution_stopping");
+
+    let (status, run) = fixture
+        .send_with_token("GET", "/api/v1/executions/exec-w30", WORKER_SECRET, None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{run}");
+    assert_eq!(
+        run["execution"]["state"]["state_type"], "cancelled",
+        "{run}"
+    );
+
+    // And what the worker was in the middle of is not accepted afterwards: the
+    // attempt already has its outcome, and it is not this one.
+    let (status, late) = fixture
+        .send_with_token(
+            "POST",
+            "/api/v1/worker/claims/exec-w30/stage/1/result",
+            WORKER_SECRET,
+            Some(json!({ "worker": "laptop-1", "outcome": "completed" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{late}");
+    assert_eq!(late["code"], "worker_report_conflict");
+}
+
+#[tokio::test]
 async fn an_output_this_instance_never_stored_is_refused_rather_than_recorded() {
     // A worker could otherwise describe a reference instead of writing one, and
     // a completed step pointing at an object that 404s is the one failure
