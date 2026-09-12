@@ -202,7 +202,7 @@ export type AppendStreamBody = {
 
 export type Approval = {
     record: ApprovalRecord;
-    withdrawn?: null | Withdrawal;
+    withdrawn?: null | ApprovalWithdrawal;
 };
 
 /**
@@ -266,6 +266,19 @@ export type ApprovalRecord = {
     bundle_digest?: string | null;
     context_id: string;
     variant_id: string;
+};
+
+/**
+ * Withdrawal is final for its approval ID. Hiding evidence is what it does;
+ * it never shortens or extends the retention of what was already published.
+ *
+ * Named `ApprovalWithdrawal` in the contract: an OpenAPI components block is
+ * one global namespace and a conversation corpus has a `Withdrawal` of its
+ * own, so the plain name silently described this one with that one's fields.
+ */
+export type ApprovalWithdrawal = {
+    withdrawn_at: number;
+    withdrawn_by: string;
 };
 
 /**

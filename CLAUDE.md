@@ -577,6 +577,13 @@ a choice with no right answer that would be re-made every time a type gained a
 second reader. A module owns its operations; the vocabulary they speak is
 shared.
 
+Being one namespace, it is also where **two domains can quietly overwrite each
+other**: `aiwatcher-conversations` and `aiwatcher-evaluation` both have a
+`Withdrawal`, and the contract described an approval's with a corpus's fields
+for a whole stage — the document generated, the client generated, and nothing
+read the field until something did. A type whose name another domain could
+plausibly use carries `#[schema(as = …)]` naming the thing it belongs to.
+
 `integrations/` is the one grouping in either crate that is not a product area:
 it holds what the crate reaches *out* to. Everything else answers from the log,
 the read model or the object store; these leave the building, with a timeout, a

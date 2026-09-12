@@ -616,7 +616,7 @@ export function Retention({
       {report.failures > 0
         ? ` ${report.failures} consecutive failures since: ${report.error ?? 'no reason reported'}`
         : ''}
-      {report.damaged_count > 0 ? (
+      {(report.damaged_count ?? 0) > 0 ? (
         <span className="text-danger">
           {' '}
           {report.damaged_count} kept {report.damaged_count === 1 ? 'result is' : 'results are'}{' '}

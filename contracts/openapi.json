@@ -10090,7 +10090,7 @@
                 "type": "null"
               },
               {
-                "$ref": "#/components/schemas/Withdrawal"
+                "$ref": "#/components/schemas/ApprovalWithdrawal"
               }
             ]
           }
@@ -10200,6 +10200,24 @@
             "type": "string"
           },
           "variant_id": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ApprovalWithdrawal": {
+        "type": "object",
+        "description": "Withdrawal is final for its approval ID. Hiding evidence is what it does;\nit never shortens or extends the retention of what was already published.\n\nNamed `ApprovalWithdrawal` in the contract: an OpenAPI components block is\none global namespace and a conversation corpus has a `Withdrawal` of its\nown, so the plain name silently described this one with that one's fields.",
+        "required": [
+          "withdrawn_by",
+          "withdrawn_at"
+        ],
+        "properties": {
+          "withdrawn_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "withdrawn_by": {
             "type": "string"
           }
         },

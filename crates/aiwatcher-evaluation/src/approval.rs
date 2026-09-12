@@ -70,7 +70,12 @@ pub struct ApprovalRecord {
 
 /// Withdrawal is final for its approval ID. Hiding evidence is what it does;
 /// it never shortens or extends the retention of what was already published.
+///
+/// Named `ApprovalWithdrawal` in the contract: an OpenAPI components block is
+/// one global namespace and a conversation corpus has a `Withdrawal` of its
+/// own, so the plain name silently described this one with that one's fields.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[schema(as = ApprovalWithdrawal)]
 #[serde(deny_unknown_fields)]
 pub struct Withdrawal {
     pub withdrawn_by: String,

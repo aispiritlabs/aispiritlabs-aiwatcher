@@ -335,7 +335,7 @@ export function EvaluationPage() {
         {search.evidence ? (
           <EvidencePane
             evaluationId={search.evidence}
-            gaps={damaged.has(search.evidence) ? retention : undefined}
+            gaps={damaged.has(search.evidence) ? (retention ?? undefined) : undefined}
           />
         ) : (
           <ReportPane
