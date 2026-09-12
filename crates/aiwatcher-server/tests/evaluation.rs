@@ -28,6 +28,8 @@ mod fixture;
 
 #[path = "evaluation/catalogue.rs"]
 mod catalogue;
+#[path = "evaluation/comparison.rs"]
+mod comparison;
 #[path = "evaluation/prompts.rs"]
 mod prompts;
 #[path = "evaluation/staging.rs"]
@@ -246,7 +248,7 @@ async fn contract(store: Arc<dyn ObjectStore>) {
     );
     assert_eq!(
         restarted
-            .list(None, 1, None, "viewer", 1000)
+            .list(None, 1, None, None, "viewer", 1000)
             .await
             .unwrap()
             .evaluations
@@ -479,7 +481,7 @@ async fn a_lost_commit_response_is_recoverable_without_a_duplicate_measurement()
     assert_eq!(recovered.committed_at, 100);
     assert_eq!(
         registry
-            .list(None, 200, None, "viewer", 201)
+            .list(None, 200, None, None, "viewer", 201)
             .await
             .unwrap()
             .evaluations

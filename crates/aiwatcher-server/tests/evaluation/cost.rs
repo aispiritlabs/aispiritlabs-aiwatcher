@@ -149,7 +149,10 @@ async fn a_catalogue_page_and_a_sweep_do_not_reread_every_published_result() {
     }
 
     counts.reset();
-    let page = registry.list(None, 200, None, "viewer", 200).await.unwrap();
+    let page = registry
+        .list(None, 200, None, None, "viewer", 200)
+        .await
+        .unwrap();
     let (gets, lists, _, bytes) = counts.read();
     assert_eq!(page.evaluations.len(), CATALOGUE);
     println!("catalogue of {CATALOGUE}: {gets} gets, {lists} lists, {bytes} bytes");

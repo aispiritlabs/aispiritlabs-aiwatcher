@@ -28,7 +28,7 @@ use std::collections::{BTreeMap, HashMap};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use aiwatcher_core::{Checkpoint, EventType, Phase, RecordedEvent};
+use aiwatcher_core::{Checkpoint, Comparability, EventType, Phase, RecordedEvent};
 
 /// Where an evaluation got to.
 ///
@@ -70,14 +70,6 @@ pub struct EvaluationContext {
     pub suite_version: Option<String>,
     pub scorer_version: Option<String>,
     pub split: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, utoipa::ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum Comparability {
-    Comparable,
-    Incompatible,
-    Unverified,
 }
 
 /// A read policy over observed evidence, not a model/prompt promotion policy.

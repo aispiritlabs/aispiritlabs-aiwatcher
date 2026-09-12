@@ -14,6 +14,7 @@ pub mod artifact;
 pub mod attrs;
 pub mod catalog;
 pub mod checkpoint;
+pub mod comparability;
 pub mod context;
 pub mod envelope;
 pub mod error;
@@ -27,6 +28,7 @@ pub mod stream;
 pub use artifact::{ArtifactKind, ArtifactRef};
 pub use catalog::{EventType, Phase, Subject};
 pub use checkpoint::Checkpoint;
+pub use comparability::Comparability;
 pub use context::{ContextGenerator, ObservabilityContext, SeedContext, SystemContextGenerator};
 pub use envelope::{
     EventEnvelope, MessageKind, RecordedEvent, RecordedMetadata, SCHEMA_VERSION, Sdk, Source,

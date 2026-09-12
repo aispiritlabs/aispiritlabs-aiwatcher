@@ -492,6 +492,31 @@ impl Registry {
             .map(|(detail, _)| detail))
     }
 
+    /// One result against another named one, as two headers.
+    ///
+    /// Explicit: a baseline nobody chose is a baseline nobody checked, and the
+    /// automatic one on the folded half exists because a log fold has no other
+    /// way to offer a pair. Here the catalogue answers that — every result in
+    /// this one's context is a candidate, and which of them is the baseline is
+    /// a decision. Both sides are read through one `Sources`, so a pair
+    /// admitted once is resolved once.
+    pub async fn compare(
+        &self,
+        id: &str,
+        baseline_id: &str,
+        subject: &str,
+        now: i64,
+    ) -> Result<Option<crate::EvidenceComparison>> {
+        let mut sources = Sources::default();
+        let Some((current, _)) = self.read(id, subject, now, &mut sources).await? else {
+            return Ok(None);
+        };
+        let Some((baseline, _)) = self.read(baseline_id, subject, now, &mut sources).await? else {
+            return Ok(None);
+        };
+        Ok(Some(crate::comparison::compare(current, baseline)))
+    }
+
     /// The summary, and the metadata it was read from when there was one.
     ///
     /// Everything a header says is in that one object. The shards behind it are
@@ -759,6 +784,14 @@ impl Registry {
 
     /// The catalogue, newest first, optionally narrowed to a period.
     ///
+    /// Narrowed to one `context_id`, every row it returns is a legitimate
+    /// baseline for every other — which is the whole of the comparability
+    /// question for published evidence, answered by the server rather than by
+    /// a browser comparing two strings. The filter walks the index rather than
+    /// a second one keyed by context: a page therefore costs the rows it
+    /// passed over as well as the ones it carries, and a cursor on a filtered
+    /// page promises another *entry* rather than another match.
+    ///
     /// It reads the index rather than the results: a result's own key is the
     /// hash of its ID, so ordering by anything but that hash meant listing
     /// every object under `evaluations/` — content included, four keys per
@@ -770,6 +803,7 @@ impl Registry {
         cursor: Option<&str>,
         limit: usize,
         window_seconds: Option<i64>,
+        context_id: Option<&str>,
         subject: &str,
         now: i64,
     ) -> Result<DurablePage> {
@@ -788,18 +822,24 @@ impl Registry {
                 "unknown discovery cursor",
             )?;
         }
-        let selected: Vec<_> = entries
-            .into_iter()
-            .filter(|e| cursor.is_none_or(|c| e.key.as_str() > c))
-            .take(limit + 1)
-            .collect();
-        let next_cursor = (selected.len() > limit).then(|| selected[limit - 1].key.clone());
         let mut evaluations = Vec::new();
+        let mut next_cursor = None;
+        let mut last = None;
         let mut sources = Sources::default();
-        for entry in selected.iter().take(limit) {
+        for entry in entries
+            .iter()
+            .filter(|e| cursor.is_none_or(|c| e.key.as_str() > c))
+        {
+            if evaluations.len() == limit {
+                next_cursor = last;
+                break;
+            }
             let Some(indexed) = self.store.read::<IndexEntry>(&entry.key).await? else {
                 continue;
             };
+            if context_id.is_some_and(|wanted| indexed.receipt.context_id != wanted) {
+                continue;
+            }
             match indexed.retired {
                 Some(state) => evaluations.push(row(indexed.receipt, state)),
                 None => {
@@ -809,6 +849,7 @@ impl Registry {
                     evaluations.push(detail);
                 }
             }
+            last = Some(entry.key.clone());
         }
         Ok(DurablePage {
             evaluations,

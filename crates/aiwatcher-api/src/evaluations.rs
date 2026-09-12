@@ -8,8 +8,8 @@ use crate::auth::Caller;
 use aiwatcher_auth::Role;
 use aiwatcher_evaluation::{
     Approval, ApprovalBundles, ApprovalPage, CasePage, DurableEvaluation, DurablePage,
-    EvaluationManifest, EvaluationReceipt, EvidenceState, PublishEvaluation, ResultStatus,
-    StagedFile,
+    EvaluationManifest, EvaluationReceipt, EvidenceComparison, EvidenceState, PublishEvaluation,
+    ResultStatus, StagedFile,
 };
 use axum::extract::{Path, Query, State};
 use axum::routing::{delete, get, post, put};
@@ -31,6 +31,7 @@ use crate::state::AppState;
     list_results,
     get_result,
     get_cases,
+    compare_results,
     forget_result,
     approve_source,
     list_approvals,
@@ -80,6 +81,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/evaluation-results/{evaluation_id}/cases",
             get(get_cases),
+        )
+        .route(
+            "/api/v1/evaluation-results/{evaluation_id}/comparison",
+            get(compare_results),
         )
         .route("/api/v1/evaluations", get(list_evaluations))
         .route("/api/v1/evaluations/{evaluation_id}", get(get_evaluation))
@@ -153,7 +158,8 @@ async fn get_evaluation(
         {
             if query.baseline_id.is_some() {
                 return Err(ApiError::BadRequest(
-                    "durable result comparisons require the B3 comparison contract".into(),
+                    "compare published evidence with GET /api/v1/evaluation-results/{id}/comparison"
+                        .into(),
                 ));
             }
             let page = registry
@@ -244,6 +250,17 @@ struct ResultQuery {
     /// Published within this many seconds. The catalogue has a published
     /// order, so a period is a bound on it rather than a filter over a scan.
     window_seconds: Option<i64>,
+    /// Only results measured under this pinned context. Every row that comes
+    /// back is a legitimate baseline for every other, which is what makes this
+    /// the candidate list for a comparison rather than a convenience filter.
+    context_id: Option<String>,
+}
+
+#[derive(serde::Deserialize, utoipa::IntoParams)]
+#[serde(deny_unknown_fields)]
+struct ComparisonQuery {
+    /// Explicit. A baseline nobody chose is a baseline nobody checked.
+    baseline: String,
 }
 #[derive(serde::Deserialize, utoipa::IntoParams)]
 #[serde(deny_unknown_fields)]
@@ -293,6 +310,7 @@ async fn list_results(
                 query.cursor.as_deref(),
                 query.limit.unwrap_or(200),
                 query.window_seconds,
+                query.context_id.as_deref(),
                 &caller.identity().subject,
                 now(),
             )
@@ -315,6 +333,33 @@ async fn get_result(
         .await?
         .map(Json)
         .ok_or(ApiError::NotFound(id))
+}
+
+/// One published result against another named one.
+///
+/// Two headers, not two results: the metrics a comparison subtracts are in the
+/// metadata each side was published with, so this costs what two summaries
+/// cost however many cases are behind them. Which two may be subtracted is the
+/// server's answer — `comparability` with its reasons, the same three words the
+/// folded half uses — and a delta is withheld rather than shown wrong. Case
+/// level regressions are not here: they are a full read of both sides.
+#[utoipa::path(get, path = "/api/v1/evaluation-results/{evaluation_id}/comparison",
+    params(("evaluation_id" = String, Path), ComparisonQuery),
+    responses((status = 200, body = EvidenceComparison), (status = 404, body = crate::error::ErrorBody)), tag = "evaluation")]
+async fn compare_results(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+    Query(query): Query<ComparisonQuery>,
+) -> ApiResult<Json<EvidenceComparison>> {
+    caller.require(Role::Viewer)?;
+    registry(&state)?
+        .clone()
+        .with_content_access(caller.require(Role::Admin).is_ok())
+        .compare(&id, &query.baseline, &caller.identity().subject, now())
+        .await?
+        .map(Json)
+        .ok_or_else(|| ApiError::NotFound(format!("{id} or baseline {}", query.baseline)))
 }
 
 #[utoipa::path(get, path = "/api/v1/evaluation-results/{evaluation_id}/cases", params(("evaluation_id" = String, Path), CasesQuery),

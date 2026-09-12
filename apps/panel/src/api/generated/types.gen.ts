@@ -2115,6 +2115,47 @@ export type EvidenceCase = {
     measurement: CaseMeasurement;
 };
 
+/**
+ * One durable result against another named one.
+ */
+export type EvidenceComparison = {
+    baseline: DurableEvaluation;
+    comparability: Comparability;
+    current: DurableEvaluation;
+    /**
+     * Every metric either side reported or the context declared, so one that
+     * appeared, disappeared or was never measured at all is visible.
+     */
+    metrics: Array<EvidenceMetricDelta>;
+    reasons: Array<string>;
+    /**
+     * Both sides pin the same variant, so a delta here measures repetition
+     * rather than a change. Comparable, and not the question somebody thinks
+     * they are asking — which is why it is a field rather than a reason.
+     */
+    same_variant: boolean;
+};
+
+/**
+ * One metric on both sides, with what the context says it means.
+ */
+export type EvidenceMetricDelta = {
+    baseline?: number | null;
+    current?: number | null;
+    /**
+     * `current - baseline`, and `None` unless the two are comparable and both
+     * reported it. A withheld delta is not a delta of zero.
+     */
+    delta?: number | null;
+    direction?: null | MetricDirection;
+    name: string;
+    /**
+     * From the context's own definition, so a reader is not guessing whether
+     * a number is seconds or a rate.
+     */
+    unit?: string | null;
+};
+
 export const EvidenceState = {
     COMPLETE: 'complete',
     PARTIAL: 'partial',
@@ -9514,6 +9555,12 @@ export type ListResultsData = {
          * order, so a period is a bound on it rather than a filter over a scan.
          */
         window_seconds?: number | null;
+        /**
+         * Only results measured under this pinned context. Every row that comes
+         * back is a legitimate baseline for every other, which is what makes this
+         * the candidate list for a comparison rather than a convenience filter.
+         */
+        context_id?: string | null;
     };
     url: '/api/v1/evaluation-results';
 };
@@ -9616,6 +9663,32 @@ export type GetCasesResponses = {
 };
 
 export type GetCasesResponse = GetCasesResponses[keyof GetCasesResponses];
+
+export type CompareResultsData = {
+    body?: never;
+    path: {
+        evaluation_id: string;
+    };
+    query: {
+        /**
+         * Explicit. A baseline nobody chose is a baseline nobody checked.
+         */
+        baseline: string;
+    };
+    url: '/api/v1/evaluation-results/{evaluation_id}/comparison';
+};
+
+export type CompareResultsErrors = {
+    404: ErrorBody;
+};
+
+export type CompareResultsError = CompareResultsErrors[keyof CompareResultsErrors];
+
+export type CompareResultsResponses = {
+    200: EvidenceComparison;
+};
+
+export type CompareResultsResponse = CompareResultsResponses[keyof CompareResultsResponses];
 
 export type ListEvaluationSuitesData = {
     body?: never;

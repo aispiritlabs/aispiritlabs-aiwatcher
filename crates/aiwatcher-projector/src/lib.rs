@@ -29,6 +29,7 @@ pub mod spans;
 pub mod window;
 pub mod workflows;
 
+pub use aiwatcher_core::Comparability;
 pub use conversations::{ConversationFilter, ConversationPage, ConversationSummary};
 pub use deadletter::{FileDeadLetters, InMemoryDeadLetters};
 pub use dedup::Deduplicator;

@@ -19,7 +19,7 @@ async fn the_catalogue_is_newest_first_paged_by_period_and_backfilled_for_older_
     }
 
     let page = registry
-        .list(None, 200, None, "viewer", 9000)
+        .list(None, 200, None, None, "viewer", 9000)
         .await
         .unwrap();
     assert_eq!(ids(&page), ["third", "second", "first"]);
@@ -27,15 +27,18 @@ async fn the_catalogue_is_newest_first_paged_by_period_and_backfilled_for_older_
     // A period is a bound on the key rather than a filter over a scan, which
     // is the whole reason the screen may have one at all.
     let recent = registry
-        .list(None, 200, Some(5000), "viewer", 9000)
+        .list(None, 200, Some(5000), None, "viewer", 9000)
         .await
         .unwrap();
     assert_eq!(ids(&recent), ["third", "second"]);
 
-    let head = registry.list(None, 2, None, "viewer", 9000).await.unwrap();
+    let head = registry
+        .list(None, 2, None, None, "viewer", 9000)
+        .await
+        .unwrap();
     assert_eq!(ids(&head), ["third", "second"]);
     let rest = registry
-        .list(head.next_cursor.as_deref(), 2, None, "viewer", 9000)
+        .list(head.next_cursor.as_deref(), 2, None, None, "viewer", 9000)
         .await
         .unwrap();
     assert_eq!(ids(&rest), ["first"]);
@@ -48,7 +51,7 @@ async fn the_catalogue_is_newest_first_paged_by_period_and_backfilled_for_older_
     }
     assert!(
         registry
-            .list(None, 200, None, "viewer", 9000)
+            .list(None, 200, None, None, "viewer", 9000)
             .await
             .unwrap()
             .evaluations
@@ -68,7 +71,7 @@ async fn the_catalogue_is_newest_first_paged_by_period_and_backfilled_for_older_
     }
     registry.collect_orphans(9000).await.unwrap();
     let rebuilt = registry
-        .list(None, 200, None, "viewer", 9000)
+        .list(None, 200, None, None, "viewer", 9000)
         .await
         .unwrap();
     assert_eq!(ids(&rebuilt), ["third", "second", "first"]);
@@ -77,7 +80,7 @@ async fn the_catalogue_is_newest_first_paged_by_period_and_backfilled_for_older_
     // from would say it had never been published.
     assert!(registry.forget("second").await.unwrap());
     let after = registry
-        .list(None, 200, None, "viewer", 9000)
+        .list(None, 200, None, None, "viewer", 9000)
         .await
         .unwrap();
     assert_eq!(ids(&after), ["third", "second", "first"]);

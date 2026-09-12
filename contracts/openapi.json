@@ -4430,6 +4430,18 @@
               ],
               "format": "int64"
             }
+          },
+          {
+            "name": "context_id",
+            "in": "query",
+            "description": "Only results measured under this pinned context. Every row that comes\nback is a legitimate baseline for every other, which is what makes this\nthe candidate list for a comparison rather than a convenience filter.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
           }
         ],
         "responses": {
@@ -4682,6 +4694,57 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/evaluation-results/{evaluation_id}/comparison": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "One published result against another named one.",
+        "description": "Two headers, not two results: the metrics a comparison subtracts are in the\nmetadata each side was published with, so this costs what two summaries\ncost however many cases are behind them. Which two may be subtracted is the\nserver's answer — `comparability` with its reasons, the same three words the\nfolded half uses — and a delta is withheld rather than shown wrong. Case\nlevel regressions are not here: they are a full read of both sides.",
+        "operationId": "compare_results",
+        "parameters": [
+          {
+            "name": "evaluation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "baseline",
+            "in": "query",
+            "description": "Explicit. A baseline nobody chose is a baseline nobody checked.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvidenceComparison"
                 }
               }
             }
@@ -13892,6 +13955,98 @@
           "expected": {},
           "measurement": {
             "$ref": "#/components/schemas/CaseMeasurement"
+          }
+        }
+      },
+      "EvidenceComparison": {
+        "type": "object",
+        "description": "One durable result against another named one.",
+        "required": [
+          "current",
+          "baseline",
+          "comparability",
+          "reasons",
+          "same_variant",
+          "metrics"
+        ],
+        "properties": {
+          "baseline": {
+            "$ref": "#/components/schemas/DurableEvaluation"
+          },
+          "comparability": {
+            "$ref": "#/components/schemas/Comparability"
+          },
+          "current": {
+            "$ref": "#/components/schemas/DurableEvaluation"
+          },
+          "metrics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EvidenceMetricDelta"
+            },
+            "description": "Every metric either side reported or the context declared, so one that\nappeared, disappeared or was never measured at all is visible."
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "same_variant": {
+            "type": "boolean",
+            "description": "Both sides pin the same variant, so a delta here measures repetition\nrather than a change. Comparable, and not the question somebody thinks\nthey are asking — which is why it is a field rather than a reason."
+          }
+        }
+      },
+      "EvidenceMetricDelta": {
+        "type": "object",
+        "description": "One metric on both sides, with what the context says it means.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "baseline": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "current": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "delta": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "`current - baseline`, and `None` unless the two are comparable and both\nreported it. A withheld delta is not a delta of zero."
+          },
+          "direction": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MetricDirection",
+                "description": "Which way is better, *declared* by whoever pinned the context. Absent\nwhere neither side declares the metric — a number nobody defined."
+              }
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "From the context's own definition, so a reader is not guessing whether\na number is seconds or a rate."
           }
         }
       },

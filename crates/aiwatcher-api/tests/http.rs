@@ -7027,6 +7027,90 @@ async fn durable_reports_override_legacy_ids_and_erasure_never_falls_back() {
     assert_eq!(durable["evaluations"].as_array().unwrap().len(), 1);
 }
 
+/// Two variants of one pinned context, and the delta the server will own.
+fn variant_request(id: &str, experiment: &str, accuracy: f64) -> Value {
+    let mut request = durable_request(id);
+    request["manifest"]["variant"]["experiment_id"] = json!(experiment);
+    request["cases"][0]["metrics"]["accuracy"] = json!(accuracy);
+    request["cases"][1]["metrics"]["accuracy"] = json!(accuracy);
+    request["cases"][2]["metrics"]["accuracy"] = json!(accuracy);
+    request
+}
+
+#[tokio::test]
+async fn a_published_comparison_is_the_servers_answer_and_names_its_two_results() {
+    let mut fixture = Fixture::new(false);
+    fixture.state.evaluations = Some(Arc::new(
+        aiwatcher_evaluation::Registry::new(
+            Arc::new(MemoryObjectStore::new()),
+            Arc::new(EvaluationSource::default()),
+            Default::default(),
+        )
+        .unwrap(),
+    ));
+    for request in [
+        variant_request("before", "prompt-v1", 0.5),
+        variant_request("after", "prompt-v2", 0.75),
+    ] {
+        let (status, body) = fixture
+            .post("/api/v1/evaluation-approvals", request["manifest"].clone())
+            .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (status, body) = fixture.post("/api/v1/evaluation-results", request).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+
+    let (status, comparison) = fixture
+        .get("/api/v1/evaluation-results/after/comparison?baseline=before")
+        .await;
+    assert_eq!(status, StatusCode::OK, "{comparison}");
+    assert_eq!(comparison["comparability"], "comparable");
+    assert_eq!(comparison["same_variant"], false);
+    let accuracy = &comparison["metrics"][0];
+    assert_eq!(accuracy["name"], "accuracy");
+    assert_eq!(accuracy["delta"], 0.25);
+    // The declaration says which way is better, so nothing downstream guesses.
+    assert_eq!(accuracy["direction"], "higher");
+
+    // The candidate list is the catalogue narrowed by the server, which is the
+    // only place the rule lives.
+    let context = comparison["current"]["receipt"]["context_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let (_, page) = fixture
+        .get(&format!("/api/v1/evaluation-results?context_id={context}"))
+        .await;
+    assert_eq!(page["evaluations"].as_array().unwrap().len(), 2);
+    let (_, none) = fixture
+        .get("/api/v1/evaluation-results?context_id=0000")
+        .await;
+    assert!(none["evaluations"].as_array().unwrap().is_empty());
+
+    // A baseline nobody published is a 404 naming both, never an automatic
+    // replacement — the folded half's rule, for published evidence.
+    assert_eq!(
+        fixture
+            .get("/api/v1/evaluation-results/after/comparison?baseline=never")
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    // And the legacy detail route still refuses to compare published evidence,
+    // now by saying where it is done instead of naming an unbuilt package.
+    let (status, refusal) = fixture
+        .get("/api/v1/evaluations/after?baseline_id=before")
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        refusal["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("/comparison"),
+        "{refusal}"
+    );
+}
+
 #[tokio::test]
 async fn durable_publication_requires_editor_and_a_source_authority() {
     let mut fixture = Fixture::behind_a_proxy(false).await;
