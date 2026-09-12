@@ -91,6 +91,18 @@ impl Tail {
             skipped: self.skipped,
         }
     }
+
+    /// What has been kept so far, without ending the stream.
+    ///
+    /// A pod's log is readable while its pod still runs, and a backend holding
+    /// the bytes itself has to answer that without giving them up.
+    #[must_use]
+    pub fn kept(&self) -> Kept {
+        Kept {
+            bytes: self.kept.clone(),
+            skipped: self.skipped,
+        }
+    }
 }
 
 /// What the stored object says before the pod's own first byte.

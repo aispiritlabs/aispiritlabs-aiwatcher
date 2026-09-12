@@ -169,6 +169,38 @@ impl FromStr for ConversationPolicyMode {
     }
 }
 
+/// What a step's pod *is* in this deployment (ADR_0029, amended).
+///
+/// A plan never says: a `container_job` step names a template and an image,
+/// and where that runs is the operator's. `Kubernetes` is one Job per attempt
+/// and the default; `Process` is one local process per attempt, for a
+/// deployment that has no cluster to offer — which keeps the launcher, the
+/// derived name, the claim by key and the log, and keeps neither the image nor
+/// a resource limit. The chart offers only the first: a release in a cluster
+/// asking for the second would be running steps in the API pod.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PodRuntime {
+    #[default]
+    Kubernetes,
+    Process,
+}
+
+impl FromStr for PodRuntime {
+    type Err = ConfigError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.to_ascii_lowercase().as_str() {
+            "kubernetes" | "k8s" | "cluster" | "pods" => Ok(Self::Kubernetes),
+            "process" | "processes" | "local" | "host" => Ok(Self::Process),
+            other => Err(ConfigError::Invalid {
+                name: "AIWATCHER_POD_RUNTIME",
+                value: other.to_owned(),
+                expected: "one of kubernetes, process",
+            }),
+        }
+    }
+}
+
 /// Where a managed execution's history lives.
 ///
 /// Its own setting for the reason the prompt store is: it answers a different
@@ -447,6 +479,13 @@ pub struct Config {
     /// `AIWATCHER_URL`. Required wherever pods are launched, because the
     /// process launching them cannot see the Service in front of the API.
     pub pod_api_url: Option<String>,
+    /// What a step's pod is here: a Job in a cluster, or a process on this
+    /// host (`AIWATCHER_POD_RUNTIME`).
+    pub pod_runtime: PodRuntime,
+    /// How many of this host's step processes may run at once
+    /// (`AIWATCHER_POD_PROCESS_LIMIT`). Meaningless under
+    /// [`PodRuntime::Kubernetes`], where a scheduler answers it.
+    pub pod_process_limit: usize,
     /// Whether the dataset area may search Hugging Face.
     ///
     /// A switch rather than a credential: the dataset search is public. Off by
@@ -616,6 +655,8 @@ impl Default for Config {
             pod_templates: None,
             pod_namespace: None,
             pod_api_url: None,
+            pod_runtime: PodRuntime::default(),
+            pod_process_limit: crate::execution::pods::process::DEFAULT_LIMIT,
             huggingface_enabled: false,
             huggingface_token: None,
             kaggle_username: None,
@@ -874,6 +915,20 @@ impl Config {
         config.pod_templates = var("AIWATCHER_POD_TEMPLATES");
         config.pod_namespace = var("AIWATCHER_POD_NAMESPACE");
         config.pod_api_url = var("AIWATCHER_POD_API_URL");
+        if let Some(raw) = var("AIWATCHER_POD_RUNTIME") {
+            config.pod_runtime = raw.parse()?;
+        }
+        if let Some(raw) = var("AIWATCHER_POD_PROCESS_LIMIT") {
+            config.pod_process_limit = raw
+                .parse()
+                .ok()
+                .filter(|limit| *limit > 0)
+                .ok_or(ConfigError::Invalid {
+                    name: "AIWATCHER_POD_PROCESS_LIMIT",
+                    value: raw,
+                    expected: "how many step processes may run at once, one or more",
+                })?;
+        }
         if let Some(raw) = var("AIWATCHER_HUGGINGFACE_ENABLED") {
             config.huggingface_enabled = parse_bool("AIWATCHER_HUGGINGFACE_ENABLED", &raw)?;
         }
@@ -1126,18 +1181,21 @@ impl Config {
         }
 
         // A process that claims attempts is the one that starts the pods they
-        // ask for, and the client that does is behind the `kube` cargo feature
-        // (ADR_0029). Without it, a pod's attempt would be accepted and wait
-        // for ever with nothing here saying why. The serve role only checks a
-        // step against the file, which needs no cluster, so it reads templates
-        // in any build.
+        // ask for, and the client that asks a cluster is behind the `kube`
+        // cargo feature (ADR_0029). Without it, a pod's attempt would be
+        // accepted and wait for ever with nothing here saying why — unless the
+        // pods are this host's processes, which every build can start. The
+        // serve role only checks a step against the file, which needs neither,
+        // so it reads templates in any build.
         if self.pod_templates.is_some() && self.role.works() {
-            if !cfg!(feature = "kube") {
+            if self.pod_runtime == PodRuntime::Kubernetes && !cfg!(feature = "kube") {
                 return Err(ConfigError::Unusable {
                     name: "AIWATCHER_POD_TEMPLATES",
                     why: "this process claims attempts and would have to start the pods they \
-                          ask for, which needs the `kube` cargo feature this build lacks; set it \
-                          on AIWATCHER_ROLE=serve, which only checks what a step asks for",
+                          ask for; a Job in a cluster needs the `kube` cargo feature this build \
+                          lacks, so either build with it, run the steps as local processes with \
+                          AIWATCHER_POD_RUNTIME=process, or set the templates on \
+                          AIWATCHER_ROLE=serve, which only checks what a step asks for",
                 });
             }
             if self.pod_api_url.is_none() {
@@ -1146,6 +1204,17 @@ impl Config {
                     because: "this process launches pods (AIWATCHER_POD_TEMPLATES in the work or \
                               combined role): each is told where to report, and only the \
                               Service in front of the API knows that",
+                });
+            }
+            // A namespace is a cluster's word for where a pod goes, and there
+            // is no cluster here. Written beside `process`, one of the two is
+            // what somebody meant, and starting anyway would pick for them.
+            if self.pod_runtime == PodRuntime::Process && self.pod_namespace.is_some() {
+                return Err(ConfigError::Unusable {
+                    name: "AIWATCHER_POD_NAMESPACE",
+                    why: "this process runs step pods as local processes \
+                          (AIWATCHER_POD_RUNTIME=process), which are in no namespace; unset it, \
+                          or set AIWATCHER_POD_RUNTIME=kubernetes",
                 });
             }
         }
@@ -1605,6 +1674,70 @@ mod tests {
             .validate()
             .expect("templates, a client and an address are all a launcher needs");
         }
+    }
+
+    #[test]
+    fn local_process_pods_need_no_cluster_client_in_any_build() {
+        // The refusal above is about reaching a cluster, and this runtime
+        // reaches none: every build can start a process. It is what makes the
+        // pod path runnable — and provable — on a machine with no cluster.
+        for role in [ProcessRole::Both, ProcessRole::Work] {
+            Config {
+                pod_runtime: PodRuntime::Process,
+                pod_api_url: Some("http://127.0.0.1:8080".to_owned()),
+                ..with_pod_templates(role)
+            }
+            .validate()
+            .expect("a process needs no kubeconfig");
+        }
+    }
+
+    #[test]
+    fn a_namespace_beside_local_process_pods_is_refused_rather_than_ignored() {
+        // Two settings, one of which is what somebody meant. Ignored, the
+        // namespace would read as the place these pods go.
+        let error = Config {
+            pod_runtime: PodRuntime::Process,
+            pod_api_url: Some("http://127.0.0.1:8080".to_owned()),
+            pod_namespace: Some("aiwatcher".to_owned()),
+            ..with_pod_templates(ProcessRole::Work)
+        }
+        .validate()
+        .expect_err("a process is in no namespace")
+        .to_string();
+        assert!(
+            error.contains("AIWATCHER_POD_NAMESPACE") && error.contains("AIWATCHER_POD_RUNTIME"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_pod_runtime_is_a_cluster_unless_it_says_otherwise() {
+        assert_eq!(PodRuntime::default(), PodRuntime::Kubernetes);
+        for (spelling, runtime) in [
+            ("kubernetes", PodRuntime::Kubernetes),
+            ("K8s", PodRuntime::Kubernetes),
+            ("cluster", PodRuntime::Kubernetes),
+            ("pods", PodRuntime::Kubernetes),
+            ("process", PodRuntime::Process),
+            ("Processes", PodRuntime::Process),
+            ("local", PodRuntime::Process),
+            ("host", PodRuntime::Process),
+        ] {
+            assert_eq!(
+                spelling.parse::<PodRuntime>().expect(spelling),
+                runtime,
+                "{spelling}"
+            );
+        }
+        let error = "docker"
+            .parse::<PodRuntime>()
+            .expect_err("a backend nothing implements")
+            .to_string();
+        assert!(
+            error.contains("AIWATCHER_POD_RUNTIME") && error.contains("process"),
+            "{error}"
+        );
     }
 
     #[test]

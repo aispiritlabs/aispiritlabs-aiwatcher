@@ -24,6 +24,7 @@
 pub mod cluster;
 pub mod log;
 pub mod manifest;
+pub mod process;
 
 #[cfg(feature = "kube")]
 pub mod kubernetes;
@@ -633,30 +634,77 @@ pub fn spawn(
             logs = keeper.is_some(),
             "pods are launched from this process"
         );
-        let mut launcher = Launcher::new(
-            ExecutionHandler::new(store),
-            templates,
-            Arc::new(cluster),
-            settings,
-            keeper,
-        );
-        loop {
-            let wait = match launcher.pass(OffsetDateTime::now_utc()).await {
-                Ok(_) => TICK,
-                Err(error) => {
-                    tracing::warn!(%error, "the pod launcher could not read or report");
-                    super::BACKOFF
-                }
-            };
-            tokio::select! {
-                () = shutdown.cancelled() => {
-                    tracing::info!("the pod launcher is stopping");
-                    return;
-                }
-                () = tokio::time::sleep(wait) => {}
-            }
-        }
+        run(
+            Launcher::new(
+                ExecutionHandler::new(store),
+                templates,
+                Arc::new(cluster),
+                settings,
+                keeper,
+            ),
+            shutdown,
+        )
+        .await;
     })
+}
+
+/// Start the launcher against this host, each attempt a process of its own.
+///
+/// Everything after the backend is the same loop, because a plan means the
+/// same thing either way: what changes is what a Job is (see [`process`]).
+#[must_use]
+pub fn spawn_processes(
+    store: Arc<dyn WorkflowStore>,
+    templates: Arc<PodTemplates>,
+    settings: Settings,
+    limit: usize,
+    keeper: Option<Keeper>,
+    shutdown: tokio_util::sync::CancellationToken,
+) -> tokio::task::JoinHandle<()> {
+    let cluster = process::ProcessCluster::new(limit);
+    tracing::warn!(
+        limit = cluster.limit(),
+        templates = templates.len(),
+        api = %settings.api_url,
+        logs = keeper.is_some(),
+        "step pods are local processes on this host: no image is run, no resource limit is          applied, and they stop when this process does"
+    );
+    tokio::spawn(async move {
+        run(
+            Launcher::new(
+                ExecutionHandler::new(store),
+                templates,
+                Arc::new(cluster),
+                settings,
+                keeper,
+            ),
+            shutdown,
+        )
+        .await;
+    })
+}
+
+/// Pass, wait, and stop when asked.
+async fn run<S: WorkflowStore>(
+    mut launcher: Launcher<S>,
+    shutdown: tokio_util::sync::CancellationToken,
+) {
+    loop {
+        let wait = match launcher.pass(OffsetDateTime::now_utc()).await {
+            Ok(_) => TICK,
+            Err(error) => {
+                tracing::warn!(%error, "the pod launcher could not read or report");
+                super::BACKOFF
+            }
+        };
+        tokio::select! {
+            () = shutdown.cancelled() => {
+                tracing::info!("the pod launcher is stopping");
+                return;
+            }
+            () = tokio::time::sleep(wait) => {}
+        }
+    }
 }
 
 #[cfg(test)]

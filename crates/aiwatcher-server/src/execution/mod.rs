@@ -48,7 +48,7 @@ use time::OffsetDateTime;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::config::Config;
+use crate::config::{Config, PodRuntime};
 
 /// How long a loop waits after an error it cannot act on.
 ///
@@ -329,7 +329,9 @@ fn with_catalog<S: WorkflowStore>(
 ///
 /// No templates is a working state, as no executor address is: a step asking
 /// for a pod was refused at registration, so nothing here is waiting for one.
-#[cfg(feature = "kube")]
+/// Which backend starts them is the deployment's — a Job in a cluster, or a
+/// process on this host (ADR_0029, amended) — and everything after the
+/// backend is one loop, because a plan means the same thing either way.
 fn launcher(
     state: &AppState,
     config: &Config,
@@ -340,23 +342,49 @@ fn launcher(
     let templates = state.pod_templates.as_ref()?;
     // `Config::validate` refused templates in this role without it.
     let api_url = config.pod_api_url.clone()?;
+    let settings = pods::Settings { api_url };
+    match config.pod_runtime {
+        PodRuntime::Process => Some(pods::spawn_processes(
+            Arc::clone(store),
+            Arc::clone(templates),
+            settings,
+            config.pod_process_limit,
+            keeper,
+            shutdown.clone(),
+        )),
+        PodRuntime::Kubernetes => {
+            cluster_launcher(config, store, templates, settings, keeper, shutdown)
+        }
+    }
+}
+
+#[cfg(feature = "kube")]
+fn cluster_launcher(
+    config: &Config,
+    store: &Arc<dyn WorkflowStore>,
+    templates: &Arc<aiwatcher_execution::pods::PodTemplates>,
+    settings: pods::Settings,
+    keeper: Option<pods::log::Keeper>,
+    shutdown: &CancellationToken,
+) -> Option<JoinHandle<()>> {
     Some(pods::spawn(
         Arc::clone(store),
         Arc::clone(templates),
-        pods::Settings { api_url },
+        settings,
         config.pod_namespace.clone(),
         keeper,
         shutdown.clone(),
     ))
 }
 
-/// No launcher in a build without `kube`. `Config::validate` refuses
-/// templates in this role here, so there is nothing to launch.
+/// No cluster in a build without `kube`. `Config::validate` refuses templates
+/// in this role and this runtime here, so there is nothing to launch.
 #[cfg(not(feature = "kube"))]
-fn launcher(
-    _state: &AppState,
+fn cluster_launcher(
     _config: &Config,
     _store: &Arc<dyn WorkflowStore>,
+    _templates: &Arc<aiwatcher_execution::pods::PodTemplates>,
+    _settings: pods::Settings,
     _keeper: Option<pods::log::Keeper>,
     _shutdown: &CancellationToken,
 ) -> Option<JoinHandle<()>> {
