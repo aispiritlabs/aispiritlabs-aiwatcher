@@ -7,7 +7,7 @@ use aiwatcher_evaluation::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, path::Path};
+use std::collections::BTreeMap;
 
 /// Uses the archive's established authenticated envelope, with Evaluation's
 /// full object path as associated data. It owns no archive storage keys.
@@ -65,7 +65,7 @@ fn digest(value: &Value) -> Result<String> {
 impl LocalSource {
     pub(super) async fn conversation_cases(
         &self,
-        root: &Path,
+        root: &super::Bundle,
         context: &EvaluationContext,
     ) -> Result<SourceEvidence> {
         if context.split != "test" {

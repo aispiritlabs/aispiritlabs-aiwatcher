@@ -76,6 +76,9 @@ struct Registries {
     annotations: Option<Arc<AnnotationRegistry>>,
     training: Option<Arc<TrainingRegistry>>,
     evaluations: Option<Arc<aiwatcher_evaluation::Registry>>,
+    /// The same adapter, seen from the other side: what an operator stages is
+    /// what it later admits by, and the prefix those bytes land in is its own.
+    evaluation_bundles: Option<Arc<dyn aiwatcher_evaluation::ApprovalBundles>>,
     /// The fifth, and the one this struct's doc comment does not describe: it
     /// shares the store and nothing else. Its content is encrypted, its
     /// retention is its own, and it is absent unless a deployment asked for it
@@ -176,6 +179,7 @@ async fn build_registries(
     let training = Arc::new(TrainingRegistry::new(Arc::clone(&store), "training"));
     let conversations = build_conversation_archive(config, &store)?;
     let mut source = crate::evaluation::LocalSource::new(config.evaluation_source_dir.clone())
+        .with_bundles(store.clone())
         .with_curation(datasets.clone())
         .with_prompts(prompts.clone())
         .with_training(training.clone())
@@ -183,9 +187,12 @@ async fn build_registries(
     if let Some(owner) = &conversations {
         source = source.with_conversations(owner.clone());
     }
+    // One adapter, two ports: what it admits a pair by, and where an operator
+    // puts those bytes when the host this runs on has no disk to put them on.
+    let source = Arc::new(source);
     let mut evaluations = aiwatcher_evaluation::Registry::new(
         store.clone(),
-        Arc::new(source),
+        source.clone(),
         config.evaluation_limits.clone(),
     )?;
     if conversations.is_some() {
@@ -205,6 +212,7 @@ async fn build_registries(
         annotations: Some(Arc::clone(&annotations)),
         training: Some(Arc::clone(&training)),
         evaluations: Some(Arc::new(evaluations)),
+        evaluation_bundles: Some(source),
         conversations,
         objects: Some(store),
     })
@@ -789,6 +797,7 @@ pub async fn build(config: Config) -> Result<Runtime> {
         sources,
         training: registries.training,
         evaluations: registries.evaluations,
+        evaluation_bundles: registries.evaluation_bundles,
         runner: build_workflow_runner(&config)?,
         // Built in the `serve` role too, unlike an executor: opening a block's
         // editor is a person waiting on a request, not an attempt somebody

@@ -698,13 +698,41 @@ for a NetworkPolicy to open. `promptStore.mode: none` means no registry at all,
 and every `/api/v1/evaluation-results` route then answers 501 naming the
 variable rather than an empty list.
 
-What it does add is a directory the server reads. A published result never
-copies the source it was measured against — a conversation corpus, an
+What it does add is a bundle the server verifies against. A published result
+never copies the source it was measured against — a conversation corpus, an
 annotation export, a curated dataset all stay with their owners and keep their
 own deletion rules — but the *producer's* side of a measurement (the suite, the
 scorer, the input and expectation schemas, the case manifest, and a model's
 package where there is one) exists nowhere else, so an operator puts it where
-the server can verify it:
+the server can verify it. There are two ways, and the first needs nothing on
+the host at all:
+
+```bash
+# The approval ID this pair is addressed by. Nobody types it.
+approval=$(cargo run -q -p aiwatcher-evaluation --example prepare -- manifest.json \
+  | sed -n 's/^approval_id: //p')
+
+for file in manifest.json suite.json scorer.py cases.json input-schema.json \
+            expectations-schema.json generation.json responses.py; do
+  curl -X PUT "$AIWATCHER/api/v1/evaluation-approvals/$approval/bundle/$file" \
+    --data-binary "@$file"
+done
+# A model's artifacts go under the one folder a bundle has:
+#   .../bundle/model-artifacts/weights.safetensors
+curl "$AIWATCHER/api/v1/evaluation-approvals/$approval/bundle"   # what landed
+```
+
+Those bytes go into the object store this deployment already has, under the
+adapter's own `evaluation-bundles/` prefix, so every replica reads the same
+ones and no pod holds the only copy. `PUT` and `DELETE` are **admin**, for the
+reason the approval itself is. Staging admits nothing on its own: the approval
+below resolves the whole bundle and records its digest, so bytes that arrive
+afterwards stop that pair reading rather than quietly changing what every
+earlier result was measured against.
+
+The other way is a directory the server reads, which is what an instance that
+was configured before this existed keeps using — staged bytes simply take
+precedence:
 
 ```yaml
 evaluationEvidence:
@@ -714,13 +742,10 @@ evaluationEvidence:
     configMap: { name: evaluation-approvals }
 ```
 
-One subdirectory per approval, **named by the pair it admits**. That name is a
-digest of the variant and context IDs, so nobody types it:
+One subdirectory per approval, **named by the pair it admits** — the same
+approval ID as above:
 
 ```bash
-cargo run -q -p aiwatcher-evaluation --example prepare -- manifest.json
-# → variant_id, context_id and the approval_id its directory is named after
-
 scripts/stage-evaluation-approval.py ./approvals ./my-bundle
 ```
 
@@ -746,7 +771,7 @@ moved in either direction. Withdrawal is final for that approval ID.
 
 Evidence disappears three ways, and no fourth: its approval is withdrawn, its
 *source* is deleted or revoked at the owner (which the sweep enforces within
-the hour and a read enforces immediately), or its retention runs out —
+the minute and a read enforces immediately), or its retention runs out —
 `limits.retentionDays`, 30 by default, and a source's own retention can only
 shorten it. `DELETE /api/v1/evaluation-results/{id}` is the narrow case of the
 first: one measurement rather than every measurement of its pair.

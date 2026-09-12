@@ -180,6 +180,7 @@ impl Fixture {
         let artifacts = registry_enabled.then(|| Arc::new(MemoryArtifacts::default()));
         let state = AppState {
             evaluations: None,
+            evaluation_bundles: None,
             answer_limits: Default::default(),
             query_engine: aiwatcher_datasets::QueryEngine::Flow,
             query_step_timeout_seconds: None,

@@ -8,9 +8,37 @@
 //! Its ID is derived from the pair, so two operators who admit the same
 //! declaration reach the same approval instead of two rows meaning one thing.
 
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::{Result, SCHEMA_VERSION, digest};
+
+/// Where an operator stages the bytes an adapter admits a pair by.
+///
+/// The registry never reads them: it records the digest the adapter computed
+/// and refuses a publication whose bundle has moved since. The port exists so
+/// the route that *accepts* them belongs to whoever owns the prefix they land
+/// in — the adapter — while the route itself sits beside the approval it is
+/// for. Absent, a new pair still needs its bytes on the host's disk.
+#[async_trait]
+pub trait ApprovalBundles: Send + Sync + std::fmt::Debug {
+    /// Replace one member. Staging after an approval does not widen it: the
+    /// recorded digest no longer matches, and every read of that pair is
+    /// refused until the bytes are what was admitted.
+    async fn stage(&self, approval_id: &str, name: &str, bytes: Vec<u8>) -> Result<StagedFile>;
+    async fn staged(&self, approval_id: &str) -> Result<Vec<StagedFile>>;
+    /// Remove every member. Answers how many there were.
+    async fn discard(&self, approval_id: &str) -> Result<usize>;
+}
+
+/// One member of a staged bundle. Never its content, and never a digest: the
+/// declaration pins one for every member and the approval pins one for the
+/// bundle, so a third copy of that fact could only disagree with them.
+#[derive(Clone, Debug, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct StagedFile {
+    pub name: String,
+    pub size_bytes: u64,
+}
 
 /// The content address of a pinned pair. Derived, never generated: a redelivered
 /// approval of one declaration lands on the approval it already made.

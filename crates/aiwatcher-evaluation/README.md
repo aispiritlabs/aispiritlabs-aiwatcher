@@ -257,8 +257,13 @@ exists, so evidence published before an instance kept approvals stays readable.
 `DELETE /api/v1/evaluation-results/{id}` (admin) forgets one measurement rather
 than every measurement of its pair.
 
-What this does not remove is the host from a *new* pair: the producer's
-artifacts have to reach the adapter, and today that is a mounted directory.
+A *new* pair needs its bytes somewhere the adapter reads, and that is no longer
+a host's disk: `PUT /api/v1/evaluation-approvals/{id}/bundle/{name}` (admin)
+stages one member into the adapter's own prefix, `GET` lists what is staged and
+`DELETE` clears it. Staging admits nothing — the approval that follows resolves
+the bundle and pins its digest, so bytes arriving afterwards stop the pair
+reading rather than widening it. Staged bytes take precedence over a configured
+directory, and an instance with no directory can still admit a pair.
 
 ## What a read costs
 

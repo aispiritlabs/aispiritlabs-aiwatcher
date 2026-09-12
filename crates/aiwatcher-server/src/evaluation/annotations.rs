@@ -6,7 +6,7 @@ use aiwatcher_evaluation::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, path::Path};
+use std::collections::BTreeMap;
 
 #[derive(Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -25,7 +25,7 @@ struct Cases {
 impl LocalSource {
     pub(super) async fn annotation_cases(
         &self,
-        root: &Path,
+        root: &super::Bundle,
         context: &EvaluationContext,
     ) -> Result<SourceEvidence> {
         let owner = self

@@ -392,10 +392,33 @@ bundle directly under the root stays readable for instances that have one. A
 root holding neither is `forbidden` rather than `deleted_source` — nothing was
 deleted, this pair was never admitted.
 
-What this does not yet do is remove the host from a *new* pair: the producer's
-artifacts have to reach the adapter somehow, and today that is a mounted
-directory. Uploading a bundle through the API is the remaining step, and it is
-an addition behind the same resource rather than a change to it.
+**Amended (2026-09-12): the bundle arrives over the API.**
+`PUT /api/v1/evaluation-approvals/{id}/bundle/{name}` (**admin**, same reason)
+stages one member — a declaration, a scorer, a case manifest, a model artifact —
+into the adapter's own prefix, `evaluation-bundles/{approval_id}/`, which every
+replica reads and no host holds. `GET` lists what is staged, by name and size
+only: the declaration already pins a digest for every member and the approval
+pins one for the bundle, so a third copy of that fact could only disagree with
+them. `DELETE` clears one, for correcting a bundle before approving it.
+
+The prefix is the **adapter's**, deliberately beside `evaluations/` rather than
+inside it. What a bundle *is* is the adapter's question — `aiwatcher-evaluation`
+knows only the digest it was told — and a second crate writing the registry's
+private layout is the thing that rule exists to prevent. It is reached through
+`ApprovalBundles`, a port beside `SourceAuthority` and implemented by the same
+adapter, so the route sits with the approval it is for while the bytes land
+where their owner decides.
+
+Staging admits nothing by itself. An approval resolves the bundle as a whole and
+records its digest, so bytes that arrive afterwards do not widen it: the pair
+stops reading until they are what was admitted again. A name is one segment, or
+the one folder a bundle has (`model-artifacts/`); anything else is refused in
+both adapters rather than resolved as a path. And what is staged takes
+precedence over a directory, so an instance keeps whatever it was configured
+with and an instance with no directory at all can still admit a pair.
+
+With that, a new variant needs no step on the server's host: an operator stages
+and approves over the API, and every repetition afterwards publishes on its own.
 
 ### Deleting one result
 
@@ -462,7 +485,9 @@ cannot tell a working sweep from one that has been failing for a week.
 Collection is split off at its own hourly cadence. It lists a prefix per
 published result, which is the expensive half and the one that is about a writer
 that stopped: an hour late is the same answer as a minute late. Source deletion
-is therefore enforced within the hour by the worker, and immediately by any read.
+is not that half — the sweep resolves every live pair once a minute, as it
+always did, and a read enforces it immediately. (An earlier draft of this
+paragraph said the hour applied to source deletion too. It does not.)
 
 Every pass is written to `evaluations/retention.json` and returned as
 `retention` on `GET /api/v1/evaluation-results`: when it ran, what it retired and

@@ -18,17 +18,10 @@ import { windowSearchSchema } from '@/shared/components/time-range';
  *
  * ## Why the period control defaults to everything
  *
- * Half of this list is not folded from that log: durable evidence is kept on
- * purpose, under its own retention (ADR_0030). The catalogue had no order but
- * the hash of an evaluation ID, so a period would have narrowed nothing and
- * this screen carried no control at all; `evaluations/index/` gave it a
- * published order, and a period is a bound on that key.
- *
- * What stays different here is the default. Every other list defaults to a
- * day because everything on it goes when the log's retention takes it; the
- * kept half of this one exists *because* it outlives that, so a day would hide
- * the evidence the screen was built to show. It opens on everything and the
- * control narrows.
+ * Every other list defaults to a day, because everything on it goes when the
+ * log's retention takes it. Half of this one is kept on purpose *because* it
+ * outlives that (ADR_0030), so a day would hide what that half is for. It
+ * opens on everything and the control narrows.
  *
  * ## Why the metric deltas are not coloured
  *

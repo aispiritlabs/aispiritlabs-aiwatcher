@@ -231,6 +231,12 @@ pub struct AppState {
     pub training: Option<Arc<TrainingRegistry>>,
     /// Authoritative durable evidence; independent of the event projection.
     pub evaluations: Option<Arc<aiwatcher_evaluation::Registry>>,
+    /// Where an operator stages the bytes a pair is admitted by, when this
+    /// deployment lets them arrive over the API rather than on a host's disk.
+    /// `None` makes the staging routes answer 501 naming the variable, the
+    /// same shape as `prompts` — an empty listing would say somebody's upload
+    /// had been accepted and lost.
+    pub evaluation_bundles: Option<Arc<dyn aiwatcher_evaluation::ApprovalBundles>>,
     /// `None` when no orchestrator is configured, which makes the rerun route
     /// answer 501 rather than 404 — the same reasoning as `prompts`, with a
     /// sharper edge. This is the only thing here that makes something happen

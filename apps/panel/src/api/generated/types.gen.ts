@@ -6592,6 +6592,16 @@ export type StagedBatch = {
 };
 
 /**
+ * One member of a staged bundle. Never its content, and never a digest: the
+ * declaration pins one for every member and the approval pins one for the
+ * bundle, so a third copy of that fact could only disagree with them.
+ */
+export type StagedFile = {
+    name: string;
+    size_bytes: number;
+};
+
+/**
  * What a caller may ask this system to run.
  *
  * Note what is not here, which is the same absence as `LaunchBody`'s and
@@ -9382,6 +9392,75 @@ export type WithdrawApprovalResponses = {
 };
 
 export type WithdrawApprovalResponse = WithdrawApprovalResponses[keyof WithdrawApprovalResponses];
+
+export type DiscardBundleData = {
+    body?: never;
+    path: {
+        approval_id: string;
+    };
+    query?: never;
+    url: '/api/v1/evaluation-approvals/{approval_id}/bundle';
+};
+
+export type DiscardBundleErrors = {
+    403: ErrorBody;
+    501: ErrorBody;
+};
+
+export type DiscardBundleError = DiscardBundleErrors[keyof DiscardBundleErrors];
+
+export type DiscardBundleResponses = {
+    204: void;
+};
+
+export type DiscardBundleResponse = DiscardBundleResponses[keyof DiscardBundleResponses];
+
+export type ListBundleData = {
+    body?: never;
+    path: {
+        approval_id: string;
+    };
+    query?: never;
+    url: '/api/v1/evaluation-approvals/{approval_id}/bundle';
+};
+
+export type ListBundleErrors = {
+    501: ErrorBody;
+};
+
+export type ListBundleError = ListBundleErrors[keyof ListBundleErrors];
+
+export type ListBundleResponses = {
+    200: Array<StagedFile>;
+};
+
+export type ListBundleResponse = ListBundleResponses[keyof ListBundleResponses];
+
+export type StageBundleData = {
+    body: Array<number>;
+    path: {
+        approval_id: string;
+        /**
+         * One member: `manifest.json`, `scorer.py`, `model-artifacts/<file>`
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/evaluation-approvals/{approval_id}/bundle/{name}';
+};
+
+export type StageBundleErrors = {
+    403: ErrorBody;
+    501: ErrorBody;
+};
+
+export type StageBundleError = StageBundleErrors[keyof StageBundleErrors];
+
+export type StageBundleResponses = {
+    200: StagedFile;
+};
+
+export type StageBundleResponse = StageBundleResponses[keyof StageBundleResponses];
 
 export type ListResultsData = {
     body?: never;

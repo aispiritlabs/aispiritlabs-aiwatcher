@@ -4182,6 +4182,169 @@
         }
       }
     },
+    "/api/v1/evaluation-approvals/{approval_id}/bundle": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "What is staged for one pair. Names and sizes: the digests are the\ndeclaration's, and a second copy of them here could only disagree.",
+        "operationId": "list_bundle",
+        "parameters": [
+          {
+            "name": "approval_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StagedFile"
+                  }
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Remove every staged member of one pair.",
+        "description": "What it does not do is un-admit anything: an approval is withdrawn through\nits own route, and evidence already published under this pair keeps reading\nuntil the adapter is asked for bytes that are no longer there. Use it to\ncorrect a bundle before approving, or to clear one that was withdrawn.",
+        "operationId": "discard_bundle",
+        "parameters": [
+          {
+            "name": "approval_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/evaluation-approvals/{approval_id}/bundle/{name}": {
+      "put": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Stage one member of a bundle, by the name the declaration gives it.",
+        "description": "This is what lets a *new* pair be admitted with nobody on the server's\nhost. Admin, because approving is: an ingest token is an editor by\nconstruction, and bytes that decide what may be published are the operator's\nact rather than the producer's.\n\nIt admits nothing on its own. The approval that follows resolves the whole\nbundle and records its digest, so bytes staged after one do not widen it —\nthey stop that pair reading until they are what was admitted again.",
+        "operationId": "stage_bundle",
+        "parameters": [
+          {
+            "name": "approval_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "path",
+            "description": "One member: `manifest.json`, `scorer.py`, `model-artifacts/<file>`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StagedFile"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/evaluation-results": {
       "get": {
         "tags": [
@@ -21660,6 +21823,24 @@
           },
           "updated_at": {
             "type": "string"
+          }
+        }
+      },
+      "StagedFile": {
+        "type": "object",
+        "description": "One member of a staged bundle. Never its content, and never a digest: the\ndeclaration pins one for every member and the approval pins one for the\nbundle, so a third copy of that fact could only disagree with them.",
+        "required": [
+          "name",
+          "size_bytes"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           }
         }
       },

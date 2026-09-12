@@ -1,16 +1,17 @@
 //! Operator-approved evidence, source owner adapters and the retention worker.
 mod annotations;
 mod conversations;
+use aiwatcher_core::storage::ObjectStore;
 use aiwatcher_evaluation::{
     CollectionReport, DatasetKind, Evaluation, EvaluationError, EvaluationManifest, EvidenceState,
-    Result, SourceAuthority, SourceEvidence,
+    Result, SourceAuthority, SourceEvidence, StagedFile,
 };
 use async_trait::async_trait;
 pub use conversations::ConversationCipher;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::AsyncReadExt;
 
@@ -20,6 +21,7 @@ use tokio::io::AsyncReadExt;
 #[derive(Debug)]
 pub struct LocalSource {
     directory: Option<String>,
+    bundles: Option<Arc<dyn ObjectStore>>,
     datasets: Option<Arc<aiwatcher_datasets::Registry>>,
     prompts: Option<Arc<aiwatcher_prompts::Registry>>,
     training: Option<Arc<aiwatcher_training::Registry>>,
@@ -31,11 +33,88 @@ impl LocalSource {
     pub fn new(directory: Option<String>) -> Self {
         Self {
             directory,
+            bundles: None,
             datasets: None,
             prompts: None,
             training: None,
             annotations: None,
             conversations: None,
+        }
+    }
+
+    /// Admit bundles staged through the API as well as bundles on this host.
+    ///
+    /// The prefix is this adapter's own and never the registry's: what a
+    /// bundle *is* — a declaration, a scorer, a model's artifacts — is the
+    /// adapter's question, and `aiwatcher-evaluation` only ever records the
+    /// digest of what it admitted.
+    #[must_use]
+    pub fn with_bundles(mut self, store: Arc<dyn ObjectStore>) -> Self {
+        self.bundles = Some(store);
+        self
+    }
+
+    /// The prefix one pair's staged bytes live under, or a refusal.
+    fn staging(&self, approval_id: &str) -> Result<String> {
+        if self.bundles.is_none() || approval_id.len() != 64 || !approval_id.is_ascii() {
+            return Err(unavailable(EvidenceState::Forbidden));
+        }
+        if !approval_id.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(unavailable(EvidenceState::Forbidden));
+        }
+        Ok(format!("{BUNDLES}{approval_id}/"))
+    }
+
+    async fn entries(&self, prefix: &str) -> Result<Vec<aiwatcher_core::storage::ObjectEntry>> {
+        self.bundles
+            .as_ref()
+            .ok_or_else(|| unavailable(EvidenceState::Forbidden))?
+            .list(prefix)
+            .await
+            .map_err(|_| unavailable(EvidenceState::Forbidden))
+    }
+
+    /// This pair's approved bundle, and the declaration that opens it.
+    ///
+    /// Staged through the API if anything was, and this host's disk otherwise
+    /// — so an instance that was configured with a directory keeps reading it,
+    /// and one that was not can still admit a pair somebody uploaded. The
+    /// declaration comes back with it because every caller reads it next and
+    /// finding the bundle means reading it already.
+    async fn bundle(&self, approval: &str) -> Result<(Bundle, Vec<u8>)> {
+        const MANIFEST: &str = "manifest.json";
+        let limit = aiwatcher_evaluation::MAX_MANIFEST_BYTES;
+        if let Some(store) = &self.bundles {
+            let staged = Bundle::Stored(store.clone(), format!("{BUNDLES}{approval}/"));
+            match staged.bytes(MANIFEST, limit).await {
+                Ok(declaration) => return Ok((staged, declaration)),
+                // Nothing staged for this pair; the host's disk may hold it.
+                Err(EvaluationError::Unavailable(EvidenceState::DeletedSource)) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        let directory = self
+            .directory
+            .as_ref()
+            .ok_or_else(|| unavailable(EvidenceState::Forbidden))?;
+        let configured: PathBuf = tokio::fs::canonicalize(directory).await.map_err(io_error)?;
+        // A directory of approvals, addressed by the pair each one admits, so a
+        // second variant is a second subdirectory rather than a swap that hides
+        // the first. One bundle directly under the root stays readable.
+        let root = match tokio::fs::canonicalize(configured.join(approval)).await {
+            Ok(path) if path.starts_with(&configured) => path,
+            _ => configured.clone(),
+        };
+        let bare = root == configured;
+        let bundle = Bundle::Directory(root);
+        match bundle.bytes(MANIFEST, limit).await {
+            Ok(declaration) => Ok((bundle, declaration)),
+            // Nothing admits this pair here. That is a refusal to admit it, not
+            // a source somebody deleted: no earlier evidence pointed at it.
+            Err(EvaluationError::Unavailable(EvidenceState::DeletedSource)) if bare => {
+                Err(unavailable(EvidenceState::Forbidden))
+            }
+            Err(error) => Err(error),
         }
     }
 
@@ -82,29 +161,95 @@ fn io_error(error: std::io::Error) -> EvaluationError {
         _ => EvidenceState::Forbidden,
     })
 }
-async fn bytes(root: &Path, name: &str, limit: usize) -> Result<Vec<u8>> {
-    if name.is_empty() || name.contains('/') || name.contains('\\') || name == ".." {
+/// This adapter's own prefix, beside the registry's and never inside it.
+const BUNDLES: &str = "evaluation-bundles/";
+
+/// One name a bundle member may have: one segment, or the single folder a
+/// bundle has. A separator anywhere else is a refusal rather than a path.
+fn member(name: &str) -> Result<()> {
+    let segment = name.strip_prefix(ARTIFACTS).map_or(name, |rest| rest);
+    if segment.is_empty()
+        || segment.contains('/')
+        || segment.contains('\\')
+        || segment.starts_with('.')
+    {
         return Err(unavailable(EvidenceState::Forbidden));
     }
-    let path = tokio::fs::canonicalize(root.join(name))
-        .await
-        .map_err(io_error)?;
-    if !path.starts_with(root) {
-        return Err(unavailable(EvidenceState::Forbidden));
-    }
-    let file = tokio::fs::File::open(path).await.map_err(io_error)?;
-    let mut bytes = Vec::new();
-    file.take(limit as u64 + 1)
-        .read_to_end(&mut bytes)
-        .await
-        .map_err(io_error)?;
-    if bytes.len() > limit {
-        return Err(unavailable(EvidenceState::CorruptArtifact));
-    }
-    Ok(bytes)
+    Ok(())
 }
-async fn verified(root: &Path, name: &str, digest: &str, length: Option<u64>) -> Result<Vec<u8>> {
-    let found = bytes(root, name, 100 * 1024 * 1024).await?;
+const ARTIFACTS: &str = "model-artifacts/";
+
+/// Where an approved bundle's bytes are, which is not what they are.
+///
+/// One operator act, two places it can leave them: a directory on the host
+/// this process runs on, or the object store every replica already shares.
+/// The second is what admits a new pair with nobody on that host — the bytes
+/// arrive over the same API the approval does, from whoever may approve, and
+/// the approval pins their digest, so what is read later is what was admitted.
+#[derive(Clone, Debug)]
+pub(crate) enum Bundle {
+    Directory(PathBuf),
+    Stored(Arc<dyn ObjectStore>, String),
+}
+impl Bundle {
+    async fn bytes(&self, name: &str, limit: usize) -> Result<Vec<u8>> {
+        member(name)?;
+        match self {
+            Self::Directory(root) => {
+                let path = tokio::fs::canonicalize(root.join(name))
+                    .await
+                    .map_err(io_error)?;
+                if !path.starts_with(root) {
+                    return Err(unavailable(EvidenceState::Forbidden));
+                }
+                let file = tokio::fs::File::open(path).await.map_err(io_error)?;
+                let mut bytes = Vec::new();
+                file.take(limit as u64 + 1)
+                    .read_to_end(&mut bytes)
+                    .await
+                    .map_err(io_error)?;
+                if bytes.len() > limit {
+                    return Err(unavailable(EvidenceState::CorruptArtifact));
+                }
+                Ok(bytes)
+            }
+            Self::Stored(store, prefix) => {
+                // A store that cannot be reached is not a deletion, and an
+                // object that is not there is not a store that is down.
+                let found = store
+                    .get(&format!("{prefix}{name}"))
+                    .await
+                    .map_err(|_| unavailable(EvidenceState::Forbidden))?
+                    .ok_or_else(|| unavailable(EvidenceState::DeletedSource))?;
+                if found.len() > limit {
+                    return Err(unavailable(EvidenceState::CorruptArtifact));
+                }
+                Ok(found)
+            }
+        }
+    }
+
+    /// The one folder a bundle has. Named by the caller, never by a manifest.
+    async fn within(&self, folder: &str) -> Result<Self> {
+        match self {
+            Self::Directory(root) => {
+                let path = tokio::fs::canonicalize(root.join(folder))
+                    .await
+                    .map_err(io_error)?;
+                if !path.starts_with(root) {
+                    return Err(unavailable(EvidenceState::Forbidden));
+                }
+                Ok(Self::Directory(path))
+            }
+            Self::Stored(store, prefix) => {
+                Ok(Self::Stored(store.clone(), format!("{prefix}{folder}/")))
+            }
+        }
+    }
+}
+
+async fn verified(root: &Bundle, name: &str, digest: &str, length: Option<u64>) -> Result<Vec<u8>> {
+    let found = root.bytes(name, 100 * 1024 * 1024).await?;
     if hex::encode(Sha256::digest(&found)) != digest
         || length.is_some_and(|len| len != found.len() as u64)
     {
@@ -137,6 +282,61 @@ struct Answer {
     answer: String,
 }
 
+/// Staging is the operator's act, and it is this adapter's because the prefix
+/// is. Nothing here admits anything: an approval does that, over the bundle as
+/// a whole, so bytes that arrive after one do not widen it — they stop the
+/// pair reading at all until they are what was admitted.
+#[async_trait]
+impl aiwatcher_evaluation::ApprovalBundles for LocalSource {
+    async fn stage(&self, approval_id: &str, name: &str, bytes: Vec<u8>) -> Result<StagedFile> {
+        let prefix = self.staging(approval_id)?;
+        member(name)?;
+        let file = StagedFile {
+            name: name.into(),
+            size_bytes: bytes.len() as u64,
+        };
+        self.bundles
+            .as_ref()
+            .ok_or_else(|| unavailable(EvidenceState::Forbidden))?
+            .put(&format!("{prefix}{name}"), bytes)
+            .await
+            .map_err(|_| unavailable(EvidenceState::Forbidden))?;
+        Ok(file)
+    }
+
+    async fn staged(&self, approval_id: &str) -> Result<Vec<StagedFile>> {
+        let prefix = self.staging(approval_id)?;
+        Ok(self
+            .entries(&prefix)
+            .await?
+            .into_iter()
+            .filter_map(|entry| {
+                entry.key.strip_prefix(&prefix).map(|name| StagedFile {
+                    name: name.into(),
+                    size_bytes: entry.size,
+                })
+            })
+            .collect())
+    }
+
+    async fn discard(&self, approval_id: &str) -> Result<usize> {
+        let prefix = self.staging(approval_id)?;
+        let store = self
+            .bundles
+            .as_ref()
+            .ok_or_else(|| unavailable(EvidenceState::Forbidden))?;
+        let mut removed = 0;
+        for entry in self.entries(&prefix).await? {
+            store
+                .delete(&entry.key)
+                .await
+                .map_err(|_| unavailable(EvidenceState::Forbidden))?;
+            removed += 1;
+        }
+        Ok(removed)
+    }
+}
+
 #[async_trait]
 impl SourceAuthority for LocalSource {
     async fn resolve(
@@ -144,10 +344,6 @@ impl SourceAuthority for LocalSource {
         manifest: &EvaluationManifest,
         _subject: &str,
     ) -> Result<SourceEvidence> {
-        let directory = self
-            .directory
-            .as_ref()
-            .ok_or_else(|| unavailable(EvidenceState::Forbidden))?;
         if !matches!(
             manifest.context.dataset.kind,
             DatasetKind::External
@@ -159,32 +355,8 @@ impl SourceAuthority for LocalSource {
             return Err(unavailable(EvidenceState::Forbidden));
         }
         let asked = Evaluation::prepare(manifest.clone())?;
-        let configured: PathBuf = tokio::fs::canonicalize(directory).await.map_err(io_error)?;
-        // A directory of approvals, addressed by the pair each one admits, so a
-        // second variant is a second subdirectory rather than a swap that hides
-        // the first. One bundle directly under the root stays readable.
         let approval = aiwatcher_evaluation::approval_id(asked.variant_id(), asked.context_id())?;
-        let root = match tokio::fs::canonicalize(configured.join(&approval)).await {
-            Ok(path) if path.starts_with(&configured) => path,
-            _ => configured.clone(),
-        };
-        let declaration = match bytes(
-            &root,
-            "manifest.json",
-            aiwatcher_evaluation::MAX_MANIFEST_BYTES,
-        )
-        .await
-        {
-            Ok(found) => found,
-            // Nothing admits this pair here. That is a refusal to admit it, not
-            // a source somebody deleted: no earlier evidence pointed at it.
-            Err(EvaluationError::Unavailable(EvidenceState::DeletedSource))
-                if root == configured =>
-            {
-                return Err(unavailable(EvidenceState::Forbidden));
-            }
-            Err(error) => return Err(error),
-        };
+        let (root, declaration) = self.bundle(&approval).await?;
         let mut bundle = Sha256::new();
         bundle.update(b"aiwatcher.evaluation.bundle.v1");
         bundle.update(&declaration);
@@ -211,19 +383,14 @@ impl SourceAuthority for LocalSource {
                 .ok_or_else(|| unavailable(EvidenceState::Forbidden))?;
             // Historical model IDs bind artifact digests, not the whole package.
             // The operator approves its full declaration separately; no URI is fetched.
-            let declared = bytes(&root, "model-package.json", 1024 * 1024).await?;
+            let declared = root.bytes("model-package.json", 1024 * 1024).await?;
             bundle.update(&declared);
             let approved: aiwatcher_training::ModelPackage = serde_json::from_slice(&declared)
                 .map_err(|_| unavailable(EvidenceState::CorruptArtifact))?;
             if serde_json::to_value(&approved)? != serde_json::to_value(&package)? {
                 return Err(unavailable(EvidenceState::Forbidden));
             }
-            let artifacts = tokio::fs::canonicalize(root.join("model-artifacts"))
-                .await
-                .map_err(io_error)?;
-            if !artifacts.starts_with(&root) {
-                return Err(unavailable(EvidenceState::Forbidden));
-            }
+            let artifacts = root.within("model-artifacts").await?;
             let mut remaining = 100 * 1024 * 1024;
             for artifact in &package.artifacts {
                 if artifact
@@ -232,7 +399,7 @@ impl SourceAuthority for LocalSource {
                 {
                     return Err(unavailable(EvidenceState::CorruptArtifact));
                 }
-                let found = bytes(&artifacts, &artifact.name, remaining).await?;
+                let found = artifacts.bytes(&artifact.name, remaining).await?;
                 if hex::encode(Sha256::digest(&found)) != artifact.digest
                     || artifact
                         .size_bytes

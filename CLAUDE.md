@@ -1751,6 +1751,16 @@ the review.
   `AIWATCHER_AUTH_INGEST_TOKENS` makes a producer an editor by construction. The
   gate is checked *after* the adapter, so a source that is gone says so rather
   than arriving as "nobody approved this". ADR_0030, amended.
+- **Never let the adapter's bytes be the registry's business.** An operator
+  stages a bundle through `PUT /api/v1/evaluation-approvals/{id}/bundle/{name}`
+  (admin) and it lands in `evaluation-bundles/`, the adapter's own prefix
+  beside `evaluations/` — because what a bundle *is* is the adapter's question
+  and `aiwatcher-evaluation` knows only the digest it was told. The port is
+  `ApprovalBundles`, beside `SourceAuthority` and implemented by the same
+  adapter. Staging admits nothing: the approval resolves the whole bundle and
+  records its digest, so bytes that arrive after one stop that pair reading
+  until they are what was admitted. A member's name is one segment or the one
+  folder a bundle has; anything else is refused rather than resolved as a path.
 - **Never read absence of an approval as a withdrawal.** Publication requires a
   record; a read requires only that no withdrawal marker exists. Evidence
   published before an instance kept approvals stays readable, and the adapter

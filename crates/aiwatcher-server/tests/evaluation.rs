@@ -30,6 +30,8 @@ mod fixture;
 mod catalogue;
 #[path = "evaluation/prompts.rs"]
 mod prompts;
+#[path = "evaluation/staging.rs"]
+mod staging;
 
 #[derive(Debug, Default)]
 struct Source {

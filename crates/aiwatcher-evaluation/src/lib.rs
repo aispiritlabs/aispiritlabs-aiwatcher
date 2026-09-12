@@ -10,7 +10,9 @@ mod registry;
 mod result;
 mod store;
 
-pub use approval::{Approval, ApprovalPage, ApprovalRecord, Withdrawal, approval_id};
+pub use approval::{
+    Approval, ApprovalBundles, ApprovalPage, ApprovalRecord, StagedFile, Withdrawal, approval_id,
+};
 pub use registry::{
     CollectionReport, PUBLICATION_GRACE_SECONDS, Registry, RegistryConfig, SourceAuthority,
     SourceEvidence,
