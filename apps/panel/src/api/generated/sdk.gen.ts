@@ -661,8 +661,8 @@ export const approveSource = <ThrowOnError extends boolean = false>(options: Opt
 export const withdrawApproval = <ThrowOnError extends boolean = false>(options: Options<WithdrawApprovalData, ThrowOnError>): RequestResult<WithdrawApprovalResponses, WithdrawApprovalErrors, ThrowOnError> => (options.client ?? client).delete<WithdrawApprovalResponses, WithdrawApprovalErrors, ThrowOnError>({ url: '/api/v1/evaluation-approvals/{approval_id}', ...options });
 
 /**
- * Durable discovery is independent of telemetry retention. Pages follow stable
- * storage IDs; clients must use the opaque cursor, not a timestamp assumption.
+ * Durable discovery is independent of telemetry retention. Newest first, and
+ * clients page with the opaque cursor rather than a timestamp assumption.
  * Conversation content requires Admin; other readers receive a forbidden state.
  */
 export const listResults = <ThrowOnError extends boolean = false>(options?: Options<ListResultsData, ThrowOnError>): RequestResult<ListResultsResponses, unknown, ThrowOnError> => (options?.client ?? client).get<ListResultsResponses, unknown, ThrowOnError>({ url: '/api/v1/evaluation-results', ...options });

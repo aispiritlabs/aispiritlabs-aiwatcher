@@ -268,11 +268,12 @@ error. A source is resolved once per admitted pair for the length of one `list`
 or `sweep`. Retention asks the receipt's own deadline first, every minute;
 collection lists a prefix per result and runs hourly. Measured at the starting
 limits, in object-store requests: a 10 000-case summary is 5 gets (was 105), a
-200-case page 7 (was 108), a 50-row catalogue page 152 (was 400), and one sweep
-103 with one list (was 550 with 53). A row costs three requests, so an index
-over the catalogue becomes required at roughly a thousand results — or at the
-first request for an order other than the hash of an ID, which is what its key
-gives it today. See `crates/aiwatcher-server/tests/evaluation/cost.rs`.
+200-case page 7 (was 108), a 50-row catalogue page 103 (was 400, then 152), and
+one sweep 103 with one list (was 550 with 53). A catalogue row costs the index
+entry and the header behind it: `evaluations/index/` is one key per published
+result in published order, so a page reads neither the claim nor the tombstone
+and a period is a bound on the key. See
+`crates/aiwatcher-server/tests/evaluation/cost.rs` and `catalogue.rs`.
 
 Every pass writes `evaluations/retention.json`, returned as `retention` on
 `GET /api/v1/evaluation-results`: when it ran, what it retired and collected,

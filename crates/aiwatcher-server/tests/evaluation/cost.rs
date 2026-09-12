@@ -149,18 +149,20 @@ async fn a_catalogue_page_and_a_sweep_do_not_reread_every_published_result() {
     }
 
     counts.reset();
-    let page = registry.list(None, 200, "viewer", 200).await.unwrap();
+    let page = registry.list(None, 200, None, "viewer", 200).await.unwrap();
     let (gets, lists, _, bytes) = counts.read();
     assert_eq!(page.evaluations.len(), CATALOGUE);
     println!("catalogue of {CATALOGUE}: {gets} gets, {lists} lists, {bytes} bytes");
-    // A claim, a tombstone marker and one header per row. Above roughly a
-    // thousand rows an index over the catalogue replaces this, and the same
-    // index is what would give it an order other than the hash of an ID —
-    // which is what its key is today. ADR_0030.
+    // The catalogue row and the header behind it. The claim and the tombstone
+    // are what the index replaced: the row it holds is written by the
+    // publication that won the gate and marked by the retirement, so a page
+    // asks neither — and it lists one key per result rather than every object
+    // under `evaluations/`, which is what the threshold was about. ADR_0030.
     assert!(
-        gets <= 4 * CATALOGUE,
+        gets < 3 * CATALOGUE,
         "a row must cost a header, not a result: {gets} gets"
     );
+    assert_eq!(lists, 1, "one listing, of the catalogue and nothing else");
 
     counts.reset();
     assert_eq!(registry.sweep("retention-worker", 200).await.unwrap(), 0);

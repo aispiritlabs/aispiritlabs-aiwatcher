@@ -35,6 +35,31 @@ pub struct SourceEvidence {
     pub bundle_digest: Option<String>,
 }
 
+/// One catalogue row, as published.
+///
+/// `retired` is written *before* the tombstone, so the only half of a crash a
+/// reader can see is the half that hides a result — never the half that shows
+/// a retired one as live. It is what lets a catalogue page skip the tombstone
+/// read a detail still makes.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct IndexEntry {
+    receipt: EvaluationReceipt,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    retired: Option<EvidenceState>,
+}
+
+/// A row with nothing behind it: the receipt, and the state that is why.
+fn row(receipt: EvaluationReceipt, state: EvidenceState) -> DurableEvaluation {
+    DurableEvaluation {
+        receipt,
+        state,
+        manifest: None,
+        status: None,
+        counts: None,
+        metrics: BTreeMap::new(),
+    }
+}
+
 /// What one collection pass removed, and what it found missing.
 ///
 /// The gaps are a by-product rather than a second pass: deleting what a result
@@ -429,10 +454,29 @@ impl Registry {
             return Err(EvaluationError::Unavailable(state));
         }
         if winner.expires_at <= now {
-            self.retire(id, EvidenceState::Expired).await?;
+            self.retire(id, Some(&winner), EvidenceState::Expired)
+                .await?;
             return Err(EvaluationError::Unavailable(EvidenceState::Expired));
         }
+        // The catalogue row, after the gate that decided this ID may publish.
+        // A process that stops here leaves a result the collection pass will
+        // index: the claim is the truth and this is only the order.
+        self.index(&winner, None).await?;
         Ok(winner)
+    }
+
+    /// Write this result's catalogue row, published or retired.
+    async fn index(
+        &self,
+        receipt: &EvaluationReceipt,
+        retired: Option<EvidenceState>,
+    ) -> Result<()> {
+        let key = store::indexed(receipt.committed_at, &receipt.evaluation_id);
+        let entry = IndexEntry {
+            receipt: receipt.clone(),
+            retired,
+        };
+        Ok(self.store.0.put(&key, canonical(&entry)?).await?)
     }
 
     /// Only `None` means unknown and permits a legacy read fallback.
@@ -478,22 +522,28 @@ impl Registry {
         now: i64,
         sources: &mut Sources,
     ) -> Result<(DurableEvaluation, Option<Metadata>)> {
-        let id = &receipt.evaluation_id.clone();
-        let mut result = DurableEvaluation {
-            receipt,
-            state: EvidenceState::Complete,
-            manifest: None,
-            status: None,
-            counts: None,
-            metrics: BTreeMap::new(),
-        };
-        if let Some(state) = self.store.read(&store::tombstone(id)).await? {
-            self.store.erase(id).await?;
-            result.state = state;
-            return Ok((result, None));
+        let id = receipt.evaluation_id.clone();
+        if let Some(state) = self.store.read(&store::tombstone(&id)).await? {
+            self.store.erase(&id).await?;
+            return Ok((row(receipt, state), None));
         }
+        self.read_committed(receipt, subject, now, sources).await
+    }
+
+    /// The same row for a receipt already known not to be retired — which is
+    /// what a catalogue entry knows, and a detail read has to ask.
+    async fn read_committed(
+        &self,
+        receipt: EvaluationReceipt,
+        subject: &str,
+        now: i64,
+        sources: &mut Sources,
+    ) -> Result<(DurableEvaluation, Option<Metadata>)> {
+        let id = &receipt.evaluation_id.clone();
+        let mut result = row(receipt, EvidenceState::Complete);
         if result.receipt.expires_at <= now {
-            self.retire(id, EvidenceState::Expired).await?;
+            self.retire(id, Some(&result.receipt), EvidenceState::Expired)
+                .await?;
             result.state = EvidenceState::Expired;
             return Ok((result, None));
         }
@@ -518,7 +568,7 @@ impl Registry {
             }
             Err(EvaluationError::Unavailable(state)) => {
                 if matches!(state, EvidenceState::Expired | EvidenceState::DeletedSource) {
-                    self.retire(id, state).await?;
+                    self.retire(id, Some(&result.receipt), state).await?;
                 }
                 result.state = state;
             }
@@ -707,17 +757,30 @@ impl Registry {
         Ok(ids)
     }
 
+    /// The catalogue, newest first, optionally narrowed to a period.
+    ///
+    /// It reads the index rather than the results: a result's own key is the
+    /// hash of its ID, so ordering by anything but that hash meant listing
+    /// every object under `evaluations/` — content included, four keys per
+    /// row — and sorting what came back. The index is one key per published
+    /// result, in published order, and a row that says it is retired needs
+    /// nothing behind it. A window is therefore a bound on the key.
     pub async fn list(
         &self,
         cursor: Option<&str>,
         limit: usize,
+        window_seconds: Option<i64>,
         subject: &str,
         now: i64,
     ) -> Result<DurablePage> {
         require(limit > 0 && limit <= 200, "limit", "must be 1..200")?;
-        let mut entries = self.store.0.list("evaluations/").await?;
-        entries.retain(|e| e.key.ends_with("/claim.json"));
+        let mut entries = self.store.0.list(store::INDEX).await?;
         entries.sort_by(|a, b| a.key.cmp(&b.key));
+        if let Some(window) = window_seconds {
+            require(window > 0, "window_seconds", "must be positive")?;
+            let since = store::indexed_since(now.saturating_sub(window));
+            entries.retain(|entry| entry.key <= since);
+        }
         if let Some(cursor) = cursor {
             require(
                 entries.iter().any(|e| e.key == cursor),
@@ -734,11 +797,17 @@ impl Registry {
         let mut evaluations = Vec::new();
         let mut sources = Sources::default();
         for entry in selected.iter().take(limit) {
-            if let Some(Claim::Committed(receipt)) = self.store.read::<Claim>(&entry.key).await? {
-                let (detail, _) = self
-                    .read_receipt(receipt, subject, now, &mut sources)
-                    .await?;
-                evaluations.push(detail);
+            let Some(indexed) = self.store.read::<IndexEntry>(&entry.key).await? else {
+                continue;
+            };
+            match indexed.retired {
+                Some(state) => evaluations.push(row(indexed.receipt, state)),
+                None => {
+                    let (detail, _) = self
+                        .read_committed(indexed.receipt, subject, now, &mut sources)
+                        .await?;
+                    evaluations.push(detail);
+                }
             }
         }
         Ok(DurablePage {
@@ -769,16 +838,32 @@ impl Registry {
     /// permanently unreadable and never falls back to telemetry. `false` means
     /// there was no such result — nothing here invents one to delete.
     pub async fn forget(&self, id: &str) -> Result<bool> {
-        if self.store.read::<Claim>(&store::claim(id)).await?.is_none() {
+        let Some(claim) = self.store.read::<Claim>(&store::claim(id)).await? else {
             return Ok(false);
-        }
-        self.retire(id, EvidenceState::DeletedSource).await?;
+        };
+        let published = match &claim {
+            Claim::Committed(receipt) => Some(receipt),
+            // Nothing was ever published under this ID, so there is no row.
+            Claim::Abandoned { .. } => None,
+        };
+        self.retire(id, published, EvidenceState::DeletedSource)
+            .await?;
         Ok(true)
     }
 
-    async fn retire(&self, id: &str, reason: EvidenceState) -> Result<()> {
-        // The durable marker precedes erasure; a crash can leave bytes but
-        // cannot make the API disclose them or fall back to old telemetry.
+    async fn retire(
+        &self,
+        id: &str,
+        published: Option<&EvaluationReceipt>,
+        reason: EvidenceState,
+    ) -> Result<()> {
+        // The catalogue row is marked before the tombstone, and the tombstone
+        // precedes erasure. Every window between the three shows less than the
+        // truth rather than more: a crash can leave bytes but cannot make the
+        // API disclose them or fall back to old telemetry.
+        if let Some(receipt) = published {
+            self.index(receipt, Some(reason)).await?;
+        }
         self.store.create(&store::tombstone(id), &reason).await?;
         self.store.erase(id).await
     }
@@ -816,7 +901,8 @@ impl Registry {
                 continue;
             }
             if receipt.expires_at <= now {
-                self.retire(id, EvidenceState::Expired).await?;
+                self.retire(id, Some(&receipt), EvidenceState::Expired)
+                    .await?;
                 retired += 1;
                 continue;
             }
@@ -836,7 +922,7 @@ impl Registry {
                 },
             };
             if let Err(state @ (EvidenceState::Expired | EvidenceState::DeletedSource)) = verdict {
-                self.retire(id, state).await?;
+                self.retire(id, Some(&receipt), state).await?;
                 retired += 1;
             }
         }
@@ -875,6 +961,18 @@ impl Registry {
             }
         }
         let mut report = CollectionReport::default();
+        // What the catalogue already holds, once for the pass. A row is written
+        // by the publication that won the gate, so a missing one is a process
+        // that stopped between the two writes — or a result published before
+        // this instance kept a catalogue at all.
+        let catalogued: BTreeSet<String> = self
+            .store
+            .0
+            .list(store::INDEX)
+            .await?
+            .into_iter()
+            .map(|entry| entry.key)
+            .collect();
         // Relist so this pass also sees claims created above. Claims are never
         // replaced/deleted; concurrent collectors therefore choose the same set.
         for entry in self.store.0.list("evaluations/").await? {
@@ -888,6 +986,13 @@ impl Registry {
             require(entry.key == store::claim(id), "claim", "identity mismatch")?;
             let mut keep = BTreeSet::new();
             if let Claim::Committed(receipt) = &claim {
+                if !catalogued.contains(&store::indexed(receipt.committed_at, id)) {
+                    // The tombstone is read here only, where a row has to be
+                    // written anyway and a wrong one would show a retired
+                    // result as live.
+                    let retired = self.store.read(&store::tombstone(id)).await?;
+                    self.index(receipt, retired).await?;
+                }
                 // Retention owns removal of winning bytes. Preserve everything
                 // if metadata is unavailable: absence is not evidence of waste.
                 let metadata: Metadata = match self.store.verified(id, &receipt.version).await {

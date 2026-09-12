@@ -119,7 +119,7 @@ pub(super) async fn contract(store: Arc<dyn ObjectStore>) {
     assert!(collector.known_ids().await.unwrap().contains("gc-crash"));
     assert!(
         collector
-            .list(None, 200, "viewer", expired)
+            .list(None, 200, None, "viewer", expired)
             .await
             .unwrap()
             .evaluations

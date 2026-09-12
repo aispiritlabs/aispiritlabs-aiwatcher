@@ -217,6 +217,9 @@ fn registry(state: &AppState) -> ApiResult<&aiwatcher_evaluation::Registry> {
 struct ResultQuery {
     cursor: Option<String>,
     limit: Option<usize>,
+    /// Published within this many seconds. The catalogue has a published
+    /// order, so a period is a bound on it rather than a filter over a scan.
+    window_seconds: Option<i64>,
 }
 #[derive(serde::Deserialize, utoipa::IntoParams)]
 #[serde(deny_unknown_fields)]
@@ -248,8 +251,8 @@ async fn publish_result(
     ))
 }
 
-/// Durable discovery is independent of telemetry retention. Pages follow stable
-/// storage IDs; clients must use the opaque cursor, not a timestamp assumption.
+/// Durable discovery is independent of telemetry retention. Newest first, and
+/// clients page with the opaque cursor rather than a timestamp assumption.
 /// Conversation content requires Admin; other readers receive a forbidden state.
 #[utoipa::path(get, path = "/api/v1/evaluation-results", params(ResultQuery), responses((status = 200, body = DurablePage)), tag = "evaluation")]
 async fn list_results(
@@ -265,6 +268,7 @@ async fn list_results(
             .list(
                 query.cursor.as_deref(),
                 query.limit.unwrap_or(200),
+                query.window_seconds,
                 &caller.identity().subject,
                 now(),
             )

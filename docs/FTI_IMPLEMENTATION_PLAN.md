@@ -666,7 +666,8 @@ okresu**. Wiersz kosztuje trzy żądania, czyli strona 200 wierszy ~600. Próg, 
 którego indeks jest wymagany: **około tysiąca opublikowanych wyników**, albo
 pierwsze żądanie porządku innego niż skrót. Indeks to jeden obiekt na commit pod
 kluczem z czasem, dopisywany po wygranej claimu i uzupełniany przez przebieg
-zbierania; celowo jeszcze nie zbudowany, bo to ta sama zmiana co porządek czasowy.
+zbierania; celowo jeszcze nie zbudowany, bo to ta sama zmiana co porządek
+czasowy. **Zbudowany w sekcji 19.2** — razem z porządkiem, oknem i kontrolką.
 
 ### 18.3 B2g — CI, obserwowalność, wdrożenie
 

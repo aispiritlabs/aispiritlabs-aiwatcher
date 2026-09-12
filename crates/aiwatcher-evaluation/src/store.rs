@@ -73,6 +73,28 @@ pub(crate) fn pending(id: &str) -> String {
     format!("{}pending.json", root(id))
 }
 
+/// The catalogue, in published order.
+///
+/// Derived, the way a prompt's head is derived: the claims are the truth and
+/// every detail read still goes through them. What this adds is an order an
+/// object store can serve — a result's own key is the hash of its ID, so
+/// "newest first" was a scan of every object under `evaluations/` to answer.
+pub(crate) const INDEX: &str = "evaluations/index/";
+/// Newest first, because a key's order is the only order a listing has. The
+/// complement of the second makes an ascending listing a descending clock, and
+/// the hash keeps a producer's own ID out of a key.
+pub(crate) fn indexed(committed_at: i64, id: &str) -> String {
+    format!(
+        "{INDEX}{:019}-{}",
+        i64::MAX.saturating_sub(committed_at),
+        hash(id.as_bytes())
+    )
+}
+/// The bound an ascending listing stops at for evidence published since then.
+pub(crate) fn indexed_since(committed_at: i64) -> String {
+    format!("{INDEX}{:019}-~", i64::MAX.saturating_sub(committed_at))
+}
+
 /// Approvals live beside the evidence and never under an evaluation ID: one
 /// approval admits every repetition of its pair, and outlives all of them.
 pub(crate) const APPROVALS: &str = "evaluations/approvals/";

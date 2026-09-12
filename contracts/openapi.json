@@ -4187,7 +4187,7 @@
         "tags": [
           "evaluation"
         ],
-        "summary": "Durable discovery is independent of telemetry retention. Pages follow stable\nstorage IDs; clients must use the opaque cursor, not a timestamp assumption.\nConversation content requires Admin; other readers receive a forbidden state.",
+        "summary": "Durable discovery is independent of telemetry retention. Newest first, and\nclients page with the opaque cursor rather than a timestamp assumption.\nConversation content requires Admin; other readers receive a forbidden state.",
         "operationId": "list_results",
         "parameters": [
           {
@@ -4211,6 +4211,19 @@
                 "null"
               ],
               "minimum": 0
+            }
+          },
+          {
+            "name": "window_seconds",
+            "in": "query",
+            "description": "Published within this many seconds. The catalogue has a published\norder, so a period is a bound on it rather than a filter over a scan.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
             }
           }
         ],

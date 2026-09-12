@@ -483,6 +483,25 @@ claim wins and backfilled by the collection pass; it is deliberately not built
 yet, because it is also what would give the catalogue a time order and both
 should be decided by the same change.
 
+**Amended (2026-09-12): it is built, and it is what the two halves share.**
+`evaluations/index/{i64::MAX - committed_at}-{sha256(id)}` holds the receipt, so
+an ascending listing is a descending clock and a period is a bound on the key
+rather than a filter over a scan. It is derived — the claim is the truth, and
+every detail read still goes through it — which is the shape a prompt's head
+already has: losing the whole prefix loses no evidence and the collection pass
+rebuilds it, which is also how evidence published before this existed arrives
+in the catalogue.
+
+Two things follow. A retirement **marks the row before it writes the tombstone**,
+so every window between the three writes shows less than the truth rather than
+more, and a retired result keeps a row saying why — vanishing from the catalogue
+would say it had never been published. And a page no longer reads the claim or
+the tombstone at all: a 50-row page is 103 requests where it was 152, with one
+listing of one key per result rather than of every object under `evaluations/`,
+which is what the thousand-result threshold was really about. The panel's
+evidence list may therefore carry a period control, and this paragraph's "no
+time control" is withdrawn.
+
 ## Amendment (2026-09-12): what a restore of `evaluations/` means
 
 This prefix, the conversation archive and the execution stream are the three

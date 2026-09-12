@@ -9389,6 +9389,11 @@ export type ListResultsData = {
     query?: {
         cursor?: string | null;
         limit?: number | null;
+        /**
+         * Published within this many seconds. The catalogue has a published
+         * order, so a period is a bound on it rather than a filter over a scan.
+         */
+        window_seconds?: number | null;
     };
     url: '/api/v1/evaluation-results';
 };
