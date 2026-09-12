@@ -473,11 +473,20 @@ e2e-train:
 e2e-pods *args:
     ./scripts/e2e-pod-steps.py {{args}}
 
-# The same four stages as four *processes* on this host, for a machine with no
-# cluster: the same launcher, the same derived name, the same claim by key, the
-# same log in the store — and no image, no resource limit and no namespace, so
-# the memory phase is not asked. It builds the plain binary, needing neither
-# the `kube` feature nor Docker nor a kubeconfig, which is the point.
+# The same four stages as four *containers* on this host: the step's own image,
+# under the template's own limits — so a stage over its memory ask is stopped by
+# the kernel, exactly as in a cluster — on a machine that has Docker and no
+# Kubernetes. It builds the image and the plain binary; it needs the engine
+# running, and neither a kubeconfig nor the `kube` feature.
+e2e-docker *args:
+    ./scripts/e2e-pod-steps.py --runtime docker {{args}}
+
+# The same four stages as four *processes* on this host, for a machine with
+# neither a cluster nor a container engine: the same launcher, the same derived
+# name, the same claim by key, the same log in the store — and no image, no
+# resource limit and no namespace, so the memory phase is not asked. It builds
+# the plain binary, needing neither the `kube` feature nor Docker nor a
+# kubeconfig, which is the point.
 e2e-processes *args:
     ./scripts/e2e-pod-steps.py --runtime process {{args}}
 

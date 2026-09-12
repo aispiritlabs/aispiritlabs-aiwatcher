@@ -117,6 +117,10 @@ BASE = ""
 #: attempt each one was for; this says whether any is still running.
 PROCESS_PATTERN = "aiwatcher_sdk.worker run-attempt"
 
+#: The label every launched pod, Job and container carries — `manifest::LABELS`
+#: in the server, and what a listing finds them by.
+MANAGED_BY = "app.kubernetes.io/managed-by=aiwatcher"
+
 
 # ── the cluster ──────────────────────────────────────────────────────────────
 
@@ -161,9 +165,7 @@ class Cluster:
         )
 
     def jobs(self) -> list[dict[str, Any]]:
-        listing = self.kubectl(
-            "get", "jobs", "-l", "app.kubernetes.io/managed-by=aiwatcher", "-o", "json"
-        )
+        listing = self.kubectl("get", "jobs", "-l", MANAGED_BY, "-o", "json")
         items = json.loads(listing).get("items", [])
         return [item for item in items if isinstance(item, dict)]
 
@@ -178,6 +180,9 @@ class Cluster:
             "AIWATCHER_POD_NAMESPACE": self.namespace,
             "KUBECONFIG": str(self.kubeconfig),
         }
+
+    def probe(self, api_url: str) -> None:
+        reachable(self, api_url)
 
     #: Every interface, because the pods are not on this host's loopback.
     listen = "0.0.0.0"
@@ -291,6 +296,9 @@ class Host:
     def server_environment(self) -> dict[str, str]:
         return {"AIWATCHER_POD_RUNTIME": "process"}
 
+    def probe(self, api_url: str) -> None:
+        """Nothing to ask: a process here is on this host's own loopback."""
+
     def teardown(self) -> None:
         """Kill anything the server left behind.
 
@@ -302,6 +310,108 @@ class Host:
         if left:
             print(f"  · killing {len(left)} step processes the server left behind")
             run("pkill", "-f", PROCESS_PATTERN, check=False)
+
+
+@dataclass
+class Containers:
+    """This machine's container engine, standing where the cluster stands.
+
+    The engine is the record here, as the cluster is: a container carries the
+    manifest's labels *and* its annotations as engine labels, so every
+    assertion about which attempt ran where is read off a real listing rather
+    than off anything this script remembers. The launcher removes a container
+    once its log is kept, so "still there" means the same thing it means in a
+    cluster — which is why the cancel and the log phases ask exactly that.
+    """
+
+    #: Every interface: a container reaches the host, not this host's loopback.
+    listen = "0.0.0.0"
+    #: The image runs under the template's limits, so a stage over its memory
+    #: ask is stopped by the kernel — the phase this backend exists to keep.
+    bounds_memory = True
+
+    def engine(self, *args: str, check: bool = True) -> str:
+        return run("docker", *args, check=check)
+
+    def jobs(self) -> list[dict[str, Any]]:
+        ids = self.engine(
+            "ps", "--all", "--quiet", "--filter", f"label={MANAGED_BY}"
+        ).split()
+        if not ids:
+            return []
+        inspected = json.loads(self.engine("inspect", *ids))
+        found: list[dict[str, Any]] = []
+        for container in inspected:
+            if not isinstance(container, dict):
+                continue
+            labels = (container.get("Config") or {}).get("Labels") or {}
+            found.append(
+                {
+                    "metadata": {
+                        "name": str(container.get("Name", "")).lstrip("/"),
+                        # One dictionary for both: a container has labels only,
+                        # and the manifest's annotations ride there beside them.
+                        "annotations": labels,
+                        "labels": labels,
+                    }
+                }
+            )
+        return found
+
+    def alive(self, held: set[str] | None = None) -> set[str]:
+        """Which containers are still there, stopped ones included.
+
+        The cluster's own semantics: a Job that has ended and not been deleted
+        is still there, and the launcher deleting it is the assertion.
+        """
+        names = {
+            str(job.get("metadata", {}).get("name")) for job in self.jobs()
+        }
+        return names if held is None else held & names
+
+    def server_environment(self) -> dict[str, str]:
+        return {"AIWATCHER_POD_RUNTIME": "docker"}
+
+    def probe(self, api_url: str) -> None:
+        """Ask a container whether the API is where the launcher will say it is.
+
+        Before anything is registered, for the reason the cluster's own probe
+        exists: an address that is right on this host and wrong inside a
+        container otherwise shows up as four attempts that never report.
+        """
+        print("· a container can reach the API")
+        script = (
+            "import urllib.request;"
+            f"print(urllib.request.urlopen('{api_url}/livez', timeout=10).status)"
+        )
+        outcome = subprocess.run(  # noqa: S603 — commands this script composes itself
+            ["docker", "run", "--rm", "--pull=missing", IMAGE, "python", "-c", script],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if outcome.returncode != 0 or "200" not in outcome.stdout:
+            raise SystemExit(
+                f"a container could not reach {api_url}: "
+                f"{outcome.stdout.strip()}{outcome.stderr.strip()}\n"
+                "pass --api-host with the name this engine calls the host"
+            )
+        print(f"  ✓ {api_url} answers from inside a container")
+
+    def teardown(self) -> None:
+        """Remove anything the launcher did not.
+
+        Normally nothing: it deletes a container once its log is kept. A run
+        that needed this says so.
+        """
+        left = self.alive()
+        if left:
+            print(f"  · removing {len(left)} containers the launcher left behind")
+            self.engine("rm", "--force", "--volumes", *sorted(left), check=False)
+
+
+#: What a phase is handed: whichever of the three runs this run's pods.
+Backend = Cluster | Containers | Host
 
 
 def reachable(cluster: Cluster, api_url: str) -> None:
@@ -371,6 +481,8 @@ def build_server(runtime: str) -> None:
     plainest build there is starts a step's pod on this host.
     """
     feature = ["--features", "aiwatcher-server/kube"] if runtime == "pods" else []
+    # The other two backends are deliberately built without it: the plainest
+    # build there is starts a step's pod on this host.
     print(f"· building the server{' with its cluster client' if feature else ''}")
     run("cargo", "build", "--bin", "aiwatcher", *feature, cwd=ROOT)
 
@@ -383,19 +495,22 @@ def templates_file(home: Path, runtime: str) -> Path:
     is the template's to set and is set, because the image is built here and
     was never pushed anywhere to pull it from.
 
-    Two things differ by backend and nothing else does. In a pod the command is
-    the image's own interpreter and the image sets `PYTHONPATH`; on this host
-    it is the interpreter this script runs under — which has the SDK, because
-    this script declares it — and the examples directory is named in the
-    template's own environment, where a template may write one.
+    Two things differ by backend and nothing else does. In a pod or a container
+    the command is the image's own interpreter and the image sets `PYTHONPATH`;
+    as a bare process it is the interpreter this script runs under — which has
+    the SDK, because this script declares it — and the examples directory is
+    named in the template's own environment, where a template may write one.
     """
-    interpreter = "python" if runtime == "pods" else sys.executable
+    in_image = runtime in ("pods", "docker")
+    interpreter = "python" if in_image else sys.executable
     command = [interpreter, "-m", "aiwatcher_sdk.worker", "run-attempt", "--queue", QUEUE]
     for stage in pod_stages.STAGES:
         command += ["--task", f"pod_stages:{stage}"]
     container: dict[str, Any] = {"imagePullPolicy": "IfNotPresent"}
-    if runtime != "pods":
-        container["env"] = [{"name": "PYTHONPATH", "value": str(ROOT / "sdk" / "python" / "examples")}]
+    if not in_image:
+        container["env"] = [
+            {"name": "PYTHONPATH", "value": str(ROOT / "sdk" / "python" / "examples")}
+        ]
     path = home / "pod-templates.json"
     path.write_text(
         json.dumps(
@@ -527,7 +642,7 @@ def grant(cluster: Cluster) -> None:
 
 
 def serve(
-    home: Path, backend: Cluster | Host, templates: Path, api_host: str
+    home: Path, backend: Backend, templates: Path, api_host: str
 ) -> tuple[subprocess.Popen[bytes], str]:
     """An aiwatcher of our own, listening where a pod can reach it."""
     global BASE
@@ -623,7 +738,7 @@ class Seen:
 
     jobs: dict[str, dict[str, str]] = field(default_factory=dict)
 
-    def take(self, backend: Cluster | Host) -> None:
+    def take(self, backend: Backend) -> None:
         for job in backend.jobs():
             metadata = job.get("metadata", {})
             name = metadata.get("name")
@@ -645,7 +760,7 @@ class Seen:
 
 
 def watch(
-    execution_id: str, backend: Cluster | Host, *, within: int
+    execution_id: str, backend: Backend, *, within: int
 ) -> tuple[dict[str, Any], Seen]:
     """Wait for one execution, watching what runs its pods while it runs."""
     seen = Seen()
@@ -710,7 +825,7 @@ def rows_of(home: Path, artifact: dict[str, Any]) -> Any:
 # ── the phases ───────────────────────────────────────────────────────────────
 
 
-def pod_phase(runtime: Runtime, backend: Cluster | Host, workflow: Workflow) -> tuple[str, Seen]:
+def pod_phase(runtime: Runtime, backend: Backend, workflow: Workflow) -> tuple[str, Seen]:
     print("· four stages, four pods")
     handle = runtime.run(workflow)
     view, seen = watch(handle.execution_id, backend, within=RUN_WITHIN)
@@ -731,7 +846,7 @@ def pod_phase(runtime: Runtime, backend: Cluster | Host, workflow: Workflow) -> 
     return handle.execution_id, seen
 
 
-def direct_phase(runtime: Runtime, backend: Cluster | Host, workflow: Workflow) -> str:
+def direct_phase(runtime: Runtime, backend: Backend, workflow: Workflow) -> str:
     print("· the same four stages, one long-lived worker")
     handle = runtime.run(workflow)
     view, seen = watch(handle.execution_id, backend, within=RUN_WITHIN)
@@ -794,7 +909,7 @@ def compare(home: Path, pods: str, direct: str) -> set[str]:
     return pod_names
 
 
-def cancel_phase(runtime: Runtime, backend: Cluster | Host, workflow: Workflow) -> None:
+def cancel_phase(runtime: Runtime, backend: Backend, workflow: Workflow) -> None:
     print("· a cancel reaches a running pod")
     handle = runtime.run(workflow)
     # Wait for `analyze`'s own pod, not just for any: the two stages before it
@@ -832,7 +947,7 @@ def cancel_phase(runtime: Runtime, backend: Cluster | Host, workflow: Workflow) 
     after.take(backend)
 
 
-def oom_phase(runtime: Runtime, backend: Cluster | Host, workflow: Workflow) -> None:
+def oom_phase(runtime: Runtime, backend: Backend, workflow: Workflow) -> None:
     """One stage over its limit fails that stage, and the budget decides next.
 
     The isolation this whole design is for. Nothing here stands in for
@@ -873,7 +988,7 @@ def oom_phase(runtime: Runtime, backend: Cluster | Host, workflow: Workflow) -> 
     )
 
 
-def logs_kept(home: Path, backend: Cluster | Host, pods: set[str]) -> None:
+def logs_kept(home: Path, backend: Backend, pods: set[str]) -> None:
     """Every pod's own words, in the store, after the pod itself is gone.
 
     Two halves, and what the first one proves depends on the backend. Nothing
@@ -925,9 +1040,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--runtime",
-        choices=("pods", "process"),
+        choices=("pods", "docker", "process"),
         default="pods",
-        help="what a step's pod is: a Job in the local cluster, or a process on this host",
+        help="what a step's pod is: a Job in the local cluster, a container on this host, "
+        "or a process on this host",
     )
     parser.add_argument("--namespace", default="aiwatcher-pod-e2e")
     parser.add_argument("--api-host", default=None, help="how a pod reaches this host")
@@ -938,6 +1054,7 @@ def main() -> None:
     arguments = parser.parse_args()
 
     in_cluster = arguments.runtime == "pods"
+    in_image = arguments.runtime in ("pods", "docker")
     context = ""
     if in_cluster:
         context = current_context()
@@ -948,29 +1065,34 @@ def main() -> None:
                 "`kubectl config use-context orbstack`."
             )
         print(f"· cluster {context}")
+    elif in_image:
+        print("· this host's container engine, one container per attempt")
     else:
         print("· this host, one process per attempt")
-    api_host = arguments.api_host or (HOST_ALIAS if in_cluster else "127.0.0.1")
+    # A container reaches the host by the same name a pod does; a process is
+    # already on it.
+    api_host = arguments.api_host or (HOST_ALIAS if in_image else "127.0.0.1")
 
     if not arguments.no_build:
         build_server(arguments.runtime)
-        if in_cluster:
+        if in_image:
             build_image()
 
     home = Path(tempfile.mkdtemp(prefix="aiwatcher-pods-"))
     server: subprocess.Popen[bytes] | None = None
-    backend: Cluster | Host | None = None
+    backend: Backend | None = None
     try:
         if in_cluster:
             backend = open_namespace(kubeconfig_for(context, home), arguments.namespace)
             print(f"· namespace {backend.namespace}")
             grant(backend)
+        elif in_image:
+            backend = Containers()
         else:
             backend = Host(log=home / "server.log")
         templates = templates_file(home, arguments.runtime)
         server, api_url = serve(home, backend, templates, api_host)
-        if isinstance(backend, Cluster):
-            reachable(backend, api_url)
+        backend.probe(api_url)
 
         # 192Mi is the step's own ask, which is its request and its limit both,
         # so a `hog_mb` above it is a pod the kernel stops.
@@ -1011,8 +1133,12 @@ def main() -> None:
             backend.teardown()
         if arguments.keep:
             print(f"· kept {home}")
-    where = "four pods" if in_cluster else "four processes on this host"
-    stopped = ", a stage the kernel stopped" if in_cluster else ""
+    where = {
+        "pods": "four pods",
+        "docker": "four containers on this host",
+        "process": "four processes on this host",
+    }[arguments.runtime]
+    stopped = ", a stage the kernel stopped" if in_image else ""
     print(
         f"\n✓ four stages in {where}, the same review, a cancel that arrived"
         f"{stopped}, every log kept"
