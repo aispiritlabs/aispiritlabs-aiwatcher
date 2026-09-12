@@ -7,7 +7,19 @@ include = ["**/*.toml"]
 # `.gitignore` when `include` is set, so the exclusion is stated here or the
 # check passes in CI (a fresh checkout, no virtualenvs) and fails on every
 # machine that has run `just sdk-install`.
-exclude = ["**/.venv/**", "**/node_modules/**", "**/target/**", "**/vendor/**"]
+#
+# `.claude/worktrees` is the same problem with a sharper edge: each entry is a
+# second checkout of this repository on somebody else's branch, so the files
+# there are theirs and are quite reasonably mid-edit. Formatting them would
+# rewrite another session's working tree, and checking them makes this repo's
+# own check fail for work that is not in it.
+exclude = [
+  "**/.venv/**",
+  "**/node_modules/**",
+  "**/target/**",
+  "**/vendor/**",
+  "**/.claude/worktrees/**",
+]
 
 # Two settings carry this file, and both exist to agree with how the repository
 # is already written rather than with taplo's defaults:
