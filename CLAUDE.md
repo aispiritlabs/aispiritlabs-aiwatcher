@@ -1911,6 +1911,12 @@ the review.
   credential, the query engine's reason. The start route refuses with 501
   `judge_disabled` on a deployment without one and 422 naming both profiles on
   one with another, because a started run nobody claims waits for ever.
+- **Never ask a judge the same question twice in one run.** Every reply is
+  kept under the declaration and the digest of the question before the fold
+  reads it (`evaluation-judges/replies/`), and a retry reads it back. Re-asked,
+  a model answers differently, the fold writes different bytes, and an attempt
+  whose settlement was lost after publication meets the first publication of
+  its own ID as a conflict — a failed run beside the result it published.
 - **Never publish evidence aiwatcher measures through the producer's route.**
   `POST /evaluation-results` answers 403 `measured_here` for a context scored by
   `aiwatcher.scoring`: the first publication of an ID wins, and anybody with an

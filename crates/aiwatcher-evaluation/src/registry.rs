@@ -1794,6 +1794,40 @@ impl Registry {
         crate::judge::calibration(&self.store, version).await
     }
 
+    /// What this declared run's judge already said to exactly this question.
+    ///
+    /// A judged step that failed halfway, or published and then lost its
+    /// settlement, is attempted again under the same declaration. Asking the
+    /// model again would pay for every answer twice and, worse, fold different
+    /// answers into different bytes — which the first publication of that ID
+    /// then refuses as a conflict, failing a run whose result is already there.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Storage`] when the store cannot be reached, and
+    /// [`EvaluationError::Unavailable`] when the kept reply does not read.
+    pub async fn remembered_reply(
+        &self,
+        declaration: &str,
+        call: &crate::JudgeCall,
+    ) -> Result<Option<crate::JudgeReply>> {
+        crate::judge::remembered(&self.store, declaration, call).await
+    }
+
+    /// Keep what the judge said, and hand back the reply that stands.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Storage`] when the store cannot be reached.
+    pub async fn remember_reply(
+        &self,
+        declaration: &str,
+        call: &crate::JudgeCall,
+        reply: crate::JudgeReply,
+    ) -> Result<crate::JudgeReply> {
+        crate::judge::remember(&self.store, declaration, call, reply).await
+    }
+
     /// The answers a calibration set's people were shown, from the result it
     /// names at the version it names.
     ///

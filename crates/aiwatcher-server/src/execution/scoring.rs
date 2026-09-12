@@ -215,8 +215,15 @@ impl ActivityExecutor for ScoreExecutor {
                     &taken.calibration,
                     &calibrated,
                 );
+                // Kept per question under this declaration, so an attempt
+                // after this one asks only what nobody answered yet.
+                let remembering: Arc<dyn JudgeModel> = Arc::new(super::judge::Remembering::new(
+                    Arc::clone(judge),
+                    Arc::clone(&self.evaluations),
+                    spec.declaration.clone(),
+                ));
                 let said = super::judge::ask_all(
-                    judge,
+                    &remembering,
                     asked.iter().map(|question| question.call.clone()).collect(),
                     *concurrency,
                 )

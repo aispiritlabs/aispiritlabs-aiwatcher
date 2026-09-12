@@ -403,3 +403,89 @@ async fn a_run_declared_for_another_judge_profile_asks_nothing() {
         unjudged.message
     );
 }
+
+#[tokio::test]
+async fn a_retried_judged_attempt_asks_only_what_was_not_answered_and_lands_on_its_own_result() {
+    /// Down for the first question about "mumble", and never the same twice:
+    /// a question put again would get the other answer.
+    #[derive(Debug, Default)]
+    struct Flaky {
+        failed: Mutex<bool>,
+        answered: Mutex<Vec<String>>,
+    }
+    #[async_trait]
+    impl JudgeModel for Flaky {
+        fn provider(&self) -> &str {
+            "llamacpp"
+        }
+        async fn ask(&self, call: &JudgeCall) -> std::result::Result<JudgeReply, JudgeFailure> {
+            let question = call.messages[1].content.clone();
+            if question.contains("mumble")
+                && !std::mem::replace(&mut *self.failed.lock().unwrap(), true)
+            {
+                return Err(JudgeFailure::Unavailable("503".into()));
+            }
+            let mut answered = self.answered.lock().unwrap();
+            let again = answered.iter().filter(|asked| **asked == question).count();
+            answered.push(question.clone());
+            Ok(JudgeReply {
+                content: json!({"value": question.contains("helpful") == (again % 2 == 0)})
+                    .to_string(),
+            })
+        }
+    }
+
+    let registry = Arc::new(registry(
+        Arc::new(MemoryObjectStore::new()),
+        Arc::new(Source::default()),
+    ));
+    let rubric = registry
+        .publish_rubric(&helpful(), "ada", now())
+        .await
+        .unwrap()
+        .version;
+    let calibration = calibrated(&registry, &rubric).await;
+    let declared = declared(&registry, &calibration, &rubric).await;
+    let view = registry
+        .scoring_run_view(&declared.id)
+        .await
+        .unwrap()
+        .unwrap();
+    registry
+        .approve(&view.manifest, "operator", now())
+        .await
+        .unwrap();
+
+    let model = Arc::new(Flaky::default());
+    let executor = ScoreExecutor::new(Arc::clone(&registry)).judged_by(model.clone(), 1);
+    let (command, attempt) = attempt(&declared.id, "judged-run");
+    let outage = executor.execute(&command, &attempt).await.unwrap_err();
+    assert_eq!(outage.class, FailureClass::Transient);
+
+    let first = executor
+        .execute(&command, &attempt)
+        .await
+        .expect("the next attempt finishes")
+        .result
+        .unwrap();
+    let answered = model.answered.lock().unwrap().clone();
+    assert_eq!(
+        answered.len(),
+        5,
+        "every question reached the model once, however the two attempts split them: {answered:?}"
+    );
+
+    // The settlement of that attempt was lost, so the reactor tries once more.
+    let again = executor
+        .execute(&command, &attempt)
+        .await
+        .expect("an attempt after a publication lands on it rather than on a conflict")
+        .result
+        .unwrap();
+    assert_eq!(again["version"], first["version"]);
+    assert_eq!(
+        model.answered.lock().unwrap().len(),
+        5,
+        "nothing was asked twice"
+    );
+}

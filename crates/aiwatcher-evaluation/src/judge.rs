@@ -214,7 +214,7 @@ pub struct JudgeCall {
 }
 
 /// What the judge said, verbatim.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JudgeReply {
     pub content: String,
 }
@@ -463,6 +463,44 @@ pub fn agreement(
         calibration: calibration.clone(),
         agreement,
     }
+}
+
+/// The address of one question, over every byte the port would send.
+fn question(call: &JudgeCall) -> Result<String> {
+    digest(&(SCHEMA_VERSION, "evaluation.judge_question", call))
+}
+
+/// The reply this run's judge already gave to exactly this question.
+pub(crate) async fn remembered(
+    store: &Store,
+    declaration: &str,
+    call: &JudgeCall,
+) -> Result<Option<JudgeReply>> {
+    text(declaration, "run")?;
+    store
+        .read(&store::judge_reply(declaration, &question(call)?))
+        .await
+}
+
+/// Keep a reply before it is used, and hand back the one that stands.
+///
+/// The first write wins: two attempts that both asked keep one answer, and the
+/// fold reads the kept one, so the result either of them publishes is the same
+/// bytes.
+pub(crate) async fn remember(
+    store: &Store,
+    declaration: &str,
+    call: &JudgeCall,
+    reply: JudgeReply,
+) -> Result<JudgeReply> {
+    text(declaration, "run")?;
+    let key = store::judge_reply(declaration, &question(call)?);
+    if store.create(&key, &reply).await? {
+        return Ok(reply);
+    }
+    store.read(&key).await?.ok_or(EvaluationError::Unavailable(
+        crate::EvidenceState::MissingArtifact,
+    ))
 }
 
 pub(crate) async fn keep_settings(store: &Store, settings: &JudgeSettings) -> Result<ArtifactRef> {

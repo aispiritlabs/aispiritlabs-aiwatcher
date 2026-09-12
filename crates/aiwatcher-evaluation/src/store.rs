@@ -137,6 +137,12 @@ pub(crate) fn judge_settings(digest: &str) -> String {
 pub(crate) fn calibration(version: &str) -> String {
     format!("evaluation-judges/calibrations/{version}.json")
 }
+/// What a judge said to one exact question, within the declared run that
+/// asked it. Named by the run and by the digest of the question, so a retry
+/// finds the answer it was already given and another run asks for itself.
+pub(crate) fn judge_reply(declaration: &str, question: &str) -> String {
+    format!("evaluation-judges/replies/{declaration}/{question}.json")
+}
 pub(crate) fn scoring_run(id: &str) -> String {
     format!("{SCORING_RUNS}{id}.json")
 }

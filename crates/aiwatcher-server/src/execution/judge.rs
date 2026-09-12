@@ -18,7 +18,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use aiwatcher_evaluation::{JudgeCall, JudgeFailure, JudgeModel, JudgeReply};
+use aiwatcher_evaluation::{
+    EvaluationError, JudgeCall, JudgeFailure, JudgeModel, JudgeReply, Registry as Evaluations,
+};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
@@ -137,12 +139,75 @@ fn refusal(status: reqwest::StatusCode, body: &Value) -> String {
     }
 }
 
+/// A judge that answers from what one declared run was already told.
+///
+/// Every reply is kept before it is used, under the run and the question, so
+/// an attempt after a failure asks only what nobody answered yet — and an
+/// attempt after a publication whose settlement was lost folds the same bytes
+/// and lands on the result that is already there, rather than on a conflict.
+#[derive(Debug)]
+pub struct Remembering {
+    judge: Arc<dyn JudgeModel>,
+    evaluations: Arc<Evaluations>,
+    declaration: String,
+}
+
+impl Remembering {
+    #[must_use]
+    pub fn new(
+        judge: Arc<dyn JudgeModel>,
+        evaluations: Arc<Evaluations>,
+        declaration: impl Into<String>,
+    ) -> Self {
+        Self {
+            judge,
+            evaluations,
+            declaration: declaration.into(),
+        }
+    }
+}
+
+#[async_trait]
+impl JudgeModel for Remembering {
+    fn provider(&self) -> &str {
+        self.judge.provider()
+    }
+
+    async fn ask(&self, call: &JudgeCall) -> Result<JudgeReply, JudgeFailure> {
+        if let Some(reply) = self
+            .evaluations
+            .remembered_reply(&self.declaration, call)
+            .await
+            .map_err(forgetting)?
+        {
+            return Ok(reply);
+        }
+        let reply = self.judge.ask(call).await?;
+        self.evaluations
+            .remember_reply(&self.declaration, call, reply)
+            .await
+            .map_err(forgetting)
+    }
+}
+
+/// A store that could not keep or give back a reply. Worth another attempt
+/// only when the store said so: a kept reply that does not read will not read
+/// next time either.
+fn forgetting(error: EvaluationError) -> JudgeFailure {
+    match &error {
+        EvaluationError::Storage(port) if port.is_retryable() => {
+            JudgeFailure::Unavailable(format!("the replies kept for this run: {error}"))
+        }
+        _ => JudgeFailure::Refused(format!("the replies kept for this run: {error}")),
+    }
+}
+
 /// Put every question to the judge, a bounded number at a time.
 ///
 /// All of them or none: a provider that stops answering halfway through is an
-/// outage rather than half a measurement, so the first failure ends the step
-/// and the attempt's retry asks again. The replies come back in the order the
-/// questions were asked.
+/// outage rather than half a measurement, so the first failure ends the step.
+/// Handed a [`Remembering`] judge, the attempt after it asks only what was not
+/// answered. The replies come back in the order the questions were asked.
 ///
 /// # Errors
 ///
