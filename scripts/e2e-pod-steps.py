@@ -257,6 +257,19 @@ def build_image() -> None:
     run("docker", "build", "-f", "deploy/Dockerfile.worker", "-t", IMAGE, ".", cwd=ROOT)
 
 
+def build_server() -> None:
+    """The binary, with the launcher in it.
+
+    Built here rather than asked for, because the feature is not the default
+    and any plain `cargo build` or `cargo test` in this repository overwrites
+    `target/debug/aiwatcher` with one that has no launcher — a run that then
+    fails at start-up with a refusal about a variable nobody set. Current, it
+    costs a cargo no-op.
+    """
+    print("· building the server with its launcher")
+    run("cargo", "build", "--bin", "aiwatcher", "--features", "aiwatcher-server/kube", cwd=ROOT)
+
+
 def templates_file(home: Path) -> Path:
     """The operator's file, as a deployment's chart values would render it.
 
@@ -788,7 +801,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--namespace", default="aiwatcher-pod-e2e")
     parser.add_argument("--api-host", default=HOST_ALIAS, help="how a pod reaches this host")
-    parser.add_argument("--no-build", action="store_true", help="use the image that is there")
+    parser.add_argument(
+        "--no-build", action="store_true", help="use the image and binary that are there"
+    )
     parser.add_argument("--keep", action="store_true", help="leave the namespace and the data")
     arguments = parser.parse_args()
 
@@ -802,6 +817,7 @@ def main() -> None:
     print(f"· cluster {context}")
 
     if not arguments.no_build:
+        build_server()
         build_image()
 
     home = Path(tempfile.mkdtemp(prefix="aiwatcher-pods-"))
