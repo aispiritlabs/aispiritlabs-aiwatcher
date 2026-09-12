@@ -3,17 +3,23 @@
 //! evidence, source authorization, immutable publication and erasure (ADR_0030).
 
 mod approval;
+mod assessment;
 mod comparison;
 mod context;
 mod manifest;
 mod reference;
 mod registry;
 mod result;
+mod rubric;
 mod store;
 
 pub use aiwatcher_core::Comparability;
 pub use approval::{
     Approval, ApprovalBundles, ApprovalPage, ApprovalRecord, StagedFile, Withdrawal, approval_id,
+};
+pub use assessment::{
+    Assessment, AssessmentHistory, AssessmentPage, AssessmentRequest, AssessmentSource,
+    AssessmentTarget, AssessmentTargetQuery, TargetKind, standing_id,
 };
 pub use comparison::{
     CaseChange, CaseDiffPage, CaseFilter, CaseOutcome, DiffQuery, EvidenceCaseDelta,
@@ -31,6 +37,7 @@ pub use context::{
 };
 pub use manifest::{EvaluationManifest, EvaluationOrigin, PreparedEvaluation, VariantManifest};
 pub use reference::{DatasetKind, DatasetReference, VersionReference};
+pub use rubric::{AssessmentValue, Rubric, RubricHead, RubricPage, RubricVersion, Scale};
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -45,6 +52,8 @@ pub enum EvaluationError {
     Invalid { field: String, reason: String },
     #[error("evaluation ID already belongs to a different result")]
     Conflict,
+    #[error("another revision of this assessment was written first")]
+    Contested,
     #[error("evaluation evidence is {0:?}")]
     Unavailable(EvidenceState),
     #[error("storage: {0}")]

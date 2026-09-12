@@ -101,6 +101,36 @@ pub(crate) const APPROVALS: &str = "evaluations/approvals/";
 /// Outside every prefix a scan filters on, and deliberately overwritten rather
 /// than versioned: it is the last pass, not a history of passes.
 pub(crate) const RETENTION: &str = "evaluations/retention.json";
+
+/// Rubrics and assessments are authored rather than measured, and they live
+/// outside `evaluations/` for a cost reason as much as an ownership one: the
+/// sweep and the collection pass each list that whole prefix to filter it by
+/// suffix, so a hundred thousand judgements there would be a hundred thousand
+/// keys every pass walks past.
+pub(crate) const RUBRICS: &str = "evaluation-rubrics/";
+pub(crate) const ASSESSMENTS: &str = "evaluation-assessments/";
+/// The name is hashed for the same reason an evaluation ID is: it is a
+/// producer's text, and a key is not the place to find out it held a slash.
+pub(crate) fn rubric_head(name: &str) -> String {
+    format!("{RUBRICS}{}/head.json", hash(name.as_bytes()))
+}
+pub(crate) fn rubric_version(name: &str, version: &str) -> String {
+    format!("{RUBRICS}{}/versions/{version}.json", hash(name.as_bytes()))
+}
+pub(crate) fn assessments(target_id: &str) -> String {
+    format!("{ASSESSMENTS}{target_id}/")
+}
+pub(crate) fn assessment_standing(target_id: &str, standing_id: &str) -> String {
+    format!("{ASSESSMENTS}{target_id}/{standing_id}/")
+}
+/// Zero padded, so a listing's order is the revision order and the last key of
+/// a standing judgement's group is its current revision.
+pub(crate) fn assessment(target_id: &str, standing_id: &str, revision: u32) -> String {
+    format!(
+        "{}{revision:010}.json",
+        assessment_standing(target_id, standing_id)
+    )
+}
 pub(crate) fn approval(id: &str) -> String {
     format!("{APPROVALS}{id}/record.json")
 }

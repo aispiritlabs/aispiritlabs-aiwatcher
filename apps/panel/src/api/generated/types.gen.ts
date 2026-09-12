@@ -495,6 +495,130 @@ export type ArtifactRef = {
 };
 
 /**
+ * One revision of one standing judgement. Immutable once written.
+ */
+export type Assessment = {
+    /**
+     * A person's subject, or the judge that answered.
+     */
+    author: string;
+    rationale?: string;
+    recorded_at: number;
+    /**
+     * The session that wrote it down, which is not always the author: a judge
+     * answers and something else files the answer.
+     */
+    recorded_by: string;
+    /**
+     * 1 for the first, and one higher for every change of mind. Nothing is
+     * overwritten, so the earlier revisions stay readable.
+     */
+    revision: number;
+    rubric: string;
+    /**
+     * The concrete version, never the name of a head. A head moves; what was
+     * said was said under one set of levels.
+     */
+    rubric_version: string;
+    source: AssessmentSource;
+    standing_id: string;
+    target: AssessmentTarget;
+    target_id: string;
+    value: AssessmentValue;
+};
+
+export type AssessmentHistory = {
+    /**
+     * The revision to continue below, where earlier ones remain.
+     */
+    next_cursor?: number | null;
+    /**
+     * Newest first.
+     */
+    revisions: Array<Assessment>;
+    standing_id: string;
+};
+
+export type AssessmentPage = {
+    /**
+     * The current revision of every standing judgement about this target.
+     */
+    assessments: Array<Assessment>;
+    target_id: string;
+};
+
+/**
+ * What a caller sends. The author is absent for a person on purpose — a client
+ * that could name the reviewer could file somebody else's judgement.
+ */
+export type AssessmentRequest = {
+    /**
+     * Which judge answered. Required for a judge and refused for a person.
+     */
+    author?: string | null;
+    rationale?: string;
+    rubric: string;
+    /**
+     * Absent means the head at the moment of writing, resolved here and
+     * recorded as the concrete version it resolved to.
+     */
+    rubric_version?: string | null;
+    source?: AssessmentSource;
+    target: AssessmentTarget;
+    value: AssessmentValue;
+};
+
+/**
+ * Who made the judgement — not who filed it.
+ */
+export const AssessmentSource = { HUMAN: 'human', JUDGE: 'judge' } as const;
+
+/**
+ * Who made the judgement — not who filed it.
+ */
+export type AssessmentSource = typeof AssessmentSource[keyof typeof AssessmentSource];
+
+/**
+ * Exactly one thing, named the way the thing itself is named.
+ *
+ * Every variant addresses something immutable, or says which moment made it
+ * one: a session is still being added to, so an assessment of "the session"
+ * has to say as of when, or two people would be judging different things
+ * under one address.
+ */
+export type AssessmentTarget = {
+    kind: 'trace';
+    trace_id: string;
+} | {
+    kind: 'span';
+    span_id: string;
+    trace_id: string;
+} | {
+    as_of: number;
+    kind: 'session';
+    session_id: string;
+} | {
+    case_id: string;
+    evaluation_id: string;
+    kind: 'case';
+    repetition_id: string;
+};
+
+/**
+ * One answer, in the shape its scale declared.
+ */
+export type AssessmentValue = {
+    type: 'number';
+    value: number;
+} | {
+    type: 'level';
+    value: string;
+} | {
+    type: 'flag';
+    value: boolean;
+};
+
+/**
  * Which attempt, of which step, of which execution.
  */
 export type AttemptKey = {
@@ -5849,6 +5973,61 @@ export type RowsBody = {
 };
 
 /**
+ * The form itself. Everything here is part of the version: two rubrics that
+ * ask different questions under one name are two rubrics.
+ */
+export type Rubric = {
+    /**
+     * Which way is better. The same vocabulary a metric definition uses,
+     * because it is the same question — and it is declared here so nothing
+     * downstream has to guess whether a rise is good news.
+     */
+    direction: MetricDirection;
+    /**
+     * The same words a person and a judge are given. A judge admitted against
+     * a calibration set was calibrated against *these* words, so they are
+     * pinned with everything else rather than kept in a prompt beside them.
+     */
+    guidance?: string;
+    name: string;
+    /**
+     * What the assessor is being asked. The one sentence that has to survive
+     * being read a year later beside a score somebody wrote today.
+     */
+    question: string;
+    scale: Scale;
+};
+
+/**
+ * Which version a caller that named no version gets. Derived from the
+ * versions, which are the truth — and moved by publishing, never edited.
+ */
+export type RubricHead = {
+    name: string;
+    question: string;
+    updated_at: number;
+    version: string;
+};
+
+export type RubricPage = {
+    rubrics: Array<RubricHead>;
+};
+
+/**
+ * One immutable version, and who put it there.
+ */
+export type RubricVersion = {
+    published_at: number;
+    published_by: string;
+    /**
+     * Nested rather than flattened: the form denies unknown fields, and a
+     * flattened struct that does reports every field beside it as one.
+     */
+    rubric: Rubric;
+    version: string;
+};
+
+/**
  * Something a caller may do to a **run**, given where it got to.
  *
  * The sibling of [`ContextAction`] and deliberately a separate enum: these are
@@ -6232,6 +6411,20 @@ export type SavedWorkflow = {
     registered_at: string;
     registered_by: string;
     revision: DefinitionRevision;
+};
+
+/**
+ * The answers one rubric admits.
+ */
+export type Scale = {
+    kind: 'numeric';
+    max: number;
+    min: number;
+} | {
+    kind: 'ordinal';
+    levels: Array<string>;
+} | {
+    kind: 'flag';
 };
 
 /**
@@ -7017,6 +7210,21 @@ export type SuiteSummary = {
     succeeded: number;
     suite: string;
 };
+
+/**
+ * Which of the four a query names.
+ */
+export const TargetKind = {
+    TRACE: 'trace',
+    SPAN: 'span',
+    SESSION: 'session',
+    CASE: 'case'
+} as const;
+
+/**
+ * Which of the four a query names.
+ */
+export type TargetKind = typeof TargetKind[keyof typeof TargetKind];
 
 /**
  * A number a request has to look like.
@@ -9652,6 +9860,86 @@ export type StageBundleResponses = {
 
 export type StageBundleResponse = StageBundleResponses[keyof StageBundleResponses];
 
+export type ListAssessmentsData = {
+    body?: never;
+    path?: never;
+    query: {
+        kind: TargetKind;
+        trace_id?: string;
+        span_id?: string;
+        session_id?: string;
+        as_of?: number;
+        evaluation_id?: string;
+        case_id?: string;
+        repetition_id?: string;
+    };
+    url: '/api/v1/evaluation-assessments';
+};
+
+export type ListAssessmentsErrors = {
+    400: ErrorBody;
+    501: ErrorBody;
+};
+
+export type ListAssessmentsError = ListAssessmentsErrors[keyof ListAssessmentsErrors];
+
+export type ListAssessmentsResponses = {
+    200: AssessmentPage;
+};
+
+export type ListAssessmentsResponse = ListAssessmentsResponses[keyof ListAssessmentsResponses];
+
+export type RecordAssessmentData = {
+    body: AssessmentRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/evaluation-assessments';
+};
+
+export type RecordAssessmentErrors = {
+    400: ErrorBody;
+    403: ErrorBody;
+    409: ErrorBody;
+    501: ErrorBody;
+};
+
+export type RecordAssessmentError = RecordAssessmentErrors[keyof RecordAssessmentErrors];
+
+export type RecordAssessmentResponses = {
+    200: Assessment;
+};
+
+export type RecordAssessmentResponse = RecordAssessmentResponses[keyof RecordAssessmentResponses];
+
+export type GetAssessmentHistoryData = {
+    body?: never;
+    path: {
+        target_id: string;
+        standing_id: string;
+    };
+    query?: {
+        /**
+         * Continue below this revision.
+         */
+        before?: number | null;
+        limit?: number | null;
+    };
+    url: '/api/v1/evaluation-assessments/{target_id}/{standing_id}';
+};
+
+export type GetAssessmentHistoryErrors = {
+    400: ErrorBody;
+    501: ErrorBody;
+};
+
+export type GetAssessmentHistoryError = GetAssessmentHistoryErrors[keyof GetAssessmentHistoryErrors];
+
+export type GetAssessmentHistoryResponses = {
+    200: AssessmentHistory;
+};
+
+export type GetAssessmentHistoryResponse = GetAssessmentHistoryResponses[keyof GetAssessmentHistoryResponses];
+
 export type ListResultsData = {
     body?: never;
     path?: never;
@@ -9837,6 +10125,74 @@ export type CompareCasesResponses = {
 };
 
 export type CompareCasesResponse = CompareCasesResponses[keyof CompareCasesResponses];
+
+export type ListRubricsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/evaluation-rubrics';
+};
+
+export type ListRubricsErrors = {
+    501: ErrorBody;
+};
+
+export type ListRubricsError = ListRubricsErrors[keyof ListRubricsErrors];
+
+export type ListRubricsResponses = {
+    200: RubricPage;
+};
+
+export type ListRubricsResponse = ListRubricsResponses[keyof ListRubricsResponses];
+
+export type PublishRubricData = {
+    body: Rubric;
+    path?: never;
+    query?: never;
+    url: '/api/v1/evaluation-rubrics';
+};
+
+export type PublishRubricErrors = {
+    400: ErrorBody;
+    403: ErrorBody;
+    501: ErrorBody;
+};
+
+export type PublishRubricError = PublishRubricErrors[keyof PublishRubricErrors];
+
+export type PublishRubricResponses = {
+    200: RubricVersion;
+};
+
+export type PublishRubricResponse = PublishRubricResponses[keyof PublishRubricResponses];
+
+export type GetRubricData = {
+    body?: never;
+    path: {
+        name: string;
+    };
+    query?: {
+        /**
+         * Absent means the current one. An assessment names a concrete version,
+         * so this is how a reader opens the form somebody actually answered.
+         */
+        version?: string | null;
+    };
+    url: '/api/v1/evaluation-rubrics/{name}';
+};
+
+export type GetRubricErrors = {
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type GetRubricError = GetRubricErrors[keyof GetRubricErrors];
+
+export type GetRubricResponses = {
+    200: RubricVersion;
+};
+
+export type GetRubricResponse = GetRubricResponses[keyof GetRubricResponses];
 
 export type ListEvaluationSuitesData = {
     body?: never;

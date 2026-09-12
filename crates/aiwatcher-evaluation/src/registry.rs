@@ -1426,3 +1426,89 @@ fn aggregate(request: &PublishEvaluation) -> Result<BTreeMap<String, f64>> {
     }
     Ok(result)
 }
+
+/// Rubrics and the judgements made under them.
+///
+/// The same door as the evidence, because the owner is the same and a
+/// judgement about a case is meaningless beside a result somebody else holds.
+/// What is not the same is the clock: a rubric and an assessment are authored,
+/// so nothing here expires with a receipt.
+impl Registry {
+    /// # Errors
+    ///
+    /// [`EvaluationError::Invalid`] when the form is unusable. Publishing the
+    /// same words twice answers with the version that is already there.
+    pub async fn publish_rubric(
+        &self,
+        rubric: &crate::Rubric,
+        published_by: &str,
+        now: i64,
+    ) -> Result<crate::RubricVersion> {
+        crate::assessment::publish_rubric(&self.store, rubric, published_by, now).await
+    }
+
+    /// # Errors
+    ///
+    /// [`EvaluationError::Storage`] when the store cannot be reached.
+    pub async fn rubrics(&self) -> Result<Vec<crate::RubricHead>> {
+        crate::assessment::rubrics(&self.store).await
+    }
+
+    /// # Errors
+    ///
+    /// [`EvaluationError::Storage`] when the store cannot be reached.
+    pub async fn rubric(
+        &self,
+        name: &str,
+        version: Option<&str>,
+    ) -> Result<Option<crate::RubricVersion>> {
+        text(name, "rubric")?;
+        let version = match version {
+            Some(version) => version.to_owned(),
+            None => match crate::assessment::rubric_head(&self.store, name).await? {
+                Some(head) => head.version,
+                None => return Ok(None),
+            },
+        };
+        crate::assessment::rubric_version(&self.store, name, &version).await
+    }
+
+    /// Record one judgement. The caller is who filed it, always.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Invalid`] when the target, the rubric or the answer
+    /// is unusable, and [`EvaluationError::Contested`] when another revision
+    /// kept winning the write.
+    pub async fn assess(
+        &self,
+        request: &crate::AssessmentRequest,
+        recorded_by: &str,
+        now: i64,
+    ) -> Result<crate::Assessment> {
+        crate::assessment::assess(&self.store, request, recorded_by, now).await
+    }
+
+    /// # Errors
+    ///
+    /// [`EvaluationError::Invalid`] when the target is unusable.
+    pub async fn assessments(
+        &self,
+        target: &crate::AssessmentTarget,
+    ) -> Result<crate::AssessmentPage> {
+        crate::assessment::assessments(&self.store, target).await
+    }
+
+    /// # Errors
+    ///
+    /// [`EvaluationError::Invalid`] when either ID or the page is unusable.
+    pub async fn assessment_history(
+        &self,
+        target_id: &str,
+        standing_id: &str,
+        before: Option<u32>,
+        limit: Option<u32>,
+    ) -> Result<crate::AssessmentHistory> {
+        crate::assessment::history(&self.store, target_id, standing_id, before, limit).await
+    }
+}

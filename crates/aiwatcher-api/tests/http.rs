@@ -7192,6 +7192,303 @@ async fn a_published_comparison_is_the_servers_answer_and_names_its_two_results(
     );
 }
 
+/// What a rubric is, as the route takes it.
+fn helpfulness(levels: [&str; 3]) -> Value {
+    json!({
+        "name": "helpfulness",
+        "question": "did the answer help?",
+        "scale": {"kind": "ordinal", "levels": levels},
+        "direction": "higher"
+    })
+}
+
+/// The target every judgement below is about, as a URL carries it.
+const ONE_CASE: &str =
+    "kind=case&evaluation_id=after&case_id=two-plus-two&repetition_id=measurement-1";
+
+fn about_that_case(rubric_value: &str) -> Value {
+    json!({
+        "target": {
+            "kind": "case", "evaluation_id": "after",
+            "case_id": "two-plus-two", "repetition_id": "measurement-1"
+        },
+        "rubric": "helpfulness",
+        "value": {"type": "level", "value": rubric_value}
+    })
+}
+
+/// A judgement is a person's, a judge's, or both — and never one over the other.
+#[tokio::test]
+async fn a_judgement_is_attributed_to_the_session_that_filed_it_and_never_replaces_another() {
+    let mut fixture = Fixture::behind_a_proxy(false).await;
+    fixture.state.evaluations = Some(Arc::new(
+        aiwatcher_evaluation::Registry::new(
+            Arc::new(MemoryObjectStore::new()),
+            Arc::new(EvaluationSource::default()),
+            Default::default(),
+        )
+        .unwrap(),
+    ));
+
+    // A reader may not declare what a score means.
+    let (status, _) = fixture
+        .post_as(
+            "/api/v1/evaluation-rubrics",
+            "bob",
+            "aiwatcher-viewers",
+            helpfulness(["bad", "fine", "good"]),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let (status, published) = fixture
+        .post_as(
+            "/api/v1/evaluation-rubrics",
+            "ada",
+            "aiwatcher-editors",
+            helpfulness(["bad", "fine", "good"]),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{published}");
+    let version = published["version"].as_str().unwrap().to_owned();
+
+    let (status, forms) = fixture
+        .get_as("/api/v1/evaluation-rubrics", "bob", "aiwatcher-viewers")
+        .await;
+    assert_eq!(status, StatusCode::OK, "{forms}");
+    assert_eq!(forms["rubrics"][0]["name"], "helpfulness");
+    assert_eq!(forms["rubrics"][0]["version"], version.as_str());
+
+    // A person's judgement carries no author: the session is the author.
+    let mut impersonating = about_that_case("bad");
+    impersonating["author"] = json!("grace");
+    let (status, refusal) = fixture
+        .post_as(
+            "/api/v1/evaluation-assessments",
+            "ada",
+            "aiwatcher-editors",
+            impersonating,
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refusal}");
+
+    let (status, recorded) = fixture
+        .post_as(
+            "/api/v1/evaluation-assessments",
+            "ada",
+            "aiwatcher-editors",
+            about_that_case("bad"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{recorded}");
+    assert_eq!(recorded["author"], "ada");
+    assert_eq!(recorded["recorded_by"], "ada");
+    assert_eq!(recorded["revision"], 1);
+    assert_eq!(
+        recorded["rubric_version"],
+        version.as_str(),
+        "a judgement names the version it was made under, never the head"
+    );
+    let standing = recorded["standing_id"].as_str().unwrap().to_owned();
+    let target = recorded["target_id"].as_str().unwrap().to_owned();
+
+    // The judge says otherwise, and neither edits the other.
+    let mut judged = about_that_case("good");
+    judged["source"] = json!("judge");
+    judged["author"] = json!("gpt-4o@sha256:abc");
+    let (status, judged) = fixture
+        .post_as(
+            "/api/v1/evaluation-assessments",
+            "worker",
+            "aiwatcher-editors",
+            judged,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{judged}");
+    assert_eq!(judged["author"], "gpt-4o@sha256:abc");
+    assert_eq!(judged["recorded_by"], "worker");
+
+    let (status, page) = fixture
+        .get_as(
+            &format!("/api/v1/evaluation-assessments?{ONE_CASE}"),
+            "bob",
+            "aiwatcher-viewers",
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let said: Vec<(&str, &str)> = page["assessments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|assessment| {
+            (
+                assessment["source"].as_str().unwrap(),
+                assessment["value"]["value"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(said, [("human", "bad"), ("judge", "good")]);
+
+    // Ada changes her mind. The current listing moves; the earlier revision
+    // stays readable, which is the whole difference between this and an edit.
+    let (status, revised) = fixture
+        .post_as(
+            "/api/v1/evaluation-assessments",
+            "ada",
+            "aiwatcher-editors",
+            about_that_case("fine"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{revised}");
+    assert_eq!(revised["revision"], 2);
+    let (_, history) = fixture
+        .get_as(
+            &format!("/api/v1/evaluation-assessments/{target}/{standing}"),
+            "bob",
+            "aiwatcher-viewers",
+        )
+        .await;
+    let revisions: Vec<(u64, &str)> = history["revisions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|revision| {
+            (
+                revision["revision"].as_u64().unwrap(),
+                revision["value"]["value"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(revisions, [(2, "fine"), (1, "bad")]);
+
+    // A query that names one kind of target and a field from another is a
+    // reader who believes they narrowed to something they did not.
+    let (status, refusal) = fixture
+        .get_as(
+            &format!("/api/v1/evaluation-assessments?{ONE_CASE}&trace_id=abc"),
+            "bob",
+            "aiwatcher-viewers",
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refusal}");
+    assert!(
+        refusal["message"].as_str().unwrap().contains("trace_id"),
+        "{refusal}"
+    );
+}
+
+/// Quality and consent are two decisions about one turn, and neither is the
+/// other. The archive's review says whether this content may be trained on at
+/// all; an assessment says whether the answer was any good. A judgement that
+/// quietly approved a turn would put somebody's words in a corpus because a
+/// reviewer rated the reply.
+#[tokio::test]
+async fn judging_what_a_turn_answered_is_not_consent_to_train_on_it() {
+    let mut fixture = Fixture::behind_a_proxy(false).await;
+    fixture.state.evaluations = Some(Arc::new(
+        aiwatcher_evaluation::Registry::new(
+            Arc::new(MemoryObjectStore::new()),
+            Arc::new(EvaluationSource::default()),
+            Default::default(),
+        )
+        .unwrap(),
+    ));
+    fixture
+        .post_as(
+            "/api/v1/evaluation-rubrics",
+            "ada",
+            "aiwatcher-editors",
+            helpfulness(["bad", "fine", "good"]),
+        )
+        .await;
+
+    let mut turn = conversation_turn("m1", "assistant", "the capital is Krakow");
+    turn["provenance"] = json!({"run_id": "run-1", "trace_id": "t-1", "span_id": "s-1"});
+    let (status, archived) = fixture
+        .post_as(
+            "/api/v1/conversation-turns",
+            "agent",
+            "aiwatcher-editors",
+            json!({ "turns": [turn] }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{archived}");
+    let turn_id = archived["turns"][0]["turn_id"].as_str().unwrap().to_owned();
+
+    let about_the_span = json!({
+        "target": {"kind": "span", "trace_id": "t-1", "span_id": "s-1"},
+        "rubric": "helpfulness",
+        "value": {"type": "level", "value": "bad"},
+        "rationale": "the capital is Warsaw"
+    });
+    let (status, judged) = fixture
+        .post_as(
+            "/api/v1/evaluation-assessments",
+            "ada",
+            "aiwatcher-editors",
+            about_the_span,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{judged}");
+
+    let queue = |state: &str| {
+        format!("/api/v1/conversation-turns?conversation_id=training-demo&review={state}")
+    };
+    let (_, pending) = fixture
+        .get_as(&queue("pending"), "bob", "aiwatcher-viewers")
+        .await;
+    assert_eq!(
+        pending["turns"][0]["turn_id"],
+        turn_id.as_str(),
+        "a judgement about the answer authorised nothing about the content"
+    );
+
+    // And the other direction: approving the content leaves the judgement of
+    // it exactly where it was. A reviewer may say "keep this, it was wrong".
+    let (status, approved) = fixture
+        .post_as(
+            "/api/v1/conversation-turn-reviews",
+            "ada",
+            "aiwatcher-editors",
+            json!({
+                "conversation_id": "training-demo", "turn_id": turn_id,
+                "review": {"state": "approved"}
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{approved}");
+    let (_, page) = fixture
+        .get_as(
+            "/api/v1/evaluation-assessments?kind=span&trace_id=t-1&span_id=s-1",
+            "bob",
+            "aiwatcher-viewers",
+        )
+        .await;
+    assert_eq!(page["assessments"][0]["value"]["value"], "bad");
+    assert_eq!(page["assessments"][0]["revision"], 1);
+}
+
+/// No evaluation store is a 501 naming the variable, as it is for every other
+/// registry here — never an empty list of forms nobody ever wrote.
+#[tokio::test]
+async fn judgements_without_an_evaluation_store_say_which_setting_is_missing() {
+    let fixture = Fixture::new(false);
+    for uri in [
+        "/api/v1/evaluation-rubrics",
+        "/api/v1/evaluation-assessments?kind=trace&trace_id=abc",
+    ] {
+        let (status, body) = fixture.get(uri).await;
+        assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{body}");
+        assert!(
+            body["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("AIWATCHER_PROMPT_STORE"),
+            "{body}"
+        );
+    }
+}
+
 /// One variant of one pinned context, with each case's score spelled out.
 fn scored_request(id: &str, experiment: &str, scores: [f64; 3]) -> Value {
     let mut request = durable_request(id);

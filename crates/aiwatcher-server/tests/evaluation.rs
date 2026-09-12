@@ -14,6 +14,9 @@ use std::sync::{
 #[path = "evaluation/approvals.rs"]
 mod approvals;
 
+#[path = "evaluation/assessments.rs"]
+mod assessments;
+
 #[path = "evaluation/cost.rs"]
 mod cost;
 

@@ -6,6 +6,7 @@
 //! | `/runs`, `/spans`, `/dimensions` | read model | what happened |
 //! | `/events/stream`, `/live` | projector fan-out | a reconnect closes its own gap — see [`stream`] |
 //! | `/prompts` | object store | authored, outlives the runs that used it |
+//! | `/evaluation-rubrics`, `/evaluation-assessments` | object store | what somebody judged, in a form somebody declared — see [`assessments`] |
 //! | `/annotation-*` | object store | the only routes taking image bytes; refusals carry a list |
 //! | `/annotation-import-*` | object store | a staged batch and a resumable job — see [`imports`] |
 //! | `/conversation-*` | encrypted store | `admin` reads content, `editor` writes, `viewer` sees everything but the words |
@@ -21,6 +22,7 @@
 
 pub mod annotations;
 pub mod artifacts;
+pub mod assessments;
 pub mod auth;
 pub mod context;
 pub mod conversations;

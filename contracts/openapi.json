@@ -4387,6 +4387,271 @@
         }
       }
     },
+    "/api/v1/evaluation-assessments": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Every standing judgement about one thing, at its current revision.",
+        "operationId": "list_assessments",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TargetKind"
+            }
+          },
+          {
+            "name": "trace_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "span_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "session_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "as_of",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "evaluation_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "case_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "repetition_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssessmentPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Record one judgement.",
+        "description": "The caller is who filed it, always: a person's judgement is attributed to\nthe session, and a judge's names the judge while the session still says who\nran it. Nothing here checks the target exists — a judgement outlives the\ntrace it is about, which is the whole reason it is written down.",
+        "operationId": "record_assessment",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssessmentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Assessment"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/evaluation-assessments/{target_id}/{standing_id}": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "What one standing judgement said over time, newest first.",
+        "description": "Both IDs came from the listing. A browser deriving either would be a second\nanswer to what one thing is, which is the rule an approval's address keeps.",
+        "operationId": "get_assessment_history",
+        "parameters": [
+          {
+            "name": "target_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "standing_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "description": "Continue below this revision.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssessmentHistory"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/evaluation-results": {
       "get": {
         "tags": [
@@ -4851,6 +5116,159 @@
             }
           },
           "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/evaluation-rubrics": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Every form this instance holds, at its current version.",
+        "operationId": "list_rubrics",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RubricPage"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Publish a form. Idempotent by content: the same words answer with the\nversion that is already there, and the head moves to it either way.",
+        "operationId": "publish_rubric",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Rubric"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RubricVersion"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/evaluation-rubrics/{name}": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "One form, at the version asked for or at the head.",
+        "operationId": "get_rubric",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "description": "Absent means the current one. An assessment names a concrete version,\nso this is how a reader opens the form somebody actually answered.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RubricVersion"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
             "description": "",
             "content": {
               "application/json": {
@@ -10748,6 +11166,318 @@
           }
         },
         "additionalProperties": false
+      },
+      "Assessment": {
+        "type": "object",
+        "description": "One revision of one standing judgement. Immutable once written.",
+        "required": [
+          "standing_id",
+          "target_id",
+          "target",
+          "rubric",
+          "rubric_version",
+          "value",
+          "source",
+          "author",
+          "revision",
+          "recorded_at",
+          "recorded_by"
+        ],
+        "properties": {
+          "author": {
+            "type": "string",
+            "description": "A person's subject, or the judge that answered."
+          },
+          "rationale": {
+            "type": "string"
+          },
+          "recorded_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "recorded_by": {
+            "type": "string",
+            "description": "The session that wrote it down, which is not always the author: a judge\nanswers and something else files the answer."
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int32",
+            "description": "1 for the first, and one higher for every change of mind. Nothing is\noverwritten, so the earlier revisions stay readable.",
+            "minimum": 0
+          },
+          "rubric": {
+            "type": "string"
+          },
+          "rubric_version": {
+            "type": "string",
+            "description": "The concrete version, never the name of a head. A head moves; what was\nsaid was said under one set of levels."
+          },
+          "source": {
+            "$ref": "#/components/schemas/AssessmentSource"
+          },
+          "standing_id": {
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/AssessmentTarget"
+          },
+          "target_id": {
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/AssessmentValue"
+          }
+        }
+      },
+      "AssessmentHistory": {
+        "type": "object",
+        "required": [
+          "standing_id",
+          "revisions"
+        ],
+        "properties": {
+          "next_cursor": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The revision to continue below, where earlier ones remain.",
+            "minimum": 0
+          },
+          "revisions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Assessment"
+            },
+            "description": "Newest first."
+          },
+          "standing_id": {
+            "type": "string"
+          }
+        }
+      },
+      "AssessmentPage": {
+        "type": "object",
+        "required": [
+          "target_id",
+          "assessments"
+        ],
+        "properties": {
+          "assessments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Assessment"
+            },
+            "description": "The current revision of every standing judgement about this target."
+          },
+          "target_id": {
+            "type": "string"
+          }
+        }
+      },
+      "AssessmentRequest": {
+        "type": "object",
+        "description": "What a caller sends. The author is absent for a person on purpose — a client\nthat could name the reviewer could file somebody else's judgement.",
+        "required": [
+          "target",
+          "rubric",
+          "value"
+        ],
+        "properties": {
+          "author": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Which judge answered. Required for a judge and refused for a person."
+          },
+          "rationale": {
+            "type": "string"
+          },
+          "rubric": {
+            "type": "string"
+          },
+          "rubric_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Absent means the head at the moment of writing, resolved here and\nrecorded as the concrete version it resolved to."
+          },
+          "source": {
+            "$ref": "#/components/schemas/AssessmentSource"
+          },
+          "target": {
+            "$ref": "#/components/schemas/AssessmentTarget"
+          },
+          "value": {
+            "$ref": "#/components/schemas/AssessmentValue"
+          }
+        },
+        "additionalProperties": false
+      },
+      "AssessmentSource": {
+        "type": "string",
+        "description": "Who made the judgement — not who filed it.",
+        "enum": [
+          "human",
+          "judge"
+        ]
+      },
+      "AssessmentTarget": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "trace_id",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "trace"
+                ]
+              },
+              "trace_id": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "trace_id",
+              "span_id",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "span"
+                ]
+              },
+              "span_id": {
+                "type": "string"
+              },
+              "trace_id": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "session_id",
+              "as_of",
+              "kind"
+            ],
+            "properties": {
+              "as_of": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "session"
+                ]
+              },
+              "session_id": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "evaluation_id",
+              "case_id",
+              "repetition_id",
+              "kind"
+            ],
+            "properties": {
+              "case_id": {
+                "type": "string"
+              },
+              "evaluation_id": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "case"
+                ]
+              },
+              "repetition_id": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "Exactly one thing, named the way the thing itself is named.\n\nEvery variant addresses something immutable, or says which moment made it\none: a session is still being added to, so an assessment of \"the session\"\nhas to say as of when, or two people would be judging different things\nunder one address."
+      },
+      "AssessmentValue": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "number"
+                ]
+              },
+              "value": {
+                "type": "number",
+                "format": "double"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "level"
+                ]
+              },
+              "value": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "flag"
+                ]
+              },
+              "value": {
+                "type": "boolean"
+              }
+            }
+          }
+        ],
+        "description": "One answer, in the shape its scale declared."
       },
       "AttemptKey": {
         "type": "object",
@@ -20735,6 +21465,102 @@
           }
         }
       },
+      "Rubric": {
+        "type": "object",
+        "description": "The form itself. Everything here is part of the version: two rubrics that\nask different questions under one name are two rubrics.",
+        "required": [
+          "name",
+          "question",
+          "scale",
+          "direction"
+        ],
+        "properties": {
+          "direction": {
+            "$ref": "#/components/schemas/MetricDirection",
+            "description": "Which way is better. The same vocabulary a metric definition uses,\nbecause it is the same question — and it is declared here so nothing\ndownstream has to guess whether a rise is good news."
+          },
+          "guidance": {
+            "type": "string",
+            "description": "The same words a person and a judge are given. A judge admitted against\na calibration set was calibrated against *these* words, so they are\npinned with everything else rather than kept in a prompt beside them."
+          },
+          "name": {
+            "type": "string"
+          },
+          "question": {
+            "type": "string",
+            "description": "What the assessor is being asked. The one sentence that has to survive\nbeing read a year later beside a score somebody wrote today."
+          },
+          "scale": {
+            "$ref": "#/components/schemas/Scale"
+          }
+        },
+        "additionalProperties": false
+      },
+      "RubricHead": {
+        "type": "object",
+        "description": "Which version a caller that named no version gets. Derived from the\nversions, which are the truth — and moved by publishing, never edited.",
+        "required": [
+          "name",
+          "version",
+          "question",
+          "updated_at"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "question": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "RubricPage": {
+        "type": "object",
+        "required": [
+          "rubrics"
+        ],
+        "properties": {
+          "rubrics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RubricHead"
+            }
+          }
+        }
+      },
+      "RubricVersion": {
+        "type": "object",
+        "description": "One immutable version, and who put it there.",
+        "required": [
+          "version",
+          "rubric",
+          "published_by",
+          "published_at"
+        ],
+        "properties": {
+          "published_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "published_by": {
+            "type": "string"
+          },
+          "rubric": {
+            "$ref": "#/components/schemas/Rubric",
+            "description": "Nested rather than flattened: the form denies unknown fields, and a\nflattened struct that does reports every field beside it as one."
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
       "RunAction": {
         "type": "string",
         "description": "Something a caller may do to a **run**, given where it got to.\n\nThe sibling of [`ContextAction`] and deliberately a separate enum: these are\ndone to an execution and those to a block, and one list holding both would\nbe a step's panel offering to stop the whole run.\n\nIt exists so a caller never re-derives a precondition. The rules are three\nlines and a panel could hold them — and then there would be two copies of\n`decide`'s mind, in two languages, and the day they disagree is the day\nsomebody trusts the wrong one. Same reasoning as `ContextAction::allowed`\nand as the annotation canvas implementing no validation.",
@@ -21537,6 +22363,75 @@
             "$ref": "#/components/schemas/DefinitionRevision"
           }
         }
+      },
+      "Scale": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "A bounded number. The bounds are part of the version, so widening them\nis a new rubric rather than a quiet re-reading of every score.",
+            "required": [
+              "min",
+              "max",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "numeric"
+                ]
+              },
+              "max": {
+                "type": "number",
+                "format": "double"
+              },
+              "min": {
+                "type": "number",
+                "format": "double"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Named levels, in the order they were declared. Order is meaning here —\nthe direction says which end is better — so reordering is a new version\nfor the same reason renaming an annotation class is.",
+            "required": [
+              "levels",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "ordinal"
+                ]
+              },
+              "levels": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 32,
+                "minItems": 2
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Yes or no, where a scale would be a scale of two.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "flag"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "The answers one rubric admits."
       },
       "Schedule": {
         "type": "object",
@@ -22794,6 +23689,16 @@
             "type": "string"
           }
         }
+      },
+      "TargetKind": {
+        "type": "string",
+        "description": "Which of the four a query names.",
+        "enum": [
+          "trace",
+          "span",
+          "session",
+          "case"
+        ]
       },
       "TensorSpec": {
         "type": "object",

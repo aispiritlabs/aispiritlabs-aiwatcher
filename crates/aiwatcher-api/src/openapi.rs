@@ -61,6 +61,8 @@ use utoipa::OpenApi;
         // this is only ever a query parameter — which emits a `$ref` and
         // registers nothing, so the generated client silently loses the type.
         aiwatcher_evaluation::CaseFilter,
+        // And the same for a target's kind, which only a query names.
+        aiwatcher_evaluation::TargetKind,
         aiwatcher_projector::SuitePage,
         aiwatcher_projector::SuiteSummary,
         aiwatcher_projector::WorkflowPage,
@@ -404,6 +406,7 @@ impl ApiDoc {
             crate::runs::openapi(),
             crate::metrics::openapi(),
             crate::evaluations::openapi(),
+            crate::assessments::openapi(),
             crate::live::openapi(),
             crate::ingest::openapi(),
             crate::health::openapi(),
@@ -533,6 +536,7 @@ mod tests {
             ("runs", crate::runs::openapi()),
             ("metrics", crate::metrics::openapi()),
             ("evaluations", crate::evaluations::openapi()),
+            ("assessments", crate::assessments::openapi()),
             ("live", crate::live::openapi()),
             ("ingest", crate::ingest::openapi()),
             ("health", crate::health::openapi()),
