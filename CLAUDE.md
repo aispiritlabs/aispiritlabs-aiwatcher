@@ -1036,6 +1036,27 @@ the review.
   a key, and the second would be served the first one's rows without ever
   seeing its own answer. `None`, rather than a key that means "probably the
   same". Section 43.40.
+- **Never make a caller recover a classification from a status code.** The
+  scheduler's one question about a refused start is whether the slot stays due,
+  and it read that off the HTTP status an `ApiError` carried: 4xx permanent,
+  5xx come back. Three refusals are 5xx by number and permanent by meaning — a
+  registry this deployment never wired (501), a stored definition that will not
+  read back (500), and an object store that understood the read and refused it
+  (502) — so each left the slot due and was retried every minute for ever, with
+  the schedule's own card saying it was still trying. `StartRefused` answers it
+  itself, and `says_the_same_next_time` is the same question `StoreError` and
+  `HandleError` now answer about themselves. The status is one caller's
+  rendering of a refusal, never the refusal.
+- **Never let the compile-and-start use case live in the HTTP module.** Three
+  callers ask for a managed run — the route somebody presses, `run_now` on a
+  schedule, and the tick that finds a slot due — and what starting *means* is
+  the same for all three: read the definition at the revision it names, compile
+  it, resolve the payload policy, derive the id, write one transaction. It is
+  `aiwatcher_execution::start`, assembled once by `AppState::executions`. What
+  stays with the caller is only what the caller knows: **who is asking** (a role
+  check against a session, which a tick does not have and must not fake) and
+  **which id** (`RunIdentity` — a slot names its own, a browser sends a key, a
+  click gets a fresh one). AR3, before C0.
 - **Never let a measurement cost a run.** The scheduler reports its lateness and
   its backlog *after* it has started the slots, and a sink that is down is a
   warning rather than a failed tick — the cursor still moves, because whether a

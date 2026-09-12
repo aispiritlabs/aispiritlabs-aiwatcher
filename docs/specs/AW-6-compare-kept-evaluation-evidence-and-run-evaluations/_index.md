@@ -44,9 +44,13 @@ building towards, and it is four things rather than one:
 - **B4 — assessments.** One trace, span, session or case measurement, with a
   rubric version, a typed value, an author and a rationale. Human and judge
   assessments coexist.
-- **AR3 — the compile-and-start use case out of the HTTP module.** Independent
-  of the rest, and still a precondition for C0: the scheduler classifies a
-  failure by the HTTP status an `ApiError` carries.
+- **AR3 — the compile-and-start use case out of the HTTP module.** **Done**
+  (plan section 21): `aiwatcher_execution::start` holds it, `AppState::executions`
+  assembles it, and the route, `run_now` and the tick all go through it. The
+  scheduler asks the refusal `says_the_same_next_time` rather than reading the
+  HTTP status an `ApiError` carries — which was wrong for the three refusals
+  that are 5xx by number and permanent by meaning, each leaving a slot due and
+  retried every minute for ever.
 - **C0 — running an evaluation rather than recording one.** `score_existing`
   first, and it is what makes the approval resource earn its keep: a managed run
   publishes evidence with no step on the server's host.
@@ -66,3 +70,7 @@ The comparison itself followed in section 20.
   `context_id` equality plus readability, `Comparability` moved to
   `aiwatcher_core` so both halves speak one vocabulary, candidates come from the
   catalogue narrowed by context, and the panel draws one control
+- 2026-09-12 — AR3 delivered (plan section 21): compile-and-start is
+  `aiwatcher_execution::start`, three callers share it, and whether a slot stays
+  due is the refusal's own answer rather than a status code's. `TargetKind`
+  deleted in favour of `DefinitionKind`; every HTTP status unchanged

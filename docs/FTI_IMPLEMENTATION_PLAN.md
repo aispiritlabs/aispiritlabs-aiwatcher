@@ -1,6 +1,6 @@
 # FTI — rekomendacja zakresu i plan rozwoju
 
-Data: 2026-09-11. Status: A1–A4 i AR1 zaimplementowane; B1 zweryfikowane, trwały wycinek B2 i atomowe orphan GC nowych publikacji dostarczone; dodano weryfikowane adaptery Curation, promptów, modeli, Annotations i Conversations; B2/AR2 pozostają otwarte: B2e–B2h, w tym judge (sekcje 9–16). Wyniki odbioru A, ograniczenia i incydent seeda w sekcji 8. Przegląd planu z 2026-09-12 jest w sekcji 17; jego wnioski są wniesione do sekcji 2–7 — etap B ma punkty 8–11 i rozstrzygnięcia wizualne, tabela paczek B2e–B2i, a B3 zależy od B2e, B2f i B2i. Sekcja 19 zmniejsza ograniczenia z sekcji 18; sekcja 20 dostarcza stronę dowodową B3 — porównanie dwóch trwałych wyników.
+Data: 2026-09-11. Status: A1–A4 i AR1 zaimplementowane; B1 zweryfikowane, trwały wycinek B2 i atomowe orphan GC nowych publikacji dostarczone; dodano weryfikowane adaptery Curation, promptów, modeli, Annotations i Conversations; B2/AR2 pozostają otwarte: B2e–B2h, w tym judge (sekcje 9–16). Wyniki odbioru A, ograniczenia i incydent seeda w sekcji 8. Przegląd planu z 2026-09-12 jest w sekcji 17; jego wnioski są wniesione do sekcji 2–7 — etap B ma punkty 8–11 i rozstrzygnięcia wizualne, tabela paczek B2e–B2i, a B3 zależy od B2e, B2f i B2i. Sekcja 19 zmniejsza ograniczenia z sekcji 18; sekcja 20 dostarcza stronę dowodową B3 — porównanie dwóch trwałych wyników; sekcja 21 dostarcza AR3 — wspólny przypadek użycia kompilacji i startu, wyjęty z modułu HTTP.
 
 Podstawa: [katalog funkcji](FTI_FEATURE_CATALOG.md), [analiza braków](FTI_FEATURE_GAPS.md), [plan UX](FTI_UX_WANDB_PLAN.md), [przegląd dokumentacji Langfuse i MLflow](FTI_LANGFUSE_MLFLOW_ANALYSIS.md), [ocena architektury](FTI_ARCHITECTURE_REVIEW.md) oraz aktualny kod. Ocena dotyczy obecności i kontraktów implementacji; nie potwierdza działania konkretnego wdrożenia. Katalog opisuje zakres docelowy, więc liczba jego pozycji nie jest miarą ukończenia produktu.
 
@@ -231,7 +231,7 @@ Obecny modularny monolit wystarcza do A. Panel ma egzekwowane vertical slices; b
 
 1. **AR1, razem z A/B1:** zapisać dozwolone zależności i właścicieli nowych danych, dodać kontrolę granic Rust do CI. F/T/I pozostaje przepływem produktu, a nie podziałem na trzy konteksty.
 2. **AR2, B1–B4:** Evaluation posiada suite, rubryki, trwałe wyniki, assessments i porównywalność. Projektor ma przebudowywalny widok. Modele/prompty zachowują własne decyzje promocji; Conversations zachowuje zgodę, retencję i usuwanie. Core otrzymuje tylko neutralne kontrakty. Do tego samego właściciela należy zatwierdzenie źródeł dowodów: dziś jest katalogiem w konfiguracji procesu, co ogranicza instancję do jednej pary wariant/kontekst (sekcja 17.1).
-3. **AR3, przed C0:** wyjąć wspólny przypadek użycia kompilacji/startu z modułu HTTP. API i scheduler korzystają z jednej usługi aplikacyjnej, z zachowaniem idempotencji, autoryzacji i polityki payloadów. Nowy scorer jest zadaniem istniejącego workera, nie nowym silnikiem wykonania. Nie zaczęte: [scheduler](../crates/aiwatcher-server/src/execution/scheduler.rs) nadal klasyfikuje trwałość błędu po statusie HTTP z `ApiError`.
+3. **AR3, przed C0:** wyjąć wspólny przypadek użycia kompilacji/startu z modułu HTTP. API i scheduler korzystają z jednej usługi aplikacyjnej, z zachowaniem idempotencji, autoryzacji i polityki payloadów. Nowy scorer jest zadaniem istniejącego workera, nie nowym silnikiem wykonania. **Dostarczone** (sekcja 21): `aiwatcher_execution::start`, a [scheduler](../crates/aiwatcher-server/src/execution/scheduler.rs) pyta odmowę `says_the_same_next_time` zamiast czytać status HTTP z `ApiError`.
 4. **AR4, wraz z B4/C:** nowe klienty ocen w modułach SDK; lekki import główny pozostaje lekki. UI, hooki i testy przy feature; wspólne komponenty dopiero przy rzeczywistym ponownym użyciu.
 
 Rozdzielenie kompilatora curation od silnika i dalsze dzielenie dużych ekranów wykonywać przy zmianach, które tego potrzebują. Nie są warunkiem rozpoczęcia A1–A4. Szczegółowe propozycje nowych modułów nie oznaczają konieczności osobnego procesu lub wdrożenia.
@@ -958,4 +958,105 @@ Instancja zatrzymana, katalog danych usunięty, wpis podglądu cofnięty.
   odrzuca manifest z judge'em po nazwie, więc takich dowodów nie ma.
 - **Kontekst wariantu na obserwacjach** (druga połowa opisu B3 z tabeli paczek:
   SDK, trace, projektor) — nie ruszone; ta paczka jest stroną dowodową.
-- **B4, AR3, C0** — bez zmian, karta AW-6.
+- **B4, AR3, C0** — bez zmian, karta AW-6. (AR3 dostarczone w sekcji 21.)
+
+## 21. AR3 — wspólny przypadek użycia kompilacji i startu
+
+Warunek C0 z sekcji 7, punkt 3, i jedyna z pozostałych paczek niezależna od
+reszty. Stan wejściowy: HEAD `a145b94`, zachowany wycinek innej sesji
+(`execution/mod.rs`, `FTI_KICKOFF.md`, `typos.toml`).
+
+### 21.1 Co było nie tak
+
+Uruchomienia managed proszą trzej wywołujący: trasa, którą ktoś naciska,
+`run_now` na harmonogramie i tick, który znalazł należny slot. Kompilacja i
+start żyły w module HTTP, więc scheduler w roli `work` był klientem routera
+axum: wołał do środka, dostawał `ApiError` i czytał **kod statusu**, żeby
+zdecydować, czy slot ma zostać należny.
+
+To jest stratne kodowanie jedynego pytania, jakie ma. Trzy odmowy są 5xx z
+numeru i trwałe ze znaczenia:
+
+| odmowa | status | tick zapisywał | powinien |
+| --- | --- | --- | --- |
+| brak registry w tym wdrożeniu | 501 | `try_again` | `refused` |
+| zapisany obiekt, który się nie odczytuje | 500 | `try_again` | `refused` |
+| magazyn, który odczyt zrozumiał i odrzucił | 502 | `try_again` | `refused` |
+
+Każda z nich zostawiała slot należny i ponawiała go **co minutę, bez końca**, a
+karta harmonogramu mówiła, że wciąż próbuje. To jest dokładnie ta połowa reguły
+R2, której `SlotSettlement::TryAgain` miał bronić — tylko z drugiej strony.
+
+### 21.2 Reguła wraca do typu, który ją zna
+
+`aiwatcher_execution::start` to ten przypadek użycia: `Executions` (pożyczone
+registry, handler, polityka payloadów, silnik zapytań), `StartRequest`,
+`compile_head`, `compile`, `start`, `compile_and_start`. Odmowa to
+`StartRefused`, a pytanie schedulera zadaje się jej wprost —
+`says_the_same_next_time`. Tę samą metodę dostały `HandleError` i `StoreError`,
+bo to jest jedno pytanie o trzech właścicielach, nie trzy pytania.
+
+Status nie znika: `impl From<StartRefused> for ApiError` jest jedynym miejscem,
+które zamienia powód na kod, i **żaden kod się nie zmienił** — 404, 400, 422,
+501, 502, 503, 409, 413 lądują tam, gdzie lądowały. Status jest renderowaniem
+odmowy przez jednego wywołującego, nigdy samą odmową.
+
+### 21.3 Co zostaje przy wywołującym
+
+Dwie rzeczy, i tylko te dwie, bo tylko on je zna:
+
+- **kto pyta** — sprawdzenie roli wobec sesji; tick nie ma sesji i nie wolno mu
+  jej udawać;
+- **który identyfikator** — `RunIdentity`: `Named` dla slotu (wyprowadzony z
+  definicji i chwili, więc dwaj workerzy, którzy zobaczyli dziewiątą, dochodzą
+  do jednego uruchomienia), `Key` dla nagłówka `Idempotency-Key` (wyprowadzony z
+  klucza **i planu**, żeby jeden klucz nie adresował dwóch planów), `Fresh` dla
+  kliknięcia.
+
+`compile_and_start` sprawdza handler **przed** kompilacją: instancja bez
+workflow store nie uruchomi niczego, więc powiedzenie tego jest lepszą
+odpowiedzią niż zgłoszenie czegokolwiek innego, czego też brakuje.
+
+### 21.4 Jedno słownictwo zamiast dwóch
+
+`TargetKind` w module HTTP był drugą kopią `DefinitionKind` z domeny — te same
+dwa warianty, te same nazwy na drucie, ten sam komentarz. Usunięty; `kind` w
+`ExecutionTarget` wskazuje teraz na `DefinitionKind`. Wartości na drucie bez
+zmian (`curation_pipeline`, `workflow`), więc panel i klient przeszły przez
+`just openapi` bez ręcznej zmiany. Razem z tym do domeny wróciły
+`ExecutionTarget`, `Decider`, `PayloadDefault` i pinowanie okna — to polityka,
+nie transport.
+
+### 21.5 Odbiór
+
+`just check` 23/23. Nowe: 12 testów jednostkowych `start::tests`, 2 testy
+mapowania nagłówka na `RunIdentity` w module trasy, 1 test HTTP (`501` nazywa
+`AIWATCHER_WORKFLOW_STORE` zamiast 404). Usunięte razem z przeniesionym kodem:
+5 testów, które badały funkcje z modułu HTTP — ich zachowanie jest w tych
+dwunastu.
+
+Odbiór na własnej instancji `127.0.0.1:19081`, katalogi tymczasowe:
+
+- trasa: `202` + `created: true`, ten sam `Idempotency-Key` → `202` + `created:
+  false` i **ten sam** `execution_id`; bez klucza → drugie uruchomienie; nazwa,
+  której nikt nie zapisał → `404 not_found`; `as_of` na workflow → `400`
+  nazywające, czego dotyczy;
+- reguła: zapisany pipeline, harmonogram godzinowy na najbliższą minutę, a
+  potem **uszkodzony `head.json`** w magazynie obiektów. Tick o 14:12 zapisał
+  `outcome: refused` z powodem „stored object …/head.json is not a dataset
+  registry document", a `next_run` przeskoczył na następną godzinę. Przed tą
+  paczką ten sam przypadek dawał 500 → `is_client_error() == false` →
+  `try_again`, slot należny, ponowienie co minutę bez końca.
+
+Instancja zatrzymana, katalog danych usunięty.
+
+### 21.6 Co zostaje
+
+- **`DefinitionRegistry` spłaszcza `PortError` do `StoreError::Backend`**, więc
+  dla *zarejestrowanego workflow* niedostępny magazyn i uszkodzony rekord są
+  nierozróżnialne i oba czytają się jako „wróć za chwilę". Dla pipeline'ów
+  reguła jest pełna, bo `aiwatcher_datasets::RegistryError` te przypadki
+  rozróżnia. Naprawa to zmiana typu błędu tamtego registry — osobna paczka.
+- **C0** ma teraz swój warunek: nowy scorer jest zadaniem istniejącego workera i
+  startuje przez `Executions`, nie przez własny silnik.
+- **B3 (różnica na poziomie przypadków), B4, C0** — bez zmian, karta AW-6.
