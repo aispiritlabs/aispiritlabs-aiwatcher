@@ -140,17 +140,19 @@ impl Artifacts {
         })
     }
 
-    /// Read rows back, and check that they are the ones the pointer names.
+    /// Read the bytes back, and check that they are the ones the pointer names.
     ///
     /// Verified rather than trusted, on the way out as well as in: this is the
     /// one corruption no metric downstream detects — a step reading somebody
-    /// else's table and succeeding.
+    /// else's table and succeeding. A pod's log is read through here too, and
+    /// gets the same check for a duller reason: an object that does not hash
+    /// to its name is not this attempt's output, whatever it holds.
     ///
     /// # Errors
     ///
     /// [`ActivityError`] when the object is missing, unreadable, or does not
     /// hash to what the reference claims.
-    pub async fn read_rows(&self, artifact: &ArtifactRef) -> Result<Rows, ActivityError> {
+    pub async fn read_bytes(&self, artifact: &ArtifactRef) -> Result<Vec<u8>, ActivityError> {
         let bytes = self.get(artifact).await?.ok_or_else(|| {
             // Infrastructure, not user code: the plan and the query were fine
             // and the bytes are gone. Retrying is worth it — the object store
@@ -170,6 +172,17 @@ impl Artifacts {
                 ),
             ));
         }
+        Ok(bytes)
+    }
+
+    /// Read rows back, verified the same way and then parsed.
+    ///
+    /// # Errors
+    ///
+    /// [`ActivityError`] from [`read_bytes`](Self::read_bytes), or user code
+    /// when the verified bytes are not a table.
+    pub async fn read_rows(&self, artifact: &ArtifactRef) -> Result<Rows, ActivityError> {
+        let bytes = self.read_bytes(artifact).await?;
         serde_json::from_slice(&bytes).map_err(|error| {
             ActivityError::user_code(format!("{} does not hold a table: {error}", artifact.uri))
         })
@@ -325,6 +338,12 @@ impl aiwatcher_core::ports::AttemptArtifacts for Artifacts {
             .into_iter()
             .map(|row| Value::Object(row.into_iter().collect()))
             .collect())
+    }
+
+    async fn read_bytes(&self, artifact: &ArtifactRef) -> PortResult<Vec<u8>> {
+        Artifacts::read_bytes(self, artifact)
+            .await
+            .map_err(as_port_error)
     }
 
     async fn put_rows(&self, name: &str, rows: Vec<Value>) -> PortResult<ArtifactRef> {

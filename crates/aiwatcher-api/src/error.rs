@@ -94,6 +94,17 @@ pub enum ApiError {
     #[error("this attempt's artifacts could not be reached: {0}")]
     WorkerArtifacts(aiwatcher_core::ports::PortError),
 
+    /// A read of what a run produced, on an instance with no object store.
+    ///
+    /// One variant rather than two, because the catalog that indexes a step's
+    /// artifacts and the store that holds their bytes are present exactly
+    /// together: both come from `AIWATCHER_PROMPT_STORE`, so their absence is
+    /// one fact with one fix. Separate from `WorkerArtifactsDisabled` because
+    /// the reader is a person on a step's view rather than a claimant, and a
+    /// code naming a worker would send them looking at one.
+    #[error("this instance keeps no step artifacts (AIWATCHER_PROMPT_STORE)")]
+    StepArtifactsDisabled,
+
     /// A worker named an attempt it does not hold: the lease expired, somebody
     /// took it over, or it was never dispatched.
     ///
@@ -271,6 +282,7 @@ impl ApiError {
             Self::WorkerArtifactsDisabled => {
                 (StatusCode::NOT_IMPLEMENTED, "worker_artifacts_disabled")
             }
+            Self::StepArtifactsDisabled => (StatusCode::NOT_IMPLEMENTED, "step_artifacts_disabled"),
             Self::WorkerArtifacts(error) => match error {
                 aiwatcher_core::ports::PortError::Rejected { .. } => {
                     (StatusCode::BAD_GATEWAY, "worker_artifacts_refused")

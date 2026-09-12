@@ -388,6 +388,20 @@ pub trait AttemptArtifacts: Send + Sync + std::fmt::Debug {
     /// The rows a reference names, verified against its digest.
     async fn read_rows(&self, artifact: &ArtifactRef) -> PortResult<Vec<serde_json::Value>>;
 
+    /// The bytes a reference names, verified against its digest.
+    ///
+    /// What [`read_rows`](Self::read_rows) is for a table, for an artifact
+    /// that is not one — a pod's log (ADR_0029). Its reader is a person on the
+    /// step's view rather than a worker, and it goes through this port for the
+    /// same reason a worker's rows do: the alternative is a presigned URL into
+    /// a bucket that also holds prompts, datasets, annotations, conversations
+    /// and training.
+    ///
+    /// Whole, rather than a range. What is stored is already bounded — a log
+    /// is its last 256 KiB — and the digest is of all of it, so a partial read
+    /// is one nothing could check.
+    async fn read_bytes(&self, artifact: &ArtifactRef) -> PortResult<Vec<u8>>;
+
     /// Store rows and hand back the pointer.
     ///
     /// The digest is of the bytes this stored, never of what a caller claimed —

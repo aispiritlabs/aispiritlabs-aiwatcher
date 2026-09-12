@@ -27,7 +27,13 @@ use aiwatcher_core::{ArtifactKind, ArtifactRef};
 use crate::state::ExecutionId;
 
 /// Who made this, so a reader can get from a byte range back to a decision.
+///
+/// Named `ArtifactProvenance` in the contract, because an OpenAPI components
+/// block is one global namespace and a conversation turn already has a
+/// `Provenance` in it. Two crates are free to call their own noun the same
+/// thing; the document is not.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
+#[schema(as = ArtifactProvenance)]
 pub struct Provenance {
     pub execution_id: ExecutionId,
     pub step_id: String,

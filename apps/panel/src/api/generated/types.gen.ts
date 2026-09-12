@@ -342,6 +342,26 @@ export type Artifact = {
 };
 
 /**
+ * One artifact, read as text.
+ *
+ * Text rather than a stream with the stored content type: everything this
+ * route is for is something somebody reads, and serving bytes back under a
+ * type the object store was told about is how a stored `text/html` becomes a
+ * page on this origin.
+ */
+export type ArtifactContent = {
+    /**
+     * The pointer, so a reader has the size and the name without the list.
+     */
+    artifact: ArtifactRef;
+    /**
+     * The bytes, decoded lossily. A pod's stdout is not promised to be UTF-8
+     * and a traceback is still worth reading with one byte mangled in it.
+     */
+    text: string;
+};
+
+/**
  * What sort of thing an artifact holds.
  *
  * An enum rather than free text — unlike `data.step_type`, which is free text
@@ -370,6 +390,20 @@ export const ArtifactKind = {
  * bytes. It decides a key prefix and a filter, and nothing that executes.
  */
 export type ArtifactKind = typeof ArtifactKind[keyof typeof ArtifactKind];
+
+/**
+ * Who made this, so a reader can get from a byte range back to a decision.
+ *
+ * Named `ArtifactProvenance` in the contract, because an OpenAPI components
+ * block is one global namespace and a conversation turn already has a
+ * `Provenance` in it. Two crates are free to call their own noun the same
+ * thing; the document is not.
+ */
+export type ArtifactProvenance = {
+    attempt: number;
+    execution_id: ExecutionId;
+    step_id: string;
+};
 
 /**
  * One file, addressed by what is in it.
@@ -691,6 +725,23 @@ export type CasePage = {
     next_cursor?: string | null;
     state: EvidenceState;
     version: string;
+};
+
+/**
+ * One artifact as the catalog holds it: the pointer, who made it, and what it
+ * was made from.
+ */
+export type CatalogedArtifact = {
+    artifact: ArtifactRef;
+    created_at: string;
+    /**
+     * The digests this was made from, in the order the step read them.
+     *
+     * Digests rather than ids: lineage has to survive a catalog that was
+     * rebuilt, and a digest is the same fact in every copy of it.
+     */
+    inputs?: Array<string>;
+    produced_by?: null | ArtifactProvenance;
 };
 
 /**
@@ -9483,6 +9534,63 @@ export type GetExecutionResponses = {
 };
 
 export type GetExecutionResponse = GetExecutionResponses[keyof GetExecutionResponses];
+
+export type RunArtifactsData = {
+    body?: never;
+    path: {
+        /**
+         * The id a start returned
+         */
+        execution_id: string;
+    };
+    query?: never;
+    url: '/api/v1/executions/{execution_id}/artifacts';
+};
+
+export type RunArtifactsErrors = {
+    501: ErrorBody;
+    503: ErrorBody;
+};
+
+export type RunArtifactsError = RunArtifactsErrors[keyof RunArtifactsErrors];
+
+export type RunArtifactsResponses = {
+    200: Array<CatalogedArtifact>;
+};
+
+export type RunArtifactsResponse = RunArtifactsResponses[keyof RunArtifactsResponses];
+
+export type ArtifactContentData = {
+    body?: never;
+    path: {
+        /**
+         * The id a start returned
+         */
+        execution_id: string;
+        /**
+         * The artifact's content address, as the list gave it
+         */
+        digest: string;
+    };
+    query?: never;
+    url: '/api/v1/executions/{execution_id}/artifacts/{digest}';
+};
+
+export type ArtifactContentErrors = {
+    404: ErrorBody;
+    413: ErrorBody;
+    501: ErrorBody;
+    502: ErrorBody;
+    503: ErrorBody;
+};
+
+export type ArtifactContentError = ArtifactContentErrors[keyof ArtifactContentErrors];
+
+export type ArtifactContentResponses = {
+    200: ArtifactContent;
+};
+
+export type ArtifactContentResponse = ArtifactContentResponses[keyof ArtifactContentResponses];
 
 export type RunBlocksData = {
     body?: never;

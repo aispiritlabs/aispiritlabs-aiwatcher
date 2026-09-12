@@ -106,6 +106,10 @@ struct Fixture {
     bus: Arc<InMemoryBus>,
     read_model: Arc<ReadModel>,
     live: Arc<LiveHub>,
+    /// The same store `state.artifacts` holds, typed — so a test can put the
+    /// bytes a pod's launcher would have put, which the port has no way to.
+    /// `None` when this instance has no object store.
+    artifacts: Option<Arc<MemoryArtifacts>>,
 }
 
 impl Fixture {
@@ -173,6 +177,7 @@ impl Fixture {
         let read_model = Arc::new(ReadModel::default());
         let live = Arc::new(LiveHub::default());
         let health = HealthState::new();
+        let artifacts = registry_enabled.then(|| Arc::new(MemoryArtifacts::default()));
         let state = AppState {
             evaluations: None,
             answer_limits: Default::default(),
@@ -245,10 +250,15 @@ impl Fixture {
             // Content-addressed and in memory, so the worker routes are
             // exercised rather than answering 501 — and so the check that a
             // reported output really exists has something to check against.
-            artifacts: Some(Arc::new(MemoryArtifacts::default()) as _),
-            catalog: Some(Arc::new(
-                aiwatcher_execution::artifact::memory::MemoryArtifactCatalog::new(),
-            ) as _),
+            //
+            // Both follow the object store, as the wiring does: they are built
+            // from `registries.objects`, so an instance with no
+            // `AIWATCHER_PROMPT_STORE` has neither and the routes that read a
+            // step's artifacts answer 501 naming it.
+            artifacts: artifacts.clone().map(|store| store as _),
+            catalog: registry_enabled.then(|| {
+                Arc::new(aiwatcher_execution::artifact::memory::MemoryArtifactCatalog::new()) as _
+            }),
             // No worker: a router built for a test runs no background task, and
             // an export here is driven by the test rather than by a tick.
             export_worker: None,
@@ -276,6 +286,7 @@ impl Fixture {
             bus,
             read_model,
             live,
+            artifacts,
         }
     }
 
@@ -642,7 +653,35 @@ impl RecordingRunner {
 /// and would pass the very test written to stop it.
 #[derive(Debug, Default)]
 struct MemoryArtifacts {
-    objects: std::sync::Mutex<std::collections::HashMap<String, Vec<serde_json::Value>>>,
+    objects: std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>,
+}
+
+impl MemoryArtifacts {
+    /// Store bytes that are not a table — what the pod launcher's `put_log`
+    /// writes. Not on the port: nothing reaching this store over HTTP writes
+    /// anything but rows, and a `put_bytes` there would be a door the real
+    /// adapter does not have.
+    fn put_bytes(
+        &self,
+        name: &str,
+        kind: aiwatcher_core::ArtifactKind,
+        body: &[u8],
+    ) -> aiwatcher_core::ArtifactRef {
+        let digest = aiwatcher_jobs::digest(body);
+        self.objects
+            .lock()
+            .expect("not poisoned")
+            .insert(digest.clone(), body.to_vec());
+        aiwatcher_core::ArtifactRef {
+            name: name.to_owned(),
+            uri: format!("object://artifacts/{}/{digest}/data", kind.as_str()),
+            digest,
+            size_bytes: Some(body.len() as u64),
+            content_type: "text/plain; charset=utf-8".to_owned(),
+            kind,
+            schema_ref: None,
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -651,6 +690,17 @@ impl aiwatcher_core::ports::AttemptArtifacts for MemoryArtifacts {
         &self,
         artifact: &aiwatcher_core::ArtifactRef,
     ) -> Result<Vec<serde_json::Value>, PortError> {
+        let bytes = self.read_bytes(artifact).await?;
+        serde_json::from_slice(&bytes).map_err(|error| PortError::Rejected {
+            target: "the object store",
+            message: format!("{} does not hold a table: {error}", artifact.uri),
+        })
+    }
+
+    async fn read_bytes(
+        &self,
+        artifact: &aiwatcher_core::ArtifactRef,
+    ) -> Result<Vec<u8>, PortError> {
         self.objects
             .lock()
             .expect("not poisoned")
@@ -672,7 +722,7 @@ impl aiwatcher_core::ports::AttemptArtifacts for MemoryArtifacts {
         self.objects
             .lock()
             .expect("not poisoned")
-            .insert(digest.clone(), rows);
+            .insert(digest.clone(), body.clone());
         Ok(aiwatcher_core::ArtifactRef {
             name: name.to_owned(),
             uri: format!("object://artifacts/rows/{digest}/data"),
@@ -5271,6 +5321,136 @@ async fn a_run_now_without_a_request_id_still_starts_one_run() {
         .await;
     assert_eq!(status, StatusCode::OK, "{set}");
     assert!(set["started"].is_string(), "{set}");
+}
+
+// ── What a run produced ──────────────────────────────────────────────────────
+//
+// The reader half of ADR_0029's log. The catalog has recorded a pod's output
+// against the attempt that printed it since 2.4; what these check is that a
+// step's view can get it back — and that it can only get back what this run
+// produced.
+
+/// What the pod launcher does when a Job ends: the bytes, then the row that
+/// indexes them.
+async fn keep_a_log(
+    fixture: &Fixture,
+    execution: &str,
+    step: &str,
+    attempt: u32,
+    body: &str,
+) -> String {
+    let store = fixture.artifacts.as_ref().expect("an object store");
+    let artifact = store.put_bytes("log", aiwatcher_core::ArtifactKind::Log, body.as_bytes());
+    let digest = artifact.digest.clone();
+    fixture
+        .state
+        .catalog
+        .as_ref()
+        .expect("a catalog")
+        .record(aiwatcher_execution::CatalogedArtifact {
+            artifact,
+            produced_by: Some(aiwatcher_execution::Provenance {
+                execution_id: aiwatcher_execution::ExecutionId::new(execution.to_owned()),
+                step_id: step.to_owned(),
+                attempt,
+            }),
+            inputs: Vec::new(),
+            created_at: time::OffsetDateTime::UNIX_EPOCH,
+        })
+        .await
+        .expect("a catalog row");
+    digest
+}
+
+#[tokio::test]
+async fn a_pods_log_is_listed_against_the_attempt_that_printed_it() {
+    // The join the step's view is drawn from: a row names the execution, the
+    // step and the attempt, so a view holding those three can find its own log
+    // without a route per noun.
+    let fixture = Fixture::new(false);
+    keep_a_log(&fixture, "run-1", "analyze", 2, "Traceback…\n").await;
+    keep_a_log(&fixture, "run-1", "persist", 1, "written\n").await;
+
+    let (status, produced) = fixture.get("/api/v1/executions/run-1/artifacts").await;
+    assert_eq!(status, StatusCode::OK, "{produced}");
+    let rows = produced.as_array().expect("a list");
+    assert_eq!(rows.len(), 2, "{produced}");
+    let analyze = rows
+        .iter()
+        .find(|row| row["produced_by"]["step_id"] == "analyze")
+        .expect("the failing step's row");
+    assert_eq!(analyze["produced_by"]["attempt"], 2);
+    assert_eq!(analyze["artifact"]["kind"], "log");
+}
+
+#[tokio::test]
+async fn a_kept_log_is_read_back_as_the_text_the_pod_printed() {
+    // "Reading why a stage failed", which is the scenario the requirement is
+    // written around.
+    let fixture = Fixture::new(false);
+    let digest = keep_a_log(
+        &fixture,
+        "run-1",
+        "analyze",
+        1,
+        "Traceback (most recent call last):\n  ValueError\n",
+    )
+    .await;
+
+    let (status, content) = fixture
+        .get(&format!("/api/v1/executions/run-1/artifacts/{digest}"))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{content}");
+    assert!(
+        content["text"]
+            .as_str()
+            .expect("the text")
+            .contains("ValueError"),
+        "{content}"
+    );
+    assert_eq!(content["artifact"]["digest"], digest);
+}
+
+#[tokio::test]
+async fn one_runs_artifact_is_not_readable_through_another_runs_id() {
+    // The digest is the whole address, and this is what stops it being an
+    // oracle over a store that also holds prompts, datasets, annotations,
+    // conversations and training: a digest no row of *this* run names is a 404
+    // whatever is under it.
+    let fixture = Fixture::new(false);
+    let digest = keep_a_log(&fixture, "run-1", "analyze", 1, "secrets\n").await;
+
+    let (status, refused) = fixture
+        .get(&format!("/api/v1/executions/run-2/artifacts/{digest}"))
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{refused}");
+    let (status, _) = fixture
+        .get("/api/v1/executions/run-1/artifacts/00000000")
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn an_instance_with_no_object_store_says_it_keeps_no_artifacts() {
+    // An empty list would say the run produced nothing, which is a different
+    // problem with a different fix. The prompt registry's rule, in a sixth
+    // place.
+    let fixture = Fixture::without_registry();
+    for uri in [
+        "/api/v1/executions/run-1/artifacts",
+        "/api/v1/executions/run-1/artifacts/abcd",
+    ] {
+        let (status, refused) = fixture.get(uri).await;
+        assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{uri}: {refused}");
+        assert_eq!(refused["code"], "step_artifacts_disabled", "{refused}");
+        assert!(
+            refused["message"]
+                .as_str()
+                .expect("a message")
+                .contains("AIWATCHER_PROMPT_STORE"),
+            "the refusal names what to set: {refused}"
+        );
+    }
 }
 
 // ── The worker protocol ──────────────────────────────────────────────────────

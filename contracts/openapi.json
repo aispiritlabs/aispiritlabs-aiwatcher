@@ -4769,6 +4769,154 @@
         }
       }
     },
+    "/api/v1/executions/{execution_id}/artifacts": {
+      "get": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "Everything one run produced, in the order it was recorded.",
+        "description": "Each row carries its `produced_by` — the execution, the step and the\nattempt — which is what lets a step's view show its own outputs and its own\nlog without a second route per noun.\n\nA run that produced nothing and a run that never existed are the same empty\nlist. The catalog cannot tell them apart and neither could a caller that\nasked it to: whether a run exists is `GET /executions/{id}`, and answering\nit twice would be a second read of a second store to describe the same\nabsence.",
+        "operationId": "run_artifacts",
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "description": "The id a start returned",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/CatalogedArtifact"
+                  }
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/executions/{execution_id}/artifacts/{digest}": {
+      "get": {
+        "tags": [
+          "execution"
+        ],
+        "summary": "One of this run's artifacts, read as text.",
+        "description": "The digest is checked against what this execution produced *before*\nanything is read, so the route answers for a run's own outputs and for\nnothing else in the store.",
+        "operationId": "artifact_content",
+        "parameters": [
+          {
+            "name": "execution_id",
+            "in": "path",
+            "description": "The id a start returned",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "digest",
+            "in": "path",
+            "description": "The artifact's content address, as the list gave it",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactContent"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/executions/{execution_id}/blocks": {
       "get": {
         "tags": [
@@ -9735,6 +9883,24 @@
           }
         }
       },
+      "ArtifactContent": {
+        "type": "object",
+        "description": "One artifact, read as text.\n\nText rather than a stream with the stored content type: everything this\nroute is for is something somebody reads, and serving bytes back under a\ntype the object store was told about is how a stored `text/html` becomes a\npage on this origin.",
+        "required": [
+          "artifact",
+          "text"
+        ],
+        "properties": {
+          "artifact": {
+            "$ref": "#/components/schemas/ArtifactRef",
+            "description": "The pointer, so a reader has the size and the name without the list."
+          },
+          "text": {
+            "type": "string",
+            "description": "The bytes, decoded lossily. A pod's stdout is not promised to be UTF-8\nand a traceback is still worth reading with one byte mangled in it."
+          }
+        }
+      },
       "ArtifactKind": {
         "type": "string",
         "description": "What sort of thing an artifact holds.\n\nAn enum rather than free text — unlike `data.step_type`, which is free text\nso a producer can introduce `rerank` without a backend release. The\ndifference is who chooses: a step type is chosen by whoever instruments an\nagent, and this is chosen by the code in this workspace that writes the\nbytes. It decides a key prefix and a filter, and nothing that executes.",
@@ -9747,6 +9913,28 @@
           "report",
           "blob"
         ]
+      },
+      "ArtifactProvenance": {
+        "type": "object",
+        "description": "Who made this, so a reader can get from a byte range back to a decision.\n\nNamed `ArtifactProvenance` in the contract, because an OpenAPI components\nblock is one global namespace and a conversation turn already has a\n`Provenance` in it. Two crates are free to call their own noun the same\nthing; the document is not.",
+        "required": [
+          "execution_id",
+          "step_id",
+          "attempt"
+        ],
+        "properties": {
+          "attempt": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "execution_id": {
+            "$ref": "#/components/schemas/ExecutionId"
+          },
+          "step_id": {
+            "type": "string"
+          }
+        }
       },
       "ArtifactRef": {
         "type": "object",
@@ -10440,6 +10628,40 @@
           },
           "version": {
             "type": "string"
+          }
+        }
+      },
+      "CatalogedArtifact": {
+        "type": "object",
+        "description": "One artifact as the catalog holds it: the pointer, who made it, and what it\nwas made from.",
+        "required": [
+          "artifact",
+          "created_at"
+        ],
+        "properties": {
+          "artifact": {
+            "$ref": "#/components/schemas/ArtifactRef"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "inputs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The digests this was made from, in the order the step read them.\n\nDigests rather than ids: lineage has to survive a catalog that was\nrebuilt, and a digest is the same fact in every copy of it."
+          },
+          "produced_by": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ArtifactProvenance"
+              }
+            ]
           }
         }
       },

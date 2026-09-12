@@ -11,6 +11,7 @@
 //! | `/conversation-*` | encrypted store | `admin` reads content, `editor` writes, `viewer` sees everything but the words |
 //! | `/training-runs`, `/models` | object store | touches no log, no live hub, no assembler |
 //! | `.../context` | plan + artifacts | so the panel need not reconstruct one |
+//! | `.../artifacts` | catalog + object store | what a run produced, a pod's log included — see [`artifacts`] |
 //! | `/executions` | workflow store | the only transactional store here; serves no list |
 //! | `/workflows` | the log | a graph rather than a run. Its rerun is the one route that asks another system to work |
 //! | `/auth` | — | about the caller. Its layer runs in front of everything |
@@ -19,6 +20,7 @@
 //! ADR_0021, ADR_0022, ADR_0025, ADR_0026.
 
 pub mod annotations;
+pub mod artifacts;
 pub mod auth;
 pub mod context;
 pub mod conversations;

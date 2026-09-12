@@ -62,6 +62,10 @@ pub fn router(state: AppState) -> Router {
         // screen — which is the one thing that is certainly not what an old run
         // read.
         .merge(crate::context::router())
+        // And what it produced, which is where a pod's log is read back from
+        // (ADR_0029). The catalog indexes it against the attempt; these are
+        // the only routes that open one.
+        .merge(crate::artifacts::router())
         .merge(crate::schedules::router())
         // The one claimant here that is not this binary: a worker runs
         // registered code somebody else operates, and speaks the reactor's own

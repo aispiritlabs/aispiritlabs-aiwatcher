@@ -19,6 +19,7 @@ import { getNotebookRevision } from '@/shared/lib/ml-pipeline';
 import { answerOf, answerOrNone } from '@/shared/lib/result';
 
 import { AnswerGate, askedBy } from '@/shared/components/answer-gate';
+import { StepLog } from '@/shared/components/step-log';
 import { Badge, Button, Card, IdChip, Refusal, Spinner } from '@/shared/components/ui/primitives';
 
 /**
@@ -383,6 +384,12 @@ function StepActions({
           <OpenEditor executionId={executionId} stepId={stepId} />
         </>
       ) : null}
+
+      {/* What the step printed, when it ran somewhere with a log of its own.
+          Not conditional on the binding: whether an attempt left one is the
+          catalog's answer, and a list of bindings here would be a second
+          opinion about which runtimes keep logs. */}
+      <StepLog executionId={executionId} stepId={stepId} />
 
       {allowed.includes('retry') ? (
         <div className="flex flex-col gap-1">

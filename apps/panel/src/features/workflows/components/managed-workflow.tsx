@@ -14,6 +14,7 @@ import {
 import type { RecordedMessage } from '@/api/generated/types.gen';
 import { useCan } from '@/shared/lib/auth';
 import { AnswerGate, askedBy } from '@/shared/components/answer-gate';
+import { StepLog } from '@/shared/components/step-log';
 import { Button, Card, CardContent } from '@/shared/components/ui/primitives';
 
 /** Registration is authored state; execution lists and graphs remain log projections. */
@@ -239,6 +240,12 @@ export function ManagedExecutionControls({
             give one — a run stopped here with no control is a run somebody has
             to go and find another screen for. The same component the pipeline's
             run card uses, because it is the same question and the same route. */}
+        {/* A step that ran in a pod of its own kept its last 256 KiB, and this
+            is the view the requirement means by "the step's view" — the one a
+            person is on when they have selected the node that failed. */}
+        {node && run.data.execution ? (
+          <StepLog executionId={executionId} stepId={node} />
+        ) : null}
         {node && context.data?.allowed.includes('answer') && context.data.state?.awaiting && (
           <AnswerGate
             executionId={executionId}

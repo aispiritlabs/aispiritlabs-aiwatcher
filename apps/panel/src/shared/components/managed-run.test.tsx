@@ -247,6 +247,128 @@ describe('reopening one step of a run', () => {
   });
 });
 
+describe("reading a step's log", () => {
+  const CONTEXT = '/steps/detect/context';
+  const ARTIFACTS = '/executions/e-1/artifacts';
+  const FIRST = '11'.repeat(32);
+  const SECOND = '22'.repeat(32);
+
+  function plainContext() {
+    return {
+      context_id: 'e-1/detect/2',
+      definition_kind: 'workflow',
+      definition_name: 'import',
+      definition_revision: 'rev-1',
+      plan_id: 'plan-1',
+      step_id: 'detect',
+      allowed: [],
+      input_artifacts: [],
+      runtime: { runtime: 'python_task', task: 'detect', params: {} },
+    };
+  }
+
+  function log(digest: string, attempt: number) {
+    return {
+      artifact: {
+        name: 'log',
+        uri: `object://artifacts/log/${digest}/data`,
+        digest,
+        size_bytes: 2048,
+        content_type: 'text/plain; charset=utf-8',
+        kind: 'log',
+      },
+      produced_by: { execution_id: 'e-1', step_id: 'detect', attempt },
+      inputs: [],
+      created_at: '2026-09-08T09:00:00Z',
+    };
+  }
+
+  it('offers a pod log per attempt, newest first, and reads one on a click', async () => {
+    // The requirement's own scenario: a pod printed a traceback and exited 1,
+    // and the attempt after it succeeded. The interesting log is the first
+    // one's, which is why the list is not just the latest.
+    const server = serve([
+      { method: 'GET', path: EXECUTION, answer: { status: 200, body: RUNNING } },
+      { method: 'GET', path: CONTEXT, answer: { status: 200, body: plainContext() } },
+      {
+        method: 'GET',
+        path: ARTIFACTS,
+        answer: { status: 200, body: [log(FIRST, 1), log(SECOND, 2)] },
+      },
+      {
+        method: 'GET',
+        path: `/executions/e-1/artifacts/${FIRST}`,
+        answer: {
+          status: 200,
+          body: {
+            artifact: log(FIRST, 1).artifact,
+            text: 'Traceback (most recent call last):\n  ValueError\n',
+          },
+        },
+      },
+    ]);
+
+    render(withQueries(<Harness />));
+    await userEvent.click(await screen.findByRole('button', { name: /detect/ }));
+
+    const buttons = await screen.findAllByRole('button', { name: /Read the log from attempt/ });
+    expect(buttons.map((button) => button.textContent)).toEqual([
+      expect.stringContaining('attempt 2'),
+      expect.stringContaining('attempt 1'),
+    ]);
+    // Nothing is fetched until somebody opens one: the list is metadata and
+    // each log is a quarter of a megabyte.
+    expect(server.countOf('GET', `/executions/e-1/artifacts/${FIRST}`)).toBe(0);
+
+    await userEvent.click(buttons[1]!);
+    await screen.findByText(/ValueError/);
+    expect(server.countOf('GET', `/executions/e-1/artifacts/${SECOND}`)).toBe(0);
+  });
+
+  it('says an instance keeps no artifacts rather than showing the step printed nothing', async () => {
+    // R6's rule on the one read where it is easiest to get wrong: a 501 and
+    // "this step has no log" look identical drawn as an absence, and only one
+    // of them has a fix.
+    serve([
+      { method: 'GET', path: EXECUTION, answer: { status: 200, body: RUNNING } },
+      { method: 'GET', path: CONTEXT, answer: { status: 200, body: plainContext() } },
+      {
+        method: 'GET',
+        path: ARTIFACTS,
+        answer: {
+          status: 501,
+          body: refusal(
+            'step_artifacts_disabled',
+            'this instance keeps no step artifacts (AIWATCHER_PROMPT_STORE)',
+          ),
+        },
+      },
+    ]);
+
+    render(withQueries(<Harness />));
+    await userEvent.click(await screen.findByRole('button', { name: /detect/ }));
+    await screen.findByText(/AIWATCHER_PROMPT_STORE/);
+  });
+
+  it('offers nothing for a step that kept no log', async () => {
+    serve([
+      { method: 'GET', path: EXECUTION, answer: { status: 200, body: RUNNING } },
+      { method: 'GET', path: CONTEXT, answer: { status: 200, body: plainContext() } },
+      {
+        method: 'GET',
+        path: ARTIFACTS,
+        // Another step's, which is the case a `step_id` filter exists for.
+        answer: { status: 200, body: [{ ...log(FIRST, 1), produced_by: { execution_id: 'e-1', step_id: 'persist', attempt: 1 } }] },
+      },
+    ]);
+
+    render(withQueries(<Harness />));
+    await userEvent.click(await screen.findByRole('button', { name: /detect/ }));
+    await screen.findByText(/context/);
+    expect(screen.queryByRole('button', { name: /Read the log/ })).toBeNull();
+  });
+});
+
 describe('answering a step that is waiting on a person', () => {
   const CONTEXT = '/steps/sign-off/context';
   const ANSWER = '/steps/sign-off/input';
