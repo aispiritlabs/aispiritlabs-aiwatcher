@@ -589,9 +589,12 @@ Cztery obserwacje z ekranu, na których opiera się „Zmiany wizualne etapu B�
 
 ## 18. Domknięcie B2 — paczki B2e–B2i (2026-09-12)
 
-Wykonane na HEAD `ab4d998` … `96f618c`. Równolegle inna sesja pracowała na
-`execution/pods/`; jej zmiany zostały nietknięte, a commity poniżej są po
-ścieżkach.
+Wykonane na HEAD `ab4d998` … `2a845aa`. Równolegle inna sesja pracowała na
+`execution/pods/` i `sdk/`; jej zmiany zostały nietknięte, a commity poniżej są
+po ścieżkach. `rtk just check` na koniec: 23/23 PASS — przy czym dwa z nich
+wymagały naprawy błędów spoza tej zmiany: `Cargo.toml` niesformatowany od
+`0ec11aa` (`049c38c`) i `taplo` wchodzący do cudzego worktree w
+`.claude/worktrees/` (`59b595a`).
 
 | Paczka | Stan | Commit |
 | --- | --- | --- |
