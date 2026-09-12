@@ -1,6 +1,6 @@
 # FTI — rekomendacja zakresu i plan rozwoju
 
-Data: 2026-09-11. Status: A1–A4 i AR1 zaimplementowane; B1 zweryfikowane, trwały wycinek B2 i atomowe orphan GC nowych publikacji dostarczone; dodano weryfikowane adaptery Curation, promptów, modeli, Annotations i Conversations; B2/AR2 pozostają otwarte: B2e–B2h, w tym judge (sekcje 9–16). Wyniki odbioru A, ograniczenia i incydent seeda w sekcji 8. Przegląd planu z 2026-09-12 jest w sekcji 17; jego wnioski są wniesione do sekcji 2–7 — etap B ma punkty 8–11 i rozstrzygnięcia wizualne, tabela paczek B2e–B2i, a B3 zależy od B2e, B2f i B2i. Sekcja 19 zmniejsza ograniczenia z sekcji 18; sekcja 20 dostarcza stronę dowodową B3 — porównanie dwóch trwałych wyników; sekcja 21 dostarcza AR3 — wspólny przypadek użycia kompilacji i startu, wyjęty z modułu HTTP; sekcja 22 domyka jego ograniczenie — rejestr definicji rozróżnia niedostępny magazyn, uszkodzony rekord i odmówioną definicję; sekcja 23 dostarcza ostatnią część B3 — różnicę na poziomie przypadków; sekcja 24 dostarcza B4 — typowane oceny, rubryki i rewizje; sekcja 25 dostarcza pierwszą paczkę C0 — scoring zapisanych odpowiedzi jako zarządzany run publikujący własny dowód; sekcja 26 zamyka ograniczenia sekcji 25 — jeden status dla niezatwierdzonej pary, scorer ilościowy z jednostką, archiwum rozmów jako źródło odpowiedzi, judge jako scorer z regułą dopuszczenia z ADR 0030 i formularz startu w panelu. Sekcja 27 poprawia ograniczenia sekcji 26 — ponowienie próby judge'a nie pyta drugi raz i nie kończy się konfliktem, wynik mówi, co obsłużył dostawca, judge widzi pytanie przypadku, próg poziomu z przedziałem zgodności, a panel śledzi uruchomiony run. Sekcja 28 dopuszcza judge'a nad archiwum rozmów z ostrzeżeniem w kontekście, deklaracji, panelu i logu oraz liczy skrót bundle'a z tego, co bundle dodaje, zamiast z bajtów manifestu.
+Data: 2026-09-11. Status: A1–A4 i AR1 zaimplementowane; B1 zweryfikowane, trwały wycinek B2 i atomowe orphan GC nowych publikacji dostarczone; dodano weryfikowane adaptery Curation, promptów, modeli, Annotations i Conversations; B2/AR2 pozostają otwarte: B2e–B2h, w tym judge (sekcje 9–16). Wyniki odbioru A, ograniczenia i incydent seeda w sekcji 8. Przegląd planu z 2026-09-12 jest w sekcji 17; jego wnioski są wniesione do sekcji 2–7 — etap B ma punkty 8–11 i rozstrzygnięcia wizualne, tabela paczek B2e–B2i, a B3 zależy od B2e, B2f i B2i. Sekcja 19 zmniejsza ograniczenia z sekcji 18; sekcja 20 dostarcza stronę dowodową B3 — porównanie dwóch trwałych wyników; sekcja 21 dostarcza AR3 — wspólny przypadek użycia kompilacji i startu, wyjęty z modułu HTTP; sekcja 22 domyka jego ograniczenie — rejestr definicji rozróżnia niedostępny magazyn, uszkodzony rekord i odmówioną definicję; sekcja 23 dostarcza ostatnią część B3 — różnicę na poziomie przypadków; sekcja 24 dostarcza B4 — typowane oceny, rubryki i rewizje; sekcja 25 dostarcza pierwszą paczkę C0 — scoring zapisanych odpowiedzi jako zarządzany run publikujący własny dowód; sekcja 26 zamyka ograniczenia sekcji 25 — jeden status dla niezatwierdzonej pary, scorer ilościowy z jednostką, archiwum rozmów jako źródło odpowiedzi, judge jako scorer z regułą dopuszczenia z ADR 0030 i formularz startu w panelu. Sekcja 27 poprawia ograniczenia sekcji 26 — ponowienie próby judge'a nie pyta drugi raz i nie kończy się konfliktem, wynik mówi, co obsłużył dostawca, judge widzi pytanie przypadku, próg poziomu z przedziałem zgodności, a panel śledzi uruchomiony run. Sekcja 28 dopuszcza judge'a nad archiwum rozmów z ostrzeżeniem w kontekście, deklaracji, panelu i logu oraz liczy skrót bundle'a z tego, co bundle dodaje, zamiast z bajtów manifestu. Sekcja 29 domyka luki C0 — anulowanie i timeout zatrzymują krok, deklaracja ma własny timeout i współbieżność, kohortę wyprowadza serwer z wersji datasetu z limitem przypadków — i dodaje metryki DeepEval, Opik i każdego adaptera za jednym kontraktem serwisu scorerów.
 
 Podstawa: [katalog funkcji](FTI_FEATURE_CATALOG.md), [analiza braków](FTI_FEATURE_GAPS.md), [plan UX](FTI_UX_WANDB_PLAN.md), [przegląd dokumentacji Langfuse i MLflow](FTI_LANGFUSE_MLFLOW_ANALYSIS.md), [ocena architektury](FTI_ARCHITECTURE_REVIEW.md) oraz aktualny kod. Ocena dotyczy obecności i kontraktów implementacji; nie potwierdza działania konkretnego wdrożenia. Katalog opisuje zakres docelowy, więc liczba jego pozycji nie jest miarą ukończenia produktu.
 
@@ -1992,3 +1992,201 @@ usunięte.
   API.
 - Dalej otwarte na AW-6: **C1** — szablon `generate_and_score`; z B3 — kontekst
   wariantu w obserwacjach.
+
+## 29. Domknięcie luk C0 i scorery frameworków za jednym kontraktem
+
+Cztery luki C0 wobec punktów 1–3 etapu C, wskazane przy pytaniu „co z C zostaje":
+anulowanie nie zatrzymywało kroku, formularz nie miał limitu przypadków, timeoutu
+ani współbieżności, kohorta pochodziła tylko z opublikowanego wyniku, a DeepEval
+był tylko czytelnikiem gotowych raportów. Użytkownik dodał wymaganie, żeby adapter
+był zaprojektowany pod inne frameworki, np. Opik. Cztery commity: `deef7ca`
+(zatrzymanie kroku), `60d55c1` (ustawienia runu), `5d5e3dd` (kohorta z wersji
+datasetu), `154f8e7` (scorery frameworków). Reguły są w
+[ADR 0030](ADR/ADR_0030_EVALUATION_EVIDENCE.md), poprawka z 2026-09-13, i w
+Guardrails `CLAUDE.md`.
+
+### 29.1 Anulowanie i timeout zatrzymują krok
+
+Anulowanie było kooperacyjne tylko dla podów: `ActivityExecutor::cancel` istniał,
+ale reaktor nigdy go nie wołał, więc run z krokiem w procesie stał w `Cancelling`,
+aż krok skończył sam — w runie z judge'em to godzina pytań, których nikt już nie
+chciał. `timeout_seconds` egzekwowały tylko wykonawcy przekazujący go klientowi
+HTTP; scoring i judge nie miały żadnego terminu.
+
+Teraz `ActivityContext.stop` (`StopSignal`) jest sygnałem, a reaktor obserwuje
+każdą próbę, którą wykonuje (`Watch`): co 2 s czyta projekcję runu i własny zegar.
+Run anulowany albo zakończony wokół kroku, albo miniony termin, ustawia sygnał,
+woła `cancel` wykonawcy i daje 30 s łaski; wykonawca, który nie wrócił, jest
+porzucany. Anulowanie kończy się klasą `Policy` (nic jej nie ponawia), timeout
+klasą `Timeout` z własnym budżetem. `timeout_seconds == 0` znaczy brak terminu,
+jak przy bramce człowieka. Krok scoringu patrzy na sygnał między kawałkami pracy,
+pytania do judge'a i do serwisu scorerów porzuca w locie, a przed publikacją
+patrzy ostatni raz. Worker HTTP słyszy to przy najbliższym heartbeacie: trasa
+rozlicza próbę jako zatrzymaną i odpowiada 409 `execution_stopping`, więc run
+kończy się bez czekania na wygaśnięcie leasingu.
+
+### 29.2 Ustawienia runu: timeout i współbieżność
+
+`ScoringRun.settings` niesie `timeout_seconds` (od minuty do doby) i `concurrency`
+(1–64, tylko dla runu, który pyta judge'a albo serwis scorerów). Ustawienia są
+częścią deklaracji — ponowienie czyta termin pierwszej próby — i nigdy manifestu,
+więc run z innym tempem mierzy to samo i jest porównywalny. Puste ustawienia nie
+zmieniają adresu deklaracji. Plan bierze termin z deklaracji albo domyślny dla
+rodzaju kroku. Start z tempem większym niż `AIWATCHER_JUDGE_CONCURRENCY` albo
+`AIWATCHER_SCORER_CONCURRENCY` jest odmawiany 422 z nazwą zmiennej, a nie po cichu
+obniżany. Formularz Measure ma sekcję „How it runs".
+
+### 29.3 Kohorta z wersji datasetu i splitu, z limitem
+
+Adapter źródeł już wyprowadzał przypadki od właściciela przy każdym zatwierdzeniu
+pary — trzy pliki kohorty były drugą kopią tej odpowiedzi, pisaną ręcznie albo
+kopiowaną z wyniku. `POST /api/v1/evaluation-cohorts` wyprowadza je jako bajty
+kanoniczne:
+
+- **curation**: wszystkie wiersze wersji; split jest tylko nazwą kohorty;
+- **annotations**: obrazy splitu eksportu (`train | validation | test`);
+- **conversations**: tury korpusu na `test`, jako skróty pytań i odpowiedzi — bez
+  słów; bierze admin, bo czytanie wierszy to treść;
+- **external**: odmowa — przypadki są producenta.
+
+`limit` bierze pierwsze przypadki właściciela w jego kolejności, nie próbkę.
+Kohorta części przypadków jest osobną kohortą, osobnym kontekstem i wynikiem
+nieporównywalnym z wynikiem na całości — co czyni przebieg dymny uczciwym.
+Rekord wyprowadzenia jest zapisywany pod skrótem przypadków, a widok deklaracji
+mówi „the first 2 of 3 cases". Nic nie jest wgrywane: przy zatwierdzeniu brakujący
+w bundle'u plik kohorty adapter wyprowadza ponownie i trzyma do przypiętego skrótu;
+wgrany plik niezgodny ze skrótem jest odmawiany jak wcześniej. Kontrole właściciela
+przyjmują teraz prefiks jego przypadków o zadeklarowanej długości. Formularz
+Measure ma sekcję „Cohort": własna kohorta wyniku albo wersja datasetu (listy
+datasetów, eksportów i korpusów z API) oraz „First cases"; limit na własnej
+kohorcie wyniku wyprowadza z jej datasetu i splitu. Panel admina mówi, że trzy
+pliki kohorty nie są do przyniesienia.
+
+### 29.4 Scorery frameworków: DeepEval, Opik i każdy adapter za jednym kontraktem
+
+Projekt, który ma utrzymać kolejne frameworki bez zmian w aiwatcher:
+
+- **Framework działa w serwisie, nie w karcie.** `services/scorers` to opcjonalny
+  serwis Pythona (jak `ml_pipeline`) z dwiema trasami: `GET /scorers/catalog` —
+  każdy adapter z zainstalowanym wydaniem, model metryk ocenianych modelem i każda
+  metryka z jednostką, kierunkiem, agregacją, zakresem, stronami przypadku, które
+  czyta (`input | answer | expected`), i parametrami; `POST /scorers/score` — jedna
+  metryka na liście przypadków, odpowiedzi w tej samej kolejności: liczba albo
+  zdanie adaptera. Rust (`aiwatcher_evaluation::external`) nie zna żadnej nazwy
+  frameworka; fixture'y `contracts/fixtures/scorers-v1/` czytają oba zestawy testów.
+- **Adapter to cztery elementy.** `name`, `version`, `model` i tabela `metrics()`
+  z `Implemented(Metric, score)` — nazwa metryki trafia do słownika, nigdy do
+  wywołania nazwanego przez żądanie. Framework jest importowany tylko w adapterze i
+  jest extra w `pyproject.toml`; brak extra to adapter pominięty w katalogu, nie
+  błąd startu. Nowy framework (Ragas, promptfoo, lm-eval) to jeden moduł i jedna
+  linia w `adapters.KNOWN`.
+- **Kierunek nie należy do autora.** Work role zapisuje katalog w rejestrze (co
+  5 min), serve role przypina go przy publikacji karty: `Scorer::External` dostaje
+  `declared` — wydanie, model, jednostkę, kierunek, agregację, zakres. Kolejny
+  katalog nie zmienia opublikowanej karty; aktualizacja frameworka to ponowna
+  publikacja karty, czyli nowa wersja suite i wynik nieporównywalny ze starym.
+- **Serwis jest trzymany do karty.** Krok `external_evaluation` (w work role, gdzie
+  jest `AIWATCHER_SCORER_URL`, z judge'em obok, gdy karta pyta też judge'a) czyta
+  katalog na żywo przed zadaniem pytania i kończy run błędem `user_code` z nazwą
+  obu wydań/modeli; serwis odmawia tego samego żądania 409.
+- **Liczba bez słów.** Kontrakt nie ma pola na `reason` frameworka, przypadek z
+  wyjątkiem jest opisany klasą wyjątku, a zapamiętane odpowiedzi (pod deklaracją i
+  pytaniem, jak u judge'a) trzymają tylko liczbę albo porażkę. Metryka `rate`
+  musi odpowiedzieć 0 albo 1, a wartość poza zadeklarowanym zakresem nie jest
+  liczbą.
+- **Metryka oceniana modelem mówi to wprost.** `MetricDefinition.measured_by`
+  (adapter z wydaniem, metryka, model) jest w kontekście; wynik ma
+  `reproducible: false`; deklaracja ostrzega, że nikt nie zmierzył zgodności tego
+  modelu z ludźmi, a panel wymaga potwierdzenia przed zatwierdzeniem i startem.
+  Nad kohortą rozmów drugie ostrzeżenie mówi, że słowa archiwum idą do serwisu i
+  dalej do dostawcy modelu. Nota wyniku w panelu wymienia, który framework i model
+  zmierzył każdą metrykę.
+- **Serwis nie wysyła niczego nigdzie poza modelem.** `adapters.quiet()` wyłącza
+  przed importem telemetrię DeepEval, śledzenie Opik i pobieranie cennika LiteLLM;
+  każda metryka Opik ma `track=False`.
+
+Adaptery na start: **DeepEval 4.2** — `exact_match`, `pattern_match` oraz oceniane
+modelem `answer_relevancy`, `bias`, `toxicity`, `g_eval`, `g_eval_with_expected`
+(przez `LocalModel`); **Opik 2.2** — `equals`, `contains`, `regex_match`, `is_json`,
+`levenshtein_ratio` oraz oceniane modelem `answer_relevance`, `hallucination`,
+`moderation`, `usefulness`, `g_eval` (przez `LiteLLMChatModel`). Jeden model zgodny z
+OpenAI dla wszystkich adapterów (`AIWATCHER_SCORERS_MODEL_*`, profil `llamacpp`
+wyłącza myślenie). Start runu na wdrożeniu bez serwisu → 501 `scorers_disabled`.
+`just scorers-install | scorers-serve | scorers-check`, osobne zadanie CI.
+
+### 29.5 Odbiór
+
+`rtk just check` 23/23 po commitach dokumentacji; `just scorers-check` zielony
+(ruff, mypy strict, 20 testów z zainstalowanymi DeepEval i Opik). Nowe testy:
+
+- 4 w reaktorze (czas wirtualny): anulowanie zatrzymuje krok w jednym–dwóch
+  spojrzeniach, wykonawca ignorujący sygnał jest porzucany po łasce, timeout
+  kończy się `Timeout` z drugą próbą, krok bez terminu trwa, ile trzeba;
+  HTTP: anulowanie dociera do workera przy heartbeacie; scoring: zatrzymany run
+  nic nie publikuje; judge i serwis: stop porzuca pytania w locie;
+- 2 jednostkowe i 1 HTTP przy ustawieniach (adres deklaracji, granice, 422 z nazwą
+  zmiennej) i 1 przy planie;
+- 4 integracyjne przy kohortach (curation: wyprowadzenie, pierwsza derywacja
+  zostaje, wgrany niezgodny plik odmówiony, bez plików → zatwierdzone i
+  zmierzone 2 z 3; odmowa dla external; annotations: pierwszy obraz splitu;
+  conversations: edytor 403, admin, rekord bez słów, run tylko na pierwszej
+  turze), 1 HTTP przy rolach, 3 w panelu, 1 w SDK;
+- Rust przy frameworkach: 3 jednostkowe przy katalogu i odpowiedziach, 1 przy
+  ostrzeżeniach nad archiwum, 3 integracyjne (przypięcie przy publikacji, run z
+  zapamiętaniem, dryf wydania razem z porażką przypadku zamiast zera), 1 HTTP (404
+  bez katalogu, 501, 422, `external_evaluation`), 3 przy kliencie (kontrakt z
+  fixture'ów, stop, zdanie odmowy); Python: kontrakt z tymi samymi fixture'ami, zasady serwisu, oba adaptery
+  na prawdziwych frameworkach; panel: nota frameworka.
+
+Odbiór na żywo: aiwatcher na `127.0.0.1:19085` (WAL, własny katalog danych),
+`llama-server` z `gemma-4-e2b` na `:19086`, serwis scorerów z oboma adapterami na
+`:19087`, panel na `:5182`; po odbiorze zatrzymane po PID, `launch.json`
+przywrócony, na `:8080` i `:18080` nic nie nasłuchiwało przed i po.
+
+- serwis wprost na gemmie: `answer_relevancy` DeepEval 1,0 / 0,0 i
+  `answer_relevance` Opik 1,0 / 0,05 dla „Warsaw" i „I like turtles.";
+  `hallucination` 0,0 / 1,0; heurystyki w ułamku sekundy;
+- work role zapisał katalog w chwilę po starcie; `GET /api/v1/evaluation-scorers`;
+- dataset curation z 3 przypadkami → kohorta `limit: 2` → „2 of 3" z URI
+  `aiwatcher://evaluation-cohorts/…`; karta z `opik.equals`, `opik.levenshtein_ratio`
+  i `deepeval.answer_relevancy` przypięta do 2.2.59 / 4.2.2 + gemma; jedno
+  ostrzeżenie o metryce ocenianej modelem;
+- zatwierdzenie bez `cases.json` i schematów → 200; start → `external_evaluation`,
+  `completed` w 3,3 s; dowód `complete`, 2/2, `exact` 0,5, `close` 0,5, `relevancy`
+  0,5, `reproducible: false`; zapamiętane odpowiedzi to same liczby;
+- drugi run anulowany po 1,1 s → `cancelled` sekundę później, próba z `policy`
+  „stopped: the execution is no longer running", log reaktora „asking a running
+  attempt to stop"; zapamiętane 3 z 6 odpowiedzi;
+- serwis zrestartowany z inną rewizją modelu → run tej karty `failed` z
+  `user_code` nazywającym obie rewizje (komunikat poprawiony po odbiorze, żeby
+  nazywał też model przypięty);
+- panel: nota wyniku wymienia framework i model przy każdej metryce; sekcje
+  „Cohort" i „How it runs" z listą wersji datasetu. Odbiór znalazł jedną lukę —
+  pole współbieżności pokazywało się tylko dla karty z judge'em — poprawioną przed
+  commitem.
+
+### 29.6 Co zostaje
+
+- **Metryki frameworków oceniane modelem nie mają kalibracji.** Ostrzeżenie mówi to
+  wprost; zgodność z ludźmi (np. próg metryki wobec `pass_level` rubryki) to
+  dodatek za tą samą kartą.
+- **Porzucony wykonawca HTTP nie zatrzymuje runtime'u.** Flow i notebooki nie mają
+  trasy anulowania, więc `cancel` jest pusty, a zapytanie w toku działa u nich do
+  końca; run kończy się mimo to. Worker HTTP słyszy anulowanie dopiero przy
+  heartbeacie (co połowę leasingu).
+- **Termin jest teraz egzekwowany dla każdego kroku w procesie**, także dla
+  publikacji datasetu (120 s) — krok, który po cichu trwał dłużej, dostanie
+  `Timeout`.
+- **Limit to pierwsze przypadki, nie próbka**; split curation to tylko nazwa.
+  Zatwierdzenie kohorty wyprowadzonej czyta właściciela dwa razy.
+- **Katalog jest odświeżany co 5 minut**: karta opublikowana tuż po aktualizacji
+  serwisu może przypiąć stary katalog; run powie to i trzeba opublikować kartę
+  ponownie. Parametry metryk są sprawdzane tylko co do rodzaju.
+- **Serwis scorerów jest bez uwierzytelnienia i bez manifestów wdrożenia**
+  (lokalny, jak `ml_pipeline`); jedno żądanie na przypadek, choć kontrakt przyjmuje
+  64. Karty z metrykami frameworków tylko przez API; katalog nie jest pokazany w
+  panelu.
+- Z odbioru etapu C dalej otwarte: **C1** `generate_and_score` (baseline i kandydat
+  przez cały proces z generowaniem), **C2** Experiments, **C3** bramka CI, **C4**
+  feedback → przypadek testowy, test śmierci workera i Joba na klastrze dla kroku
+  podowego; z B3 — kontekst wariantu w obserwacjach.

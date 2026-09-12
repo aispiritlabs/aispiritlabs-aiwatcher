@@ -4,7 +4,9 @@
   2026-09-12 with approvals as a resource, the read/verify split, restore, and
   the admission rule a judge will need, the adapter for a judge this
   deployment asks, what that judge is shown and keeps, a judge over the
-  archive told to everyone, and a bundle digest over what a bundle adds
+  archive told to everyone, and a bundle digest over what a bundle adds;
+  amended 2026-09-13 with a framework's metrics behind a scorer service, a
+  cohort derived from a dataset version, and a run's settings and stop
 - **Date**: 2026-09-11
 
 ## Context
@@ -902,3 +904,65 @@ what `ApprovalRecord::bundle_digest` always said it was. An approval recorded
 over the whole declaration still admits against that earlier digest while those
 bytes stand, and a pair admitted over other bytes answers 409
 `admitted_other_bytes`, naming the approval.
+
+## Amendment (2026-09-13): a framework's metrics, a derived cohort, and a run that stops
+
+Three additions to what a scoring run is. None moves a context written before
+it: every new field is absent from the bytes when it is unused.
+
+**A scorecard may name a framework's metric, and no framework is named here.**
+DeepEval, Opik, Ragas and the rest each ship dozens of metrics, and every one of
+them is Python a scorecard must never carry. They run in a scorer service the
+deployment operates (`services/scorers`) behind a two-route contract — a
+catalog and one metric over cases — and `Scorer::External` names an adapter, a
+metric and its parameters. Adding a framework is an adapter there; nothing in
+`aiwatcher-evaluation` changes. What keeps the rules this ADR already has:
+
+- **Which way is better is still never the author's.** The work role, which
+  holds the service's socket, records its catalog in the registry; publishing a
+  card copies the catalog's description of each external metric into the card
+  version — the framework release, the model a graded metric asks, its unit,
+  direction, aggregation, range and what it reads. A later catalog changes no
+  published card, so upgrading a framework is publishing the card again: a new
+  suite version, and a result that does not compare with the old one.
+- **The service is held to the card.** An `external_evaluation` step, claimed
+  where `AIWATCHER_SCORER_URL` is, reads the live catalog before it asks
+  anything and fails naming both when the release or the model differs; the
+  service refuses the same request with a 409.
+- **A reply keeps its number and never its words.** The contract has no field
+  for a framework's `reason`, a failed case is reported by the exception's class,
+  and replies are kept per declaration and question as the judge's are.
+- **A number a model graded says so, uncalibrated.** Its metric definition
+  carries `measured_by` with the model, the result reads as not reproducible,
+  and the declaration warns — acknowledged before admitting and starting — that
+  nothing measured how often that model agrees with people. This is weaker than
+  the rubric judge's rule above, which publishes agreement beside its numbers;
+  the difference is stated rather than hidden, and a calibration for framework
+  metrics is an addition behind the same card.
+- **Over a conversation cohort, the service is sent the archive's words** and a
+  graded metric sends them on to its model's provider. The declaration and the
+  Approvals panel say so, as they do for a judge.
+
+**A cohort may be derived from a dataset version this deployment owns.** The
+source adapter already derived a curation version's, an annotation export's and
+a conversation corpus's cases from their owners every time it admitted a pair;
+the three files a cohort pins were a second copy of that answer. `POST
+/api/v1/evaluation-cohorts` derives them as canonical bytes — optionally the
+owner's first `limit` cases, never a sample — and records where they came from
+under the digest of the cases. Nothing is staged: admission derives them again
+when a pinned member is not in the bundle and holds them to the pins, and a
+staged member that does not match is refused as before. The owner checks accept
+a prefix of the owner's cases as declared, so a smoke run of ten cases is its own
+cohort, its own context and a result that compares with nothing measured on all
+of them. An external cohort is not derivable: its cases are its producer's.
+
+**A declaration carries how it runs, and a run stops when it is cancelled.**
+`settings.timeout_seconds` and `settings.concurrency` are part of the
+declaration — a retry reads the deadline the first attempt had — and never of
+the manifest. A pace past the deployment's `AIWATCHER_JUDGE_CONCURRENCY` or
+`AIWATCHER_SCORER_CONCURRENCY` is refused at start rather than lowered. The
+reactor now watches every attempt it performs: a run that is cancelling or has
+ended, or a deadline that passed, sets the attempt's stop signal, and the
+scoring step drops a judge's or a service's questions in flight and publishes
+nothing it had not already begun to. A worker hears the same at its next
+heartbeat, as 409 `execution_stopping`.

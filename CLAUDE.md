@@ -67,6 +67,8 @@ just serve-model      # verify the promoted package's digests, load it, serve it
 just onnx-version     # re-express that model as an ONNX graph, check it agrees, move the label
 just ml-pipeline-serve # the marimo notebook runtime on :8082, for notebook blocks
 just ml-pipeline-check # ruff, mypy --strict and pytest for that service
+just scorers-serve    # the scorer service on :8083: DeepEval's and Opik's metrics for a scorecard
+just scorers-check    # ruff, mypy --strict and pytest for it, with both frameworks installed
 just query-serve   # the query engine AIWATCHER_QUERY_ENGINE names (flow | datafusion | duckdb) on :8081
 just query-check   # that engine's own checks; `query-contract-check` is the Python workspace's
 just query-conformance # the same four questions asked of that engine, compared with Flow's rows
@@ -151,7 +153,7 @@ Crates, in dependency order. A crate may only depend on ones above it.
 | `aiwatcher-annotations` | Vector image annotations for **any** vision domain — it ships no vocabulary, and the project's label schema carries the domain (ADR_0020). Sliced by noun: `images/` (one picture — head, revisions, review, bytes, bulk import), `imports/` (the staged batch and the queued job that reads it, ADR_0022), `project`, `export`, `license` (what may be done with the data), `schema`, `shapes`, `sources` (a catalogue an instance loads), `integrations/` — `hubs` (Kaggle and Hugging Face) and `fetch`, the bounded downloader every outbound byte goes through. `registry` is the facade and the only public door; `store` is the private key layout every slice reads through. |
 | `aiwatcher-conversations` | Governed conversation training data: the `turn` contract, consent and retention, the **encrypted** archive, the human review gate, and the resumable export job that freezes a corpus. The one authored store that is off by default, whose content is sealed, and whose deletions delete. Sliced by noun: `turn`, `policy`, `redaction`, `review`, `archive/` (the store and its retention clock, `crypt` beneath it), `export/` (the job, `format` beneath it). `registry` is the facade and the only public door; `store` is the private key layout. |
 | `aiwatcher-training` | Training runs and the model versions they produce. The one registry here whose contents never came from the event log: a run is a record that grows in place, and a promotion is refused without a held-out score. `package` is what a serving runtime is handed — the runtime, the entry point, the shapes, and every artifact with its digest (ADR_0023). |
-| `aiwatcher-evaluation` | Pinned variant/context contracts and durable evidence (ADR_0030). `Evaluation::prepare` validates declarations; `Registry` owns immutable publication, paging, erasure and **approvals** — the pair an operator admitted, which is what lets one instance hold a baseline and a candidate at once — through a `SourceAuthority` adapter. It also measures: a **scorecard** declares named scorers and derives each metric's direction, and a **scoring run** folds a staged recording, or a conversation cohort's own archived responses, against one — asking a calibrated **judge** first when the card names a rubric — and publishes the result — admitted against the scorecard and the compiled vocabulary rather than a bundle's files. Legacy reports remain in Projector with an explicit API read bridge. |
+| `aiwatcher-evaluation` | Pinned variant/context contracts and durable evidence (ADR_0030). `Evaluation::prepare` validates declarations; `Registry` owns immutable publication, paging, erasure and **approvals** — the pair an operator admitted, which is what lets one instance hold a baseline and a candidate at once — through a `SourceAuthority` adapter. It also measures: a **scorecard** declares named scorers and derives each metric's direction, and a **scoring run** folds a staged recording, or a conversation cohort's own archived responses, against one — asking a calibrated **judge** first when the card names a rubric, and the **scorer service** when it names a framework's metric — and publishes the result — admitted against the scorecard and the compiled vocabulary rather than a bundle's files. A run's **cohort** may be derived from a dataset version the deployment owns, first cases only when limited. `external` is the scorer service's contract, and the one module that knows one exists. Legacy reports remain in Projector with an explicit API read bridge. |
 | `aiwatcher-datasets` | Curation recipes, the dataset versions they produce, and the **block pipelines** of ADR_0024 — a chain of source, transform, notebook, approval and view, refused as a whole with every problem at once. Nothing here executes anything; the panel drives the chain because the engines are three different systems. |
 | `aiwatcher-execution` | Owned execution (ADR_0025, ADR_0026): the compiled `ExecutionPlan` and its `plan_id`, the states, the attempts, the pure `decide`/`evolve`, the cache key, the compiler from ADR_0024's blocks, the atomic command handler, the claim table, the `ContextSnapshot` that reopens a block, the fact encoder and the outbox publisher. Three ports: `WorkflowStore` (`memory | file | postgres | duckdb`, the last two behind features so `sqlx` and DuckDB's C++ amalgamation are out of every build that does not ask for them — the shape `laser` has in `aiwatcher-bus`), `ActivityExecutor` (what a reactor does with a claimed attempt) and `ArtifactCatalog` (metadata, lineage, the cache index). Executes nothing itself, and holds no second copy of `aiwatcher-jobs`' rules — it calls them. |
 | `aiwatcher-runner` | The workflow rerun dispatcher: one HTTP POST to one configured endpoint, behind `core::ports::WorkflowRunner`. |
@@ -164,7 +166,7 @@ Everything else: `apps/panel` (React), `sdk/python`, `sdk/agentic`, `sdk/typescr
 `contracts/` (the OpenAPI document and the envelope JSON Schema), `deploy/`
 (the Dockerfiles, the docker compose stack, the kustomize test stack, and
 `helm/aiwatcher` + `helmfile.yaml.gotmpl` + `scripts/` — the install path),
-`docs/ADR/`, and two **optional** services outside the Cargo workspace that the
+`docs/ADR/`, and three **optional** services outside the Cargo workspace that the
 Rust binary does not know exist. `services/query` holds the **query engines** a
 deployment chooses between with `AIWATCHER_QUERY_ENGINE` (ADR_0028), behind the
 panel's Query tab, its recipes and a chain's query step: `flow` is the PHP surface
@@ -175,10 +177,14 @@ and the two engines on it (`just query-contract-check`; `services/query/README.m
 marimo blocks: it runs one as a step through marimo's own `App.run(defs=…)` — in
 a worker thread, so a run does not hold the loop that serves everything else —
 and serves the same file as a live app for the block's editor (`just
-ml-pipeline-check`). `just check` covers neither — PHP and a Python toolchain
-may not be on a machine that only touches the Rust crates — but **CI runs each**,
-in their own jobs and once per query engine, because a managed query or `marimo`
-step runs through them and a break there is a break in the execution path.
+ml-pipeline-check`). `services/scorers` runs a scorecard's **framework metrics** —
+DeepEval's and Opik's, each an adapter behind a two-route contract whose
+fixtures the Rust half reads too — for an `external_evaluation` step (`just
+scorers-check`; `services/scorers/README.md`). `just check` covers none of them —
+PHP and a Python toolchain may not be on a machine that only touches the Rust
+crates — but **CI runs each**, in their own jobs and once per query engine,
+because a managed query, `marimo` or external step runs through them and a break
+there is a break in the execution path.
 
 ### The words, since "workflow" meant four things
 
@@ -828,19 +834,25 @@ what runs a real graph.
   producer sent, so colouring one there would be guessing whether a rise is an
   improvement or a bill.
   Its **Measure** form is the start of a scoring run, and it derives nothing
-  either: the cohort and the variant are a published result's, the metrics, the
-  approval and the run's identity come back from the server, and the
-  declaration and the run it started live in the URL. Admitting from there
+  either: the variant is a published result's, the cohort is that result's or
+  one the server derived from a dataset version (`POST
+  /evaluation-cohorts`, with the case limit), the metrics, the approval and the
+  run's identity come back from the server, and the declaration and the run it
+  started live in the URL. How the run goes — its timeout and how many
+  questions at once — is the declaration's `settings`, never the manifest's. Admitting from there
   stages the files the cohort pins beside the declaration's own manifest, so
   nobody writes one out. The run it started is followed with the shared
   `ManagedRunCard` — the stream as the signal, the run's page as the truth —
   and the catalogue is re-read whenever that run moves, without a list here of
   which states are endings. A judged result says it is a model's word and
   shows its agreement with people uncoloured, with its interval, and what the
-  provider said served it. A declaration whose judge reads the archive shows
-  the server's own warning, and Start and Stage-and-admit wait for somebody to
-  acknowledge it — here and in the Approvals panel, which reads
-  `reads_archive` off the chosen manifest and works nothing out.
+  provider said served it; a metric a framework measured names the framework,
+  its release and the model that graded it. A declaration the server warns
+  about — a judge or a scorer service sent the archive's words, a metric a
+  model graded uncalibrated — shows the server's own sentences, and Start and
+  Stage-and-admit wait for somebody to acknowledge them — here and in the
+  Approvals panel, which reads `reads_archive` and `measured_by` off the chosen
+  manifest and works nothing out.
 - `annotations` is the one area that draws. Its canvas puts an `<img>` and an
   `<svg>` in one transformed container, both sized to the image's *natural*
   pixels, so SVG user units are image coordinates and no shape ever carries a
@@ -1859,6 +1871,25 @@ the review.
   scorer's answer changes for some input, `SCORING_VERSION` moves, because
   `context.scorer` names the code that read the card and `context.suite` names
   the card — two owners, two references.
+- **Never let a framework's metric in, except by name and pinned.** DeepEval's,
+  Opik's and any other framework's metrics are Python a card must never carry,
+  so they run in `services/scorers` and `Scorer::External` names an adapter, a
+  metric and its parameters — nothing in `aiwatcher-evaluation` names a
+  framework, and adding one is an adapter there. Which way is better is still
+  not the author's: the work role records the service's catalog, and
+  publishing a card copies the catalog's description of each such metric —
+  release, model, unit, direction, aggregation, range, what it reads — into the
+  card version as `declared`. A later catalog changes no published card, so an
+  upgrade is publishing the card again, and a result measured before it
+  compares with nothing after. An `external_evaluation` step reads the live
+  catalog before it asks anything and fails naming both when the service runs
+  another release or model; the service refuses the same request with a 409.
+  A reply is a number or the adapter's own sentence — the contract has no field
+  for a framework's reason — kept per declaration and question as a judge's is.
+  A metric a model graded carries `measured_by` with that model, reads as not
+  reproducible, and is warned about as uncalibrated: a rubric judge publishes
+  its agreement with people, and a framework's model does not. The service
+  turns every framework's phoning home off before importing it.
 - **Never publish a case that answered some of the metrics.** A scored case
   carries every declared metric or it is a failure with a reason and none of
   them: a case in three averages out of four gives each metric its own
@@ -1944,6 +1975,28 @@ the review.
   credential, the query engine's reason. The start route refuses with 501
   `judge_disabled` on a deployment without one and 422 naming both profiles on
   one with another, because a started run nobody claims waits for ever.
+- **Never ask anybody to stage a cohort this deployment can derive.** A
+  curation version's, an annotation export's and a conversation corpus's cases
+  are already derived from their owners at admission, so `POST
+  /evaluation-cohorts` derives the three files a cohort pins as canonical bytes,
+  and admission derives them again when a pinned member is not in the bundle —
+  held to the pins, while a staged member that does not match is refused as
+  before. A `limit` takes the owner's first cases, never a sample, and the owner
+  checks accept a prefix of that length; a cohort of some of the cases is its
+  own context, which is what keeps a smoke run from comparing with a full one.
+  A conversation corpus's cohort is derived by an admin and holds digests, never
+  words; an external cohort is not derivable.
+- **Never let a step run past its run or its deadline.** A cancel was
+  cooperative for pods and for nothing else — `ActivityExecutor::cancel` was
+  never called — so a run whose step ran in the reactor's process stayed
+  `Cancelling` until the step finished, and `timeout_seconds` held only where an
+  executor passed it to an HTTP client. The reactor now watches every attempt
+  (`Watch`): a run that is cancelling or has ended, or a deadline that passed,
+  sets `ActivityContext::stop`, calls `cancel`, and abandons an executor that has
+  not returned within the grace, reporting `Policy` or `Timeout`. An executor
+  doing work in pieces checks the signal between them and never after it began
+  to publish. A worker hears it at its next heartbeat as 409
+  `execution_stopping`, with its attempt already settled.
 - **Never ask a judge the same question twice in one run.** Every reply is
   kept under the declaration and the digest of the question before the fold
   reads it (`evaluation-judges/replies/`), and a retry reads it back. Re-asked,

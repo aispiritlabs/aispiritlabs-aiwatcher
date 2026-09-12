@@ -1,33 +1,17 @@
 //! Metrics a scorer framework implements, measured by a service that runs it.
 //!
-//! DeepEval, Opik, Ragas and the rest each ship dozens of metrics, and every
-//! one of them is Python a scorecard must never carry. So they run in a scorer
-//! service this deployment operates (`services/scorers`), and this module is
-//! the whole of what aiwatcher knows about them: a **catalog** the service
-//! describes itself with, and one **question** per case. Nothing here names a
-//! framework — a new one is an adapter in that service and a word in its
-//! catalog, never a change to this crate.
+//! DeepEval, Opik and the rest ship metrics that are Python a scorecard must
+//! never carry, so they run in a scorer service (`services/scorers`) and this
+//! module is all aiwatcher knows of them: a **catalog** the service describes
+//! itself with, and one **question** per case. No framework is named here.
 //!
-//! Three rules carry it, and they are the rules the rest of Evaluation keeps.
+//! **Which way is better is the adapter's word, pinned into the card.**
+//! Publishing a card copies what the catalog says a metric is — release, model,
+//! unit, direction — into the card version, and a run holds the service to it.
 //!
-//! **Which way is better is the adapter's word, pinned into the card.** A
-//! scorecard names an adapter, a metric and its parameters; publishing it
-//! copies what the catalog said that metric is — the adapter's version, the
-//! model it grades with, its unit, direction and aggregation — into the card
-//! version. The author states none of it, a later catalog changes no card
-//! already published, and the run holds the service to the card: a service
-//! now running another version, or grading with another model, fails the run
-//! naming both rather than measuring something else under the card's name.
-//!
-//! **A metric a model graded says so.** Its definition carries `measured_by`
-//! with the model, the result says it is not reproducible by re-reading, and
-//! the declaration warns that nothing measured how often that model agrees
-//! with people — which a rubric judge's calibration does, and a framework's
-//! own model does not.
-//!
-//! **A reply keeps its number and never its words.** A framework's reason is a
-//! model's text and can repeat the answer it was shown, so the contract carries
-//! none; a failure is the adapter's own sentence. Kept replies hold the same.
+//! **A metric a model graded says so**, as `measured_by` on its definition, and
+//! **a reply keeps its number and never its words.** See ADR_0030's amendment
+//! of 2026-09-13.
 
 use std::collections::BTreeMap;
 

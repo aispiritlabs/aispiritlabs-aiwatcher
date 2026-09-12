@@ -6,7 +6,7 @@ status: open
 branch: main
 repo: aiwatcher
 created: 2026-09-12
-updated: 2026-09-12
+updated: 2026-09-13
 tags: [spec/AW-6, step/backlog, branch/main, status/open]
 ---
 <!-- spec-card -->
@@ -77,7 +77,11 @@ building towards, and it is four things rather than one:
   26): one 409 for a pair nobody admitted, a quantity scorer whose unit is the
   author's, the conversation archive as answers read under the approval rather
   than a session, a calibrated judge whose agreement with people rides beside
-  its numbers, and a Measure form in the panel. What is left is C1's
+  its numbers, and a Measure form in the panel. Its gaps against stage C's first
+  three points are closed too (plan section 29): a cancel stops a running step,
+  a declaration carries its own deadline and pace, a cohort is derived from a
+  dataset version with a case limit, and a card may name DeepEval's, Opik's or
+  any adapter's metrics through a scorer service. What is left is C1's
   `generate_and_score` template.
 
 Both follow-ups that sat inside the first are done (plan section 19): the
@@ -161,3 +165,18 @@ The comparison itself followed in section 20.
   warning is acknowledged, and kept judge replies now hold no words. Live, the
   whole path ran over a real archive with gemma-4-e2b and the data directory
   held no plaintext marker afterwards
+- 2026-09-13 — C0's gaps against stage C closed (plan section 29), four
+  packages. A cancel was cooperative for pods and nothing else — `cancel` was
+  never called — so the reactor now watches every attempt, stops it on a cancel
+  or a passed deadline and abandons it after a grace; a worker hears it at its
+  heartbeat. A declaration carries `timeout_seconds` and `concurrency`, refused
+  past the deployment's ceiling. A cohort is derived from a curation version, an
+  annotation export's split or a conversation corpus, first cases only when
+  limited, and admission derives it again rather than asking anybody to stage
+  it. And a card may name a framework's metric: `services/scorers` runs DeepEval
+  and Opik behind a two-route contract, publication pins the catalog's release,
+  model and direction into the card, and a run holds the service to it. Live
+  against gemma-4-e2b both frameworks' relevancy metrics told "Warsaw" from "I
+  like turtles.", a derived two-of-three cohort was admitted with no case file
+  staged, a cancel ended its run a second later, and a service restarted on
+  another model revision failed the card's run naming both
