@@ -36,6 +36,10 @@ extend-exclude = [
   "examples/titanic/",
   # The FTI design and acceptance documents are also written in Polish.
   "docs/FTI_KICKOFF.md",
+  # Listed rather than globbed as `docs/FTI_*`, for the reason above: the
+  # kickoff for B2 is Polish like its predecessor, and the next FTI document
+  # should be a decision rather than an inherited exemption.
+  "docs/FTI_KICKOFF_B2.md",
   "docs/FTI_IMPLEMENTATION_PLAN.md",
   "docs/FTI_ARCHITECTURE_REVIEW.md",
   "docs/FTI_FEATURE_CATALOG.md",

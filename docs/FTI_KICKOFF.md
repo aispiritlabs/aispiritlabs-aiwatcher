@@ -2,6 +2,8 @@
 
 Przygotowano: 2026-09-11. Repozytorium: `/Users/mkubaszek/Projects/ai_spirit/aiwatcher`.
 
+> **Nowa sesja zaczyna od [FTI_KICKOFF_B2.md](FTI_KICKOFF_B2.md).** Ten dokument jest zapisem wydania A i siedmiu kontynuacji B2, które są już dostarczone; jego „następny zakres” jest nieaktualny — adaptery źródeł są zrobione, a judge nie jest następną paczką.
+
 **Checkpoint po implementacji (2026-09-11):** A1–A4 i AR1 dostarczone; aktualny odbiór i ograniczenia opisuje [sekcja 8 planu](FTI_IMPLEMENTATION_PLAN.md#8-postęp-implementacji-2026-09-11). Pełne `just check` przeszło. Zachowano wcześniejsze zmiany AW-4. Istotny incydent dodatkowego seeda: przed naprawą obsługi `--base-url` jego część treningowa dodała demonstracyjny model/run i przestawiła etykietę `demo.segmenter/production` na istniejącej instancji :8080; szczegóły i ID w planie. Użytkownik zdecydował o pozostawieniu nowej wersji demonstracyjnej. B1 z początkiem AR2 dostarczono w kontynuacji opisanej poniżej; dalszy zakres to B2.
 
 
