@@ -4121,6 +4121,48 @@
         }
       }
     },
+    "/api/v1/evaluation-approvals/address": {
+      "post": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "The address one declaration's bundle is staged under, and the pair it names.",
+        "description": "A caller cannot work this out: it is a digest over the canonicalised\ndeclaration, and a second implementation of that in another language is a\nsecond answer to what a pair *is*. Pure — it reads no store and admits\nnothing — so it is the one route here below `admin`, and a declaration it\nrefuses is a 400 saying what is wrong with it rather than a digest of\nsomething invalid.",
+        "operationId": "address_approval",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvaluationManifest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalAddress"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/evaluation-approvals/{approval_id}": {
       "delete": {
         "tags": [
@@ -10051,6 +10093,26 @@
                 "$ref": "#/components/schemas/Withdrawal"
               }
             ]
+          }
+        }
+      },
+      "ApprovalAddress": {
+        "type": "object",
+        "description": "Where a declaration's bundle belongs, and the two IDs it is derived from.",
+        "required": [
+          "approval_id",
+          "variant_id",
+          "context_id"
+        ],
+        "properties": {
+          "approval_id": {
+            "type": "string"
+          },
+          "context_id": {
+            "type": "string"
+          },
+          "variant_id": {
+            "type": "string"
           }
         }
       },

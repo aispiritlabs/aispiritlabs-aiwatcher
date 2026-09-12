@@ -803,6 +803,13 @@ what runs a real graph.
   drawing of one run. The ad-hoc path stays, because a preview and a block at a
   time are what an editor needs; the two empty states say which of the two ran,
   since "nothing run yet" under a card reading `completed` is a contradiction.
+- `evaluation` is the one area with an operator's half beside a reader's. Its
+  Approvals panel stages a bundle and admits the pair it declares, in that
+  order, and it **never computes an approval ID**: that is a digest over the
+  canonicalised declaration, so `POST /api/v1/evaluation-approvals/address`
+  answers it and a second implementation in TypeScript would be a second answer
+  to what a pair is. Withdrawal asks first, because it hides every result
+  measured under that pair and is final.
 - `annotations` is the one area that draws. Its canvas puts an `<img>` and an
   `<svg>` in one transformed container, both sized to the image's *natural*
   pixels, so SVG user units are image coordinates and no shape ever carries a

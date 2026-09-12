@@ -35,6 +35,7 @@ use crate::state::AppState;
     approve_source,
     list_approvals,
     withdraw_approval,
+    address_approval,
     stage_bundle,
     list_bundle,
     discard_bundle,
@@ -60,6 +61,10 @@ pub fn router() -> Router<AppState> {
         )
         .route("/api/v1/evaluation-approvals", get(list_approvals))
         .route("/api/v1/evaluation-approvals", post(approve_source))
+        .route(
+            "/api/v1/evaluation-approvals/address",
+            post(address_approval),
+        )
         .route(
             "/api/v1/evaluation-approvals/{approval_id}",
             delete(withdraw_approval),
@@ -570,4 +575,40 @@ async fn discard_bundle(
     caller.require(Role::Admin)?;
     bundles(&state)?.discard(&approval_id).await?;
     Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
+/// The address one declaration's bundle is staged under, and the pair it names.
+///
+/// A caller cannot work this out: it is a digest over the canonicalised
+/// declaration, and a second implementation of that in another language is a
+/// second answer to what a pair *is*. Pure — it reads no store and admits
+/// nothing — so it is the one route here below `admin`, and a declaration it
+/// refuses is a 400 saying what is wrong with it rather than a digest of
+/// something invalid.
+#[utoipa::path(post, path = "/api/v1/evaluation-approvals/address",
+    request_body = EvaluationManifest,
+    responses((status = 200, body = ApprovalAddress), (status = 400, body = crate::error::ErrorBody)),
+    tag = "evaluation")]
+async fn address_approval(
+    caller: Caller,
+    Json(manifest): Json<EvaluationManifest>,
+) -> ApiResult<Json<ApprovalAddress>> {
+    caller.require(Role::Viewer)?;
+    let prepared = aiwatcher_evaluation::Evaluation::prepare(manifest)?;
+    Ok(Json(ApprovalAddress {
+        approval_id: aiwatcher_evaluation::approval_id(
+            prepared.variant_id(),
+            prepared.context_id(),
+        )?,
+        variant_id: prepared.variant_id().into(),
+        context_id: prepared.context_id().into(),
+    }))
+}
+
+/// Where a declaration's bundle belongs, and the two IDs it is derived from.
+#[derive(serde::Serialize, utoipa::ToSchema)]
+struct ApprovalAddress {
+    approval_id: String,
+    variant_id: String,
+    context_id: String,
 }

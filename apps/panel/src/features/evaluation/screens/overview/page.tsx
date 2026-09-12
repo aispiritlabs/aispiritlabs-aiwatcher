@@ -18,6 +18,7 @@ import type {
   SuiteSummary,
 } from '@/api/generated/types.gen';
 import { StatusBadge } from '@/shared/components/status-badge';
+import { Approvals } from './approvals';
 import { EvidencePane, EvidenceRow, EvidenceUnavailable, Retention, useEvidence } from './evidence';
 import type { DurableEvaluation } from '@/api/generated/types.gen';
 import { ApiFailure } from '@/shared/lib/result';
@@ -190,8 +191,19 @@ export function EvaluationPage() {
             them.
           </p>
         </div>
-        <TimeRange value={window} onChange={(seconds) => select({ window: seconds })} />
+        <div className="flex items-center gap-2">
+          <TimeRange value={window} onChange={(seconds) => select({ window: seconds })} />
+          <Button
+            size="sm"
+            variant={search.approvals ? 'default' : 'outline'}
+            aria-pressed={search.approvals === true}
+            onClick={() => select({ approvals: search.approvals ? undefined : true })}
+          >
+            Approvals
+          </Button>
+        </div>
       </div>
+      {search.approvals ? <Approvals /> : null}
 
       <LocalViews
         screen="evaluation"

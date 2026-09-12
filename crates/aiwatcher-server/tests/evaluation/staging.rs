@@ -158,6 +158,27 @@ async fn staging_is_an_operator_route_and_publication_needs_no_step_on_the_host(
             response.text().await.unwrap()
         );
     }
+    // The one folder a bundle has, through the same route: a name, not a path,
+    // and the only separator either adapter accepts.
+    let nested = client
+        .put(format!("{bundle}/model-artifacts/weights.bin"))
+        .header("x-authentik-username", "operator")
+        .header("x-authentik-groups", "aiwatcher-admins")
+        .body(vec![1u8, 2, 3])
+        .send()
+        .await
+        .unwrap();
+    assert!(nested.status().is_success());
+    let escaped = client
+        .put(format!("{bundle}/nested%2Fescape.json"))
+        .header("x-authentik-username", "operator")
+        .header("x-authentik-groups", "aiwatcher-admins")
+        .body(vec![1u8])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(escaped.status(), 403);
+
     let listed: Vec<Value> = client
         .get(&bundle)
         .header("x-authentik-username", "viewer")
@@ -168,6 +189,11 @@ async fn staging_is_an_operator_route_and_publication_needs_no_step_on_the_host(
         .await
         .unwrap();
     assert!(listed.iter().any(|file| file["name"] == "scorer.py"));
+    assert!(
+        listed
+            .iter()
+            .any(|file| file["name"] == "model-artifacts/weights.bin")
+    );
 
     admit(&client, &base, &fixture.request.manifest).await;
     let response = client

@@ -42,6 +42,8 @@ export const searchSchema = z.object({
   report: z.string().optional(),
   /** The durable evidence open in the pane on the right, which is the other kind. */
   evidence: z.string().optional(),
+  /** Whether the operator's half — which pairs this instance admits — is open. */
+  approvals: z.boolean().optional(),
   baseline: z.string().optional(),
   metrics: z.string().optional(),
 });

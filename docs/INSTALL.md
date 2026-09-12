@@ -742,6 +742,10 @@ evaluationEvidence:
     configMap: { name: evaluation-approvals }
 ```
 
+The chart still requires `volume` whenever `enabled` is set. An instance that
+only ever stages over the API can point it at an empty ConfigMap; relaxing that
+value is a chart change and not a server one.
+
 One subdirectory per approval, **named by the pair it admits** — the same
 approval ID as above:
 
@@ -754,7 +758,7 @@ one bundle. A second variant is a second subdirectory: admitting it cannot hide
 the first, which is what an A/B comparison needs and what a single approved
 bundle could not give.
 
-Admitting one is then an API call, and it is `admin`:
+Either way, admitting the pair is then an API call, and it is `admin`:
 
 ```bash
 curl -X POST "$AIWATCHER/api/v1/evaluation-approvals" \

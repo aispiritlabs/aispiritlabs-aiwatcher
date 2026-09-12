@@ -206,6 +206,15 @@ export type Approval = {
 };
 
 /**
+ * Where a declaration's bundle belongs, and the two IDs it is derived from.
+ */
+export type ApprovalAddress = {
+    approval_id: string;
+    context_id: string;
+    variant_id: string;
+};
+
+/**
  * A question this step puts in front of a person before the graph goes on.
  *
  * The same question a curation's `approval` block holds, and
@@ -9369,6 +9378,25 @@ export type ApproveSourceResponses = {
 };
 
 export type ApproveSourceResponse = ApproveSourceResponses[keyof ApproveSourceResponses];
+
+export type AddressApprovalData = {
+    body: EvaluationManifest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/evaluation-approvals/address';
+};
+
+export type AddressApprovalErrors = {
+    400: ErrorBody;
+};
+
+export type AddressApprovalError = AddressApprovalErrors[keyof AddressApprovalErrors];
+
+export type AddressApprovalResponses = {
+    200: ApprovalAddress;
+};
+
+export type AddressApprovalResponse = AddressApprovalResponses[keyof AddressApprovalResponses];
 
 export type WithdrawApprovalData = {
     body?: never;
