@@ -162,6 +162,78 @@ async fn what_a_recording_was_measured_under_is_two_references_rather_than_one()
 }
 
 #[tokio::test]
+async fn a_distance_is_published_as_a_mean_in_its_own_unit_rather_than_as_a_rate() {
+    let expected = BTreeMap::from([
+        ("capital-pl".to_owned(), json!({"minutes": 12})),
+        ("empty-input".to_owned(), json!({"minutes": 3})),
+        ("two-plus-two".to_owned(), json!({"minutes": 0.5})),
+    ]);
+    let registry = store(expected.clone());
+    let card = Scorecard {
+        name: "estimates".into(),
+        description: String::new(),
+        scorers: vec![ScorerSpec {
+            metric: "estimate_error".into(),
+            answer_path: "/minutes".into(),
+            expected_path: "/minutes".into(),
+            scorer: Scorer::AbsoluteError {
+                unit: "minutes".into(),
+            },
+        }],
+    };
+    let version = registry
+        .publish_scorecard(&card, "ada", 100)
+        .await
+        .unwrap()
+        .version;
+    let mut run = declaration("estimated", &version);
+    run.scorecard.name = "estimates".into();
+    let answer = |case_id: &str, minutes: f64| RecordedAnswer {
+        case_id: case_id.into(),
+        answer: json!({ "minutes": minutes }),
+        trace_id: None,
+        span_id: None,
+    };
+    let scored = score(
+        &card,
+        &expected,
+        &[
+            answer("capital-pl", 15.0),
+            answer("empty-input", 3.0),
+            answer("two-plus-two", 2.0),
+        ],
+        &run.repetition_id,
+    );
+    publish(
+        &registry,
+        PublishEvaluation {
+            manifest: run.manifest(&card, None).unwrap(),
+            status: scored.status,
+            cases: scored.cases,
+        },
+        "editor",
+        200,
+    )
+    .await
+    .expect("a distance above one is a quantity, not a rate out of bounds");
+
+    let evidence = registry
+        .get("estimated", "reader", 300)
+        .await
+        .unwrap()
+        .unwrap();
+    let metric = &evidence.manifest.unwrap().context.metrics[0];
+    assert_eq!(metric.unit, "minutes");
+    assert_eq!(metric.direction, MetricDirection::Lower);
+    assert_eq!(metric.aggregation, Aggregation::Mean);
+    let error = evidence.metrics["estimate_error"];
+    assert!(
+        (error - 1.5).abs() < 1e-9,
+        "three, nought and one and a half minutes out: {error}"
+    );
+}
+
+#[tokio::test]
 async fn a_case_nobody_answered_is_unscored_rather_than_scored_zero() {
     let registry = store(cohort());
     measured(

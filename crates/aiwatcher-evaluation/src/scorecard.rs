@@ -53,6 +53,11 @@ pub enum Scorer {
     RegexMatch { pattern: String },
     /// The answer is a number near the expected number.
     NumericWithin { tolerance: f64 },
+    /// How far the answer is from the expected number. A quantity rather than a
+    /// verdict, so it is averaged rather than counted and lower is better — and
+    /// it has a unit, which is the one part of a metric definition only the
+    /// author can know: the scorer sees two numbers and never what they count.
+    AbsoluteError { unit: String },
     /// The answer said something it must not. Counted rather than avoided, so
     /// the metric means what its name says and lower is better.
     Forbidden {
@@ -77,22 +82,47 @@ impl Scorer {
     pub const fn reads_expected(&self) -> bool {
         matches!(
             self,
-            Self::ExactMatch { .. } | Self::Contains { .. } | Self::NumericWithin { .. }
+            Self::ExactMatch { .. }
+                | Self::Contains { .. }
+                | Self::NumericWithin { .. }
+                | Self::AbsoluteError { .. }
         )
     }
 
-    /// Which way this scorer's metric is better, and in what unit.
+    /// Which way this scorer's metric is better.
     ///
-    /// Every scorer here answers pass or fail about one case, so the aggregate
-    /// is the fraction that passed — a rate, which is also what bounds each
-    /// case's own number to nought or one. A scorer measuring a quantity would
-    /// have a unit only its author knows, and the spec gains that field the day
-    /// one arrives rather than inviting a guess now.
+    /// A fact about what the scorer counts: a forbidden phrase and a distance
+    /// are both better when there is less of them.
     #[must_use]
     pub const fn direction(&self) -> MetricDirection {
         match self {
-            Self::Forbidden { .. } => MetricDirection::Lower,
+            Self::Forbidden { .. } | Self::AbsoluteError { .. } => MetricDirection::Lower,
             _ => MetricDirection::Higher,
+        }
+    }
+
+    /// How a result folds this scorer's per-case numbers into one.
+    ///
+    /// A pass-or-fail scorer's aggregate is the fraction that passed — a rate,
+    /// which is also what bounds each case's number to nought or one. A
+    /// quantity is averaged, because a count of distances means nothing.
+    #[must_use]
+    pub const fn aggregation(&self) -> Aggregation {
+        match self {
+            Self::AbsoluteError { .. } => Aggregation::Mean,
+            _ => Aggregation::Rate,
+        }
+    }
+
+    /// What a number this scorer writes is in.
+    ///
+    /// Derived for a verdict, and the author's own word for a quantity — the
+    /// one field a scorecard states about its metric, because nothing else can.
+    #[must_use]
+    pub fn unit(&self) -> String {
+        match self {
+            Self::AbsoluteError { unit } => unit.clone(),
+            _ => "ratio".into(),
         }
     }
 
@@ -114,6 +144,14 @@ impl Scorer {
                 &format!("{field}.tolerance"),
                 "must be a finite tolerance of zero or more",
             ),
+            Self::AbsoluteError { unit } => {
+                text(unit, &format!("{field}.unit"))?;
+                require(
+                    unit.len() <= 64,
+                    &format!("{field}.unit"),
+                    "must name a unit in at most 64 bytes",
+                )
+            }
             Self::Forbidden { text: phrase, .. } => text(phrase, &format!("{field}.text")),
             Self::ExactMatch { .. } | Self::Contains { .. } => Ok(()),
         }
@@ -141,6 +179,15 @@ impl Scorer {
             },
             Self::NumericWithin { tolerance } => match (answer.as_f64(), expected.as_f64()) {
                 (Some(answer), Some(expected)) => hit((answer - expected).abs() <= *tolerance),
+                _ => Score::Unscored("this scorer compares numbers and one side is not".into()),
+            },
+            Self::AbsoluteError { .. } => match (answer.as_f64(), expected.as_f64()) {
+                // Two finite numbers can still be an infinite distance apart,
+                // and a mean with one of those in it is not a number.
+                (Some(answer), Some(expected)) if (answer - expected).is_finite() => {
+                    Score::Measured((answer - expected).abs())
+                }
+                (Some(_), Some(_)) => Score::Unscored("the distance is not a finite number".into()),
                 _ => Score::Unscored("this scorer compares numbers and one side is not".into()),
             },
             Self::Forbidden {
@@ -221,9 +268,9 @@ impl ScorerSpec {
     pub fn metric(&self) -> MetricDefinition {
         MetricDefinition {
             name: self.metric.clone(),
-            unit: "ratio".into(),
+            unit: self.scorer.unit(),
             direction: self.scorer.direction(),
-            aggregation: Aggregation::Rate,
+            aggregation: self.scorer.aggregation(),
         }
     }
 }
@@ -441,6 +488,56 @@ mod tests {
             "a forbidden phrase is counted, so more of it is worse"
         );
         assert!(metrics.iter().all(|metric| metric.unit == "ratio"));
+    }
+
+    #[test]
+    fn a_distance_is_averaged_in_the_unit_its_author_named_and_less_of_it_is_better() {
+        let latency = spec(
+            "latency_error",
+            Scorer::AbsoluteError {
+                unit: "seconds".into(),
+            },
+        );
+        let metric = latency.metric();
+        assert_eq!(
+            metric.unit, "seconds",
+            "the one thing the scorer cannot know"
+        );
+        assert_eq!(metric.direction, MetricDirection::Lower);
+        assert_eq!(
+            metric.aggregation,
+            Aggregation::Mean,
+            "a count of distances means nothing"
+        );
+        assert_eq!(
+            latency.measure(&json!(4.5), &json!(3)),
+            Score::Measured(1.5)
+        );
+        assert_eq!(
+            latency.measure(&json!(3), &json!(4.5)),
+            Score::Measured(1.5)
+        );
+        assert!(matches!(
+            latency.measure(&json!("four"), &json!(4)),
+            Score::Unscored(_)
+        ));
+        assert!(matches!(
+            latency.measure(&json!(f64::MAX), &json!(-f64::MAX)),
+            Score::Unscored(_)
+        ));
+    }
+
+    #[test]
+    fn a_distance_nobody_said_the_unit_of_is_refused() {
+        for unit in ["", " seconds", &"s".repeat(65)] {
+            let refused = card(vec![spec(
+                "error",
+                Scorer::AbsoluteError { unit: unit.into() },
+            )])
+            .validate()
+            .unwrap_err();
+            assert!(refused.to_string().contains("unit"), "{unit:?}: {refused}");
+        }
     }
 
     #[test]

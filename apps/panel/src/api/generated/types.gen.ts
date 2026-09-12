@@ -6670,6 +6670,9 @@ export type Scorer = {
     kind: 'numeric_within';
     tolerance: number;
 } | {
+    kind: 'absolute_error';
+    unit: string;
+} | {
     ignore_case?: boolean;
     kind: 'forbidden';
     text: string;

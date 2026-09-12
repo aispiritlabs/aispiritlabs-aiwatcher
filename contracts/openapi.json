@@ -23293,6 +23293,25 @@
           },
           {
             "type": "object",
+            "description": "How far the answer is from the expected number. A quantity rather than a\nverdict, so it is averaged rather than counted and lower is better — and\nit has a unit, which is the one part of a metric definition only the\nauthor can know: the scorer sees two numbers and never what they count.",
+            "required": [
+              "unit",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "absolute_error"
+                ]
+              },
+              "unit": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
             "description": "The answer said something it must not. Counted rather than avoided, so\nthe metric means what its name says and lower is better.",
             "required": [
               "text",

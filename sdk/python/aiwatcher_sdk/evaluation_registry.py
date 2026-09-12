@@ -136,6 +136,18 @@ class NumericWithin(TypedDict):
     tolerance: float
 
 
+class AbsoluteError(TypedDict):
+    """How far the answer is from the expected number, averaged.
+
+    ``unit`` is the one part of the metric the author states: the server derives
+    that lower is better and that it is a mean, and cannot know what the two
+    numbers count.
+    """
+
+    kind: Literal["absolute_error"]
+    unit: str
+
+
 class Forbidden(TypedDict):
     """Counted rather than avoided: the server declares lower as better."""
 
@@ -144,7 +156,7 @@ class Forbidden(TypedDict):
     ignore_case: NotRequired[bool]
 
 
-Scorer = ExactMatch | Contains | RegexMatch | NumericWithin | Forbidden
+Scorer = ExactMatch | Contains | RegexMatch | NumericWithin | AbsoluteError | Forbidden
 
 
 class ScorerSpec(TypedDict):

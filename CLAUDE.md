@@ -1836,9 +1836,12 @@ the review.
   better.** A scorer is a name from the vocabulary this deployment implements
   and the parameters that name takes; the enum is the implementation, so the
   vocabulary cannot grow without an arm that knows what a new word means. Each
-  scorer's metric definition — unit, direction, aggregation — is derived, never
-  authored beside it: `forbidden` counts a phrase, and a card that declared it
-  higher-is-better would invert every comparison drawn from it. When an existing
+  scorer's direction and aggregation are derived, never authored beside it:
+  `forbidden` counts a phrase, and a card that declared it higher-is-better
+  would invert every comparison drawn from it. The unit is derived for a verdict
+  (`ratio`) and is the author's one word for a quantity — `absolute_error`
+  requires it, because the scorer sees two numbers and never what they count,
+  and a guessed unit reads as a stated one. When an existing
   scorer's answer changes for some input, `SCORING_VERSION` moves, because
   `context.scorer` names the code that read the card and `context.suite` names
   the card — two owners, two references.

@@ -195,19 +195,57 @@ def test_starting_a_declared_run_twice_is_safe_and_names_nothing_but_the_declara
     assert json.loads(seen[0][2]) == {}
 
 
-def test_a_run_nobody_admitted_raises_with_the_approval_that_would() -> None:
+def test_a_pair_nobody_admitted_is_one_code_for_a_run_and_a_publication() -> None:
+    calls = 0
+
     def handle(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
         return httpx.Response(
             409,
             json={
-                "error": "pair_not_admitted",
+                "code": "pair_not_admitted",
                 "message": "evaluation: no operator has admitted this pair yet: approval abc",
             },
         )
 
     with (
         httpx.Client(transport=httpx.MockTransport(handle)) as http,
-        EvaluationRegistry("http://localhost", client=http) as registry,
-        pytest.raises(EvaluationRegistryError, match="approval abc"),
+        EvaluationRegistry("http://localhost", client=http, attempts=3) as registry,
     ):
-        registry.start_scoring_run("a" * 64)
+        with pytest.raises(EvaluationRegistryError, match="approval abc") as started:
+            registry.start_scoring_run("a" * 64)
+        with pytest.raises(EvaluationRegistryError, match="approval abc") as published:
+            registry.publish(manifest(), [])
+    assert started.value.code == published.value.code == "pair_not_admitted"
+    assert calls == 2, "admitting is somebody's act, so waiting for it is not a retry"
+
+
+def test_a_distance_is_sent_with_the_unit_its_author_named() -> None:
+    sent: list[bytes] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        sent.append(request.content)
+        return httpx.Response(200, json={"version": "b" * 64})
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(handle)) as http,
+        EvaluationRegistry("http://localhost", client=http) as registry,
+    ):
+        registry.publish_scorecard(
+            {
+                "name": "estimates",
+                "scorers": [
+                    {
+                        "metric": "estimate_error",
+                        "answer_path": "/minutes",
+                        "expected_path": "/minutes",
+                        "scorer": {"kind": "absolute_error", "unit": "minutes"},
+                    }
+                ],
+            }
+        )
+    assert json.loads(sent[0])["scorers"][0]["scorer"] == {
+        "kind": "absolute_error",
+        "unit": "minutes",
+    }
