@@ -39,17 +39,18 @@ from aiwatcher_sdk.serving.fetch import fetch_verified
 
 __all__ = ["Build", "host_platform", "install_llama_server", "main"]
 
-#: llama.cpp's release assets, keyed by what this module calls a platform. The
-#: names are upstream's; the mapping exists so a caller can look up the host
-#: without also learning how `platform.machine()` spells a Mac.
+#: The *platform* part of llama.cpp's asset names, keyed by what this machine
+#: calls itself. The mapping exists so a caller can look up the host without
+#: also learning how `platform.machine()` spells a Mac. It is half a file name
+#: and never the whole one — see :class:`Build`.
 _HOSTS: dict[tuple[str, str], str] = {
     ("darwin", "arm64"): "macos-arm64",
     ("darwin", "x86_64"): "macos-x64",
     ("linux", "x86_64"): "ubuntu-x64",
     ("linux", "aarch64"): "ubuntu-arm64",
     ("linux", "arm64"): "ubuntu-arm64",
-    ("windows", "amd64"): "win-x64",
-    ("windows", "arm64"): "win-arm64",
+    ("windows", "amd64"): "win-cpu-x64",
+    ("windows", "arm64"): "win-cpu-arm64",
 }
 
 _RELEASES = "https://github.com/ggml-org/llama.cpp/releases/download"
@@ -165,23 +166,48 @@ def _unpack(archive: Path, root: Path) -> None:
         zipped.extractall(root)  # noqa: S202 - every member was checked above
 
 
+def _host_hint() -> str:
+    """Name this machine's half of the asset name, for a reader of ``--help``."""
+    try:
+        return f"This host takes the {host_platform()} asset of a release."
+    except LoadError as error:
+        return str(error)
+
+
 def main(argv: list[str] | None = None) -> int:
-    """``python -m aiwatcher_sdk.serving.llama_cpp --release … --asset … --sha256 …``."""
+    """``python -m aiwatcher_sdk.serving.llama_cpp --release … --asset … --sha256 …``.
+
+    ``--asset`` is required, and deriving it from the host would be the obvious
+    convenience to add back. It was there, and it was wrong: it assembled
+    ``llama-<release>-bin-<host>.zip`` while upstream ships ``.tar.gz`` for
+    every host in :data:`_HOSTS` except Windows, and had renamed the Windows
+    ones besides. Nobody noticed, because a caller who has the digest has
+    already read the release page and passes the name it gave.
+
+    That is the rule from :class:`Build` applied one level up: a digest is true
+    of exactly one file, so a name this module assembled could only ever turn a
+    typo upstream made into a checksum mismatch here — which reads as corrupt
+    bytes rather than as the wrong file.
+    """
     parser = argparse.ArgumentParser(
         prog="aiwatcher-llama-cpp",
         description="Install one pinned llama.cpp server build, verified by digest.",
+        epilog=_host_hint(),
     )
     parser.add_argument("--release", required=True, help="upstream release tag, e.g. b1234")
-    parser.add_argument("--asset", help="asset file name; default: llama-<release>-bin-<host>.zip")
+    parser.add_argument(
+        "--asset",
+        required=True,
+        help="asset file name, exactly as the release page spells it",
+    )
     parser.add_argument("--sha256", required=True, help="expected sha256 of the asset")
     parser.add_argument("--into", required=True, help="directory to unpack under")
     parser.add_argument("--base", default=_RELEASES, help="release download base, for a mirror")
     parser.add_argument("--timeout", type=float, default=300.0)
     args = parser.parse_args(argv)
-    asset = args.asset or f"llama-{args.release}-bin-{host_platform()}.zip"
     try:
         binary = install_llama_server(
-            Build(release=args.release, asset=asset, sha256=args.sha256, base=args.base),
+            Build(release=args.release, asset=args.asset, sha256=args.sha256, base=args.base),
             into=args.into,
             timeout=args.timeout,
         )

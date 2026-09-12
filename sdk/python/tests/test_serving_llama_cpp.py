@@ -109,6 +109,13 @@ def test_the_host_maps_to_an_upstream_asset_name_or_says_it_does_not(
     monkeypatch.setattr("platform.machine", lambda: "x86_64")
     assert host_platform() == "ubuntu-x64"
 
+    # Upstream publishes the plain CPU build under `win-cpu-*`. `win-x64`, which
+    # this table used to name, is an asset of no recent release.
+    monkeypatch.setattr("platform.system", lambda: "Windows")
+    monkeypatch.setattr("platform.machine", lambda: "AMD64")
+    assert host_platform() == "win-cpu-x64"
+
+    monkeypatch.setattr("platform.system", lambda: "Linux")
     monkeypatch.setattr("platform.machine", lambda: "riscv64")
     with pytest.raises(LoadError, match="no binary this module knows"):
         host_platform()
@@ -136,3 +143,18 @@ def test_the_command_line_prints_the_binary_it_installed(
 
     assert code == 0
     assert capsys.readouterr().out.strip().endswith("llama-server")
+
+
+def test_the_command_line_will_not_guess_the_asset_name(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """It used to, from the host and a `.zip` suffix, and it was wrong for every
+    host here but Windows — upstream ships `.tar.gz` for macOS and Linux, and
+    had renamed the Windows assets. A guessed name plus a real digest fails as
+    a checksum mismatch, which reads as corrupt bytes rather than wrong file.
+    """
+    with pytest.raises(SystemExit) as exited:
+        main(["--release", RELEASE, "--sha256", "0" * 64, "--into", str(tmp_path)])
+
+    assert exited.value.code == 2
+    assert "--asset" in capsys.readouterr().err
