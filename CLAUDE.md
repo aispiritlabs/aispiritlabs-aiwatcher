@@ -832,8 +832,12 @@ what runs a real graph.
   approval and the run's identity come back from the server, and the
   declaration and the run it started live in the URL. Admitting from there
   stages the files the cohort pins beside the declaration's own manifest, so
-  nobody writes one out. A judged result says it is a model's word and shows
-  its agreement with people uncoloured.
+  nobody writes one out. The run it started is followed with the shared
+  `ManagedRunCard` — the stream as the signal, the run's page as the truth —
+  and the catalogue is re-read whenever that run moves, without a list here of
+  which states are endings. A judged result says it is a model's word and
+  shows its agreement with people uncoloured, with its interval, and what the
+  provider said served it.
 - `annotations` is the one area that draws. Its canvas puts an `<img>` and an
   `<svg>` in one transformed container, both sized to the image's *natural*
   pixels, so SVG user units are image coordinates and no shape ever carries a

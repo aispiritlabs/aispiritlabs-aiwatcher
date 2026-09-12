@@ -1,3 +1,5 @@
+import * as React from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -5,6 +7,11 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { refusal, serve, withQueries } from '@/test/server';
 
 import { Measure } from './measure';
+
+// The run card links to the waterfall, and a `Link` outside a router throws.
+vi.mock('@tanstack/react-router', () => ({
+  Link: ({ children }: { children: React.ReactNode }) => <a href="#waterfall">{children}</a>,
+}));
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -349,4 +356,94 @@ it("says what of a case's question a judge is shown, as the card points", async 
   );
   await choose();
   expect(await screen.findByText(/exact sees the case's input at \/question\./)).toBeTruthy();
+});
+
+it('follows the run it started, and re-reads the catalogue as the run moves', async () => {
+  const onStarted = vi.fn();
+  let read = 0;
+  /** Stands in for the catalogue on the page beside the form. */
+  function Catalogue() {
+    useQuery({
+      queryKey: ['evaluation-evidence', 'probe'],
+      queryFn: async () => {
+        read += 1;
+        return read;
+      },
+    });
+    return null;
+  }
+  serve([
+    { method: 'GET', path: '/auth/config', answer: { status: 200, body: { enabled: false } } },
+    {
+      method: 'GET',
+      path: `/evaluation-runs/${DECLARATION}`,
+      answer: {
+        status: 200,
+        body: {
+          admitted: true,
+          approval_id: APPROVAL,
+          manifest: published().manifest,
+          declaration: {
+            id: DECLARATION,
+            declared_by: 'ada',
+            declared_at: 1,
+            run: {
+              evaluation_id: 'candidate-1',
+              repetition_id: 'measurement-1',
+              variant: published().manifest.variant,
+              cohort: {},
+              scorecard: { name: 'answer-quality', version: VERSION },
+              answers: artifact('answers.json'),
+            },
+          },
+        },
+      },
+    },
+    {
+      method: 'GET',
+      path: '/api/v1/executions/e-1',
+      answer: {
+        status: 200,
+        body: {
+          allowed: [],
+          execution: {
+            created_at: '2026-09-12T09:00:00Z',
+            definition_name: 'candidate-1',
+            execution_id: 'e-1',
+            last_message_version: 4,
+            mode: 'compiled',
+            owner: 'Local',
+            plan_id: 'plan-1',
+            requested_by: 'ada',
+            state: { state_type: 'completed' },
+            steps: [
+              {
+                step_id: 'score',
+                runtime: 'judge_evaluation',
+                current_attempt: 2,
+                state: { state_type: 'completed' },
+              },
+            ],
+          },
+        },
+      },
+    },
+  ]);
+  render(
+    withQueries(
+      <>
+        <Catalogue />
+        <Measure
+          declaration={DECLARATION}
+          measured="e-1"
+          onDeclared={vi.fn()}
+          onStarted={onStarted}
+          onOpenResult={vi.fn()}
+        />
+      </>,
+    ),
+  );
+  expect(await screen.findByText('judge_evaluation')).toBeTruthy();
+  expect(screen.getByText('attempt 2')).toBeTruthy();
+  await waitFor(() => expect(read).toBeGreaterThan(1));
 });

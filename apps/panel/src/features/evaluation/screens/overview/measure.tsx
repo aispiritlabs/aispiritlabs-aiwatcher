@@ -36,7 +36,7 @@ import type {
   ScoringRunView,
   VersionReference,
 } from '@/api/generated/types.gen';
-import { ExecutionReference } from '@/shared/components/lineage-reference';
+import { ManagedRunCard, useManagedRun } from '@/shared/components/managed-run';
 import { needsRole, useRoleDecision } from '@/shared/lib/auth';
 import { answerOf, ApiFailure } from '@/shared/lib/result';
 import { Badge, Button, Card, IdChip, Spinner } from '@/shared/components/ui/primitives';
@@ -74,7 +74,8 @@ export function Measure({
   declaration: string | undefined;
   measured: string | undefined;
   onDeclared: (declaration: string | undefined) => void;
-  onStarted: (execution: string) => void;
+  /** The run this declaration started, or none once a missing one is forgotten. */
+  onStarted: (execution: string | undefined) => void;
   onOpenResult: (evaluationId: string) => void;
 }) {
   return (
@@ -545,13 +546,26 @@ function Declared({
 }: {
   id: string;
   measured: string | undefined;
-  onStarted: (execution: string) => void;
+  onStarted: (execution: string | undefined) => void;
   onOpenResult: (evaluationId: string) => void;
   onAnother: () => void;
 }) {
   const editor = useRoleDecision('editor');
   const admin = useRoleDecision('admin');
   const queries = useQueryClient();
+  const followed = useManagedRun(measured);
+  const moved = followed.data
+    ? `${followed.data.execution.state.state_type}:${followed.data.execution.steps
+        .map((step) => step.state.state_type)
+        .join(',')}`
+    : undefined;
+  React.useEffect(() => {
+    // The catalogue is re-read whenever the run moves. The step publishes
+    // before it settles, so the move that ends the run comes after the result
+    // exists — and which states are endings is the server's to say, not a
+    // list kept here.
+    if (moved) void queries.invalidateQueries({ queryKey: ['evaluation-evidence'] });
+  }, [moved, queries]);
   const view = useQuery({
     queryKey: ['evaluation-run', id],
     queryFn: async () =>
@@ -645,9 +659,6 @@ function Declared({
         </Button>
         {measured ? (
           <>
-            <span>
-              Run: <ExecutionReference executionId={measured} />
-            </span>
             <Button
               size="sm"
               variant="outline"
@@ -665,6 +676,16 @@ function Declared({
           </>
         ) : null}
       </div>
+      {measured ? (
+        <ManagedRunCard
+          run={followed.data ?? undefined}
+          executionId={measured}
+          pending={followed.isLoading}
+          missing={followed.data === null}
+          failure={followed.error}
+          onForget={() => onStarted(undefined)}
+        />
+      ) : null}
       {start.error instanceof ApiFailure && start.error.code === 'pair_not_admitted' ? (
         <p className="text-danger">
           Nobody has admitted this pair yet. An admin admits approval {pinchId(approval_id, 8, 6)}{' '}
