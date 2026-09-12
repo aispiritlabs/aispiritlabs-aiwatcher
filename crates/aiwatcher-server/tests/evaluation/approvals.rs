@@ -217,13 +217,17 @@ async fn an_admitted_pair_refuses_a_bundle_that_changed_underneath_it() {
         .await
         .unwrap();
     // A pair nobody admitted is refused, and says so rather than reporting a
-    // source somebody deleted: no earlier evidence ever pointed at it.
+    // source somebody deleted: no earlier evidence ever pointed at it. It names
+    // the approval, because admitting it is the one thing to do next.
     let mut unapproved = request.clone();
     unapproved.manifest.variant.experiment_id = "never-admitted".into();
     unapproved.manifest.origin.evaluation_id = "eval-never-admitted".into();
+    let prepared = aiwatcher_evaluation::Evaluation::prepare(unapproved.manifest.clone()).unwrap();
+    let expected =
+        aiwatcher_evaluation::approval_id(prepared.variant_id(), prepared.context_id()).unwrap();
     assert!(matches!(
         registry.publish(unapproved, "producer", 100).await,
-        Err(EvaluationError::Unavailable(EvidenceState::Forbidden))
+        Err(EvaluationError::NotAdmitted(named)) if named == expected
     ));
     registry
         .publish(request.clone(), "producer", 100)

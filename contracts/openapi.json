@@ -4805,6 +4805,7 @@
           "evaluation"
         ],
         "summary": "Publish terminal evidence. Retry the identical body and logical ID after a\ntimeout; a different body conflicts. No result content enters the event log.\nConversation evidence requires Admin, including publication.",
+        "description": "A pair nobody has admitted yet is a 409 `pair_not_admitted` naming the\napproval, as starting a scoring run is; a withdrawn pair stays a 403.",
         "operationId": "publish_result",
         "requestBody": {
           "content": {
@@ -4838,7 +4839,7 @@
             }
           },
           "403": {
-            "description": "",
+            "description": "`evidence_forbidden`: the pair was withdrawn, its bundle changed, or the caller may not read the source",
             "content": {
               "application/json": {
                 "schema": {
@@ -4848,7 +4849,7 @@
             }
           },
           "409": {
-            "description": "",
+            "description": "`pair_not_admitted` names the approval that would admit the pair; `evaluation_conflict` is a different body under this ID",
             "content": {
               "application/json": {
                 "schema": {
@@ -5534,7 +5535,7 @@
             }
           },
           "409": {
-            "description": "No operator has admitted this pair; the message names the approval",
+            "description": "`pair_not_admitted`: no operator has admitted this pair yet; the message names the approval",
             "content": {
               "application/json": {
                 "schema": {

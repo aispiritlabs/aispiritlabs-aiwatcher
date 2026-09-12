@@ -293,9 +293,13 @@ struct CasesQuery {
 /// Publish terminal evidence. Retry the identical body and logical ID after a
 /// timeout; a different body conflicts. No result content enters the event log.
 /// Conversation evidence requires Admin, including publication.
+///
+/// A pair nobody has admitted yet is a 409 `pair_not_admitted` naming the
+/// approval, as starting a scoring run is; a withdrawn pair stays a 403.
 #[utoipa::path(post, path = "/api/v1/evaluation-results", request_body = PublishEvaluation,
     responses((status = 200, body = EvaluationReceipt), (status = 400, body = crate::error::ErrorBody),
-    (status = 403, body = crate::error::ErrorBody), (status = 409, body = crate::error::ErrorBody),
+    (status = 403, body = crate::error::ErrorBody, description = "`evidence_forbidden`: the pair was withdrawn, its bundle changed, or the caller may not read the source"),
+    (status = 409, body = crate::error::ErrorBody, description = "`pair_not_admitted` names the approval that would admit the pair; `evaluation_conflict` is a different body under this ID"),
     (status = 410, body = crate::error::ErrorBody), (status = 503, body = crate::error::ErrorBody)), tag = "evaluation")]
 async fn publish_result(
     State(state): State<AppState>,

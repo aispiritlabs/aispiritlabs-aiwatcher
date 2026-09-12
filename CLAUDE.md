@@ -1853,7 +1853,7 @@ the review.
   publication, and that failed run is what every later start of the same
   declaration lands on. `POST /evaluation-runs` declares and answers with the
   derived manifest and its `approval_id`; `/start` refuses with a 409 naming it
-  until the gate — asked through `Registry::admits`, never by looking for a
+  until the gate — asked through `Registry::admission`, never by looking for a
   record — says yes.
 - **Never admit evidence this deployment measured by asking for files it has
   none of.** A producer's suite and scorer are files re-read from the operator's
@@ -1903,7 +1903,13 @@ the review.
   on the host per publication. Admitting and withdrawing are **admin**, because
   `AIWATCHER_AUTH_INGEST_TOKENS` makes a producer an editor by construction. The
   gate is checked *after* the adapter, so a source that is gone says so rather
-  than arriving as "nobody approved this". ADR_0030, amended.
+  than arriving as "nobody approved this". **Not yet is one answer whoever
+  asks**: a publication and a scoring run's start both get a 409
+  `pair_not_admitted` naming the approval — including when the adapter found
+  nothing that admits the pair, because admitting it is where the adapter's own
+  reason surfaces. A withdrawn pair, a bundle that changed underneath an
+  approval and a caller who may not read the source stay the 403 they were:
+  none of them is a step somebody still has to take. ADR_0030, amended.
 - **Never let the adapter's bytes be the registry's business.** An operator
   stages a bundle through `PUT /api/v1/evaluation-approvals/{id}/bundle/{name}`
   (admin) and it lands in `evaluation-bundles/`, the adapter's own prefix

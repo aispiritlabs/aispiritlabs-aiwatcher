@@ -10216,7 +10216,13 @@ export type PublishResultData = {
 
 export type PublishResultErrors = {
     400: ErrorBody;
+    /**
+     * `evidence_forbidden`: the pair was withdrawn, its bundle changed, or the caller may not read the source
+     */
     403: ErrorBody;
+    /**
+     * `pair_not_admitted` names the approval that would admit the pair; `evaluation_conflict` is a different body under this ID
+     */
     409: ErrorBody;
     410: ErrorBody;
     503: ErrorBody;
@@ -10497,7 +10503,7 @@ export type StartScoringRunErrors = {
     403: ErrorBody;
     404: ErrorBody;
     /**
-     * No operator has admitted this pair; the message names the approval
+     * `pair_not_admitted`: no operator has admitted this pair yet; the message names the approval
      */
     409: ErrorBody;
     501: ErrorBody;

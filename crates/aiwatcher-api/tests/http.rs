@@ -7663,6 +7663,7 @@ async fn a_scoring_run_waits_for_an_operator_and_then_is_one_run_however_often_i
         .post(&format!("/api/v1/evaluation-runs/{id}/start"), json!({}))
         .await;
     assert_eq!(status, StatusCode::CONFLICT, "{refusal}");
+    assert_eq!(refusal["code"], "pair_not_admitted");
     assert!(
         refusal["message"]
             .as_str()
@@ -7710,6 +7711,66 @@ async fn a_scoring_run_waits_for_an_operator_and_then_is_one_run_however_often_i
     unknown["scorecard"]["version"] = json!("f".repeat(64));
     let (status, refusal) = fixture.post("/api/v1/evaluation-runs", unknown).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{refusal}");
+}
+
+/// Not yet admitted is one answer whoever asks, and it is not the answer a
+/// withdrawal gets: one of them is a step somebody still has to take.
+#[tokio::test]
+async fn a_producer_publishing_a_pair_nobody_admitted_hears_which_approval_would() {
+    let mut fixture = Fixture::new(false);
+    fixture.state.evaluations = Some(Arc::new(
+        aiwatcher_evaluation::Registry::new(
+            Arc::new(MemoryObjectStore::new()),
+            Arc::new(EvaluationSource::default()),
+            Default::default(),
+        )
+        .unwrap(),
+    ));
+    let request = durable_request("not-yet");
+    let (status, address) = fixture
+        .post(
+            "/api/v1/evaluation-approvals/address",
+            request["manifest"].clone(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{address}");
+    let approval = address["approval_id"].as_str().unwrap().to_owned();
+
+    let (status, refusal) = fixture
+        .post("/api/v1/evaluation-results", request.clone())
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refusal}");
+    assert_eq!(refusal["code"], "pair_not_admitted");
+    assert!(
+        refusal["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains(&approval),
+        "{refusal}"
+    );
+
+    let (status, admitted) = fixture
+        .post("/api/v1/evaluation-approvals", request["manifest"].clone())
+        .await;
+    assert_eq!(status, StatusCode::OK, "{admitted}");
+    let (status, receipt) = fixture
+        .post("/api/v1/evaluation-results", request.clone())
+        .await;
+    assert_eq!(status, StatusCode::OK, "{receipt}");
+
+    let (status, _) = fixture
+        .delete(&format!("/api/v1/evaluation-approvals/{approval}"))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let mut again = durable_request("not-yet-again");
+    again["manifest"] = request["manifest"].clone();
+    again["manifest"]["origin"]["evaluation_id"] = json!("not-yet-again");
+    let (status, withdrawn) = fixture.post("/api/v1/evaluation-results", again).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{withdrawn}");
+    assert_eq!(
+        withdrawn["code"], "evidence_forbidden",
+        "a withdrawal is final for that approval, so it is not a step still to take"
+    );
 }
 
 /// One variant of one pinned context, with each case's score spelled out.

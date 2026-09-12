@@ -335,9 +335,10 @@ async fn annotation_publication_requires_exact_inputs_targets_and_split() {
     let mut f = Fixture::new("annotation-refusals").await;
     let owner = Arc::new(Annotations::new(f.store.clone(), "annotations"));
     pin(&mut f, &owner).await;
+    // Nothing admits it and no operator did: the answer is the one to act on.
     assert!(matches!(
         publish(&f.registry(), f.request.clone(), "editor", 100).await,
-        Err(EvaluationError::Unavailable(EvidenceState::Forbidden))
+        Err(EvaluationError::NotAdmitted(_))
     ));
     let source = f.source().with_annotations(owner.clone());
     for split in ["train", "validation", "all", "arbitrary"] {

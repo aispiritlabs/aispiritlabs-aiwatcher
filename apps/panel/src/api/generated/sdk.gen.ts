@@ -779,6 +779,9 @@ export const listResults = <ThrowOnError extends boolean = false>(options?: Opti
  * Publish terminal evidence. Retry the identical body and logical ID after a
  * timeout; a different body conflicts. No result content enters the event log.
  * Conversation evidence requires Admin, including publication.
+ *
+ * A pair nobody has admitted yet is a 409 `pair_not_admitted` naming the
+ * approval, as starting a scoring run is; a withdrawn pair stays a 403.
  */
 export const publishResult = <ThrowOnError extends boolean = false>(options: Options<PublishResultData, ThrowOnError>): RequestResult<PublishResultResponses, PublishResultErrors, ThrowOnError> => (options.client ?? client).post<PublishResultResponses, PublishResultErrors, ThrowOnError>({
     url: '/api/v1/evaluation-results',

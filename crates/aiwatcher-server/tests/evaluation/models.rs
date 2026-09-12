@@ -283,7 +283,7 @@ async fn missing_owner_package_or_approval_is_refused_before_publication() {
     pin(&mut fixture, &training).await;
     assert!(matches!(
         publish(&fixture.registry(), fixture.request.clone(), "editor", 100).await,
-        Err(EvaluationError::Unavailable(EvidenceState::Forbidden))
+        Err(EvaluationError::NotAdmitted(_))
     ));
     let owner = registry(&fixture, training.clone());
     let mut missing = fixture.request.clone();
@@ -320,9 +320,17 @@ async fn missing_owner_package_or_approval_is_refused_before_publication() {
         .unwrap()
         .version = legacy.version.version;
     fixture.approve(&fixture.request.manifest).await;
+    // A version with no package cannot be admitted, and admitting is where
+    // that is said; the producer hears only that nobody has admitted the pair.
+    assert!(matches!(
+        owner
+            .approve(&fixture.request.manifest, "operator", 100)
+            .await,
+        Err(EvaluationError::Unavailable(EvidenceState::Forbidden))
+    ));
     assert!(matches!(
         publish(&owner, fixture.request.clone(), "editor", 100).await,
-        Err(EvaluationError::Unavailable(EvidenceState::Forbidden))
+        Err(EvaluationError::NotAdmitted(_))
     ));
     assert!(fixture.store.list("evaluations/").await.unwrap().is_empty());
 }

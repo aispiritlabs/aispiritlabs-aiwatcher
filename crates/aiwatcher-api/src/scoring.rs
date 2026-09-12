@@ -17,7 +17,7 @@
 
 use aiwatcher_auth::Role;
 use aiwatcher_core::ArtifactRef;
-use aiwatcher_evaluation::{DeclaredRun, EvaluationError, ScoringRun, ScoringRunView};
+use aiwatcher_evaluation::{DeclaredRun, ScoringRun, ScoringRunView};
 use aiwatcher_execution::message::RunProjection;
 use aiwatcher_execution::plan::{
     CachePolicy, DefinitionKind, DefinitionRevision, ExecutionPlan, PlanStep, RetryPolicy,
@@ -183,7 +183,7 @@ async fn get_scoring_run(
     params(("id" = String, Path, description = "The declaration address")),
     responses((status = 202, body = ScoringAccepted), (status = 403, body = crate::error::ErrorBody),
     (status = 404, body = crate::error::ErrorBody),
-    (status = 409, body = crate::error::ErrorBody, description = "No operator has admitted this pair; the message names the approval"),
+    (status = 409, body = crate::error::ErrorBody, description = "`pair_not_admitted`: no operator has admitted this pair yet; the message names the approval"),
     (status = 501, body = crate::error::ErrorBody), (status = 503, body = crate::error::ErrorBody)),
     tag = "evaluation")]
 async fn start_scoring_run(
@@ -194,9 +194,9 @@ async fn start_scoring_run(
     let requester = caller.require(Role::Editor)?.log_subject().to_owned();
     let evaluations = registry(&state)?;
     let viewed = view(evaluations, &id).await?;
-    if !viewed.admitted {
-        return Err(EvaluationError::NotAdmitted(viewed.approval_id).into());
-    }
+    // The gate's own refusal: not yet names the approval, and withdrawn is the
+    // same 403 a producer's publication of that pair gets.
+    evaluations.admission(&viewed.manifest).await?;
     let started = state
         .executions()
         .start(

@@ -415,7 +415,9 @@ impl Registry {
             Some(approval) if !approval.admits() => {
                 Err(EvaluationError::Unavailable(EvidenceState::Forbidden))
             }
-            None if publishing => Err(EvaluationError::Unavailable(EvidenceState::Forbidden)),
+            // Not yet is a state somebody can change by admitting it, so it is
+            // not the refusal a withdrawal is, and it names the approval.
+            None if publishing => Err(EvaluationError::NotAdmitted(id)),
             _ => Ok(approval),
         }
     }
@@ -454,7 +456,16 @@ impl Registry {
             "result",
             "exceeds instance byte limit",
         )?;
-        let source = self.authority.resolve(&request.manifest, subject).await?;
+        let source = match self.authority.resolve(&request.manifest, subject).await {
+            // An adapter with nothing that admits this pair is, for a pair no
+            // operator admitted either, the pair not being admitted yet — and
+            // admitting it is where the adapter's own reason will surface.
+            Err(EvaluationError::Unavailable(EvidenceState::Forbidden)) => {
+                self.admitted(&prepared, true).await?;
+                return Err(EvaluationError::Unavailable(EvidenceState::Forbidden));
+            }
+            resolved => resolved?,
+        };
         require(
             source.expected.len() as u64 == request.manifest.context.case_count,
             "source",
@@ -1621,12 +1632,27 @@ impl Registry {
     /// [`EvaluationError::Invalid`] when the manifest does not prepare, and
     /// [`EvaluationError::Storage`] when the store cannot be reached.
     pub async fn admits(&self, manifest: &EvaluationManifest) -> Result<bool> {
-        let prepared = Evaluation::prepare(manifest.clone())?;
-        match self.admitted(&prepared, true).await {
-            Ok(_) => Ok(true),
-            Err(EvaluationError::Unavailable(EvidenceState::Forbidden)) => Ok(false),
+        match self.admission(manifest).await {
+            Ok(()) => Ok(true),
+            Err(
+                EvaluationError::NotAdmitted(_)
+                | EvaluationError::Unavailable(EvidenceState::Forbidden),
+            ) => Ok(false),
             Err(error) => Err(error),
         }
+    }
+
+    /// The same gate, answering with its own refusal rather than a boolean.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::NotAdmitted`] naming the approval while nobody has
+    /// admitted the pair, [`EvaluationError::Unavailable`] with
+    /// [`EvidenceState::Forbidden`] once it was withdrawn, and the errors of
+    /// [`Registry::admits`].
+    pub async fn admission(&self, manifest: &EvaluationManifest) -> Result<()> {
+        let prepared = Evaluation::prepare(manifest.clone())?;
+        self.admitted(&prepared, true).await.map(drop)
     }
 
     /// Keep the answers a run will measure, and hand back the reference.
