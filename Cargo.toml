@@ -79,7 +79,11 @@ jsonwebtoken = "9.3.1"
 # clean. Matching reqwest's is what leaves one. `k8s-openapi` is generated per
 # API version and needs one named: the oldest this release knows, because the
 # launcher only creates a `batch/v1` Job, whose fields it sets have not moved.
-kube = { version = "4.2", default-features = false, features = ["client", "rustls-tls", "aws-lc-rs"] }
+kube = { version = "4.2", default-features = false, features = [
+  "client",
+  "rustls-tls",
+  "aws-lc-rs",
+] }
 k8s-openapi = { version = "0.28", features = ["v1_32"] }
 # Not for TLS — nothing here speaks it directly — but to *say* which provider
 # this process uses, because the features cannot: `iggy` enables rustls's
