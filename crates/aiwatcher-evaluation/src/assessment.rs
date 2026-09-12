@@ -150,6 +150,12 @@ pub struct Assessment {
     pub recorded_by: String,
 }
 
+impl Assessment {
+    fn repeats(&self, version: &str, value: &AssessmentValue, rationale: &str) -> bool {
+        self.rubric_version == version && self.value == *value && self.rationale == rationale
+    }
+}
+
 /// What a caller sends. The author is absent for a person on purpose — a client
 /// that could name the reviewer could file somebody else's judgement.
 #[derive(Clone, Debug, Serialize, Deserialize, utoipa::ToSchema)]
@@ -310,9 +316,18 @@ pub(crate) async fn assess(
     let target_id = request.target.address()?;
     let standing = standing_id(&target_id, &request.rubric, request.source, &author)?;
     for _ in 0..WRITE_ATTEMPTS {
-        let revision = current(store, &target_id, &standing)
-            .await?
-            .map_or(1, |assessment| assessment.revision + 1);
+        // Repeating what the current revision already says is not a change of
+        // mind, so it lands on that revision — the rule a prompt version keeps,
+        // and what makes a redelivered write safe. The cost is stated rather
+        // than hidden: a judge that answers the same thing every night leaves
+        // the date it first said so, and no record of having said it again.
+        let revision = match current(store, &target_id, &standing).await? {
+            Some(said) if said.repeats(&version, &request.value, &request.rationale) => {
+                return Ok(said);
+            }
+            Some(said) => said.revision + 1,
+            None => 1,
+        };
         let record = Assessment {
             standing_id: standing.clone(),
             target_id: target_id.clone(),

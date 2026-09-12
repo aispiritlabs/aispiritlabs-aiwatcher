@@ -323,3 +323,33 @@ async fn publishing_one_form_twice_lands_on_the_version_that_is_already_there() 
     );
     assert_eq!(registry.rubrics().await.unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn saying_the_same_thing_again_is_not_another_change_of_mind() {
+    let registry = store();
+    registry
+        .publish_rubric(&ordinal("helpfulness", &["bad", "good"]), "ada", 100)
+        .await
+        .unwrap();
+    let first = registry
+        .assess(&judgement("helpfulness", level("good")), "ada", 200)
+        .await
+        .unwrap();
+    // A lost response and a retry, or a nightly judge that has not changed its
+    // mind: either way there is nothing new to record.
+    let again = registry
+        .assess(&judgement("helpfulness", level("good")), "ada", 900)
+        .await
+        .unwrap();
+    assert_eq!((first.revision, again.revision), (1, 1));
+    assert_eq!(
+        again.recorded_at, 200,
+        "the revision that stands is the one that was written"
+    );
+
+    // A different answer is a revision; so is the same answer given a reason.
+    let mut explained = judgement("helpfulness", level("good"));
+    explained.rationale = "it answered the question that was asked".into();
+    let explained = registry.assess(&explained, "ada", 1_000).await.unwrap();
+    assert_eq!(explained.revision, 2);
+}

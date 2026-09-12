@@ -131,6 +131,9 @@ async fn get_rubric(
 /// the session, and a judge's names the judge while the session still says who
 /// ran it. Nothing here checks the target exists — a judgement outlives the
 /// trace it is about, which is the whole reason it is written down.
+///
+/// Safe to send twice: repeating what the current revision already says lands
+/// on that revision rather than recording a second one.
 #[utoipa::path(post, path = "/api/v1/evaluation-assessments", request_body = AssessmentRequest,
     responses((status = 200, body = Assessment), (status = 400, body = crate::error::ErrorBody),
     (status = 403, body = crate::error::ErrorBody), (status = 409, body = crate::error::ErrorBody),

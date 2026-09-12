@@ -3,12 +3,16 @@
 Retry publication with the same evaluation ID and body after an ambiguous
 transport failure. The server returns the first receipt or an explicit conflict.
 Use ``evaluation`` for types without importing the HTTP transport.
+
+The same client carries rubrics and assessments, because they have the same
+owner: a judgement about a case is meaningless beside a result somebody else
+holds.
 """
 
 from __future__ import annotations
 
 from types import TracebackType
-from typing import Any, Literal, Self, TypedDict
+from typing import Any, Literal, NotRequired, Self, TypedDict
 from urllib.parse import quote
 
 import httpx
@@ -19,6 +23,85 @@ from aiwatcher_sdk.evaluation import EvaluationManifest
 
 class EvaluationRegistryError(ApiError):
     """The durable registry refused or could not complete an operation."""
+
+
+class NumericScale(TypedDict):
+    kind: Literal["numeric"]
+    min: float
+    max: float
+
+
+class OrdinalScale(TypedDict):
+    """Named levels, in the order declared. Order is meaning: the direction
+    says which end is better, so reordering them is a different rubric."""
+
+    kind: Literal["ordinal"]
+    levels: list[str]
+
+
+class FlagScale(TypedDict):
+    kind: Literal["flag"]
+
+
+Scale = NumericScale | OrdinalScale | FlagScale
+
+
+class Rubric(TypedDict):
+    """The form an assessment is given on. Versioned by its content, so
+    publishing the same words twice lands on the version already there."""
+
+    name: str
+    question: str
+    scale: Scale
+    direction: Literal["higher", "lower", "none"]
+    guidance: NotRequired[str]
+
+
+class NumberValue(TypedDict):
+    type: Literal["number"]
+    value: float
+
+
+class LevelValue(TypedDict):
+    type: Literal["level"]
+    value: str
+
+
+class FlagValue(TypedDict):
+    type: Literal["flag"]
+    value: bool
+
+
+AssessmentValue = NumberValue | LevelValue | FlagValue
+
+
+class TraceTarget(TypedDict):
+    kind: Literal["trace"]
+    trace_id: str
+
+
+class SpanTarget(TypedDict):
+    kind: Literal["span"]
+    trace_id: str
+    span_id: str
+
+
+class SessionTarget(TypedDict):
+    """A session is still being added to, so judging one names the moment."""
+
+    kind: Literal["session"]
+    session_id: str
+    as_of: int
+
+
+class CaseTarget(TypedDict):
+    kind: Literal["case"]
+    evaluation_id: str
+    case_id: str
+    repetition_id: str
+
+
+AssessmentTarget = TraceTarget | SpanTarget | SessionTarget | CaseTarget
 
 
 class CaseMeasurement(TypedDict):
@@ -103,6 +186,100 @@ class EvaluationRegistry:
                 "GET",
                 self._path(evaluation_id) + "/cases",
                 params={"version": version, "cursor": cursor, "limit": limit},
+            )
+        )
+
+    def publish_rubric(self, rubric: Rubric) -> dict[str, Any]:
+        """Declare the form a judgement may be given on.
+
+        Idempotent by content: the same words answer with the version that is
+        already there, so a deploy step may publish its rubrics every time.
+        """
+        return self._object(
+            self._transport.send(
+                "POST", "/api/v1/evaluation-rubrics", dict(rubric), idempotent=True
+            )
+        )
+
+    def list_rubrics(self) -> dict[str, Any]:
+        return self._object(self._transport.send("GET", "/api/v1/evaluation-rubrics"))
+
+    def get_rubric(self, name: str, *, version: str | None = None) -> dict[str, Any]:
+        """One form, at ``version`` or at the head.
+
+        Read the version before answering under it: the scale is what an answer
+        has to fit, and a head moves.
+        """
+        return self._object(
+            self._transport.send(
+                "GET",
+                "/api/v1/evaluation-rubrics/" + quote(name, safe=""),
+                params={"version": version},
+            )
+        )
+
+    def assess(
+        self,
+        target: AssessmentTarget,
+        rubric: str,
+        value: AssessmentValue,
+        *,
+        rubric_version: str | None = None,
+        source: Literal["human", "judge"] = "human",
+        author: str | None = None,
+        rationale: str = "",
+    ) -> dict[str, Any]:
+        """Record one judgement about one thing.
+
+        ``author`` names the judge that answered and is refused for a person:
+        a person's judgement is attributed to the session that filed it, so a
+        client that could name somebody else could file their judgement.
+
+        Safe to send twice. Repeating what the current revision already says
+        lands on that revision rather than recording a second one.
+        """
+        body: dict[str, Any] = {
+            "target": dict(target),
+            "rubric": rubric,
+            "value": dict(value),
+            "source": source,
+            "rationale": rationale,
+        }
+        if rubric_version is not None:
+            body["rubric_version"] = rubric_version
+        if author is not None:
+            body["author"] = author
+        return self._object(
+            self._transport.send("POST", "/api/v1/evaluation-assessments", body, idempotent=True)
+        )
+
+    def get_assessments(self, target: AssessmentTarget) -> dict[str, Any]:
+        """Every standing judgement about one thing, at its current revision."""
+        return self._object(
+            self._transport.send("GET", "/api/v1/evaluation-assessments", params=dict(target))
+        )
+
+    def get_assessment_history(
+        self,
+        target_id: str,
+        standing_id: str,
+        *,
+        before: int | None = None,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        """What one standing judgement said over time, newest first.
+
+        Both IDs come from :meth:`get_assessments` or from a recorded
+        judgement. Nothing here derives either.
+        """
+        return self._object(
+            self._transport.send(
+                "GET",
+                "/api/v1/evaluation-assessments/"
+                + quote(target_id, safe="")
+                + "/"
+                + quote(standing_id, safe=""),
+                params={"before": before, "limit": limit},
             )
         )
 
