@@ -631,6 +631,99 @@ no scorers, no judges, no suite runner.
 
 ---
 
+## Durable evaluation evidence
+
+Off by default (`evaluationEvidence.enabled`). Reports that ride the event log
+are bounded by its retention; the evidence behind a decision is not, so
+[ADR_0030](ADR/ADR_0030_EVALUATION_EVIDENCE.md) gives it its own store, its own
+retention and its own admission. Turning it on adds no backend: the evidence
+goes into the bucket the prompt registry already uses, under an `evaluations/`
+prefix, so there is no new service, no new credential and no new network path
+for a NetworkPolicy to open. `promptStore.mode: none` means no registry at all,
+and every `/api/v1/evaluation-results` route then answers 501 naming the
+variable rather than an empty list.
+
+What it does add is a directory the server reads. A published result never
+copies the source it was measured against — a conversation corpus, an
+annotation export, a curated dataset all stay with their owners and keep their
+own deletion rules — but the *producer's* side of a measurement (the suite, the
+scorer, the input and expectation schemas, the case manifest, and a model's
+package where there is one) exists nowhere else, so an operator puts it where
+the server can verify it:
+
+```yaml
+evaluationEvidence:
+  enabled: true
+  sourceDir: /etc/aiwatcher/evaluation-approvals
+  volume:
+    configMap: { name: evaluation-approvals }
+```
+
+One subdirectory per approval, **named by the pair it admits**. That name is a
+digest of the variant and context IDs, so nobody types it:
+
+```bash
+cargo run -q -p aiwatcher-evaluation --example prepare -- manifest.json
+# → variant_id, context_id and the approval_id its directory is named after
+
+scripts/stage-evaluation-approval.py ./approvals ./my-bundle
+```
+
+The naming is the whole point of it being a directory of approvals rather than
+one bundle. A second variant is a second subdirectory: admitting it cannot hide
+the first, which is what an A/B comparison needs and what a single approved
+bundle could not give.
+
+Admitting one is then an API call, and it is `admin`:
+
+```bash
+curl -X POST "$AIWATCHER/api/v1/evaluation-approvals" \
+  -H 'content-type: application/json' --data-binary @manifest.json
+```
+
+`admin` rather than `editor` because an ingest token is an editor by
+construction — a producer that could admit its own evidence is not an approval.
+After that, every publication of that pair — from a worker, a schedule or a CI
+gate — needs nothing on this host. `DELETE /api/v1/evaluation-approvals/{id}`
+withdraws one: every result measured under that pair stops being readable and
+no new one can be published, and nothing already published has its retention
+moved in either direction. Withdrawal is final for that approval ID.
+
+Evidence disappears three ways, and no fourth: its approval is withdrawn, its
+*source* is deleted or revoked at the owner (which the sweep enforces within
+the hour and a read enforces immediately), or its retention runs out —
+`limits.retentionDays`, 30 by default, and a source's own retention can only
+shorten it. `DELETE /api/v1/evaluation-results/{id}` is the narrow case of the
+first: one measurement rather than every measurement of its pair.
+
+### What a restore of that prefix means
+
+`evaluations/` is one of the three stores in a cluster whose contents exist
+nowhere else — the conversation archive and the execution stream are the other
+two — and it is the only one whose correctness rests on an object *not* coming
+back. Publication and collection race at one immutable key: whichever creates
+`claim.json` first decides whether that logical ID ever publishes. Restoring
+the prefix from a backup can therefore put back a claim a collector already
+abandoned, or drop a tombstone that was the record of an erasure.
+
+So restore it whole, to the state of one moment, and never merge two points in
+time. Restoring `content/` without the `claim.json` beside it produces bytes
+nothing points at; restoring a claim without its tombstone republishes evidence
+somebody deleted. After any restore, run one collection pass — the hourly half
+of the retention worker — and read `retention` on `GET
+/api/v1/evaluation-results` to see it complete.
+
+### Whether retention is running
+
+That same `retention` field is the answer. It carries the last pass: when it
+ran, how much it retired and collected, and `failures` — the number of
+consecutive failed passes. A sweep that has been failing for a week otherwise
+looks exactly like one that had nothing to do, which is why the field is a
+durable object rather than a log line: it survives a restart and every replica
+reads the same one.
+
+---
+
 ## The install script
 
 ```

@@ -31,6 +31,9 @@ and a release that ignored it would come up without the engine it asked for. */ 
 {{- if and (eq .Values.execution.store "file") (not .Values.server.persistence.enabled) -}}
 {{- fail "execution.store is \"file\" but server.persistence.enabled is false. That store is one directory of append-only files, so on an emptyDir every managed run is forgotten when the pod restarts — including one that was still running. Turn persistence on, or use \"postgres\"." -}}
 {{- end -}}
+{{- if and .Values.evaluationEvidence.enabled (not .Values.evaluationEvidence.volume) -}}
+{{- fail "evaluationEvidence.enabled is true but evaluationEvidence.volume is empty. The approvals an operator admits live in that volume, and with nothing mounted every publication answers 403 — which reads as a permissions problem rather than as a missing volume." -}}
+{{- end -}}
 {{- if and (eq .Values.server.bus "laser") (not .Values.server.laser.connectionStringSecret.name) -}}
 {{- fail "server.bus is \"laser\" but server.laser.connectionStringSecret.name is empty. The connection string carries a password, so it comes from a Secret." -}}
 {{- end -}}
@@ -142,6 +145,11 @@ spec:
             {{- if .Values.execution.pods.templates }}
             - { name: pod-templates, mountPath: /etc/aiwatcher/pods, readOnly: true }
             {{- end }}
+            {{- if .Values.evaluationEvidence.enabled }}
+            - name: evaluation-approvals
+              mountPath: {{ .Values.evaluationEvidence.sourceDir | quote }}
+              readOnly: true
+            {{- end }}
       {{- with .Values.server.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -166,4 +174,11 @@ spec:
         {{- if .Values.execution.pods.templates }}
         - name: pod-templates
           configMap: { name: {{ $fullname }}-pod-templates }
+        {{- end }}
+        {{- if .Values.evaluationEvidence.enabled }}
+        # Whatever the operator mounted. The chart does not decide whether an
+        # approval bundle is a ConfigMap or a claim: one with model artifacts in
+        # it is megabytes, and one with a scorer and a case manifest is not.
+        - name: evaluation-approvals
+          {{- toYaml .Values.evaluationEvidence.volume | nindent 10 }}
         {{- end }}

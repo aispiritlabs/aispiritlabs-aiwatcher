@@ -15,5 +15,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let manifest = serde_json::from_slice(&bytes)?;
     let prepared = aiwatcher_evaluation::Evaluation::prepare(manifest)?;
     println!("{}", serde_json::to_string_pretty(&prepared)?);
+    // The address of the approval that would admit this pair, which is also the
+    // name of the directory an operator stages its bundle in.
+    println!(
+        "approval_id: {}",
+        aiwatcher_evaluation::approval_id(prepared.variant_id(), prepared.context_id())?
+    );
     Ok(())
 }

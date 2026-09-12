@@ -167,6 +167,55 @@ jobs:
       - name: storage contract against a real database
         run: just test-postgres
 
+  object-store:
+    name: Object store (RustFS)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      # The store that holds prompts, datasets, annotations, conversations,
+      # training and now evaluation evidence — and the one the default suite
+      # never touches: `cargo test --workspace` runs those registries against
+      # the memory and filesystem adapters, whose atomic create is a lock and a
+      # hard link. Neither proves anything about `If-None-Match: *`, which is
+      # what the whole publication and collection protocol of ADR_0030 rests
+      # on. This job is also the only place the hand-written SigV4 signer meets
+      # a real S3 implementation.
+      rustfs:
+        image: rustfs/rustfs:1.0.0-rc.3
+        env:
+          RUSTFS_ACCESS_KEY: rustfsadmin
+          RUSTFS_SECRET_KEY: rustfsadmin
+          RUSTFS_CONSOLE_ENABLE: 'false'
+        # 9010, matching `just rustfs-up`, so a failure here reproduces locally
+        # with the same endpoint in the same variable.
+        ports:
+          - 9010:9000
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.98.0'
+      - uses: Swatinem/rust-cache@v2
+      - uses: extractions/setup-just@v3
+
+      - name: wait for the object store
+        run: |
+          for _ in $(seq 1 60); do
+            # 403 is the success condition: the endpoint is up and refusing an
+            # unsigned request. A 200 would mean it is not authenticating.
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:9010/ || true)
+            if [ "$code" = "403" ]; then echo "rustfs is up"; exit 0; fi
+            sleep 1
+          done
+          echo "rustfs never came up" >&2
+          exit 1
+
+      - name: the signer, against a real S3 implementation
+        run: just test-rustfs
+
+      - name: the publication and collection protocol, against real conditional writes
+        run: just test-evaluation-s3
+
   # One entry per engine a deployment may choose (AW-3): the engine's own checks,
   # then the conformance suite against it — the same four questions, Flow's rows.
   query:

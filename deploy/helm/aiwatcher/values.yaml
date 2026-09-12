@@ -660,6 +660,43 @@ conversationArchive:
   # How often the retention sweep runs.
   sweepSeconds: 3600
 
+# Durable evaluation evidence: what a variant scored, kept after the traces that
+# produced it have been evicted. Off, because it needs something this chart
+# cannot invent — the approval bundles an operator admits. ADR_0030.
+#
+# The evidence itself goes into the same bucket as everything else, under an
+# `evaluations/` prefix, so turning this on adds no store and no network path.
+# What it does add is a directory the server reads: one subdirectory per
+# approval, named by the pair it admits, holding the suite, the scorer, the
+# schemas and the case manifest that pair was measured against. Approving is
+# then an API call (`POST /api/v1/evaluation-approvals`, `admin`), and every
+# publication of an admitted pair needs nothing on this host.
+evaluationEvidence:
+  enabled: false
+
+  # Where those bundles are mounted. Read-only: nothing in aiwatcher writes here.
+  sourceDir: /etc/aiwatcher/evaluation-approvals
+
+  # The volume that directory comes from, rendered verbatim — a ConfigMap for a
+  # text-only bundle, a PersistentVolumeClaim for one with model artifacts in
+  # it. Required when enabled: a bundle nobody mounted makes every publication
+  # a 403, which reads as a permissions problem rather than a missing volume.
+  #
+  #   volume:
+  #     configMap: { name: evaluation-approvals }
+  volume: {}
+
+  # The instance's starting limits. Measure before raising them: a summary and a
+  # catalogue page are bounded by the first two, and `pageSize` is capped at 200
+  # by the registry itself.
+  limits:
+    maxCases: 10000
+    maxBytes: 104857600
+    pageSize: 200
+    # How long published evidence is kept. A source's own retention can shorten
+    # this and never lengthens it.
+    retentionDays: 30
+
 promptStore:
   # install | external | none.
   #

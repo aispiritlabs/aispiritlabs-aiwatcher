@@ -93,6 +93,16 @@ test-rustfs:
     AIWATCHER_PROMPT_S3_ENDPOINT={{rustfs_endpoint}} \
       cargo test -p aiwatcher-prompts --test rustfs -- --ignored --test-threads=1
 
+# `just rustfs-up` first. The half of ADR_0030 that the memory and filesystem
+# adapters cannot prove: publication and collection race at one immutable key,
+# and on S3 that key is `If-None-Match: *`. A lock and a hard link say nothing
+# about it, so without this the protocol is verified everywhere except on the
+# store that holds production.
+test-evaluation-s3:
+    AIWATCHER_EVALUATION_TEST_S3_ENDPOINT={{rustfs_endpoint}} \
+      cargo test -p aiwatcher-server --test evaluation \
+      -- --ignored --test-threads=1
+
 # `just postgres-up` first. Two files: `postgres` is what makes the third
 # `WorkflowStore` adapter prove the same properties as the two that need no
 # service — the suite is `aiwatcher_execution::testing`, called by all three —
@@ -319,6 +329,34 @@ run-serve:
     cargo run --bin aiwatcher --features postgres,laser -- serve
 
 # Server on :8080 with the prompt registry in RustFS. Run `just rustfs-up` first.
+# The durable evidence path of ADR_0030, on this machine.
+#
+# Two halves, and they are separate on purpose. The bundles an operator admits
+# are a directory — one subdirectory per approval, named by the pair it admits —
+# and the committed evidence goes into the object store beside prompts. This
+# stages the shipped fixture as its own approval, so `just approve-evaluation`
+# can admit it and the SDK can publish against it without a step on this host
+# every time.
+run-evaluation:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ./scripts/stage-evaluation-approval.py ./.data/evaluation-approvals
+    AIWATCHER_BUS=wal \
+    AIWATCHER_INGEST_ENABLED=true \
+    AIWATCHER_PROMPT_STORE=fs \
+    AIWATCHER_EVALUATION_SOURCE_DIR="$PWD/.data/evaluation-approvals" \
+    AIWATCHER_LOG=info,aiwatcher=debug \
+    cargo run --bin aiwatcher
+
+# Admit the staged fixture on a running `just run-evaluation`, and say what it
+# admitted. `admin`, because an editor is what a producer's own token holds.
+approve-evaluation base="http://127.0.0.1:8080":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    curl -sS -X POST "{{base}}/api/v1/evaluation-approvals" \
+      -H 'content-type: application/json' \
+      --data-binary @contracts/fixtures/evaluation-v1/manifest.json | python3 -m json.tool
+
 run-rustfs:
     AIWATCHER_BUS=wal \
     AIWATCHER_INGEST_ENABLED=true \

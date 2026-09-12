@@ -1,6 +1,8 @@
 # ADR_0030: Evaluation owns pinned variants and durable evidence
 
-- **Status**: accepted; B1 contract and initial B2 persistence implemented
+- **Status**: accepted; B1 contract and B2 persistence implemented, amended
+  2026-09-12 with approvals as a resource, the read/verify split, restore, and
+  the admission rule a judge will need
 - **Date**: 2026-09-11
 
 ## Context
@@ -345,3 +347,177 @@ panel integration remain B3 work; this change does not infer promotion quality.
 Python's `evaluation_registry` client uses the existing raising HTTP transport;
 TypeScript exports `evaluation-registry` separately. Manifest-only imports remain
 lightweight. Both preserve the best-effort telemetry API unchanged.
+
+
+## Amendment (2026-09-12): an approval is a resource
+
+The operator's approval was one directory on the server's disk, holding one
+`manifest.json`. Everything whose variant or context did not match it was
+`forbidden`. That made an instance hold exactly one admitted pair: publishing a
+second variant meant swapping the directory, and after the swap **the results
+already published under the first one stopped being readable**. A comparison of
+two variants needs both readable at once, so this was a blocker rather than a
+limitation, and it was equally one for anything publishing unattended — with a
+single directory, alternating between two variants meant a human on the host per
+publication.
+
+An approval is now a versioned resource Evaluation owns, addressed by the pair
+it admits: `approval_id = sha256([1, "evaluation.approval", variant_id,
+context_id])`. It records who admitted it and when, plus a `bundle_digest` — what
+the deployment adapter verified *beyond* the manifest's own pinned digests,
+which is how a model package gets pinned at all, since Training's historical ID
+binds artifacts rather than the whole declaration. It is created only after the
+adapter resolves the declaration, so an approval is never a promise about bytes
+nobody read, and a bundle that changed underneath an admitted pair conflicts
+rather than silently moving what every earlier result was measured against.
+
+`POST /api/v1/evaluation-approvals` admits one and `DELETE
+/api/v1/evaluation-approvals/{id}` withdraws it. Both are **`admin`**:
+`AIWATCHER_AUTH_INGEST_TOKENS` makes a producer an editor by construction, and a
+producer that can admit its own evidence has not been approved by anybody.
+Publication requires an admitted, unwithdrawn pair — checked *after* the adapter,
+so a source that is gone says so rather than arriving as "nobody approved this"
+and sending somebody to admit a pair whose bytes are not there.
+
+A **read** requires only that the pair has not been withdrawn. Absence is not
+withdrawal: evidence published before an instance kept approvals stays readable,
+and the adapter still admits it. Withdrawal hides and is final for that approval
+ID; it moves no retention deadline in either direction, because retention is a
+promise about how long content is kept and withdrawal is a statement about what
+may be read.
+
+The deployment adapter follows: `AIWATCHER_EVALUATION_SOURCE_DIR` is now a
+directory **of** approvals, one subdirectory per approval ID, and a single
+bundle directly under the root stays readable for instances that have one. A
+root holding neither is `forbidden` rather than `deleted_source` — nothing was
+deleted, this pair was never admitted.
+
+What this does not yet do is remove the host from a *new* pair: the producer's
+artifacts have to reach the adapter somehow, and today that is a mounted
+directory. Uploading a bundle through the API is the remaining step, and it is
+an addition behind the same resource rather than a change to it.
+
+### Deleting one result
+
+`DELETE /api/v1/evaluation-results/{id}` writes the same durable marker the
+retention sweep does, and is `admin`. Evidence therefore disappears exactly
+three ways — a withdrawn approval, a deleted or revoked source, or retention —
+and this is the narrow case of the first: one measurement rather than every
+measurement of its pair. The marker's reason is `deleted_source`, and the
+vocabulary deliberately stays at seven states: a reader has to act on what is
+missing, and an eighth word for "an operator removed this one" would be a
+distinction with no different next step.
+
+## Amendment (2026-09-12): a summary is read, a shard is verified
+
+Reading a header used to read the whole result. `Registry::get` walked every
+shard, verified each digest and threw the rows away to return counts and metrics
+that were already in the metadata object; `cases` did that and then read its
+page; `list` did it per row **including the source resolution**, which reads a
+model's artifacts inside a 100 MiB budget or a conversation corpus shard by
+shard; and the 60-second sweep did it for every committed claim. Measured at the
+instance's starting limits, in object-store requests:
+
+| | before | after |
+| --- | --- | --- |
+| summary of a 10 000-case result | 105 gets, 1 661 263 B | **5 gets, 11 163 B** |
+| first page of 200 cases | 108 gets, 1 704 843 B | **7 gets, 44 165 B** |
+| catalogue page of 50 rows | 400 gets, 1 list, 185 550 B | **152 gets, 1 list, 131 535 B** |
+| one sweep over 50 rows | 550 gets, 53 lists, 319 050 B | **103 gets, 1 list, 17 806 B** |
+
+Three rules replace it, and none of them relaxes a guarantee.
+
+**A summary answers from its metadata object**, which is itself content-addressed
+and verified, and which is where the counts, the metrics and the manifest have
+always lived. A shard is verified when the page it is on is read, and a damaged
+shard is *that page's* state rather than an error and never a short page — a
+page silently missing rows would read as a result with fewer cases in it. The
+cost is stated rather than hidden: a result whose shards are gone reads as
+complete in the catalogue until somebody opens it, where before it was reported
+by any read at all.
+
+**A source is resolved once per admitted pair**, for the length of one list or
+one sweep, because a catalogue is mostly repetitions of a handful of pairs and
+the answer cannot differ between two rows of one pair. Only a verdict about the
+source is remembered; a store that was briefly unreachable is not one, and
+caching it would condemn every other row of that pair.
+
+**The sweep asks the receipt first.** `expires_at` is already the minimum of the
+instance's clock and the source's, recorded at commit, so expiry needs neither
+the metadata nor the owner. Only what is still live is resolved. It counts what
+*that pass* retired, never a running total — a count including yesterday's work
+cannot tell a working sweep from one that has been failing for a week.
+
+Collection is split off at its own hourly cadence. It lists a prefix per
+published result, which is the expensive half and the one that is about a writer
+that stopped: an hour late is the same answer as a minute late. Source deletion
+is therefore enforced within the hour by the worker, and immediately by any read.
+
+Every pass is written to `evaluations/retention.json` and returned as
+`retention` on `GET /api/v1/evaluation-results`: when it ran, what it retired and
+collected, and how many consecutive failures precede now. Durable rather than a
+log line, so it survives a restart and every replica reads the same one.
+
+### The catalogue's order, and when an index becomes required
+
+The key is `evaluations/{sha256(id)}/`, so the catalogue's order is the order of
+a hash and "newest first" would need a full scan. This stays as it is, and the
+panel's evidence list therefore carries **no time control** rather than one that
+would not narrow anything. A row now costs three requests — a claim, a tombstone
+marker and one header — so a 200-row page is roughly 600 requests: fine at the
+hundreds, and the point at which an index is required is **about a thousand
+published results**, or the first request for an order other than the hash.
+That index is one object per commit under a time-ordered key, written after the
+claim wins and backfilled by the collection pass; it is deliberately not built
+yet, because it is also what would give the catalogue a time order and both
+should be decided by the same change.
+
+## Amendment (2026-09-12): what a restore of `evaluations/` means
+
+This prefix, the conversation archive and the execution stream are the three
+stores whose contents exist nowhere else, and this is the only one whose
+correctness rests on an object *not* coming back. Publication and collection
+race at one immutable key; whichever creates `claim.json` first decides whether
+a logical ID may ever publish. A restore can therefore resurrect a claim a
+collector abandoned, or drop a tombstone that was the record of an erasure.
+
+Restore it whole, to one moment, and never merge two points in time. `content/`
+without its `claim.json` is bytes nothing points at; a claim without its
+tombstone republishes evidence somebody deleted. Run one collection pass
+afterwards and read `retention` to see it complete.
+
+## Amendment (2026-09-12): the admission rule a judge needs
+
+The five source adapters admit a declaration by **reading the owner's bytes
+again** — a curated dataset's rows, a prompt's exact version, a model package's
+artifact digests, an annotation export's shapes, a conversation corpus's
+decrypted shards. A judge's output is not bytes anybody can read back. It is a
+model call, and whether it would answer the same way tomorrow depends on a
+provider, a revision and a configuration rather than on a digest. Carrying the
+"verify the bytes" rule onto it would either refuse every judge or, worse, be
+relaxed for all five adapters that do satisfy it.
+
+So a judge gets its own rule, and this ADR states it before the adapter exists:
+
+1. **Its configuration is pinned by content**, exactly as a variant is — the
+   provider, the model revision and the complete judge configuration, already
+   in `EvaluationContext::judge`. A changed configuration is a changed context,
+   never the same evidence measured again.
+2. **Its calibration set is part of the evidence.** A judge is admitted against
+   a recorded set of cases a human also scored, pinned the way a case manifest
+   is. An admission with no calibration set is refused, not defaulted.
+3. **Its disagreement with those human scores is stored beside the result**, and
+   it is the number worth watching across a series — the judge's analogue of
+   `overfit_gap`. A judge selected by maximising agreement on the set it is then
+   reported against is the same failure `OptimizationRecord::verdict` exists to
+   refuse.
+4. **The result is marked as not reproducible by re-reading.** This is a field
+   on the evidence, not a convention: a reader comparing two results has to be
+   able to tell "these bytes were verified" from "a model said so at the time",
+   and a comparison that treats them alike is the reason B3 must inspect more
+   than a matching context hash.
+
+Until an adapter implements those four, `LocalSource` refuses a manifest
+carrying a judge **by name**, which is the behaviour today and is deliberate:
+an absent judge is a working state, and a judge admitted under the bytes rule
+would be evidence nobody could interpret.

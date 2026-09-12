@@ -310,6 +310,15 @@ later as "holds no object".
 # says which variable is unset rather than showing an empty list.
 - { name: AIWATCHER_PROMPT_STORE, value: "none" }
 {{- end }}
+{{- if .Values.evaluationEvidence.enabled }}
+- { name: AIWATCHER_EVALUATION_SOURCE_DIR, value: {{ .Values.evaluationEvidence.sourceDir | quote }} }
+# `int64` before `quote`, or a byte limit this size renders as 1.048576e+08 and
+# the server refuses to start on a number it cannot parse.
+- { name: AIWATCHER_EVALUATION_MAX_CASES, value: {{ .Values.evaluationEvidence.limits.maxCases | int64 | quote }} }
+- { name: AIWATCHER_EVALUATION_MAX_BYTES, value: {{ .Values.evaluationEvidence.limits.maxBytes | int64 | quote }} }
+- { name: AIWATCHER_EVALUATION_PAGE_SIZE, value: {{ .Values.evaluationEvidence.limits.pageSize | int64 | quote }} }
+- { name: AIWATCHER_EVALUATION_RETENTION_SECONDS, value: {{ mul .Values.evaluationEvidence.limits.retentionDays 86400 | quote }} }
+{{- end }}
 {{- if .Values.conversationArchive.enabled }}
 - { name: AIWATCHER_CONVERSATION_ARCHIVE, value: "on" }
 - { name: AIWATCHER_CONVERSATION_PREFIX, value: {{ .Values.conversationArchive.prefix | quote }} }
