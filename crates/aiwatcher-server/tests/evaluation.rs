@@ -14,6 +14,9 @@ use std::sync::{
 #[path = "evaluation/approvals.rs"]
 mod approvals;
 
+#[path = "evaluation/cost.rs"]
+mod cost;
+
 #[path = "evaluation/gc.rs"]
 mod gc;
 
@@ -72,6 +75,56 @@ fn request(id: &str, count: u64) -> PublishEvaluation {
 fn registry(store: Arc<dyn ObjectStore>, source: Arc<Source>) -> Registry {
     Registry::new(store, source, RegistryConfig::default()).unwrap()
 }
+/// What this evidence reads as, from its header and from the page behind it.
+///
+/// A summary answers from one verified object; a shard is verified when the
+/// page it is on is read. So damage shows on whichever of the two holds it,
+/// and neither surface ever serves the damaged bytes as data.
+async fn evidence(
+    registry: &Registry,
+    receipt: &EvaluationReceipt,
+    subject: &str,
+    now: i64,
+) -> EvidenceState {
+    let detail = registry
+        .get(&receipt.evaluation_id, subject, now)
+        .await
+        .unwrap()
+        .unwrap();
+    if !matches!(
+        detail.state,
+        EvidenceState::Complete | EvidenceState::Partial
+    ) {
+        return detail.state;
+    }
+    let mut cursor = None;
+    loop {
+        let page = registry
+            .cases(
+                &receipt.evaluation_id,
+                &receipt.version,
+                cursor.as_deref(),
+                Some(200),
+                subject,
+                now,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        if !matches!(page.state, EvidenceState::Complete | EvidenceState::Partial) {
+            assert!(
+                page.cases.is_empty(),
+                "damaged evidence never arrives as rows"
+            );
+            return page.state;
+        }
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            return detail.state;
+        }
+    }
+}
+
 /// Admit a pair over HTTP, the way an operator does: `Admin`, because an
 /// editor is what a producer's own ingest token holds.
 async fn admit(client: &reqwest::Client, base: &str, manifest: &EvaluationManifest) {
@@ -283,20 +336,38 @@ async fn missing_and_corrupt_artifacts_remain_known_and_never_look_complete() {
         } else {
             store.delete(&shard.key).await.unwrap();
         }
-        let result = registry
-            .get("damaged", "viewer", 200)
-            .await
-            .unwrap()
-            .unwrap();
         assert_eq!(
-            result.state,
+            evidence(&registry, &receipt, "viewer", 200).await,
             if corrupt {
                 EvidenceState::CorruptArtifact
             } else {
                 EvidenceState::MissingArtifact
             }
         );
-        assert!(result.manifest.is_none());
+        // The header is one intact object and still answers how many cases
+        // were measured. Nothing here turns the damage into a smaller result.
+        let header = registry
+            .get("damaged", "viewer", 200)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(header.counts.unwrap().scored, 3);
+        // Damaging the header itself is the other half, and hides everything.
+        let metadata = store
+            .list("evaluations/")
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|e| e.key.contains(&receipt.version))
+            .unwrap();
+        store.put(&metadata.key, b"[]".to_vec()).await.unwrap();
+        let hidden = registry
+            .get("damaged", "viewer", 200)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(hidden.state, EvidenceState::CorruptArtifact);
+        assert!(hidden.manifest.is_none());
     }
 }
 #[tokio::test]

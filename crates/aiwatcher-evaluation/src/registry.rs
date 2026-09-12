@@ -3,7 +3,7 @@ use crate::{
     Aggregation, Approval, ApprovalRecord, CaseMeasurement, CasePage, DurableEvaluation,
     DurablePage, Evaluation, EvaluationError, EvaluationManifest, EvaluationReceipt, EvidenceCase,
     EvidenceState, PreparedEvaluation, PublishEvaluation, Result, ResultCounts, ResultStatus,
-    Withdrawal, approval_id, canonical, require,
+    RetentionReport, Withdrawal, approval_id, canonical, require,
     store::{self, Claim, Pending, Store},
     text,
 };
@@ -67,6 +67,15 @@ struct Shard {
     expected: String,
     count: usize,
 }
+/// One verdict per admitted pair, for the length of one list or one sweep.
+///
+/// Resolving a source reads the owner's own bytes — a model's artifacts inside
+/// a 100 MiB budget, a conversation corpus shard by shard — and a catalogue is
+/// mostly repetitions of a handful of pairs. Only a verdict *about the source*
+/// is remembered; a transport failure is not one.
+#[derive(Debug, Default)]
+struct Sources(BTreeMap<String, std::result::Result<Option<i64>, EvidenceState>>);
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Metadata {
     manifest: EvaluationManifest,
@@ -409,10 +418,43 @@ impl Registry {
         subject: &str,
         now: i64,
     ) -> Result<Option<DurableEvaluation>> {
+        Ok(self
+            .read(id, subject, now, &mut Sources::default())
+            .await?
+            .map(|(detail, _)| detail))
+    }
+
+    /// The summary, and the metadata it was read from when there was one.
+    ///
+    /// Everything a header says is in that one object. The shards behind it are
+    /// verified when somebody reads the page they are on — a fifty-shard result
+    /// used to be read whole to answer how many cases it had, which is what
+    /// made a catalogue page cost the corpus. `Sources` is what stops one pair
+    /// being resolved once per row of a list that is mostly repetitions of it.
+    async fn read(
+        &self,
+        id: &str,
+        subject: &str,
+        now: i64,
+        sources: &mut Sources,
+    ) -> Result<Option<(DurableEvaluation, Option<Metadata>)>> {
         let Some(claim) = self.store.read::<Claim>(&store::claim(id)).await? else {
             return Ok(None);
         };
-        let receipt = claim.receipt()?;
+        Ok(Some(
+            self.read_receipt(claim.receipt()?, subject, now, sources)
+                .await?,
+        ))
+    }
+
+    async fn read_receipt(
+        &self,
+        receipt: EvaluationReceipt,
+        subject: &str,
+        now: i64,
+        sources: &mut Sources,
+    ) -> Result<(DurableEvaluation, Option<Metadata>)> {
+        let id = &receipt.evaluation_id.clone();
         let mut result = DurableEvaluation {
             receipt,
             state: EvidenceState::Complete,
@@ -424,14 +466,17 @@ impl Registry {
         if let Some(state) = self.store.read(&store::tombstone(id)).await? {
             self.store.erase(id).await?;
             result.state = state;
-            return Ok(Some(result));
+            return Ok((result, None));
         }
         if result.receipt.expires_at <= now {
             self.retire(id, EvidenceState::Expired).await?;
             result.state = EvidenceState::Expired;
-            return Ok(Some(result));
+            return Ok((result, None));
         }
-        match self.read_metadata(&result.receipt, subject, now).await {
+        match self
+            .read_metadata(&result.receipt, subject, now, sources)
+            .await
+        {
             Ok(metadata) => {
                 result.state = if metadata.status == ResultStatus::Succeeded
                     && metadata.counts.unscored == 0
@@ -441,10 +486,11 @@ impl Registry {
                 } else {
                     EvidenceState::Partial
                 };
-                result.manifest = Some(metadata.manifest);
+                result.manifest = Some(metadata.manifest.clone());
                 result.status = Some(metadata.status);
-                result.counts = Some(metadata.counts);
-                result.metrics = metadata.metrics;
+                result.counts = Some(metadata.counts.clone());
+                result.metrics = metadata.metrics.clone();
+                return Ok((result, Some(metadata)));
             }
             Err(EvaluationError::Unavailable(state)) => {
                 if matches!(state, EvidenceState::Expired | EvidenceState::DeletedSource) {
@@ -454,7 +500,7 @@ impl Registry {
             }
             Err(error) => return Err(error),
         }
-        Ok(Some(result))
+        Ok((result, None))
     }
 
     async fn read_metadata(
@@ -462,16 +508,14 @@ impl Registry {
         receipt: &EvaluationReceipt,
         subject: &str,
         now: i64,
+        sources: &mut Sources,
     ) -> Result<Metadata> {
-        let metadata: Metadata = self
+        let (metadata, sealed): (Metadata, bool) = self
             .store
-            .verified(&receipt.evaluation_id, &receipt.version)
+            .opened(&receipt.evaluation_id, &receipt.version)
             .await?;
-        let protected = self.protected(&metadata.manifest)?;
-        if protected {
-            self.store
-                .verified_protected::<Metadata>(&receipt.evaluation_id, &receipt.version, true)
-                .await?;
+        if self.protected(&metadata.manifest)? && !sealed {
+            return Err(EvaluationError::Unavailable(EvidenceState::CorruptArtifact));
         }
         let prepared = Evaluation::prepare(metadata.manifest.clone())?;
         require(
@@ -481,19 +525,43 @@ impl Registry {
             "receipt",
             "manifest identity mismatch",
         )?;
-        let approval = self.admitted(&prepared, false).await?;
-        let source = self.authority.resolve(&metadata.manifest, subject).await?;
+        let key = approval_id(prepared.variant_id(), prepared.context_id())?;
+        let source = match sources.0.get(&key) {
+            Some(remembered) => *remembered,
+            None => {
+                let answer = self.source_of(&prepared, &metadata.manifest, subject).await;
+                let remembered = match answer {
+                    Ok(expiry) => Ok(expiry),
+                    // Only a verdict about the source is worth remembering. A
+                    // store that was briefly unreachable is not one, and would
+                    // otherwise condemn every other row of the same pair.
+                    Err(EvaluationError::Unavailable(state)) => Err(state),
+                    Err(error) => return Err(error),
+                };
+                sources.0.insert(key, remembered);
+                remembered
+            }
+        };
+        let expires_at = source.map_err(EvaluationError::Unavailable)?;
+        if expires_at.is_some_and(|expiry| expiry <= now) {
+            return Err(EvaluationError::Unavailable(EvidenceState::Expired));
+        }
+        Ok(metadata)
+    }
+
+    /// Whether the source still admits this pair, and until when.
+    async fn source_of(
+        &self,
+        prepared: &PreparedEvaluation,
+        manifest: &EvaluationManifest,
+        subject: &str,
+    ) -> Result<Option<i64>> {
+        let approval = self.admitted(prepared, false).await?;
+        let source = self.authority.resolve(manifest, subject).await?;
         if approval.is_some_and(|approval| approval.record.bundle_digest != source.bundle_digest) {
             return Err(EvaluationError::Unavailable(EvidenceState::Forbidden));
         }
-        if source.expires_at.is_some_and(|expiry| expiry <= now) {
-            return Err(EvaluationError::Unavailable(EvidenceState::Expired));
-        }
-        for shard in &metadata.shards {
-            self.read_shard(&receipt.evaluation_id, shard, protected)
-                .await?;
-        }
-        Ok(metadata)
+        Ok(source.expires_at)
     }
 
     async fn read_shard(
@@ -532,7 +600,8 @@ impl Registry {
         subject: &str,
         now: i64,
     ) -> Result<Option<CasePage>> {
-        let Some(detail) = self.get(id, subject, now).await? else {
+        let Some((detail, metadata)) = self.read(id, subject, now, &mut Sources::default()).await?
+        else {
             return Ok(None);
         };
         require(
@@ -546,12 +615,14 @@ impl Registry {
             next_cursor: None,
             state: detail.state,
         };
-        if !matches!(
-            detail.state,
-            EvidenceState::Complete | EvidenceState::Partial
-        ) {
+        let Some(metadata) = metadata.filter(|_| {
+            matches!(
+                detail.state,
+                EvidenceState::Complete | EvidenceState::Partial
+            )
+        }) else {
             return Ok(Some(page));
-        }
+        };
         let offset = match cursor {
             None => 0,
             Some(cursor) => cursor
@@ -564,7 +635,6 @@ impl Registry {
         };
         let limit = limit.unwrap_or(self.config.page_size);
         require(limit > 0 && limit <= 200, "limit", "must be 1..200")?;
-        let metadata: Metadata = self.store.verified(id, version).await?;
         let protected = self.protected(&metadata.manifest)?;
         let total: usize = metadata.shards.iter().map(|s| s.count).sum();
         require(offset <= total, "cursor", "beyond result")?;
@@ -572,7 +642,20 @@ impl Registry {
         let mut start = 0;
         for shard in &metadata.shards {
             if start < end && start + shard.count > offset {
-                let rows = self.read_shard(id, shard, protected).await?;
+                // A damaged shard is this page's state, not an error and never
+                // a short page: the header is intact and says how many cases
+                // there are, so cases simply missing would read as a result
+                // that had fewer of them.
+                let rows = match self.read_shard(id, shard, protected).await {
+                    Ok(rows) => rows,
+                    Err(EvaluationError::Unavailable(state)) => {
+                        page.cases.clear();
+                        page.next_cursor = None;
+                        page.state = state;
+                        return Ok(Some(page));
+                    }
+                    Err(error) => return Err(error),
+                };
                 page.cases.extend(
                     rows.into_iter()
                         .skip(offset.saturating_sub(start))
@@ -625,17 +708,35 @@ impl Registry {
             .collect();
         let next_cursor = (selected.len() > limit).then(|| selected[limit - 1].key.clone());
         let mut evaluations = Vec::new();
+        let mut sources = Sources::default();
         for entry in selected.iter().take(limit) {
-            if let Some(Claim::Committed(receipt)) = self.store.read::<Claim>(&entry.key).await?
-                && let Some(detail) = self.get(&receipt.evaluation_id, subject, now).await?
-            {
+            if let Some(Claim::Committed(receipt)) = self.store.read::<Claim>(&entry.key).await? {
+                let (detail, _) = self
+                    .read_receipt(receipt, subject, now, &mut sources)
+                    .await?;
                 evaluations.push(detail);
             }
         }
         Ok(DurablePage {
             evaluations,
             next_cursor,
+            retention: self.retention().await?,
         })
+    }
+
+    /// What the last retention pass did. `None` means none has ever finished.
+    pub async fn retention(&self) -> Result<Option<RetentionReport>> {
+        self.store.read(store::RETENTION).await
+    }
+
+    /// Record one pass, overwriting the last. The worker calls this whether the
+    /// pass worked or not — a pass nobody can see is the failure this prevents.
+    pub async fn record_sweep(&self, report: &RetentionReport) -> Result<()> {
+        Ok(self
+            .store
+            .0
+            .put(store::RETENTION, canonical(report)?)
+            .await?)
     }
 
     /// Forget one published result on request.
@@ -660,20 +761,58 @@ impl Registry {
 
     /// An operator sweep enforces expiry and owner-wide deletion without a read.
     /// The authority must distinguish global deletion from caller-specific denial.
+    ///
+    /// Expiry is answered from the receipt's own deadline, which is already the
+    /// minimum of the instance's clock and the source's — so the common pass
+    /// reads a claim and stops. Only what is still live is resolved, once per
+    /// admitted pair rather than once per result: a measurement must not cost
+    /// the corpus it is measuring.
     pub async fn sweep(&self, subject: &str, now: i64) -> Result<usize> {
-        self.collect_orphans(now).await?;
         let mut retired = 0;
+        let mut sources = Sources::default();
         for entry in self.store.0.list("evaluations/").await? {
             if !entry.key.ends_with("/claim.json") {
                 continue;
             }
-            if let Some(Claim::Committed(receipt)) = self.store.read::<Claim>(&entry.key).await?
-                && let Some(detail) = self.get(&receipt.evaluation_id, subject, now).await?
-                && matches!(
-                    detail.state,
-                    EvidenceState::Expired | EvidenceState::DeletedSource
-                )
+            let Some(Claim::Committed(receipt)) = self.store.read::<Claim>(&entry.key).await?
+            else {
+                continue;
+            };
+            let id = &receipt.evaluation_id;
+            // Already retired. Erase whatever a late write left behind and say
+            // nothing: a count that includes what yesterday's sweep did cannot
+            // tell a working sweep from one that has been failing for a week.
+            if self
+                .store
+                .read::<EvidenceState>(&store::tombstone(id))
+                .await?
+                .is_some()
             {
+                self.store.erase(id).await?;
+                continue;
+            }
+            if receipt.expires_at <= now {
+                self.retire(id, EvidenceState::Expired).await?;
+                retired += 1;
+                continue;
+            }
+            // Still live by the clock, so the only question left is whether the
+            // owner still has it — one answer per admitted pair, and the pair
+            // is on the receipt rather than inside the result.
+            let key = approval_id(&receipt.variant_id, &receipt.context_id)?;
+            let verdict = match sources.0.get(&key) {
+                Some(remembered) => *remembered,
+                None => match self
+                    .read_metadata(&receipt, subject, now, &mut sources)
+                    .await
+                {
+                    Ok(_) => Ok(None),
+                    Err(EvaluationError::Unavailable(state)) => Err(state),
+                    Err(error) => return Err(error),
+                },
+            };
+            if let Err(state @ (EvidenceState::Expired | EvidenceState::DeletedSource)) = verdict {
+                self.retire(id, state).await?;
                 retired += 1;
             }
         }

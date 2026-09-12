@@ -391,23 +391,88 @@ fn prompt_error(error: aiwatcher_prompts::RegistryError) -> EvaluationError {
 
 /// Retention runs even when no client opens the report. Multiple replicas may
 /// sweep concurrently: markers are create-only and deletion is idempotent.
+///
+/// Two passes, at two rates, because they answer different questions. Every
+/// minute: has anything reached its deadline or lost its source — which reads
+/// a claim and stops for most rows. Every hour: is there anything nobody
+/// claimed — which lists a prefix per published result and is the expensive
+/// half. Collection is about a writer that stopped, and an hour late is the
+/// same answer as a minute late.
+///
+/// Every pass is written down. A sweep that has been failing for a week looks
+/// exactly like one that had nothing to do, and the record is what tells them
+/// apart — durably, so a restart does not reset the evidence of a problem.
 pub fn spawn(
     state: &aiwatcher_api::state::AppState,
     shutdown: tokio_util::sync::CancellationToken,
 ) -> Option<tokio::task::JoinHandle<()>> {
     let registry = state.evaluations.clone()?;
     Some(tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        let mut interval = tokio::time::interval(RETENTION_INTERVAL);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut collected_at = None;
+        let mut report = registry
+            .retention()
+            .await
+            .unwrap_or_default()
+            .unwrap_or_default();
         loop {
             tokio::select! {
                 () = shutdown.cancelled() => break,
                 _ = interval.tick() => {
-                    if let Err(error) = registry.as_ref().clone().with_content_access(true).sweep("retention-worker", time::OffsetDateTime::now_utc().unix_timestamp()).await {
-                        tracing::warn!(%error, "evaluation retention sweep failed");
+                    let now = time::OffsetDateTime::now_utc().unix_timestamp();
+                    let due = collected_at
+                        .is_none_or(|last: i64| now - last >= COLLECTION_INTERVAL.as_secs() as i64);
+                    match pass(&registry, due, now).await {
+                        Ok((retired, collected)) => {
+                            if due {
+                                collected_at = Some(now);
+                            }
+                            report = aiwatcher_evaluation::RetentionReport {
+                                ran_at: now,
+                                retired,
+                                collected,
+                                ..Default::default()
+                            };
+                            if retired + collected > 0 {
+                                tracing::info!(retired, collected, "evaluation retention pass");
+                            }
+                        }
+                        Err(error) => {
+                            report.failures = report.failures.saturating_add(1);
+                            report.failed_at = Some(now);
+                            report.error = Some(error.to_string());
+                            tracing::error!(
+                                %error,
+                                failures = report.failures,
+                                "evaluation retention sweep failed"
+                            );
+                        }
+                    }
+                    if let Err(error) = registry.record_sweep(&report).await {
+                        tracing::error!(%error, "cannot record the evaluation retention pass");
                     }
                 }
             }
         }
     }))
+}
+
+const RETENTION_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+const COLLECTION_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3600);
+
+async fn pass(
+    registry: &std::sync::Arc<aiwatcher_evaluation::Registry>,
+    collect: bool,
+    now: i64,
+) -> Result<(usize, usize)> {
+    // The worker holds the content capability explicitly: retention applies to
+    // governed evidence, and a pass that could not read it would keep it.
+    let registry = registry.as_ref().clone().with_content_access(true);
+    let collected = if collect {
+        registry.collect_orphans(now).await?
+    } else {
+        0
+    };
+    Ok((registry.sweep("retention-worker", now).await?, collected))
 }

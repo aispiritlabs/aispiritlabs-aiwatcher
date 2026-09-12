@@ -89,8 +89,31 @@ pub struct CasePage {
     pub state: EvidenceState,
 }
 
+/// What the last retention pass did, durably, so it survives a restart and is
+/// the same answer in every replica.
+///
+/// A sweep that has been failing for a week looks exactly like one that had
+/// nothing to retire — unless it says so. `failures` is what tells them apart;
+/// `retired` and `collected` count only what *that* pass did, never a running
+/// total that would keep yesterday's success on the screen.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct RetentionReport {
+    pub ran_at: i64,
+    pub retired: usize,
+    pub collected: usize,
+    pub failures: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct DurablePage {
     pub evaluations: Vec<DurableEvaluation>,
     pub next_cursor: Option<String>,
+    /// Absent only where no pass has ever finished — a fresh instance, or one
+    /// whose worker has never run. It is not "nothing to do".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retention: Option<RetentionReport>,
 }

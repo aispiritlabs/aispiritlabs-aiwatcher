@@ -124,13 +124,18 @@ fn registry(f: &Fixture, archive: Arc<Conversations>) -> Registry {
 fn now() -> i64 {
     time::OffsetDateTime::now_utc().unix_timestamp()
 }
+/// Governed evidence, read the way a reader reads it: the header, and then the
+/// page behind it. A sealed shard is verified when its page is, so damage to
+/// one shows there rather than in a summary that is one intact object.
 async fn state(registry: &Registry, id: &str) -> EvidenceState {
-    registry
-        .get(id, "admin", now())
-        .await
-        .unwrap()
-        .unwrap()
-        .state
+    let detail = registry.get(id, "admin", now()).await.unwrap().unwrap();
+    if !matches!(
+        detail.state,
+        EvidenceState::Complete | EvidenceState::Partial
+    ) {
+        return detail.state;
+    }
+    evidence(registry, &detail.receipt, "admin", now()).await
 }
 async fn content_keys(store: &Arc<dyn ObjectStore>) -> Vec<String> {
     store
@@ -694,14 +699,11 @@ async fn sealed_content_rejects_plaintext_downgrades_and_concurrent_retries_keep
             )
             .unwrap();
         store.put(&key, plain).await.unwrap();
-        let detail = registry
-            .get(&receipt.evaluation_id, "admin", 102)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(detail.state, EvidenceState::CorruptArtifact);
-        assert!(detail.manifest.is_none());
-        assert!(detail.metrics.is_empty());
+        assert_eq!(
+            evidence(&registry, &receipt, "admin", 102).await,
+            EvidenceState::CorruptArtifact,
+            "a plaintext downgrade is never an accepted fallback"
+        );
         store.put(&key, original).await.unwrap();
     }
     request.cases[0].actual = Some(json!({"answer":"losing sealed content"}));

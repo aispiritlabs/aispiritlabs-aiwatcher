@@ -76,6 +76,9 @@ pub(crate) fn pending(id: &str) -> String {
 /// Approvals live beside the evidence and never under an evaluation ID: one
 /// approval admits every repetition of its pair, and outlives all of them.
 pub(crate) const APPROVALS: &str = "evaluations/approvals/";
+/// Outside every prefix a scan filters on, and deliberately overwritten rather
+/// than versioned: it is the last pass, not a history of passes.
+pub(crate) const RETENTION: &str = "evaluations/retention.json";
 pub(crate) fn approval(id: &str) -> String {
     format!("{APPROVALS}{id}/record.json")
 }
@@ -171,6 +174,15 @@ impl Store {
     }
     pub async fn verified<T: DeserializeOwned>(&self, id: &str, digest: &str) -> Result<T> {
         self.verified_protected(id, digest, false).await
+    }
+    /// The object and whether it arrived sealed. Metadata names the dataset its
+    /// own protection depends on, so reading it twice to learn that is the one
+    /// full re-read a summary can never avoid by asking in a better order.
+    pub async fn opened<T: DeserializeOwned>(&self, id: &str, digest: &str) -> Result<(T, bool)> {
+        let (bytes, sealed) = self.open(id, digest).await?;
+        let value = serde_json::from_slice(&bytes)
+            .map_err(|_| EvaluationError::Unavailable(EvidenceState::CorruptArtifact))?;
+        Ok((value, sealed))
     }
     pub async fn verified_protected<T: DeserializeOwned>(
         &self,

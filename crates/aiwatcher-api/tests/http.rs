@@ -6916,6 +6916,8 @@ async fn durable_abandoned_uploads_are_gone_and_cannot_reappear_through_legacy_r
     let later = time::OffsetDateTime::now_utc().unix_timestamp()
         + aiwatcher_evaluation::PUBLICATION_GRACE_SECONDS
         + 1;
+    // Collection is the hourly half of the worker; retention is the minute one.
+    assert!(registry.collect_orphans(later).await.unwrap() > 0);
     assert_eq!(registry.sweep("retention-worker", later).await.unwrap(), 0);
     for path in [
         "/api/v1/evaluation-results/abandoned",

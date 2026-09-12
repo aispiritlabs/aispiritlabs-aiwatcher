@@ -12522,6 +12522,17 @@
               "string",
               "null"
             ]
+          },
+          "retention": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RetentionReport",
+                "description": "Absent only where no pass has ever finished — a fresh instance, or one\nwhose worker has never run. It is not \"nothing to do\"."
+              }
+            ]
           }
         }
       },
@@ -19692,6 +19703,48 @@
           "ttl_days": {
             "type": "integer",
             "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "RetentionReport": {
+        "type": "object",
+        "description": "What the last retention pass did, durably, so it survives a restart and is\nthe same answer in every replica.\n\nA sweep that has been failing for a week looks exactly like one that had\nnothing to retire — unless it says so. `failures` is what tells them apart;\n`retired` and `collected` count only what *that* pass did, never a running\ntotal that would keep yesterday's success on the screen.",
+        "required": [
+          "ran_at",
+          "retired",
+          "collected",
+          "failures"
+        ],
+        "properties": {
+          "collected": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "failed_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "failures": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "ran_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "retired": {
+            "type": "integer",
             "minimum": 0
           }
         }

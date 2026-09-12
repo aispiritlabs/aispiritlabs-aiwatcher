@@ -1635,6 +1635,7 @@ export type DurableEvaluation = {
 export type DurablePage = {
     evaluations: Array<DurableEvaluation>;
     next_cursor?: string | null;
+    retention?: null | RetentionReport;
 };
 
 /**
@@ -5406,6 +5407,24 @@ export type RetentionPolicy = {
      */
     policy_id?: string;
     ttl_days: number;
+};
+
+/**
+ * What the last retention pass did, durably, so it survives a restart and is
+ * the same answer in every replica.
+ *
+ * A sweep that has been failing for a week looks exactly like one that had
+ * nothing to retire — unless it says so. `failures` is what tells them apart;
+ * `retired` and `collected` count only what *that* pass did, never a running
+ * total that would keep yesterday's success on the screen.
+ */
+export type RetentionReport = {
+    collected: number;
+    error?: string | null;
+    failed_at?: number | null;
+    failures: number;
+    ran_at: number;
+    retired: number;
 };
 
 /**
