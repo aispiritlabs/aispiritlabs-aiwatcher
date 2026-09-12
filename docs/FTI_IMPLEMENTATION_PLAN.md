@@ -1,6 +1,6 @@
 # FTI — rekomendacja zakresu i plan rozwoju
 
-Data: 2026-09-11. Status: A1–A4 i AR1 zaimplementowane; B1 zweryfikowane, trwały wycinek B2 i atomowe orphan GC nowych publikacji dostarczone; dodano weryfikowane adaptery Curation, promptów, modeli, Annotations i Conversations; B2/AR2 pozostają otwarte: B2e–B2h, w tym judge (sekcje 9–16). Wyniki odbioru A, ograniczenia i incydent seeda w sekcji 8. Przegląd planu z 2026-09-12 jest w sekcji 17; jego wnioski są wniesione do sekcji 2–7 — etap B ma punkty 8–11 i rozstrzygnięcia wizualne, tabela paczek B2e–B2i, a B3 zależy od B2e, B2f i B2i. Sekcja 19 zmniejsza ograniczenia z sekcji 18; sekcja 20 dostarcza stronę dowodową B3 — porównanie dwóch trwałych wyników; sekcja 21 dostarcza AR3 — wspólny przypadek użycia kompilacji i startu, wyjęty z modułu HTTP; sekcja 22 domyka jego ograniczenie — rejestr definicji rozróżnia niedostępny magazyn, uszkodzony rekord i odmówioną definicję; sekcja 23 dostarcza ostatnią część B3 — różnicę na poziomie przypadków; sekcja 24 dostarcza B4 — typowane oceny, rubryki i rewizje; sekcja 25 dostarcza pierwszą paczkę C0 — scoring zapisanych odpowiedzi jako zarządzany run publikujący własny dowód.
+Data: 2026-09-11. Status: A1–A4 i AR1 zaimplementowane; B1 zweryfikowane, trwały wycinek B2 i atomowe orphan GC nowych publikacji dostarczone; dodano weryfikowane adaptery Curation, promptów, modeli, Annotations i Conversations; B2/AR2 pozostają otwarte: B2e–B2h, w tym judge (sekcje 9–16). Wyniki odbioru A, ograniczenia i incydent seeda w sekcji 8. Przegląd planu z 2026-09-12 jest w sekcji 17; jego wnioski są wniesione do sekcji 2–7 — etap B ma punkty 8–11 i rozstrzygnięcia wizualne, tabela paczek B2e–B2i, a B3 zależy od B2e, B2f i B2i. Sekcja 19 zmniejsza ograniczenia z sekcji 18; sekcja 20 dostarcza stronę dowodową B3 — porównanie dwóch trwałych wyników; sekcja 21 dostarcza AR3 — wspólny przypadek użycia kompilacji i startu, wyjęty z modułu HTTP; sekcja 22 domyka jego ograniczenie — rejestr definicji rozróżnia niedostępny magazyn, uszkodzony rekord i odmówioną definicję; sekcja 23 dostarcza ostatnią część B3 — różnicę na poziomie przypadków; sekcja 24 dostarcza B4 — typowane oceny, rubryki i rewizje; sekcja 25 dostarcza pierwszą paczkę C0 — scoring zapisanych odpowiedzi jako zarządzany run publikujący własny dowód; sekcja 26 zamyka ograniczenia sekcji 25 — jeden status dla niezatwierdzonej pary, scorer ilościowy z jednostką, archiwum rozmów jako źródło odpowiedzi, judge jako scorer z regułą dopuszczenia z ADR 0030 i formularz startu w panelu.
 
 Podstawa: [katalog funkcji](FTI_FEATURE_CATALOG.md), [analiza braków](FTI_FEATURE_GAPS.md), [plan UX](FTI_UX_WANDB_PLAN.md), [przegląd dokumentacji Langfuse i MLflow](FTI_LANGFUSE_MLFLOW_ANALYSIS.md), [ocena architektury](FTI_ARCHITECTURE_REVIEW.md) oraz aktualny kod. Ocena dotyczy obecności i kontraktów implementacji; nie potwierdza działania konkretnego wdrożenia. Katalog opisuje zakres docelowy, więc liczba jego pozycji nie jest miarą ukończenia produktu.
 
@@ -1417,7 +1417,7 @@ zatrzymane i usunięte:
   kontrakt i trasę, nie mają ekranu.
 - **Rozbieżność judge'a z ocenami ludzi** nie jest jeszcze liczona; to trzeci
   warunek judge'a z ADR 0030 i należy do jego adaptera.
-- **C0** — bez zmian, karta AW-6; jego zależność od B4 jest spełniona. (Pierwsza paczka C0 dostarczona w sekcji 25.)
+- **C0** — bez zmian, karta AW-6; jego zależność od B4 jest spełniona. (Pierwsza paczka C0 dostarczona w sekcji 25, jej ograniczenia zamknięte w sekcji 26.)
 
 ## 25. C0 — scoring zapisanych odpowiedzi
 
@@ -1566,3 +1566,171 @@ Panel nie wymagał zmian: szczegół trwałego dowodu już rysuje
   nie zostało zrobione po cichu.
 - **Anulowanie** działa ogólnym mechanizmem managed execution; krok jest krótki
   (fold ograniczony limitem przypadków), więc nie ma punktu przerwania w środku.
+
+## 26. Zamknięcie ograniczeń sekcji 25
+
+Pięć pozycji z listy „Co zostaje" sekcji 25, każda jako osobna paczka i osobny
+commit: `049ded7` (status), `09dc86b` (scorer ilościowy), `e8ae1d1` (archiwum),
+`15222f6` (judge), `e6438d3` (panel). Reguły są w
+[ADR 0030](ADR/ADR_0030_EVALUATION_EVIDENCE.md), poprawka „a judge this deployment
+asks, and the archive as answers", i w Guardrails `CLAUDE.md`.
+
+### 26.1 Niezatwierdzona para to jedna odpowiedź
+
+Publikacja producenta dla pary bez zatwierdzenia odpowiadała 403
+`evidence_forbidden`, a start runu scoringu dla tej samej pary — 409
+`pair_not_admitted` z adresem zatwierdzenia. Jeden stan, dwa statusy, a 403
+czytało się jak brak roli tokenu. Teraz oba odpowiadają 409 `pair_not_admitted`
+z adresem — także wtedy, gdy adapter nie znalazł nic, co dopuszcza parę, bo to
+zatwierdzanie jest miejscem, w którym ujawni się powód adaptera. Wycofana para,
+bundle zmieniony pod zatwierdzeniem i wywołujący bez prawa do źródła zostają przy
+403: żadne z nich nie jest krokiem, który ktoś jeszcze może wykonać. Start pyta
+`Registry::admission`, więc wycofana para jest tam 403, a nie „jeszcze nie".
+Zmiana statusu widocznego dla producentów jest świadoma; żaden SDK nie ponawia ani
+403, ani 409.
+
+### 26.2 Scorer ilościowy ma jednostkę autora
+
+`absolute_error { unit }` mierzy odległość odpowiedzi od oczekiwanej liczby: średnia
+zamiast odsetka, mniej znaczy lepiej. Kierunek i agregacja są wyprowadzane jak dla
+każdego scorera; jednostka jest jedynym słowem, które autor mówi o metryce, bo
+scorer widzi dwie liczby i nigdy to, co liczą. Karta bez jednostki jest odmawiana
+przy publikacji; odległość, której nie da się wyrazić skończoną liczbą, nie jest
+oceniana. `SCORING_VERSION` zostaje `1`: nowe słowo nie zmienia odpowiedzi żadnego
+istniejącego scorera.
+
+### 26.3 Archiwum rozmów jako źródło odpowiedzi
+
+Przypadek kohorty rozmów to tura asystenta, a odpowiedzią na niego jest odpowiedź
+tej tury — run może zadeklarować `"answers": "archive"`. Ograniczenie z sekcji 25
+było dosłowne: wykonawca czyta kohortę przez archiwum, a treść czyta się tylko z
+dostępem do treści, którego nic mu nie dawało. Przyznanie go temu, kto kliknął
+start, zrobiłoby z kliknięcia edytora sposób na odczyt archiwum. **Uprawnieniem
+jest zatwierdzenie**: wykonawca pyta bramkę, zanim cokolwiek przeczyta, i czyta z
+dostępem do treści tylko dla pary dopuszczonej przez admina — którego zatwierdzenie
+samo rozwiązało tę treść. Dowód jest pieczętowany szyfrem archiwum, a rejestr, na
+którym działał krok, nie zachowuje dostępu.
+
+Przy okazji: `Registry::cohort` rozwiązywał kohortę rozmów dla dowolnego
+wywołującego, bo nie sprawdzał bramki treści przed adapterem — publikacja zawsze
+to robiła. Teraz robi to tak samo.
+
+Trzy odmowy z nazwą: nagranie dla kohorty rozmów (odpowiedzi na pytania z archiwum
+leżałyby jawnie, poza retencją i usuwaniem), archiwum dla innej kohorty, i scorer
+czytający oczekiwanie nad archiwum (oczekiwaniem jest mierzona odpowiedź).
+Deklaracja wymaga też opublikowanej karty, więc run, który mógłby tylko upaść, jest
+odmawiany przed zapisem. Na przewodzie nagranie jest dalej zwykłą referencją
+artefaktu, więc wcześniejsze deklaracje zachowują adres.
+
+### 26.4 Judge jako scorer
+
+Adapter dla czterech warunków judge'a z ADR 0030 — dla judge'a, którego pyta sam
+aiwatcher; judge producenta dalej nie ma adaptera i jest odmawiany z nazwy.
+
+- **Konfiguracja przypięta treścią.** Scorer `judge` wskazuje wersję rubryki; skala
+  i kierunek metryki są rubryki (flaga → `rate`/`ratio`, liczba → średnia `score`,
+  poziomy → średnia pozycja od zera). Run deklaruje profil (`openai | llamacpp`),
+  model i rewizję oraz ustawienia, których skrót jest
+  `context.judge.configuration`.
+- **Zbiór kalibracyjny jest częścią dowodu.** `POST /evaluation-calibrations`
+  zamraża oceny ludzi (B4) przypadków opublikowanego wyniku pod wskazanymi wersjami
+  rubryk, adresowane treścią; kontekst wskazuje go jako dataset nowego rodzaju
+  `assessments`. Zbiór bez oceny człowieka pod którąkolwiek rubryką karty jest
+  odmawiany, nie domyślny; zbiór z wyniku tego samego runu też.
+- **Zgodność z ludźmi obok wyniku.** Run zadaje judge'owi pytania o przypadki
+  kohorty i o każdą pozycję zbioru kalibracyjnego, i publikuje per metryka: ile było
+  pozycji, na ile judge odpowiedział na skali, odsetek zgodnych — **liczony po
+  wszystkich pozycjach**, żeby judge odmawiający trudnych przypadków nie
+  „dogadywał się" w górę — i średnią odległość.
+- **Wynik oznaczony jako słowo modelu.** `reproducible: false` na dowodzie, a
+  porównanie takich wyników niesie `judged: true` jako pole, nie powód.
+
+Judge działa w roli `work`, jako osobny rodzaj runtime'u `judge_evaluation`,
+tam gdzie są `AIWATCHER_JUDGE_URL` i `AIWATCHER_JUDGE_PROVIDER` (plus opcjonalnie
+`AIWATCHER_JUDGE_TOKEN`, `_CONCURRENCY`, `_TIMEOUT_SECONDS` i wartości `execution.judge`
+w chart). Start odmawia 501 `judge_disabled` bez judge'a i 422 z oboma profilami przy
+innym — run, którego nikt nie odbierze, czekałby wiecznie. Pytania idą przed foldem,
+ograniczoną liczbą naraz; jedna awaria kończy próbę zamiast publikować pół pomiaru.
+Judge nie dostaje słów z archiwum ani kalibracji na dowodzie z rozmów.
+
+**Znalezisko z odbioru na żywo**: `gemma-4-e2b` (Q4, llama.cpp) proszona o „true or
+false" odpowiadała `"false"` w cudzysłowie. Ścisły odczyt odrzucał wtedy każdy
+przypadek, na który model powiedział „nie" — liczyły się tylko jego „tak". Każde
+wywołanie niesie teraz skalę jako JSON Schema, na którą dostawca dekoduje; odczyt
+zostaje ścisły. Powód nigdy nie cytuje odpowiedzi modelu.
+
+Przy okazji zamknięta luka: `POST /evaluation-results` przyjmował dowód z kontekstem
+`aiwatcher.scoring`, więc ktoś z tokenem edytora mógł opublikować liczby pod nazwą
+zadeklarowanego runu przed runem — a pierwsza publikacja ID wygrywa. Teraz 403
+`measured_here`.
+
+### 26.5 Formularz startu w panelu
+
+Ekran Evaluation ma przycisk **Measure**. Formularz zbiera wybory człowieka: kartę,
+opublikowany wynik, którego kohortę i wariant mierzyć, nową nazwę eksperymentu,
+ID wyniku i powtórzenia, odpowiedzi (plik nagrania albo — tylko dla kohorty rozmów —
+archiwum) i, gdy karta pyta judge'a, profil, model, rewizję, ustawienia oraz zbiór
+kalibracyjny brany z ocen ludzi innego wyniku. **Niczego nie wylicza**: metryki,
+zatwierdzenie i tożsamość runu wracają z serwera. Deklaracja i run, który uruchomiła,
+są w URL (`declaration`, `measured`), więc przeładowanie albo link wysłany adminowi
+trafia w tę samą deklarację. Z widoku deklaracji admin stage'uje przypięte pliki, a
+manifest dokłada panel — ten z deklaracji, nie przepisywany ręcznie. Odmowa startu
+`pair_not_admitted` mówi, kto i co ma zatwierdzić. Panel wyniku judge'a mówi, że to
+słowo modelu, i pokazuje zgodność z ludźmi bez kolorowania; porównanie takich
+wyników mówi, że różnica zawiera zmienność samego judge'a.
+
+### 26.6 Odbiór
+
+`rtk just check` 23/23 po `15222f6` i po `e6438d3`; po `049ded7`, `09dc86b` i
+`e8ae1d1` — testy zmienionych crate'ów, clippy i lint komentarzy. Nowe testy: 3
+jednostkowe przy scorerze ilościowym i 1 przy publikacji średniej; 3 jednostkowe
+przy źródle odpowiedzi i 1 na prawdziwym archiwum rozmów (zaszyfrowany dowód, bez
+jawnych słów w magazynie, odmowa przed zatwierdzeniem bez odczytu); 4 jednostkowe
+przy judge'u, 5 przy kliencie i wykonawcy (kolejność odpowiedzi, awaria, profil,
+konfiguracja, stranded), 3 integracyjne (zgodność z ludźmi, odmowy kalibracji,
+zły profil); 3 HTTP (jeden kod niezatwierdzonej pary, start judge'a w trzech
+wdrożeniach i `measured_here`); 2 w SDK Python; 5 w panelu.
+
+Odbiór na żywo, `127.0.0.1:19085` z własnym katalogiem danych i `llama-server` z
+`gemma-4-e2b` na `127.0.0.1:19086`, po odbiorze zatrzymane po PID i usunięte:
+
+- rubryka „correct" (flaga), wcześniejszy run bez judge'a, trzy oceny ludzi
+  (Warsaw — tak, „5" na 2+2 — nie, Blue — tak), zbiór kalibracyjny: 3 pozycje;
+- run z kartą judge'a nad kandydatem (Kraków, „4", odmowa odpowiedzi): deklaracja
+  z `calibration_dataset.kind = assessments`, publikacja pod jego nazwą → 403
+  `measured_here`, start → krok `judge_evaluation`, 1,5 s;
+- dowód: `complete`, 3/3, `correct = 0,33` (tylko „4" poprawne),
+  `reproducible: false`, zgodność z ludźmi 3/3, 100%, średnia odległość 0;
+  ponowny start → ten sam run; porównanie z wcześniejszym wynikiem →
+  `incompatible` („Different suite", „Different judge"), `judged: true`;
+- przed poprawką schematu ten sam run: `partial`, 1/3, dwa przypadki z powodem
+  „a value of another kind" i zgodność 33% — to znalazło 26.4;
+- panel na `:5182` przeciw tej instancji: formularz z kartą judge'a, zbiór
+  kalibracyjny wzięty z przycisku (3 oceny), deklaracja z nagraniem wysłanym z
+  przeglądarki, start przed zatwierdzeniem → komunikat z adresem, zatwierdzenie z
+  panelu z sześcioma przypiętymi plikami, start → link do wykonania, wynik z notą
+  judge'a; przeładowanie wraca do tej samej deklaracji i wykonania.
+
+Po odbiorze nic nie nasłuchuje na 8080, 18080, 19085, 19086 ani 5182.
+
+### 26.7 Co zostaje
+
+- **Rewizja modelu judge'a jest deklaracją, nie sprawdzeniem** — dostawca zgodny z
+  OpenAI nie mówi, jaką rewizję obsłużył. Stąd `reproducible: false` i zgodność z
+  ludźmi obok liczb.
+- **Judge widzi to, co wskazuje `answer_path`** (i `expected_path`); źródło nie daje
+  wejścia przypadku, więc nagranie, które chce pokazać pytanie, umieszcza je w
+  odpowiedzi — tak zrobił odbiór.
+- **Poziomy uśredniane są jako pozycje**, co zakłada równe odstępy; próg zbioru
+  kalibracyjnego to co najmniej jedna ocena na rubrykę, a nie liczność, która
+  cokolwiek dowodzi — liczba pozycji stoi obok zgodności.
+- **Ponowienie próby judge'a pyta od nowa o wszystko** — koszt jest zapisany, a
+  pytań nie pamięta się między próbami.
+- **Archiwum jako odpowiedzi to odpowiedzi samego korpusu kohorty**; odpowiedzi
+  nowej wersji aplikacji zapisane w innym korpusie nie są dopasowywane do
+  przypadków, a trace nie jest przenoszony. Judge nad archiwum jest odmawiany.
+- **Panel**: kohorta i wariant pochodzą wyłącznie z opublikowanego wyniku; karty i
+  rubryki dalej tylko przez API; lista wyników nie odświeża się sama w trakcie runu
+  (odświeża ją „Open the result").
+- Dalej otwarte na AW-6: **C1** — szablon `generate_and_score`; z B3 — kontekst
+  wariantu w obserwacjach.

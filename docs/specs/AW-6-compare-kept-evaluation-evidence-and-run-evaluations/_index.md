@@ -41,7 +41,8 @@ building towards, and it is four things rather than one:
   be read. The case-level diff followed in plan section 23 —
   `/comparison/cases`, a merge of two streams both sides sorted by `case_id` at
   publish, narrowed by the server and bounded in how far one request walks.
-  What is left of B3 is the judge's fourth ADR_0030 condition and the variant
+  The judge's four ADR_0030 conditions are kept by an adapter for a judge
+  aiwatcher asks itself (plan section 26); what is left of B3 is the variant
   context on observations.
 - **B4 — assessments.** **Done** (plan section 24): a rubric is a resource —
   the question, the words a person and a judge are both given, the answers it
@@ -72,9 +73,12 @@ building towards, and it is four things rather than one:
   the evidence — with no step on the server's host and no model called. The
   admission rule gained a second kind: evidence measured here is admitted
   against the scorecard and the compiled scorer, because it has no suite or
-  scorer file for a bundle to hold. What is left of C0's line in the plan is
-  the start form, which the package table gives to C1, and the conversation
-  archive as a second source of answers.
+  scorer file for a bundle to hold. Its limits were closed next (plan section
+  26): one 409 for a pair nobody admitted, a quantity scorer whose unit is the
+  author's, the conversation archive as answers read under the approval rather
+  than a session, a calibrated judge whose agreement with people rides beside
+  its numbers, and a Measure form in the panel. What is left is C1's
+  `generate_and_score` template.
 
 Both follow-ups that sat inside the first are done (plan section 19): the
 catalogue has an index and a published order, so its page costs 103 requests
@@ -124,3 +128,13 @@ The comparison itself followed in section 20.
   admitted a suite and a scorer only as bundle files, which evidence measured
   here does not have: every scoring run would have been refused at approval,
   and only reading the adapter before live acceptance showed it
+- 2026-09-12 — C0's limits closed (plan section 26), five packages. Not admitted
+  is one 409 whoever asks. `absolute_error` measures a quantity in the unit its
+  author names. A conversation cohort is answered from the archive, read with
+  content access only for a pair an admin admitted — which also found
+  `Registry::cohort` resolving that cohort without the content gate. A scorecard
+  may ask a judge: settings pinned by digest, a calibration set frozen from B4's
+  human judgements, agreement counted over every item beside the numbers,
+  `reproducible: false`, claimed in the work role. Live against gemma-4-e2b the
+  judge answered `"false"` in quotes until every call carried the scale as a JSON
+  Schema. And the panel starts a measurement, deriving nothing

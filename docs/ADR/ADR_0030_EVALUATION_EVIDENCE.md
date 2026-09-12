@@ -2,7 +2,8 @@
 
 - **Status**: accepted; B1 contract and B2 persistence implemented, amended
   2026-09-12 with approvals as a resource, the read/verify split, restore, and
-  the admission rule a judge will need
+  the admission rule a judge will need, and the adapter for a judge this
+  deployment asks
 - **Date**: 2026-09-11
 
 ## Context
@@ -757,3 +758,70 @@ three averages out of four would give each metric its own denominator. And a
 case the recording answered twice is not scored: one publication is one
 repetition, and two answers to one case are two measurements it cannot tell
 apart.
+
+## Amendment (2026-09-12): a judge this deployment asks, and the archive as answers
+
+The judge rule above was written before an adapter existed. This is that
+adapter, for a judge aiwatcher asks itself inside a scoring run; a producer's
+judge still has none, and is still refused by name. Building it, and closing the
+rest of the first scoring package's limits, settled six things.
+
+**The four conditions, as they are kept.** A `judge` scorer names a rubric
+version, and the metric's scale and direction are that rubric's — a flag is a
+rate in `ratio`, a bounded number a mean `score`, levels a mean position from
+nought. The run declares the rest: a profile (`openai` or `llamacpp`), the model
+and a revision its author pins, and the settings, whose digest is
+`context.judge.configuration` (condition 1). The calibration set is the human
+judgements B4 recorded about a published result's cases, under exactly those
+rubric versions, frozen by content through `POST /evaluation-calibrations` and
+named in `context.judge.calibration_dataset` with the new dataset kind
+`assessments` (condition 2). Admission reads the settings and the set from this
+registry and refuses a set with no person's judgement under any rubric the card
+asks. The run puts every calibrated answer to the judge beside the cohort's, and
+publishes per metric how many items there were, how many the judge answered on
+the scale, the fraction it agreed on — over *every* item, so declining the hard
+ones does not agree its way up — and the mean distance (condition 3). The
+evidence carries `reproducible: false`, and a comparison of two such results
+carries `judged: true` rather than a reason, the way `same_variant` does
+(condition 4). Revisions to people's judgements after a set was taken make a
+later set; they never re-read this one.
+
+**A reply is decoded against the scale, not read generously.** Every call sends
+the scale as a JSON Schema. Live, `gemma-4-e2b` on llama.cpp told "true or
+false" answered `"false"` in quotes; the strict reader failed every case it said
+no to, so only its yeses were counted. Decoding against the schema fixed the
+model rather than the reader. A reason never quotes a reply, and a provider's
+refusal carries its status and error message only.
+
+**A judge runs where a socket and a credential are.** A judged run is its own
+runtime kind, `judge_evaluation`, claimed in the work role where
+`AIWATCHER_JUDGE_URL` and `AIWATCHER_JUDGE_PROVIDER` are, and a start is refused
+— 501 without a judge, 422 naming both profiles with another — rather than left
+for no process to claim. One outage fails the attempt instead of publishing half
+a measurement; the retry asks every question again, which is the cost stated.
+
+**The archive is an answer source, under the approval rather than the session.**
+A conversation cohort's case is an assistant turn, and its answer is that turn's
+response, so a run may declare `"answers": "archive"`. The executor has no
+session to hold content access; it asks the gate first and reads with content
+access only for a pair an admin admitted — whose approval resolved that very
+content. A recording is refused for such a cohort, since it would keep answers to
+archived questions unsealed and outside retention and erasure; a card over the
+archive may read no expectation, because the expectation is the response being
+measured; and no judge is asked about the archive's words, nor calibrated on
+conversation evidence.
+
+**Not yet admitted is one answer.** A publication for a pair with no approval
+record, including one the adapter found nothing for, answers 409
+`pair_not_admitted` naming the approval, as a scoring run's start does. A
+withdrawn pair, a bundle that changed under its approval and a caller who may not
+read the source stay 403: none is a step somebody still has to take.
+
+**What aiwatcher measured, only its run publishes.** `POST /evaluation-results`
+answers 403 `measured_here` for a context scored by `aiwatcher.scoring`. The first
+publication of an ID wins, and only the run knows its numbers, its origin and its
+agreement.
+
+A scorer measuring a quantity arrived too: `absolute_error`, a mean distance
+whose unit is the author's one word about its metric — the scorer sees two
+numbers and never what they count — while its direction stays derived.
