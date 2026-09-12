@@ -154,9 +154,9 @@ async fn a_catalogue_page_and_a_sweep_do_not_reread_every_published_result() {
     assert_eq!(page.evaluations.len(), CATALOGUE);
     println!("catalogue of {CATALOGUE}: {gets} gets, {lists} lists, {bytes} bytes");
     // A claim, a tombstone marker and one header per row. Above roughly a
-    // thousand rows this is what an index over the catalogue would replace —
-    // and the same index is what would give it an order other than the hash of
-    // an ID. See the FTI plan's section 18.
+    // thousand rows an index over the catalogue replaces this, and the same
+    // index is what would give it an order other than the hash of an ID —
+    // which is what its key is today. ADR_0030.
     assert!(
         gets <= 4 * CATALOGUE,
         "a row must cost a header, not a result: {gets} gets"

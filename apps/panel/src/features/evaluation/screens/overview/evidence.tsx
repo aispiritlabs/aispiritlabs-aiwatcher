@@ -1,30 +1,17 @@
 /**
  * Durable evidence, on the screen.
  *
- * The other half of this area. A report folded from the event log is bounded by
- * that log's retention; evidence published through `/api/v1/evaluation-results`
- * is kept on purpose, with its own clock and its own admission (ADR_0030). The
- * two appear in one list, because "which measurements do we have" is one
- * question — and every row says which it is, because what you can do with them
- * differs: one you can still compare against a baseline, the other outlives the
- * traces behind it.
+ * The other half of this area: a report folded from the event log is bounded by
+ * that log's retention, and evidence published through
+ * `/api/v1/evaluation-results` is kept on purpose, with its own clock and its
+ * own admission (ADR_0030). They appear in one list, and every row says which
+ * it is, because what you can do with them differs.
  *
- * ## Two words that are both "partial"
- *
- * `EvidenceState::Partial` and `ResultStatus::Partial` arrive together on one
- * object and mean different things — the first is about what is *readable*, the
- * second about what was *measured*. Two badges reading "partial" beside each
- * other would be worse than either, so nothing here prints that word twice:
- * evidence is kept or kept with gaps, and an outcome succeeded, failed or was
- * partly measured.
- *
- * ## Seven states, not one error
- *
- * `EvidenceState` is seven answers, five of which are not "it worked" — and
- * they are not interchangeable. Bytes that do not verify are not bytes that are
- * gone; retention running out is not a deletion; and `forbidden` has three
- * different causes with three different next steps. Each gets its own sentence
- * and says what to do, because a reader has to act on it.
+ * Two rules carry the rest. `EvidenceState::Partial` and `ResultStatus::Partial`
+ * arrive together and mean different things — what is *readable* against what
+ * was *measured* — so nothing here prints that word twice. And `EvidenceState`
+ * is seven answers with seven next steps, of which `forbidden` alone has three
+ * causes, so each gets its own sentence rather than one shared "failed" shape.
  */
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 
