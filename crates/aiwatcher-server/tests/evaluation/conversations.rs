@@ -151,8 +151,7 @@ async fn conversation_evidence_is_sealed_restartable_paged_and_erased_with_its_s
     let archive = owner(f.store.clone());
     pin(&mut f, &archive).await;
     let registry = registry(&f, archive.clone());
-    let receipt = registry
-        .publish(f.request.clone(), "admin", now())
+    let receipt = publish(&registry, f.request.clone(), "admin", now())
         .await
         .unwrap();
     assert!(receipt.expires_at <= now() + 86400);
@@ -175,8 +174,7 @@ async fn conversation_evidence_is_sealed_restartable_paged_and_erased_with_its_s
     }
     let restarted = self::registry(&f, owner(f.store.clone()));
     assert_eq!(
-        restarted
-            .publish(f.request.clone(), "admin", now() + 1)
+        publish(&restarted, f.request.clone(), "admin", now() + 1)
             .await
             .unwrap(),
         receipt
@@ -223,8 +221,7 @@ async fn conversation_evidence_is_sealed_restartable_paged_and_erased_with_its_s
     );
     assert!(content_keys(&f.store).await.is_empty());
     assert!(
-        restarted
-            .publish(f.request.clone(), "admin", now())
+        publish(&restarted, f.request.clone(), "admin", now())
             .await
             .is_err()
     );
@@ -238,14 +235,11 @@ async fn conversation_roles_are_explicit_and_retention_never_renews() {
     let registry = registry(&f, archive.clone());
     let unprivileged = registry.clone().with_content_access(false);
     assert!(matches!(
-        unprivileged
-            .publish(f.request.clone(), "admin", now())
-            .await,
+        publish(&unprivileged, f.request.clone(), "admin", now()).await,
         Err(EvaluationError::Unavailable(EvidenceState::Forbidden))
     ));
     assert!(f.store.list("evaluations/").await.unwrap().is_empty());
-    let receipt = registry
-        .publish(f.request.clone(), "admin", now())
+    let receipt = publish(&registry, f.request.clone(), "admin", now())
         .await
         .unwrap();
     assert_eq!(
@@ -274,8 +268,7 @@ async fn conversation_roles_are_explicit_and_retention_never_renews() {
         EvidenceState::Complete
     );
     assert_eq!(
-        registry
-            .publish(f.request.clone(), "admin", now() + 60)
+        publish(&registry, f.request.clone(), "admin", now() + 60)
             .await
             .unwrap(),
         receipt
@@ -298,8 +291,7 @@ async fn conversation_integrity_and_key_loss_hide_without_false_erasure() {
     let archive = owner(f.store.clone());
     pin(&mut f, &archive).await;
     let registry = registry(&f, archive.clone());
-    let receipt = registry
-        .publish(f.request.clone(), "admin", now())
+    let receipt = publish(&registry, f.request.clone(), "admin", now())
         .await
         .unwrap();
     let lost_key = registry
@@ -383,7 +375,7 @@ async fn conversation_publication_requires_cipher_exact_cohort_and_native_policy
     .unwrap()
     .with_content_access(true);
     assert!(matches!(
-        unsealed.publish(f.request.clone(), "admin", now()).await,
+        publish(&unsealed, f.request.clone(), "admin", now()).await,
         Err(EvaluationError::Unavailable(EvidenceState::Forbidden))
     ));
     for split in ["train", "validation", "all"] {
@@ -470,6 +462,7 @@ async fn conversation_http_uses_admin_for_publication_detail_pages_list_and_lega
             .unwrap();
         assert_eq!(response.status(), 403);
     }
+    admit(&client, &base, &f.request.manifest).await;
     let response = client
         .post(&endpoint)
         .header("x-authentik-username", "reader")
@@ -576,8 +569,7 @@ async fn conversation_owner_checks_shard_identity_current_consent_and_shorter_re
     let rows = pin(&mut f, &archive).await;
     let version = f.request.manifest.context.dataset.version.clone();
     let registry = registry(&f, archive.clone());
-    let receipt = registry
-        .publish(f.request.clone(), "admin", now())
+    let receipt = publish(&registry, f.request.clone(), "admin", now())
         .await
         .unwrap();
     let inventory = f.store.list("conversations/").await.unwrap();
@@ -687,8 +679,8 @@ async fn sealed_content_rejects_plaintext_downgrades_and_concurrent_retries_keep
     request.manifest.context.dataset.kind = DatasetKind::Conversations;
     request.manifest.variant.dataset = request.manifest.context.dataset.clone();
     let (left, right) = tokio::join!(
-        registry.publish(request.clone(), "admin", 100),
-        registry.publish(request.clone(), "admin", 101)
+        publish(&registry, request.clone(), "admin", 100),
+        publish(&registry, request.clone(), "admin", 101)
     );
     let receipt = left.unwrap();
     assert_eq!(receipt, right.unwrap());
@@ -714,7 +706,7 @@ async fn sealed_content_rejects_plaintext_downgrades_and_concurrent_retries_keep
     }
     request.cases[0].actual = Some(json!({"answer":"losing sealed content"}));
     assert!(matches!(
-        registry.publish(request, "admin", 103).await,
+        publish(&registry, request, "admin", 103).await,
         Err(EvaluationError::Conflict)
     ));
     assert!(registry.collect_orphans(104).await.unwrap() > 0);

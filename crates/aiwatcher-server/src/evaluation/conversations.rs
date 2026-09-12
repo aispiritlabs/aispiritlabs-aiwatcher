@@ -116,6 +116,7 @@ impl LocalSource {
         Ok(SourceEvidence {
             expected,
             expires_at: Some(source.expires_at.unix_timestamp()),
+            bundle_digest: None,
         })
     }
 }

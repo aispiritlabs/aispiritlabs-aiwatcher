@@ -75,8 +75,7 @@ async fn model_pins_survive_head_changes_and_reopen_then_retire_when_version_is_
     let training = Arc::new(Training::new(fixture.store.clone(), "training"));
     pin(&mut fixture, &training).await;
     let first = registry(&fixture, training.clone());
-    let receipt = first
-        .publish(fixture.request.clone(), "editor", 100)
+    let receipt = publish(&first, fixture.request.clone(), "editor", 100)
         .await
         .unwrap();
     let new = training
@@ -113,8 +112,7 @@ async fn model_pins_survive_head_changes_and_reopen_then_retire_when_version_is_
         Arc::new(Training::new(fixture.store.clone(), "training")),
     );
     assert_eq!(
-        reopened
-            .publish(fixture.request.clone(), "editor", 101)
+        publish(&reopened, fixture.request.clone(), "editor", 101)
             .await
             .unwrap(),
         receipt
@@ -178,8 +176,7 @@ async fn every_artifact_and_full_package_are_checked_and_revocation_hides_eviden
     let training = Arc::new(Training::new(fixture.store.clone(), "training"));
     pin(&mut fixture, &training).await;
     let registry = registry(&fixture, training);
-    let receipt = registry
-        .publish(fixture.request.clone(), "editor", 100)
+    let receipt = publish(&registry, fixture.request.clone(), "editor", 100)
         .await
         .unwrap();
     for name in ["weights", "config"] {
@@ -285,10 +282,7 @@ async fn missing_owner_package_or_approval_is_refused_before_publication() {
     let training = Arc::new(Training::new(fixture.store.clone(), "training"));
     pin(&mut fixture, &training).await;
     assert!(matches!(
-        fixture
-            .registry()
-            .publish(fixture.request.clone(), "editor", 100)
-            .await,
+        publish(&fixture.registry(), fixture.request.clone(), "editor", 100).await,
         Err(EvaluationError::Unavailable(EvidenceState::Forbidden))
     ));
     let owner = registry(&fixture, training.clone());
@@ -296,7 +290,7 @@ async fn missing_owner_package_or_approval_is_refused_before_publication() {
     missing.manifest.variant.model.as_mut().unwrap().version = "0".repeat(64);
     fixture.approve(&missing.manifest).await;
     assert!(matches!(
-        owner.publish(missing, "editor", 100).await,
+        publish(&owner, missing, "editor", 100).await,
         Err(EvaluationError::Unavailable(EvidenceState::DeletedSource))
     ));
     fixture.approve(&fixture.request.manifest).await;
@@ -304,7 +298,7 @@ async fn missing_owner_package_or_approval_is_refused_before_publication() {
     let bytes = tokio::fs::read(&path).await.unwrap();
     tokio::fs::remove_file(&path).await.unwrap();
     assert!(matches!(
-        owner.publish(fixture.request.clone(), "editor", 100).await,
+        publish(&owner, fixture.request.clone(), "editor", 100).await,
         Err(EvaluationError::Unavailable(EvidenceState::DeletedSource))
     ));
     tokio::fs::write(path, bytes).await.unwrap();
@@ -327,7 +321,7 @@ async fn missing_owner_package_or_approval_is_refused_before_publication() {
         .version = legacy.version.version;
     fixture.approve(&fixture.request.manifest).await;
     assert!(matches!(
-        owner.publish(fixture.request.clone(), "editor", 100).await,
+        publish(&owner, fixture.request.clone(), "editor", 100).await,
         Err(EvaluationError::Unavailable(EvidenceState::Forbidden))
     ));
     assert!(fixture.store.list("evaluations/").await.unwrap().is_empty());
@@ -382,6 +376,7 @@ async fn server_wiring_resolves_model_pins_and_protects_http_evidence() {
             .status(),
         403
     );
+    admit(&client, &base, &fixture.request.manifest).await;
     let response = client
         .post(&endpoint)
         .header("x-authentik-username", "editor")

@@ -44,8 +44,7 @@ async fn prompt_pins_survive_label_changes_and_index_loss_then_withdraw_on_versi
     ));
     pin(&mut fixture, &prompts).await;
     let first = registry(&fixture, prompts.clone());
-    let receipt = first
-        .publish(fixture.request.clone(), "editor", 100)
+    let receipt = publish(&first, fixture.request.clone(), "editor", 100)
         .await
         .unwrap();
     prompts
@@ -69,8 +68,7 @@ async fn prompt_pins_survive_label_changes_and_index_loss_then_withdraw_on_versi
     );
     let id = &receipt.evaluation_id;
     assert_eq!(
-        reopened
-            .publish(fixture.request.clone(), "editor", 101)
+        publish(&reopened, fixture.request.clone(), "editor", 101)
             .await
             .unwrap(),
         receipt
@@ -141,8 +139,7 @@ async fn prompt_evidence_is_hidden_for_tampering_or_revoked_approval_and_still_e
     let prompts = Arc::new(Prompts::new(fixture.store.clone(), PromptConfig::default()));
     pin(&mut fixture, &prompts).await;
     let registry = registry(&fixture, prompts);
-    let receipt = registry
-        .publish(fixture.request.clone(), "editor", 100)
+    let receipt = publish(&registry, fixture.request.clone(), "editor", 100)
         .await
         .unwrap();
     let id = &receipt.evaluation_id;
@@ -250,10 +247,14 @@ async fn prompt_publication_needs_an_owner_approval_and_an_existing_exact_versio
     .dataset;
     fixture.request.manifest.variant.dataset = fixture.request.manifest.context.dataset.clone();
     fixture.approve(&fixture.request.manifest).await;
-    registry(&fixture, prompts)
-        .publish(fixture.request.clone(), "editor", 100)
-        .await
-        .unwrap();
+    publish(
+        &registry(&fixture, prompts),
+        fixture.request.clone(),
+        "editor",
+        100,
+    )
+    .await
+    .unwrap();
 }
 
 #[tokio::test]
@@ -305,6 +306,7 @@ async fn server_wiring_resolves_prompt_pins_and_protects_http_evidence() {
             .status(),
         403
     );
+    admit(&client, &base, &fixture.request.manifest).await;
     let response = client
         .post(&endpoint)
         .header("x-authentik-username", "editor")

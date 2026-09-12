@@ -128,8 +128,7 @@ async fn annotation_pin_survives_new_revision_and_index_loss_then_retires_with_i
     let owner = Arc::new(Annotations::new(f.store.clone(), "annotations"));
     let coco = pin(&mut f, &owner).await;
     let first = registry(&f, owner.clone());
-    let receipt = first
-        .publish(f.request.clone(), "editor", 100)
+    let receipt = publish(&first, f.request.clone(), "editor", 100)
         .await
         .unwrap();
     let image = coco["images"][0]["file_name"].as_str().unwrap();
@@ -146,8 +145,7 @@ async fn annotation_pin_survives_new_revision_and_index_loss_then_retires_with_i
         Arc::new(Annotations::new(f.store.clone(), "annotations")),
     );
     assert_eq!(
-        reopened
-            .publish(f.request.clone(), "editor", 101)
+        publish(&reopened, f.request.clone(), "editor", 101)
             .await
             .unwrap(),
         receipt
@@ -191,8 +189,7 @@ async fn revoked_rights_and_review_hide_annotation_evidence_without_resetting_re
     let owner = Arc::new(Annotations::new(f.store.clone(), "annotations"));
     let coco = pin(&mut f, &owner).await;
     let registry = registry(&f, owner.clone());
-    let receipt = registry
-        .publish(f.request.clone(), "editor", 100)
+    let receipt = publish(&registry, f.request.clone(), "editor", 100)
         .await
         .unwrap();
     let image = coco["images"][0]["file_name"].as_str().unwrap();
@@ -269,8 +266,7 @@ async fn export_revision_schema_and_image_corruption_never_yield_partial_success
     let owner = Arc::new(Annotations::new(f.store.clone(), "annotations"));
     let coco = pin(&mut f, &owner).await;
     let registry = registry(&f, owner.clone());
-    let receipt = registry
-        .publish(f.request.clone(), "editor", 100)
+    let receipt = publish(&registry, f.request.clone(), "editor", 100)
         .await
         .unwrap();
     let image = coco["images"][0]["file_name"].as_str().unwrap();
@@ -340,7 +336,7 @@ async fn annotation_publication_requires_exact_inputs_targets_and_split() {
     let owner = Arc::new(Annotations::new(f.store.clone(), "annotations"));
     pin(&mut f, &owner).await;
     assert!(matches!(
-        f.registry().publish(f.request.clone(), "editor", 100).await,
+        publish(&f.registry(), f.request.clone(), "editor", 100).await,
         Err(EvaluationError::Unavailable(EvidenceState::Forbidden))
     ));
     let source = f.source().with_annotations(owner.clone());
@@ -432,6 +428,7 @@ async fn server_wiring_resolves_annotation_pins_and_protects_http_evidence() {
             .status(),
         403
     );
+    admit(&client, &base, &fixture.request.manifest).await;
     let response = client
         .post(&endpoint)
         .header("x-authentik-username", "editor")

@@ -1,8 +1,9 @@
 //! Durable publication, access and retention behind the domain facade.
 use crate::{
-    Aggregation, CaseMeasurement, CasePage, DurableEvaluation, DurablePage, Evaluation,
-    EvaluationError, EvaluationManifest, EvaluationReceipt, EvidenceCase, EvidenceState,
-    PublishEvaluation, Result, ResultCounts, ResultStatus, canonical, require,
+    Aggregation, Approval, ApprovalRecord, CaseMeasurement, CasePage, DurableEvaluation,
+    DurablePage, Evaluation, EvaluationError, EvaluationManifest, EvaluationReceipt, EvidenceCase,
+    EvidenceState, PreparedEvaluation, PublishEvaluation, Result, ResultCounts, ResultStatus,
+    Withdrawal, approval_id, canonical, require,
     store::{self, Claim, Pending, Store},
     text,
 };
@@ -25,10 +26,13 @@ pub trait SourceAuthority: Send + Sync + std::fmt::Debug {
     -> Result<SourceEvidence>;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct SourceEvidence {
     pub expected: BTreeMap<String, serde_json::Value>,
     pub expires_at: Option<i64>,
+    /// What this adapter admitted beyond the manifest's own pinned digests.
+    /// An approval records it, so bytes cannot change under an admitted pair.
+    pub bundle_digest: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -117,6 +121,137 @@ impl Registry {
         Ok(protected)
     }
 
+    /// Admit one pinned pair, once, attributably.
+    ///
+    /// The adapter proves the declaration still resolves before anything is
+    /// written, so an approval is never a promise about bytes nobody has read.
+    /// Approving is idempotent for the pair and refuses a bundle that has
+    /// changed underneath it — the pair is the identity, so a second answer for
+    /// it would silently move what every earlier publication was measured
+    /// against. A withdrawn pair is never admitted again under the same ID.
+    pub async fn approve(
+        &self,
+        manifest: &EvaluationManifest,
+        subject: &str,
+        now: i64,
+    ) -> Result<Approval> {
+        text(subject, "approved_by")?;
+        let prepared = Evaluation::prepare(manifest.clone())?;
+        self.protected(manifest)?;
+        let id = approval_id(prepared.variant_id(), prepared.context_id())?;
+        if let Some(approval) = self.approval(&id).await? {
+            require(
+                approval.admits(),
+                "approval",
+                "was withdrawn; a withdrawn pair needs a new declaration",
+            )?;
+        }
+        let source = self.authority.resolve(manifest, subject).await?;
+        require(
+            source.expected.len() as u64 == manifest.context.case_count,
+            "source",
+            "selected case count differs from the pinned manifest",
+        )?;
+        let record = ApprovalRecord {
+            approval_id: id.clone(),
+            variant_id: prepared.variant_id().into(),
+            context_id: prepared.context_id().into(),
+            bundle_digest: source.bundle_digest,
+            approved_by: subject.into(),
+            approved_at: now,
+        };
+        self.store.create(&store::approval(&id), &record).await?;
+        let approval = self
+            .approval(&id)
+            .await?
+            .ok_or(EvaluationError::Unavailable(EvidenceState::MissingArtifact))?;
+        if approval.record.bundle_digest != record.bundle_digest {
+            return Err(EvaluationError::Conflict);
+        }
+        Ok(approval)
+    }
+
+    /// Hide every result measured under one pair, without touching retention.
+    /// The marker is create-only and the record is never rewritten, so two
+    /// operators withdrawing at once agree on who did it and when.
+    pub async fn withdraw(
+        &self,
+        approval_id: &str,
+        subject: &str,
+        now: i64,
+    ) -> Result<Option<Approval>> {
+        text(subject, "withdrawn_by")?;
+        if self.approval(approval_id).await?.is_none() {
+            return Ok(None);
+        }
+        self.store
+            .create(
+                &store::withdrawal(approval_id),
+                &Withdrawal {
+                    withdrawn_by: subject.into(),
+                    withdrawn_at: now,
+                },
+            )
+            .await?;
+        self.approval(approval_id).await
+    }
+
+    /// Every pair this instance has admitted, withdrawn ones included: an
+    /// approval that vanished from the list would read as one nobody made.
+    pub async fn approvals(&self) -> Result<Vec<Approval>> {
+        let mut approvals = Vec::new();
+        let mut entries = self.store.0.list(store::APPROVALS).await?;
+        entries.sort_by(|a, b| a.key.cmp(&b.key));
+        for entry in entries {
+            if !entry.key.ends_with("/record.json") {
+                continue;
+            }
+            if let Some(record) = self.store.read::<ApprovalRecord>(&entry.key).await?
+                && entry.key == store::approval(&record.approval_id)
+                && let Some(approval) = self.approval(&record.approval_id).await?
+            {
+                approvals.push(approval);
+            }
+        }
+        Ok(approvals)
+    }
+
+    async fn approval(&self, id: &str) -> Result<Option<Approval>> {
+        let Some(record) = self
+            .store
+            .read::<ApprovalRecord>(&store::approval(id))
+            .await?
+        else {
+            return Ok(None);
+        };
+        require(record.approval_id == id, "approval", "identity mismatch")?;
+        Ok(Some(Approval {
+            record,
+            withdrawn: self.store.read(&store::withdrawal(id)).await?,
+        }))
+    }
+
+    /// The gate a publication passes and a read is refused by.
+    ///
+    /// Absence is not withdrawal: evidence published before an instance kept
+    /// approvals stays readable, and only the adapter admits it. Absence *is*
+    /// a refusal to publish, because that is where the operator's act belongs.
+    async fn admitted(
+        &self,
+        prepared: &PreparedEvaluation,
+        publishing: bool,
+    ) -> Result<Option<Approval>> {
+        let id = approval_id(prepared.variant_id(), prepared.context_id())?;
+        let approval = self.approval(&id).await?;
+        match &approval {
+            Some(approval) if !approval.admits() => {
+                Err(EvaluationError::Unavailable(EvidenceState::Forbidden))
+            }
+            None if publishing => Err(EvaluationError::Unavailable(EvidenceState::Forbidden)),
+            _ => Ok(approval),
+        }
+    }
+
     /// Same logical ID and content is idempotent, including a lost HTTP response.
     /// The terminal payload determines version; the first claim fixes the clock.
     pub async fn publish(
@@ -156,6 +291,13 @@ impl Registry {
             "source",
             "selected case count differs from pinned manifest",
         )?;
+        // After the adapter, never before it: a source that is gone says so,
+        // rather than arriving as "nobody approved this" and sending somebody
+        // to approve a pair whose bytes are not there to admit.
+        let approval = self.admitted(&prepared, true).await?;
+        if approval.is_some_and(|approval| approval.record.bundle_digest != source.bundle_digest) {
+            return Err(EvaluationError::Unavailable(EvidenceState::Forbidden));
+        }
         let expires_at = source
             .expires_at
             .unwrap_or(i64::MAX)
@@ -339,7 +481,11 @@ impl Registry {
             "receipt",
             "manifest identity mismatch",
         )?;
+        let approval = self.admitted(&prepared, false).await?;
         let source = self.authority.resolve(&metadata.manifest, subject).await?;
+        if approval.is_some_and(|approval| approval.record.bundle_digest != source.bundle_digest) {
+            return Err(EvaluationError::Unavailable(EvidenceState::Forbidden));
+        }
         if source.expires_at.is_some_and(|expiry| expiry <= now) {
             return Err(EvaluationError::Unavailable(EvidenceState::Expired));
         }
@@ -490,6 +636,19 @@ impl Registry {
             evaluations,
             next_cursor,
         })
+    }
+
+    /// Forget one published result on request.
+    ///
+    /// The marker is the retention sweep's own, so a forgotten ID is
+    /// permanently unreadable and never falls back to telemetry. `false` means
+    /// there was no such result — nothing here invents one to delete.
+    pub async fn forget(&self, id: &str) -> Result<bool> {
+        if self.store.read::<Claim>(&store::claim(id)).await?.is_none() {
+            return Ok(false);
+        }
+        self.retire(id, EvidenceState::DeletedSource).await?;
+        Ok(true)
     }
 
     async fn retire(&self, id: &str, reason: EvidenceState) -> Result<()> {

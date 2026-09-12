@@ -4020,12 +4020,174 @@
         }
       }
     },
+    "/api/v1/evaluation-approvals": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Every pair this instance has admitted, withdrawn ones included: an approval\nthat vanished from the list would read as one nobody ever made.",
+        "operationId": "list_approvals",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalPage"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Admit one pinned pair.",
+        "description": "The operator act that authorises publication, separated from publishing so\nthat every later repetition — from a worker, a schedule or CI — needs\nnothing on the server's host. `Admin`, not `Editor`: an ingest token is an\neditor by construction, and a producer that can admit its own evidence is\nnot an approval. Idempotent for the pair; a bundle that changed underneath\nan admitted pair conflicts rather than moving what earlier results mean.",
+        "operationId": "approve_source",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvaluationManifest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Approval"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/evaluation-approvals/{approval_id}": {
+      "delete": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Withdraw one. Every result measured under that pair stops being readable and\nno new one can be published; nothing already published has its retention\nmoved, in either direction. Final for this approval ID.",
+        "operationId": "withdraw_approval",
+        "parameters": [
+          {
+            "name": "approval_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Approval"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/evaluation-results": {
       "get": {
         "tags": [
           "evaluation"
         ],
-        "summary": "Durable discovery is independent of telemetry retention. Pages follow stable\nstorage IDs; clients must use the opaque cursor, not a timestamp assumption.",
+        "summary": "Durable discovery is independent of telemetry retention. Pages follow stable\nstorage IDs; clients must use the opaque cursor, not a timestamp assumption.\nConversation content requires Admin; other readers receive a forbidden state.",
         "operationId": "list_results",
         "parameters": [
           {
@@ -4069,7 +4231,7 @@
         "tags": [
           "evaluation"
         ],
-        "summary": "Publish terminal evidence. Retry the identical body and logical ID after a\ntimeout; a different body conflicts. No result content enters the event log.",
+        "summary": "Publish terminal evidence. Retry the identical body and logical ID after a\ntimeout; a different body conflicts. No result content enters the event log.\nConversation evidence requires Admin, including publication.",
         "operationId": "publish_result",
         "requestBody": {
           "content": {
@@ -4173,6 +4335,59 @@
             }
           },
           "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Forget one published result.",
+        "description": "The third way evidence disappears, beside its approval being withdrawn and\nits retention running out — and the only one that is about a single\nmeasurement. It writes the same durable marker the retention sweep does, so\nthe ID stays permanently unreadable rather than falling back to telemetry.",
+        "operationId": "forget_result",
+        "parameters": [
+          {
+            "name": "evaluation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
             "description": "",
             "content": {
               "application/json": {
@@ -9642,6 +9857,27 @@
         },
         "additionalProperties": false
       },
+      "Approval": {
+        "type": "object",
+        "required": [
+          "record"
+        ],
+        "properties": {
+          "record": {
+            "$ref": "#/components/schemas/ApprovalRecord"
+          },
+          "withdrawn": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Withdrawal"
+              }
+            ]
+          }
+        }
+      },
       "ApprovalGate": {
         "type": "object",
         "description": "A question this step puts in front of a person before the graph goes on.\n\nThe same question a curation's `approval` block holds, and\n[`aiwatcher_core::human_input`] owns what a valid one is — a workflow gate\nand a canvas gate compile to one binding and are answered through one route.",
@@ -9676,6 +9912,57 @@
             "format": "int64",
             "description": "How long the graph waits here. Absent waits as long as it takes.",
             "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "ApprovalPage": {
+        "type": "object",
+        "required": [
+          "approvals"
+        ],
+        "properties": {
+          "approvals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Approval"
+            }
+          }
+        }
+      },
+      "ApprovalRecord": {
+        "type": "object",
+        "description": "Immutable once written. What it records is the act, not the bytes: the\ndeclaration's own digests are the variant and context IDs it is addressed by.",
+        "required": [
+          "approval_id",
+          "variant_id",
+          "context_id",
+          "approved_by",
+          "approved_at"
+        ],
+        "properties": {
+          "approval_id": {
+            "type": "string"
+          },
+          "approved_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "approved_by": {
+            "type": "string"
+          },
+          "bundle_digest": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the deployment adapter verified *beyond* the manifest's own pinned\ndigests — a model package, whose historical ID binds artifacts and not\nthe whole declaration. `None` where an adapter has nothing to add."
+          },
+          "context_id": {
+            "type": "string"
+          },
+          "variant_id": {
+            "type": "string"
           }
         },
         "additionalProperties": false

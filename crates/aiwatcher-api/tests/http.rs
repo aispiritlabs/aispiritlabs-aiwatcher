@@ -6843,7 +6843,7 @@ impl aiwatcher_evaluation::SourceAuthority for EvaluationSource {
                 .into_iter()
                 .map(|id| (id.into(), json!({"answer": ""})))
                 .collect(),
-            expires_at: None,
+            ..Default::default()
         })
     }
 }
@@ -6867,7 +6867,9 @@ impl aiwatcher_evaluation::SourceAuthority for InterruptedEvaluation {
         manifest: &aiwatcher_evaluation::EvaluationManifest,
         subject: &str,
     ) -> aiwatcher_evaluation::Result<aiwatcher_evaluation::SourceEvidence> {
-        if self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 1 {
+        // Admitting the pair resolves once; the publication then fails on its
+        // final recheck, after the shards and before the claim.
+        if self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 2 {
             return Err(aiwatcher_evaluation::EvaluationError::Unavailable(
                 aiwatcher_evaluation::EvidenceState::Forbidden,
             ));
@@ -6894,6 +6896,16 @@ async fn durable_abandoned_uploads_are_gone_and_cannot_reappear_through_legacy_r
         .unwrap(),
     );
     fixture.state.evaluations = Some(registry.clone());
+    assert_eq!(
+        fixture
+            .post(
+                "/api/v1/evaluation-approvals",
+                durable_request("abandoned")["manifest"].clone()
+            )
+            .await
+            .0,
+        StatusCode::OK
+    );
     assert_eq!(
         fixture
             .post("/api/v1/evaluation-results", durable_request("abandoned"))
@@ -6958,6 +6970,14 @@ async fn durable_reports_override_legacy_ids_and_erasure_never_falls_back() {
         )
         .unwrap(),
     ));
+    // Publication is a producer's act and needs a pair an operator admitted.
+    let (status, approval) = fixture
+        .post(
+            "/api/v1/evaluation-approvals",
+            durable_request("durable")["manifest"].clone(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{approval}");
     let (status, receipt) = fixture
         .post("/api/v1/evaluation-results", durable_request("durable"))
         .await;

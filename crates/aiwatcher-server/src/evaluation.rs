@@ -158,17 +158,38 @@ impl SourceAuthority for LocalSource {
         {
             return Err(unavailable(EvidenceState::Forbidden));
         }
-        let root: PathBuf = tokio::fs::canonicalize(directory).await.map_err(io_error)?;
-        let approved: EvaluationManifest = serde_json::from_slice(
-            &bytes(
-                &root,
-                "manifest.json",
-                aiwatcher_evaluation::MAX_MANIFEST_BYTES,
-            )
-            .await?,
-        )?;
-        let approved = Evaluation::prepare(approved)?;
         let asked = Evaluation::prepare(manifest.clone())?;
+        let configured: PathBuf = tokio::fs::canonicalize(directory).await.map_err(io_error)?;
+        // A directory of approvals, addressed by the pair each one admits, so a
+        // second variant is a second subdirectory rather than a swap that hides
+        // the first. One bundle directly under the root stays readable.
+        let approval = aiwatcher_evaluation::approval_id(asked.variant_id(), asked.context_id())?;
+        let root = match tokio::fs::canonicalize(configured.join(&approval)).await {
+            Ok(path) if path.starts_with(&configured) => path,
+            _ => configured.clone(),
+        };
+        let declaration = match bytes(
+            &root,
+            "manifest.json",
+            aiwatcher_evaluation::MAX_MANIFEST_BYTES,
+        )
+        .await
+        {
+            Ok(found) => found,
+            // Nothing admits this pair here. That is a refusal to admit it, not
+            // a source somebody deleted: no earlier evidence pointed at it.
+            Err(EvaluationError::Unavailable(EvidenceState::DeletedSource))
+                if root == configured =>
+            {
+                return Err(unavailable(EvidenceState::Forbidden));
+            }
+            Err(error) => return Err(error),
+        };
+        let mut bundle = Sha256::new();
+        bundle.update(b"aiwatcher.evaluation.bundle.v1");
+        bundle.update(&declaration);
+        let approved =
+            Evaluation::prepare(serde_json::from_slice::<EvaluationManifest>(&declaration)?)?;
         if approved.variant_id() != asked.variant_id()
             || approved.context_id() != asked.context_id()
         {
@@ -190,9 +211,10 @@ impl SourceAuthority for LocalSource {
                 .ok_or_else(|| unavailable(EvidenceState::Forbidden))?;
             // Historical model IDs bind artifact digests, not the whole package.
             // The operator approves its full declaration separately; no URI is fetched.
-            let approved: aiwatcher_training::ModelPackage =
-                serde_json::from_slice(&bytes(&root, "model-package.json", 1024 * 1024).await?)
-                    .map_err(|_| unavailable(EvidenceState::CorruptArtifact))?;
+            let declared = bytes(&root, "model-package.json", 1024 * 1024).await?;
+            bundle.update(&declared);
+            let approved: aiwatcher_training::ModelPackage = serde_json::from_slice(&declared)
+                .map_err(|_| unavailable(EvidenceState::CorruptArtifact))?;
             if serde_json::to_value(&approved)? != serde_json::to_value(&package)? {
                 return Err(unavailable(EvidenceState::Forbidden));
             }
@@ -261,11 +283,16 @@ impl SourceAuthority for LocalSource {
         if c.dataset.kind == DatasetKind::External && c.dataset.version != c.case_manifest.digest {
             return Err(unavailable(EvidenceState::CorruptArtifact));
         }
+        let bundle_digest = Some(hex::encode(bundle.finalize()));
         if c.dataset.kind == DatasetKind::Conversations {
-            return self.conversation_cases(&root, c).await;
+            let mut evidence = self.conversation_cases(&root, c).await?;
+            evidence.bundle_digest = bundle_digest;
+            return Ok(evidence);
         }
         if c.dataset.kind == DatasetKind::Annotations {
-            return self.annotation_cases(&root, c).await;
+            let mut evidence = self.annotation_cases(&root, c).await?;
+            evidence.bundle_digest = bundle_digest;
+            return Ok(evidence);
         }
         let cases: Cases = serde_json::from_slice(
             &verified(
@@ -314,6 +341,7 @@ impl SourceAuthority for LocalSource {
         Ok(SourceEvidence {
             expected,
             expires_at: None,
+            bundle_digest,
         })
     }
 }

@@ -2,6 +2,7 @@
 //! The facade validates and freezes contracts. The registry owns durable
 //! evidence, source authorization, immutable publication and erasure (ADR_0030).
 
+mod approval;
 mod context;
 mod manifest;
 mod reference;
@@ -9,6 +10,7 @@ mod registry;
 mod result;
 mod store;
 
+pub use approval::{Approval, ApprovalPage, ApprovalRecord, Withdrawal, approval_id};
 pub use registry::{
     PUBLICATION_GRACE_SECONDS, Registry, RegistryConfig, SourceAuthority, SourceEvidence,
 };

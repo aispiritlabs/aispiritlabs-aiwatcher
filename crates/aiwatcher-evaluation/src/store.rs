@@ -73,6 +73,16 @@ pub(crate) fn pending(id: &str) -> String {
     format!("{}pending.json", root(id))
 }
 
+/// Approvals live beside the evidence and never under an evaluation ID: one
+/// approval admits every repetition of its pair, and outlives all of them.
+pub(crate) const APPROVALS: &str = "evaluations/approvals/";
+pub(crate) fn approval(id: &str) -> String {
+    format!("{APPROVALS}{id}/record.json")
+}
+pub(crate) fn withdrawal(id: &str) -> String {
+    format!("{APPROVALS}{id}/withdrawn.json")
+}
+
 impl Store {
     pub async fn begin(&self, intent: Pending, now: i64) -> Result<()> {
         let id = &intent.evaluation_id;

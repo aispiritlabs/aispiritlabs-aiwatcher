@@ -11,6 +11,9 @@ use std::sync::{
     atomic::{AtomicU8, Ordering},
 };
 
+#[path = "evaluation/approvals.rs"]
+mod approvals;
+
 #[path = "evaluation/gc.rs"]
 mod gc;
 
@@ -39,7 +42,7 @@ impl SourceAuthority for Source {
             expected: (0..manifest.context.case_count)
                 .map(|n| (format!("case-{n:05}"), serde_json::json!({"answer": ""})))
                 .collect(),
-            expires_at: None,
+            ..Default::default()
         })
     }
 }
@@ -69,6 +72,36 @@ fn request(id: &str, count: u64) -> PublishEvaluation {
 fn registry(store: Arc<dyn ObjectStore>, source: Arc<Source>) -> Registry {
     Registry::new(store, source, RegistryConfig::default()).unwrap()
 }
+/// Admit a pair over HTTP, the way an operator does: `Admin`, because an
+/// editor is what a producer's own ingest token holds.
+async fn admit(client: &reqwest::Client, base: &str, manifest: &EvaluationManifest) {
+    let response = client
+        .post(format!("{base}/api/v1/evaluation-approvals"))
+        .header("x-authentik-username", "operator")
+        .header("x-authentik-groups", "aiwatcher-admins")
+        .json(manifest)
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        response.status().is_success(),
+        "{}",
+        response.text().await.unwrap()
+    );
+}
+/// Publication needs an admitted pair. Admitting one is the operator act these
+/// tests are not about, so every fixture admits its own declaration first — and
+/// ignores a refusal, because a source that cannot be resolved cannot be
+/// approved either, and publication is about to fail for that same reason.
+async fn publish(
+    registry: &Registry,
+    request: PublishEvaluation,
+    subject: &str,
+    now: i64,
+) -> Result<EvaluationReceipt> {
+    let _ = registry.approve(&request.manifest, "operator", now).await;
+    registry.publish(request, subject, now).await
+}
 async fn contract(store: Arc<dyn ObjectStore>) {
     let source = Arc::new(Source::default());
     let first = registry(store.clone(), source.clone());
@@ -81,13 +114,11 @@ async fn contract(store: Arc<dyn ObjectStore>) {
         source.clone(),
     );
     assert!(
-        lossy
-            .publish(request("lost-adapter", 3), "editor", 100)
+        publish(&lossy, request("lost-adapter", 3), "editor", 100)
             .await
             .is_err()
     );
-    let recovered = lossy
-        .publish(request("lost-adapter", 3), "editor", 200)
+    let recovered = publish(&lossy, request("lost-adapter", 3), "editor", 200)
         .await
         .unwrap();
     assert_eq!(recovered.committed_at, 100);
@@ -95,8 +126,8 @@ async fn contract(store: Arc<dyn ObjectStore>) {
     let mut b = a.clone();
     b.cases[0].metrics.insert("accuracy".into(), 0.0);
     let (ra, rb) = tokio::join!(
-        first.publish(a.clone(), "editor", 100),
-        second.publish(b.clone(), "editor", 101)
+        publish(&first, a.clone(), "editor", 100),
+        publish(&second, b.clone(), "editor", 101)
     );
     assert_ne!(ra.is_ok(), rb.is_ok(), "exactly one immutable result wins");
     let winning = if ra.is_ok() { a } else { b };
@@ -104,7 +135,9 @@ async fn contract(store: Arc<dyn ObjectStore>) {
         ra.as_ref().err().or(rb.as_ref().err()),
         Some(EvaluationError::Conflict)
     ));
-    let receipt = first.publish(winning.clone(), "editor", 999).await.unwrap();
+    let receipt = publish(&first, winning.clone(), "editor", 999)
+        .await
+        .unwrap();
     assert!(receipt.committed_at <= 101, "retry never resets retention");
     // Reconstruct the registry, with no event log or in-memory read model.
     drop(first);
@@ -194,7 +227,7 @@ async fn contract(store: Arc<dyn ObjectStore>) {
         EvidenceState::DeletedSource
     );
     assert!(
-        restarted.publish(winning, "editor", 1001).await.is_err(),
+        publish(&restarted, winning, "editor", 1001).await.is_err(),
         "cannot resurrect erased data"
     );
     assert!(
@@ -235,8 +268,7 @@ async fn missing_and_corrupt_artifacts_remain_known_and_never_look_complete() {
     for corrupt in [false, true] {
         let store: Arc<dyn ObjectStore> = Arc::new(MemoryObjectStore::new());
         let registry = registry(store.clone(), Arc::new(Source::default()));
-        let receipt = registry
-            .publish(request("damaged", 3), "editor", 100)
+        let receipt = publish(&registry, request("damaged", 3), "editor", 100)
             .await
             .unwrap();
         let shard = store
@@ -274,15 +306,14 @@ async fn partial_counts_and_retention_never_turn_missing_scores_into_zeroes() {
     let mut request = request("partial", 3);
     request.cases.pop();
     assert!(
-        registry
-            .publish(request.clone(), "editor", 100)
+        publish(&registry, request.clone(), "editor", 100)
             .await
             .is_err()
     );
     request.status = ResultStatus::Partial;
     request.cases[0].error = Some("scorer failed".into());
     request.cases[0].metrics.clear();
-    let receipt = registry.publish(request, "editor", 100).await.unwrap();
+    let receipt = publish(&registry, request, "editor", 100).await.unwrap();
     let result = registry
         .get("partial", "viewer", 101)
         .await
@@ -363,13 +394,11 @@ async fn a_lost_commit_response_is_recoverable_without_a_duplicate_measurement()
         Arc::new(Source::default()),
     );
     assert!(
-        registry
-            .publish(request("lost", 3), "editor", 100)
+        publish(&registry, request("lost", 3), "editor", 100)
             .await
             .is_err()
     );
-    let recovered = registry
-        .publish(request("lost", 3), "editor", 200)
+    let recovered = publish(&registry, request("lost", 3), "editor", 200)
         .await
         .unwrap();
     assert_eq!(recovered.committed_at, 100);
@@ -476,8 +505,7 @@ async fn a_source_retention_change_before_commit_shortens_the_receipt() {
         RegistryConfig::default(),
     )
     .unwrap();
-    let receipt = registry
-        .publish(request("shortened", 3), "editor", 100)
+    let receipt = publish(&registry, request("shortened", 3), "editor", 100)
         .await
         .unwrap();
     assert_eq!(receipt.expires_at, 150);
@@ -543,10 +571,18 @@ async fn the_full_byte_budget_is_rejected_before_any_artifact_is_written() {
     };
     let registry = Registry::new(store.clone(), Arc::new(Source::default()), config).unwrap();
     assert!(matches!(
-        registry.publish(request, "editor", 100).await,
+        publish(&registry, request, "editor", 100).await,
         Err(EvaluationError::Invalid { .. })
     ));
-    assert!(store.list("evaluations/").await.unwrap().is_empty());
+    assert!(
+        store
+            .list("evaluations/")
+            .await
+            .unwrap()
+            .iter()
+            .all(|entry| entry.key.starts_with("evaluations/approvals/")),
+        "an approved pair is not a published result"
+    );
 }
 
 #[path = "evaluation/models.rs"]

@@ -70,6 +70,7 @@ impl LocalSource {
                 .map(|case| (case.case_id, case.expected))
                 .collect::<BTreeMap<_, _>>(),
             expires_at: None,
+            bundle_digest: None,
         })
     }
 }

@@ -7,11 +7,11 @@
 use crate::auth::Caller;
 use aiwatcher_auth::Role;
 use aiwatcher_evaluation::{
-    CasePage, DurableEvaluation, DurablePage, EvaluationReceipt, EvidenceState, PublishEvaluation,
-    ResultStatus,
+    Approval, ApprovalPage, CasePage, DurableEvaluation, DurablePage, EvaluationManifest,
+    EvaluationReceipt, EvidenceState, PublishEvaluation, ResultStatus,
 };
 use axum::extract::{Path, Query, State};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use utoipa::OpenApi;
 
@@ -30,6 +30,10 @@ use crate::state::AppState;
     list_results,
     get_result,
     get_cases,
+    forget_result,
+    approve_source,
+    list_approvals,
+    withdraw_approval,
 ))]
 struct Api;
 
@@ -48,7 +52,13 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/api/v1/evaluation-results/{evaluation_id}",
-            get(get_result),
+            get(get_result).delete(forget_result),
+        )
+        .route("/api/v1/evaluation-approvals", get(list_approvals))
+        .route("/api/v1/evaluation-approvals", post(approve_source))
+        .route(
+            "/api/v1/evaluation-approvals/{approval_id}",
+            delete(withdraw_approval),
         )
         .route(
             "/api/v1/evaluation-results/{evaluation_id}/cases",
@@ -302,6 +312,91 @@ async fn get_cases(
         .await?
         .map(Json)
         .ok_or(ApiError::NotFound(id))
+}
+
+// ── Approvals ────────────────────────────────────────────────────────────────
+
+/// Admit one pinned pair.
+///
+/// The operator act that authorises publication, separated from publishing so
+/// that every later repetition — from a worker, a schedule or CI — needs
+/// nothing on the server's host. `Admin`, not `Editor`: an ingest token is an
+/// editor by construction, and a producer that can admit its own evidence is
+/// not an approval. Idempotent for the pair; a bundle that changed underneath
+/// an admitted pair conflicts rather than moving what earlier results mean.
+#[utoipa::path(post, path = "/api/v1/evaluation-approvals", request_body = EvaluationManifest,
+    responses((status = 200, body = Approval), (status = 400, body = crate::error::ErrorBody),
+    (status = 403, body = crate::error::ErrorBody), (status = 409, body = crate::error::ErrorBody),
+    (status = 501, body = crate::error::ErrorBody)), tag = "evaluation")]
+async fn approve_source(
+    State(state): State<AppState>,
+    caller: Caller,
+    Json(manifest): Json<EvaluationManifest>,
+) -> ApiResult<Json<Approval>> {
+    caller.require(Role::Admin)?;
+    Ok(Json(
+        registry(&state)?
+            .clone()
+            .with_content_access(true)
+            .approve(&manifest, &caller.identity().subject, now())
+            .await?,
+    ))
+}
+
+/// Every pair this instance has admitted, withdrawn ones included: an approval
+/// that vanished from the list would read as one nobody ever made.
+#[utoipa::path(get, path = "/api/v1/evaluation-approvals",
+    responses((status = 200, body = ApprovalPage), (status = 501, body = crate::error::ErrorBody)), tag = "evaluation")]
+async fn list_approvals(
+    State(state): State<AppState>,
+    caller: Caller,
+) -> ApiResult<Json<ApprovalPage>> {
+    caller.require(Role::Viewer)?;
+    Ok(Json(ApprovalPage {
+        approvals: registry(&state)?.approvals().await?,
+    }))
+}
+
+/// Withdraw one. Every result measured under that pair stops being readable and
+/// no new one can be published; nothing already published has its retention
+/// moved, in either direction. Final for this approval ID.
+#[utoipa::path(delete, path = "/api/v1/evaluation-approvals/{approval_id}",
+    params(("approval_id" = String, Path)),
+    responses((status = 200, body = Approval), (status = 403, body = crate::error::ErrorBody),
+    (status = 404, body = crate::error::ErrorBody), (status = 501, body = crate::error::ErrorBody)), tag = "evaluation")]
+async fn withdraw_approval(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(approval_id): Path<String>,
+) -> ApiResult<Json<Approval>> {
+    caller.require(Role::Admin)?;
+    registry(&state)?
+        .withdraw(&approval_id, &caller.identity().subject, now())
+        .await?
+        .map(Json)
+        .ok_or(ApiError::NotFound(approval_id))
+}
+
+/// Forget one published result.
+///
+/// The third way evidence disappears, beside its approval being withdrawn and
+/// its retention running out — and the only one that is about a single
+/// measurement. It writes the same durable marker the retention sweep does, so
+/// the ID stays permanently unreadable rather than falling back to telemetry.
+#[utoipa::path(delete, path = "/api/v1/evaluation-results/{evaluation_id}",
+    params(("evaluation_id" = String, Path)),
+    responses((status = 204), (status = 403, body = crate::error::ErrorBody),
+    (status = 404, body = crate::error::ErrorBody), (status = 501, body = crate::error::ErrorBody)), tag = "evaluation")]
+async fn forget_result(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+) -> ApiResult<axum::http::StatusCode> {
+    caller.require(Role::Admin)?;
+    if registry(&state)?.forget(&id).await? {
+        return Ok(axum::http::StatusCode::NO_CONTENT);
+    }
+    Err(ApiError::NotFound(id))
 }
 
 /// The old detail shape stays readable. It exposes only a bounded first page

@@ -8,8 +8,7 @@ use serde_json::{Value, json};
 async fn curation_evidence_survives_restart_and_head_moves_but_not_source_deletion() {
     let fixture = Fixture::new("lifecycle").await;
     let first = fixture.registry();
-    let receipt = first
-        .publish(fixture.request.clone(), "editor", 100)
+    let receipt = publish(&first, fixture.request.clone(), "editor", 100)
         .await
         .unwrap();
     let mut next = fixture.rows.clone();
@@ -31,8 +30,7 @@ async fn curation_evidence_survives_restart_and_head_moves_but_not_source_deleti
             .any(|case| case.expected == json!({"answer": "Warsaw"}))
     );
     assert_eq!(
-        restarted
-            .publish(fixture.request.clone(), "editor", 200)
+        publish(&restarted, fixture.request.clone(), "editor", 200)
             .await
             .unwrap(),
         receipt
@@ -144,7 +142,7 @@ async fn curation_requires_operator_approval_an_owner_and_matching_inputs_not_on
     ));
     fixture.approve(&request.manifest).await;
     assert!(matches!(
-        fixture.registry().publish(request, "editor", 100).await,
+        publish(&fixture.registry(), request, "editor", 100).await,
         Err(EvaluationError::Unavailable(EvidenceState::CorruptArtifact))
     ));
     assert!(fixture.store.list("evaluations/").await.unwrap().is_empty());
@@ -155,8 +153,7 @@ async fn damaged_native_bytes_hide_published_evidence_without_becoming_a_false_d
     let fixture = Fixture::new("corruption").await;
     let registry = fixture.registry();
     let id = &fixture.request.manifest.origin.evaluation_id;
-    let receipt = registry
-        .publish(fixture.request.clone(), "editor", 100)
+    let receipt = publish(&registry, fixture.request.clone(), "editor", 100)
         .await
         .unwrap();
     let pin = &fixture.request.manifest.context.dataset.version;
@@ -257,6 +254,7 @@ async fn server_wiring_uses_the_native_owner_and_preserves_http_roles() {
         "{}",
         response.text().await.unwrap()
     );
+    admit(&client, &base, &fixture.request.manifest).await;
     let response = client
         .post(&publish)
         .header("x-authentik-username", "editor")

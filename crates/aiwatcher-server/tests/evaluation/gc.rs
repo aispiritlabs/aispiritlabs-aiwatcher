@@ -88,11 +88,10 @@ pub(super) async fn contract(store: Arc<dyn ObjectStore>) {
     // A process stops after one shard: it never advertises a partial upload.
     let paused = PausedStore::new(store.clone(), Pause::AfterArtifact);
     let publisher = registry(paused.clone(), source.clone());
-    let task = tokio::spawn(async move {
-        publisher
-            .publish(request("gc-crash", 3), "editor", 100)
-            .await
-    });
+    let task =
+        tokio::spawn(
+            async move { publish(&publisher, request("gc-crash", 3), "editor", 100).await },
+        );
     paused.reached().await;
     assert_eq!(collector.collect_orphans(expired - 1).await.unwrap(), 0);
     assert!(
@@ -120,20 +119,17 @@ pub(super) async fn contract(store: Arc<dyn ObjectStore>) {
             .is_empty()
     );
     assert!(matches!(
-        collector
-            .publish(request("gc-crash", 3), "editor", expired)
-            .await,
+        publish(&collector, request("gc-crash", 3), "editor", expired).await,
         Err(EvaluationError::Unavailable(EvidenceState::Expired))
     ));
 
     // Collection wins exactly where the publisher is about to claim its ID.
     let paused = PausedStore::new(store.clone(), Pause::BeforeCommit);
     let publisher = registry(paused.clone(), source.clone());
-    let task = tokio::spawn(async move {
-        publisher
-            .publish(request("gc-first", 3), "editor", 100)
-            .await
-    });
+    let task =
+        tokio::spawn(
+            async move { publish(&publisher, request("gc-first", 3), "editor", 100).await },
+        );
     paused.reached().await;
     assert!(collector.collect_orphans(expired).await.unwrap() > 0);
     paused.resume.notify_one();
@@ -147,9 +143,7 @@ pub(super) async fn contract(store: Arc<dyn ObjectStore>) {
     let paused = PausedStore::new(store.clone(), Pause::AfterCommit);
     let publisher = registry(paused.clone(), source.clone());
     let task = tokio::spawn(async move {
-        publisher
-            .publish(request("commit-first", 3), "editor", 100)
-            .await
+        publish(&publisher, request("commit-first", 3), "editor", 100).await
     });
     paused.reached().await;
     assert_eq!(collector.collect_orphans(expired).await.unwrap(), 0);
@@ -163,8 +157,7 @@ pub(super) async fn contract(store: Arc<dyn ObjectStore>) {
     let receipt = task.await.unwrap().unwrap();
     let restarted = registry(store.clone(), source.clone());
     assert_eq!(
-        restarted
-            .publish(request("commit-first", 3), "editor", expired)
+        publish(&restarted, request("commit-first", 3), "editor", expired)
             .await
             .unwrap(),
         receipt
@@ -175,9 +168,7 @@ pub(super) async fn contract(store: Arc<dyn ObjectStore>) {
     let paused = PausedStore::new(store.clone(), Pause::BeforeArtifact);
     let publisher = registry(paused.clone(), source.clone());
     let task = tokio::spawn(async move {
-        publisher
-            .publish(request("gc-late-write", 3), "editor", 100)
-            .await
+        publish(&publisher, request("gc-late-write", 3), "editor", 100).await
     });
     paused.reached().await;
     collector.collect_orphans(expired).await.unwrap();
@@ -192,8 +183,7 @@ pub(super) async fn contract(store: Arc<dyn ObjectStore>) {
 
     // Losing versions can share expectation/response shards with the winner.
     // Collection protects the winner's full reference set, not just metadata.
-    let winner = collector
-        .publish(request("gc-conflict", 3), "editor", 100)
+    let winner = publish(&collector, request("gc-conflict", 3), "editor", 100)
         .await
         .unwrap();
     let before: Vec<_> = content(&store, "gc-conflict")
@@ -205,7 +195,7 @@ pub(super) async fn contract(store: Arc<dyn ObjectStore>) {
     let publisher = registry(paused.clone(), source.clone());
     let mut losing = request("gc-conflict", 3);
     losing.cases[0].actual = Some(serde_json::json!({"answer": "different"}));
-    let task = tokio::spawn(async move { publisher.publish(losing, "editor", 100).await });
+    let task = tokio::spawn(async move { publish(&publisher, losing, "editor", 100).await });
     paused.reached().await;
     assert_eq!(collector.collect_orphans(100).await.unwrap(), 2);
     paused.resume.notify_one();
@@ -234,9 +224,7 @@ pub(super) async fn contract(store: Arc<dyn ObjectStore>) {
     let paused = PausedStore::new(store.clone(), Pause::BeforeCommit);
     let publisher = registry(paused.clone(), source.clone());
     let task = tokio::spawn(async move {
-        publisher
-            .publish(request("gc-lost-response", 3), "editor", 100)
-            .await
+        publish(&publisher, request("gc-lost-response", 3), "editor", 100).await
     });
     paused.reached().await;
     let lossy = registry(
@@ -274,8 +262,7 @@ async fn file_collection_and_commit_have_one_atomic_winner() {
 async fn collection_preserves_old_receipts_and_cannot_guess_references_from_missing_metadata() {
     let store: Arc<dyn ObjectStore> = Arc::new(MemoryObjectStore::new());
     let registry = registry(store.clone(), Arc::new(Source::default()));
-    let receipt = registry
-        .publish(request("old", 3), "editor", 100)
+    let receipt = publish(&registry, request("old", 3), "editor", 100)
         .await
         .unwrap();
     let pending = store

@@ -200,6 +200,11 @@ export type AppendStreamBody = {
     timers?: Array<TimerBody>;
 };
 
+export type Approval = {
+    record: ApprovalRecord;
+    withdrawn?: null | Withdrawal;
+};
+
 /**
  * A question this step puts in front of a person before the graph goes on.
  *
@@ -230,6 +235,28 @@ export type ApprovalGate = {
      * How long the graph waits here. Absent waits as long as it takes.
      */
     timeout_seconds?: number | null;
+};
+
+export type ApprovalPage = {
+    approvals: Array<Approval>;
+};
+
+/**
+ * Immutable once written. What it records is the act, not the bytes: the
+ * declaration's own digests are the variant and context IDs it is addressed by.
+ */
+export type ApprovalRecord = {
+    approval_id: string;
+    approved_at: number;
+    approved_by: string;
+    /**
+     * What the deployment adapter verified *beyond* the manifest's own pinned
+     * digests — a model package, whose historical ID binds artifacts and not
+     * the whole declaration. `None` where an adapter has nothing to add.
+     */
+    bundle_digest?: string | null;
+    context_id: string;
+    variant_id: string;
 };
 
 /**
@@ -9257,6 +9284,70 @@ export type ListDimensionResponses = {
 
 export type ListDimensionResponse = ListDimensionResponses[keyof ListDimensionResponses];
 
+export type ListApprovalsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/evaluation-approvals';
+};
+
+export type ListApprovalsErrors = {
+    501: ErrorBody;
+};
+
+export type ListApprovalsError = ListApprovalsErrors[keyof ListApprovalsErrors];
+
+export type ListApprovalsResponses = {
+    200: ApprovalPage;
+};
+
+export type ListApprovalsResponse = ListApprovalsResponses[keyof ListApprovalsResponses];
+
+export type ApproveSourceData = {
+    body: EvaluationManifest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/evaluation-approvals';
+};
+
+export type ApproveSourceErrors = {
+    400: ErrorBody;
+    403: ErrorBody;
+    409: ErrorBody;
+    501: ErrorBody;
+};
+
+export type ApproveSourceError = ApproveSourceErrors[keyof ApproveSourceErrors];
+
+export type ApproveSourceResponses = {
+    200: Approval;
+};
+
+export type ApproveSourceResponse = ApproveSourceResponses[keyof ApproveSourceResponses];
+
+export type WithdrawApprovalData = {
+    body?: never;
+    path: {
+        approval_id: string;
+    };
+    query?: never;
+    url: '/api/v1/evaluation-approvals/{approval_id}';
+};
+
+export type WithdrawApprovalErrors = {
+    403: ErrorBody;
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type WithdrawApprovalError = WithdrawApprovalErrors[keyof WithdrawApprovalErrors];
+
+export type WithdrawApprovalResponses = {
+    200: Approval;
+};
+
+export type WithdrawApprovalResponse = WithdrawApprovalResponses[keyof WithdrawApprovalResponses];
+
 export type ListResultsData = {
     body?: never;
     path?: never;
@@ -9295,6 +9386,29 @@ export type PublishResultResponses = {
 };
 
 export type PublishResultResponse = PublishResultResponses[keyof PublishResultResponses];
+
+export type ForgetResultData = {
+    body?: never;
+    path: {
+        evaluation_id: string;
+    };
+    query?: never;
+    url: '/api/v1/evaluation-results/{evaluation_id}';
+};
+
+export type ForgetResultErrors = {
+    403: ErrorBody;
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type ForgetResultError = ForgetResultErrors[keyof ForgetResultErrors];
+
+export type ForgetResultResponses = {
+    204: void;
+};
+
+export type ForgetResultResponse = ForgetResultResponses[keyof ForgetResultResponses];
 
 export type GetResultData = {
     body?: never;
