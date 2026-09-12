@@ -38,8 +38,10 @@ building towards, and it is four things rather than one:
   context hash — that address already covers the cohort, split, suite, scorer,
   judge and schemas — *plus* the two things it does not carry: whether the
   measurement succeeded, and whether the evidence behind each number can still
-  be read. What is left is the case-level diff (regressed and fixed, a full
-  read of both sides), the judge's fourth ADR_0030 condition, and the variant
+  be read. The case-level diff followed in plan section 23 —
+  `/comparison/cases`, a merge of two streams both sides sorted by `case_id` at
+  publish, narrowed by the server and bounded in how far one request walks.
+  What is left of B3 is the judge's fourth ADR_0030 condition and the variant
   context on observations.
 - **B4 — assessments.** One trace, span, session or case measurement, with a
   rubric version, a typed value, an author and a rationale. Human and judge
@@ -83,3 +85,10 @@ The comparison itself followed in section 20.
   definition that does not compile are three answers. Here the statuses *do*
   change, because the classification was the thing that was wrong: 500, 502 and
   422 where there was one 503
+- 2026-09-12 — B3's case-level diff delivered (plan section 23): a route of its
+  own, because the header comparison costs two summaries and this is a full read
+  of both sides. Five words rather than two lists — a case can be better at one
+  thing and worse at another — decided from the directions the pinned context
+  declares, never in the browser. An unverified pair keeps its rows, which is
+  the one place the two halves of a comparison part company: the cases that
+  failed are what somebody opens it to read

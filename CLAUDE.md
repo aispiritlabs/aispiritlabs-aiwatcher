@@ -1784,8 +1784,21 @@ the review.
   each side's own header, so it costs what two summaries cost however many
   cases are behind them — the rule that made a catalogue page stop costing the
   corpus, one layer up. Which cases regressed is the other question and is a
-  full read of both sides: it is named as absent rather than quietly served by
-  a route that walks a hundred shards.
+  full read of both sides, so it is a **route of its own** that says so:
+  `/comparison/cases` pages, is narrowed by the server, and walks a bounded
+  number of cases per request. What it may never become is a field on the
+  header comparison, quietly walking a hundred shards for somebody who asked
+  what two numbers were.
+- **Never decide in the browser whether a case got worse.** A case carries the
+  declared metrics and the *pinned context* declares which way each of them is
+  better, so `regressed` is a fact about a declaration and `mixed` — better at
+  one thing, worse at another — is a state a single verdict would have to hide.
+  A browser reading it off the sign of a delta would be guessing at exactly the
+  thing the context exists to state, and would have to guess again the day a
+  second metric disagreed with the first. The panel renders the change the
+  server sent, including a row its own filter would have dropped: the rules
+  live where the declarations are, as the pipeline canvas's and the annotation
+  canvas's do.
 - **An evaluation report is not redacted.** The Collector strips
   `gen_ai.prompt` and `gen_ai.completion` from spans, and an evaluation forms no
   span, so nothing strips `data.report`. A producer that puts model output there

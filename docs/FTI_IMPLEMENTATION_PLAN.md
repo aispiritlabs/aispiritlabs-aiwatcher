@@ -1,6 +1,6 @@
 # FTI — rekomendacja zakresu i plan rozwoju
 
-Data: 2026-09-11. Status: A1–A4 i AR1 zaimplementowane; B1 zweryfikowane, trwały wycinek B2 i atomowe orphan GC nowych publikacji dostarczone; dodano weryfikowane adaptery Curation, promptów, modeli, Annotations i Conversations; B2/AR2 pozostają otwarte: B2e–B2h, w tym judge (sekcje 9–16). Wyniki odbioru A, ograniczenia i incydent seeda w sekcji 8. Przegląd planu z 2026-09-12 jest w sekcji 17; jego wnioski są wniesione do sekcji 2–7 — etap B ma punkty 8–11 i rozstrzygnięcia wizualne, tabela paczek B2e–B2i, a B3 zależy od B2e, B2f i B2i. Sekcja 19 zmniejsza ograniczenia z sekcji 18; sekcja 20 dostarcza stronę dowodową B3 — porównanie dwóch trwałych wyników; sekcja 21 dostarcza AR3 — wspólny przypadek użycia kompilacji i startu, wyjęty z modułu HTTP; sekcja 22 domyka jego ograniczenie — rejestr definicji rozróżnia niedostępny magazyn, uszkodzony rekord i odmówioną definicję.
+Data: 2026-09-11. Status: A1–A4 i AR1 zaimplementowane; B1 zweryfikowane, trwały wycinek B2 i atomowe orphan GC nowych publikacji dostarczone; dodano weryfikowane adaptery Curation, promptów, modeli, Annotations i Conversations; B2/AR2 pozostają otwarte: B2e–B2h, w tym judge (sekcje 9–16). Wyniki odbioru A, ograniczenia i incydent seeda w sekcji 8. Przegląd planu z 2026-09-12 jest w sekcji 17; jego wnioski są wniesione do sekcji 2–7 — etap B ma punkty 8–11 i rozstrzygnięcia wizualne, tabela paczek B2e–B2i, a B3 zależy od B2e, B2f i B2i. Sekcja 19 zmniejsza ograniczenia z sekcji 18; sekcja 20 dostarcza stronę dowodową B3 — porównanie dwóch trwałych wyników; sekcja 21 dostarcza AR3 — wspólny przypadek użycia kompilacji i startu, wyjęty z modułu HTTP; sekcja 22 domyka jego ograniczenie — rejestr definicji rozróżnia niedostępny magazyn, uszkodzony rekord i odmówioną definicję; sekcja 23 dostarcza ostatnią część B3 — różnicę na poziomie przypadków.
 
 Podstawa: [katalog funkcji](FTI_FEATURE_CATALOG.md), [analiza braków](FTI_FEATURE_GAPS.md), [plan UX](FTI_UX_WANDB_PLAN.md), [przegląd dokumentacji Langfuse i MLflow](FTI_LANGFUSE_MLFLOW_ANALYSIS.md), [ocena architektury](FTI_ARCHITECTURE_REVIEW.md) oraz aktualny kod. Ocena dotyczy obecności i kontraktów implementacji; nie potwierdza działania konkretnego wdrożenia. Katalog opisuje zakres docelowy, więc liczba jego pozycji nie jest miarą ukończenia produktu.
 
@@ -952,7 +952,7 @@ Instancja zatrzymana, katalog danych usunięty, wpis podglądu cofnięty.
 ### 20.7 Co zostaje z B3
 
 - **Różnica na poziomie przypadków** (regresje i naprawy) — projekt opisany w
-  20.4, nie zbudowany.
+  20.4. **Dostarczona w sekcji 23.**
 - **Judge**: czwarty warunek z ADR 0030 — wynik nieodtwarzalny przez ponowny
   odczyt — musi wejść do tej reguły razem z adapterem. Dziś `LocalSource`
   odrzuca manifest z judge'em po nazwie, więc takich dowodów nie ma.
@@ -1154,3 +1154,139 @@ Instancja zatrzymana, katalog danych usunięty.
   adapter plikowy nie ma jak być chwilowo nieosiągalny. To ta sama granica, co
   przy pipeline'ach.
 - **B3 (różnica na poziomie przypadków), B4, C0** — bez zmian, karta AW-6.
+
+## 23. B3 — które przypadki się ruszyły
+
+Sekcja 20 dostarczyła porównanie dwóch nagłówków i **nazwała** to, czego w nim
+nie ma: „zdał na baseline, oblewa teraz". Ta paczka to dobudowanie tamtego
+projektu, bez zmiany niczego, co sekcja 20 rozstrzygnęła.
+
+### 23.1 Dlaczego to musi być osobna trasa
+
+Porównanie nagłówków kosztuje tyle, co dwa podsumowania — niezależnie od liczby
+przypadków za nimi, i to jest reguła, która sprawiła, że strona katalogu
+przestała kosztować korpus. Różnica na poziomie przypadków jest pełnym odczytem
+obu stron. Dopisanie jej jako pola do `GET .../comparison` oznaczałoby, że ktoś,
+kto zapytał o dwie liczby, po cichu chodzi po stu shardach.
+
+Więc jest osobno: `GET /api/v1/evaluation-results/{id}/comparison/cases`.
+Stronicowana, zawężana **na serwerze**, i z sufitem na to, jak daleko wolno jej
+zajść w jednym żądaniu — 2000 przypadków. Bez sufitu para, której dziesięć
+tysięcy przypadków zawiera dwanaście regresji, byłaby jednym żądaniem czytającym
+każdy shard obu stron.
+
+Trzy rzeczy robią to tanim:
+
+| | |
+| --- | --- |
+| obie strony są **posortowane po `case_id`** przy publikacji | różnica to scalenie dwóch uporządkowanych strumieni, a kursor to para przesunięć — ta sama liczba, którą trzyma kursor strony przypadków, raz na stronę |
+| czytane są **tylko pomiary** | oczekiwane odpowiedzi to kohorta, którą porównywalna para dzieli z definicji, więc odjęcie dwóch wyników kosztuje połowę tego, co odczyt przypadków któregokolwiek z nich |
+| zawężenie jest serwera | „przypadki, które coś straciły" to trasa, a nie odfiltrowanie dziesięciu tysięcy wierszy w przeglądarce |
+
+Strona zawężona kończy się na pierwszym z dwóch: wierszach, o które poproszono,
+albo przypadkach, po których wolno było przejść. Kursor obiecuje więc kolejny
+**przypadek**, a nie kolejne trafienie — dokładnie ta własność, którą ma już
+katalog zawężony po kontekście, i z tego samego powodu: porządek należy do
+przypadków, nie do filtru.
+
+### 23.2 Pięć słów, bo dowód jest inny niż po stronie fałdowanej
+
+Połowa fałdowana trzyma dwie listy, `regressed` i `fixed`, bo producent przysyła
+tam `passed` na przypadek i regresja to przewrócenie się tego booleana. Tutaj
+przypadek niesie **zadeklarowane metryki**, a przypięty kontekst deklaruje, w
+którą stronę każda z nich jest lepsza. Z tego wychodzi pięć odpowiedzi zamiast
+dwóch list:
+
+- `regressed` — wszystko, co się ruszyło, ruszyło się w złą stronę; albo
+  przypadek **przestał być mierzalny**, co jest najostrzejszą regresją, jaka
+  istnieje, i jedynym ruchem, którego nie da się wyrazić liczbą (przypadek,
+  który zawiódł, nie niesie żadnego wyniku),
+- `improved`,
+- `mixed` — lepiej w jednym, gorzej w drugim: stan, który pojedynczy werdykt
+  musiałby ukryć, a o który akurat ktoś się spiera przed wydaniem,
+- `unchanged`,
+- `unmeasured` — jedna ze stron nigdy tego przypadku nie zmierzyła. Różnica
+  między dwoma przebiegami, a nie ruch.
+
+Filtr `?only=` jest **pytaniem**, nie werdyktem: `worse` to to, co czyta bramka
+wydania, i celowo zawiera `mixed` — bramka, która ukryłaby przypadki, które coś
+straciły *i* coś zyskały, ukrywałaby te, o których trzeba zdecydować.
+
+Arytmetyka jest dokładna, bez własnej tolerancji: obie liczby są tym, co
+opublikowało dwóch producentów, a epsilon tutaj byłby progiem, którego nikt nie
+zadeklarował, decydującym, które z ich pomiarów się liczą.
+
+### 23.3 Jedno miejsce, w którym obie połowy porównania się rozchodzą
+
+Wiersze powstają także dla pary `unverified` — i to jest ta jedna różnica.
+Nagłówek wstrzymuje tam swoją deltę, bo agregat po przypadkach, które zawiodły
+albo zostały niezmierzone, jest liczbą o mianowniku, na który nikt się nie
+zgodził. Delta jednego przypadku odejmuje dwa pomiary **tego samego** przypadku
+i jest poprawna niezależnie od tego, co stało się z resztą — a przypadki, które
+zawiodły, to dokładnie to, po co ktoś tę trasę otwiera.
+
+Dla pary `incompatible` wierszy nie ma: różnica nad dwoma wynikami, których
+serwer właśnie odmówił odejmować, byłaby drugą odpowiedzią na pytanie, czy wolno
+je odjąć. Werdykt i powody jadą na stronie, więc odmowa brzmi tym samym zdaniem,
+co przy nagłówku, zamiast być pustą listą.
+
+### 23.4 Panel niczego nie klasyfikuje
+
+Sekcja jest **otwierana**, nie pobierana: wszystko powyżej niej to dwa nagłówki,
+a to są dwa pełne wyniki, więc otwarcie wyniku nie może za to płacić. Wybrany
+filtr siedzi w URL-u (`cases=worse|better|changed|all`), więc link do „przypadków,
+które coś straciły" wprowadza następnego czytelnika na to samo pytanie. Czwarta
+wartość istnieje, bo brak parametru już coś znaczy — zamknięte — więc „otwarte i
+nic nie odfiltrowane" potrzebuje własnego słowa.
+
+Panel rysuje zmianę, którą przysłał serwer, **łącznie z wierszem, który jego
+własny filtr by odrzucił**: reguły mieszkają tam, gdzie deklaracje, tak jak przy
+kanwie pipeline'u i kanwie adnotacji. Test trzyma dokładnie ten przypadek.
+
+### 23.5 Odbiór
+
+`just check` 23/23 PASS. Nowe: 7 testów rejestru (w tym scalenie 250 przypadków
+przez granice shardów, w obie strony), 1 akceptacyjny HTTP, 4 testy panelu
+(łącznie 12 w tym pliku).
+
+Odbiór na własnej instancji `127.0.0.1:19083`, własny katalog danych, pakiety
+zatwierdzeń wgrane przez API. Trzy przypadki fikstury, dwa warianty jednego
+kontekstu: `before` zdał `capital-pl` i `two-plus-two`, oblał `empty`; `after`
+zdał `empty`, oblał `two-plus-two`, a na `capital-pl` **zawiódł** („the model
+timed out").
+
+- nagłówek: `unverified`, `accuracy` 0.5 vs 0.6667, **delta wstrzymana** — bo
+  `after` zostawił przypadek niezmierzony;
+- `/comparison/cases`: `capital-pl regressed` (accuracy `—` ← 1.0, bez delty,
+  z komunikatem błędu), `empty improved` (+1.0), `two-plus-two regressed` (−1.0).
+  To jest ta paczka w jednym zdaniu: nagłówek nie mógł podać różnicy, a ta trasa
+  mówi, które przypadki ją zabrały;
+- `only=worse` → dwa wiersze, `only=better` → jeden, `only=changed` → trzy;
+- `limit=1` → jeden wiersz i kursor niosący **obie** wersje i oba przesunięcia;
+  podążenie za nim daje `empty`;
+- kursor spoza tej pary, `nope` i `a:b:c:d` → `400`, `limit=0` → `400`,
+  baseline, którego nikt nie opublikował → `404`;
+- trzeci wynik na splicie `holdout`: `incompatible`, powody `Different
+  evaluation context` i `Different split`, zero wierszy, brak kursora.
+
+Ekran sprawdzony w obu motywach: pigułki filtru, `regressed` na czerwono,
+`improved` na zielono, błąd pod liczbami, a nie zamiast nich; `cases=all` w URL
+po kliknięciu. Instancja zatrzymana, katalog danych usunięty, motyw przywrócony.
+
+Jedna rzecz do zapisania: przy pierwszym uruchomieniu podałem `AIWATCHER_ADDR`
+zamiast `AIWATCHER_LISTEN`, więc instancja przez chwilę stała na domyślnym
+`0.0.0.0:8080`. Własny katalog danych, więc żadne cudze dane nie zostały
+dotknięte; proces zatrzymany, port zwolniony.
+
+### 23.6 Co zostaje
+
+- **Treść przypadku** — co dana strona odpowiedziała — nie jest w wierszu
+  różnicy. Trasa przypadków obok odpowiada na to pytanie, a niesienie obu
+  odpowiedzi tutaj kazałoby jednej trasie, która i tak czyta oba wyniki, nieść
+  także obie ich treści. Skok z wiersza różnicy do przypadku jest do dorobienia.
+- **Sufit 2000 przypadków na żądanie** jest stały. Dla pary 10 000 × 10 000 bez
+  trafień to pięć żądań, żeby dojść do końca — poprawne i widoczne w kursorze,
+  ale nie jest to strona indeksowana po zmianie.
+- **Judge** (czwarty warunek ADR 0030) i **kontekst wariantu na obserwacjach** —
+  bez zmian, tak jak w 20.7.
+- **B4, C0** — bez zmian, karta AW-6.
