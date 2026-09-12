@@ -337,6 +337,38 @@ outline below is what the spec already fixes.
   repository replaces `target/debug/aiwatcher` with one that has no launcher —
   after which the gate fails at start-up with a refusal about a variable nobody
   set.
+- **What a pod *is* is the deployment's, so the backend is a setting** (2.6, the
+  owner's ask). `AIWATCHER_POD_RUNTIME` is `kubernetes` or `process`; the plan,
+  the `plan_id`, the derived name and the claim are identical either way. The
+  alternative considered was a second binding — a `LocalProcess` runtime kind —
+  and it was wrong for the reason ADR_0012 gives: a definition would then name
+  where it runs, and the same import could not move between a laptop and a
+  release without being re-authored.
+- **The two backends are sent one manifest, not two descriptions** (2.6). A
+  neutral `Launch` struct beside the Job would have been two authored shapes of
+  one thing, free to drift. The pod spec already says what to run, with what
+  environment, in which directory, so the process backend *reads* the manifest
+  — the same way `KubeCluster` reads it back into a typed `Job` before sending
+  it, and the same way `attempt_of` is the inverse of `annotations`.
+- **A host refuses what the program would read and ignores what only shapes the
+  room** (2.6). `envFrom`, a volume and an environment value from anywhere but
+  the downward API's own name end the attempt naming themselves; the image, the
+  limits, the security context, the service account and the node selector are
+  ignored and named once in the module rather than per pod. The split is what a
+  wrong answer costs: a program without its credential fails somewhere else
+  entirely, while one without a cgroup is honestly slower and unbounded.
+- **The queue is the start allowance, not a refusal** (2.6). Over the host's
+  limit, a `create` is accepted and the attempt is `Live` with the cluster's own
+  kind of reason, so the launcher's start allowance decides about it exactly as
+  it decides about a pod nothing will schedule. Refusing the create instead
+  would have been a warning per waiting attempt per two seconds, and a
+  concurrency answer written twice.
+- **The gate gets a backend rather than a second gate** (2.6). `--runtime
+  process` runs the same five phases and skips the memory one, saying why. What
+  a `kubectl get jobs` answers in a cluster is answered there by the launcher's
+  own log, in JSON, because a step's process lives inside the server and nothing
+  outside it can list one — and the two assertions that are about a process
+  being *gone* ask `pgrep`.
 
 ## Tasks
 
@@ -390,6 +422,11 @@ outline below is what the spec already fixes.
       in aiwatcher's own gate (`just e2e-pods`); naming a template on planner's
       own four is planner's commit*
 
+### Part 3 — the other backend (the owner's ask, 2026-09-12)
+- [x] 2.6 `AIWATCHER_POD_RUNTIME=process`: the same launcher against this host,
+      one process per attempt, proven by `just e2e-processes` — *what a pod is
+      is the deployment's*, *a host refuses what it cannot keep*
+
 ## Log
 - 2026-09-11 12:50 — job planned: Part 1 in three passes cut where other sessions' work sits, five decisions, ten tasks; Part 2 outlined
 - 2026-09-11 13:40 — Part 1a built: the server refuses the engine by name (`ConfigError::Removed`, two tests), the crate and its end-to-end test are gone, the chart refuses `engine`, the SDK integration and the recipes are gone, ADR_0016 superseded; `cargo clippy -Dwarnings` and the config tests green, `just chart-check` and `just sdk-check` (419) green
@@ -401,3 +438,4 @@ outline below is what the spec already fixes.
 - 2026-09-12 00:32 — 2.3 built, and swept into another session's `26be55e` before it could be committed on its own: the key-only claim rule in `ClaimFilter` and in the PostgreSQL claim, `claimable_attempts` in four adapters with a contract property, the launcher and its Job manifest in `aiwatcher-server/src/execution/pods` — the loop and the manifest in every build, kube-rs behind `kube` — a refused launch reported as a `StepFailed` the way a reactor reports, `PERFORMABLE` and `recorded_result` widened so a pod's report is acknowledged, the chart's templates file, launcher RBAC, mounts and network rule, `AIWATCHER_POD_API_URL` and `AIWATCHER_POD_NAMESPACE`, the SDK reading `AIWATCHER_ATTEMPT` and `AIWATCHER_WORKER_NAME`, and `aiwatcher-server/kube` in the release image. Clippy -Dwarnings with every feature, the execution, API and server suites, `just sdk-check` 424, `just chart-check` plus renders with templates set, the postgres and duckdb store contracts, `cargo deny` and `just openapi-check` green
 - 2026-09-12 01:10 — 2.4 built (`c713a1e`): the launcher's pass gained a watch — the cluster's own Jobs and pods listing, read once each per pass — which ends a dead pod's attempt as `Infrastructure` with the cluster's own reason (`OOMKilled`, `DeadlineExceeded`, an exit code), ends and deletes a Job no pod claimed within its template's start allowance, and stops a cancelling or already-ended run's pods as `Policy` so the cancel completes rather than waiting out a lease; the attempt rides as three annotations so it can be read back; the log is the last 256 KiB through a `Tail` that compiles in every build, stored under the artifacts prefix and recorded in the catalog against the attempt, after which the Job is deleted (`DeleteParams::background()`, or the pod outlives it); a log that could not be read or stored leaves the Job for the next pass. `RunState::cancelling()`/`is_cancelling()` replace matching a badge's string, and the cancel that left a dispatched attempt in the claim table for ever — `StepSkipped` retiring attempt `0` — is fixed in the handler. Clippy `-Dwarnings --all-features`, execution 160 + 13 + 23 + 14 + 15 + 12, server 93 + 38 and 93 with `kube`, API 156 + 24, the postgres (5 + 7) and duckdb (4) store contracts, `just chart-check`, `cargo deny` and `just openapi-check` green
 - 2026-09-12 07:55 — 2.5 built (`0ec11aa`, `409ec5d`), and AW-4's exit is green on a real cluster: `just e2e-pods` runs an import's four stages as four pods on the local Kubernetes and the same four through one long-lived worker, and compares them — every stage's output has one digest across both paths, while the artifacts saying who ran each stage differ, four pod names against one worker's. Beside it: the chart's Role covers each call the launcher makes and refuses four it must not, a cancel deleted `analyze`'s Job and reached `cancelled` in 2.3s with `persist` never started, a stage taking 512MiB against its 192Mi limit failed twice as `infrastructure` with the cluster's own `OOMKilled (exit 137)` while the stages before it stood, and every pod's log was in the store with no Job left behind. It found the bug that mattered: two rustls crypto providers in one process meant the launcher panicked on its first call to any cluster, in a build that was green everywhere else. Clippy `-Dwarnings --all-features`, `cargo test --workspace --all-targets` (47 suites), server 93 + 38 with `kube`, `just sdk-check` 450, `just chart-check`, `just openapi-check` and `cargo deny` green
+- 2026-09-12 09:34 — 2.6 built (`c77a997`, `aaf09fc`): the launcher's backend is a setting — `AIWATCHER_POD_RUNTIME=kubernetes|process` — and `ProcessCluster` is the second `Cluster`, one process per attempt from the same manifest, with a slot limit that queues rather than refuses, both streams into one 256 KiB tail, a delete that kills, a `Drop` that stops what is left, and refusals for `envFrom`, a volume and any environment value but the downward API's own name. Templates in the work role no longer need the `kube` feature under this runtime, and a namespace beside it is refused. 15 new tests (12 on the backend against real processes, 3 on the config); `just e2e-processes` green on a binary built with no cargo feature, no image and no kubeconfig — four distinct pod names, one digest per stage against the worker, a cancel in 2.0s, every log in the store — and `just e2e-pods` still green on orbstack, memory phase included

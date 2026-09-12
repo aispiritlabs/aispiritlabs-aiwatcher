@@ -60,6 +60,7 @@ just seed-import      # stage a corpus in pages, import it with the queued job
 just run-conversations # the server with the encrypted conversation archive on
 just seed-conversations # one reviewed exchange, an export job, an immutable corpus
 just e2e-pods         # four stages as four pods on a local cluster, against the same four in one worker
+just e2e-processes    # the same four as four processes on this host: no cluster, no image, no cargo feature
 just e2e-train        # the whole chain: annotate → export → fit a real tiny model → promote
 just serve-model      # verify the promoted package's digests, load it, serve it, watch the label
 just onnx-version     # re-express that model as an ONNX graph, check it agrees, move the label
@@ -343,7 +344,14 @@ area.
    every output has one digest across both paths while the artifacts naming who
    ran them differ. It is what found the launcher's one fatal defect — two
    rustls crypto providers in one process, so every call to a cluster panicked
-   in a build that was green everywhere else.
+   in a build that was green everywhere else. What a pod *is*, though, is the
+   deployment's and never the plan's: `AIWATCHER_POD_RUNTIME` is `kubernetes`
+   or `process`, and the second runs each attempt as a process on the work
+   role's own host — the same launcher, the same derived name, the same claim
+   by key, the same watch and the same log, and no image, no resource limit and
+   no life past the server that started it. `just e2e-processes` proves that
+   whole path with nothing installed; no chart value renders it, because in a
+   cluster it would be step code in the API pod (ADR_0029, amended).
 
 14. **An annotation is authored, vector-first, and split by family**
    ([ADR_0017](docs/ADR/ADR_0017_IMAGE_ANNOTATION.md),
@@ -1313,6 +1321,19 @@ the review.
   reads; a second copy answers no question and grows with every step of every
   run. The `file` adapter rewrites the whole outbox on each publish, so
   remembering was quadratic. Section 43.16.
+- **Never let a plan know what a pod is.** A `container_job` step names a
+  template and an image on that template's list; whether that becomes a Job in
+  a cluster or a process on this host is `AIWATCHER_POD_RUNTIME`, and the plan,
+  the `plan_id`, the derived name and the claim are identical either way —
+  which is what let the second backend be one file behind the `Cluster` port.
+  Both are sent the same manifest, one representation read twice, so the honest
+  thing a host has to do is **refuse** what it cannot keep rather than ignore
+  it: `envFrom`, a volume, an environment value from anywhere but the downward
+  API's own `metadata.name`. Ignored, each of those runs something else under a
+  step's name — the program without the credential it was written to hold,
+  which fails somewhere else entirely. What it may ignore is what only shapes
+  the room the program runs in, the image and the limits and the node, and the
+  module says so once rather than per pod.
 - **Never leave a process's crypto provider to the features.** rustls asks the
   *process* which one to use and refuses to guess when more than one is compiled
   in — and more than one is, whenever two dependencies each pick their own:
