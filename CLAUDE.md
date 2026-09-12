@@ -1939,6 +1939,10 @@ the review.
   a model answers differently, the fold writes different bytes, and an attempt
   whose settlement was lost after publication meets the first publication of
   its own ID as a conflict — a failed run beside the result it published.
+  What is kept is `JudgeReply::kept` and never the reply's words: a value on
+  the scale, or a stand-in `read` refuses for the same reason, because a kept
+  reply has no seal, no retention and no erasure and a reply can repeat what
+  it was shown.
 - **Never publish evidence aiwatcher measures through the producer's route.**
   `POST /evaluation-results` answers 403 `measured_here` for a context scored by
   `aiwatcher.scoring`: the first publication of an ID wins, and anybody with an

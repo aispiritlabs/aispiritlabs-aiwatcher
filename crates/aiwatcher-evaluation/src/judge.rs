@@ -359,16 +359,7 @@ pub fn read(
     rubric: &Rubric,
     reply: &JudgeReply,
 ) -> std::result::Result<(AssessmentValue, f64), String> {
-    let content = reply.content.trim();
-    let object = match (content.find('{'), content.rfind('}')) {
-        (Some(open), Some(close)) if open < close => &content[open..=close],
-        _ => return Err("the judge's reply holds no JSON object".into()),
-    };
-    let parsed: serde_json::Value = serde_json::from_str(object)
-        .map_err(|_| "the judge's reply is not a JSON object".to_owned())?;
-    let said = parsed
-        .get("value")
-        .ok_or_else(|| "the judge's reply has no value".to_owned())?;
+    let said = &said(&reply.content).map_err(|unread| unread.reason().to_owned())?;
     let value = match &rubric.scale {
         Scale::Numeric { .. } => said.as_f64().map(|value| AssessmentValue::Number { value }),
         Scale::Ordinal { .. } => said.as_str().map(|value| AssessmentValue::Level {
@@ -386,6 +377,83 @@ pub fn read(
     let number = number(&rubric.scale, &value)
         .ok_or_else(|| "the judge answered outside this rubric's scale".to_owned())?;
     Ok((value, number))
+}
+
+/// Why a reply holds no value to read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Unread {
+    NoObject,
+    NotJson,
+    NoValue,
+}
+
+impl Unread {
+    const fn reason(self) -> &'static str {
+        match self {
+            Self::NoObject => "the judge's reply holds no JSON object",
+            Self::NotJson => "the judge's reply is not a JSON object",
+            Self::NoValue => "the judge's reply has no value",
+        }
+    }
+}
+
+/// The value a reply's JSON object names, found the one way [`read`] and
+/// [`JudgeReply::kept`] both find it.
+fn said(content: &str) -> std::result::Result<serde_json::Value, Unread> {
+    let content = content.trim();
+    let object = match (content.find('{'), content.rfind('}')) {
+        (Some(open), Some(close)) if open < close => &content[open..=close],
+        _ => return Err(Unread::NoObject),
+    };
+    let mut parsed: serde_json::Value =
+        serde_json::from_str(object).map_err(|_| Unread::NotJson)?;
+    parsed
+        .get_mut("value")
+        .map(serde_json::Value::take)
+        .ok_or(Unread::NoValue)
+}
+
+impl JudgeReply {
+    /// This reply as it is kept: what reading it finds, and no word of it.
+    ///
+    /// A reply can repeat what it was shown, and a kept reply sits beside its
+    /// declaration with no seal, no retention clock and no erasure — fine for a
+    /// value on a scale, and not for a sentence out of somebody's conversation.
+    /// So the kept reply is one [`read`] answers exactly as it answers this:
+    /// a boolean or a number as it came, a level only when the question offered
+    /// it, and in place of anything else a stand-in refused for the same reason.
+    #[must_use]
+    pub fn kept(&self, call: &JudgeCall) -> Self {
+        let content = match said(&self.content) {
+            Err(Unread::NoObject) => String::new(),
+            Err(Unread::NotJson) => "{?}".to_owned(),
+            Err(Unread::NoValue) => "{}".to_owned(),
+            Ok(value) => {
+                let value = match value {
+                    serde_json::Value::Bool(_) | serde_json::Value::Number(_) => value,
+                    serde_json::Value::String(level) if offered(call, &level) => {
+                        serde_json::Value::String(level)
+                    }
+                    // No level is empty, so this is off every scale of levels
+                    // and of another kind on every other.
+                    serde_json::Value::String(_) => serde_json::Value::String(String::new()),
+                    _ => serde_json::Value::Null,
+                };
+                serde_json::json!({ "value": value }).to_string()
+            }
+        };
+        Self {
+            content,
+            served: self.served.clone(),
+        }
+    }
+}
+
+/// Whether the question put this level on offer.
+fn offered(call: &JudgeCall, level: &str) -> bool {
+    call.schema["properties"]["value"]["enum"]
+        .as_array()
+        .is_some_and(|levels| levels.iter().any(|named| named.as_str() == Some(level)))
 }
 
 /// The number a value scores under one metric: [`number`] on the scale, or —
@@ -612,7 +680,7 @@ pub(crate) async fn remembered(
 ///
 /// The first write wins: two attempts that both asked keep one answer, and the
 /// fold reads the kept one, so the result either of them publishes is the same
-/// bytes.
+/// bytes. What is kept is [`JudgeReply::kept`], never the reply's words.
 pub(crate) async fn remember(
     store: &Store,
     declaration: &str,
@@ -621,6 +689,7 @@ pub(crate) async fn remember(
 ) -> Result<JudgeReply> {
     text(declaration, "run")?;
     let key = store::judge_reply(declaration, &question(call)?);
+    let reply = reply.kept(call);
     if store.create(&key, &reply).await? {
         return Ok(reply);
     }
@@ -820,6 +889,44 @@ mod tests {
         }
         let flag = rubric(Scale::Flag);
         assert_eq!(read(&flag, &reply("{\"value\": false}")).unwrap().1, 0.0);
+    }
+
+    #[test]
+    fn a_kept_reply_reads_exactly_as_the_reply_did_and_holds_none_of_its_words() {
+        let flag = rubric(Scale::Flag);
+        let levels = rubric(Scale::Ordinal {
+            levels: vec!["bad".into(), "fine".into(), "good".into()],
+        });
+        let bounded = rubric(Scale::Numeric { min: 1.0, max: 5.0 });
+        let replies = [
+            "{\"value\": true}",
+            "Sure! {\"value\": false} because SECRET",
+            "{\"value\": \"false\"}",
+            "{\"value\": \"good\"}",
+            "{\"value\": \"SECRET\"}",
+            "{\"value\": 4}",
+            "{\"value\": 9}",
+            "{\"value\": [\"SECRET\"]}",
+            "{\"value\": {\"said\": \"SECRET\"}}",
+            "{\"value\": null}",
+            "{\"reason\": \"SECRET\"}",
+            "{SECRET}",
+            "SECRET",
+            "",
+        ];
+        for rubric in [&flag, &levels, &bounded] {
+            let call = ask(rubric, &judge(), None, &json!("an answer"), None);
+            for said in replies {
+                let kept = reply(said).kept(&call);
+                assert_eq!(
+                    read(rubric, &kept),
+                    read(rubric, &reply(said)),
+                    "{said:?} on {:?}",
+                    rubric.scale
+                );
+                assert!(!kept.content.contains("SECRET"), "{said:?} kept {kept:?}");
+            }
+        }
     }
 
     #[test]
