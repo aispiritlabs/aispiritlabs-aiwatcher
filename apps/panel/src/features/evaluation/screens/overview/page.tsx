@@ -30,12 +30,61 @@ import {
   Spinner,
   Stat,
 } from '@/shared/components/ui/primitives';
+import { TimeRange, windowParam } from '@/shared/components/time-range';
 import { VirtualList } from '@/shared/components/virtual-list';
 import { cn, formatDuration, formatTime, pinchId } from '@/shared/lib/utils';
 
 const routeApi = getRouteApi('/evaluation');
 
 const REPORT_PAGE = 50;
+
+/**
+ * Everything, until somebody narrows it.
+ *
+ * Every other list here defaults to a day, because everything on them goes
+ * when the log's retention takes it. Half of this one is kept on purpose for
+ * thirty days *because* it outlives that log, so a day would hide the evidence
+ * this screen exists to show. The control narrows the view; it does not define
+ * it.
+ */
+const DEFAULT_EVALUATION_WINDOW = 0;
+
+/** When a row happened, in the one unit the two halves have in common. */
+function timeOf(row: Row): number {
+  return row.kind === 'evidence'
+    ? row.item.receipt.committed_at
+    : Date.parse(row.item.started_at) / 1000;
+}
+
+/**
+ * The oldest row a merge of two paged lists may show.
+ *
+ * A list that still has pages can deliver a row that belongs above one already
+ * drawn, so anything older than its tail is held back until it does. Without
+ * this the list reorders under the reader every time a page arrives, which is
+ * worse than a short list.
+ */
+function boundaryOf(rows: Row[], hasNextPage: boolean): number {
+  const tail = rows.at(-1);
+  return hasNextPage && tail ? timeOf(tail) : Number.NEGATIVE_INFINITY;
+}
+
+/** Both halves as one list, newest first, as far as both have been read. */
+export function mergeRows(
+  kept: Row[],
+  folded: Row[],
+  moreKept: boolean,
+  moreFolded: boolean,
+): Row[] {
+  const merged = [...kept, ...folded].sort((a, b) => timeOf(b) - timeOf(a));
+  const boundary = Math.max(boundaryOf(kept, moreKept), boundaryOf(folded, moreFolded));
+  return Number.isFinite(boundary) ? merged.filter((row) => timeOf(row) >= boundary) : merged;
+}
+
+/** The two halves as rows, so nothing downstream re-wraps them. */
+function rowsOf<T>(kind: 'evidence' | 'report', items: T[]): Row[] {
+  return items.map((item) => ({ kind, item }) as Row);
+}
 
 /**
  * One list, two provenances.
@@ -45,7 +94,7 @@ const REPORT_PAGE = 50;
  * can do with them differs, so the row says which it is rather than leaving
  * somebody to find out by clicking.
  */
-type Row =
+export type Row =
   { kind: 'evidence'; item: DurableEvaluation } | { kind: 'report'; item: EvaluationSummary };
 
 function idOf(row: Row): string {
@@ -79,14 +128,16 @@ export function EvaluationPage() {
   // we have" — so they are one list, and every row says which it is. The two
   // sets never overlap: the API excludes a committed registry ID from the
   // legacy listing rather than reporting it twice.
-  const evidence = useEvidence();
+  const window = search.window ?? DEFAULT_EVALUATION_WINDOW;
+  const evidence = useEvidence(windowParam(window));
 
   const reports = useInfiniteQuery({
-    queryKey: ['evaluations', search.suite, search.dataset, search.status, search.q],
+    queryKey: ['evaluations', search.suite, search.dataset, search.status, search.q, window],
     initialPageParam: undefined as string | undefined,
     queryFn: async ({ pageParam }) => {
       const response = await listEvaluations({
         query: {
+          window_seconds: windowParam(window),
           suite: search.suite,
           dataset: search.dataset,
           status: search.status,
@@ -104,23 +155,21 @@ export function EvaluationPage() {
     refetchInterval: 10_000,
   });
 
-  const reportRows = React.useMemo(
-    () => reports.data?.pages.flatMap((page) => page.evaluations) ?? [],
+  const foldedRows = React.useMemo(
+    () => rowsOf('report', reports.data?.pages.flatMap((page) => page.evaluations) ?? []),
     [reports.data],
   );
-  const evidenceRows = React.useMemo(
-    () => evidence.data?.pages.flatMap((page) => page.evaluations) ?? [],
+  const keptRows = React.useMemo(
+    () => rowsOf('evidence', evidence.data?.pages.flatMap((page) => page.evaluations) ?? []),
     [evidence.data],
   );
-  // Kept first, and not by preference: the catalogue has no time order to
-  // interleave by (ADR_0030), so a merge that pretended to one would be
-  // inventing it. Provenance is on every row instead.
+  // Newest first, across both halves. The catalogue has a published order now
+  // (ADR_0030), so interleaving states a fact rather than inventing one — and
+  // provenance stays on every row, because what a row *is* does not follow
+  // from where it sits.
   const rows: Row[] = React.useMemo(
-    () => [
-      ...evidenceRows.map((item) => ({ kind: 'evidence' as const, item })),
-      ...reportRows.map((item) => ({ kind: 'report' as const, item })),
-    ],
-    [evidenceRows, reportRows],
+    () => mergeRows(keptRows, foldedRows, evidence.hasNextPage, reports.hasNextPage),
+    [keptRows, foldedRows, evidence.hasNextPage, reports.hasNextPage],
   );
   const total = reports.data?.pages[0]?.total_known ?? 0;
   const retention = evidence.data?.pages[0]?.retention;
@@ -141,6 +190,7 @@ export function EvaluationPage() {
             them.
           </p>
         </div>
+        <TimeRange value={window} onChange={(seconds) => select({ window: seconds })} />
       </div>
 
       <LocalViews
@@ -181,11 +231,12 @@ export function EvaluationPage() {
           />
         </label>
         <datalist id="baseline-options">
-          {reportRows
-            .filter((row) => row.evaluation_id !== search.report)
-            .map((row) => (
-              <option value={row.evaluation_id} key={row.evaluation_id}>
-                {row.status} · {row.suite}
+          {foldedRows
+            .map((row) => row.item as EvaluationSummary)
+            .filter((report) => report.evaluation_id !== search.report)
+            .map((report) => (
+              <option value={report.evaluation_id} key={report.evaluation_id}>
+                {report.status} · {report.suite}
               </option>
             ))}
         </datalist>
@@ -230,9 +281,11 @@ export function EvaluationPage() {
                 estimateSize={62}
                 keyOf={(row) => `${row.kind}:${idOf(row)}`}
                 onReachEnd={() => {
-                  // The kept half first, then the folded half, in the order
-                  // they are drawn in.
-                  if (evidence.hasNextPage && !evidence.isFetchingNextPage) {
+                  // Whichever half the boundary is waiting on. Fetching the
+                  // other one adds rows the merge would hold back anyway.
+                  const kept = boundaryOf(keptRows, evidence.hasNextPage);
+                  const folded = boundaryOf(foldedRows, reports.hasNextPage);
+                  if (kept >= folded && evidence.hasNextPage && !evidence.isFetchingNextPage) {
                     void evidence.fetchNextPage();
                   } else if (reports.hasNextPage && !reports.isFetchingNextPage) {
                     void reports.fetchNextPage();

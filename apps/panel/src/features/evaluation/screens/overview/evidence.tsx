@@ -134,13 +134,15 @@ function keptUntil(expiresAt: number): string {
  * this half is a control people re-read before every click. See ADR_0030's
  * amendment on when an index over this becomes required.
  */
-export function useEvidence() {
+export function useEvidence(windowSeconds?: number) {
   return useInfiniteQuery({
-    queryKey: ['evaluation-evidence'],
+    queryKey: ['evaluation-evidence', windowSeconds],
     initialPageParam: undefined as string | undefined,
     queryFn: async ({ pageParam }) =>
       answerOf(
-        await listResults({ query: { cursor: pageParam, limit: EVIDENCE_PAGE } }),
+        await listResults({
+          query: { cursor: pageParam, limit: EVIDENCE_PAGE, window_seconds: windowSeconds },
+        }),
         'could not read the durable evidence catalogue',
       ),
     getNextPageParam: (last) => last.next_cursor ?? undefined,

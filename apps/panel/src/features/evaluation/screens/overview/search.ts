@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { windowSearchSchema } from '@/shared/components/time-range';
+
 /**
  * Scoring the thing the traces come from.
  *
@@ -14,14 +16,19 @@ import { z } from 'zod';
  * `eval.*` events produce no span and no row in the runs list. See
  * `crates/aiwatcher-projector/src/evaluations.rs`.
  *
- * ## Why there is no period control
+ * ## Why the period control defaults to everything
  *
  * Half of this list is not folded from that log: durable evidence is kept on
- * purpose, under its own retention (ADR_0030), and its store is keyed by the
- * hash of an evaluation ID — so the catalogue's order is the order of a hash
- * and a period would narrow nothing. One control that narrowed half the rows
- * and not the other half is a control people re-read before every click, so
- * there is none, and the log-folded half lists everything it still holds.
+ * purpose, under its own retention (ADR_0030). The catalogue had no order but
+ * the hash of an evaluation ID, so a period would have narrowed nothing and
+ * this screen carried no control at all; `evaluations/index/` gave it a
+ * published order, and a period is a bound on that key.
+ *
+ * What stays different here is the default. Every other list defaults to a
+ * day because everything on it goes when the log's retention takes it; the
+ * kept half of this one exists *because* it outlives that, so a day would hide
+ * the evidence the screen was built to show. It opens on everything and the
+ * control narrows.
  *
  * ## Why the metric deltas are not coloured
  *
@@ -33,6 +40,7 @@ import { z } from 'zod';
  */
 
 export const searchSchema = z.object({
+  ...windowSearchSchema,
   suite: z.string().optional(),
   dataset: z.string().optional(),
   status: z.enum(['running', 'succeeded', 'failed']).optional(),

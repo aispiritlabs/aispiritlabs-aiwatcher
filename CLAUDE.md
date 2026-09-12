@@ -822,6 +822,9 @@ what runs a real graph.
   else in Metrics is a control people re-read before every click. It carries
   across the observability sub-navigation and nothing else does — having
   narrowed to fifteen minutes, "now the metrics for it" is the next question.
+  One list defaults differently and says why: Evaluation opens on everything,
+  because half its rows are kept on purpose *because* they outlive the log's
+  retention, and a day would hide what that half is for.
 - An area that exists in the navigation before it exists in the backend renders
   `AreaPlaceholder`, which names what is missing. Never mock data to fill a
   screen — a plausible fake reads as working software.
