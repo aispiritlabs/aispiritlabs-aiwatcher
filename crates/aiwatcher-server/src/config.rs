@@ -919,15 +919,15 @@ impl Config {
             config.pod_runtime = raw.parse()?;
         }
         if let Some(raw) = var("AIWATCHER_POD_PROCESS_LIMIT") {
-            config.pod_process_limit = raw
-                .parse()
-                .ok()
-                .filter(|limit| *limit > 0)
-                .ok_or(ConfigError::Invalid {
-                    name: "AIWATCHER_POD_PROCESS_LIMIT",
-                    value: raw,
-                    expected: "how many step processes may run at once, one or more",
-                })?;
+            config.pod_process_limit =
+                raw.parse()
+                    .ok()
+                    .filter(|limit| *limit > 0)
+                    .ok_or(ConfigError::Invalid {
+                        name: "AIWATCHER_POD_PROCESS_LIMIT",
+                        value: raw,
+                        expected: "how many step processes may run at once, one or more",
+                    })?;
         }
         if let Some(raw) = var("AIWATCHER_HUGGINGFACE_ENABLED") {
             config.huggingface_enabled = parse_bool("AIWATCHER_HUGGINGFACE_ENABLED", &raw)?;

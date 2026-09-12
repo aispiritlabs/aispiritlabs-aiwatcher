@@ -123,6 +123,22 @@ impl ProcessCluster {
     }
 }
 
+impl Drop for ProcessCluster {
+    /// Stop every process this host started.
+    ///
+    /// What makes the module's promise true: a step's process goes with the
+    /// server, where a Job outlives a launcher and is picked up by the next
+    /// one. A `SIGKILL` runs no destructor, so a child survives that — the
+    /// backstop there is `kill_on_drop` and, after it, a lease that lapses.
+    fn drop(&mut self) {
+        for job in self.started.get_mut().values() {
+            if let Stage::Running { stop, .. } = &job.stage {
+                stop.cancel();
+            }
+        }
+    }
+}
+
 /// Reap what has ended and start what a free slot admits.
 ///
 /// Called wherever this cluster is asked anything, so nothing here needs a
@@ -201,9 +217,9 @@ fn start(name: &str, program: &Program) -> Result<Stage, ClusterError> {
         .map_err(|error| match error.kind() {
             // Permanent until somebody edits the template, which is what
             // `Refused` means: the attempt ends rather than being retried.
-            ErrorKind::NotFound | ErrorKind::PermissionDenied => ClusterError::Refused(format!(
-                "this host cannot run '{head}': {error}"
-            )),
+            ErrorKind::NotFound | ErrorKind::PermissionDenied => {
+                ClusterError::Refused(format!("this host cannot run '{head}': {error}"))
+            }
             _ => ClusterError::Unavailable(format!("'{head}' could not be started: {error}")),
         })?;
     let printed = Arc::new(Mutex::new(Tail::new(super::log::TAIL_BYTES)));
@@ -453,22 +469,28 @@ fn program(manifest: &Value) -> Result<Program, String> {
         .pointer("/spec/template/spec")
         .ok_or_else(|| "the manifest carries no pod spec".to_owned())?;
     if listed(pod, "volumes") {
-        return Err("a process on this host mounts no volumes, and this template asks for one; \
+        return Err(
+            "a process on this host mounts no volumes, and this template asks for one; \
                     run it on a cluster, or take the volume out"
-            .to_owned());
+                .to_owned(),
+        );
     }
     let container = pod
         .pointer("/containers/0")
         .ok_or_else(|| "the pod spec has no container".to_owned())?;
     if listed(container, "volumeMounts") {
-        return Err("a process on this host mounts no volumes, and this template's container \
+        return Err(
+            "a process on this host mounts no volumes, and this template's container \
                     asks for one"
-            .to_owned());
+                .to_owned(),
+        );
     }
     if listed(container, "envFrom") {
-        return Err("a process on this host cannot read the Secret or ConfigMap this \
+        return Err(
+            "a process on this host cannot read the Secret or ConfigMap this \
                     template's `envFrom` names; give the value in `env`, or run it on a cluster"
-            .to_owned());
+                .to_owned(),
+        );
     }
     let command = container
         .get("command")
@@ -756,11 +778,16 @@ mod tests {
         cluster.create_job(&manifest).await.expect("it starts");
         let name = named(&manifest);
         tokio::time::sleep(Duration::from_millis(200)).await;
-        assert_eq!(phase_of(&cluster, &name).await, Phase::Live { reason: None });
+        assert_eq!(
+            phase_of(&cluster, &name).await,
+            Phase::Live { reason: None }
+        );
 
         cluster.delete(&name).await.expect("it goes");
         tokio::time::sleep(Duration::from_millis(300)).await;
-        let written = std::fs::metadata(&marker).expect("it had written something").len();
+        let written = std::fs::metadata(&marker)
+            .expect("it had written something")
+            .len();
         tokio::time::sleep(Duration::from_millis(300)).await;
         assert_eq!(
             std::fs::metadata(&marker).expect("the file stays").len(),
