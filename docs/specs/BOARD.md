@@ -7,6 +7,8 @@ means it is sitting on that column waiting for something.
 
 ## Backlog
 
+- [ ] [AW-6 · Compare kept evaluation evidence, and run evaluations from aiwatcher](AW-6-compare-kept-evaluation-evidence-and-run-evaluations/_index.md)
+
 ## Investigation
 
 ## Spec

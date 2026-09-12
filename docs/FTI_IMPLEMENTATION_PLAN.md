@@ -1,6 +1,6 @@
 # FTI — rekomendacja zakresu i plan rozwoju
 
-Data: 2026-09-11. Status: A1–A4 i AR1 zaimplementowane; B1 zweryfikowane, trwały wycinek B2 i atomowe orphan GC nowych publikacji dostarczone; dodano weryfikowane adaptery Curation, promptów, modeli, Annotations i Conversations; B2/AR2 pozostają otwarte dla judge (sekcje 9–16). Wyniki odbioru A, ograniczenia i incydent seeda w sekcji 8. Przegląd planu z 2026-09-12 — czego brakuje i co zmienia kolejność przed B3 — jest w sekcji 17.
+Data: 2026-09-11. Status: A1–A4 i AR1 zaimplementowane; B1 zweryfikowane, trwały wycinek B2 i atomowe orphan GC nowych publikacji dostarczone; dodano weryfikowane adaptery Curation, promptów, modeli, Annotations i Conversations; B2/AR2 pozostają otwarte: B2e–B2h, w tym judge (sekcje 9–16). Wyniki odbioru A, ograniczenia i incydent seeda w sekcji 8. Przegląd planu z 2026-09-12 jest w sekcji 17; jego wnioski są wniesione do sekcji 2–7 — etap B ma punkty 8–11 i rozstrzygnięcia wizualne, tabela paczek B2e–B2i, a B3 zależy od B2e, B2f i B2i.
 
 Podstawa: [katalog funkcji](FTI_FEATURE_CATALOG.md), [analiza braków](FTI_FEATURE_GAPS.md), [plan UX](FTI_UX_WANDB_PLAN.md), [przegląd dokumentacji Langfuse i MLflow](FTI_LANGFUSE_MLFLOW_ANALYSIS.md), [ocena architektury](FTI_ARCHITECTURE_REVIEW.md) oraz aktualny kod. Ocena dotyczy obecności i kontraktów implementacji; nie potwierdza działania konkretnego wdrożenia. Katalog opisuje zakres docelowy, więc liczba jego pozycji nie jest miarą ukończenia produktu.
 
@@ -34,6 +34,8 @@ Najważniejsze miejsca potwierdzenia: [run treningowy](../crates/aiwatcher-train
 4. **Bramki modelu i promptu są różne.** `ModelVersion::check_promotable` wymaga odtwarzalnego datasetu i niepustych metryk testowych; nie wymaga przewagi nad baseline. Verdict optymalizacji promptu sprawdza poprawę wskazanej metryki held-out. W obu przypadkach samo pole `test` nie dowodzi niezależności zbioru — pochodzenie oceny trzeba zapisać.
 5. **Potwierdzona baza kosztowa to przede wszystkim tokeny.** [Metryki](../crates/aiwatcher-projector/src/metrics.rs) i [ich ekran](../apps/panel/src/features/observability/screens/metrics/page.tsx) pokazują zużycie, nie kompletny rachunek pieniężny. Porównanie w walucie wymaga źródła i wersji ceny, obsługi cache oraz pokrycia wyceny. Czas treningu również nie jest automatycznie jego kosztem.
 6. **Nie zaczynamy od nowego wykonawcy.** SDK ma już `TaskContext.record_evaluation`, wypełniający wykonanie/krok i stabilne ID raportu przy retry. W katalogu roboczym trwają zmiany uruchamiania w podach; nie należy uznawać ich za zweryfikowane wdrożenie. Wariant ewaluacji w Kubernetes zależy od zakończenia anulowania, obsługi śmierci poda i próby na lokalnym klastrze. Wariant z istniejącym workerem nie musi czekać na Kubernetes.
+7. **AW-5 dostarczyło połączenia oceny i bramkę etykiety.** [AW-5](specs/AW-5-optimise-evaluate-and-promote-a-prompt-in-one-managed-run/_index.md) jest zakończone: raport ma referencję wykonania i kroku, optymalizacja promptu wiąże raporty held-out, a `production` odmawia kandydatowi odrzuconemu przez verdict. Punkt 4 i B5 nie definiują tego od nowa — są zawężone do polityki decyzji dla **modeli** i do wymogu kompletnego held-out.
+8. **Trwałe dowody dopuszczają jedną zatwierdzoną parę wariant/kontekst.** `LocalSource::resolve` porównuje publikowany manifest z jednym `manifest.json` we wskazanym katalogu; drugi wariant wymaga podmiany katalogu, po której wcześniejsze wyniki czytają się jako `forbidden`. Porównanie dwóch trwałych wyników (B3) oraz publikacja z wykonania (C0/C1/C3) wymagają wcześniej zatwierdzenia jako zasobu. Dowody w sekcji 17.1.
 
 ## 3. Priorytety względem katalogu
 
@@ -49,11 +51,14 @@ Rozmiar oznacza względny wysiłek obejmujący kontrakty, implementację i odbi�
 | Uruchamianie ewaluacji | Następne wydanie | Jeden szablon workflow, przypięte wejścia, ograniczenia, wynik | L |
 | Scoring zapisanych odpowiedzi | Pierwszy wariant wykonania oceny | `score_existing` z wersją scorera i artefaktem wejścia, bez ponownej generacji | M |
 | Trwały wynik i dowód promocji | Następne wydanie, fundament | Wersjonowany artefakt oceny i powtarzalna decyzja serwera | L |
+| Zatwierdzenie źródeł dowodów jako zasób | Teraz, przed B3 | Wiele przypięć naraz, adresowanych treścią, z zapisem i wycofaniem zatwierdzenia; bez katalogu na dysku serwera | M |
+| Koszt odczytu i indeks katalogu dowodów | Teraz, przed B3 | Podsumowanie bez czytania przypadków, lista bez weryfikacji źródła na wiersz, porządek czasowy katalogu | M |
+| Panel trwałych dowodów | Razem z B3 | Stany dowodu, termin retencji, pochodzenie wiersza i kontrolka porównywalności; bez drugiej implementacji reguł w TypeScript | S–M |
 | Feedback i typowane oceny | Kontrakt w B, przepływ w C | Cel oceny, źródło/autor, rubryka, rewizje i filtrowanie trace | M–L |
 | Review → przypadek regresji | Przed raportami zespołowymi | Oczekiwana odpowiedź i źródło; zatwierdzenie do wersji datasetu | M–L |
 | Bramka jakości aplikacji w CI | Razem z wykonaniem oceny | SDK/CLI, znane regresje, wynik i link do dowodów; osobno held-out | M |
 | Experiments: jakość/czas/zużycie | Po kontrakcie wariantu | Konkretna kohorta przypadków, dowody i drill-down | L |
-| Scorery / judges | Wąsko z ewaluacją | Jeden scorer deterministyczny i jeden adapter; wersja konfiguracji, zbiór kalibracyjny i rozbieżności z ocenami ludzi | M |
+| Scorery / judges | Wąsko z ewaluacją, po własnej regule dopuszczenia | Jeden scorer deterministyczny i jeden adapter; wersja konfiguracji, zbiór kalibracyjny i rozbieżności z ocenami ludzi. Wyniku judge'a nie potwierdza ponowny odczyt bajtów, więc dopuszczenie ma inną regułę niż pozostałe źródła | M |
 | Alerty | Po uruchamialnej ewaluacji | Błąd wykonania / regresja oceny, jeden kanał, deduplikacja | L |
 | Diagnostyka i pierwsza integracja | Przed szerszym użyciem | Faktyczne możliwości instancji i potwierdzenie pierwszego sygnału | M |
 | Workspace zespołowe i raporty | Po trwałych wynikach | Zapisane widoki serwerowe, opis + przypięte dane | L |
@@ -99,8 +104,24 @@ Rejestry, serving SDK, review danych, Query i harmonogramy należy utrzymywać i
 5. Zdefiniować politykę decyzji osobno od etykiety wersji. Nowa rekomendacja promocji ma wymagać kompletnego held-out, zgodnego baseline i poprawy metryki według zadanej polityki. Obsłużyć pierwszy model bez baseline jako jawny przypadek inicjalizacji, bez komunikatu „lepszy od poprzednika”. Zmiana istniejących zasad etykietowania modeli wymaga opisanej migracji, nie ukrytej zmiany w UI.
 6. Manifest wariantu obejmuje również rzeczywistą konfigurację generacji, schemat odpowiedzi, wersję kodu i definicji narzędzi/workflow. Schemat wejść i oczekiwań ma własną przypiętą wersję. Aliasy rozwiązywać w momencie startu. Dodać relację `case_id` → artefakt odpowiedzi → trace/span oraz tożsamość niezależnego powtórzenia pomiaru; techniczne retry pozostaje idempotentne.
 7. Wprowadzić kontrakt typowanej oceny/feedbacku: jednoznaczny cel (trace/span/snapshot sesji/przypadek), wersja rubryki, typ wartości, źródło i autor, uzasadnienie, czas i rewizja. Ocena człowieka nie nadpisuje wyniku judge'a. Oczekiwana odpowiedź jest osobnym polem/artefaktem od oceny otrzymanej odpowiedzi. Wykorzystać istniejące review rozmów, zachowując rozdzielenie jakości i zgody na użycie treści.
+8. Zatwierdzenie źródła dowodów jest wersjonowanym zasobem, nie katalogiem w konfiguracji procesu: wiele przypięć naraz, adresowanych treścią, z zapisem kto i kiedy zatwierdził oraz z wycofaniem. Bez tego nie da się mieć jednocześnie czytelnego baseline i kandydata, a każda publikacja z wykonania wymaga ręcznego kroku na hoście. Właścicielem pozostaje Evaluation; nadal nie czyta prywatnych kluczy innych rejestrów.
+9. Rozdzielić koszt odczytu od jego zakresu: podsumowanie odpowiada z metadanych, shard weryfikuje się przy czytaniu jego strony, lista nie weryfikuje źródła dla każdego wiersza, a sprzątanie korzysta z terminów w receipt zamiast z pełnej weryfikacji treści. Wybrać porządek katalogu — dziś klucz jest skrótem ID, więc „najnowsze pierwsze” wymaga pełnego skanu. Zmierzyć na wartościach startowych: 10 000 przypadków, 100 MiB, strony po 200, 30 dni.
+10. Rozstrzygnąć usunięcie pojedynczego dowodu: albo trasa z uprawnieniem, albo zapisane w ADR 0030 stwierdzenie, że dowód znika wyłącznie przez usunięcie źródła i retencję. Dla źródeł `external` nie ma czego usunąć, więc milczenie oznacza 30-dniowy zegar jako jedyne narzędzie.
+11. Judge dostaje własną regułę dopuszczenia. Pozostałe źródła dopuszcza ponowny odczyt bajtów u właściciela; wyniku judge'a nikt ponownie nie potwierdzi. Zapisać w ADR 0030: konfiguracja przypięta treścią, zbiór kalibracyjny i rozbieżność z ocenami ludzi jako część dowodu oraz jawne oznaczenie wyniku jako nieodtwarzalnego przez ponowny odczyt. Adapter dopiero po tym rozstrzygnięciu.
 
-**Odbiór B:** historyczne rekordy bez nowych pól nadal się odczytują; nic nie dopasowuje wariantu po nazwie modelu; zbyt duży raport można odczytać z artefaktu; restart i usunięcie szczegółów projekcji nie zmieniają przypiętego wyniku; niezgodny split/scorer blokuje decyzję; ponowienie tej samej próby nie tworzy drugiego logicznego wyniku.
+**Zmiany wizualne etapu B.** Trwałe dowody nie mają dziś żadnej postaci w panelu: [ekran Evaluation](../apps/panel/src/features/evaluation/screens/overview/page.tsx) czyta wyłącznie projekcję logu, a wygenerowany klient ma `listResults`, `getResult` i `getCases`, których nie woła żaden ekran. Poniższe rozstrzygnięcia należą do B2i i B3.
+
+- **Siedem stanów dowodu to nie są stany błędu.** `EvidenceState` ma `complete`, `partial`, `missing_artifact`, `corrupt_artifact`, `expired`, `deleted_source` i `forbidden`, a cztery z nich są poprawnymi zakończeniami o różnym następnym kroku: po `expired` i `deleted_source` nie ma czego ponawiać, `corrupt_artifact` bywa odwracalny naprawą bajtów, a `forbidden` ma trzy różne przyczyny — wycofane prawa lub review u źródła, cofnięte zatwierdzenie operatora, brak roli Admin przy dowodach ze źródła Conversations. Każda potrzebuje własnego zdania; wspólne „nie udało się” czyta się jak awaria. Obowiązuje reguła panelu: nieudany odczyt nie jest stanem pustym, a `forbidden` z powodu roli renderuje się jak w Conversations — „czytanie treści wymaga roli admin”, nie jak porażka.
+- **`state: partial` i `status: partial` znaczą co innego.** Wynik niesie oba pola: pierwsze mówi, że część dowodów jest nieczytelna, drugie — że część przypadków nie ma oceny. Dwie plakietki z tym samym słowem obok siebie to najtańszy sposób na pomylenie ich; nazwać je w UI osobno.
+- **Retencja jest faktem z datą.** Receipt niesie `expires_at`, skracany przez źródło. Dowód czytelny dziś i nieodwracalnie nieczytelny za trzy dni wygląda dziś tak samo jak trwały. Pokazywać termin przy wyniku — tak jak Conversations rysuje pasek eksportu, bo mianownik jest faktem — i nie obiecywać dostępności, której zapis widoku z A4 również nie obiecuje.
+- **Status porównywalności zasługuje na kontrolkę, nie na akapit.** Serwer z A3 zwraca `comparable`/`incompatible`/`unverified`, powody, pokrycie i kompletność; ekran renderuje to zdaniami, w których najważniejsze — „delty wstrzymane” — jest czwartym zdaniem pod trzema innymi. Jedna widoczna kontrolka stanu z powodami pod spodem, a wstrzymana delta widocznie wstrzymana zamiast po prostu nieobecnej. B3 używa tej samej kontrolki dla dwóch trwałych wyników.
+- **Katalog trwały i lista z projekcji to jedna lista z widocznym pochodzeniem wiersza.** Stare listy celowo wykluczają ID przejęte przez registry, a szczegół preferuje trwały wynik i odpowiada 403/410 po wycofaniu. Dwie zakładki albo ciche scalenie dają ten sam efekt: raport „znika” bez powodu. Wiersz ma mówić, czy jest fałdą logu, czy trwałym dowodem.
+- **Katalog dziedziczy konwencje list panelu poza jedną.** `useInfiniteQuery` i `VirtualList`, filtry w URL, kursor z serwera — tak. Okno czasu — nie: katalog nie fałduje logu, a jego klucz jest skrótem ID, więc nie ma porządku czasowego. Albo B2f daje mu indeks, albo ekran mówi wprost, że nie jest sortowany po czasie; kontrolka okresu, która niczego nie zawęża, jest gorsza niż jej brak.
+- **Brak konfiguracji to 501 z nazwą zmiennej, nie pusta lista.** Tak odpowiadają Prompts, Datasets i Conversations. Po B2e ta sama zasada obejmuje brak zatwierdzenia: dziś „publikacja odmówiona” nie ma w UI żadnego śladu, który tłumaczyłby powód.
+
+Czego nie robimy: drugiej implementacji porównywalności w TypeScript — reguły i powody liczy serwer, panel renderuje jego odpowiedź, jak przy kanwie adnotacji i kanwie pipeline'u. I nie kolorujemy delt metryk: kierunek poprawy jest nieznany, więc zielona liczba może znaczyć „zdrożało”. Powód jest zapisany w [search.ts](../apps/panel/src/features/evaluation/screens/overview/search.ts) i zostaje.
+
+**Odbiór B:** historyczne rekordy bez nowych pól nadal się odczytują; nic nie dopasowuje wariantu po nazwie modelu; zbyt duży raport można odczytać z artefaktu; restart i usunięcie szczegółów projekcji nie zmieniają przypiętego wyniku; niezgodny split/scorer blokuje decyzję; ponowienie tej samej próby nie tworzy drugiego logicznego wyniku. Dwa warianty jednej suite są czytelne jednocześnie i pozostają czytelne po zatwierdzeniu trzeciego; podsumowanie wyniku nie czyta jego przypadków; strona katalogu nie weryfikuje źródła każdego wiersza; koszt jednego przebiegu sprzątania nie rośnie z rozmiarem opublikowanych wyników; usunięcie dowodu ma opisane narzędzie albo opisany brak narzędzia. Na ekranie: żaden z siedmiu stanów dowodu nie renderuje się jako stan pusty, dwa znaczenia słowa „partial” są rozróżnione, termin retencji jest widoczny przy wyniku, a wstrzymana delta jest widocznie wstrzymana.
 
 Po rozszerzeniu o Langfuse/MLflow: zmiana konfiguracji lub aliasu po starcie nie zmienia manifestu; dwa niezależne powtórzenia przypadku pozostają osobnymi pomiarami; ocena recenzenta zachowuje autora i historię; schematy ocen waliduje API.
 
@@ -114,7 +135,7 @@ Pełne treści i artefakty pozostają poza logiem telemetrycznym zgodnie z istni
 
 1. Jeden formularz: wersja datasetu i split, baseline/kandydat, wersja zestawu scorerów, limit przypadków, timeout i współbieżność. Start tworzy istniejące managed execution. Lista suite z API jest agregatem raportów, więc definicja uruchamialnego zestawu oceny jest nowym, wersjonowanym zasobem.
 2. Jeden szablon workflow z istniejącym workerem i jednym kontraktem wyniku. Zacząć od scorera deterministycznego; dodać jeden potrzebny adapter, np. do używanej integracji DeepEval. Judge musi mieć przypiętą konfigurację i przykłady kalibracyjne; szeroka biblioteka nie jest warunkiem wydania.
-3. Zapewnić anulowanie, timeout, częściowy wynik i idempotencję startu/retry. Sekrety i wykonawcy są wybierani z dozwolonej konfiguracji serwera, a UI nie staje się uniwersalnym edytorem dowolnego kodu. Stosować istniejące reguły dostępu do uruchamiania.
+3. Zapewnić anulowanie, timeout, częściowy wynik i idempotencję startu/retry. Sekrety i wykonawcy są wybierani z dozwolonej konfiguracji serwera, a UI nie staje się uniwersalnym edytorem dowolnego kodu. Stosować istniejące reguły dostępu do uruchamiania. Publikacja dowodu z wykonania wymaga zatwierdzenia jako zasobu (etap B, punkt 8); bez niego każde uruchomienie potrzebuje ręcznego kroku na hoście.
 4. Wypełnić Experiments: jeden wiersz na przypięty wariant, jakość, liczebność próby, błędy, czas i tokeny, linki do oceny i trace. Dla jakości i wydajności używać jawnego zbioru przypadków/wykonań. Oddzielać pomiary benchmarku od obserwacji produkcyjnych, a czas całego workflow od opóźnienia pojedynczej inferencji. Nie uśredniać percentyli podgrup.
 5. Kwoty pieniężne pokazywać dopiero po dodaniu jawnego źródła/wersji ceny i pokrycia. Bez tego wydanie dostarcza porównanie tokenów. Nie mieszać kosztu budowy wariantu z kosztem jego obsługi ruchu.
 6. Dodać przepis SDK/CLI do uruchomienia oceny w CI i sprawdzenia wyniku: pass, regresja, błąd lub niekompletna ocena. Zapisać commit, wersję suite i link do dowodów. Krytyczne przypadki mają własne warunki, niezależne od średniej. Zacząć od deterministycznego przykładu; bramka korzysta z tej samej polityki co UI. Widoczny zestaw regresji nie zastępuje niezależnego held-out do oceny poprawy.
@@ -142,6 +163,7 @@ A: porównania + lokalny zapis + linki
                   │
                   ▼
 B: kontekst + trwały wynik + wariant + typowane oceny
+   + zatwierdzenie jako zasób, koszt odczytu, indeks katalogu
                   │
                   ▼
 C: scoring istniejących odpowiedzi → generacja i ocena
@@ -165,7 +187,12 @@ Pierwsze paczki do implementacji, w tej kolejności:
 | A4 | Nazwane lokalne widoki, preferencje, podstawowe linki | Training, Evaluation, ustawienia i wspólne prymitywy według użycia | A2, A3 |
 | B1 | ADR: właściciele danych, referencje, kontekst oceny, trwałość i kompatybilność | `docs/ADR/`, fasada Evaluation, typy domeny i kontrakty SDK; AR1/AR2 | Wnioski z A |
 | B2 | Zapis i odczyt trwałego wyniku | Nowy moduł Evaluation z własnym storage metadanych, artefakty, worker SDK, projekcja i API | B1 |
-| B3 | Kontekst wariantu na obserwacjach, porównywalność i dowody decyzji | Evaluation; Core tylko neutralne kontrakty, SDK Python/TS, trace/projektor, modele/prompty | B1, B2 |
+| B2e | Zatwierdzenie źródła jako wersjonowany zasób z wycofaniem; usunięcie dowodu albo jawny jego brak w ADR | Evaluation, API, Server, konfiguracja | B2 |
+| B2f | Podsumowanie bez odczytu przypadków, lista bez weryfikacji źródła na wiersz, sprzątanie z receiptu, indeks porządku katalogu | Evaluation | B2 |
+| B2g | Zadanie CI na rzeczywistym magazynie obiektów, raportowanie sprzątania, zmienne w chart/INSTALL i receptura `just` | `.github/workflows/`, `deploy/`, `justfile`, Server | B2 |
+| B2h | Judge: reguła dopuszczenia w ADR 0030, potem adapter | `docs/ADR/`, Evaluation, Server | B2e |
+| B2i | Panel trwałych dowodów: siedem stanów, retencja, pochodzenie wiersza, kontrolka porównywalności | `features/evaluation/` | B2e, B2f |
+| B3 | Kontekst wariantu na obserwacjach, porównywalność i dowody decyzji | Evaluation; Core tylko neutralne kontrakty, SDK Python/TS, trace/projektor, modele/prompty, `features/evaluation/` | B1, B2, B2e, B2f, B2i |
 | B4 | Typowane oceny i feedback, rubryki, pochodzenie i rewizje | Domena/API ocen, SDK, Evaluation/Observability, adapter review rozmów | B1, B2 |
 | C0 | Scoring zapisanych odpowiedzi | Usługa aplikacyjna startu, Execution, worker, artefakty, Evaluation | B2, B3, B4, AR3 |
 | C1 | Jeden szablon generowania i oceny oraz formularz startu | Execution, worker, Evaluation | C0 |
@@ -173,7 +200,7 @@ Pierwsze paczki do implementacji, w tej kolejności:
 | C3 | Bramka regresji aplikacji w CI i przykład SDK/CLI | SDK, przykład integracji, kontrakt decyzji; bez wymaganego komentowania PR | C0; C1 dla testów generacji |
 | C4 | Feedback → review → wersjonowany przypadek testowy | Observability, review, dataset i oczekiwania | B4, trwały zapis przypadków z B |
 
-Ścieżki panelu w tabeli są względem `apps/panel/src/`. Każda paczka obejmuje testy zachowania i dokumentację swojego kontraktu. B1 może rozpocząć się podczas dopracowywania A; pełne Experiments nie powinno blokować dostarczenia A2.
+Ścieżki panelu w tabeli są względem `apps/panel/src/`. Każda paczka obejmuje testy zachowania i dokumentację swojego kontraktu. B1 może rozpocząć się podczas dopracowywania A; pełne Experiments nie powinno blokować dostarczenia A2. B2e–B2i domykają B2 i wyprzedzają B3; ich uzasadnienie i dowody w kodzie są w sekcji 17. B2i jest jedyną z nich, którą widać na ekranie — pozostałe cztery są kontraktem, magazynem i odbiorem.
 
 Nie przypisuję dat na podstawie samej liczby funkcji: nie znam dostępnej obsady ani wyników wdrożenia wykonawcy. Po A1/A2 należy oszacować resztę na podstawie rzeczywistego czasu, wielkości danych i decyzji o wielozespołowości. Pierwszy zamknięty zakres wydania to A1–A4, a nie cały katalog P1.
 
@@ -186,11 +213,15 @@ Przed implementacją utrwalić próbki danych i zmierzyć, ile kroków zajmuje z
 | Panel | Klawiatura, Back/refresh/URL, stany puste i błędy, brak serii, różne jednostki, oba motywy; `rtk npm run typecheck`, `rtk npm test`, `rtk npm run build` w `apps/panel` (architektura sprawdzana przez skrypty) |
 | API i SDK | Stare rekordy, brakujące pola, niewłaściwy baseline, różny split/scorer, ograniczenia zapytań; `rtk just openapi` i testy zmienionych modułów oraz SDK |
 | Trwałość | Restart, utrata szczegółów projekcji, duży raport, brak artefaktu, odebranie dostępu/usunięcie danych; te same zachowania na wspieranych magazynach |
+| Panel trwałych dowodów | Każdy stan dowodu z własnym zdaniem i bez stanu pustego, `forbidden` z powodu roli jako wymaganie roli a nie awaria, widoczny termin retencji, pochodzenie wiersza w katalogu, brak konfiguracji jako 501 z nazwą zmiennej |
+| Magazyn obiektów | Atomowy `create` i protokół claim/sprzątania na rzeczywistym magazynie w CI, nie tylko w pamięci i na pliku; konkurencyjna publikacja w obu kolejnościach |
+| Koszt i skala | Odczyt podsumowania, strona przypadków, strona katalogu i jeden przebieg sprzątania zmierzone na wartościach startowych; próg, powyżej którego indeks jest wymagany |
+| Wdrożenie | Zmienne rejestru w chart i opisie instalacji, receptura uruchomienia trwałej ścieżki, znaczenie odtworzenia prefiksu `evaluations/` z kopii |
 | Execution | Retry po utracie odpowiedzi, anulowanie, timeout, częściowy wynik, współbieżne warianty; rzeczywisty workflow, nie tylko mock formularza |
 | Feedback i regresje | Rewizje i źródła ocen, niedostępna treść, idempotencja kolejki, zero generacji w `score_existing`, krytyczny przypadek mimo lepszej średniej, błąd scorera blokujący CI |
-| Przed scaleniem kodu | `rtk just check`; dodatkowe testy usług i lokalnego klastra tylko gdy zmieniona ścieżka ich wymaga |
+| Przed scaleniem kodu | `rtk just check`; dodatkowe testy usług i lokalnego klastra tylko gdy zmieniona ścieżka ich wymaga; trwałe reguły przenieść do `CLAUDE.md` i ADR zamiast zostawiać je w checkpointach |
 
-Decyzje wymagające ustalenia najpóźniej w B1: izolacja zespołów, pierwszy rzeczywisty dataset i scorer, oczekiwana skala oraz czas przechowywania dowodów. Dla pierwszego wydania przyjmujemy wspólną instancję, maksymalnie pięć porównywanych treningów i lokalny zapis widoków; to wystarcza do rozpoczęcia A bez blokowania się rozbudowaną administracją.
+Decyzje wymagające ustalenia najpóźniej w B1: izolacja zespołów, pierwszy rzeczywisty dataset i scorer, oczekiwana skala oraz czas przechowywania dowodów. Skala i retencja zostały w B1 wybrane jako wartości startowe, nie zmierzone (sekcja 9); B2f zamienia je na pomiar i próg. Dla pierwszego wydania przyjmujemy wspólną instancję, maksymalnie pięć porównywanych treningów i lokalny zapis widoków; to wystarcza do rozpoczęcia A bez blokowania się rozbudowaną administracją.
 
 Pierwotny przegląd był dokumentacyjny. Późniejsza implementacja i odbiór A są opisane w sekcji 8; nie potwierdzają realizacji scenariuszy B/C/D ani gotowości wdrożenia Kubernetes.
 
@@ -199,11 +230,13 @@ Pierwotny przegląd był dokumentacyjny. Późniejsza implementacja i odbiór A 
 Obecny modularny monolit wystarcza do A. Panel ma egzekwowane vertical slices; backend wymaga dwóch konkretnych wydzieleń dla zakresu B/C. [Pełna analiza](FTI_ARCHITECTURE_REVIEW.md) zawiera dowody w kodzie, mapę kontekstów i kryteria odbioru.
 
 1. **AR1, razem z A/B1:** zapisać dozwolone zależności i właścicieli nowych danych, dodać kontrolę granic Rust do CI. F/T/I pozostaje przepływem produktu, a nie podziałem na trzy konteksty.
-2. **AR2, B1–B4:** Evaluation posiada suite, rubryki, trwałe wyniki, assessments i porównywalność. Projektor ma przebudowywalny widok. Modele/prompty zachowują własne decyzje promocji; Conversations zachowuje zgodę, retencję i usuwanie. Core otrzymuje tylko neutralne kontrakty.
-3. **AR3, przed C0:** wyjąć wspólny przypadek użycia kompilacji/startu z modułu HTTP. API i scheduler korzystają z jednej usługi aplikacyjnej, z zachowaniem idempotencji, autoryzacji i polityki payloadów. Nowy scorer jest zadaniem istniejącego workera, nie nowym silnikiem wykonania.
+2. **AR2, B1–B4:** Evaluation posiada suite, rubryki, trwałe wyniki, assessments i porównywalność. Projektor ma przebudowywalny widok. Modele/prompty zachowują własne decyzje promocji; Conversations zachowuje zgodę, retencję i usuwanie. Core otrzymuje tylko neutralne kontrakty. Do tego samego właściciela należy zatwierdzenie źródeł dowodów: dziś jest katalogiem w konfiguracji procesu, co ogranicza instancję do jednej pary wariant/kontekst (sekcja 17.1).
+3. **AR3, przed C0:** wyjąć wspólny przypadek użycia kompilacji/startu z modułu HTTP. API i scheduler korzystają z jednej usługi aplikacyjnej, z zachowaniem idempotencji, autoryzacji i polityki payloadów. Nowy scorer jest zadaniem istniejącego workera, nie nowym silnikiem wykonania. Nie zaczęte: [scheduler](../crates/aiwatcher-server/src/execution/scheduler.rs) nadal klasyfikuje trwałość błędu po statusie HTTP z `ApiError`.
 4. **AR4, wraz z B4/C:** nowe klienty ocen w modułach SDK; lekki import główny pozostaje lekki. UI, hooki i testy przy feature; wspólne komponenty dopiero przy rzeczywistym ponownym użyciu.
 
 Rozdzielenie kompilatora curation od silnika i dalsze dzielenie dużych ekranów wykonywać przy zmianach, które tego potrzebują. Nie są warunkiem rozpoczęcia A1–A4. Szczegółowe propozycje nowych modułów nie oznaczają konieczności osobnego procesu lub wdrożenia.
+
+Pozostała część FTI — B2e–B2h, B3, B4, AR3 i C0 — powinna dostać kartę na [tablicy specyfikacji](specs/BOARD.md), a trwałe rozstrzygnięcia trafiać do ADR i `CLAUDE.md`. Niezmienniki rejestru dowodów wypracowane w sekcjach 10–16 — intencja przed pierwszym artefaktem, claim jako jedyna atomowa bramka, brak fallbacku po tombstone, shard przed receiptem, wymagane szyfrowanie dowodów ze źródła Conversations, `with_content_access` przyznawane po sprawdzeniu Admin — są dziś tylko w tym dokumencie.
 
 ## 8. Postęp implementacji (2026-09-11)
 
@@ -472,20 +505,20 @@ pozostałych kryteriów B2/AR2 i B3. Nie powtarzać adapterów.
 
 ## 17. Przegląd planu — braki i propozycje (2026-09-12)
 
-Przegląd dotyczy **planu**, nie dostarczonego kodu: odbiory z sekcji 8–16 nie są tu podważane. Wskazane niżej rzeczy albo nie mają w planie właściciela i terminu, albo mają go po etapie, w którym staną się blokadą. Dowody odczytano z checkoutu na HEAD `c77a997` wraz z niezacommitowanym wycinkiem Conversations.
+Przegląd dotyczy **planu**, nie dostarczonego kodu: odbiory z sekcji 8–16 nie są tu podważane. Dowody odczytano z checkoutu na HEAD `c77a997` wraz z niezacommitowanym wycinkiem Conversations. Każdy wniosek jest już wniesiony do sekcji 2–7 — ta sekcja zostaje jako uzasadnienie i wskazanie miejsca w kodzie, a kolumna niżej mówi, gdzie w planie trafił.
 
-| # | Rzecz | Gdzie powinna trafić | Skutek pominięcia |
+| # | Rzecz | Gdzie trafiła w planie | Skutek pominięcia |
 | --- | --- | --- | --- |
-| E1 | Jedna zatwierdzona para wariant/kontekst na instancję | Przed B3 | B3 nie ma dwóch porównywalnych dowodów |
-| E2 | Publikacja wymaga ręcznego zatwierdzenia przy każdym uruchomieniu | Przed C0 | C0/C1/C3 nie opublikują dowodu bez człowieka |
-| E3 | Brak trasy usunięcia pojedynczego dowodu | B2, domknięcie | Jedynym narzędziem jest retencja |
-| K1–K5 | Koszt odczytu i porządek katalogu | Przed B3 | Ekran katalogu i sweep skalują się z całym korpusem |
-| O1 | Brak zadania CI dla object store | Przed zamknięciem B2 | Protokół claim/GC nie jest dowiedziony na S3 |
-| O2 | Sweep nie raportuje wyniku | Przed zamknięciem B2 | Tydzień nieudanych sweepów wygląda jak działający |
-| W1 | Rejestr nie istnieje we wdrożeniu | Przed pierwszym wdrożeniem | Funkcji nie da się włączyć chartem |
-| W2 | Backup/odtworzenie prefiksu `evaluations/` | Przed pierwszym wdrożeniem | Odtworzenie może wskrzesić porzucone ID |
-| J1 | Kształt judge'a | Przed adapterem judge | Adapter skopiuje regułę, która go nie dotyczy |
-| X1–X4 | Plan jako dokument | Teraz | Kolejna sesja powtarza pracę AW-5 lub gubi stan |
+| E1 | Jedna zatwierdzona para wariant/kontekst na instancję | Uściślenie 8, etap B p. 8, paczka B2e | B3 nie ma dwóch porównywalnych dowodów |
+| E2 | Publikacja wymaga ręcznego zatwierdzenia przy każdym uruchomieniu | Etap B p. 8, etap C p. 3, paczka B2e | C0/C1/C3 nie opublikują dowodu bez człowieka |
+| E3 | Brak trasy usunięcia pojedynczego dowodu | Etap B p. 10, paczka B2e | Jedynym narzędziem jest retencja |
+| K1–K5 | Koszt odczytu i porządek katalogu | Etap B p. 9, paczka B2f, sekcja 6 | Ekran katalogu i sweep skalują się z całym korpusem |
+| O1 | Brak zadania CI dla object store | Paczka B2g, sekcja 6 | Protokół claim/GC nie jest dowiedziony na S3 |
+| O2 | Sweep nie raportuje wyniku | Paczka B2g | Tydzień nieudanych sweepów wygląda jak działający |
+| W1 | Rejestr nie istnieje we wdrożeniu | Paczka B2g, sekcja 6 | Funkcji nie da się włączyć chartem |
+| W2 | Backup/odtworzenie prefiksu `evaluations/` | Sekcja 6, ADR 0030 | Odtworzenie może wskrzesić porzucone ID |
+| J1 | Kształt judge'a | Etap B p. 11, paczka B2h | Adapter skopiuje regułę, która go nie dotyczy |
+| X1–X4 | Plan jako dokument | Uściślenie 7, sekcje 6 i 7 | Kolejna sesja powtarza pracę AW-5 lub gubi stan |
 
 ### 17.1 Dostęp do dowodów — blokady B3 i C
 
@@ -541,14 +574,146 @@ Plan i kickoff trzymają judge'a jako „ostatni adapter". To nie jest ten sam r
 
 **X4. AR3 jest warunkiem C0 i nie zaczęto go.** Sekcja 7 wymaga wydzielenia wspólnego przypadku użycia kompilacji/startu z modułu HTTP przed C0; [scheduler](../crates/aiwatcher-server/src/execution/scheduler.rs) nadal klasyfikuje trwałość błędu po statusie HTTP z `ApiError`. To powinno być w „następnym zakresie" kickoffu obok judge'a, a nie odkryte przy C0.
 
-### 17.7 Proponowana kolejność po domknięciu adapterów
+### 17.7 Kolejność
 
-| Paczka | Zakres | Dlaczego przed B3 |
+Paczki B2e–B2i i zależności B3 są w [tabeli paczek](#5-zależności-i-pierwsze-paczki-prac). Kolejność wewnątrz nich jest wymienna poza trzema ograniczeniami: B2e poprzedza B3, bo bez niego B3 nie ma dwóch czytelnych wyników; B2h następuje po rozstrzygnięciu reguły dopuszczenia w ADR 0030; a B2i następuje po B2e i B2f, bo rysuje stany i katalog, które one ustalają. AR3 biegnie równolegle i pozostaje warunkiem C0.
+
+### 17.8 Zmiany wizualne
+
+Cztery obserwacje z ekranu, na których opiera się „Zmiany wizualne etapu B” i paczka B2i.
+
+- **V1. Trwała ścieżka nie ma ekranu.** `listResults`, `getResult` i `getCases` są w wygenerowanym kliencie i nie woła ich nic poza nim; jedyny ekran Evaluation czyta projekcję logu. Cała praca sekcji 10–16 jest dziś dostępna wyłącznie przez HTTP i SDK.
+- **V2. Dwa różne `partial` w jednej odpowiedzi.** `EvidenceState::Partial` i `ResultStatus::Partial` przyjeżdżają razem w `DurableEvaluation` i znaczą co innego. To trafia na ekran jako dwie plakietki, zanim ktokolwiek zdecyduje inaczej.
+- **V3. Kontrakt A3 jest renderowany jako proza.** W [page.tsx](../apps/panel/src/features/evaluation/screens/overview/page.tsx) zdanie o wstrzymanych deltach stoi pod akapitami o pokryciu i kompletności — serwer rozróżnia trzy stany, ekran ich nie eksponuje.
+- **V4. Okno czasu nie ma zastosowania do katalogu dowodów.** Ekran Evaluation niesie `window` przez [search.ts](../apps/panel/src/features/evaluation/screens/overview/search.ts), bo fałduje log. Katalog trwałych wyników jest listowany w porządku skrótu ID; ta sama kontrolka nad nim nie zawężałaby niczego.
+
+## 18. Domknięcie B2 — paczki B2e–B2i (2026-09-12)
+
+Wykonane na HEAD `ab4d998` … `96f618c`. Równolegle inna sesja pracowała na
+`execution/pods/`; jej zmiany zostały nietknięte, a commity poniżej są po
+ścieżkach.
+
+| Paczka | Stan | Commit |
 | --- | --- | --- |
-| B2e | Zatwierdzenie jako wersjonowany zasób z wieloma przypięciami; trasa usunięcia albo jawny jej brak w ADR | E1, E2, E3 z 17.1 |
-| B2f | Rozdzielenie podsumowania od weryfikacji shardów; `list` bez `resolve` per wiersz; wybór indeksu porządku | K1–K5 |
-| B2g | Zadanie CI z RustFS; raportowanie sweepu; zmienne w chart/INSTALL i receptura `just` | O1, O2, W1 |
-| B2h | Judge: własna reguła dopuszczenia w ADR 0030, potem adapter | J1 |
-| B3 | Katalog i porównanie trwałych wyników w panelu | ma wtedy dane, indeks i koszt pod kontrolą |
+| B2e — zatwierdzenie jako zasób | zrobione | `004704f` |
+| B2f — koszt odczytu | zrobione | `63d1480` |
+| B2g — CI, obserwowalność, wdrożenie | zrobione | `9d06541` |
+| B2h — reguła dopuszczenia judge'a | zrobione (ADR, bez adaptera) | `9d06541` |
+| B2i — panel trwałych dowodów | zrobione | `96f618c` |
 
-AR3 biegnie równolegle i jest warunkiem C0. Kolejność wewnątrz B2e–B2h jest wymienna poza tym, że B2e poprzedza B3, a B2h następuje po rozstrzygnięciu w ADR.
+### 18.1 B2e — zatwierdzenie jest zasobem
+
+`approval_id = sha256([1, "evaluation.approval", variant_id, context_id])`.
+Rekord w `evaluations/approvals/{id}/record.json` (tylko `create`) trzyma kto,
+kiedy i `bundle_digest` — to, co adapter sprawdził **ponad** digesty z manifestu,
+czyli pakiet modelu, którego historyczne ID nie obejmuje. Wycofanie to osobny
+znacznik `withdrawn.json`, ostateczny dla danego ID.
+
+- `POST/GET/DELETE /api/v1/evaluation-approvals` — **admin**, bo token ingestu
+  jest z definicji edytorem, a producent dopuszczający własne dowody nie jest
+  zatwierdzeniem.
+- Publikacja wymaga dopuszczonej pary, **po** adapterze: źródło, którego nie ma,
+  mówi to wprost zamiast „nikt tego nie zatwierdził".
+- Odczyt wymaga tylko braku wycofania. Brak rekordu to nie wycofanie — dowody
+  sprzed tej zmiany pozostają czytelne.
+- `AIWATCHER_EVALUATION_SOURCE_DIR` to teraz katalog **zatwierdzeń**, po jednym
+  podkatalogu na parę; pojedynczy bundle wprost w korzeniu nadal działa.
+- E3 rozstrzygnięte: `DELETE /api/v1/evaluation-results/{id}` (admin), ten sam
+  trwały znacznik co retencja. Słownik stanów zostaje przy siedmiu.
+
+**Odbiór** (`approvals.rs`, dwa testy; plus ręcznie na własnej instancji `:19080`
+z RustFS na `:9011`): baseline i kandydat `complete` naraz, trzecie zatwierdzenie
+nie rusza dwóch wcześniejszych (receipty bajt w bajt te same), wycofanie daje
+`forbidden` przy niezmienionym `expires_at`, kolejna repetycja dopuszczonej pary
+publikuje się bez kroku na hoście, `DELETE` jednego wyniku nie rusza drugiego.
+
+**Czego to nie robi:** nowa para nadal wymaga wgrania bajtów bundle'a tam, gdzie
+adapter je czyta. Upload bundle'a przez API to dopisanie za tym samym zasobem,
+nie zmiana w nim. Zapisane w ADR 0030.
+
+### 18.2 B2f — cztery liczby, przed i po
+
+Mierzone w żądaniach do object store (`cost.rs`, `Counting`), na wartościach
+startowych. Żądanie, nie milisekunda, bo to magazyn po drugiej stronie sieci.
+
+| | przed | po |
+| --- | --- | --- |
+| podsumowanie wyniku o 10 000 przypadków | 105 gets, 1 661 263 B | **5 gets, 11 163 B** |
+| pierwsza strona 200 przypadków | 108 gets, 1 704 843 B | **7 gets, 44 165 B** |
+| strona katalogu, 50 wierszy | 400 gets, 1 list, 185 550 B | **152 gets, 1 list, 131 535 B** |
+| jeden przebieg sprzątania, 50 wierszy | 550 gets, 53 lists, 319 050 B | **103 gets, 1 list, 17 806 B** |
+
+Trzy reguły, żadna nie rozluźnia gwarancji: podsumowanie odpowiada z
+content-addressed metadanych; shard weryfikuje się przy czytaniu jego strony, a
+uszkodzony jest **stanem tej strony**, nie błędem i nie krótszą stroną; źródło
+rozwiązywane raz na dopuszczoną parę w obrębie jednego `list`/`sweep`, i tylko
+werdykt o źródle jest pamiętany. Sprzątanie pyta najpierw receipt. Zbieranie
+osieroconych odłączone na własną kadencję godzinną.
+
+**Koszt nazwany:** wynik, którego shardy zniknęły, czyta się w katalogu jako
+`complete`, dopóki ktoś go nie otworzy. Wcześniej zgłaszał to każdy odczyt.
+Usunięcie źródła egzekwuje worker w ciągu godziny, a odczyt natychmiast.
+
+**Porządek katalogu i próg indeksu.** Klucz to `evaluations/{sha256(id)}/`, więc
+porządek jest porządkiem skrótu — i dlatego ekran B2i **nie ma kontrolki
+okresu**. Wiersz kosztuje trzy żądania, czyli strona 200 wierszy ~600. Próg, od
+którego indeks jest wymagany: **około tysiąca opublikowanych wyników**, albo
+pierwsze żądanie porządku innego niż skrót. Indeks to jeden obiekt na commit pod
+kluczem z czasem, dopisywany po wygranej claimu i uzupełniany przez przebieg
+zbierania; celowo jeszcze nie zbudowany, bo to ta sama zmiana co porządek czasowy.
+
+### 18.3 B2g — CI, obserwowalność, wdrożenie
+
+- **CI**: zadanie `object-store` z usługą RustFS na `:9010`, uruchamia
+  `just test-rustfs` i nowe `just test-evaluation-s3` (`--ignored`). Obie
+  przepuszczone lokalnie na własnym kontenerze `:9011`: 6/6 i 1/1. To samo
+  zadanie domyka lukę podpisu SigV4.
+- **Obserwowalność**: `RetentionReport` w `evaluations/retention.json`
+  (nadpisywany), zwracany jako `retention` na `GET /api/v1/evaluation-results` —
+  kiedy przebieg się odbył, ile wycofał i zebrał, i ile **kolejnych** przebiegów
+  się nie udało. Trwały, nie linia w logu: przeżywa restart i każda replika czyta
+  ten sam. Liczy tylko ten przebieg, nigdy sumy narastającej.
+- **Wdrożenie**: `evaluationEvidence` w chartcie (`enabled`, `sourceDir`,
+  `volume`, cztery limity), montowany tylko w `server`, z odmową renderowania bez
+  `volume`. `docs/INSTALL.md` — nowy rozdział z odtwarzaniem prefiksu z kopii.
+  `just run-evaluation` i `just approve-evaluation`, plus
+  `scripts/stage-evaluation-approval.py`, który **pyta binarkę** o adres
+  zatwierdzenia — pierwsza wersja liczyła go w Pythonie i wychodziła inna liczba.
+  Nowych backendów ani ścieżek sieciowych nie ma: `evaluations/` to prefiks w
+  tym samym buckecie, więc NetworkPolicy się nie zmienia.
+
+### 18.4 B2h — judge
+
+Tylko ADR, bez adaptera, zgodnie z kolejnością. Cztery reguły dopuszczenia w
+ADR 0030: konfiguracja przypięta treścią, zapisany zbiór kalibracyjny jako część
+dowodu, rozbieżność z ocenami ludzi obok wyniku, i jawne oznaczenie wyniku jako
+nieodtwarzalnego przez ponowny odczyt. Do czasu adaptera `LocalSource` odrzuca
+manifest z judge'em **po nazwie**, co jest dzisiejszym zachowaniem i jest celowe.
+
+### 18.5 B2i — panel
+
+Jedna lista, dwa pochodzenia (plakietka `kept` na wierszu trwałym), bez kontrolki
+okresu. Siedem stanów, każdy z własnym zdaniem i następnym krokiem; `forbidden`
+wymienia trzy przyczyny i **nie zgaduje** między nimi — połowę o roli rozstrzyga
+`useRoleDecision('admin')`, tak jak w Conversations. Dwa „partial" rozdzielone na
+„Kept with gaps" (co jest czytelne) i „Partly measured" (co zmierzono). Termin
+retencji jako data przy wyniku. A3 jako kontrolka `role="group"` z `aria-current`
+zamiast czwartego zdania, a wstrzymana delta pisze **withheld** zamiast pustej
+komórki. Brak konfiguracji to 501 z nazwą zmiennej. Linia retencji pod listą, i
+„żaden przebieg się nie odbył" odróżnione od „jeszcze czytam".
+
+**Odbiór**: 15 testów w `features/evaluation`, 242/242 w panelu, typecheck i
+build czyste; oglądnięte na własnej instancji — cztery stany na liście, szczegół
+`partial` i `forbidden`, wiersz osiągalny z klawiatury z widocznym focusem,
+klik zapisuje `?evidence=` w URL. Motyw jasny sprawdzony przez tokeny (te same
+`warning`/`danger`/`muted`, których używa reszta panelu) — panel przeglądarki
+wymusza klasę `dark` na `<html>`, więc zrzutu w jasnym nie zrobiłem.
+
+### 18.6 Co zostaje
+
+- **B3** ma teraz z czego budować: dwie pary czytelne naraz.
+- **Indeks katalogu** — powyżej ~1000 wyników albo przy pierwszym żądaniu
+  porządku czasowego.
+- **Upload bundle'a zatwierdzenia** — ostatni krok do usunięcia hosta z drogi.
+- **Adapter judge'a** — reguła jest w ADR, kodu nie ma.
+- **AR3** — niezależny, nadal warunek C0.

@@ -151,7 +151,7 @@ Crates, in dependency order. A crate may only depend on ones above it.
 | `aiwatcher-annotations` | Vector image annotations for **any** vision domain — it ships no vocabulary, and the project's label schema carries the domain (ADR_0020). Sliced by noun: `images/` (one picture — head, revisions, review, bytes, bulk import), `imports/` (the staged batch and the queued job that reads it, ADR_0022), `project`, `export`, `license` (what may be done with the data), `schema`, `shapes`, `sources` (a catalogue an instance loads), `integrations/` — `hubs` (Kaggle and Hugging Face) and `fetch`, the bounded downloader every outbound byte goes through. `registry` is the facade and the only public door; `store` is the private key layout every slice reads through. |
 | `aiwatcher-conversations` | Governed conversation training data: the `turn` contract, consent and retention, the **encrypted** archive, the human review gate, and the resumable export job that freezes a corpus. The one authored store that is off by default, whose content is sealed, and whose deletions delete. Sliced by noun: `turn`, `policy`, `redaction`, `review`, `archive/` (the store and its retention clock, `crypt` beneath it), `export/` (the job, `format` beneath it). `registry` is the facade and the only public door; `store` is the private key layout. |
 | `aiwatcher-training` | Training runs and the model versions they produce. The one registry here whose contents never came from the event log: a run is a record that grows in place, and a promotion is refused without a held-out score. `package` is what a serving runtime is handed — the runtime, the entry point, the shapes, and every artifact with its digest (ADR_0023). |
-| `aiwatcher-evaluation` | Pinned variant/context contracts and durable evidence (ADR_0030). `Evaluation::prepare` validates declarations; `Registry` owns immutable publication, paging and erasure through a `SourceAuthority` adapter. Legacy reports remain in Projector with an explicit API read bridge. |
+| `aiwatcher-evaluation` | Pinned variant/context contracts and durable evidence (ADR_0030). `Evaluation::prepare` validates declarations; `Registry` owns immutable publication, paging, erasure and **approvals** — the pair an operator admitted, which is what lets one instance hold a baseline and a candidate at once — through a `SourceAuthority` adapter. Legacy reports remain in Projector with an explicit API read bridge. |
 | `aiwatcher-datasets` | Curation recipes, the dataset versions they produce, and the **block pipelines** of ADR_0024 — a chain of source, transform, notebook, approval and view, refused as a whole with every problem at once. Nothing here executes anything; the panel drives the chain because the engines are three different systems. |
 | `aiwatcher-execution` | Owned execution (ADR_0025, ADR_0026): the compiled `ExecutionPlan` and its `plan_id`, the states, the attempts, the pure `decide`/`evolve`, the cache key, the compiler from ADR_0024's blocks, the atomic command handler, the claim table, the `ContextSnapshot` that reopens a block, the fact encoder and the outbox publisher. Three ports: `WorkflowStore` (`memory | file | postgres | duckdb`, the last two behind features so `sqlx` and DuckDB's C++ amalgamation are out of every build that does not ask for them — the shape `laser` has in `aiwatcher-bus`), `ActivityExecutor` (what a reactor does with a claimed attempt) and `ArtifactCatalog` (metadata, lineage, the cache index). Executes nothing itself, and holds no second copy of `aiwatcher-jobs`' rules — it calls them. |
 | `aiwatcher-runner` | The workflow rerun dispatcher: one HTTP POST to one configured endpoint, behind `core::ports::WorkflowRunner`. |
@@ -1737,6 +1737,65 @@ the review.
   unwritten verdict is not an admission. `staging` and a version a person
   wrote stay free. A 422 `promotion_refused`, the model registry's answer to
   the same act. ADR_0011, amended.
+- **Never publish evaluation evidence for a pair nobody admitted.** An approval
+  is a resource Evaluation owns, addressed by the pair it admits —
+  `approval_id = sha256([1, "evaluation.approval", variant_id, context_id])` —
+  recording who admitted it, when, and what the adapter verified beyond the
+  manifest's own digests. It was one directory on the server's disk, which meant
+  an instance held exactly one pair: publishing a second variant hid the results
+  already published under the first, and alternating between two meant a human
+  on the host per publication. Admitting and withdrawing are **admin**, because
+  `AIWATCHER_AUTH_INGEST_TOKENS` makes a producer an editor by construction. The
+  gate is checked *after* the adapter, so a source that is gone says so rather
+  than arriving as "nobody approved this". ADR_0030, amended.
+- **Never read absence of an approval as a withdrawal.** Publication requires a
+  record; a read requires only that no withdrawal marker exists. Evidence
+  published before an instance kept approvals stays readable, and the adapter
+  still admits it. Withdrawal hides every result measured under that pair, is
+  final for that approval ID, and moves no retention deadline in either
+  direction — retention is a promise about how long content is kept, and
+  withdrawal is a statement about what may be read.
+- **Never make a summary read the whole result.** The header is one
+  content-addressed object and every count and metric is in it; walking fifty
+  shards to return it made a catalogue page cost the corpus. A shard is verified
+  when the page it is on is read, and a damaged shard is *that page's*
+  `EvidenceState` rather than an error and never a short page — a page silently
+  missing rows reads as a result with fewer cases in it. The cost is stated
+  rather than hidden: a result whose shards are gone reads as complete until
+  somebody opens it.
+- **Never resolve one source once per row.** Resolving reads the owner's own
+  bytes — a model's artifacts inside a 100 MiB budget, a conversation corpus
+  shard by shard — and a catalogue is mostly repetitions of a handful of pairs.
+  One verdict per admitted pair, for the length of one `list` or one `sweep`,
+  and only a verdict *about the source* is remembered: a store that was briefly
+  unreachable is not one, and caching that would condemn every other row.
+- **Never make retention read a result to find its deadline.** `expires_at` on
+  the receipt is already the minimum of the instance's clock and the source's,
+  recorded at commit, so expiry needs neither the metadata nor the owner. Only
+  what is still live is resolved. Collection — which lists a prefix per
+  published result — is the expensive half and runs hourly instead, because it
+  is about a writer that stopped and an hour late is the same answer.
+- **Never let a sweep's count include what an earlier sweep did.** It counts
+  what *that* pass retired, and a pass that failed writes its own failure down:
+  `evaluations/retention.json`, returned as `retention` on
+  `GET /api/v1/evaluation-results`, with the number of consecutive failures.
+  Durable rather than a log line, so it survives a restart and every replica
+  reads the same one. A sweep that has been failing for a week otherwise looks
+  exactly like one that had nothing to do.
+- **Never admit a judge under the rule the other five adapters pass.** They
+  admit a source by reading the owner's bytes again; a judge's output is a model
+  call nobody can read back. Carrying that rule across would either refuse every
+  judge or be relaxed for the five that do satisfy it. Its own rule is in
+  ADR_0030 — configuration pinned by content, a recorded calibration set as part
+  of the evidence, disagreement with human scores stored beside the result, and
+  the result marked as not reproducible by re-reading — and until an adapter
+  implements it, a manifest carrying a judge is refused by name.
+- **Never restore the `evaluations/` prefix from two points in time.**
+  Publication and collection race at one immutable key, so a restore can
+  resurrect a claim a collector abandoned or drop a tombstone that recorded an
+  erasure. Restore it whole, to one moment, and run one collection pass after.
+  This, the conversation archive and the execution stream are the three stores
+  whose contents exist nowhere else.
 - **Never ship a label vocabulary.** aiwatcher is a generic vision annotation
   tool and the project's schema is where the domain lives — its classes, their
   geometry, which are `ignore`, and which `layer` each paints into. A shipped

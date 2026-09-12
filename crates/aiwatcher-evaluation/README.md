@@ -219,14 +219,71 @@ Governed Conversations uses the separate path below.
 
 The HTTP publication body has an additional fixed 100 MiB ceiling. Storage
 uses the existing `AIWATCHER_PROMPT_STORE` adapter under its own `evaluations/`
-prefix. Memory is for tests and loses all data on process restart. Discovery
-currently walks object keys; measure that cost before increasing scale.
+prefix. Memory is for tests and loses all data on process restart.
+
+## Approvals
+
+`AIWATCHER_EVALUATION_SOURCE_DIR` is a directory **of** approvals: one
+subdirectory per admitted pair, named by its `approval_id`, plus — for an
+instance that has one — a single bundle directly under the root, which stays
+readable. Many pairs therefore coexist, which is what a baseline against a
+candidate needs and what one bundle could not give: swapping it used to hide
+every result already published under the previous one.
+
+```sh
+cargo run -q -p aiwatcher-evaluation --example prepare -- manifest.json
+# prints variant_id, context_id and the approval_id its directory is named after
+scripts/stage-evaluation-approval.py ./approvals ./my-bundle
+```
+
+Admitting one is `POST /api/v1/evaluation-approvals` with the manifest, and it
+is **admin**: an ingest token is an editor by construction, so a producer that
+could admit its own evidence would not have been approved by anybody. The
+record is written only after the adapter resolves the declaration, and carries
+who admitted it, when, and a `bundle_digest` covering what the adapter verified
+beyond the manifest's own pinned digests — a model package, whose historical ID
+binds artifacts rather than the whole declaration. A bundle that changed
+underneath an admitted pair conflicts rather than moving what earlier results
+were measured against.
+
+`DELETE /api/v1/evaluation-approvals/{id}` withdraws one. Every result measured
+under that pair stops being readable, no new one can be published, and nothing
+already published has its retention moved in either direction. It is final for
+that approval ID. `GET` lists them, withdrawn ones included: an approval that
+vanished from the list would read as one nobody made.
+
+Publication needs an admitted pair; a **read** needs only that no withdrawal
+exists, so evidence published before an instance kept approvals stays readable.
+`DELETE /api/v1/evaluation-results/{id}` (admin) forgets one measurement rather
+than every measurement of its pair.
+
+What this does not remove is the host from a *new* pair: the producer's
+artifacts have to reach the adapter, and today that is a mounted directory.
+
+## What a read costs
+
+A summary answers from its metadata object; a shard is verified when the page it
+is on is read, and a damaged shard is that page's `EvidenceState` rather than an
+error. A source is resolved once per admitted pair for the length of one `list`
+or `sweep`. Retention asks the receipt's own deadline first, every minute;
+collection lists a prefix per result and runs hourly. Measured at the starting
+limits, in object-store requests: a 10 000-case summary is 5 gets (was 105), a
+200-case page 7 (was 108), a 50-row catalogue page 152 (was 400), and one sweep
+103 with one list (was 550 with 53). A row costs three requests, so an index
+over the catalogue becomes required at roughly a thousand results — or at the
+first request for an order other than the hash of an ID, which is what its key
+gives it today. See `crates/aiwatcher-server/tests/evaluation/cost.rs`.
+
+Every pass writes `evaluations/retention.json`, returned as `retention` on
+`GET /api/v1/evaluation-results`: when it ran, what it retired and collected,
+and how many consecutive passes have failed.
 
 To try the pinned fixture on a dedicated local instance:
 
 ```sh
-rtk proxy env AIWATCHER_LISTEN=127.0.0.1:19080 AIWATCHER_DATA_DIR=/tmp/fti-demo AIWATCHER_EVALUATION_SOURCE_DIR="$PWD/contracts/fixtures/evaluation-v1" cargo run --bin aiwatcher
-rtk proxy uv run --project sdk/python python scripts/seed-evaluation-registry.py --base-url http://127.0.0.1:19080 --evaluation-id fti-durable-1 --repetition-id measurement-1
+just run-evaluation          # stages the fixture as its own approval, then serves
+just approve-evaluation      # admits it; every later publication needs no host step
+rtk proxy uv run --project sdk/python python scripts/seed-evaluation-registry.py --base-url http://127.0.0.1:8080 --evaluation-id fti-durable-1 --repetition-id measurement-1
 ```
 
 The seed requires an explicit destination and ID, calls the actual fixture
