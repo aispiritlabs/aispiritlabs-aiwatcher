@@ -11431,7 +11431,14 @@
       "CaseOutcome": {
         "type": "object",
         "description": "What one side recorded for a case.\n\nIts *answer* is not here. A diff is read to find which cases moved, and the\ncase page beside it is where what a case said is read — carrying both\nresponses here would make the one route that already has to walk both\nresults carry both of their contents as well.",
+        "required": [
+          "at"
+        ],
         "properties": {
+          "at": {
+            "type": "string",
+            "description": "Where this case sits on this side, in the words the case route already\nspeaks: hand it back as that route's `cursor` with `limit=1` and it\nanswers with this case and nothing else.\n\nThe merge already knows — it is walking both sides by position — so\ncarrying it costs nothing and saves the alternative: either a lookup\nthat reads shards until it finds a case, or the answers themselves on\nevery row of a route that already reads two whole results. Opaque, and\nnever taken apart here: it belongs to the route that issued it."
+          },
           "error": {
             "type": [
               "string",

@@ -1183,6 +1183,15 @@ Trzy rzeczy robią to tanim:
 | czytane są **tylko pomiary** | oczekiwane odpowiedzi to kohorta, którą porównywalna para dzieli z definicji, więc odjęcie dwóch wyników kosztuje połowę tego, co odczyt przypadków któregokolwiek z nich |
 | zawężenie jest serwera | „przypadki, które coś straciły" to trasa, a nie odfiltrowanie dziesięciu tysięcy wierszy w przeglądarce |
 
+Wiersz nie niesie **treści** przypadku — niesie `at`, czyli **gdzie** ten
+przypadek leży po danej stronie, w słowach, którymi trasa przypadków już mówi:
+oddany jako jej `cursor` z `limit=1` zwraca dokładnie ten przypadek. Scalenie i
+tak zna tę pozycję, bo po niej chodzi, więc niesienie jej kosztuje zero — a
+oszczędza dwie gorsze możliwości: wyszukiwanie po `case_id`, które czyta shardy,
+aż trafi (do 50 odczytów na jeden przypadek przy 10 000), albo obie odpowiedzi w
+każdym wierszu trasy, która i tak czyta dwa całe wyniki. Kursor jest nieprzezroczysty
+i nigdzie nie jest rozbierany: należy do trasy, która go wystawiła.
+
 Strona zawężona kończy się na pierwszym z dwóch: wierszach, o które poproszono,
 albo przypadkach, po których wolno było przejść. Kursor obiecuje więc kolejny
 **przypadek**, a nie kolejne trafienie — dokładnie ta własność, którą ma już
@@ -1243,11 +1252,18 @@ Panel rysuje zmianę, którą przysłał serwer, **łącznie z wierszem, który 
 własny filtr by odrzucił**: reguły mieszkają tam, gdzie deklaracje, tak jak przy
 kanwie pipeline'u i kanwie adnotacji. Test trzyma dokładnie ten przypadek.
 
+Kliknięcie `case_id` rozwija wiersz w to, co **obie strony odpowiedziały** —
+oczekiwane obok udzielonego, a przy przypadku, który zawiódł, komunikat błędu
+zamiast odpowiedzi. To dwa odczyty jednego przypadku przez `at`, robione dopiero
+po kliknięciu; zamknięty wiersz nie pyta o nic, co test też trzyma. Który wiersz
+jest otwarty zostaje w stanie komponentu, a nie w URL-u: w URL-u siedzi pytanie,
+które ktoś zadał, a to jest jeden wiersz odpowiedzi, na którą już patrzy.
+
 ### 23.5 Odbiór
 
-`just check` 23/23 PASS. Nowe: 7 testów rejestru (w tym scalenie 250 przypadków
-przez granice shardów, w obie strony), 1 akceptacyjny HTTP, 4 testy panelu
-(łącznie 12 w tym pliku).
+`just check` 23/23 PASS. Nowe: 8 testów rejestru (w tym scalenie 250 przypadków
+przez granice shardów i podążenie za `at` do przypadku po obu stronach),
+1 akceptacyjny HTTP, 5 testów panelu (łącznie 13 w tym pliku).
 
 Odbiór na własnej instancji `127.0.0.1:19083`, własny katalog danych, pakiety
 zatwierdzeń wgrane przez API. Trzy przypadki fikstury, dwa warianty jednego
@@ -1267,11 +1283,17 @@ timed out").
 - kursor spoza tej pary, `nope` i `a:b:c:d` → `400`, `limit=0` → `400`,
   baseline, którego nikt nie opublikował → `404`;
 - trzeci wynik na splicie `holdout`: `incompatible`, powody `Different
-  evaluation context` i `Different split`, zero wierszy, brak kursora.
+  evaluation context` i `Different split`, zero wierszy, brak kursora;
+- `at` z wiersza `two-plus-two` oddane trasie przypadków z `limit=1` zwraca po
+  obu stronach dokładnie ten przypadek, z oczekiwaną odpowiedzią.
 
 Ekran sprawdzony w obu motywach: pigułki filtru, `regressed` na czerwono,
 `improved` na zielono, błąd pod liczbami, a nie zamiast nich; `cases=all` w URL
-po kliknięciu. Instancja zatrzymana, katalog danych usunięty, motyw przywrócony.
+po kliknięciu. Rozwinięty `two-plus-two` pokazuje `expected {"answer":"4"}` po
+obu stronach i `answered {"answer":"five"}` kontra `{"answer":"4"}`; rozwinięty
+`capital-pl` — „the model timed out" na czerwono zamiast odpowiedzi, przy
+nietkniętej odpowiedzi baseline'u. Instancja zatrzymana, katalog danych usunięty,
+motyw przywrócony.
 
 Jedna rzecz do zapisania: przy pierwszym uruchomieniu podałem `AIWATCHER_ADDR`
 zamiast `AIWATCHER_LISTEN`, więc instancja przez chwilę stała na domyślnym
@@ -1280,10 +1302,6 @@ dotknięte; proces zatrzymany, port zwolniony.
 
 ### 23.6 Co zostaje
 
-- **Treść przypadku** — co dana strona odpowiedziała — nie jest w wierszu
-  różnicy. Trasa przypadków obok odpowiada na to pytanie, a niesienie obu
-  odpowiedzi tutaj kazałoby jednej trasie, która i tak czyta oba wyniki, nieść
-  także obie ich treści. Skok z wiersza różnicy do przypadku jest do dorobienia.
 - **Sufit 2000 przypadków na żądanie** jest stały. Dla pary 10 000 × 10 000 bez
   trafień to pięć żądań, żeby dojść do końca — poprawne i widoczne w kursorze,
   ale nie jest to strona indeksowana po zmianie.

@@ -249,6 +249,16 @@ impl CaseFilter {
 /// results carry both of their contents as well.
 #[derive(Clone, Debug, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct CaseOutcome {
+    /// Where this case sits on this side, in the words the case route already
+    /// speaks: hand it back as that route's `cursor` with `limit=1` and it
+    /// answers with this case and nothing else.
+    ///
+    /// The merge already knows — it is walking both sides by position — so
+    /// carrying it costs nothing and saves the alternative: either a lookup
+    /// that reads shards until it finds a case, or the answers themselves on
+    /// every row of a route that already reads two whole results. Opaque, and
+    /// never taken apart here: it belongs to the route that issued it.
+    pub at: String,
     /// Present where the case was attempted and failed. A failed case carries
     /// no metrics, which is why it is the one movement a diff cannot express
     /// as a number.
@@ -333,11 +343,12 @@ pub(crate) fn merged(current: EvidenceState, baseline: EvidenceState) -> Evidenc
 /// declared deciding which of their measurements count.
 pub(crate) fn diff_case(
     declared: &[MetricDefinition],
-    current: Option<&CaseMeasurement>,
-    baseline: Option<&CaseMeasurement>,
+    current: Option<(&CaseMeasurement, String)>,
+    baseline: Option<(&CaseMeasurement, String)>,
 ) -> EvidenceCaseDelta {
-    fn outcome(case: &CaseMeasurement) -> CaseOutcome {
+    fn outcome((case, at): (&CaseMeasurement, String)) -> CaseOutcome {
         CaseOutcome {
+            at,
             error: case.error.clone(),
             trace_id: case.trace_id.clone(),
             span_id: case.span_id.clone(),
@@ -345,13 +356,18 @@ pub(crate) fn diff_case(
     }
 
     let case_id = current
-        .or(baseline)
-        .map_or_else(String::new, |case| case.case_id.clone());
+        .as_ref()
+        .or(baseline.as_ref())
+        .map_or_else(String::new, |(case, _)| case.case_id.clone());
     let metrics: Vec<EvidenceMetricDelta> = declared
         .iter()
         .filter_map(|metric| {
-            let now = current.and_then(|case| case.metrics.get(&metric.name).copied());
-            let then = baseline.and_then(|case| case.metrics.get(&metric.name).copied());
+            let now = current
+                .as_ref()
+                .and_then(|(case, _)| case.metrics.get(&metric.name).copied());
+            let then = baseline
+                .as_ref()
+                .and_then(|(case, _)| case.metrics.get(&metric.name).copied());
             (now.is_some() || then.is_some()).then(|| EvidenceMetricDelta {
                 name: metric.name.clone(),
                 unit: Some(metric.unit.clone()),
@@ -363,8 +379,8 @@ pub(crate) fn diff_case(
         })
         .collect();
 
-    let change = match (current, baseline) {
-        (Some(now), Some(then)) => {
+    let change = match (current.as_ref(), baseline.as_ref()) {
+        (Some((now, _)), Some((then, _))) => {
             // A case that stopped being measurable carries no metrics to
             // subtract, so the transition is the whole of its movement.
             let mut better = then.error.is_some() && now.error.is_none();

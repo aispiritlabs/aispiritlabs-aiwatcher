@@ -13,11 +13,13 @@
  * of the candidates is the baseline is somebody's decision rather than a
  * default they might not notice.
  */
-import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { Fragment, useState } from 'react';
+import { useInfiniteQuery, useQueries, useQuery } from '@tanstack/react-query';
 
-import { compareCases, compareResults, listResults } from '@/api/generated/sdk.gen';
+import { compareCases, compareResults, getCases, listResults } from '@/api/generated/sdk.gen';
 import type {
   CaseChange,
+  CaseOutcome,
   DurableEvaluation,
   EvidenceCaseDelta,
   EvidenceComparison,
@@ -211,8 +213,8 @@ function Verdict({
       </p>
       {onCases && comparison.comparability !== 'incompatible' ? (
         <CaseDiff
-          id={comparison.current.receipt.evaluation_id}
-          baseline={comparison.baseline.receipt.evaluation_id}
+          current={comparison.current}
+          baseline={comparison.baseline}
           only={cases}
           onSelect={onCases}
         />
@@ -236,13 +238,13 @@ function Verdict({
  * exactly the thing the context exists to state.
  */
 function CaseDiff({
-  id,
+  current,
   baseline,
   only,
   onSelect,
 }: {
-  id: string;
-  baseline: string;
+  current: DurableEvaluation;
+  baseline: DurableEvaluation;
   only: CaseFilterChoice | undefined;
   onSelect: (only: CaseFilterChoice | undefined) => void;
 }) {
@@ -271,30 +273,35 @@ function CaseDiff({
           Reads both results in full, a page at a time. Everything above is two headers.
         </p>
       ) : (
-        <MovedCases id={id} baseline={baseline} only={only} />
+        <MovedCases current={current} baseline={baseline} only={only} />
       )}
     </div>
   );
 }
 
 function MovedCases({
-  id,
+  current,
   baseline,
   only,
 }: {
-  id: string;
-  baseline: string;
+  current: DurableEvaluation;
+  baseline: DurableEvaluation;
   only: CaseFilterChoice;
 }) {
+  const id = current.receipt.evaluation_id;
+  // Which row is open is a disclosure rather than a filter, so it stays here:
+  // what the URL carries is the question somebody asked, and this is one row
+  // of the answer they are already looking at.
+  const [open, setOpen] = useState<string | undefined>(undefined);
   const diff = useInfiniteQuery({
-    queryKey: ['evaluation-case-diff', id, baseline, only],
+    queryKey: ['evaluation-case-diff', id, baseline.receipt.evaluation_id, only],
     initialPageParam: undefined as string | undefined,
     queryFn: async ({ pageParam }) =>
       answerOf(
         await compareCases({
           path: { evaluation_id: id },
           query: {
-            baseline,
+            baseline: baseline.receipt.evaluation_id,
             cursor: pageParam,
             limit: DIFF_PAGE,
             ...(only === 'all' ? {} : { only }),
@@ -342,15 +349,33 @@ function MovedCases({
           </thead>
           <tbody>
             {rows.map((row) => (
-              <tr key={row.case_id} className="border-t border-border/40 align-top">
-                <td className="py-1 pr-2 font-mono">{row.case_id}</td>
-                <td className="py-1 pr-2">
-                  <ChangeBadge change={row.change} />
-                </td>
-                <td className="py-1">
-                  <CaseMetrics row={row} />
-                </td>
-              </tr>
+              <Fragment key={row.case_id}>
+                <tr className="border-t border-border/40 align-top">
+                  <td className="py-1 pr-2 font-mono">
+                    <button
+                      type="button"
+                      className="underline decoration-dotted underline-offset-2"
+                      aria-expanded={open === row.case_id}
+                      onClick={() => setOpen(open === row.case_id ? undefined : row.case_id)}
+                    >
+                      {row.case_id}
+                    </button>
+                  </td>
+                  <td className="py-1 pr-2">
+                    <ChangeBadge change={row.change} />
+                  </td>
+                  <td className="py-1">
+                    <CaseMetrics row={row} />
+                  </td>
+                </tr>
+                {open === row.case_id ? (
+                  <tr className="border-t border-border/20">
+                    <td colSpan={3} className="py-1">
+                      <CaseAnswers row={row} current={current} baseline={baseline} />
+                    </td>
+                  </tr>
+                ) : null}
+              </Fragment>
             ))}
           </tbody>
         </table>
@@ -369,6 +394,84 @@ function MovedCases({
           {diff.isFetchingNextPage ? 'reading…' : 'read further into both results'}
         </button>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * What each side actually answered, read from the route that holds it.
+ *
+ * The diff row carries no content — it carries *where* its case is on each
+ * side, as a cursor the case route issued — so opening a row is two reads of
+ * one case rather than a diff that shipped both results' answers to everybody
+ * who only wanted to know which cases moved. Nothing here builds that cursor:
+ * it is handed back exactly as it arrived.
+ */
+function CaseAnswers({
+  row,
+  current,
+  baseline,
+}: {
+  row: EvidenceCaseDelta;
+  current: DurableEvaluation;
+  baseline: DurableEvaluation;
+}) {
+  const sides: { label: string; evidence: DurableEvaluation; outcome: CaseOutcome | undefined }[] =
+    [
+      { label: 'This result', evidence: current, outcome: row.current ?? undefined },
+      { label: 'Baseline', evidence: baseline, outcome: row.baseline ?? undefined },
+    ];
+  const answers = useQueries({
+    queries: sides.map((side) => ({
+      queryKey: ['evaluation-case', side.evidence.receipt.evaluation_id, row.case_id],
+      queryFn: async () =>
+        answerOf(
+          await getCases({
+            path: { evaluation_id: side.evidence.receipt.evaluation_id },
+            query: {
+              version: side.evidence.receipt.version,
+              cursor: side.outcome?.at,
+              limit: 1,
+            },
+          }),
+          'could not read this case',
+        ),
+      enabled: side.outcome !== undefined,
+      retry: false,
+    })),
+  });
+
+  return (
+    <div className="grid gap-2 rounded-md bg-muted/40 px-3 py-2 sm:grid-cols-2">
+      {sides.map((side, index) => {
+        const answer = answers[index];
+        const found = answer?.data?.cases[0];
+        return (
+          <div key={side.label} className="min-w-0">
+            <p className="font-medium">{side.label}</p>
+            {side.outcome === undefined ? (
+              <p className="text-muted-foreground">never measured this case</p>
+            ) : answer?.isLoading ? (
+              <Spinner />
+            ) : !found ? (
+              <p className="text-muted-foreground">its evidence could not be read</p>
+            ) : (
+              <dl className="mt-0.5">
+                <dt className="text-muted-foreground">expected</dt>
+                <dd className="break-words">{JSON.stringify(found.expected)}</dd>
+                <dt className="mt-1 text-muted-foreground">answered</dt>
+                <dd className="break-words">
+                  {found.measurement.error ? (
+                    <span className="text-danger">{found.measurement.error}</span>
+                  ) : (
+                    JSON.stringify(found.measurement.actual)
+                  )}
+                </dd>
+              </dl>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

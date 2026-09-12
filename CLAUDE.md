@@ -1788,7 +1788,11 @@ the review.
   `/comparison/cases` pages, is narrowed by the server, and walks a bounded
   number of cases per request. What it may never become is a field on the
   header comparison, quietly walking a hundred shards for somebody who asked
-  what two numbers were.
+  what two numbers were. A diff row carries **where** its case is — the cursor
+  the case route would want for it, which the merge already knows because it is
+  walking both sides by position — and never what that case said: the
+  alternative is a lookup that reads shards until it finds an ID, or both
+  results' answers on every row of a route that already reads both results.
 - **Never decide in the browser whether a case got worse.** A case carries the
   declared metrics and the *pinned context* declares which way each of them is
   better, so `regressed` is a fact about a declaration and `mixed` — better at

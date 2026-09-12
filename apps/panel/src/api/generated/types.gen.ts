@@ -858,6 +858,18 @@ export type CaseMeasurement = {
  */
 export type CaseOutcome = {
     /**
+     * Where this case sits on this side, in the words the case route already
+     * speaks: hand it back as that route's `cursor` with `limit=1` and it
+     * answers with this case and nothing else.
+     *
+     * The merge already knows — it is walking both sides by position — so
+     * carrying it costs nothing and saves the alternative: either a lookup
+     * that reads shards until it finds a case, or the answers themselves on
+     * every row of a route that already reads two whole results. Opaque, and
+     * never taken apart here: it belongs to the route that issued it.
+     */
+    at: string;
+    /**
      * Present where the case was attempted and failed. A failed case carries
      * no metrics, which is why it is the one movement a diff cannot express
      * as a number.

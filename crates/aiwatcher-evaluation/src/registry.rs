@@ -192,6 +192,11 @@ impl Side {
         let (_, start, rows) = self.loaded.as_ref()?;
         rows.get(self.offset.saturating_sub(*start))
     }
+
+    /// The case in hand, and the cursor the case route would want for it.
+    fn here(&self, version: &str) -> Option<(&CaseMeasurement, String)> {
+        Some((self.peek()?, format!("{version}:{}", self.offset)))
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -701,13 +706,16 @@ impl Registry {
                 (None, Some(_)) => std::cmp::Ordering::Greater,
                 (Some(now), Some(then)) => now.case_id.cmp(&then.case_id),
             };
+            // The cursor each row carries is this walk's own position, in the
+            // case route's words — so a reader who wants one case's answers
+            // asks the route that already serves them.
             let delta = diff_case(
                 &declared,
                 (order != std::cmp::Ordering::Greater)
-                    .then(|| sides.0.peek())
+                    .then(|| sides.0.here(&current.receipt.version))
                     .flatten(),
                 (order != std::cmp::Ordering::Less)
-                    .then(|| sides.1.peek())
+                    .then(|| sides.1.here(&baseline.receipt.version))
                     .flatten(),
             );
             if order != std::cmp::Ordering::Greater {

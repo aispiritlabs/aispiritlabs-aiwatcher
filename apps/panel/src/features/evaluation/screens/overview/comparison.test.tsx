@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 
 import type {
@@ -238,8 +238,8 @@ it('shows a case that stopped being measurable with its error and no invented de
       {
         case_id: 'two-plus-two',
         change: 'regressed',
-        current: { error: 'the model timed out' },
-        baseline: {},
+        current: { at: 'v-after:0', error: 'the model timed out' },
+        baseline: { at: 'v-before:0' },
         metrics: [{ name: 'accuracy', baseline: 1, direction: 'higher', unit: 'ratio' }],
       },
     ]),
@@ -276,8 +276,8 @@ it('renders what the server narrowed to rather than narrowing it again here', as
       {
         case_id: 'capital-pl',
         change: 'unchanged',
-        current: {},
-        baseline: {},
+        current: { at: 'v-after:0' },
+        baseline: { at: 'v-before:0' },
         metrics: [],
       },
     ]),
@@ -312,4 +312,116 @@ it('says another page means another case rather than another match', async () =>
   );
   expect(await screen.findByText(/there are more to read/)).toBeTruthy();
   expect(screen.getByRole('button', { name: /read further into both results/ })).toBeTruthy();
+});
+
+it('opens a case into what each side answered, read from the route that holds it', async () => {
+  // The diff row carries where its case is, not what it said. Opening it asks
+  // the case route with that cursor — so the panel never ships two whole
+  // results to somebody who only wanted to know which cases moved.
+  const server = serve([
+    { method: 'GET', path: '/auth/config', answer: { status: 200, body: { enabled: false } } },
+    {
+      method: 'GET',
+      path: '/evaluation-results',
+      answer: { status: 200, body: { evaluations: [result('before')], next_cursor: null } },
+    },
+    {
+      method: 'GET',
+      path: '/comparison/cases',
+      answer: {
+        status: 200,
+        body: moved([
+          {
+            case_id: 'two-plus-two',
+            change: 'regressed',
+            current: { at: 'v-after:1' },
+            baseline: { at: 'v-before:1' },
+            metrics: [
+              { name: 'accuracy', current: 0, baseline: 1, delta: -1, direction: 'higher' },
+            ],
+          },
+        ]),
+      },
+    },
+    {
+      method: 'GET',
+      path: '/comparison',
+      answer: { status: 200, body: comparison([]) },
+    },
+    {
+      method: 'GET',
+      path: '/before/cases',
+      answer: {
+        status: 200,
+        body: {
+          version: 'v-before',
+          state: 'complete',
+          next_cursor: null,
+          cases: [
+            {
+              expected: { answer: '4' },
+              measurement: {
+                case_id: 'two-plus-two',
+                repetition_id: 'measurement-1',
+                actual: { answer: '4' },
+                metrics: { accuracy: 1 },
+                error: null,
+                trace_id: null,
+                span_id: null,
+              },
+            },
+          ],
+        },
+      },
+    },
+    {
+      method: 'GET',
+      path: '/after/cases',
+      answer: {
+        status: 200,
+        body: {
+          version: 'v-after',
+          state: 'complete',
+          next_cursor: null,
+          cases: [
+            {
+              expected: { answer: '4' },
+              measurement: {
+                case_id: 'two-plus-two',
+                repetition_id: 'measurement-1',
+                actual: { answer: 'five' },
+                metrics: { accuracy: 0 },
+                error: null,
+                trace_id: null,
+                span_id: null,
+              },
+            },
+          ],
+        },
+      },
+    },
+  ]);
+  render(
+    withQueries(
+      <Comparison
+        evidence={result('after')}
+        baseline="before"
+        onSelect={() => {}}
+        cases="worse"
+        onCases={() => {}}
+      />,
+    ),
+  );
+  // Closed, the answers are not fetched at all.
+  const row = await screen.findByRole('button', { name: 'two-plus-two' });
+  expect(server.countOf('GET', '/after/cases')).toBe(0);
+  expect(server.countOf('GET', '/before/cases')).toBe(0);
+
+  fireEvent.click(row);
+  // Both sides, each read from its own result: what was expected, and what
+  // that side answered.
+  expect(await screen.findByText('{"answer":"five"}')).toBeTruthy();
+  expect(screen.getAllByText('{"answer":"4"}').length).toBe(3);
+  expect(server.countOf('GET', '/after/cases')).toBe(1);
+  expect(server.countOf('GET', '/before/cases')).toBe(1);
 });

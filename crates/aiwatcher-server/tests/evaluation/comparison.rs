@@ -610,3 +610,55 @@ async fn a_cursor_from_another_pair_of_results_is_refused_rather_than_resolved()
         "{refused:?}",
     );
 }
+
+#[tokio::test]
+async fn a_diff_row_says_where_its_case_is_so_the_answers_come_from_the_route_that_has_them() {
+    let registry = registry(
+        Arc::new(MemoryObjectStore::new()),
+        Arc::new(Source::default()),
+    );
+    published(
+        &registry,
+        outcomes(
+            "candidate-run",
+            "prompt-v2",
+            &[Some(1.0), Some(0.0), Some(1.0)],
+        ),
+        outcomes(
+            "baseline-run",
+            "prompt-v1",
+            &[Some(1.0), Some(1.0), Some(1.0)],
+        ),
+    )
+    .await;
+
+    let page = diff(&registry, Some(CaseFilter::Worse)).await;
+    let row = &page.cases[0];
+    assert_eq!(row.case_id, "case-00001");
+    // The diff row carries no answer; it carries where the answer is, in the
+    // words the case route already speaks.
+    for (id, side) in [
+        ("candidate-run", row.current.as_ref().unwrap()),
+        ("baseline-run", row.baseline.as_ref().unwrap()),
+    ] {
+        let receipt = registry.get(id, "viewer", 3000).await.unwrap().unwrap();
+        let one = registry
+            .cases(
+                id,
+                &receipt.receipt.version,
+                Some(&side.at),
+                Some(1),
+                "viewer",
+                3000,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(one.cases.len(), 1);
+        assert_eq!(
+            one.cases[0].measurement.case_id, row.case_id,
+            "{id}'s cursor points at the case the row is about",
+        );
+        assert!(one.cases[0].expected.is_object(), "with what was expected");
+    }
+}
