@@ -12,11 +12,11 @@ from aiwatcher_sdk.integrations.agentic import tracer as tracer_module
 from aiwatcher_sdk.integrations.agentic.tracer import current_attempt
 
 from aiwatcher_agentic.agent import Agent
-from aiwatcher_agentic.capabilities import AbstractCapability, HookContext
+from aiwatcher_agentic.capabilities import AbstractCapability, Allow, Deny, HookContext
 from aiwatcher_agentic.exceptions import ModelRetry, ToolValidationError
 from aiwatcher_agentic.model import TextModel
 from aiwatcher_agentic.prompts import GemmaPromptBuilder
-from aiwatcher_agentic.tools import ToolCallCommand, ToolRunStatus
+from aiwatcher_agentic.tools import ToolCallCommand, ToolFailure, ToolRunStatus
 from aiwatcher_agentic.tracer import LLMTracer, NoopLLMTracer
 
 
@@ -303,3 +303,114 @@ def test_after_tool_hook_result_or_exception_is_the_recorded_outcome(raises: boo
     events = [e for e in transport.events if e["event_type"].startswith("tool.")]
     assert [e["event_type"] for e in events] == ["tool.started", "tool.failed"]
     assert events[-1]["data"]["error"] == ("hook failure" if raises else "Error: rejected by hook")
+
+
+@pytest.mark.parametrize(
+    ("failure", "status", "output"),
+    [
+        (
+            ToolFailure("no sources in the allowed domains"),
+            ToolRunStatus.ERROR,
+            "Error: no sources in the allowed domains",
+        ),
+        (ToolFailure("rate limited", retryable=True), ToolRunStatus.RETRY, "Error: rate limited"),
+        (ToolFailure("Error: already prefixed"), ToolRunStatus.ERROR, "Error: already prefixed"),
+    ],
+)
+def test_a_tool_that_declares_its_failure_is_not_read_by_prefix(
+    failure: ToolFailure, status: ToolRunStatus, output: str
+) -> None:
+    """The status comes from the tool, not from how its message happens to start.
+
+    Read by prefix, `no sources in the allowed domains` is a successful call —
+    which is how a search that found nothing used to close as `tool.completed`.
+    """
+    transport = RecordingTransport()
+    client = AiwatcherClient(service="test", transport=transport)
+    tracer = AiwatcherTracer(client=client)
+
+    def search(query: str) -> ToolFailure:
+        return failure
+
+    agent = Agent(
+        model_provider=NoModels(),
+        prompt_builder=GemmaPromptBuilder(system_prompt="p"),
+        tools=[search],
+    )
+    with tracer.workflow(name="scout", session_id="session"), tracer.agent(name="scout"):
+        result = agent.run_tool(("search", {"query": "panels"}), tracer=tracer)
+    client.close()
+
+    assert result is not None
+    assert result.status == status
+    assert result.output == output
+    assert result.success is False
+    assert result.retry is (status == ToolRunStatus.RETRY)
+
+    tool_events = [e for e in transport.events if e["event_type"].startswith("tool.")]
+    assert [e["event_type"] for e in tool_events] == ["tool.started", "tool.failed"]
+    end = tool_events[1]
+    assert end["data"]["error"] == failure.message
+    assert end["data"]["tool_status"] == status.value
+    assert end["data"]["retryable"] is (status == ToolRunStatus.RETRY)
+
+
+def test_a_capability_refuses_a_call_and_the_refusal_is_a_tool_span() -> None:
+    """A denied call never runs, and is still visible as a failed tool call.
+
+    Held outside the agent, an approval gate has to be kept in step with the
+    agent by hand; held here, the refusal is the tool's result and the model
+    reads the reason like any other failure.
+    """
+
+    class RequireApproval(AbstractCapability):
+        def before_tool_execute(
+            self, tool_name: str, parameters: dict[str, Any], context: HookContext
+        ) -> Deny:
+            return Deny("publishing needs an approved action")
+
+    class Widen(AbstractCapability):
+        def before_tool_execute(
+            self, tool_name: str, parameters: dict[str, Any], context: HookContext
+        ) -> Allow:
+            return Allow({**parameters, "query": parameters["query"] + " site:example.org"})
+
+    calls: list[str] = []
+
+    def search(query: str) -> str:
+        calls.append(query)
+        return "found"
+
+    transport = RecordingTransport()
+    client = AiwatcherClient(service="test", transport=transport)
+    tracer = AiwatcherTracer(client=client)
+    denied = Agent(
+        model_provider=NoModels(),
+        prompt_builder=GemmaPromptBuilder(system_prompt="p"),
+        tools=[search],
+        # The widening capability sits after the refusal and must not be asked.
+        capabilities=[RequireApproval(), Widen()],
+    )
+    with tracer.workflow(name="scout", session_id="session"), tracer.agent(name="scout"):
+        result = denied.run_tool(("search", {"query": "panels"}), tracer=tracer)
+    client.close()
+
+    assert calls == []
+    assert result is not None
+    assert result.status == ToolRunStatus.DENIED
+    assert result.output == "Error: publishing needs an approved action"
+    assert result.success is False
+    tool_events = [e for e in transport.events if e["event_type"].startswith("tool.")]
+    assert [e["event_type"] for e in tool_events] == ["tool.started", "tool.failed"]
+    assert tool_events[1]["data"]["error"] == "publishing needs an approved action"
+
+    allowed = Agent(
+        model_provider=NoModels(),
+        prompt_builder=GemmaPromptBuilder(system_prompt="p"),
+        tools=[search],
+        capabilities=[Widen()],
+    )
+    granted = allowed.run_tool(("search", {"query": "panels"}))
+    assert granted is not None and granted.success
+    assert calls == ["panels site:example.org"]
+    assert granted.tool_call == ("search", {"query": "panels site:example.org"})

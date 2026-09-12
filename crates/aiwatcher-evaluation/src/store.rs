@@ -6,7 +6,22 @@ use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
 #[derive(Clone, Debug)]
-pub(crate) struct Store(pub Arc<dyn ObjectStore>);
+pub(crate) struct Store(
+    pub Arc<dyn ObjectStore>,
+    pub Option<Arc<dyn EvidenceCipher>>,
+);
+
+/// Deployment encryption, without a dependency on another domain's storage.
+/// Implementations authenticate the full object path and never log plaintext.
+pub trait EvidenceCipher: Send + Sync + std::fmt::Debug {
+    fn seal(&self, path: &str, plaintext: &[u8]) -> Result<serde_json::Value>;
+    fn open(&self, path: &str, envelope: &serde_json::Value) -> Result<Vec<u8>>;
+}
+
+#[derive(Serialize, Deserialize)]
+struct Protected {
+    evaluation_sealed_v1: serde_json::Value,
+}
 
 /// An intent contains no source material. Its first deadline is never renewed.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -91,23 +106,70 @@ impl Store {
     pub async fn create<T: Serialize>(&self, key: &str, value: &T) -> Result<bool> {
         Ok(self.0.create(key, canonical(value)?).await?)
     }
-    pub async fn artifact<T: Serialize>(&self, id: &str, value: &T) -> Result<String> {
+    pub async fn artifact<T: Serialize>(
+        &self,
+        id: &str,
+        value: &T,
+        protected: bool,
+    ) -> Result<String> {
         let bytes = canonical(value)?;
         let digest = hash(&bytes);
         let key = format!("{}{digest}.json", content(id));
-        self.0.create(&key, bytes.clone()).await?;
-        if self.0.get(&key).await?.as_deref() != Some(bytes.as_slice()) {
+        let stored = if protected {
+            let cipher = self
+                .1
+                .as_ref()
+                .ok_or(EvaluationError::Unavailable(EvidenceState::Forbidden))?;
+            canonical(&Protected {
+                evaluation_sealed_v1: cipher.seal(&key, &bytes)?,
+            })?
+        } else {
+            bytes.clone()
+        };
+        self.0.create(&key, stored).await?;
+        let (found, sealed) = self.open(id, &digest).await?;
+        if found != bytes || (protected && !sealed) {
             return Err(EvaluationError::Unavailable(EvidenceState::CorruptArtifact));
         }
         Ok(digest)
     }
-    pub async fn verified<T: DeserializeOwned>(&self, id: &str, digest: &str) -> Result<T> {
+    async fn open(&self, id: &str, digest: &str) -> Result<(Vec<u8>, bool)> {
+        let key = format!("{}{digest}.json", content(id));
         let bytes = self
             .0
-            .get(&format!("{}{digest}.json", content(id)))
+            .get(&key)
             .await?
             .ok_or(EvaluationError::Unavailable(EvidenceState::MissingArtifact))?;
+        // A serde struct also accepts a one-element JSON sequence. Detect only
+        // the named OBJECT field, or an old one-row shard looks like a seal.
+        let envelope = serde_json::from_slice::<serde_json::Value>(&bytes)
+            .ok()
+            .and_then(|value| value.get("evaluation_sealed_v1").cloned());
+        let (bytes, sealed) = if let Some(envelope) = envelope {
+            let cipher = self
+                .1
+                .as_ref()
+                .ok_or(EvaluationError::Unavailable(EvidenceState::Forbidden))?;
+            (cipher.open(&key, &envelope)?, true)
+        } else {
+            (bytes, false)
+        };
         if hash(&bytes) != digest {
+            return Err(EvaluationError::Unavailable(EvidenceState::CorruptArtifact));
+        }
+        Ok((bytes, sealed))
+    }
+    pub async fn verified<T: DeserializeOwned>(&self, id: &str, digest: &str) -> Result<T> {
+        self.verified_protected(id, digest, false).await
+    }
+    pub async fn verified_protected<T: DeserializeOwned>(
+        &self,
+        id: &str,
+        digest: &str,
+        protected: bool,
+    ) -> Result<T> {
+        let (bytes, sealed) = self.open(id, digest).await?;
+        if protected && !sealed {
             return Err(EvaluationError::Unavailable(EvidenceState::CorruptArtifact));
         }
         serde_json::from_slice(&bytes)

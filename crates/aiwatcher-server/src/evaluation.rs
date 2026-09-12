@@ -1,10 +1,12 @@
 //! Operator-approved evidence, source owner adapters and the retention worker.
 mod annotations;
+mod conversations;
 use aiwatcher_evaluation::{
     DatasetKind, Evaluation, EvaluationError, EvaluationManifest, EvidenceState, Result,
     SourceAuthority, SourceEvidence,
 };
 use async_trait::async_trait;
+pub use conversations::ConversationCipher;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -22,6 +24,7 @@ pub struct LocalSource {
     prompts: Option<Arc<aiwatcher_prompts::Registry>>,
     training: Option<Arc<aiwatcher_training::Registry>>,
     annotations: Option<Arc<aiwatcher_annotations::Registry>>,
+    conversations: Option<Arc<aiwatcher_conversations::Registry>>,
 }
 impl LocalSource {
     #[must_use]
@@ -32,7 +35,17 @@ impl LocalSource {
             prompts: None,
             training: None,
             annotations: None,
+            conversations: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_conversations(
+        mut self,
+        conversations: Arc<aiwatcher_conversations::Registry>,
+    ) -> Self {
+        self.conversations = Some(conversations);
+        self
     }
 
     #[must_use]
@@ -137,7 +150,10 @@ impl SourceAuthority for LocalSource {
             .ok_or_else(|| unavailable(EvidenceState::Forbidden))?;
         if !matches!(
             manifest.context.dataset.kind,
-            DatasetKind::External | DatasetKind::Curation | DatasetKind::Annotations
+            DatasetKind::External
+                | DatasetKind::Curation
+                | DatasetKind::Annotations
+                | DatasetKind::Conversations
         ) || manifest.context.judge.is_some()
         {
             return Err(unavailable(EvidenceState::Forbidden));
@@ -244,6 +260,9 @@ impl SourceAuthority for LocalSource {
         }
         if c.dataset.kind == DatasetKind::External && c.dataset.version != c.case_manifest.digest {
             return Err(unavailable(EvidenceState::CorruptArtifact));
+        }
+        if c.dataset.kind == DatasetKind::Conversations {
+            return self.conversation_cases(&root, c).await;
         }
         if c.dataset.kind == DatasetKind::Annotations {
             return self.annotation_cases(&root, c).await;
@@ -356,7 +375,7 @@ pub fn spawn(
             tokio::select! {
                 () = shutdown.cancelled() => break,
                 _ = interval.tick() => {
-                    if let Err(error) = registry.sweep("retention-worker", time::OffsetDateTime::now_utc().unix_timestamp()).await {
+                    if let Err(error) = registry.as_ref().clone().with_content_access(true).sweep("retention-worker", time::OffsetDateTime::now_utc().unix_timestamp()).await {
                         tracing::warn!(%error, "evaluation retention sweep failed");
                     }
                 }

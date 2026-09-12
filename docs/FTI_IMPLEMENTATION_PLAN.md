@@ -1,6 +1,6 @@
 # FTI — rekomendacja zakresu i plan rozwoju
 
-Data: 2026-09-11. Status: A1–A4 i AR1 zaimplementowane; B1 zweryfikowane, trwały wycinek B2 i atomowe orphan GC nowych publikacji dostarczone; dodano weryfikowane adaptery Curation, promptów, modeli i Annotations; B2/AR2 pozostają otwarte dla pozostałych źródeł (sekcje 9–15). Wyniki odbioru A, ograniczenia i incydent seeda w sekcji 8.
+Data: 2026-09-11. Status: A1–A4 i AR1 zaimplementowane; B1 zweryfikowane, trwały wycinek B2 i atomowe orphan GC nowych publikacji dostarczone; dodano weryfikowane adaptery Curation, promptów, modeli, Annotations i Conversations; B2/AR2 pozostają otwarte dla judge (sekcje 9–16). Wyniki odbioru A, ograniczenia i incydent seeda w sekcji 8. Przegląd planu z 2026-09-12 — czego brakuje i co zmienia kolejność przed B3 — jest w sekcji 17.
 
 Podstawa: [katalog funkcji](FTI_FEATURE_CATALOG.md), [analiza braków](FTI_FEATURE_GAPS.md), [plan UX](FTI_UX_WANDB_PLAN.md), [przegląd dokumentacji Langfuse i MLflow](FTI_LANGFUSE_MLFLOW_ANALYSIS.md), [ocena architektury](FTI_ARCHITECTURE_REVIEW.md) oraz aktualny kod. Ocena dotyczy obecności i kontraktów implementacji; nie potwierdza działania konkretnego wdrożenia. Katalog opisuje zakres docelowy, więc liczba jego pozycji nie jest miarą ukończenia produktu.
 
@@ -390,3 +390,165 @@ Stan wejściowy: czysty checkout, HEAD `836545d` zawiera wcześniejsze prace B2.
 Pierwsze pełne check przeszło testy i pozostałe kontrole, wskazując tylko nieaktualny opis pola w OpenAPI. Poprawienie nieścisłego komentarza o digestach wymagało regeneracji `contracts/openapi.json` oraz klienta panelu (`just openapi`); kształt danych HTTP nie zmienił się. **Pełne `rtk proxy just check` po regeneracji PASS**, log `/tmp/fti-annotations-just-check.log`: fmt, clippy wszystkich features/targetów, testy Rust, bramki architektury, aktualność OpenAPI i manifestu, panel build/typecheck/testy, oba SDK, agentic, K8s/Helm/Tilt oraz linters. Dodatkowo PASS `git diff --check`. Testowy listener zakończono; nie uruchamiano seedów ani nie modyfikowano istniejących instancji.
 
 **Następny zakres:** Conversations przez właściciela, z szyfrowaniem przechowywanych oczekiwań/odpowiedzi, właściwą rolą i wiążącym usunięciem/retencją. Potem judge. B2/AR2 nadal nie są ukończone w całości. B3, powiadomienie po commicie i migracja starych orphanów bez intencji pozostają osobnym zakresem. Bez commita i wdrożenia.
+
+
+## 16. B2 — Conversations: szyfrowane dowody i polityki źródła (2026-09-12)
+
+Na wejściu zachowano niezacommitowane Annotations i niezależne zmiany SDK.
+W trakcie pracy HEAD przeszedł z `836545d` do `35a9981`; wcześniejsze zmiany są
+w tym commicie. Ta kontynuacja nie wykonywała commita ani zmian działających
+instancji i demonstracyjnych danych.
+
+Dostarczono:
+
+- `Conversations::Registry::verified_evaluation_rows`: pełny eksport
+  `prompt_response`, wymagany scope `evaluate` i human review. Właściciel
+  weryfikuje request/version, kolejność i SHA shardów, liczbę wierszy, obie tury
+  każdej pary, ich bajty oraz aktualną zgodę, review i najkrótszą retencję.
+  Nie interpretuje deklaracji train jako evaluate. Uszkodzenie nie staje się
+  pustym oczekiwaniem, a usunięcie źródła wycofuje dowody.
+- Adapter Server przez publiczną fasadę; bundle operatora zawiera tylko
+  `case_id`, `input_digest`, `expected_digest`, bez tekstów rozmowy. Mapowanie:
+  assistant turn ID → `{question: prompt}` / `{answer: response}`. Wymagana
+  dokładna kolejność i pełny korpus; split `test` jest deklaracją operatora.
+- Port `Evaluation::EvidenceCipher`, implementacja w Server na istniejącym
+  Keyring Conversations (AES-GCM/HKDF, uwierzytelniona ścieżka obiektu).
+  Metadane, actual i expected są szyfrowane przed storage; skróty i niezmienny
+  claim liczone nadal z treści, więc losowa koperta nie zmienia wersji/retry.
+  Brak szyfrowania lub podmiana na plaintext blokuje dowód. Stare plaintext
+  wyniki pozostałych rodzajów źródeł zachowują format i odczyt.
+- Jawne `with_content_access` na kopii registry dla jednego wywołania:
+  API przyznaje je dopiero po sprawdzeniu Admin, worker retencji ma zaufany
+  dostęp. Sama nazwa subject, również `admin`/`retention-worker`, nie przyznaje
+  prawa. Viewer/Editor widzą `forbidden` bez treści/metadanych/metryk, stary
+  detail daje 403; po wycofaniu brak fallbacku (410 w starym API).
+- Retencja jest minimum pierwszego receipt, aktualnego limitu źródła i polityki
+  instancji; retry jej nie odnawia. Tombstone poprzedza usunięcie zaszyfrowanych
+  kopii. Utrata klucza daje `forbidden`, naruszenie integralności
+  `corrupt_artifact`, bez fałszywego usunięcia źródła.
+
+Limity/zakres: 1 000 wierszy i 100 MiB sumy odczytów źródła (koperty i plaintext),
+4 MiB manifest, 2 MiB głów tur/kopert treści; port ObjectStore nadal oddaje pełny
+obiekt przed sprawdzeniem limitu. Evaluation zachowuje limit 100 MiB logicznego
+raportu; szyfrowane koperty mają dodatkowy narzut base64. Brak dowodu niezależności
+zbioru testowego, wykonania modelu czy jakości promotowalnej. Chat/SFT/DPO,
+wybór podzbioru i judge są odrzucane. Zmiana/deletion źródła jest wykrywana na
+odczycie lub sweep co 60 s. Przy braku klucza nie można odczytać metadanych dla
+powiązania ze źródłem; receipt nadal pozwala usunąć kopie po pierwotnej retencji.
+Odzyskanie klucza przed tombstone przywraca możliwość weryfikacji, nie odnawia czasu.
+
+Odbiór PASS:
+
+| Scenariusz | Wynik |
+| --- | --- |
+| Zaszyfrowane obiekty bez sentinel tekstu, filesystem, rekonstrukcja właściciela/registry, retry i strony | PASS |
+| Jawna capability, odmowa mimo subject `admin`, review i nieodnawiana retencja | PASS |
+| Utrata klucza, naruszenie koperty, podmiana ścieżki, uszkodzenie/usunięcie sharda źródła | PASS |
+| Brak cipher, inny split/cohort/input digest, alias wersji; odmowa przed zapisem | PASS |
+| Rzeczywiste HTTP: Admin publish/read, Viewer/Editor odmowa, discovery/detail/pages/legacy, erasure | PASS |
+| Tożsamość manifestu/sharda, aktualna zgoda, brak indeksu i skrócony TTL właściciela | PASS |
+| Downgrade metadanych/shardów na plaintext, 401 przypadków, współbieżne retry/konflikt i GC zwycięzcy | PASS |
+
+`cargo check -p aiwatcher-server` oraz testy kierunkowe Conversations/Evaluation/
+Server PASS (`/tmp/fti-conversations-check.log`, `/tmp/fti-conversations-tests.log`).
+Siedem nowych scenariuszy w Server; cały server/evaluation: **38 PASS, 1 pominięty**
+test opt-in RustFS. Testy zgodności wykryły i pomogły naprawić rozpoznawanie koperty:
+serde może odczytać jednopolowy struct z jednoelementowej tablicy, dlatego marker
+jest teraz sprawdzany wyłącznie jako nazwane pole obiektu JSON. Stare shardy
+jednego przypadku zachowują odczyt i retry.
+
+Pełne **`just check` PASS** (`/tmp/fti-conversations-just-check.log`): fmt/clippy,
+testy workspace, granice i testy negatywne, aktualność kontraktów, panel oraz SDK,
+manifesty K8s/Helm/Tilt, komentarze/typos/taplo/cargo deny. Zregenerowano OpenAPI
+i klienta panelu — zmieniły się opisy wymagań Admin, bez zmiany kształtu HTTP.
+Nowe nieśledzone moduły sprawdzono również ręcznie linterem komentarzy.
+Nie uruchamiano nowego odbioru na żywym RustFS ani Kubernetes.
+W trakcie pełnego check pojawiły się niezależne edycje Execution i pod launcher;
+zachowano je, nie są częścią tego odbioru Conversations.
+
+Następny zakres: judge przez właścicieli przypięć/konfiguracji, potem przegląd
+pozostałych kryteriów B2/AR2 i B3. Nie powtarzać adapterów.
+
+
+## 17. Przegląd planu — braki i propozycje (2026-09-12)
+
+Przegląd dotyczy **planu**, nie dostarczonego kodu: odbiory z sekcji 8–16 nie są tu podważane. Wskazane niżej rzeczy albo nie mają w planie właściciela i terminu, albo mają go po etapie, w którym staną się blokadą. Dowody odczytano z checkoutu na HEAD `c77a997` wraz z niezacommitowanym wycinkiem Conversations.
+
+| # | Rzecz | Gdzie powinna trafić | Skutek pominięcia |
+| --- | --- | --- | --- |
+| E1 | Jedna zatwierdzona para wariant/kontekst na instancję | Przed B3 | B3 nie ma dwóch porównywalnych dowodów |
+| E2 | Publikacja wymaga ręcznego zatwierdzenia przy każdym uruchomieniu | Przed C0 | C0/C1/C3 nie opublikują dowodu bez człowieka |
+| E3 | Brak trasy usunięcia pojedynczego dowodu | B2, domknięcie | Jedynym narzędziem jest retencja |
+| K1–K5 | Koszt odczytu i porządek katalogu | Przed B3 | Ekran katalogu i sweep skalują się z całym korpusem |
+| O1 | Brak zadania CI dla object store | Przed zamknięciem B2 | Protokół claim/GC nie jest dowiedziony na S3 |
+| O2 | Sweep nie raportuje wyniku | Przed zamknięciem B2 | Tydzień nieudanych sweepów wygląda jak działający |
+| W1 | Rejestr nie istnieje we wdrożeniu | Przed pierwszym wdrożeniem | Funkcji nie da się włączyć chartem |
+| W2 | Backup/odtworzenie prefiksu `evaluations/` | Przed pierwszym wdrożeniem | Odtworzenie może wskrzesić porzucone ID |
+| J1 | Kształt judge'a | Przed adapterem judge | Adapter skopiuje regułę, która go nie dotyczy |
+| X1–X4 | Plan jako dokument | Teraz | Kolejna sesja powtarza pracę AW-5 lub gubi stan |
+
+### 17.1 Dostęp do dowodów — blokady B3 i C
+
+**E1. Instancja zatwierdza jedną parę wariant/kontekst naraz.** `LocalSource::resolve` w [adapterze Server](../crates/aiwatcher-server/src/evaluation.rs) czyta jeden `manifest.json` ze wskazanego `AIWATCHER_EVALUATION_SOURCE_DIR` i odrzuca jako `forbidden` wszystko, czego `variant_id`/`context_id` nie zgadza się z tym jednym zatwierdzeniem. Opublikowanie drugiego wariantu wymaga podmiany katalogu, a po podmianie **wcześniej opublikowane wyniki przestają być czytelne**. B3 brzmi „porównywanie trwałych wyników", czyli wymaga dwóch wyników o różnych `variant_id` czytelnych jednocześnie — dziś nie ma takiego stanu. README Evaluation opisuje to ograniczenie jako „one operator-approved bundle"; plan nie wyciąga z niego wniosku i planuje B3 tak, jakby dane wejściowe istniały.
+
+*Propozycja:* zatwierdzenie operatora przestaje być katalogiem na dysku serwera i staje się własnym, wersjonowanym zasobem — wiele przypięć naraz, adresowanych treścią, z zapisem kto i kiedy zatwierdził. Właścicielem jest Evaluation; nadal nie czyta prywatnych kluczy innych rejestrów. To jest paczka **przed** B3, nie po niej.
+
+**E2. Publikacja nadal wymaga człowieka przy każdym uruchomieniu.** `POST /api/v1/evaluation-results` wymaga roli Editor **i** wcześniejszego umieszczenia przez operatora bundle'a na dysku serwera, dokładnie odpowiadającego publikowanemu manifestowi. C0 (`score_existing`), C1 (szablon generowania i oceny) i C3 (bramka CI) mają produkować dowody automatycznie — z dzisiejszym kontraktem każde ich uruchomienie wymaga ręcznego kroku na hoście. To ta sama decyzja co E1 i należy ją podjąć raz.
+
+**E3. Nie ma trasy usunięcia pojedynczego dowodu.** [Router evaluations](../crates/aiwatcher-api/src/evaluations.rs) ma `GET`/`POST` i żadnego `DELETE`. Dowód znika tylko przez usunięcie źródła albo upływ retencji, a dla źródeł `external` nie ma czego usuwać. Jeżeli opublikowany wynik kiedykolwiek będzie musiał zniknąć na żądanie, jedynym narzędziem jest 30-dniowy zegar. Warto rozstrzygnąć jawnie: albo trasa usunięcia z uprawnieniem, albo zapisane w ADR 0030 stwierdzenie, że usunięcie jest wyłącznie pochodną źródła i retencji.
+
+### 17.2 Koszt odczytu na wartościach startowych
+
+Plan mówi „odkrywanie skanuje klucze object store — przed zwiększeniem skali należy zmierzyć koszty". Kod robi istotnie więcej niż skanowanie kluczy:
+
+**K1. Podsumowanie czyta cały wynik.** `Registry::get` → `read_metadata` w [registry](../crates/aiwatcher-evaluation/src/registry.rs) przechodzi pętlą po **wszystkich** shardach (`read_shard`) i odrzuca ich zawartość, żeby zwrócić nagłówek z licznikami i metrykami, które są już w metadanych. Przy wartościach startowych `GET /api/v1/evaluation-results/{id}` czyta i weryfikuje 10 000 przypadków, a dla źródła Conversations dodatkowo je odszyfrowuje.
+
+**K2. Strony przypadków czytają wynik raz na stronę.** `cases` wywołuje `get` (czyli K1), a potem odczytuje jeszcze żądaną stronę. Przejście przez 10 000 przypadków po 200 to pięćdziesiąt jeden pełnych odczytów tego samego wyniku.
+
+**K3. Lista wykonuje K1 dla każdego wiersza.** `list` pobiera pełne `list("evaluations/")`, sortuje w pamięci, a następnie dla każdego elementu strony woła `get` — czyli pełny odczyt wyniku **i** `authority.resolve`, które ponownie weryfikuje źródło (wiersze Curation, bajty artefaktów modelu w budżecie 100 MiB, shardy Conversations). Strona 200 wierszy to w granicach konfiguracji rząd wielkości 20 GiB odczytów z object store na jedno żądanie.
+
+**K4. Sweep powtarza to dla całego korpusu co 60 s.** `sweep` listuje prefiks i woła `get` dla każdego zatwierdzonego claimu. Retencja i wycofanie potrzebują `expires_at` z receiptu oraz terminu źródła — nie pełnej weryfikacji treści. To dokładnie reguła „Never let a measurement cost a run" z `CLAUDE.md`, zastosowana do sprzątania.
+
+**K5. Katalog nie ma porządku czasowego.** Klucz to `evaluations/{sha256(id)}/` ([store](../crates/aiwatcher-evaluation/src/store.rs)), a kursor listy jest posortowanym kluczem. Porządek jest więc porządkiem skrótu: ekran B3 nie pokaże „najnowsze pierwsze" bez przeskanowania wszystkiego. Indeks (własny obiekt-głowa z porządkiem czasu albo indeks po stronie projektora trzymający wyłącznie referencję) trzeba wybrać przed ekranem, nie po nim.
+
+*Propozycja:* rozdzielić ścieżkę podsumowania od weryfikacji shardów — sharda weryfikować wtedy, gdy ktoś czyta jego stronę; `list` oprzeć na receipt/claim bez `authority.resolve` per wiersz, a stan źródła potwierdzać przy wejściu w szczegół. Do planu dopisać jedną paczkę pomiarową z wartościami startowymi (10 000 przypadków, 100 MiB, 30 dni) i progiem, powyżej którego indeks jest wymagany.
+
+### 17.3 Odbiór i obserwowalność
+
+**O1. Brak zadania CI dla object store.** Cała poprawność publikacji i GC opiera się na atomowym `create`; na S3 to `If-None-Match: *`, a memory używa zamka, plik twardego dowiązania — ani jedno, ani drugie nie dowodzi zachowania S3. Jedyny test na prawdziwym storage jest `#[ignore]` za `AIWATCHER_EVALUATION_TEST_S3_ENDPOINT` ([testy Server](../crates/aiwatcher-server/tests/evaluation.rs)), więc CI go nie uruchamia. [CI](../.github/workflows/ci.yml) ma dedykowane usługi dla Iggy i PostgreSQL dokładnie z tego powodu — komentarz przy `workflow-store` mówi wprost, że bez tego zadania właściwości „nie dowodzą niczego o magazynie, który trzyma produkcję". Zadanie z RustFS domyka tę samą lukę także dla podpisu SigV4 w Prompts.
+
+**O2. Sweep nie raportuje niczego.** Worker w [evaluation.rs](../crates/aiwatcher-server/src/evaluation.rs) odrzuca licznik zwracany przez `sweep` i loguje `warn!` przy błędzie. Sweep psujący się od tygodnia wygląda identycznie jak działający — ta sama sytuacja, którą guardrail harmonogramu opisuje zdaniem „schedule refused every morning for a week looked exactly like one that had been working". Do planu: licznik wycofanych i zebranych obiektów jako metryka albo pole diagnostyki instancji (etap D już przewiduje diagnostykę — wystarczy tam dopisać ten rejestr).
+
+### 17.4 Wdrożenie
+
+**W1. Rejestr nie istnieje poza kodem i dokumentami.** Żadna ze zmiennych `AIWATCHER_EVALUATION_*` nie występuje w `deploy/helm`, `docs/INSTALL.md`, `justfile` ani w `detect-stack.py`; nie ma też receptury uruchamiającej lub zasilającej trwałą ścieżkę (jest tylko `just seed-evaluation`, czyli stare raporty zdarzeniowe). Skutki: funkcji nie da się włączyć chartem, odbiór z sekcji 10–16 jest odtwarzalny wyłącznie z prozy planu, a `evaluations/` jest siódmym prefiksem we wspólnym object store, o którym nie wie ani NetworkPolicy, ani opis instalacji.
+
+**W2. Backup i odtworzenie `evaluations/` są nieokreślone.** To — obok Conversations i strumienia wykonania — magazyn, którego treści nie ma nigdzie indziej. Jednocześnie protokół opiera się na tym, że claim jest niezmienny: odtworzenie prefiksu z kopii może przywrócić claim, który kolektor już porzucił, albo usunąć tombstone. Jeden akapit w ADR 0030 o tym, co odtworzenie znaczy, jest tańszy niż odkrycie tego przy pierwszej awarii.
+
+### 17.5 Judge — rozstrzygnąć kształt przed adapterem
+
+Plan i kickoff trzymają judge'a jako „ostatni adapter". To nie jest ten sam rodzaj pracy. Pięć dotychczasowych adapterów dopuszcza źródło przez **ponowny odczyt bajtów u właściciela**; wynik judge'a nie jest bajtami, które ktokolwiek może ponownie potwierdzić — to wywołanie modelu, którego odtwarzalność zależy od przypiętej konfiguracji, dostawcy i zbioru kalibracyjnego. Przeniesienie reguły „zweryfikuj bajty" na judge'a albo go zablokuje, albo — co gorsze — zostanie rozluźnione dla wszystkich pozostałych źródeł.
+
+*Propozycja do planu:* judge dostaje własną regułę dopuszczenia: konfiguracja przypięta treścią, zapisany zbiór kalibracyjny i rozbieżność z ocenami ludzi jako część dowodu, oraz jawne oznaczenie wyniku jako nieodtwarzalnego przez ponowny odczyt. To jest rozstrzygnięcie na poziomie ADR 0030, nie szczegół adaptera. Sekcja 4 etapu C już wymaga kalibracji przy uruchamianiu judge'a — brakuje tego samego po stronie trwałych dowodów.
+
+### 17.6 Plan jako dokument
+
+**X1. AW-5 nie jest w planie.** [AW-5](specs/AW-5-optimise-evaluate-and-promote-a-prompt-in-one-managed-run/_index.md) jest `done` na tablicy specyfikacji i dostarczył dokładnie: połączenie raportu z wykonaniem/krokiem, połączenie optymalizacji z raportami held-out oraz odmowę etykiety `production` dla odrzuconego kandydata. Punkt 2.4 i B5 nadal opisują to jako pracę do zdefiniowania. Plan powinien się do AW-5 odwołać i zawęzić B5 do tego, czego AW-5 nie robi — polityki decyzji dla **modeli** i wymogu kompletnego held-out.
+
+**X2. Decyzje nie trafiły do `CLAUDE.md`.** Siedem kontynuacji wytworzyło niebanalne niezmienniki: intencja przed pierwszym artefaktem, claim jako jedyna atomowa bramka, brak fallbacku po tombstone, kolejność shard → receipt (kolejne miejsce `aiwatcher_jobs::ORDERING`), wymagane szyfrowanie dowodów ze źródła Conversations, `with_content_access` jako jawna zdolność przyznawana po sprawdzeniu Admin. W `CLAUDE.md` jest tylko wiersz w tabeli crate'ów. Konwencja tego repozytorium — widoczna choćby po AW-5, które „graduated decisions into ADR_0010, ADR_0011 i CLAUDE.md" — mówi, że takie reguły mieszkają w Guardrails. Bez tego kolejna zmiana w Evaluation nie ma czego naruszyć świadomie.
+
+**X3. FTI jest poza `docs/specs/`.** Repozytorium ma proces spec-flow z tablicą i fazami; FTI — inicjatywa większa niż AW-3, AW-4 i AW-5 razem — prowadzi go plikami `FTI_*.md` i doklejanymi akapitami. Nie trzeba przepisywać dotychczasowych sekcji wstecz; wystarczy karta na tablicy dla pozostałej części (B2-domknięcie, B3, B4, AR3, C0) i trzymanie następnych rozstrzygnięć w ADR-ach, a nie w checkpointach.
+
+**X4. AR3 jest warunkiem C0 i nie zaczęto go.** Sekcja 7 wymaga wydzielenia wspólnego przypadku użycia kompilacji/startu z modułu HTTP przed C0; [scheduler](../crates/aiwatcher-server/src/execution/scheduler.rs) nadal klasyfikuje trwałość błędu po statusie HTTP z `ApiError`. To powinno być w „następnym zakresie" kickoffu obok judge'a, a nie odkryte przy C0.
+
+### 17.7 Proponowana kolejność po domknięciu adapterów
+
+| Paczka | Zakres | Dlaczego przed B3 |
+| --- | --- | --- |
+| B2e | Zatwierdzenie jako wersjonowany zasób z wieloma przypięciami; trasa usunięcia albo jawny jej brak w ADR | E1, E2, E3 z 17.1 |
+| B2f | Rozdzielenie podsumowania od weryfikacji shardów; `list` bez `resolve` per wiersz; wybór indeksu porządku | K1–K5 |
+| B2g | Zadanie CI z RustFS; raportowanie sweepu; zmienne w chart/INSTALL i receptura `just` | O1, O2, W1 |
+| B2h | Judge: własna reguła dopuszczenia w ADR 0030, potem adapter | J1 |
+| B3 | Katalog i porównanie trwałych wyników w panelu | ma wtedy dane, indeks i koszt pod kontrolą |
+
+AR3 biegnie równolegle i jest warunkiem C0. Kolejność wewnątrz B2e–B2h jest wymienna poza tym, że B2e poprzedza B3, a B2h następuje po rozstrzygnięciu w ADR.

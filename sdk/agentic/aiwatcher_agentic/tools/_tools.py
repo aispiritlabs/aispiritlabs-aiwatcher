@@ -35,6 +35,25 @@ class ToolContext:
     track_id: str
 
 
+@dataclass(frozen=True, slots=True)
+class ToolFailure:
+    """A tool result that is a failure because the tool said so.
+
+    A tool that handles its own failure has always had to encode that in the
+    string it returns, and the toolset read it back by prefix — so a tool whose
+    honest answer began with "Error:" was a failed call, and a failure phrased
+    any other way was a successful one. Return this instead: the status is then
+    declared by the code that knows, in any language, and the message is only
+    a message.
+
+    `retryable` is the same distinction `ModelRetry` makes — worth another
+    attempt — without raising for a failure the tool already understood.
+    """
+
+    message: str
+    retryable: bool = False
+
+
 class JsonParser:
     @staticmethod
     def extract_json_block(text: str) -> str:

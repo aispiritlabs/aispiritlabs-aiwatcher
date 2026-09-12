@@ -298,9 +298,32 @@ until that schema is available again. Ordinary export/COCO APIs retain behavior.
 No domain dependency or public HTTP shape was added. Shared roles and operator
 approval still apply; no per-project ACL or independent retention is invented.
 
-Conversations and judges remain refused.
-A local path is not a replacement for their consent/retention policies, and the
-plaintext bundle and result storage do not admit governed conversation content.
+Conversations now admits reviewed `prompt_response` exports with explicit
+`evaluate` scope through the owner's `verified_evaluation_rows` facade. It
+verifies the request/version and each decrypted shard, then both source turns'
+content, present consent/review and earliest expiry. Server compares the ordered
+full cohort to approved case IDs and input/expected digests. No conversation
+text is stored in the operator bundle. Other conversation formats and judges
+remain refused; a `test` label does not prove an independent held-out dataset.
+
+Evaluation owns an optional `EvidenceCipher` port; Server implements it with the
+existing Conversations Keyring and authenticates the complete Evaluation object
+path. Conversation metadata and actual/expected shards must be sealed. Logical
+content digests, receipt shape and CAS/GC semantics remain unchanged; retries
+verify plaintext identity rather than requiring identical random ciphertext.
+Old non-conversation plaintext objects remain readable. A plaintext downgrade
+of governed metadata or shards is corrupt evidence, never an accepted fallback.
+
+The registry defaults to no governed-content capability. Each API call receives
+a clone with `with_content_access` set from the authenticated Admin role;
+publishing also requires Admin. The retention worker explicitly holds this
+capability. Subject strings never grant permission. Viewer/Editor can discover
+minimal receipts and forbidden states but receive no manifest, metrics or cases.
+All durable and legacy detail routes pass through this check. Source deletion
+and shorter retention erase encrypted copies via the existing tombstone-first
+protocol. Unknown keys hide content without declaring it deleted; receipt expiry
+still permits erasure when the key cannot decrypt source linkage. See Evaluation
+README and FTI plan section 16 for limits and acceptance.
 
 A 60-second server task enforces expiry and global source deletion, independently
 of API reads. The marker is stored before erasing content. Caller-specific

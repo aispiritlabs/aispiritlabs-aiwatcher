@@ -154,6 +154,22 @@ impl Backend {
         format!("{}/exports/index/", self.prefix)
     }
 
+    pub(crate) async fn bounded_bytes(&self, key: &str, limit: usize) -> Result<Vec<u8>> {
+        let bytes = self
+            .store
+            .get(key)
+            .await?
+            .ok_or_else(|| Error::NotFound(key.into()))?;
+        if bytes.len() > limit {
+            return Err(Error::TooLarge {
+                what: "verified conversation object",
+                size: bytes.len(),
+                limit,
+            });
+        }
+        Ok(bytes)
+    }
+
     // ── Plaintext documents ──────────────────────────────────────────────
 
     pub(crate) async fn read<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>> {

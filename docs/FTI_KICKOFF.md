@@ -13,7 +13,7 @@ Dostarczono pierwszy działający wycinek B2: atomowy storage file/S3/memory, tr
 
 Pełne `just check` PASS (`/tmp/fti-b2-just-check.log`). Odbiór osobnego RustFS oraz HTTP obu SDK po restarcie procesu PASS. Końcowe dodatkowe sprawdzenia i dokładne ograniczenia: sekcja 10 planu i README `crates/aiwatcher-evaluation`.
 
-**Następny zakres: domknięcie B2/AR2.** Adapter obsługuje operator-approved lokalny bundle (`AIWATCHER_EVALUATION_SOURCE_DIR`), dla external, krótkich odpowiedzi Curation i wybranych splitów Annotations, także z natywnym promptem lub modelem. Conversations i judge są celowo odrzucane, dopóki ich właściciele nie potwierdzą referencji i praw. Zaimplementuj odpowiednie adaptery przez publiczne fasady właścicieli, wraz z testami usunięcia/retencji/uprawnień. Nie przechodź przez prywatne klucze innych rejestrów.
+**Następny zakres: domknięcie B2/AR2.** Adapter obsługuje operator-approved lokalny bundle (`AIWATCHER_EVALUATION_SOURCE_DIR`), dla external, krótkich odpowiedzi Curation, wybranych splitów Annotations oraz szyfrowanych eksportów prompt_response Conversations, także z natywnym promptem lub modelem. Judge jest nadal odrzucany; wymaga weryfikacji przypięć i konfiguracji. Zaimplementuj odpowiednie adaptery przez publiczne fasady właścicieli, wraz z testami usunięcia/retencji/uprawnień. Nie przechodź przez prywatne klucze innych rejestrów.
 
 **Kontynuacja GC:** checkout na wejściu był czysty, HEAD `d2aed6d` zawiera B1/B2. Dodano zbieranie nowych osieroconych publikacji przez niezmienną intencję (godzina, skracana retencją) i atomową konkurencję kolektora/publikacji o ten sam claim. Zatwierdzony wynik chroni wszystkie swoje shardy; zebrane ID jest trwale niedostępne (410), bez legacy fallbacku. Worker retencji wykonuje GC. Odbiór memory/file/real RustFS obejmuje obie kolejności wyścigu, późne zapisy i utracone odpowiedzi. Pełne `just check` PASS (`/tmp/fti-b2-gc-just-check.log`), bez commita ani wdrożenia; własny RustFS zatrzymano. Dokładny checkpoint/testy i przegląd fasad kolejnych adapterów w sekcji 11 planu; nie implementuj ponownie tego protokołu. Starsze niezatwierdzone prefiksy bez intencji i staging adaptera są zachowane i wymagają uzgodnienia przy wdrożeniu. Powiadomienie `eval.*` z referencją po commicie pozostaje opcjonalnym brakującym mostkiem; trwałe listowanie działa niezależnie od zdarzeń.
 
@@ -25,9 +25,42 @@ Pełne `just check` PASS (`/tmp/fti-b2-just-check.log`). Odbiór osobnego RustFS
 
 **Kontynuacja Annotations:** wejściowy checkout czysty, HEAD `836545d`. Dodano `Registry::verified_coco` oraz adapter porównujący pełne przypadki COCO, z weryfikacją eksportu/rewizji/schematu/bajtów i aktualnych praw/review. Obsługa tylko natywnych obrazów oraz splitów train/validation/test, polityki commercial/research. Zmiana zaakceptowanej rewizji nie podmienia przypięcia; brak źródła wycofuje dowody. Stary schemat po zmianie projektu jest niedostępny — jawne ograniczenie opisane w sekcji 15 planu i README Evaluation. Pełne `just check` PASS (`/tmp/fti-annotations-just-check.log`), w tym sześć nowych scenariuszy właściciela/adaptera i rzeczywisty HTTP. Server/evaluation: 31 PASS, 1 pominięty test RustFS. Zregenerowano opis w OpenAPI i kliencie panelu; kształt danych bez zmian. Następny zakres: Conversations z szyfrowaniem kopii, rolą i retencją/usunięciem, potem judge. Nie powtarzaj wcześniejszych adapterów. Bez commita i zmian istniejących instancji.
 
+**Kontynuacja Conversations (2026-09-12):** zachowano wcześniejsze Annotations
+oraz niezależne zmiany SDK; w trakcie pracy HEAD przeszedł do `35a9981`.
+Dodano `Registry::verified_evaluation_rows`, adapter pełnego eksportu
+prompt_response/evaluate/test oraz manifest przypadków zawierający tylko
+skróty. Evaluation szyfruje metadane i shardy przez port EvidenceCipher, Server
+używa Keyring archiwum. API sprawdza Admin zarówno przy publikacji, jak i
+odczycie; tekst subject nie nadaje uprawnień. Aktualne zgody/review, bytes,
+retencja, utrata klucza i usunięcie źródła są weryfikowane. Stare wyniki
+innych źródeł pozostają czytelne; podmiana szyfrowanych danych na plaintext odmawiana.
+Siedem nowych scenariuszy PASS; server/evaluation: 38 PASS, 1 pominięty RustFS.
+Pełne `just check` PASS (`/tmp/fti-conversations-just-check.log`). Zregenerowano
+opisy ról OpenAPI/klienta panelu. Zachowano także niezależne edycje Execution/pod
+launcher, które pojawiły się w trakcie pracy. Końcowy odbiór i ograniczenia:
+sekcja 16 planu. Następny
+zakres: judge, potem końcowy przegląd B2/AR2 i B3. Nie powtarzać adapterów.
+Bez commita i zmian istniejących instancji.
+
 B3: porównywanie trwałych wyników i prezentacja pełnych stron w panelu. Stary szczegół czyta pierwszą stronę registry, ale stara lista/suite/baseline wyklucza jego ID; pełny katalog jest pod `/api/v1/evaluation-results`. Nie przywracaj fallbacku po tombstone, odmowie dostępu lub uszkodzeniu. Nie oznaczaj całego B2/AR2 jako ukończonego na podstawie samego syntetycznego adaptera.
 
 Wartości startowe wybrane za zgodą użytkownika i wdrożone: 10 000 przypadków, 100 MiB, strony po 200, 30 dni retencji skracane źródłem. Manifest 256 KiB, 128 metryk. Zachowaj nową wersję demonstracyjną `demo.segmenter/production` na :8080 zgodnie z wcześniejszą decyzją użytkownika; nie modyfikowano jej w B2.
+
+## Przegląd przed dalszym zakresem (2026-09-12)
+
+Przegląd planu po adapterach: [sekcja 17 planu](FTI_IMPLEMENTATION_PLAN.md#17-przegląd-planu--braki-i-propozycje-2026-09-12) z dowodami w kodzie. Nie podważa odbiorów z sekcji 8–16. Zmienia natomiast **kolejność**: judge nie jest ostatnią rzeczą przed B3.
+
+**Rozstrzygnij, zanim zaczniesz B3:**
+
+1. **Instancja zatwierdza dziś jedną parę wariant/kontekst.** `LocalSource::resolve` porównuje publikowany manifest z jednym `manifest.json` w `AIWATCHER_EVALUATION_SOURCE_DIR`; drugi wariant wymaga podmiany katalogu, a po podmianie wcześniejsze wyniki czytają się jako `forbidden`. B3 porównuje dwa wyniki o różnych `variant_id`, więc dziś nie ma dla niego danych. Zatwierdzenie musi się stać wersjonowanym zasobem z wieloma przypięciami, zanim powstanie ekran.
+2. **Publikacja wymaga ręcznego kroku na hoście.** To samo rozstrzygnięcie: bez niego C0, C1 i bramka CI nie opublikują dowodu bez człowieka kopiującego bundle przy każdym uruchomieniu.
+3. **Odczyt podsumowania czyta cały wynik.** `get` → `read_metadata` przechodzi po wszystkich shardach, `cases` robi to raz na stronę, a `list` powtarza to wraz z `authority.resolve` dla każdego wiersza. Sweep co 60 s wykonuje to dla całego korpusu. Katalog jest posortowany po skrócie ID, więc nie ma porządku czasowego. Rozdziel podsumowanie od weryfikacji shardów i wybierz indeks, zanim powstanie ekran katalogu.
+
+**Domknij przy zamykaniu B2:** zadanie CI z RustFS (atomowy `create` na S3 to `If-None-Match: *`, a jedyny test jest `#[ignore]`; CI ma już analogiczne usługi dla Iggy i PostgreSQL), raportowanie licznika sweepu zamiast samego `warn!`, zmienne `AIWATCHER_EVALUATION_*` w chart/INSTALL i receptura `just` dla trwałej ścieżki, akapit o odtwarzaniu prefiksu `evaluations/` z kopii, oraz decyzja o trasie usunięcia pojedynczego dowodu albo jawny jej brak w ADR 0030.
+
+**Judge ma inną regułę dopuszczenia niż pozostałe źródła.** Pięć adapterów dopuszcza źródło przez ponowny odczyt bajtów u właściciela; wyniku judge'a nikt ponownie nie potwierdzi. Rozstrzygnij w ADR 0030 — konfiguracja przypięta treścią, zbiór kalibracyjny i rozbieżność z ocenami ludzi w dowodzie, wynik oznaczony jako nieodtwarzalny przez ponowny odczyt — a dopiero potem pisz adapter.
+
+**Sprawy porządkowe tego dokumentu:** AW-5 jest `done` i dostarczył połączenia raport ↔ wykonanie/krok, optymalizacja ↔ held-out oraz odmowę `production` dla odrzuconego kandydata — nie implementuj tego ponownie pod B5. Niezmienniki rejestru (intencja przed artefaktem, claim jako jedyna atomowa bramka, brak fallbacku po tombstone, shard przed receiptem, wymagane szyfrowanie dowodów Conversations, `with_content_access` po sprawdzeniu Admin) nie trafiły do `CLAUDE.md`; to jest miejsce, w którym to repozytorium trzyma takie reguły. AR3 — wydzielenie kompilacji/startu z modułu HTTP — nadal nie jest zaczęte i pozostaje warunkiem C0. Odwołanie do `AGENTS.md` w liście „Przeczytaj na początku" wskazuje plik, którego w tym repozytorium nie ma; obowiązuje `CLAUDE.md`. Akapity kontynuacji mówiące „bez commita" są historyczne: na 2026-09-12 HEAD to `c77a997`, a niezacommitowany jest wyłącznie wycinek Conversations z sekcji 16.
 
 ## Pierwotny cel sesji — wydanie A
 

@@ -109,13 +109,16 @@ class NoopSpan:
         del output, metadata, level
 
 
-class ToolSpan(NoopSpan):
-    """Keep only the attempt outcome, never arguments or successful output.
+class OutcomeSpan(NoopSpan):
+    """A scope that remembers whether the work inside it actually succeeded.
 
-    ERROR is sticky until this attempt closes. RETRY is a failed, retryable
+    ERROR is sticky until the scope closes. RETRY is a failed, retryable
     attempt; WARNING alone is not a failure. The metadata key carries the
     Agent SDK's result status without coupling the two distributions.
     """
+
+    #: What the terminal event calls the failure, when the scope named no reason.
+    reported_by = "Scope"
 
     def __init__(self) -> None:
         self.status = "success"
@@ -143,13 +146,37 @@ class ToolSpan(NoopSpan):
                     self.error = reason[:500]
 
     def outcome(self) -> dict[str, Any]:
+        """What the terminal event adds when this scope failed; empty when it did not."""
         if self.status == "success":
             return {}
-        return {
-            "tool_status": self.status,
-            "retryable": self.status == "retry",
-            "error": self.error or "Tool reported " + self.status,
-        }
+        return {"error": self.error or f"{self.reported_by} reported {self.status}"}
+
+
+class ToolSpan(OutcomeSpan):
+    """Keep only the attempt outcome, never arguments or successful output."""
+
+    reported_by = "Tool"
+
+    def outcome(self) -> dict[str, Any]:
+        outcome = super().outcome()
+        if not outcome:
+            return outcome
+        return {"tool_status": self.status, "retryable": self.status == "retry", **outcome}
+
+
+class StepSpan(OutcomeSpan):
+    """A step that failed without raising.
+
+    Work that hands back its failure instead of throwing it — a tool result the
+    caller inspected, a guardrail that refused, a provider that answered with a
+    refusal — leaves the step around it with nothing to fail on. Before this,
+    the only ways to make `step.failed` appear were to raise an exception the
+    code did not have, or to open a second, tool-shaped scope around work that
+    was already scoped. Both report something that did not happen, and the
+    second one also doubles the tool calls the panel shows.
+    """
+
+    reported_by = "Step"
 
 
 def _int_or_zero(value: Any) -> int:
@@ -416,7 +443,7 @@ class AiwatcherTracer:
         context = self._scope()
         started = time.monotonic()
 
-        handle = ToolSpan() if kind == _TOOL_SPAN_TYPE else NoopSpan()
+        handle = ToolSpan() if kind == _TOOL_SPAN_TYPE else StepSpan()
         with self._scoped_span() as (span_id, parent_span):
             self._emit(
                 f"{event_prefix}.started",
@@ -437,7 +464,7 @@ class AiwatcherTracer:
                 )
                 raise
             else:
-                outcome = handle.outcome() if isinstance(handle, ToolSpan) else {}
+                outcome = handle.outcome()
                 terminal = "failed" if outcome else "completed"
                 self._emit(
                     f"{event_prefix}.{terminal}",

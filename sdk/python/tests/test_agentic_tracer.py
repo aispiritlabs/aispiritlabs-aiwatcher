@@ -279,3 +279,38 @@ def test_tee_updates_other_handles_when_one_annotation_fails() -> None:
     watcher = ToolSpan()
     TeeSpan([BrokenSpan(), watcher]).update(level="ERROR", output={"error": "tool failure"})
     assert watcher.outcome()["error"] == "tool failure"
+
+
+def test_a_step_that_reports_an_error_without_raising_fails_like_a_tool() -> None:
+    """A step whose work returned a failure must not close as `step.completed`.
+
+    Without this, the only way to make a failed step visible was to raise an
+    exception the caller did not have, or to wrap already-scoped work in a
+    second, tool-shaped span — which also doubles the tool calls the panel
+    shows for one search.
+    """
+    from aiwatcher_sdk import AiwatcherClient
+    from aiwatcher_sdk.integrations.agentic import AiwatcherTracer
+
+    recording = Recording()
+    client = AiwatcherClient(service="test", transport=recording)
+    tracer = AiwatcherTracer(client=client)
+    with tracer.workflow(name="scout", session_id="session"):
+        with tracer.step(name="discover", span_type="CHAIN") as span:
+            span.update(level="ERROR", output={"error": "the search returned no sources"})
+        with tracer.step(name="compose", span_type="CHAIN"):
+            pass
+    client.close()
+
+    events = [e for e in recording.events if e["event_type"].startswith("step.")]
+    assert [e["event_type"] for e in events] == [
+        "step.started",
+        "step.failed",
+        "step.started",
+        "step.completed",
+    ]
+    assert events[1]["data"]["error"] == "the search returned no sources"
+    assert events[1]["data"]["step_type"] == "chain"
+    # A step is not a tool: the tool-shaped keys stay on tool spans.
+    assert "tool_status" not in events[1]["data"]
+    assert "retryable" not in events[1]["data"]

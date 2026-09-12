@@ -54,6 +54,7 @@ pub struct Registry {
     store: Store,
     authority: Arc<dyn SourceAuthority>,
     config: RegistryConfig,
+    content_access: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -87,10 +88,33 @@ impl Registry {
             "limits must be positive; page size must not exceed 200",
         )?;
         Ok(Self {
-            store: Store(store),
+            store: Store(store, None),
             authority,
             config,
+            content_access: false,
         })
+    }
+
+    /// Grant content access only after the transport has authenticated the
+    /// archive's content-reader role. Subject names never grant this capability.
+    #[must_use]
+    pub fn with_content_access(mut self, allowed: bool) -> Self {
+        self.content_access = allowed;
+        self
+    }
+
+    #[must_use]
+    pub fn with_cipher(mut self, cipher: Arc<dyn crate::EvidenceCipher>) -> Self {
+        self.store.1 = Some(cipher);
+        self
+    }
+
+    fn protected(&self, manifest: &EvaluationManifest) -> Result<bool> {
+        let protected = manifest.context.dataset.kind == crate::DatasetKind::Conversations;
+        if protected && (!self.content_access || self.store.1.is_none()) {
+            return Err(EvaluationError::Unavailable(EvidenceState::Forbidden));
+        }
+        Ok(protected)
     }
 
     /// Same logical ID and content is idempotent, including a lost HTTP response.
@@ -102,6 +126,7 @@ impl Registry {
         now: i64,
     ) -> Result<EvaluationReceipt> {
         let prepared = Evaluation::prepare(request.manifest.clone())?;
+        let protected = self.protected(&request.manifest)?;
         let id = &request.manifest.origin.evaluation_id;
         if let Some(state) = self
             .store
@@ -190,10 +215,10 @@ impl Registry {
                 .iter()
                 .map(|case| &source.expected[&case.case_id])
                 .collect();
-            self.store.artifact(id, &cases).await?;
-            self.store.artifact(id, &expected).await?;
+            self.store.artifact(id, &cases, protected).await?;
+            self.store.artifact(id, &expected, protected).await?;
         }
-        let version = self.store.artifact(id, &metadata).await?;
+        let version = self.store.artifact(id, &metadata, protected).await?;
         let mut receipt = EvaluationReceipt {
             evaluation_id: id.clone(),
             version,
@@ -300,6 +325,12 @@ impl Registry {
             .store
             .verified(&receipt.evaluation_id, &receipt.version)
             .await?;
+        let protected = self.protected(&metadata.manifest)?;
+        if protected {
+            self.store
+                .verified_protected::<Metadata>(&receipt.evaluation_id, &receipt.version, true)
+                .await?;
+        }
         let prepared = Evaluation::prepare(metadata.manifest.clone())?;
         require(
             prepared.variant_id() == receipt.variant_id
@@ -313,14 +344,26 @@ impl Registry {
             return Err(EvaluationError::Unavailable(EvidenceState::Expired));
         }
         for shard in &metadata.shards {
-            self.read_shard(&receipt.evaluation_id, shard).await?;
+            self.read_shard(&receipt.evaluation_id, shard, protected)
+                .await?;
         }
         Ok(metadata)
     }
 
-    async fn read_shard(&self, id: &str, shard: &Shard) -> Result<Vec<EvidenceCase>> {
-        let actual: Vec<CaseMeasurement> = self.store.verified(id, &shard.actual).await?;
-        let expected: Vec<serde_json::Value> = self.store.verified(id, &shard.expected).await?;
+    async fn read_shard(
+        &self,
+        id: &str,
+        shard: &Shard,
+        protected: bool,
+    ) -> Result<Vec<EvidenceCase>> {
+        let actual: Vec<CaseMeasurement> = self
+            .store
+            .verified_protected(id, &shard.actual, protected)
+            .await?;
+        let expected: Vec<serde_json::Value> = self
+            .store
+            .verified_protected(id, &shard.expected, protected)
+            .await?;
         if actual.len() != shard.count || expected.len() != shard.count {
             return Err(EvaluationError::Unavailable(EvidenceState::CorruptArtifact));
         }
@@ -376,13 +419,14 @@ impl Registry {
         let limit = limit.unwrap_or(self.config.page_size);
         require(limit > 0 && limit <= 200, "limit", "must be 1..200")?;
         let metadata: Metadata = self.store.verified(id, version).await?;
+        let protected = self.protected(&metadata.manifest)?;
         let total: usize = metadata.shards.iter().map(|s| s.count).sum();
         require(offset <= total, "cursor", "beyond result")?;
         let end = offset.saturating_add(limit).min(total);
         let mut start = 0;
         for shard in &metadata.shards {
             if start < end && start + shard.count > offset {
-                let rows = self.read_shard(id, shard).await?;
+                let rows = self.read_shard(id, shard, protected).await?;
                 page.cases.extend(
                     rows.into_iter()
                         .skip(offset.saturating_sub(start))

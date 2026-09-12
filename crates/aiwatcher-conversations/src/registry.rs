@@ -10,6 +10,9 @@
 //! for the same reason: a consumer that could reach the key layout could write
 //! objects the registry's own reads never look for.
 
+mod verified;
+pub use verified::VerifiedEvaluationRows;
+
 use std::sync::Arc;
 
 use aiwatcher_core::prompts::ObjectStore;

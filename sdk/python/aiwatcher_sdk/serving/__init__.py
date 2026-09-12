@@ -39,6 +39,7 @@ from aiwatcher_sdk.serving.artifact import (
     VersionCacheReader,
     read_verified,
 )
+from aiwatcher_sdk.serving.fetch import Fetched, fetch_verified
 from aiwatcher_sdk.serving.loader import Loaded, Loader, Predictor, load
 from aiwatcher_sdk.serving.runtimes import available
 from aiwatcher_sdk.serving.server import (
@@ -56,6 +57,7 @@ __all__ = [
     "LABEL",
     "MAX_BODY_BYTES",
     "ArtifactReader",
+    "Fetched",
     "FileReader",
     "LoadError",
     "Loaded",
@@ -68,6 +70,7 @@ __all__ = [
     "Server",
     "VersionCacheReader",
     "available",
+    "fetch_verified",
     "load",
     "read_verified",
     "resolve",

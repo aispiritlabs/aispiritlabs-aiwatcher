@@ -47,6 +47,20 @@ class ToolValidationError(AgenticError):
         self.message = message
 
 
+class ModelResponseError(AgenticError):
+    """The endpoint answered, and the answer is not a completion.
+
+    Separate from a transport failure on purpose: "no route to the model" is
+    the application's problem and "the model stopped mid-JSON" is this one's,
+    and a caller that maps both onto one message cannot tell a retry worth
+    making from one that will fail the same way.
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
 class UsageLimitExceeded(AgenticError):  # noqa: N818 - likewise
     """Raised when a usage limit (tokens, requests, tool calls) is hit."""
 

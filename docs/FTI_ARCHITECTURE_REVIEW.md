@@ -210,3 +210,24 @@ Historyczny model ID przypina uporządkowane digests plików, lecz nie cały opi
 Annotations posiada weryfikację eksportu, schematu, rewizji i bajtów oraz interpretację aktualnych praw/review. Server składa tę fasadę z Evaluation i porównuje pełne przypadki COCO z zatwierdzonym bundle. Tożsamości eksportu/rewizji zachowują historyczny format. Evaluation nadal zależy tylko od Core; Server nie zna kluczy storage Annotations. Zwykły odczyt COCO nie zmienia się.
 
 Prawa commercial/research są sprawdzane u właściciela przy każdym odczycie; nie dodano per-project ACL ani wymyślonej retencji. Utrata źródła wycofuje kopie wektorowych oczekiwań, a revocation ukrywa je. Brak historycznego schematu jest jawnie odmawiany, zamiast relabelingu według nowej klasy. Obrazy pozostają w Annotations i nie są pobierane z URL. Limity, testy i dalszy zakres są w sekcji 15 planu; Conversations i judge nadal wymagają domknięcia AR2.
+
+
+## 16. B2 — Conversations i granica szyfrowanych dowodów
+
+Conversations posiada weryfikację korpusu, źródłowych tur, aktualnej zgody/review
+oraz deadline. Server porównuje zatwierdzone skróty przypadków z publiczną fasadą
+właściciela. Nie odczytuje jego prywatnych kluczy storage i nie kopiuje treści do
+lokalnego bundle. Evaluation nadal zależy tylko od Core; port EvidenceCipher nie
+zna Keyring ani Conversations, implementację składa Server.
+
+Evaluation posiada szyfrowane kopie, ich atomową publikację i usunięcie. Brak
+content capability jest domyślną odmową dla Conversations; API wiąże capability
+z rzeczywistym Admin, nie z tekstem subject. Worker retencji ma jawny dostęp.
+Metadane i shardy podlegają tej samej ochronie, stary endpoint przechodzi przez
+ten sam registry. Losowa koperta nie zmienia tożsamości treści ani protokołu GC.
+Odczyt jawnych historycznych wyników innych źródeł pozostaje kompatybilny;
+plaintext pod przypięciem Conversations jest odrzucany.
+
+Ograniczenia, macierz odbioru i następny krok znajdują się w sekcji 16 planu.
+Brak importów domen do Core/Execution/Projector i nowych krawędzi Cargo.
+Judge nadal wymaga domknięcia AR2; split test sam nie dowodzi niezależności.

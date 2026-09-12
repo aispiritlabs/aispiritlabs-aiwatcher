@@ -175,22 +175,36 @@ async fn build_registries(
     };
     let training = Arc::new(TrainingRegistry::new(Arc::clone(&store), "training"));
     let conversations = build_conversation_archive(config, &store)?;
+    let mut source = crate::evaluation::LocalSource::new(config.evaluation_source_dir.clone())
+        .with_curation(datasets.clone())
+        .with_prompts(prompts.clone())
+        .with_training(training.clone())
+        .with_annotations(annotations.clone());
+    if let Some(owner) = &conversations {
+        source = source.with_conversations(owner.clone());
+    }
+    let mut evaluations = aiwatcher_evaluation::Registry::new(
+        store.clone(),
+        Arc::new(source),
+        config.evaluation_limits.clone(),
+    )?;
+    if conversations.is_some() {
+        let keys = Keyring::parse(
+            "AIWATCHER_CONVERSATION_KEYS",
+            config
+                .conversation_keys
+                .as_deref()
+                .context("conversation keys")?,
+        )?;
+        evaluations =
+            evaluations.with_cipher(Arc::new(crate::evaluation::ConversationCipher(keys)));
+    }
     Ok(Registries {
         prompts: Some(Arc::clone(&prompts)),
         datasets: Some(Arc::clone(&datasets)),
         annotations: Some(Arc::clone(&annotations)),
         training: Some(Arc::clone(&training)),
-        evaluations: Some(Arc::new(aiwatcher_evaluation::Registry::new(
-            Arc::clone(&store),
-            Arc::new(
-                crate::evaluation::LocalSource::new(config.evaluation_source_dir.clone())
-                    .with_curation(datasets)
-                    .with_prompts(prompts)
-                    .with_training(training)
-                    .with_annotations(annotations),
-            ),
-            config.evaluation_limits.clone(),
-        )?)),
+        evaluations: Some(Arc::new(evaluations)),
         conversations,
         objects: Some(store),
     })

@@ -116,6 +116,10 @@ async fn get_evaluation(
 ) -> ApiResult<Json<EvaluationDetail>> {
     caller.require(Role::Viewer)?;
     if let Some(registry) = &state.evaluations {
+        let registry = registry
+            .as_ref()
+            .clone()
+            .with_content_access(caller.require(Role::Admin).is_ok());
         if let Some(detail) = registry
             .get(&evaluation_id, &caller.identity().subject, now())
             .await?
@@ -214,6 +218,7 @@ struct CasesQuery {
 
 /// Publish terminal evidence. Retry the identical body and logical ID after a
 /// timeout; a different body conflicts. No result content enters the event log.
+/// Conversation evidence requires Admin, including publication.
 #[utoipa::path(post, path = "/api/v1/evaluation-results", request_body = PublishEvaluation,
     responses((status = 200, body = EvaluationReceipt), (status = 400, body = crate::error::ErrorBody),
     (status = 403, body = crate::error::ErrorBody), (status = 409, body = crate::error::ErrorBody),
@@ -226,6 +231,8 @@ async fn publish_result(
     caller.require(Role::Editor)?;
     Ok(Json(
         registry(&state)?
+            .clone()
+            .with_content_access(caller.require(Role::Admin).is_ok())
             .publish(request, &caller.identity().subject, now())
             .await?,
     ))
@@ -233,6 +240,7 @@ async fn publish_result(
 
 /// Durable discovery is independent of telemetry retention. Pages follow stable
 /// storage IDs; clients must use the opaque cursor, not a timestamp assumption.
+/// Conversation content requires Admin; other readers receive a forbidden state.
 #[utoipa::path(get, path = "/api/v1/evaluation-results", params(ResultQuery), responses((status = 200, body = DurablePage)), tag = "evaluation")]
 async fn list_results(
     State(state): State<AppState>,
@@ -242,6 +250,8 @@ async fn list_results(
     caller.require(Role::Viewer)?;
     Ok(Json(
         registry(&state)?
+            .clone()
+            .with_content_access(caller.require(Role::Admin).is_ok())
             .list(
                 query.cursor.as_deref(),
                 query.limit.unwrap_or(200),
@@ -261,6 +271,8 @@ async fn get_result(
 ) -> ApiResult<Json<DurableEvaluation>> {
     caller.require(Role::Viewer)?;
     registry(&state)?
+        .clone()
+        .with_content_access(caller.require(Role::Admin).is_ok())
         .get(&id, &caller.identity().subject, now())
         .await?
         .map(Json)
@@ -277,6 +289,8 @@ async fn get_cases(
 ) -> ApiResult<Json<CasePage>> {
     caller.require(Role::Viewer)?;
     registry(&state)?
+        .clone()
+        .with_content_access(caller.require(Role::Admin).is_ok())
         .cases(
             &id,
             &query.version,

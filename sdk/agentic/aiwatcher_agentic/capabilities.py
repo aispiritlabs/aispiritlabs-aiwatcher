@@ -38,6 +38,26 @@ class HookContext:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True, slots=True)
+class Allow:
+    """Run the tool, with these parameters."""
+
+    parameters: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class Deny:
+    """Do not run the tool. The reason goes to the model as the tool's result."""
+
+    reason: str
+
+
+#: What `before_tool_execute` may answer. A bare ``dict`` still means
+#: :class:`Allow` with those parameters, because that is what every capability
+#: written before this returned.
+type ToolDecision = Allow | Deny | dict[str, Any]
+
+
 class AbstractCapability:
     """Base class for composable capabilities.
 
@@ -55,8 +75,15 @@ class AbstractCapability:
 
     def before_tool_execute(
         self, tool_name: str, parameters: dict[str, Any], context: HookContext
-    ) -> dict[str, Any]:
-        """Called before executing a tool. Return modified parameters."""
+    ) -> ToolDecision:
+        """Called before executing a tool.
+
+        Return :class:`Allow` (or plain parameters) to run it, or :class:`Deny`
+        to refuse it. Refusing is the point: a hook that can only rewrite
+        arguments cannot express a policy, a budget or an approval, so every
+        caller that needed one had to build the gate outside the agent and then
+        keep the two in step.
+        """
         return parameters
 
     def after_tool_execute(self, tool_name: str, result: str, context: HookContext) -> str:
@@ -97,9 +124,17 @@ class CombinedCapability(AbstractCapability):
 
     def before_tool_execute(
         self, tool_name: str, parameters: dict[str, Any], context: HookContext
-    ) -> dict[str, Any]:
+    ) -> ToolDecision:
+        """The first refusal wins, and the capabilities after it are not asked.
+
+        Asking them would mean running the `before` half of a middleware whose
+        `after` half never comes, for a call that is not going to happen.
+        """
         for cap in self._capabilities:
-            parameters = cap.before_tool_execute(tool_name, parameters, context)
+            decision = cap.before_tool_execute(tool_name, parameters, context)
+            if isinstance(decision, Deny):
+                return decision
+            parameters = decision.parameters if isinstance(decision, Allow) else decision
         return parameters
 
     def after_tool_execute(self, tool_name: str, result: str, context: HookContext) -> str:

@@ -13,6 +13,7 @@ pub use registry::{
     PUBLICATION_GRACE_SECONDS, Registry, RegistryConfig, SourceAuthority, SourceEvidence,
 };
 pub use result::*;
+pub use store::EvidenceCipher;
 
 pub use context::{
     Aggregation, EvaluationContext, JudgeConfiguration, MetricDefinition, MetricDirection,

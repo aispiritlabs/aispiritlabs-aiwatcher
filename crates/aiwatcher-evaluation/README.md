@@ -63,7 +63,7 @@ Retrying the original publication creates its intent; do not remove those prefix
 using an age-only script. Adapter staging files (`.tmp`) are outside the object
 collection protocol.
 
-The server accepts one operator-approved short-answer or annotation bundle. It compares the
+The server accepts one operator-approved short-answer, annotation or governed-conversation bundle. It compares the
 manifest pins, verifies all local files and rechecks them on each read. It never
 fetches producer URLs. `external` uses the original synthetic fixture;
 `curation` additionally resolves the exact dataset version through
@@ -205,9 +205,9 @@ there is no independent Annotations expiry or per-project ACL. Images are checke
 in their owner's store, not copied into Evaluation shards; vector expectations
 are retained as evidence.
 
-Conversations and judges still require owner adapters and remain refused. The current bundle and Evaluation artifacts
+Judges still require an owner adapter and remain refused. The original synthetic and annotation Evaluation artifacts
 are plaintext: do not use sensitive or conversation-derived content here.
-Native Conversations requires its own encryption, erasure and role handling.
+Governed Conversations uses the separate path below.
 
 | Environment | Default |
 | --- | --- |
@@ -246,3 +246,83 @@ Legacy list/suite/automatic-baseline queries exclude registry-owned IDs, while
 the new durable list remains available after projection loss. This avoids using
 old telemetry to reintroduce revoked evidence. Durable comparison and the panel's
 full result browser follow in B3; explicit durable baselines are refused for now.
+
+
+## Governed Conversations
+
+Enable the existing archive (`AIWATCHER_CONVERSATION_ARCHIVE` and persistent
+`AIWATCHER_CONVERSATION_KEYS`) and configure the approved Evaluation source
+directory. Both API and adapter use the same archive. A default-disabled archive
+cannot publish governed evidence. Publishing and reading Conversation evidence
+requires **Admin**, the archive's content-reader role; ingest/Editor credentials
+cannot read expectations indirectly by publishing an evaluation. Other sources
+keep their existing Viewer/Editor policy. Auth mode `none` retains its established
+meaning: the instance deliberately disables role enforcement.
+
+Create a native export with `format: "prompt_response"`,
+`required_scope: "evaluate"`, and `require_human_review: true`. Every included
+user and assistant turn must have explicit evaluation consent and current
+approval. The owner revalidates the request/version, ordered shard digests, all
+rows, both turns' actual content and present policy. It does not rely on the
+export index or fetch producer URLs. `train` consent never implies `evaluate`.
+The current slice covers the **entire export**, at most 1,000 rows, with the
+operator-declared split `test`. Chat/SFT/DPO and arbitrary subcohorts are refused.
+A test label does not prove independence from training.
+
+Both dataset references must use `kind: "conversations"` and the exact native
+export name/version. The approved case manifest contains **digests, not words**:
+
+```json
+{
+  "schema_version": 1,
+  "cases": [{
+    "case_id": "<assistant turn_id from row.eligibility[1]>",
+    "input_digest": "<sha256 of compact UTF-8 JSON {question: row.prompt}>",
+    "expected_digest": "<sha256 of compact UTF-8 JSON {answer: row.response}>"
+  }]
+}
+```
+
+Keep the native row order. Compute the one-key object hashes using compact JSON,
+unescaped UTF-8 (Python `json.dumps(value, ensure_ascii=False, separators=(",", ":"))`)
+and SHA-256. Pin the actual bytes of this case file in `context.case_manifest`.
+Use the ordinary `evaluation-v1` question/answer schemas and exact string scorer;
+pin every other code/config/suite/scorer/workflow artifact as for the other
+adapters. The report's `case_id` is the assistant turn ID, and `actual` is an
+`{"answer": "..."}` object. Expectations are resolved from the archive.
+No plaintext export file is needed in the approved directory. The reproducible
+synthetic setup is documented in `contracts/fixtures/evaluation-conversations-v1`.
+Do not route these words through telemetry, a Curation copy or the existing seed.
+
+`EvidenceCipher` is an Evaluation port, implemented in Server by the existing
+Conversations Keyring (AES-256-GCM/HKDF and authenticated object path). All
+Conversation metadata, actual responses and expected responses are sealed before
+storage. Only minimal receipts/intents/tombstones stay plaintext; use opaque IDs
+and metadata, never conversation text in identifiers. The random seal does not
+change logical hashes, versions or retry identity. A downgrade of metadata or
+shards to plaintext is corrupt evidence. Existing non-conversation results keep
+their format. Evaluation's 100 MiB result budget counts logical plaintext; stored
+envelopes additionally incur base64 overhead.
+
+`with_content_access` is a trusted in-process capability on a per-request clone,
+not a user-supplied subject convention. It defaults to false; API supplies the
+Admin check, and the retention worker explicitly has access. Viewer/Editor
+receive minimal `forbidden` states without manifests, metrics or cases through
+list/detail/pages; the legacy detail returns 403 without telemetry fallback.
+An erased/expired result returns the established unavailable states (legacy 410).
+
+The first receipt caps retention. Every read/publication also checks the minimum
+of source deadlines and the archive's **current** TTL cap. Revocation hides data
+without renewing its lifetime; source deletion or expiry creates a tombstone
+before removing encrypted copies. The 60-second worker enforces this without an
+Admin reading the result. A missing key returns `forbidden`; bad ciphertext,
+wrong path or mismatched source bytes return `corrupt_artifact`, never false
+source deletion. When no key can open metadata, source linkage cannot be checked;
+the receipt deadline still allows erasure. Keep old keys during rotation until
+retained results expire; restored keys do not undo a tombstone.
+
+Owner verification permits 100 MiB summed source reads (ciphertext and plaintext),
+4 MiB manifests and 2 MiB turn heads/content envelopes. The object-store port
+returns whole objects before the bound is checked. Export consent and review
+are recorded assertions checked by the existing owner, not independently verified
+legal permission or proof that the producer executed its declared model.

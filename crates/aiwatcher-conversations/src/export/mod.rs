@@ -803,7 +803,10 @@ async fn gather(
 /// Erasure first, because a turn whose content is gone is not "unreviewed"
 /// however true that also is, and a reason that sends somebody to the review
 /// queue for a row nothing can produce wastes their afternoon.
-fn excluded_for(turn: &ArchivedTurn, request: &ExportRequest) -> Option<(ExclusionReason, String)> {
+pub(crate) fn excluded_for(
+    turn: &ArchivedTurn,
+    request: &ExportRequest,
+) -> Option<(ExclusionReason, String)> {
     if turn.state == TurnState::Erased {
         return Some((ExclusionReason::Erased, String::new()));
     }
