@@ -15,7 +15,7 @@ is left for you.
 
 ## What gets installed, and what does not
 
-The chart can install eight things. Five of them are things a cluster may
+The chart can install ten things. Seven of them are things a cluster may
 already run:
 
 | Component | Default | Detected? |
@@ -28,6 +28,8 @@ already run:
 | VictoriaMetrics | installed | yes → `mode: external` |
 | RustFS (the prompt registry's store) | installed | detected, but **never** reused automatically |
 | PostgreSQL (the workflow store) | **off** | detected, but **never** reused automatically |
+| Chat model (llama.cpp, OpenAI-compatible) | **off** | detected, but **never** reused automatically |
+| Web search (SearXNG, JSON API) | **off** | detected, but **never** reused automatically |
 | Perses | never installed | yes → the datasource ConfigMap is emitted |
 
 Detection is `deploy/scripts/detect-stack.py`. Run it on its own to see what a
@@ -46,6 +48,8 @@ cluster: vps
   perses           present   http://planner-perses.planner.svc.cluster.local:8080
   postgres         present   http://planner-postgres.planner.svc.cluster.local:5432
   objectstore      present   http://planner-rustfs-svc.planner.svc.cluster.local:9000
+  chatmodel        absent    no pod runs a matching image
+  websearch        absent    no pod runs a matching image
 ```
 
 ### Why this is not just a set of flags
@@ -144,6 +148,57 @@ aiwatcher only" — which would cut off whoever else was writing to that bucket.
 take three away.
 
 ---
+
+### The two components nothing in this chart calls
+
+`chatModel` and `webSearch` are the odd pair here. Everything else the chart
+installs is something aiwatcher itself reads — the server writes prompts to the
+object store, the Collector forwards to VictoriaTraces. These two are installed
+*for the workloads in the namespace*: a llama.cpp server speaking the OpenAI
+chat API, and a SearXNG with `formats: [json]` on, which are the two endpoints
+`aiwatcher_agentic.openai_chat` and `aiwatcher_agentic.web_search` are written
+against.
+
+Both are off by default and both take the same three modes. Two consequences
+follow from nothing in this release calling them:
+
+**The endpoint goes in somebody else's values file.** `helm install` prints it;
+the release that runs the agent is where it is read. There is no wiring for the
+chart to do.
+
+**The NetworkPolicy has to be told who may call them.** The server's ingest rule
+admits any pod in the namespace, because publishing a span is cheap and every
+workload does it. These two are not: one occupies the only decoder for the
+length of a run, and the other makes requests to the public internet for
+whoever reaches it. So `allowIngressFrom` is named per component, and the chart
+**refuses to render** `mode: install` with `networkPolicy.enabled` and an empty
+list — a model server no pod may reach is a mistake that otherwise shows up as
+a timeout three layers away.
+
+```yaml
+chatModel:
+  mode: install
+  name: animica-agent-2b            # the alias a caller sends as `model`
+  model:
+    uri: https://…/model.gguf
+    sha256: <64 hex characters>      # required: the fetch is decided by this
+    fetchImage: { repository: ghcr.io/you/your-python-image, tag: v1 }
+  allowIngressFrom:
+    - podSelector: { matchLabels: { app.kubernetes.io/name: your-app } }
+```
+
+`fetchImage` has no default on purpose. The initContainer runs `python -m
+aiwatcher_sdk.serving.fetch`, which streams the weights, verifies the digest on
+the way past and skips the download when the volume already holds them — and
+the three images this chart publishes are a Rust server, a panel and a query
+service. An application that already builds a Python image with the SDK in it
+names that one; the alternative was a fourth image to publish and version for
+a job that is twelve lines of somebody else's container.
+
+The same fetcher runs on a laptop. `aiwatcher_sdk.serving.llama_cpp` installs a
+pinned `llama-server` build beside the weights, so a developer reproduces what
+the node runs without Docker — release tag, asset name and SHA256 declared, no
+call to the GitHub API, and nothing unpacked before its digest matches.
 
 ## Managed execution
 

@@ -756,6 +756,133 @@ promptStore:
     limits:
       memory: 512Mi
 
+# ── Chat model ───────────────────────────────────────────────────────────────
+#
+# llama.cpp's server, which speaks the OpenAI chat API, serving one GGUF pinned
+# by digest. The caller at the other end is `aiwatcher_agentic.openai_chat` with
+# the `LLAMA_CPP` profile; this block is where that profile runs.
+#
+# Nothing in this chart calls it. It is installed *for* the workloads in the
+# namespace — which is why `allowIngressFrom` below is not optional, and why
+# this is the one component here whose endpoint another release's values file
+# has to name.
+#
+# It lives in this chart rather than in each application's because nothing about
+# it is any application's. planner ran it under its own name until 2026-09-12,
+# and what those 169 lines said was "llama.cpp on CPU, one slot, weights on a
+# PVC" — a sentence about a platform, in the chart of something that sells
+# fences.
+#
+# Three modes like every backend (ADR_0009), and `external` earns its place for
+# the same reason it does there: a second llama.cpp beside an existing one comes
+# up green, answers correctly, and leaves both with half the RAM and a node that
+# swaps.
+chatModel:
+  # install | external | none
+  mode: none
+
+  external:
+    # OpenAI-compatible base URL with `/v1`, exactly what a caller passes to
+    # OpenAIChatModel. Required when mode is "external".
+    endpoint: ""
+
+  # The alias the server answers to, and what a caller sends as `model`. Named
+  # rather than derived: llama.cpp defaults the alias to the file path, so a
+  # caller would otherwise have to know where this chart mounted the weights.
+  name: ""
+
+  image:
+    repository: ghcr.io/ggml-org/llama.cpp
+    # Moves. Pin it by digest in the environment, the way planner's overlay did.
+    tag: server
+    pullPolicy: IfNotPresent
+
+  model:
+    # Where the weights come from and what they must hash to. Both are required
+    # when mode is "install", because the fetch is decided by the digest and not
+    # by the URL: that is what lets a restart skip a 1.3 GB download, and what
+    # stops a truncated one from being served as a model.
+    uri: ""
+    sha256: ""
+
+    # The initContainer runs `python -m aiwatcher_sdk.serving.fetch`, so this
+    # has to be an image carrying the Python SDK. There is deliberately no
+    # default: this chart publishes a Rust server, a panel and a PHP query
+    # service, and none of them is that image. An application that already
+    # builds one — planner's import image has the SDK in it — names it here,
+    # rather than this chart growing a fourth image to publish.
+    fetchImage:
+      repository: ""
+      tag: ""
+      pullPolicy: IfNotPresent
+
+    persistence:
+      # The weights outlive the release: the claim carries
+      # `helm.sh/resource-policy: keep`, so an uninstall does not throw away a
+      # download that took an hour on a home connection.
+      size: 4Gi
+      storageClassName: ""
+
+  # Tokens held per slot, and threads used to decode. One slot, always:
+  # `--parallel` above 1 divides this context between the slots rather than
+  # multiplying it, and an agent that loses half its window mid-run reports a
+  # truncation, not a queue.
+  contextSize: 8192
+  threads: 2
+
+  resources:
+    requests: { cpu: 500m, memory: 2Gi }
+    limits: { cpu: "2", memory: 3Gi }
+
+  # Which pods may call it, in the NetworkPolicy's own `from` shape. The chart
+  # refuses to install with a policy on and this list empty. Defaulting to the
+  # whole namespace — which is what the server's own ingest rule does — would be
+  # the wrong answer here: publishing a span is cheap and every workload does
+  # it; holding the only decoder for four hundred seconds is neither.
+  allowIngressFrom: []
+
+# ── Web search ───────────────────────────────────────────────────────────────
+#
+# SearXNG with its JSON API on, which is the contract `SearxngSearch` reads in
+# `aiwatcher_agentic.web_search`: GET /search?q=…&format=json, with `url`,
+# `title` and `content` on every result.
+#
+# A private, stateless tool endpoint: no accounts, no public interface, and a
+# session key generated at start rather than kept in a Secret — nothing is
+# stored across a restart that a key would have to unlock.
+webSearch:
+  # install | external | none
+  mode: none
+
+  external:
+    # The full search URL, path included. Required when mode is "external".
+    endpoint: ""
+
+  image:
+    repository: ghcr.io/searxng/searxng
+    # Moves, like llama.cpp's above. Pin it by digest in the environment.
+    tag: latest
+    pullPolicy: IfNotPresent
+
+  # What the rendered settings.yml says.
+  settings:
+    instanceName: aiwatcher
+    # An allow-list, not a deny-list. SearXNG's defaults include engines that
+    # answer with something other than web pages, and an agent reading a snippet
+    # has no way to tell one from the other.
+    engines: [duckduckgo, brave, bing]
+    language: en-US
+    requestTimeoutSeconds: 8.0
+    maxRequestTimeoutSeconds: 15.0
+
+  resources:
+    requests: { cpu: 100m, memory: 192Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+
+  # Same rule as the model's, for a sharper reason: this pod makes requests to
+  # the public internet on behalf of whoever reaches it.
+  allowIngressFrom: []
+
 # ── Perses wiring ────────────────────────────────────────────────────────────
 #
 # This chart never installs Perses — every cluster that wants one already has

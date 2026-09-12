@@ -1,0 +1,141 @@
+{{- /*
+SearXNG with the JSON API on: the contract `aiwatcher_agentic.web_search` reads.
+
+Included unconditionally for the same reason as the model's — the mode is
+checked on every render, not only on the ones that install something.
+*/ -}}
+{{- $endpoint := include "aiwatcher.webSearchEndpoint" . -}}
+{{- if eq .Values.webSearch.mode "install" }}
+{{- $fullname := include "aiwatcher.fullname" . -}}
+{{- $ws := .Values.webSearch -}}
+{{- if and .Values.networkPolicy.enabled (not $ws.allowIngressFrom) }}
+{{- fail "webSearch.mode is \"install\" and networkPolicy.enabled is true, but webSearch.allowIngressFrom is empty, so no pod could reach the search engine. Name the workloads that call it — the same `from` entries a NetworkPolicy takes. This one is not defaulted to the namespace either: it makes requests to the public internet for whoever reaches it, which is a thing to grant rather than to inherit." }}
+{{- end }}
+{{- $settings := $ws.settings }}
+{{- $config := printf `use_default_settings:
+  engines:
+    keep_only: [%s]
+general:
+  instance_name: %s
+search:
+  formats: [json]
+  default_lang: %s
+server:
+  bind_address: 0.0.0.0
+  port: 8080
+  # SEARXNG_SECRET is generated at start; see the command below.
+  limiter: false
+  public_instance: false
+  image_proxy: false
+outgoing:
+  request_timeout: %v
+  max_request_timeout: %v
+` (join ", " $settings.engines) $settings.instanceName $settings.language $settings.requestTimeoutSeconds $settings.maxRequestTimeoutSeconds }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $fullname }}-web-search
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web-search
+data:
+  settings.yml: |
+    {{- $config | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-web-search
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web-search
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels:
+      {{- include "aiwatcher.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: web-search
+  template:
+    metadata:
+      annotations:
+        # Rolls the pod when the engine list or a timeout changes. SearXNG reads
+        # settings.yml once, at start.
+        checksum/settings: {{ $config | sha256sum }}
+      labels:
+        {{- include "aiwatcher.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/part-of: aiwatcher
+        app.kubernetes.io/component: web-search
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      {{- include "aiwatcher.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: searxng
+          image: "{{ $ws.image.repository }}:{{ $ws.image.tag }}"
+          imagePullPolicy: {{ $ws.image.pullPolicy }}
+          # The session key is generated per start rather than kept in a Secret.
+          # Nothing here survives a restart that a stable key would unlock: no
+          # accounts, no saved preferences, no public interface.
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              export SEARXNG_SECRET="$(head -c 32 /dev/urandom | base64)"
+              exec /usr/local/searxng/entrypoint.sh
+          env:
+            - { name: GRANIAN_WORKERS, value: "1" }
+            - { name: GRANIAN_BLOCKING_THREADS, value: "2" }
+            - { name: GRANIAN_HOST, value: "0.0.0.0" }
+            # The image chowns its data directory at start unless told not to,
+            # which a read-only root filesystem refuses.
+            - { name: FORCE_OWNERSHIP, value: "false" }
+          ports:
+            - { name: http, containerPort: 8080, protocol: TCP }
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+            failureThreshold: 24
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 30
+          resources:
+            {{- toYaml $ws.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: config, mountPath: /etc/searxng, readOnly: true }
+            - { name: cache, mountPath: /var/cache/searxng }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: config
+          configMap: { name: {{ $fullname }}-web-search }
+        - name: cache
+          emptyDir: { sizeLimit: 64Mi }
+        - name: tmp
+          emptyDir: { sizeLimit: 64Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-web-search
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web-search
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "aiwatcher.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: web-search
+  ports:
+    - { name: http, port: 8080, targetPort: http, protocol: TCP }
+{{- end }}

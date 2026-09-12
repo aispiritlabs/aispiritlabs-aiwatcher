@@ -8,6 +8,8 @@ What this release owns and what it borrowed:
   VictoriaTraces   {{ .Values.victoriatraces.mode }}{{ if eq .Values.victoriatraces.mode "external" }} → {{ .Values.victoriatraces.external.url }}{{ end }}
   VictoriaMetrics  {{ .Values.victoriametrics.mode }}{{ if eq .Values.victoriametrics.mode "external" }} → {{ .Values.victoriametrics.external.url }}{{ end }}
   sign-in          {{ .Values.auth.mode }}{{ if eq .Values.auth.mode "oidc" }} → {{ .Values.auth.oidc.issuer }}{{ end }}
+  chat model       {{ .Values.chatModel.mode }}{{ if ne .Values.chatModel.mode "none" }} → {{ include "aiwatcher.chatModelEndpoint" . }}{{ end }}
+  web search       {{ .Values.webSearch.mode }}{{ if ne .Values.webSearch.mode "none" }} → {{ include "aiwatcher.webSearchEndpoint" . }}{{ end }}
 
 Reach the panel:
 {{- if .Values.ingress.enabled }}
@@ -20,6 +22,21 @@ Reach the panel:
 {{- else }}
 
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "aiwatcher.fullname" . }}-server 8080:8080
+{{- end }}
+
+{{- if or (ne .Values.chatModel.mode "none") (ne .Values.webSearch.mode "none") }}
+
+Point an agent at the two services it calls. Nothing in this release reads these
+— they go in the values of whatever runs the agent:
+
+{{- if ne .Values.chatModel.mode "none" }}
+
+  model   {{ include "aiwatcher.chatModelEndpoint" . }}{{ if eq .Values.chatModel.mode "install" }}   (as `{{ .Values.chatModel.name }}`){{ end }}
+{{- end }}
+{{- if ne .Values.webSearch.mode "none" }}
+
+  search  {{ include "aiwatcher.webSearchEndpoint" . }}
+{{- end }}
 {{- end }}
 
 Point an SDK at it, from inside the cluster:

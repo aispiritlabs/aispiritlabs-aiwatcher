@@ -1,0 +1,180 @@
+{{- /*
+llama.cpp's server, on CPU, serving one GGUF pinned by digest.
+
+The endpoint helper is included here rather than only in NOTES.txt so the mode
+is validated on every render, including the renders that install nothing.
+*/ -}}
+{{- $endpoint := include "aiwatcher.chatModelEndpoint" . -}}
+{{- if eq .Values.chatModel.mode "install" }}
+{{- $fullname := include "aiwatcher.fullname" . -}}
+{{- $cm := .Values.chatModel -}}
+{{- if not $cm.name }}
+{{- fail "chatModel.mode is \"install\" but chatModel.name is empty. That name is the alias the server answers to and the string a caller sends as `model`; llama.cpp would otherwise default it to the path this chart mounted the weights at, which no caller can be expected to know." }}
+{{- end }}
+{{- if not $cm.model.uri }}
+{{- fail "chatModel.mode is \"install\" but chatModel.model.uri is empty. There is nothing to serve." }}
+{{- end }}
+{{- if not $cm.model.sha256 }}
+{{- fail "chatModel.mode is \"install\" but chatModel.model.sha256 is empty. The fetch is decided by the digest rather than by the URL: that is what lets a restart skip the download instead of pulling gigabytes again, and what stops a truncated file from being served as a model. Pin the SHA256 of the exact file, or serve it from somewhere you can." }}
+{{- end }}
+{{- if not $cm.model.fetchImage.repository }}
+{{- fail "chatModel.mode is \"install\" but chatModel.model.fetchImage.repository is empty. The initContainer runs `python -m aiwatcher_sdk.serving.fetch`, so it needs an image carrying the Python SDK, and this chart publishes none — its three images are a Rust server, a panel and a query service. Name an image you already build that has aiwatcher-sdk installed." }}
+{{- end }}
+{{- if and .Values.networkPolicy.enabled (not $cm.allowIngressFrom) }}
+{{- fail "chatModel.mode is \"install\" and networkPolicy.enabled is true, but chatModel.allowIngressFrom is empty, so no pod could reach the model. Name the workloads that call it — the same `from` entries a NetworkPolicy takes. The chart will not fall back to the whole namespace here the way the server's ingest rule does: a span is cheap and universal, and the single decoder is neither." }}
+{{- end }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $fullname }}-chat-model
+  annotations:
+    # The weights outlive the release. An uninstall that threw them away would
+    # cost an hour of somebody's bandwidth to undo.
+    helm.sh/resource-policy: keep
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+    app.kubernetes.io/component: chat-model
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ $cm.model.persistence.size }}
+  {{- include "aiwatcher.storageClass" $cm.model.persistence | nindent 2 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullname }}-chat-model
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+    app.kubernetes.io/component: chat-model
+spec:
+  replicas: 1
+  # One writer for one ReadWriteOnce claim, and one process for one set of
+  # weights held in memory.
+  strategy: { type: Recreate }
+  selector:
+    matchLabels:
+      {{- include "aiwatcher.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: chat-model
+  template:
+    metadata:
+      labels:
+        {{- include "aiwatcher.selectorLabels" . | nindent 8 }}
+        # Not in the selector — the selector is immutable, and this is here so
+        # deploy/scripts/detect-stack.py can tell aiwatcher's own pods from the
+        # ones it is looking for.
+        app.kubernetes.io/part-of: aiwatcher
+        app.kubernetes.io/component: chat-model
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      {{- include "aiwatcher.imagePullSecrets" . | nindent 6 }}
+      initContainers:
+        - name: fetch-model
+          image: "{{ $cm.model.fetchImage.repository }}:{{ $cm.model.fetchImage.tag }}"
+          imagePullPolicy: {{ $cm.model.fetchImage.pullPolicy }}
+          # Streaming, atomic, and skipped when the volume already holds the
+          # pinned file, so a restart does not pull the weights a second time.
+          # The algorithm is the SDK's and has tests; a copy of it pasted into
+          # this YAML would have neither.
+          command: ["python", "-m", "aiwatcher_sdk.serving.fetch"]
+          args:
+            - --uri
+            - {{ $cm.model.uri | quote }}
+            - --digest
+            - {{ $cm.model.sha256 | quote }}
+            - --into
+            - /models/model.gguf
+          resources:
+            requests: { cpu: 100m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 128Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: model, mountPath: /models }
+            - { name: tmp, mountPath: /tmp }
+      containers:
+        - name: llama-server
+          image: "{{ $cm.image.repository }}:{{ $cm.image.tag }}"
+          imagePullPolicy: {{ $cm.image.pullPolicy }}
+          args:
+            - --model
+            - /models/model.gguf
+            - --alias
+            - {{ $cm.name | quote }}
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8080"
+            - --ctx-size
+            - {{ $cm.contextSize | quote }}
+            - --threads
+            - {{ $cm.threads | quote }}
+            # One slot. Raising this divides the context window between slots
+            # rather than multiplying it, and half a window arrives at the
+            # caller as a truncated answer, not as a queue.
+            - --parallel
+            - "1"
+            # This component is the CPU deployment. A GPU one is a different
+            # image and a different resource request, so it is a change to make
+            # deliberately rather than a value to flip.
+            - --n-gpu-layers
+            - "0"
+            - --no-op-offload
+            - --jinja
+            - --reasoning
+            - "off"
+            - --no-webui
+          ports:
+            - { name: http, containerPort: 8080, protocol: TCP }
+          # Loading gigabytes of weights on a CPU node takes minutes, and the
+          # startup probe is what keeps that from reading as a crash loop.
+          startupProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            {{- toYaml $cm.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: model, mountPath: /models, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: model
+          persistentVolumeClaim: { claimName: {{ $fullname }}-chat-model }
+        - name: tmp
+          emptyDir: { sizeLimit: 64Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-chat-model
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+    app.kubernetes.io/component: chat-model
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "aiwatcher.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: chat-model
+  ports:
+    - { name: http, port: 8080, targetPort: http, protocol: TCP }
+{{- end }}

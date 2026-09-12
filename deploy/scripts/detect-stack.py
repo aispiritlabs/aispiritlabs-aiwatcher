@@ -124,6 +124,24 @@ TARGETS: tuple[Target, ...] = (
         not_images=("minio-operator", "operator:", "minio/mc", "minio/console"),
         note="an S3 endpoint is reported, never reused: its credentials are not discoverable",
     ),
+    # The two services an agent calls rather than aiwatcher. Reported for the
+    # object store's reason and refused for a sharper one: an OpenAI-compatible
+    # endpoint says nothing about which model it serves or what alias a caller
+    # has to send, and a SearXNG says nothing about whether `formats: [json]` is
+    # on. Both answer HTTP either way, so a wrong guess is a 404 at the first
+    # tool call rather than a failure here.
+    Target(
+        key="chatmodel",
+        images=("llama.cpp", "llama-server"),
+        port=8080,
+        note="a model server is reported, never reused: the alias a caller must send is not discoverable",
+    ),
+    Target(
+        key="websearch",
+        images=("searxng",),
+        port=8080,
+        note="a search engine is reported, never reused: whether its JSON API is on is not discoverable",
+    ),
 )
 
 
@@ -607,6 +625,31 @@ def as_helm_values(findings: dict[str, Finding], domain: Domain, reachable: bool
             lines.append("# Nothing fences it, so leave networkPolicy.allowEgressToExternalWorkflowStore")
             lines.append("# off: a rule attached to unfenced pods would cut off its existing clients —")
             lines.append("# and a database is the backend most likely to have some.")
+
+    # The half of ADR_0009 that matters most for these two: on a four-core node
+    # a second llama.cpp is not a duplicate that splits a metric, it is two
+    # processes holding two copies of the weights and a node that swaps.
+    model = findings["chatmodel"]
+    if model.found:
+        lines.append(f"# A model server is running at {model.url}, and this release installs")
+        lines.append('# none — chatModel.mode stays at its chart default of "none". To point agents')
+        lines.append("# at that one rather than starting a second:")
+        lines.append("#")
+        lines.append("#   chatModel:")
+        lines.append("#     mode: external")
+        lines.append(f"#     external: {{ endpoint: {model.url}/v1 }}")
+        lines.append("#")
+        lines.append("# The alias it answers to is not discoverable from here; ask the endpoint")
+        lines.append("# (GET /v1/models) rather than assuming the one this chart would have used.")
+    search = findings["websearch"]
+    if search.found:
+        lines.append(f"# A search engine is running at {search.url}, and this release installs")
+        lines.append("# none. Point agents at it only if its JSON API is on — `formats: [json]` in")
+        lines.append("# its settings.yml, which a pod list does not show:")
+        lines.append("#")
+        lines.append("#   webSearch:")
+        lines.append("#     mode: external")
+        lines.append(f"#     external: {{ endpoint: {search.url}/search }}")
 
     return "\n".join(lines) + "\n"
 

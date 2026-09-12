@@ -211,6 +211,45 @@ spec:
       ports:
         - { protocol: TCP, port: 5432 }
 {{- end }}
+{{- /*
+The two agent-facing services, and the one place in this file where the rule is
+written from a value rather than from what the chart knows.
+
+It has to be: their callers are not this release's pods. Nothing here posts a
+completion or runs a search — the workloads that do are whatever the namespace
+runs, the same unknown the server's ingest rule faces at the top of this file.
+The server answers it with "any pod in this namespace"; these two answer it with
+"the ones named", and the component templates refuse to install without a name.
+
+The asymmetry is deliberate. Publishing a span is cheap, universal and idempotent;
+occupying the only decoder, or making requests to the internet from inside the
+namespace, is neither.
+*/}}
+{{- range $svc := list
+  (dict "name" "chat-model" "cfg" $.Values.chatModel)
+  (dict "name" "web-search" "cfg" $.Values.webSearch)
+}}
+{{- if eq $svc.cfg.mode "install" }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-{{ $svc.name }}-ingress
+  labels:
+    {{- include "aiwatcher.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "aiwatcher.selectorLabels" $ | nindent 6 }}
+      app.kubernetes.io/component: {{ $svc.name }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        {{- toYaml $svc.cfg.allowIngressFrom | nindent 8 }}
+      ports:
+        - { protocol: TCP, port: 8080 }
+{{- end }}
+{{- end }}
 {{- end }}
 
 {{- /*

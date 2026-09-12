@@ -104,6 +104,8 @@ Environment:
   AIWATCHER_QUERY=true                      install the optional query engine
   AIWATCHER_QUERY_ENGINE                    which one: flow (default), datafusion, duckdb
   AIWATCHER_QUERY_IMAGE                     override that engine's image
+  AIWATCHER_MODEL_FETCH_IMAGE               image carrying the Python SDK, used by
+  AIWATCHER_MODEL_FETCH_IMAGE_TAG           chatModel's initContainer to fetch weights
   AIWATCHER_IMAGE_PULL_SECRET               pull Secret for private images
   IMAGE_PULL_SECRET                         planner-compatible fallback
   AIWATCHER_DOMAIN                          publish an ingress on this host;
@@ -285,6 +287,16 @@ fi
 # defaults to off and this is the one switch.
 if [[ ${AIWATCHER_QUERY:-} == "true" ]]; then
   sets+=(--set "query.enabled=true")
+fi
+# The chat model's weights are fetched by `python -m aiwatcher_sdk.serving.fetch`,
+# which needs an image with the SDK in it. This chart publishes none — a caller
+# that already builds one (planner's import image) names it here rather than
+# waiting for a fourth image to exist.
+if [[ -n ${AIWATCHER_MODEL_FETCH_IMAGE:-} ]]; then
+  sets+=(--set "chatModel.model.fetchImage.repository=$AIWATCHER_MODEL_FETCH_IMAGE")
+fi
+if [[ -n ${AIWATCHER_MODEL_FETCH_IMAGE_TAG:-} ]]; then
+  sets+=(--set "chatModel.model.fetchImage.tag=$AIWATCHER_MODEL_FETCH_IMAGE_TAG")
 fi
 image_pull_secret="${AIWATCHER_IMAGE_PULL_SECRET:-${IMAGE_PULL_SECRET:-}}"
 if [[ -n $image_pull_secret ]]; then

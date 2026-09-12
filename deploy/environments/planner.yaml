@@ -148,6 +148,79 @@ postgresql:
     name: planner-secrets
     passwordKey: AIWATCHER_POSTGRES_PASSWORD
 
+# ── What the agents call ─────────────────────────────────────────────────────
+#
+# planner's Offer Scout runs a local model and a search engine, and until
+# 2026-09-12 planner's own chart carried both: 169 lines of llama.cpp and 125 of
+# SearXNG, in the chart of an application that sells fences. Neither template
+# mentioned an offer. They are here now, and planner's overlay names the two
+# endpoints this file publishes.
+#
+# The node is four cores and eight gigabytes, shared with everything else in
+# this namespace, which is what the limits below are sized against.
+chatModel:
+  mode: install
+  # The alias Scout sends as `model`; planner's `scout.model` has to match it.
+  name: animica-agent-2b
+  image:
+    # Pinned by manifest digest for amd64 and arm64, as planner's overlay had it.
+    repository: ghcr.io/ggml-org/llama.cpp
+    tag: server@sha256:ce6b9639bea61c87e641d0f5622229c23400fb84dc4d91075240e8983d7c3b47
+  model:
+    # Animica-Agent-2B, one revision, one file. This pair is the only place the
+    # weights are named — the local `just scout-model` in planner reads the same
+    # two strings out of here rather than keeping a second copy.
+    uri: https://huggingface.co/animicaorg/Animica-Agent-2B/resolve/9c1a0cf87697953788c7e55fe45318b4589e49a1/animica-agent-2b-q4_k_m.gguf
+    sha256: 793ba92b1dd5dc2f00d935cd8001bc5ef911857b9282bfa018cd03b08ec44e9c
+    # planner's import image, which installs aiwatcher-sdk. install.sh sets both
+    # halves from AIWATCHER_MODEL_FETCH_IMAGE and its tag, the same way it sets
+    # the server's; the placeholder here is what a render without them shows.
+    fetchImage:
+      repository: ghcr.io/example/planner-import
+      tag: latest
+    persistence:
+      # The file is about 1.27 GB. The claim is kept across an uninstall.
+      size: 4Gi
+  contextSize: 8192
+  threads: 2
+  resources:
+    requests: { cpu: 500m, memory: 2Gi }
+    limits: { cpu: "2", memory: 3Gi }
+  allowIngressFrom:
+    # planner's import API and worker, and only those. The scout ticker is given
+    # the endpoint in its environment but never calls it: it enqueues a cycle
+    # and the worker runs it.
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: planner
+          app.kubernetes.io/instance: planner
+        matchExpressions:
+          - key: app.kubernetes.io/component
+            operator: In
+            values: [import-api, import-worker]
+
+webSearch:
+  mode: install
+  image:
+    repository: ghcr.io/searxng/searxng
+    tag: latest@sha256:e084201aa606fafce2151c8dc2844c9c3309025e90fbe7163b4f5e5183e474f0
+  settings:
+    instanceName: Planner Scout
+    # Scout looks for Polish product pages and prices.
+    language: pl-PL
+  resources:
+    requests: { cpu: 100m, memory: 192Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+  allowIngressFrom:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: planner
+          app.kubernetes.io/instance: planner
+        matchExpressions:
+          - key: app.kubernetes.io/component
+            operator: In
+            values: [import-api, import-worker]
+
 # ── Signing in ───────────────────────────────────────────────────────────────
 #
 # Left off, and this is the one setting in this file that is deliberately not

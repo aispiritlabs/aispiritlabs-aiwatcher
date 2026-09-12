@@ -506,3 +506,41 @@ a value from `--set` is a float64 and one of a million renders as `1e+06`.
 {{ add $step 60 }}
 {{- end -}}
 {{- end -}}
+
+{{/*
+Where an agent in this namespace finds a model, and where it finds a search
+engine.
+
+Unlike every other endpoint above, nothing in this chart consumes these: they
+are read by NOTES.txt, and by whoever copies the line it prints into the values
+of the release that actually calls them. That is the whole reason `external`
+exists here — it is how the chart says "one is already running, do not start a
+second" without claiming it started this one.
+*/}}
+{{- define "aiwatcher.chatModelEndpoint" -}}
+{{- $cm := .Values.chatModel -}}
+{{- if eq $cm.mode "install" -}}
+http://{{ include "aiwatcher.fullname" . }}-chat-model:8080/v1
+{{- else if eq $cm.mode "external" -}}
+{{- if not $cm.external.endpoint -}}
+{{- fail "chatModel.mode is \"external\" but chatModel.external.endpoint is empty. Set the OpenAI-compatible base URL (with /v1), or set mode to \"install\" or \"none\"." -}}
+{{- end -}}
+{{- $cm.external.endpoint | trimSuffix "/" -}}
+{{- else if ne $cm.mode "none" -}}
+{{- fail (printf "chatModel.mode is %q; it must be one of install, external, none." $cm.mode) -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "aiwatcher.webSearchEndpoint" -}}
+{{- $ws := .Values.webSearch -}}
+{{- if eq $ws.mode "install" -}}
+http://{{ include "aiwatcher.fullname" . }}-web-search:8080/search
+{{- else if eq $ws.mode "external" -}}
+{{- if not $ws.external.endpoint -}}
+{{- fail "webSearch.mode is \"external\" but webSearch.external.endpoint is empty. Set the full search URL, path included, or set mode to \"install\" or \"none\"." -}}
+{{- end -}}
+{{- $ws.external.endpoint | trimSuffix "/" -}}
+{{- else if ne $ws.mode "none" -}}
+{{- fail (printf "webSearch.mode is %q; it must be one of install, external, none." $ws.mode) -}}
+{{- end -}}
+{{- end -}}
