@@ -91,9 +91,19 @@ spec:
             - {{ $cm.model.sha256 | quote }}
             - --into
             - /models/model.gguf
+          # The fetch itself is bounded — a megabyte of chunk, hashed and written,
+          # never the file in memory. What is not bounded is the page cache the
+          # kernel keeps for those writes, and it is charged to this container's
+          # cgroup: at 128Mi the weights arrived faster than the node's disk
+          # retired them and the kernel killed the fetch twenty seconds in. The
+          # same 128Mi is ample where the destination is fast, which is why this
+          # only ever failed on a cluster. Raising the *limit* costs nothing to
+          # schedule — a pod is placed on the sum of its app containers' requests
+          # or the largest init request, whichever is greater, and 64Mi is far
+          # below the server's 2Gi.
           resources:
             requests: { cpu: 100m, memory: 64Mi }
-            limits: { cpu: 500m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 512Mi }
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
