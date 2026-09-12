@@ -151,14 +151,14 @@ Crates, in dependency order. A crate may only depend on ones above it.
 | `aiwatcher-annotations` | Vector image annotations for **any** vision domain — it ships no vocabulary, and the project's label schema carries the domain (ADR_0020). Sliced by noun: `images/` (one picture — head, revisions, review, bytes, bulk import), `imports/` (the staged batch and the queued job that reads it, ADR_0022), `project`, `export`, `license` (what may be done with the data), `schema`, `shapes`, `sources` (a catalogue an instance loads), `integrations/` — `hubs` (Kaggle and Hugging Face) and `fetch`, the bounded downloader every outbound byte goes through. `registry` is the facade and the only public door; `store` is the private key layout every slice reads through. |
 | `aiwatcher-conversations` | Governed conversation training data: the `turn` contract, consent and retention, the **encrypted** archive, the human review gate, and the resumable export job that freezes a corpus. The one authored store that is off by default, whose content is sealed, and whose deletions delete. Sliced by noun: `turn`, `policy`, `redaction`, `review`, `archive/` (the store and its retention clock, `crypt` beneath it), `export/` (the job, `format` beneath it). `registry` is the facade and the only public door; `store` is the private key layout. |
 | `aiwatcher-training` | Training runs and the model versions they produce. The one registry here whose contents never came from the event log: a run is a record that grows in place, and a promotion is refused without a held-out score. `package` is what a serving runtime is handed — the runtime, the entry point, the shapes, and every artifact with its digest (ADR_0023). |
-| `aiwatcher-evaluation` | Pinned variant/context contracts and durable evidence (ADR_0030). `Evaluation::prepare` validates declarations; `Registry` owns immutable publication, paging, erasure and **approvals** — the pair an operator admitted, which is what lets one instance hold a baseline and a candidate at once — through a `SourceAuthority` adapter. Legacy reports remain in Projector with an explicit API read bridge. |
+| `aiwatcher-evaluation` | Pinned variant/context contracts and durable evidence (ADR_0030). `Evaluation::prepare` validates declarations; `Registry` owns immutable publication, paging, erasure and **approvals** — the pair an operator admitted, which is what lets one instance hold a baseline and a candidate at once — through a `SourceAuthority` adapter. It also measures: a **scorecard** declares named scorers and derives each metric's direction, and a **scoring run** folds a staged recording against one and publishes the result — admitted against the scorecard and the compiled vocabulary rather than a bundle's files. Legacy reports remain in Projector with an explicit API read bridge. |
 | `aiwatcher-datasets` | Curation recipes, the dataset versions they produce, and the **block pipelines** of ADR_0024 — a chain of source, transform, notebook, approval and view, refused as a whole with every problem at once. Nothing here executes anything; the panel drives the chain because the engines are three different systems. |
 | `aiwatcher-execution` | Owned execution (ADR_0025, ADR_0026): the compiled `ExecutionPlan` and its `plan_id`, the states, the attempts, the pure `decide`/`evolve`, the cache key, the compiler from ADR_0024's blocks, the atomic command handler, the claim table, the `ContextSnapshot` that reopens a block, the fact encoder and the outbox publisher. Three ports: `WorkflowStore` (`memory | file | postgres | duckdb`, the last two behind features so `sqlx` and DuckDB's C++ amalgamation are out of every build that does not ask for them — the shape `laser` has in `aiwatcher-bus`), `ActivityExecutor` (what a reactor does with a claimed attempt) and `ArtifactCatalog` (metadata, lineage, the cache index). Executes nothing itself, and holds no second copy of `aiwatcher-jobs`' rules — it calls them. |
 | `aiwatcher-runner` | The workflow rerun dispatcher: one HTTP POST to one configured endpoint, behind `core::ports::WorkflowRunner`. |
 | `aiwatcher-auth` | Single sign-on: OIDC discovery, a JWKS cache, the authorization-code flow with PKCE, HMAC-signed session cookies, authentik's forward-auth headers, and the group-to-role mapping. Knows nothing about axum. |
 | `aiwatcher-projector` | The pipeline, live hub, read model, dimension, span, evaluation and workflow-graph folds, dedup, retry, dead letters |
 | `aiwatcher-api` | axum router: REST, SSE, WebSocket, OpenAPI. `worker` is the one module whose caller is not a browser: the reactor's own loop with an HTTP seam where the work happens (Phase 10). |
-| `aiwatcher-server` | Config, wiring, graceful shutdown, and the **reactors** — the one place an executor's client lives, because an executor holds a socket and a credential. `execution/` is mostly the work role: `artifacts` (the object store's sixth prefix, and the receipt a lookup reads), `query` (the client every query engine shares) with `flow`, `datafusion` and `duckdb` beside it (one executor per engine, and only the deployed one registered) and `publish` (the dataset version, which runs in `serve` because it executes nothing) — and `editor`, which runs in `serve` because opening a block on a step's rows is a person waiting on a request rather than an attempt somebody claimed. The only crate that knows every implementation exists. |
+| `aiwatcher-server` | Config, wiring, graceful shutdown, and the **reactors** — the one place an executor's client lives, because an executor holds a socket and a credential. `execution/` is mostly the work role: `artifacts` (the object store's sixth prefix, and the receipt a lookup reads), `query` (the client every query engine shares) with `flow`, `datafusion` and `duckdb` beside it (one executor per engine, and only the deployed one registered) `publish` (the dataset version, which runs in `serve` because it executes nothing) and `scoring` (a scoring run's one step, in `serve` for the same reason) — and `editor`, which runs in `serve` because opening a block on a step's rows is a person waiting on a request rather than an attempt somebody claimed. The only crate that knows every implementation exists. |
 
 Everything else: `apps/panel` (React), `sdk/python`, `sdk/agentic`, `sdk/typescript`,
 `contracts/` (the OpenAPI document and the envelope JSON Schema), `deploy/`
@@ -1832,6 +1832,36 @@ the review.
   assessment carries no expected answer either, because the cohort owns those:
   a better answer somebody proposes is a change to a dataset, made through
   review rather than recorded as one.
+- **Never let a scorecard carry code, or its author decide which way is
+  better.** A scorer is a name from the vocabulary this deployment implements
+  and the parameters that name takes; the enum is the implementation, so the
+  vocabulary cannot grow without an arm that knows what a new word means. Each
+  scorer's metric definition — unit, direction, aggregation — is derived, never
+  authored beside it: `forbidden` counts a phrase, and a card that declared it
+  higher-is-better would invert every comparison drawn from it. When an existing
+  scorer's answer changes for some input, `SCORING_VERSION` moves, because
+  `context.scorer` names the code that read the card and `context.suite` names
+  the card — two owners, two references.
+- **Never publish a case that answered some of the metrics.** A scored case
+  carries every declared metric or it is a failure with a reason and none of
+  them: a case in three averages out of four gives each metric its own
+  denominator and nothing in the numbers says so. A selected case nobody
+  answered is unscored rather than zero, and a case a recording answered twice
+  is not scored at all — one publication is one repetition.
+- **Never start a scoring run for a pair nobody admitted.** A declaration is the
+  run's identity, so a run started without an approval could only fail at
+  publication, and that failed run is what every later start of the same
+  declaration lands on. `POST /evaluation-runs` declares and answers with the
+  derived manifest and its `approval_id`; `/start` refuses with a 409 naming it
+  until the gate — asked through `Registry::admits`, never by looking for a
+  record — says yes.
+- **Never admit evidence this deployment measured by asking for files it has
+  none of.** A producer's suite and scorer are files re-read from the operator's
+  bundle; a scoring run's suite is a scorecard in this registry and its scorer
+  is the binary. The registry admits that kind against those owners — compiled
+  version, published card, metrics exactly as the card derives them — and the
+  adapter skips `suite.json` and `scorer.py` for it alone. Resolved through a
+  test double, the other rule refused every scoring run and no test noticed.
 - **An evaluation report is not redacted.** The Collector strips
   `gen_ai.prompt` and `gen_ai.completion` from spans, and an evaluation forms no
   span, so nothing strips `data.report`. A producer that puts model output there

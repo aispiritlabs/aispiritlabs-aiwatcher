@@ -701,3 +701,59 @@ and a better answer somebody proposes is a change to a dataset made through
 review; and it carries no consent, because a turn's review answers whether the
 content may be used at all while an assessment answers whether the answer was
 good.
+
+## Amendment (2026-09-12): evidence this deployment measured
+
+Every result so far was measured somewhere else and published here. A scoring
+run is the first that aiwatcher measures itself: it reads a recording somebody
+staged, scores it against a scorecard somebody declared, and publishes the
+result through the same gate. It calls no model of the application under test,
+so a new scorecard over an unchanged recording differs from the last result by
+the measurement alone. Building it settled five things.
+
+**What is measured is a resource, and which way is better is not its author's
+to say.** The suite list the API already served is an aggregate of reports — a
+name learnt after the fact, with nothing in it that could run again. A scorecard
+is the declaration: named scorers from a vocabulary this deployment implements,
+the metric each one writes, and where in an answer and an expectation each one
+reads. It holds no code, so publishing one is not a way to run something on the
+host. Each scorer's metric definition — unit, direction, aggregation — is
+derived from the scorer rather than authored beside it, because a forbidden
+phrase declared higher-is-better would invert every comparison drawn from it.
+
+**The suite and the scorer are two references because they are two owners.**
+`context.suite` names the scorecard at its content version; `context.scorer`
+names `aiwatcher.scoring` at the version of the vocabulary that read it, which
+is bumped whenever an existing scorer's answer changes for some input. A
+rewritten scorer measures an unchanged declaration differently, and one
+reference could not say so.
+
+**Admission reads each pin from its owner, and for this evidence two owners are
+not a bundle.** A producer's suite and scorer are files it ran, and the adapter
+admits them by re-reading `suite.json` and `scorer.py` from the operator's
+bundle. Evidence this deployment measured has neither file: its suite is a
+scorecard in this registry and its scorer is the binary, whose version is not a
+digest. So the registry admits that kind — recognised by the scorer's name —
+against those owners before it asks the adapter anything: the version must be
+the one compiled in, the scorecard must exist at the version named, and the
+context's metrics must be exactly the ones that card derives. The adapter then
+skips the two files that do not exist and checks every other pin as before.
+The judge rule above is untouched; a scorecard names no judge.
+
+**A declaration is the run's identity, and it is admitted before it starts.** A
+scoring run is declared — variant, cohort, card version and the recording's
+digest — and the declaration is addressed by its content, so starting it is an
+ordinary managed execution whose plan carries that address and whose id is
+derived from it. Repeating a start reaches the run already going; measuring the
+same variant again is another repetition, and so another declaration. Starting
+is refused while nothing admits the pair, naming the approval that would: a run
+started without one could only fail at publication, and that failed run would
+be what every later start of the same declaration landed on.
+
+**Absence stays absence.** A selected case nobody answered is unscored, not
+zero. A case any scorer could not read carries none of the metrics, because the
+contract already requires a scored case to carry all of them, and a case in
+three averages out of four would give each metric its own denominator. And a
+case the recording answered twice is not scored: one publication is one
+repetition, and two answers to one case are two measurements it cannot tell
+apart.

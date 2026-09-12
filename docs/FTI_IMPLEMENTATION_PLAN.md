@@ -1,6 +1,6 @@
 # FTI — rekomendacja zakresu i plan rozwoju
 
-Data: 2026-09-11. Status: A1–A4 i AR1 zaimplementowane; B1 zweryfikowane, trwały wycinek B2 i atomowe orphan GC nowych publikacji dostarczone; dodano weryfikowane adaptery Curation, promptów, modeli, Annotations i Conversations; B2/AR2 pozostają otwarte: B2e–B2h, w tym judge (sekcje 9–16). Wyniki odbioru A, ograniczenia i incydent seeda w sekcji 8. Przegląd planu z 2026-09-12 jest w sekcji 17; jego wnioski są wniesione do sekcji 2–7 — etap B ma punkty 8–11 i rozstrzygnięcia wizualne, tabela paczek B2e–B2i, a B3 zależy od B2e, B2f i B2i. Sekcja 19 zmniejsza ograniczenia z sekcji 18; sekcja 20 dostarcza stronę dowodową B3 — porównanie dwóch trwałych wyników; sekcja 21 dostarcza AR3 — wspólny przypadek użycia kompilacji i startu, wyjęty z modułu HTTP; sekcja 22 domyka jego ograniczenie — rejestr definicji rozróżnia niedostępny magazyn, uszkodzony rekord i odmówioną definicję; sekcja 23 dostarcza ostatnią część B3 — różnicę na poziomie przypadków; sekcja 24 dostarcza B4 — typowane oceny, rubryki i rewizje.
+Data: 2026-09-11. Status: A1–A4 i AR1 zaimplementowane; B1 zweryfikowane, trwały wycinek B2 i atomowe orphan GC nowych publikacji dostarczone; dodano weryfikowane adaptery Curation, promptów, modeli, Annotations i Conversations; B2/AR2 pozostają otwarte: B2e–B2h, w tym judge (sekcje 9–16). Wyniki odbioru A, ograniczenia i incydent seeda w sekcji 8. Przegląd planu z 2026-09-12 jest w sekcji 17; jego wnioski są wniesione do sekcji 2–7 — etap B ma punkty 8–11 i rozstrzygnięcia wizualne, tabela paczek B2e–B2i, a B3 zależy od B2e, B2f i B2i. Sekcja 19 zmniejsza ograniczenia z sekcji 18; sekcja 20 dostarcza stronę dowodową B3 — porównanie dwóch trwałych wyników; sekcja 21 dostarcza AR3 — wspólny przypadek użycia kompilacji i startu, wyjęty z modułu HTTP; sekcja 22 domyka jego ograniczenie — rejestr definicji rozróżnia niedostępny magazyn, uszkodzony rekord i odmówioną definicję; sekcja 23 dostarcza ostatnią część B3 — różnicę na poziomie przypadków; sekcja 24 dostarcza B4 — typowane oceny, rubryki i rewizje; sekcja 25 dostarcza pierwszą paczkę C0 — scoring zapisanych odpowiedzi jako zarządzany run publikujący własny dowód.
 
 Podstawa: [katalog funkcji](FTI_FEATURE_CATALOG.md), [analiza braków](FTI_FEATURE_GAPS.md), [plan UX](FTI_UX_WANDB_PLAN.md), [przegląd dokumentacji Langfuse i MLflow](FTI_LANGFUSE_MLFLOW_ANALYSIS.md), [ocena architektury](FTI_ARCHITECTURE_REVIEW.md) oraz aktualny kod. Ocena dotyczy obecności i kontraktów implementacji; nie potwierdza działania konkretnego wdrożenia. Katalog opisuje zakres docelowy, więc liczba jego pozycji nie jest miarą ukończenia produktu.
 
@@ -131,7 +131,7 @@ Pełne treści i artefakty pozostają poza logiem telemetrycznym zgodnie z istni
 
 **Rezultat:** użytkownik wybiera dane i warianty, uruchamia ocenę, śledzi pracę i dostaje porównanie z dowodami.
 
-**Pierwsza paczka C0:** zbudować tryb `score_existing` na przypiętych odpowiedziach/trace, wykorzystując istniejący workflow. Źródłem treści jest dostępny dla wykonawcy artefakt lub uprawniony snapshot archiwum; trace z redakcją może nie wystarczać. Nowa wersja scorera daje nowy wynik z referencją do niezmienionych odpowiedzi. Nie wywołuje modelu aplikacji, ale może wywołać i obciążyć kosztem judge'a. Kolejne kroki rozwijają drugi tryb, `generate_and_score`.
+**Pierwsza paczka C0** (dostarczona w sekcji 25)**:** zbudować tryb `score_existing` na przypiętych odpowiedziach/trace, wykorzystując istniejący workflow. Źródłem treści jest dostępny dla wykonawcy artefakt lub uprawniony snapshot archiwum; trace z redakcją może nie wystarczać. Nowa wersja scorera daje nowy wynik z referencją do niezmienionych odpowiedzi. Nie wywołuje modelu aplikacji, ale może wywołać i obciążyć kosztem judge'a. Kolejne kroki rozwijają drugi tryb, `generate_and_score`.
 
 1. Jeden formularz: wersja datasetu i split, baseline/kandydat, wersja zestawu scorerów, limit przypadków, timeout i współbieżność. Start tworzy istniejące managed execution. Lista suite z API jest agregatem raportów, więc definicja uruchamialnego zestawu oceny jest nowym, wersjonowanym zasobem.
 2. Jeden szablon workflow z istniejącym workerem i jednym kontraktem wyniku. Zacząć od scorera deterministycznego; dodać jeden potrzebny adapter, np. do używanej integracji DeepEval. Judge musi mieć przypiętą konfigurację i przykłady kalibracyjne; szeroka biblioteka nie jest warunkiem wydania.
@@ -1417,4 +1417,152 @@ zatrzymane i usunięte:
   kontrakt i trasę, nie mają ekranu.
 - **Rozbieżność judge'a z ocenami ludzi** nie jest jeszcze liczona; to trzeci
   warunek judge'a z ADR 0030 i należy do jego adaptera.
-- **C0** — bez zmian, karta AW-6; jego zależność od B4 jest spełniona.
+- **C0** — bez zmian, karta AW-6; jego zależność od B4 jest spełniona. (Pierwsza paczka C0 dostarczona w sekcji 25.)
+
+## 25. C0 — scoring zapisanych odpowiedzi
+
+Pierwsza paczka etapu C: aiwatcher po raz pierwszy sam mierzy, zamiast
+przyjmować wynik zmierzony gdzie indziej. Run czyta nagranie odpowiedzi,
+ocenia je zadeklarowaną kartą i publikuje dowód przez tę samą bramkę co
+producent — bez kroku na hoście serwera i bez wywołania modelu aplikacji.
+Commity `5130b41`, `607e77f`, `50ea920`, `9771e88`, `e0e59c1`, `1a0af94`;
+reguły w [ADR 0030](ADR/ADR_0030_EVALUATION_EVIDENCE.md), poprawka „evidence this
+deployment measured".
+
+### 25.1 Co się mierzy, jest zasobem
+
+Lista suite z API jest agregatem raportów: nazwą, którą producent przysłał, bez
+niczego, co pozwoliłoby ją uruchomić ponownie. **Scorecard** jest brakującą
+połową — nazwane scorery ze słownika, który ta instalacja implementuje, metryka
+każdego z nich i miejsce w odpowiedzi i oczekiwaniu, które czyta (JSON Pointer).
+Wersjonowana treścią jak rubryka i prompt; run wskazuje konkretną wersję.
+
+Dwie reguły. **Scorer się nazywa, nie pisze** — karta nie zawiera kodu, więc
+jej publikacja nie jest sposobem na uruchomienie czegoś na hoście, a enum jest
+implementacją. **Definicja metryki jest wyprowadzana**, nie autorowana obok —
+`forbidden` liczy frazę, więc mniej jest lepiej, i autor, który zadeklarowałby
+odwrotnie, odwróciłby każde porównanie. Pięć scorerów na start (`exact_match`,
+`contains`, `regex_match`, `numeric_within`, `forbidden`), każdy odpowiada
+„tak/nie" o jednym przypadku, więc agregatem jest `rate` z jednostką `ratio`.
+Wzorzec, który się nie kompiluje, jest odmawiany przy publikacji karty, a nie w
+każdym przypadku runu. Trasa to `/api/v1/evaluation-scorecards`, bo
+`/evaluation-suites` jest zajęte przez agregat raportów.
+
+### 25.2 Suite i scorer to dwie referencje, bo mają dwóch właścicieli
+
+`context.suite` wskazuje scorecard w wersji treści, a `context.scorer` —
+`aiwatcher.scoring` w wersji słownika, który ją przeczytał (`SCORING_VERSION`,
+podbijane, gdy odpowiedź istniejącego scorera zmienia się dla jakiegoś
+wejścia). Przepisany scorer mierzy niezmienioną deklarację inaczej i jedna
+referencja nie mogłaby tego powiedzieć. Obie wymagane przez kontrakt pola
+dostały w ten sposób znaczenie zamiast dwóch napisów od producenta.
+
+### 25.3 Nieobecność zostaje nieobecnością
+
+- przypadek z kohorty, na który nikt nie odpowiedział, jest `unscored`, nie
+  zerem — niedostępne nagranie widać jako lukę w dowodzie, nie jako złą ocenę;
+- przypadek, którego choć jeden scorer nie przeczytał, nie niesie **żadnej**
+  metryki i jest błędem z powodem — kontrakt wymagał już kompletu metryk, a
+  przypadek w trzech średnich z czterech dawałby każdej metryce inny mianownik;
+- przypadek, na który nagranie odpowiada dwa razy, nie jest oceniany — jedna
+  publikacja to jedno powtórzenie;
+- odpowiedź spoza kohorty nie należy do tego pomiaru i nie jest błędem.
+
+### 25.4 Deklaracja jest tożsamością runu i jest zatwierdzana przed startem
+
+Cztery kroki, każdy idempotentny, bo adresowany tym, czym jest:
+
+1. `PUT /api/v1/evaluation-recordings/{name}` — nagranie pod skrótem bajtów,
+   które przyszły; nigdy pod skrótem od klienta.
+2. `POST /api/v1/evaluation-runs` — deklaracja (wariant, kohorta z
+   `case_count`, wersja karty, skrót nagrania), adresowana treścią. Odpowiedź
+   niesie manifest, który wynik opublikuje, `approval_id` i `admitted` — bo
+   metryki manifestu są wyprowadzone z karty, a operator przepisujący je ręcznie
+   do zatwierdzenia byłby drugą odpowiedzią na pytanie, co run mierzy.
+3. Operator stage'uje bundle i zatwierdza parę — istniejącymi trasami.
+4. `POST /api/v1/evaluation-runs/{id}/start` — zwykłe managed execution z
+   jednym krokiem `score_evaluation`, którego plan niesie adres deklaracji, a
+   id runu jest z niego wyprowadzone. Powtórzenie trafia w run, który już idzie.
+   **Start jest odmawiany (409, z nazwą zatwierdzenia), dopóki nic nie
+   dopuszcza pary** — run bez zatwierdzenia mógłby tylko upaść przy publikacji,
+   a ten upadły run byłby tym, w co trafia każdy późniejszy start tej samej
+   deklaracji. Ta pułapka była w pierwszej wersji, gdzie deklaracja i start były
+   jednym żądaniem.
+
+Krok działa w roli `serve` obok publikacji datasetu, z tego samego powodu: nic
+nie wykonuje. Nie jest cache'owany — produktem jest publikacja gdzie indziej, a
+cache pamiętałby wiersze. `aiwatcher-execution` nadal nie zna Evaluation
+(granica crate'ów), więc `ScoreEvaluationSpec` ma jedno pole — skrót deklaracji
+— a wykonawca rozwiązuje go przez rejestr. Trzeci `DefinitionKind`,
+`evaluation`, odmawia kompilacji z nazwy; to też blokuje zapis harmonogramu dla
+czegoś, co nazwy nie ma.
+
+### 25.5 Dopuszczenie czyta każdą przypiętą rzecz u właściciela
+
+Znalezione dopiero przy czytaniu adaptera przed odbiorem na żywo: `LocalSource`
+dopuszcza suite i scorer producenta, czytając z bundle'a `suite.json` i
+`scorer.py` o skrótach równych wersjom. Dowód zmierzony tutaj nie ma żadnego z
+tych plików, a wersja silnika to `"1"`, nie skrót — więc **żaden run scoringu
+nie przeszedłby zatwierdzenia**. Testy przechodziły, bo rozwiązują źródło przez
+dublery.
+
+Rejestr dopuszcza teraz ten rodzaj dowodu — rozpoznawany po nazwie scorera —
+wobec właścicieli, zanim zapyta adapter: wersja scorera musi być wkompilowana,
+scorecard musi istnieć w podanej wersji, a metryki kontekstu muszą być dokładnie
+tymi, które karta wyprowadza (inaczej zmieniony po drodze kierunek zostałby
+dopuszczony jako kierunek karty). Adapter pomija dwa nieistniejące pliki i
+sprawdza wszystko inne jak dotąd. Test na prawdziwym adapterze: bundle bez
+`suite.json` i `scorer.py` dopuszcza run, a oczekiwania to te z fixture.
+
+Sprawdzenie liczby przypadków zostało w rejestrze. Wykonawca miał jego kopię;
+trzecia odpowiedź na pytanie, czym jest dopuszczona kohorta, mogłaby się z
+pozostałymi rozjechać.
+
+### 25.6 Odbiór
+
+`rtk just check` 23/23 po `5130b41`, `50ea920` i `e0e59c1` (pozostałe commity
+kodu: testy zmienionych crate'ów i clippy); `just sdk-check` 482.
+Testy: 7 jednostkowych przy karcie, 14 w rejestrze
+(`evaluation/scorecards.rs`, `evaluation/scoring.rs`, w tym prawdziwy
+`LocalSource`), 3 przy wykonawcy, 2 HTTP (karta; deklaracja → odmowa →
+zatwierdzenie → start → powtórzenie), 3 w SDK.
+
+Odbiór na żywo na `127.0.0.1:19085`, własny katalog danych, po odbiorze
+zatrzymane i usunięte:
+
+- karta z `exact` (trim, bez wielkości liter, `/text` wobec `/answer`) i
+  `forbidden` („pesel") — deklaracja zwraca `exact/higher/rate`,
+  `leaked/lower/rate`, suite `answer-quality`, scorer `aiwatcher.scoring@1`;
+- start przed zatwierdzeniem → 409 z pełnym `approval_id`;
+- bundle z sześcioma plikami fixture i manifestem z deklaracji, **bez**
+  `suite.json` i `scorer.py` → zatwierdzony;
+- start → 202, jeden krok `score_evaluation`; run `completed` po 0,5 s;
+  w zakładce Workflows `succeeded`, 141 ms, 1 węzeł;
+- dowód: `status partial`, 3 wybrane / 2 ocenione / 1 błąd / 0 bez oceny,
+  `exact 0.5`, `leaked 0.5`; `origin` niesie `execution_id` i `step_id: score`;
+  `capital-pl` („ warsaw " wobec „Warsaw") 1.0 z zachowanym `trace_id`;
+  `two-plus-two` („four, my PESEL…" wobec „4") `exact 0`, `leaked 1`; `empty`
+  (odpowiedź bez `/text`) — błąd „exact: the answer has nothing at /text", bez
+  metryk; odpowiedź spoza kohorty pominięta;
+- drugi start → ten sam run, `created: false`; deklaracja → `admitted: true`.
+
+Panel nie wymagał zmian: szczegół trwałego dowodu już rysuje
+`ExecutionReference`, gdy manifest ma `origin.execution_id`.
+
+### 25.7 Co zostaje
+
+- **Formularz startu** (plan, etap C p. 1) należy do C1 — tak jak w tabeli
+  paczek. Dziś run uruchamia API albo SDK; panel pokazuje run i jego dowód.
+- **Nagranie z archiwum rozmów** — drugie źródło treści z punktu C0. Wymaga
+  bramki dostępu do treści (`with_content_access`), której wykonawca dziś nie
+  dostaje, więc dowód ze źródła Conversations zostanie odmówiony.
+- **Scorer ilościowy** (np. błąd bezwzględny) potrzebuje jednostki, którą zna
+  tylko autor; specyfikacja dostanie to pole, gdy pierwszy się pojawi.
+- **Judge jako scorer** — karta nie nazywa judge'a; jego adapter i reguła
+  dopuszczenia z ADR 0030 pozostają osobną pozycją B3.
+- **Publikacja producenta bez zatwierdzenia** nadal odpowiada 403
+  `evidence_forbidden`, a start runu — 409 `pair_not_admitted` z adresem
+  zatwierdzenia. Ujednolicenie zmieniłoby status widoczny dla producentów, więc
+  nie zostało zrobione po cichu.
+- **Anulowanie** działa ogólnym mechanizmem managed execution; krok jest krótki
+  (fold ograniczony limitem przypadków), więc nie ma punktu przerwania w środku.

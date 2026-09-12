@@ -63,9 +63,18 @@ building towards, and it is four things rather than one:
   22): the registry a *registered workflow* is read from answers with three
   errors instead of one string, so a corrupt stored definition is no longer
   indistinguishable from a store having a bad moment.
-- **C0 — running an evaluation rather than recording one.** `score_existing`
-  first, and it is what makes the approval resource earn its keep: a managed run
-  publishes evidence with no step on the server's host.
+- **C0 — running an evaluation rather than recording one.** Its first package
+  is **done** (plan section 25): `score_existing`. A scorecard declares what is
+  measured and derives which way each metric is better; a recording is staged
+  under the digest of its bytes; a declaration names both with the variant and
+  the cohort, answers with the manifest and the approval that admits it, and
+  starting it is a managed run whose one step folds the answers and publishes
+  the evidence — with no step on the server's host and no model called. The
+  admission rule gained a second kind: evidence measured here is admitted
+  against the scorecard and the compiled scorer, because it has no suite or
+  scorer file for a bundle to hold. What is left of C0's line in the plan is
+  the start form, which the package table gives to C1, and the conversation
+  archive as a second source of answers.
 
 Both follow-ups that sat inside the first are done (plan section 19): the
 catalogue has an index and a published order, so its page costs 103 requests
@@ -107,3 +116,11 @@ The comparison itself followed in section 20.
   keeps a nightly judge from writing a revision a night forever. The panel
   judges a case where its answer is and colours nothing: which end of a scale
   is better is the rubric's declaration to make
+- 2026-09-12 — C0's first package delivered (plan section 25): scoring saved
+  answers as a managed run that publishes its own evidence. Two findings shaped
+  it. A declaration is the run's identity, so declaring and starting had to
+  become two routes — started before an approval, a run could only fail, and the
+  failed run was what every later start landed on. And the source adapter
+  admitted a suite and a scorer only as bundle files, which evidence measured
+  here does not have: every scoring run would have been refused at approval,
+  and only reading the adapter before live acceptance showed it
