@@ -6,7 +6,9 @@ the shared history a fan-out needs when every agent worker holds its own
 SQLite. `payloads` is where the words go while aiwatcher holds only the
 reference. Handed an outbox, the store writes a hop down before it sends it,
 and `deliver` / `stream_sender` are what drains one. `standalone` registers
-one agent as a workflow of its own, with no graph around it.
+one agent as a workflow of its own, with no graph around it. `harness` is the
+other shape a sequence of agents comes in: a function calling its stages in
+order, declared and traced without a composition object to read.
 
 Neither imports the agent's packages. The tracer matches a protocol
 structurally; the event store is handed its message type through a codec, and
@@ -36,6 +38,7 @@ from .event_store import (
     stream_sender,
 )
 from .graph import GraphTraversal, as_topology, declare_graph
+from .harness import Harness, HarnessStep, HarnessTool, harness_steps
 from .payloads import (
     FilePayloadStore,
     MemoryPayloadStore,
@@ -57,6 +60,9 @@ __all__ = [
     "ConcurrencyConflictError",
     "FilePayloadStore",
     "GraphTraversal",
+    "Harness",
+    "HarnessStep",
+    "HarnessTool",
     "JoinTimers",
     "MemoryPayloadStore",
     "MessageCodec",
@@ -79,6 +85,7 @@ __all__ = [
     "deliver",
     "digest_of",
     "encode_payload",
+    "harness_steps",
     "stream_sender",
     "tee",
 ]

@@ -88,7 +88,12 @@ class GraphTraversal:
 
     @contextlib.contextmanager
     def node(
-        self, node_id: str, *, agent_id: str | None = None, kind: str = "agent"
+        self,
+        node_id: str,
+        *,
+        agent_id: str | None = None,
+        kind: str = "agent",
+        **payload: Any,
     ) -> Generator[NodeContext, None, None]:
         """One node running, and every span a tracer opens in it nested under it.
 
@@ -100,9 +105,16 @@ class GraphTraversal:
         a parent inferred from "what is still open" would depend on which of
         them drained first. Minted once and carried by every event of the node,
         so a redelivered envelope still lands on the span it opened.
+
+        `payload` rides along on the node's events — what this stage was given
+        to work on, counted rather than quoted. Metadata, never content: a
+        query a stage sent belongs in what the stage saved, not in the log of
+        the fact that it ran.
         """
         span_id = uuid.uuid4().hex[:16]
-        with self.flow.node(node_id, agent_id=agent_id, kind=kind, span_id=span_id) as node:
+        with self.flow.node(
+            node_id, agent_id=agent_id, kind=kind, span_id=span_id, **payload
+        ) as node:
             bound = current_attempt.set(node.correlation)
             try:
                 yield node
