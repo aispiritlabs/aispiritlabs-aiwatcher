@@ -17,6 +17,9 @@ mod approvals;
 #[path = "evaluation/assessments.rs"]
 mod assessments;
 
+#[path = "evaluation/scorecards.rs"]
+mod scorecards;
+
 #[path = "evaluation/cost.rs"]
 mod cost;
 

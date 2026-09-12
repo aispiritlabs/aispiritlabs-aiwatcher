@@ -1473,6 +1473,52 @@ impl Registry {
         crate::assessment::rubric_version(&self.store, name, &version).await
     }
 
+    /// Publish a scorecard. Idempotent by content: the same measurements
+    /// answer with the version that is already there, and the head moves to it
+    /// either way.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Invalid`] when a scorer, a metric name or a pointer
+    /// is unusable, and [`EvaluationError::Storage`] when the store cannot be
+    /// reached.
+    pub async fn publish_scorecard(
+        &self,
+        scorecard: &crate::Scorecard,
+        published_by: &str,
+        now: i64,
+    ) -> Result<crate::ScorecardVersion> {
+        crate::scorecard::publish(&self.store, scorecard, published_by, now).await
+    }
+
+    /// # Errors
+    ///
+    /// [`EvaluationError::Storage`] when the store cannot be reached.
+    pub async fn scorecards(&self) -> Result<Vec<crate::ScorecardHead>> {
+        crate::scorecard::all(&self.store).await
+    }
+
+    /// One scorecard, at the version asked for or at the head.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Storage`] when the store cannot be reached.
+    pub async fn scorecard(
+        &self,
+        name: &str,
+        version: Option<&str>,
+    ) -> Result<Option<crate::ScorecardVersion>> {
+        text(name, "scorecard")?;
+        let version = match version {
+            Some(version) => version.to_owned(),
+            None => match crate::scorecard::head(&self.store, name).await? {
+                Some(head) => head.version,
+                None => return Ok(None),
+            },
+        };
+        crate::scorecard::version(&self.store, name, &version).await
+    }
+
     /// Record one judgement. The caller is who filed it, always.
     ///
     /// # Errors

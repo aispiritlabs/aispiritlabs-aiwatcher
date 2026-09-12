@@ -109,6 +109,9 @@ pub(crate) const RETENTION: &str = "evaluations/retention.json";
 /// keys every pass walks past.
 pub(crate) const RUBRICS: &str = "evaluation-rubrics/";
 pub(crate) const ASSESSMENTS: &str = "evaluation-assessments/";
+/// A scorecard is authored too, and it is read at the start of every run
+/// rather than measured, so it keeps the same distance from the sweep.
+pub(crate) const SCORECARDS: &str = "evaluation-scorecards/";
 /// The name is hashed for the same reason an evaluation ID is: it is a
 /// producer's text, and a key is not the place to find out it held a slash.
 pub(crate) fn rubric_head(name: &str) -> String {
@@ -116,6 +119,15 @@ pub(crate) fn rubric_head(name: &str) -> String {
 }
 pub(crate) fn rubric_version(name: &str, version: &str) -> String {
     format!("{RUBRICS}{}/versions/{version}.json", hash(name.as_bytes()))
+}
+pub(crate) fn scorecard_head(name: &str) -> String {
+    format!("{SCORECARDS}{}/head.json", hash(name.as_bytes()))
+}
+pub(crate) fn scorecard_version(name: &str, version: &str) -> String {
+    format!(
+        "{SCORECARDS}{}/versions/{version}.json",
+        hash(name.as_bytes())
+    )
 }
 pub(crate) fn assessments(target_id: &str) -> String {
     format!("{ASSESSMENTS}{target_id}/")

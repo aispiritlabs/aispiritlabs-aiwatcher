@@ -111,6 +111,10 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "htt
 # the PKCE verifier and the nonce. Already in the graph under rustls, and the
 # one place in this workspace where "write it by hand" is the wrong answer.
 ring = "0.17.14"
+# A scorecard's pattern is data a person typed, matched against an answer
+# for every case of a run. This engine has no backtracking, so a pattern
+# somebody publishes cannot be a way to stall the run that reads it.
+regex = "1.13.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 # The PostgreSQL workflow store, optional and off by default — the `postgres`

@@ -6556,6 +6556,93 @@ export type Score = {
 };
 
 /**
+ * The form itself. Everything here is part of the version: two scorecards
+ * that measure different things under one name are two scorecards.
+ */
+export type Scorecard = {
+    description?: string;
+    name: string;
+    scorers: Array<ScorerSpec>;
+};
+
+/**
+ * Which version a caller that named no version gets. Derived from the
+ * versions, which are the truth — and moved by publishing, never edited.
+ */
+export type ScorecardHead = {
+    description?: string;
+    metrics: Array<MetricDefinition>;
+    name: string;
+    updated_at: number;
+    version: string;
+};
+
+export type ScorecardPage = {
+    scorecards: Array<ScorecardHead>;
+};
+
+/**
+ * One immutable version, and who put it there.
+ */
+export type ScorecardVersion = {
+    published_at: number;
+    published_by: string;
+    /**
+     * Nested rather than flattened: the card denies unknown fields, and a
+     * flattened struct that does reports every field beside it as one.
+     */
+    scorecard: Scorecard;
+    version: string;
+};
+
+/**
+ * The scorers this deployment implements, and what each one takes.
+ *
+ * The enum is the implementation: a name reaches a `match` arm and never a
+ * callable, so the vocabulary cannot grow without code that knows what the
+ * new word means.
+ */
+export type Scorer = {
+    ignore_case?: boolean;
+    kind: 'exact_match';
+    trim?: boolean;
+} | {
+    ignore_case?: boolean;
+    kind: 'contains';
+} | {
+    kind: 'regex_match';
+    pattern: string;
+} | {
+    kind: 'numeric_within';
+    tolerance: number;
+} | {
+    ignore_case?: boolean;
+    kind: 'forbidden';
+    text: string;
+};
+
+/**
+ * One measurement: a metric name, where to read each side, and the scorer.
+ */
+export type ScorerSpec = {
+    /**
+     * A JSON Pointer into the recorded answer. Empty reads the whole value,
+     * which is what a plain text answer wants.
+     */
+    answer_path?: string;
+    /**
+     * The same, into the case's expected answer.
+     */
+    expected_path?: string;
+    /**
+     * The metric this writes. Unique within the scorecard, because a case
+     * carries one number per name and the second writer would win silently.
+     */
+    metric: string;
+    scorer: Scorer;
+};
+
+/**
  * Which SDK produced an event.
  *
  * Serialised as a plain string with an unknown value passing through: an SDK
@@ -10193,6 +10280,74 @@ export type GetRubricResponses = {
 };
 
 export type GetRubricResponse = GetRubricResponses[keyof GetRubricResponses];
+
+export type ListScorecardsData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/v1/evaluation-scorecards';
+};
+
+export type ListScorecardsErrors = {
+    501: ErrorBody;
+};
+
+export type ListScorecardsError = ListScorecardsErrors[keyof ListScorecardsErrors];
+
+export type ListScorecardsResponses = {
+    200: ScorecardPage;
+};
+
+export type ListScorecardsResponse = ListScorecardsResponses[keyof ListScorecardsResponses];
+
+export type PublishScorecardData = {
+    body: Scorecard;
+    path?: never;
+    query?: never;
+    url: '/api/v1/evaluation-scorecards';
+};
+
+export type PublishScorecardErrors = {
+    400: ErrorBody;
+    403: ErrorBody;
+    501: ErrorBody;
+};
+
+export type PublishScorecardError = PublishScorecardErrors[keyof PublishScorecardErrors];
+
+export type PublishScorecardResponses = {
+    200: ScorecardVersion;
+};
+
+export type PublishScorecardResponse = PublishScorecardResponses[keyof PublishScorecardResponses];
+
+export type GetScorecardData = {
+    body?: never;
+    path: {
+        name: string;
+    };
+    query?: {
+        /**
+         * Absent means the current one. A run names a concrete version, so this
+         * is how a reader opens the card a result was actually measured under.
+         */
+        version?: string | null;
+    };
+    url: '/api/v1/evaluation-scorecards/{name}';
+};
+
+export type GetScorecardErrors = {
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type GetScorecardError = GetScorecardErrors[keyof GetScorecardErrors];
+
+export type GetScorecardResponses = {
+    200: ScorecardVersion;
+};
+
+export type GetScorecardResponse = GetScorecardResponses[keyof GetScorecardResponses];
 
 export type ListEvaluationSuitesData = {
     body?: never;

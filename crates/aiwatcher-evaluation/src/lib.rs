@@ -11,6 +11,7 @@ mod reference;
 mod registry;
 mod result;
 mod rubric;
+mod scorecard;
 mod store;
 
 pub use aiwatcher_core::Comparability;
@@ -38,6 +39,9 @@ pub use context::{
 pub use manifest::{EvaluationManifest, EvaluationOrigin, PreparedEvaluation, VariantManifest};
 pub use reference::{DatasetKind, DatasetReference, VersionReference};
 pub use rubric::{AssessmentValue, Rubric, RubricHead, RubricPage, RubricVersion, Scale};
+pub use scorecard::{
+    Score, Scorecard, ScorecardHead, ScorecardPage, ScorecardVersion, Scorer, ScorerSpec,
+};
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};

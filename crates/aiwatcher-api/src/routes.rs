@@ -28,6 +28,7 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::metrics::router())
         .merge(crate::evaluations::router())
         .merge(crate::assessments::router())
+        .merge(crate::scorecards::router())
         .merge(crate::live::router())
         .merge(crate::ingest::router())
         .merge(crate::health::router())

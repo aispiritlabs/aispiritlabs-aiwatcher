@@ -7476,6 +7476,7 @@ async fn judgements_without_an_evaluation_store_say_which_setting_is_missing() {
     for uri in [
         "/api/v1/evaluation-rubrics",
         "/api/v1/evaluation-assessments?kind=trace&trace_id=abc",
+        "/api/v1/evaluation-scorecards",
     ] {
         let (status, body) = fixture.get(uri).await;
         assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{body}");
@@ -7487,6 +7488,104 @@ async fn judgements_without_an_evaluation_store_say_which_setting_is_missing() {
             "{body}"
         );
     }
+}
+
+/// What a run would measure, declared rather than discovered.
+#[tokio::test]
+async fn a_scorecard_is_declared_by_an_editor_and_read_back_at_the_version_that_measured_with_it() {
+    let mut fixture = Fixture::behind_a_proxy(false).await;
+    fixture.state.evaluations = Some(Arc::new(
+        aiwatcher_evaluation::Registry::new(
+            Arc::new(MemoryObjectStore::new()),
+            Arc::new(EvaluationSource::default()),
+            Default::default(),
+        )
+        .unwrap(),
+    ));
+    let card = json!({
+        "name": "answer-quality",
+        "scorers": [
+            {"metric": "exact", "answer_path": "/text",
+             "scorer": {"kind": "exact_match", "trim": true}},
+            {"metric": "leaked",
+             "scorer": {"kind": "forbidden", "text": "ssn", "ignore_case": true}}
+        ]
+    });
+
+    // A reader may not declare what an evaluation measures.
+    let (status, _) = fixture
+        .post_as(
+            "/api/v1/evaluation-scorecards",
+            "bob",
+            "aiwatcher-viewers",
+            card.clone(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    let (status, published) = fixture
+        .post_as(
+            "/api/v1/evaluation-scorecards",
+            "ada",
+            "aiwatcher-editors",
+            card.clone(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{published}");
+    let version = published["version"].as_str().unwrap().to_owned();
+    assert_eq!(published["published_by"], "ada");
+
+    // A card carries no code, so what it will measure is readable from a list.
+    let (status, cards) = fixture
+        .get_as("/api/v1/evaluation-scorecards", "bob", "aiwatcher-viewers")
+        .await;
+    assert_eq!(status, StatusCode::OK, "{cards}");
+    let head = &cards["scorecards"][0];
+    assert_eq!(head["version"], version.as_str());
+    assert_eq!(head["metrics"][0]["direction"], "higher");
+    assert_eq!(
+        head["metrics"][1]["direction"], "lower",
+        "a forbidden phrase is counted, and which way is better is not the author's to say"
+    );
+
+    let (status, pinned) = fixture
+        .get_as(
+            &format!("/api/v1/evaluation-scorecards/answer-quality?version={version}"),
+            "bob",
+            "aiwatcher-viewers",
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{pinned}");
+    assert_eq!(pinned["scorecard"]["scorers"][0]["answer_path"], "/text");
+
+    let (status, missing) = fixture
+        .get_as(
+            "/api/v1/evaluation-scorecards/nobody-declared-this",
+            "bob",
+            "aiwatcher-viewers",
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{missing}");
+
+    // A pattern that cannot compile fails now rather than on every case.
+    let mut broken = card;
+    broken["scorers"][0]["scorer"] = json!({"kind": "regex_match", "pattern": "(unclosed"});
+    let (status, refusal) = fixture
+        .post_as(
+            "/api/v1/evaluation-scorecards",
+            "ada",
+            "aiwatcher-editors",
+            broken,
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refusal}");
+    assert!(
+        refusal["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("pattern"),
+        "{refusal}"
+    );
 }
 
 /// One variant of one pinned context, with each case's score spelled out.

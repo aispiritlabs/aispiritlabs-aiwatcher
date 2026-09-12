@@ -5281,6 +5281,161 @@
         }
       }
     },
+    "/api/v1/evaluation-scorecards": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Every scorecard this instance holds, at its current version.",
+        "description": "A head carries the metrics its version declares, so a form choosing what to\nrun says what each card would measure without opening it.",
+        "operationId": "list_scorecards",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScorecardPage"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Publish a scorecard. Idempotent by content: the same measurements answer\nwith the version that is already there, and the head moves to it either\nway.",
+        "description": "Nothing here is code. A scorer is a name this deployment implements and the\nparameters that name takes, so publishing a card is not a way to run\nsomething on the server's host.",
+        "operationId": "publish_scorecard",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Scorecard"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScorecardVersion"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/evaluation-scorecards/{name}": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "One scorecard, at the version asked for or at the head.",
+        "operationId": "get_scorecard",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "description": "Absent means the current one. A run names a concrete version, so this\nis how a reader opens the card a result was actually measured under.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScorecardVersion"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/evaluation-suites": {
       "get": {
         "tags": [
@@ -22578,6 +22733,233 @@
             "type": "string"
           }
         }
+      },
+      "Scorecard": {
+        "type": "object",
+        "description": "The form itself. Everything here is part of the version: two scorecards\nthat measure different things under one name are two scorecards.",
+        "required": [
+          "name",
+          "scorers"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "scorers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScorerSpec"
+            },
+            "maxItems": 32,
+            "minItems": 1
+          }
+        },
+        "additionalProperties": false
+      },
+      "ScorecardHead": {
+        "type": "object",
+        "description": "Which version a caller that named no version gets. Derived from the\nversions, which are the truth — and moved by publishing, never edited.",
+        "required": [
+          "name",
+          "version",
+          "metrics",
+          "updated_at"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "metrics": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MetricDefinition"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "ScorecardPage": {
+        "type": "object",
+        "required": [
+          "scorecards"
+        ],
+        "properties": {
+          "scorecards": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScorecardHead"
+            }
+          }
+        }
+      },
+      "ScorecardVersion": {
+        "type": "object",
+        "description": "One immutable version, and who put it there.",
+        "required": [
+          "version",
+          "scorecard",
+          "published_by",
+          "published_at"
+        ],
+        "properties": {
+          "published_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "published_by": {
+            "type": "string"
+          },
+          "scorecard": {
+            "$ref": "#/components/schemas/Scorecard",
+            "description": "Nested rather than flattened: the card denies unknown fields, and a\nflattened struct that does reports every field beside it as one."
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "Scorer": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "The answer is the expected one. Two strings are compared as text under\nthe options below; anything else is compared as JSON, so an object with\nits keys in another order still matches.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "ignore_case": {
+                "type": "boolean"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "exact_match"
+                ]
+              },
+              "trim": {
+                "type": "boolean"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The expected answer appears somewhere in the answer.",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "ignore_case": {
+                "type": "boolean"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "contains"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The answer has the shape this pattern describes. The pattern is the\nscorecard's rather than the case's: it asks the same question of every\nanswer, which is why it reads no expectation.",
+            "required": [
+              "pattern",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "regex_match"
+                ]
+              },
+              "pattern": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The answer is a number near the expected number.",
+            "required": [
+              "tolerance",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "numeric_within"
+                ]
+              },
+              "tolerance": {
+                "type": "number",
+                "format": "double"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "The answer said something it must not. Counted rather than avoided, so\nthe metric means what its name says and lower is better.",
+            "required": [
+              "text",
+              "kind"
+            ],
+            "properties": {
+              "ignore_case": {
+                "type": "boolean"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "forbidden"
+                ]
+              },
+              "text": {
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "The scorers this deployment implements, and what each one takes.\n\nThe enum is the implementation: a name reaches a `match` arm and never a\ncallable, so the vocabulary cannot grow without code that knows what the\nnew word means."
+      },
+      "ScorerSpec": {
+        "type": "object",
+        "description": "One measurement: a metric name, where to read each side, and the scorer.",
+        "required": [
+          "metric",
+          "scorer"
+        ],
+        "properties": {
+          "answer_path": {
+            "type": "string",
+            "description": "A JSON Pointer into the recorded answer. Empty reads the whole value,\nwhich is what a plain text answer wants."
+          },
+          "expected_path": {
+            "type": "string",
+            "description": "The same, into the case's expected answer."
+          },
+          "metric": {
+            "type": "string",
+            "description": "The metric this writes. Unique within the scorecard, because a case\ncarries one number per name and the second writer would win silently."
+          },
+          "scorer": {
+            "$ref": "#/components/schemas/Scorer"
+          }
+        },
+        "additionalProperties": false
       },
       "Sdk": {
         "oneOf": [
