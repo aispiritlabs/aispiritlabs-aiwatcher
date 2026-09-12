@@ -116,7 +116,7 @@ async fn measured(
         PublishEvaluation {
             manifest: declared
                 .run
-                .manifest(&card, &Rubrics::default(), None)
+                .manifest(&card, &Rubrics::default(), None, None)
                 .unwrap(),
             status: scored.status,
             cases: scored.cases,
@@ -215,7 +215,9 @@ async fn a_distance_is_published_as_a_mean_in_its_own_unit_rather_than_as_a_rate
     publish(
         &registry,
         PublishEvaluation {
-            manifest: run.manifest(&card, &Rubrics::default(), None).unwrap(),
+            manifest: run
+                .manifest(&card, &Rubrics::default(), None, None)
+                .unwrap(),
             status: scored.status,
             cases: scored.cases,
             judge: None,
@@ -442,7 +444,9 @@ async fn engine_scored(registry: &Registry, evaluation_id: &str) -> PublishEvalu
         &run.repetition_id,
     );
     PublishEvaluation {
-        manifest: run.manifest(&card, &Rubrics::default(), None).unwrap(),
+        manifest: run
+            .manifest(&card, &Rubrics::default(), None, None)
+            .unwrap(),
         status: scored.status,
         cases: scored.cases,
         judge: None,
@@ -511,7 +515,9 @@ async fn a_scoring_run_is_admitted_with_no_suite_or_scorer_file_in_its_bundle() 
         .unwrap()
         .version;
     let run = declaration("scored-against-the-fixture", &version);
-    let manifest = run.manifest(&card, &Rubrics::default(), None).unwrap();
+    let manifest = run
+        .manifest(&card, &Rubrics::default(), None, None)
+        .unwrap();
     let prepared = Evaluation::prepare(manifest.clone()).unwrap();
     let approval =
         aiwatcher_evaluation::approval_id(prepared.variant_id(), prepared.context_id()).unwrap();

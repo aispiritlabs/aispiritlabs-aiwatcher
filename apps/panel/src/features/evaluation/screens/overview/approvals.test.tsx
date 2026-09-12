@@ -71,3 +71,20 @@ it('reads a store nobody configured as a deployment fact, not an empty list', as
   render(withQueries(<Approvals />));
   expect(await screen.findByText(/keeps no durable evidence/)).toBeTruthy();
 });
+
+it("warns an admin whose declaration's judge reads the archive, and waits to be heard", async () => {
+  only([]);
+  render(withQueries(<Approvals />));
+  const text = JSON.stringify({
+    context: { judge: { provider: 'llamacpp', reads_archive: true } },
+  });
+  const manifest = Object.assign(new File([text], 'manifest.json', { type: 'application/json' }), {
+    text: async () => text,
+  });
+  await userEvent.upload(await screen.findByLabelText('Bundle files'), manifest);
+  expect(await screen.findByText(/judge is sent words from the conversation archive/)).toBeTruthy();
+  const admit = screen.getByRole('button', { name: 'Stage and admit' }) as HTMLButtonElement;
+  expect(admit.disabled).toBe(true);
+  await userEvent.click(screen.getByLabelText('Acknowledge what this judge is sent'));
+  expect(admit.disabled).toBe(false);
+});

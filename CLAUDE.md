@@ -837,7 +837,10 @@ what runs a real graph.
   and the catalogue is re-read whenever that run moves, without a list here of
   which states are endings. A judged result says it is a model's word and
   shows its agreement with people uncoloured, with its interval, and what the
-  provider said served it.
+  provider said served it. A declaration whose judge reads the archive shows
+  the server's own warning, and Start and Stage-and-admit wait for somebody to
+  acknowledge it — here and in the Approvals panel, which reads
+  `reads_archive` off the chosen manifest and works nothing out.
 - `annotations` is the one area that draws. Its canvas puts an `<img>` and an
   `<svg>` in one transformed container, both sized to the image's *natural*
   pixels, so SVG user units are image coordinates and no shape ever carries a
@@ -1924,9 +1927,17 @@ the review.
   every case it said no to failed and only its yeses were counted. And a
   reason never quotes a reply, nor a provider refusal its body — a reply can
   repeat the answer it was shown.
-- **Never send the archive's words to a judge.** A judge over a conversation
-  cohort, and a calibration set taken from conversation evidence, are refused by
-  name: asking a judge is sending what it reads to a provider.
+- **Never send the archive's words to a judge without every reader being told.**
+  A judge over a conversation cohort, and one calibrated on conversation
+  evidence, is allowed — and asking it is sending what it reads to a provider
+  that keeps it outside the archive's encryption, retention and erasure. So
+  `JudgeConfiguration::reads_archive` is derived into the context, where an
+  admin admitting the pair admits it and a hand-written context saying
+  otherwise is refused; `ScoringRunView::warnings` says it in words; the panel
+  holds admitting and starting until it is acknowledged; the evidence says it
+  for as long as it is kept; and the executor logs it. What stays here holds
+  none of it: evidence is sealed and kept replies carry no words. A calibration
+  set from conversation evidence is taken by an admin, who may read its cases.
 - **Never ask a judge from the `serve` role, or start a judged run nothing will
   claim.** A judged run is `judge_evaluation`, claimed where
   `AIWATCHER_JUDGE_URL` and `AIWATCHER_JUDGE_PROVIDER` are — a socket and a

@@ -448,6 +448,12 @@ function JudgeNote({ evidence }: { evidence: DurableEvaluation }) {
           {judge.calibration_dataset.name}.
         </p>
       ) : null}
+      {judge?.reads_archive ? (
+        <p className="mt-1 text-danger">
+          This judge was sent words from the conversation archive, which its provider keeps outside
+          the archive&apos;s encryption, retention and erasure.
+        </p>
+      ) : null}
       {report ? <Served report={report} /> : null}
       {report ? (
         <table className="mt-2 w-full text-left">

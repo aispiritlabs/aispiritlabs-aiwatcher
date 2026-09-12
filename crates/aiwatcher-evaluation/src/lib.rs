@@ -55,7 +55,7 @@ pub use scoring::{
     Answers, ArchiveWord, Asked, Asking, Calibrated, Cohort, CohortCases, DeclaredRun,
     JudgeQuestion, Judged, RecordedAnswer, RecordedAnswers, SCORING_ENGINE, SCORING_VERSION,
     Scored, ScoringRun, ScoringRunView, Shown, StepOrigin, archived, questions, replies, score,
-    score_with, scoring_engine,
+    score_with, scoring_engine, warnings,
 };
 
 use serde::Serialize;

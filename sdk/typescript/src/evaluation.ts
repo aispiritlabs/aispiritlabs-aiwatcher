@@ -36,6 +36,8 @@ export interface JudgeConfiguration {
   model: VersionReference;
   configuration: ArtifactReference;
   calibration_dataset: DatasetReference;
+  /** The judge is sent words from the conversation archive. Derived by the server; absent when false. */
+  reads_archive?: boolean;
 }
 
 export interface EvaluationContext {

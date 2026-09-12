@@ -236,3 +236,72 @@ it('says a model gave these numbers, and how often it agreed with people, uncolo
   expect(screen.getByText(/gpt-4o-2024-08-06 \(fp_a\) answered 4 replies/)).toBeTruthy();
   expect(screen.getByText(/\(fp_b\) answered 1 reply\./)).toBeTruthy();
 });
+
+it('says in words when the judge behind a result was sent the archive', async () => {
+  only([
+    {
+      method: 'GET',
+      path: '/cases',
+      answer: { status: 200, body: { version: 'ff00', cases: [], state: 'complete' } },
+    },
+  ]);
+  const artifact = (name: string) => ({
+    name,
+    uri: `file://${name}`,
+    digest: 'e'.repeat(64),
+    size_bytes: 10,
+    content_type: 'application/json',
+  });
+  const dataset = { kind: 'conversations' as const, name: 'chats', version: 'v1' };
+  render(
+    withQueries(
+      <Evidence
+        evidence={evidence('complete', {
+          reproducible: false,
+          manifest: {
+            schema_version: 1,
+            origin: { evaluation_id: 'archive-judged', repetition_id: 'measurement-1' },
+            variant: {
+              schema_version: 1,
+              experiment_id: 'candidate',
+              dataset,
+              code: artifact('responses.py'),
+              generation_config: artifact('generation.json'),
+            },
+            context: {
+              dataset,
+              case_manifest: artifact('cases.json'),
+              case_count: 2,
+              split: 'test',
+              suite: { name: 'archive-judged', version: 'c'.repeat(64) },
+              scorer: { name: 'aiwatcher.scoring', version: '1' },
+              input_schema: artifact('input-schema.json'),
+              expectations_schema: artifact('expectations-schema.json'),
+              judge: {
+                provider: 'llamacpp',
+                model: { name: 'gemma', version: 'q4' },
+                configuration: artifact('judge-settings.json'),
+                calibration_dataset: {
+                  kind: 'assessments',
+                  name: 'people',
+                  version: 'f'.repeat(64),
+                },
+                reads_archive: true,
+              },
+              metrics: [
+                { name: 'helpful', unit: 'ratio', direction: 'higher', aggregation: 'rate' },
+              ],
+            },
+          },
+          judge: {
+            calibration: { name: 'people', version: 'f'.repeat(64) },
+            agreement: [],
+          },
+        })}
+      />,
+    ),
+  );
+  expect(
+    await screen.findByText(/This judge was sent words from the conversation archive/),
+  ).toBeTruthy();
+});

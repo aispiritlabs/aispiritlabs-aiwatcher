@@ -40,6 +40,17 @@ pub struct JudgeConfiguration {
     pub model: VersionReference,
     pub configuration: ArtifactRef,
     pub calibration_dataset: DatasetReference,
+    /// The judge is sent words from the conversation archive — the responses a
+    /// conversation cohort answered with, what they answered where the card
+    /// shows it, or the answers people judged in a calibration set taken from
+    /// conversation evidence. The provider keeps what it is sent outside the
+    /// archive's encryption, retention and erasure.
+    ///
+    /// Derived, never authored, and part of the context: an operator admitting
+    /// this pair admits that, and the evidence says so for as long as it is
+    /// kept. Absent from the bytes when false, so no earlier context moves.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reads_archive: bool,
 }
 
 /// Evidence context is separate from variant identity: a new scorer measures

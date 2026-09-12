@@ -275,8 +275,12 @@ async fn take_calibration(
     Json(request): Json<CalibrationRequest>,
 ) -> ApiResult<Json<CalibrationVersion>> {
     let requester = caller.require(Role::Editor)?.log_subject().to_owned();
+    // People's judgements of conversation evidence are taken by an admin, who
+    // may read the cases they are about; anybody else is refused as that.
     Ok(Json(
         registry(&state)?
+            .clone()
+            .with_content_access(caller.require(Role::Admin).is_ok())
             .take_calibration(&request, &requester, now())
             .await?,
     ))

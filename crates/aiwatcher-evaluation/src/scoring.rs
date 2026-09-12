@@ -249,9 +249,10 @@ impl ScoringRun {
     /// The archive's answer to a case is the response its expectation was
     /// read from, so a scorer comparing the two measures a response against
     /// itself and would report perfect agreement about nothing. A judge is
-    /// declared exactly when the card asks one, and never over the archive:
-    /// asking one is sending what it is asked about to a provider, and the
-    /// archive's words do not leave the archive.
+    /// declared exactly when the card asks one. Over the archive it is sent the
+    /// archive's words, which is allowed and never quiet: the context says
+    /// `reads_archive`, and [`warnings`] says it to whoever declares, admits or
+    /// reads the run.
     pub fn check(&self, card: &Scorecard) -> Result<()> {
         require(
             card.name == self.scorecard.name,
@@ -269,12 +270,6 @@ impl ScoringRun {
             },
         )?;
         let archive = matches!(self.answers, Answers::Archive(_));
-        require(
-            !(archive && asks_a_judge),
-            "run.judge",
-            "a judge is a model call to a provider, and the archive's words do not leave the \
-             archive",
-        )?;
         if archive
             && let Some(spec) = card
                 .scorers
@@ -304,15 +299,28 @@ impl ScoringRun {
     /// The metrics come from the card rather than from the caller: which way a
     /// scorer's number is better is a fact about what it counts, and a context
     /// restating it would be free to disagree with the card it names.
+    ///
+    /// `calibration` is the set the judge names, when it names one: whether the
+    /// judge is sent the archive's words depends on where that set was taken
+    /// from as well as on this cohort.
     pub fn manifest(
         &self,
         card: &Scorecard,
         rubrics: &Rubrics,
+        calibration: Option<&CalibrationSet>,
         ran_by: Option<&StepOrigin>,
     ) -> Result<EvaluationManifest> {
         self.check(card)?;
+        require(
+            self.judge.is_none() || calibration.is_some(),
+            "run.judge.calibration",
+            "is needed to say whether the judge is sent the conversation archive's words",
+        )?;
+        let reads_archive = self.variant.dataset.kind == DatasetKind::Conversations
+            || calibration.is_some_and(|set| set.from_archive);
         let judge = match &self.judge {
             Some(judge) => Some(JudgeConfiguration {
+                reads_archive,
                 provider: judge.provider.clone(),
                 model: judge.model.clone(),
                 configuration: judge.settings.artifact()?.0,
@@ -382,6 +390,51 @@ pub struct ScoringRunView {
     /// Whether a publication of this manifest would pass the operator's gate
     /// now. A fact at the moment of reading: a withdrawal changes it.
     pub admitted: bool,
+    /// What whoever declares, admits or starts this run should be told first,
+    /// in words. Empty when there is nothing to say.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+}
+
+/// What a run's manifest commits people to that they should hear before it
+/// runs. Written once, here, so the panel and an API caller read one sentence
+/// rather than each composing their own from the fields.
+#[must_use]
+pub fn warnings(
+    manifest: &EvaluationManifest,
+    card: &Scorecard,
+    calibration: Option<&CalibrationSet>,
+) -> Vec<String> {
+    let Some(judge) = manifest
+        .context
+        .judge
+        .as_ref()
+        .filter(|judge| judge.reads_archive)
+    else {
+        return Vec::new();
+    };
+    let mut sent = Vec::new();
+    if manifest.context.dataset.kind == DatasetKind::Conversations {
+        sent.push("each assistant response this run scores");
+        if card
+            .scorers
+            .iter()
+            .any(|spec| spec.scorer.rubric().is_some() && spec.input_path.is_some())
+        {
+            sent.push("what was said to the assistant before each one");
+        }
+    }
+    if calibration.is_some_and(|set| set.from_archive) {
+        sent.push("the conversation answers people judged in its calibration set");
+    }
+    vec![format!(
+        "This run's judge ({} · {}) is sent words from the conversation archive: {}. The \
+         provider keeps what it is sent outside the archive's encryption, retention and \
+         erasure, and nothing here can take it back.",
+        judge.provider,
+        judge.model.name,
+        sent.join("; ")
+    )]
 }
 
 /// What one pass over the recording measured.
@@ -918,6 +971,103 @@ mod tests {
             elsewhere.to_string().contains("conversation"),
             "{elsewhere}"
         );
+    }
+
+    #[test]
+    fn a_judge_over_the_archive_is_allowed_and_its_context_and_its_warning_both_say_so() {
+        let pinned = VersionReference {
+            name: "helpful".into(),
+            version: "r".repeat(64),
+        };
+        let rubrics = Rubrics::default().with(
+            &pinned,
+            crate::Rubric {
+                name: "helpful".into(),
+                question: "Does it help?".into(),
+                guidance: String::new(),
+                scale: crate::Scale::Flag,
+                direction: crate::MetricDirection::Higher,
+            },
+        );
+        let mut judged = card(Scorer::Judge {
+            rubric: pinned,
+            pass_level: None,
+        });
+        judged.scorers[0].input_path = Some("/question".into());
+        let declare = |kind, answers| {
+            let mut declared = run(kind, answers);
+            declared.judge = Some(JudgeDeclaration {
+                provider: "llamacpp".into(),
+                model: VersionReference {
+                    name: "gemma".into(),
+                    version: "q4".into(),
+                },
+                settings: crate::JudgeSettings::default(),
+                calibration: VersionReference {
+                    name: "people".into(),
+                    version: "c".repeat(64),
+                },
+            });
+            declared
+        };
+        let set = |from_archive| CalibrationSet {
+            name: "people".into(),
+            result: VersionReference {
+                name: "earlier".into(),
+                version: "v".into(),
+            },
+            items: Vec::new(),
+            from_archive,
+        };
+        let reads = |manifest: &EvaluationManifest| {
+            manifest
+                .context
+                .judge
+                .as_ref()
+                .is_some_and(|judge| judge.reads_archive)
+        };
+
+        let archive = declare(
+            DatasetKind::Conversations,
+            Answers::Archive(ArchiveWord::Archive),
+        );
+        assert!(archive.check(&judged).is_ok());
+        let manifest = archive
+            .manifest(&judged, &rubrics, Some(&set(false)), None)
+            .unwrap();
+        assert!(reads(&manifest));
+        let said = warnings(&manifest, &judged, Some(&set(false)));
+        assert_eq!(said.len(), 1);
+        assert!(said[0].contains("each assistant response"), "{said:?}");
+        assert!(
+            said[0].contains("what was said to the assistant"),
+            "{said:?}"
+        );
+        assert!(said[0].contains("llamacpp"), "{said:?}");
+        assert!(
+            archive.manifest(&judged, &rubrics, None, None).is_err(),
+            "whether a judge reads the archive is not guessed without its calibration set"
+        );
+
+        let recording = declare(DatasetKind::Curation, Answers::Recording(recording()));
+        let quiet = recording
+            .manifest(&judged, &rubrics, Some(&set(false)), None)
+            .unwrap();
+        assert!(!reads(&quiet));
+        assert!(warnings(&quiet, &judged, Some(&set(false))).is_empty());
+        assert!(
+            !serde_json::to_string(&quiet)
+                .unwrap()
+                .contains("reads_archive"),
+            "a context whose judge reads nothing of the archive keeps its bytes"
+        );
+        let calibrated = recording
+            .manifest(&judged, &rubrics, Some(&set(true)), None)
+            .unwrap();
+        assert!(reads(&calibrated));
+        let said = warnings(&calibrated, &judged, Some(&set(true)));
+        assert!(said[0].contains("calibration set"), "{said:?}");
+        assert!(!said[0].contains("each assistant response"), "{said:?}");
     }
 
     #[test]

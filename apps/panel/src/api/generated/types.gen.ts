@@ -902,6 +902,12 @@ export type CalibrationRequest = {
  * words, that the people were.
  */
 export type CalibrationSet = {
+    /**
+     * That result is conversation evidence, so a judge calibrated on this set
+     * is sent the archive's words. Absent when false, so an earlier set keeps
+     * its address.
+     */
+    from_archive?: boolean;
     items: Array<CalibrationItem>;
     name: string;
     /**
@@ -3983,6 +3989,18 @@ export type JudgeConfiguration = {
     configuration: ArtifactRef;
     model: VersionReference;
     provider: string;
+    /**
+     * The judge is sent words from the conversation archive — the responses a
+     * conversation cohort answered with, what they answered where the card
+     * shows it, or the answers people judged in a calibration set taken from
+     * conversation evidence. The provider keeps what it is sent outside the
+     * archive's encryption, retention and erasure.
+     *
+     * Derived, never authored, and part of the context: an operator admitting
+     * this pair admits that, and the evidence says so for as long as it is
+     * kept. Absent from the bytes when false, so no earlier context moves.
+     */
+    reads_archive?: boolean;
 };
 
 /**
@@ -6987,6 +7005,11 @@ export type ScoringRunView = {
     approval_id: string;
     declaration: DeclaredRun;
     manifest: EvaluationManifest;
+    /**
+     * What whoever declares, admits or starts this run should be told first,
+     * in words. Empty when there is nothing to say.
+     */
+    warnings?: Array<string>;
 };
 
 /**

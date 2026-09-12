@@ -146,10 +146,23 @@ impl ActivityExecutor for ScoreExecutor {
             .rubrics_for(&card.scorecard)
             .await
             .map_err(refusal)?;
+        let taken = match &run.judge {
+            Some(declared) => Some(
+                self.evaluations
+                    .calibration(&declared.calibration.version)
+                    .await
+                    .map_err(refusal)?
+                    .ok_or_else(|| {
+                        ActivityError::user_code("the calibration set this run names is gone")
+                    })?,
+            ),
+            None => None,
+        };
         let manifest = run
             .manifest(
                 &card.scorecard,
                 &rubrics,
+                taken.as_ref().map(|taken| &taken.calibration),
                 Some(&StepOrigin {
                     execution_id: command.key.execution_id.to_string(),
                     step_id: Some(command.key.step_id.clone()),
@@ -167,11 +180,24 @@ impl ActivityExecutor for ScoreExecutor {
             .admission(&manifest)
             .await
             .map_err(refusal)?;
-        let evaluations = self
-            .evaluations
+        let reads_archive = manifest
+            .context
+            .judge
             .as_ref()
-            .clone()
-            .with_content_access(manifest.context.dataset.kind == DatasetKind::Conversations);
+            .is_some_and(|judge| judge.reads_archive);
+        // The same authority for a calibration set taken from conversation
+        // evidence: the admitted context says its judge reads the archive.
+        let evaluations = self.evaluations.as_ref().clone().with_content_access(
+            manifest.context.dataset.kind == DatasetKind::Conversations || reads_archive,
+        );
+        if reads_archive {
+            tracing::warn!(
+                evaluation = %run.evaluation_id,
+                provider = manifest.context.judge.as_ref().map_or("", |judge| judge.provider.as_str()),
+                "a judge is being sent words from the conversation archive, under an admitted pair \
+                 whose context says so"
+            );
+        }
         let cohort = evaluations
             .cohort_cases(&manifest, &subject)
             .await
@@ -198,13 +224,11 @@ impl ActivityExecutor for ScoreExecutor {
                         judge.provider()
                     )));
                 }
-                let taken = evaluations
-                    .calibration(&declared.calibration.version)
-                    .await
-                    .map_err(refusal)?
-                    .ok_or_else(|| {
-                        ActivityError::user_code("the calibration set this run names is gone")
-                    })?;
+                let Some(taken) = &taken else {
+                    return Err(ActivityError::user_code(
+                        "the calibration set this run names is gone",
+                    ));
+                };
                 let shows_inputs = card
                     .scorecard
                     .scorers
@@ -493,7 +517,12 @@ mod tests {
             .approve(
                 &declared
                     .run
-                    .manifest(&card(), &aiwatcher_evaluation::Rubrics::default(), None)
+                    .manifest(
+                        &card(),
+                        &aiwatcher_evaluation::Rubrics::default(),
+                        None,
+                        None,
+                    )
                     .expect("a manifest derives"),
                 "operator",
                 100,

@@ -447,3 +447,89 @@ it('follows the run it started, and re-reads the catalogue as the run moves', as
   expect(screen.getByText('attempt 2')).toBeTruthy();
   await waitFor(() => expect(read).toBeGreaterThan(1));
 });
+
+it("holds admitting and starting until the server's warning about the archive is acknowledged", async () => {
+  const onStarted = vi.fn();
+  const warning =
+    "This run's judge (llamacpp · gemma) is sent words from the conversation archive: each assistant response this run scores.";
+  const manifest = published('conversations').manifest;
+  const judged = {
+    ...manifest,
+    context: {
+      ...manifest.context,
+      judge: {
+        provider: 'llamacpp',
+        model: { name: 'gemma', version: 'q4' },
+        configuration: artifact('judge-settings.json'),
+        calibration_dataset: { kind: 'assessments', name: 'people', version: 'f'.repeat(64) },
+        reads_archive: true,
+      },
+    },
+  };
+  const server = serve([
+    { method: 'GET', path: '/auth/config', answer: { status: 200, body: { enabled: false } } },
+    {
+      method: 'GET',
+      path: `/evaluation-runs/${DECLARATION}`,
+      answer: {
+        status: 200,
+        body: {
+          admitted: false,
+          approval_id: APPROVAL,
+          manifest: judged,
+          warnings: [warning],
+          declaration: {
+            id: DECLARATION,
+            declared_by: 'ada',
+            declared_at: 1,
+            run: {
+              evaluation_id: 'archive-judged',
+              repetition_id: 'measurement-1',
+              variant: judged.variant,
+              cohort: {},
+              scorecard: { name: 'answer-quality', version: VERSION },
+              answers: 'archive',
+              judge: {
+                provider: 'llamacpp',
+                model: { name: 'gemma', version: 'q4' },
+                calibration: { name: 'people', version: 'f'.repeat(64) },
+              },
+            },
+          },
+        },
+      },
+    },
+    {
+      method: 'POST',
+      path: `/evaluation-runs/${DECLARATION}/start`,
+      answer: {
+        status: 202,
+        body: { declaration: DECLARATION, created: true, execution: { execution_id: 'e-2' } },
+      },
+    },
+  ]);
+  render(
+    withQueries(
+      <Measure
+        declaration={DECLARATION}
+        measured={undefined}
+        onDeclared={vi.fn()}
+        onStarted={onStarted}
+        onOpenResult={vi.fn()}
+      />,
+    ),
+  );
+  expect(await screen.findByText(warning)).toBeTruthy();
+  expect(screen.getByText('judge reads the archive')).toBeTruthy();
+  const start = screen.getByRole('button', { name: 'Start' }) as HTMLButtonElement;
+  const admit = screen.getByRole('button', { name: 'Stage and admit' }) as HTMLButtonElement;
+  expect(start.disabled).toBe(true);
+  expect(admit.disabled).toBe(true);
+  expect(screen.getByText('Acknowledge what this judge is sent first.')).toBeTruthy();
+
+  await userEvent.click(screen.getByLabelText('Acknowledge what this judge is sent'));
+  expect(start.disabled).toBe(false);
+  await userEvent.click(start);
+  await waitFor(() => expect(onStarted).toHaveBeenCalledWith('e-2'));
+  expect(server.countOf('POST', `/evaluation-runs/${DECLARATION}/start`)).toBe(1);
+});

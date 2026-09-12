@@ -848,7 +848,7 @@ async fn the_archives_own_answers_are_scored_under_an_admins_approval_and_stay_s
         .unwrap();
     let manifest = declared
         .run
-        .manifest(&card, &Rubrics::default(), None)
+        .manifest(&card, &Rubrics::default(), None, None)
         .unwrap();
     let executor = ScoreExecutor::new(deployment.clone());
     let (command, attempt) = attempt(&declared.id, "archive-scored");
@@ -908,4 +908,254 @@ async fn the_archives_own_answers_are_scored_under_an_admins_approval_and_stay_s
         EvidenceState::Forbidden,
         "running the step granted this process nothing it keeps"
     );
+}
+
+/// An operator's bundle for one pair, in the directory named by its approval,
+/// so two pairs of one fixture are admitted at once.
+async fn admit_beside(f: &Fixture, manifest: &EvaluationManifest) {
+    let prepared = Evaluation::prepare(manifest.clone()).unwrap();
+    let directory = f.root.join(
+        aiwatcher_evaluation::approval_id(prepared.variant_id(), prepared.context_id()).unwrap(),
+    );
+    tokio::fs::create_dir_all(&directory).await.unwrap();
+    for entry in std::fs::read_dir(&f.root).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_type().unwrap().is_file() {
+            tokio::fs::copy(entry.path(), directory.join(entry.file_name()))
+                .await
+                .unwrap();
+        }
+    }
+    tokio::fs::write(
+        directory.join("manifest.json"),
+        serde_json::to_vec(manifest).unwrap(),
+    )
+    .await
+    .unwrap();
+}
+
+/// A judge over the archive is sent its words — allowed, and never quietly:
+/// the context an admin admits says so, the declaration's view warns in words,
+/// and nothing of what the judge said is kept beside the declaration.
+#[tokio::test]
+async fn a_judge_over_the_archive_is_sent_its_words_under_a_context_that_says_so() {
+    use aiwatcher_execution::ActivityExecutor;
+    use aiwatcher_server::execution::scoring::ScoreExecutor;
+
+    /// Says yes about everything, and repeats what it was shown while doing so.
+    #[derive(Debug, Default)]
+    struct Echoing {
+        asked: std::sync::Mutex<Vec<String>>,
+    }
+    #[async_trait]
+    impl JudgeModel for Echoing {
+        fn provider(&self) -> &str {
+            "llamacpp"
+        }
+        async fn ask(&self, call: &JudgeCall) -> std::result::Result<JudgeReply, JudgeFailure> {
+            let question = call.messages[1].content.clone();
+            self.asked.lock().unwrap().push(question.clone());
+            Ok(JudgeReply {
+                content: format!("You wrote: {question} -> {{\"value\": true}}"),
+                served: Served::default(),
+            })
+        }
+    }
+
+    let mut f = Fixture::new("conversation-judge").await;
+    let archive = owner(f.store.clone());
+    pin(&mut f, &archive).await;
+    let deployment = Arc::new(registry(&f, archive.clone()).with_content_access(false));
+    let admin = registry(&f, archive);
+
+    // People judged the archive's answers in an earlier result.
+    admit_beside(&f, &f.request.manifest).await;
+    let earlier = f.request.manifest.origin.evaluation_id.clone();
+    publish(&admin, f.request.clone(), "admin", now())
+        .await
+        .unwrap();
+    let rubric = deployment
+        .publish_rubric(
+            &Rubric {
+                name: "helpful".into(),
+                question: "Does the answer help the person who asked?".into(),
+                guidance: String::new(),
+                scale: Scale::Flag,
+                direction: MetricDirection::Higher,
+            },
+            "ada",
+            now(),
+        )
+        .await
+        .unwrap()
+        .version;
+    for (case, value) in f.request.cases.iter().zip([true, false]) {
+        admin
+            .assess(
+                &AssessmentRequest {
+                    target: AssessmentTarget::Case {
+                        evaluation_id: earlier.clone(),
+                        case_id: case.case_id.clone(),
+                        repetition_id: case.repetition_id.clone(),
+                    },
+                    rubric: "helpful".into(),
+                    rubric_version: Some(rubric.clone()),
+                    value: AssessmentValue::Flag { value },
+                    source: AssessmentSource::Human,
+                    author: None,
+                    rationale: String::new(),
+                },
+                "grace",
+                now(),
+            )
+            .await
+            .unwrap();
+    }
+    let pinned = VersionReference {
+        name: "helpful".into(),
+        version: rubric,
+    };
+    let request = CalibrationRequest {
+        name: "people-on-the-archive".into(),
+        evaluation_id: earlier.clone(),
+        rubrics: vec![pinned.clone()],
+    };
+    assert!(
+        matches!(
+            deployment.take_calibration(&request, "editor", now()).await,
+            Err(EvaluationError::Unavailable(EvidenceState::Forbidden))
+        ),
+        "people's judgements of conversation evidence are taken by somebody who may read it"
+    );
+    let calibration = admin
+        .take_calibration(&request, "admin", now())
+        .await
+        .unwrap();
+    assert!(calibration.calibration.from_archive);
+    assert_eq!(calibration.calibration.items.len(), 2);
+
+    let card = Scorecard {
+        name: "archive-judged".into(),
+        description: String::new(),
+        scorers: vec![ScorerSpec {
+            metric: "helpful".into(),
+            answer_path: "/answer".into(),
+            expected_path: String::new(),
+            input_path: Some("/question".into()),
+            scorer: Scorer::Judge {
+                rubric: pinned,
+                pass_level: None,
+            },
+        }],
+    };
+    let context = f.request.manifest.context.clone();
+    let run = ScoringRun {
+        evaluation_id: "archive-judged".into(),
+        repetition_id: "measurement-1".into(),
+        variant: f.request.manifest.variant.clone(),
+        cohort: Cohort {
+            case_manifest: context.case_manifest.clone(),
+            case_count: context.case_count,
+            split: context.split.clone(),
+            input_schema: context.input_schema.clone(),
+            expectations_schema: context.expectations_schema.clone(),
+        },
+        scorecard: VersionReference {
+            name: card.name.clone(),
+            version: deployment
+                .publish_scorecard(&card, "ada", now())
+                .await
+                .unwrap()
+                .version,
+        },
+        answers: Answers::Archive(ArchiveWord::Archive),
+        judge: Some(JudgeDeclaration {
+            provider: "llamacpp".into(),
+            model: VersionReference {
+                name: "gemma-4-e2b".into(),
+                version: "ud-q4-k-xl".into(),
+            },
+            settings: JudgeSettings::default(),
+            calibration: VersionReference {
+                name: "people-on-the-archive".into(),
+                version: calibration.version.clone(),
+            },
+        }),
+    };
+    let declared = deployment
+        .declare_scoring_run(&run, "ada", now())
+        .await
+        .expect("a judge over the archive is declared, not refused");
+    let view = deployment
+        .scoring_run_view(&declared.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(view.manifest.context.judge.as_ref().unwrap().reads_archive);
+    assert_eq!(view.warnings.len(), 1, "{:?}", view.warnings);
+    for said in [
+        "each assistant response",
+        "what was said to the assistant",
+        "calibration set",
+        "outside the archive's encryption",
+    ] {
+        assert!(view.warnings[0].contains(said), "{:?}", view.warnings);
+    }
+
+    // A context written by hand to say otherwise is not one an admin admits.
+    let mut quiet = view.manifest.clone();
+    quiet.context.judge.as_mut().unwrap().reads_archive = false;
+    let refused = admin.approve(&quiet, "admin", now()).await.unwrap_err();
+    assert!(refused.to_string().contains("reads_archive"), "{refused}");
+
+    admit_beside(&f, &view.manifest).await;
+    admin.approve(&view.manifest, "admin", now()).await.unwrap();
+    let model = Arc::new(Echoing::default());
+    let (command, attempt) = attempt(&declared.id, "archive-judged");
+    let reported = ScoreExecutor::new(deployment.clone())
+        .judged_by(model.clone(), 2)
+        .execute(&command, &attempt)
+        .await
+        .expect("the judge is asked under the approval")
+        .result
+        .unwrap();
+    assert_eq!(
+        reported["judge_questions"], 4,
+        "two turns and two calibration items"
+    );
+    let asked = model.asked.lock().unwrap().join("\n");
+    assert!(
+        asked.contains("SYNTHETIC_PRIVATE_ANSWER_ONE")
+            && asked.contains("SYNTHETIC_PRIVATE_QUESTION_ONE"),
+        "what the warning said is what happened: {asked}"
+    );
+
+    for prefix in ["evaluation-judges/", "evaluations/"] {
+        for entry in f.store.list(prefix).await.unwrap() {
+            let bytes = f.store.get(&entry.key).await.unwrap().unwrap();
+            assert!(
+                !String::from_utf8_lossy(&bytes).contains("SYNTHETIC_PRIVATE"),
+                "{} holds the archive's words in the clear",
+                entry.key
+            );
+        }
+    }
+    let evidence = admin
+        .get("archive-judged", "admin", now())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(evidence.state, EvidenceState::Complete);
+    assert!(
+        evidence
+            .manifest
+            .unwrap()
+            .context
+            .judge
+            .unwrap()
+            .reads_archive,
+        "the evidence says for as long as it is kept that its judge read the archive"
+    );
+    let agreement = &evidence.judge.unwrap().agreement[0];
+    assert_eq!((agreement.items, agreement.answered), (2, 2));
 }

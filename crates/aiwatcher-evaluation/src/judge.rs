@@ -161,6 +161,11 @@ pub struct CalibrationSet {
     /// The evaluation, by its ID and the result version its cases are read at.
     pub result: VersionReference,
     pub items: Vec<CalibrationItem>,
+    /// That result is conversation evidence, so a judge calibrated on this set
+    /// is sent the archive's words. Absent when false, so an earlier set keeps
+    /// its address.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub from_archive: bool,
 }
 
 impl CalibrationSet {
@@ -971,6 +976,7 @@ mod tests {
                 item("c", true),
                 item("d", true),
             ],
+            from_archive: false,
         };
         let said = BTreeMap::from([
             ((0, "helpful".to_owned()), Some(1.0)),

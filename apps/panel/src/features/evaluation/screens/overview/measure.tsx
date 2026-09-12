@@ -367,6 +367,13 @@ function Draft({ onDeclared }: { onDeclared: (declaration: string) => void }) {
               ? `${shownInputs.join('; ')}.`
               : 'It is shown the answer and never what the case asked.'}
           </p>
+          {conversations ? (
+            <p className="rounded border border-warning/40 bg-warning/5 p-2 text-warning md:col-span-3">
+              Over a conversation cohort this judge is sent the archive&apos;s words. Declaring
+              sends nothing; the declaration says what will be sent, and starting it asks you to
+              acknowledge that.
+            </p>
+          ) : null}
           <label className="flex flex-col gap-1">
             Profile
             <select
@@ -507,7 +514,6 @@ function Calibration({
           <option value="">Choose a published result…</option>
           {published
             .filter((row) => row.receipt.evaluation_id !== exclude)
-            .filter((row) => row.manifest?.context.dataset.kind !== 'conversations')
             .map((row) => (
               <option key={row.receipt.evaluation_id} value={row.receipt.evaluation_id}>
                 {row.receipt.evaluation_id}
@@ -524,11 +530,19 @@ function Calibration({
           {pending ? 'Taking…' : 'Take calibration set'}
         </Button>
       </label>
+      {published.find((row) => row.receipt.evaluation_id === from)?.manifest?.context.dataset
+        .kind === 'conversations' ? (
+        <span className="text-warning">
+          That is conversation evidence: an admin takes its set, and a judge calibrated on it is
+          sent the answers people judged there.
+        </span>
+      ) : null}
       {taken ? (
         <span className="text-muted-foreground">
           {taken.calibration.items.length} human judgement
-          {taken.calibration.items.length === 1 ? '' : 's'} of {taken.calibration.result.name},
-          frozen as <IdChip label="set" value={pinchId(taken.version, 8, 6)} full={taken.version} />
+          {taken.calibration.items.length === 1 ? '' : 's'} of {taken.calibration.result.name}
+          {taken.calibration.from_archive ? ', from the conversation archive' : ''}, frozen as{' '}
+          <IdChip label="set" value={pinchId(taken.version, 8, 6)} full={taken.version} />
         </span>
       ) : null}
       <Refused error={error} />
@@ -553,6 +567,9 @@ function Declared({
   const editor = useRoleDecision('editor');
   const admin = useRoleDecision('admin');
   const queries = useQueryClient();
+  // What the server warned about, heard: nothing is sent until the pair is
+  // admitted and the run started, so both of those wait for it.
+  const [acknowledged, setAcknowledged] = React.useState(false);
   const followed = useManagedRun(measured);
   const moved = followed.data
     ? `${followed.data.execution.state.state_type}:${followed.data.execution.steps
@@ -582,6 +599,9 @@ function Declared({
   if (!view.data) return <Refused error={view.error} />;
   const { declaration, manifest, approval_id, admitted } = view.data;
   const { run } = declaration;
+  const warnings = view.data.warnings ?? [];
+  const heeded = warnings.length === 0 || acknowledged;
+  const unheard = 'Acknowledge what this judge is sent first.';
   return (
     <div className="flex flex-col gap-3 text-xs">
       <div className="flex flex-wrap items-center gap-2">
@@ -593,6 +613,9 @@ function Declared({
           <Badge tone="warning">not admitted</Badge>
         )}
         {manifest.context.judge ? <Badge tone="warning">judged by a model</Badge> : null}
+        {manifest.context.judge?.reads_archive ? (
+          <Badge tone="danger">judge reads the archive</Badge>
+        ) : null}
         <Button size="sm" variant="outline" onClick={onAnother}>
           Declare another
         </Button>
@@ -635,10 +658,33 @@ function Declared({
         ) : null}
       </dl>
 
+      {warnings.length > 0 ? (
+        <div
+          role="alert"
+          className="flex flex-col gap-2 rounded-md border border-danger/40 bg-danger/5 p-3"
+        >
+          {warnings.map((warning) => (
+            <p key={warning} className="text-danger">
+              {warning}
+            </p>
+          ))}
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              aria-label="Acknowledge what this judge is sent"
+              checked={acknowledged}
+              onChange={(event) => setAcknowledged(event.target.checked)}
+            />
+            I understand what this judge is sent. Admitting this pair and starting the run send it.
+          </label>
+        </div>
+      ) : null}
+
       {admitted ? null : (
         <AdmitDeclared
           view={view.data}
-          disabled={admin === false}
+          disabled={admin === false || !heeded}
+          because={admin === false ? needsRole('admin') : unheard}
           onAdmitted={() => {
             // The refusal a start met before the pair was admitted no longer
             // describes it.
@@ -652,8 +698,8 @@ function Declared({
         <Button
           size="sm"
           onClick={() => start.mutate()}
-          disabled={editor === false || start.isPending}
-          title={editor === false ? needsRole('editor') : undefined}
+          disabled={editor === false || start.isPending || !heeded}
+          title={editor === false ? needsRole('editor') : heeded ? undefined : unheard}
         >
           {start.isPending ? 'Starting…' : measured ? 'Start again' : 'Start'}
         </Button>
@@ -707,10 +753,13 @@ function Declared({
 function AdmitDeclared({
   view,
   disabled,
+  because,
   onAdmitted,
 }: {
   view: ScoringRunView;
   disabled: boolean;
+  /** Why it is disabled, when it is. */
+  because: string;
   onAdmitted: () => void;
 }) {
   const [files, setFiles] = React.useState<File[]>([]);
@@ -760,7 +809,7 @@ function AdmitDeclared({
       </Button>
       <span className="text-muted-foreground">
         {disabled
-          ? needsRole('admin')
+          ? because
           : 'The manifest is this declaration’s; bring the files its cohort and variant pin.'}
       </span>
       <Refused error={admit.error} />

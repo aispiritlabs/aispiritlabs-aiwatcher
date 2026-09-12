@@ -47,6 +47,7 @@ fn judge_configuration_and_calibration_are_part_of_the_measurement_context() {
         model: manifest.context.scorer.clone(),
         configuration: manifest.variant.generation_config.clone(),
         calibration_dataset: manifest.context.dataset.clone(),
+        reads_archive: false,
     });
     let judged = Evaluation::prepare(manifest.clone()).unwrap();
     assert_eq!(original.variant_id(), judged.variant_id());

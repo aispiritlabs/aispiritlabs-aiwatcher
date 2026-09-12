@@ -461,6 +461,17 @@ impl Registry {
                 field: "context.judge.calibration_dataset".into(),
                 reason: "names no calibration set this registry took".into(),
             })?;
+        // Derived, so a context that says otherwise was written by hand — and
+        // the one thing it must not be able to do is admit a judge that reads
+        // the archive under a context that says it does not.
+        require(
+            judge.reads_archive
+                == (context.dataset.kind == crate::DatasetKind::Conversations
+                    || taken.calibration.from_archive),
+            "context.judge.reads_archive",
+            "must say whether the judge is sent the conversation archive's words, as this cohort \
+             and this calibration set decide",
+        )?;
         covers(&taken.calibration, &asks)
     }
 
@@ -1718,21 +1729,22 @@ impl Registry {
         let header = self
             .get(&request.evaluation_id, subject, now)
             .await?
-            .filter(|header| {
-                matches!(
-                    header.state,
-                    EvidenceState::Complete | EvidenceState::Partial
-                )
-            })
             .ok_or_else(unreadable)?;
+        // Conversation evidence a caller may not read is refused as that, not
+        // as a result that is not there: an admin takes this set.
+        if header.state == EvidenceState::Forbidden {
+            return Err(EvaluationError::Unavailable(EvidenceState::Forbidden));
+        }
+        if !matches!(
+            header.state,
+            EvidenceState::Complete | EvidenceState::Partial
+        ) {
+            return Err(unreadable());
+        }
         let manifest = header.manifest.as_ref().ok_or_else(unreadable)?;
-        // A judge is put what the people were shown, and a provider is where
-        // it is put: the archive's words do not go there.
-        require(
-            manifest.context.dataset.kind != crate::DatasetKind::Conversations,
-            "calibration.evaluation_id",
-            "is conversation evidence, whose answers a judge's provider may not be sent",
-        )?;
+        // A judge is put what the people were shown. From conversation evidence
+        // that is the archive's words, which a run calibrated on this set says.
+        let from_archive = manifest.context.dataset.kind == crate::DatasetKind::Conversations;
         let mut items = Vec::new();
         let mut cursor: Option<String> = None;
         loop {
@@ -1796,6 +1808,7 @@ impl Registry {
                 version: header.receipt.version,
             },
             items,
+            from_archive,
         };
         let asked: Vec<&crate::VersionReference> = request.rubrics.iter().collect();
         covers(&set, &asked)?;
@@ -2032,11 +2045,24 @@ impl Registry {
             .await?
             .ok_or(EvaluationError::Unavailable(EvidenceState::MissingArtifact))?;
         let rubrics = self.rubrics_for(&card.scorecard).await?;
-        let manifest = declaration.run.manifest(&card.scorecard, &rubrics, None)?;
+        let calibration = match &declaration.run.judge {
+            Some(judge) => Some(
+                self.calibration(&judge.calibration.version)
+                    .await?
+                    .ok_or(EvaluationError::Unavailable(EvidenceState::MissingArtifact))?
+                    .calibration,
+            ),
+            None => None,
+        };
+        let manifest =
+            declaration
+                .run
+                .manifest(&card.scorecard, &rubrics, calibration.as_ref(), None)?;
         let prepared = Evaluation::prepare(manifest.clone())?;
         Ok(Some(crate::ScoringRunView {
             approval_id: approval_id(prepared.variant_id(), prepared.context_id())?,
             admitted: self.admits(&manifest).await?,
+            warnings: crate::warnings(&manifest, &card.scorecard, calibration.as_ref()),
             manifest,
             declaration,
         }))

@@ -235,6 +235,10 @@
         },
         "provider": {
           "type": "string"
+        },
+        "reads_archive": {
+          "description": "The judge is sent words from the conversation archive — the responses a\nconversation cohort answered with, what they answered where the card\nshows it, or the answers people judged in a calibration set taken from\nconversation evidence. The provider keeps what it is sent outside the\narchive's encryption, retention and erasure.\n\nDerived, never authored, and part of the context: an operator admitting\nthis pair admits that, and the evidence says so for as long as it is\nkept. Absent from the bytes when false, so no earlier context moves.",
+          "type": "boolean"
         }
       },
       "required": [

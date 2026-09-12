@@ -183,6 +183,11 @@ function ApprovalRow({ approval, admin }: { approval: Approval; admin: boolean |
 function Admit({ disabled }: { disabled: boolean }) {
   const queries = useQueryClient();
   const [files, setFiles] = React.useState<File[]>([]);
+  // The declaration's own word that its judge reads the archive, read off the
+  // chosen manifest.json so the admin hears it before admitting — never worked
+  // out here.
+  const [readsArchive, setReadsArchive] = React.useState(false);
+  const [acknowledged, setAcknowledged] = React.useState(false);
   const input = React.useRef<HTMLInputElement>(null);
   const admit = useMutation({
     mutationFn: async (chosen: File[]) => {
@@ -209,6 +214,8 @@ function Admit({ disabled }: { disabled: boolean }) {
     },
     onSuccess: () => {
       setFiles([]);
+      setReadsArchive(false);
+      setAcknowledged(false);
       if (input.current) input.current.value = '';
       void queries.invalidateQueries({ queryKey: ['evaluation-approvals'] });
       void queries.invalidateQueries({ queryKey: ['evaluation-evidence'] });
@@ -229,11 +236,49 @@ function Admit({ disabled }: { disabled: boolean }) {
           type="file"
           multiple
           aria-label="Bundle files"
-          onChange={(event) => setFiles(Array.from(event.target.files ?? []))}
+          onChange={(event) => {
+            const chosen = Array.from(event.target.files ?? []);
+            setFiles(chosen);
+            setAcknowledged(false);
+            const declaration = chosen.find((file) => nameOf(file) === 'manifest.json');
+            setReadsArchive(false);
+            void declaration
+              ?.text()
+              .then((text) => {
+                const manifest = JSON.parse(text) as EvaluationManifest;
+                setReadsArchive(manifest.context?.judge?.reads_archive === true);
+              })
+              // Unreadable here is refused by the server on submit, with why.
+              .catch(() => setReadsArchive(false));
+          }}
           className="rounded border border-border bg-background p-1"
         />
       </label>
-      <Button size="sm" type="submit" disabled={disabled || files.length === 0 || admit.isPending}>
+      {readsArchive ? (
+        <div role="alert" className="flex w-full flex-col gap-1 text-danger">
+          <p>
+            This declaration&apos;s judge is sent words from the conversation archive. Admitting it
+            lets every run of this pair send them to that provider, outside the archive&apos;s
+            encryption, retention and erasure.
+          </p>
+          <label className="flex items-center gap-2 text-foreground">
+            <input
+              type="checkbox"
+              aria-label="Acknowledge what this judge is sent"
+              checked={acknowledged}
+              onChange={(event) => setAcknowledged(event.target.checked)}
+            />
+            I understand what this judge is sent.
+          </label>
+        </div>
+      ) : null}
+      <Button
+        size="sm"
+        type="submit"
+        disabled={
+          disabled || files.length === 0 || admit.isPending || (readsArchive && !acknowledged)
+        }
+      >
         {admit.isPending ? 'Staging…' : 'Stage and admit'}
       </Button>
       {disabled ? <span className="text-muted-foreground">{needsRole('admin')}</span> : null}

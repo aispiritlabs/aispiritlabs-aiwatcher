@@ -91,6 +91,7 @@ impl LocalSource {
         .map_err(|_| unavailable(EvidenceState::CorruptArtifact))?;
         let mut cases = Vec::new();
         let mut expected = BTreeMap::new();
+        let mut inputs = BTreeMap::new();
         for row in source.rows {
             let id = row["eligibility"][1]["turn_id"]
                 .as_str()
@@ -103,9 +104,10 @@ impl LocalSource {
                 input_digest: digest(&input)?,
                 expected_digest: digest(&answer)?,
             });
-            if expected.insert(id, answer).is_some() {
+            if expected.insert(id.clone(), answer).is_some() {
                 return Err(unavailable(EvidenceState::CorruptArtifact));
             }
+            inputs.insert(id, input);
         }
         if approved.schema_version != 1
             || approved.cases != cases
@@ -115,10 +117,9 @@ impl LocalSource {
         }
         Ok(SourceEvidence {
             expected,
-            // What somebody said to the assistant is content too, and the one
-            // reader of an input is a judge, which the archive's words never
-            // reach.
-            inputs: BTreeMap::new(),
+            // What somebody said to the assistant, for a judge the card shows
+            // it to — whose context then says it reads the archive.
+            inputs,
             expires_at: Some(source.expires_at.unix_timestamp()),
             bundle_digest: None,
             earlier_bundle_digest: None,
