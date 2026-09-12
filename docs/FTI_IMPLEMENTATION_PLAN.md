@@ -655,7 +655,10 @@ osieroconych odłączone na własną kadencję godzinną.
 
 **Koszt nazwany:** wynik, którego shardy zniknęły, czyta się w katalogu jako
 `complete`, dopóki ktoś go nie otworzy. Wcześniej zgłaszał to każdy odczyt.
-Usunięcie źródła egzekwuje worker w ciągu godziny, a odczyt natychmiast.
+Usunięcie źródła egzekwuje `sweep` co 60 s — tak jak wcześniej — bo rozwiązuje
+źródło raz na dopuszczoną parę; na godzinę zeszło wyłącznie zbieranie
+osieroconych, gdzie godzina spóźnienia to ta sama odpowiedź. Zdanie w
+poprzedniej wersji tej sekcji mówiło inaczej i było nieprawdziwe.
 
 **Porządek katalogu i próg indeksu.** Klucz to `evaluations/{sha256(id)}/`, więc
 porządek jest porządkiem skrótu — i dlatego ekran B2i **nie ma kontrolki

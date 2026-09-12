@@ -177,10 +177,12 @@ export function EvidenceRow({
   evidence,
   selected,
   onSelect,
+  gaps,
 }: {
   evidence: DurableEvaluation;
   selected: boolean;
   onSelect: () => void;
+  gaps?: boolean;
 }) {
   const { receipt, state } = evidence;
   return (
@@ -200,6 +202,10 @@ export function EvidenceRow({
       </div>
       <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
         <Badge tone="primary">kept</Badge>
+        {/* Not a second state badge: the state is what the header says, and the
+            header is readable. This is what the last collection pass found
+            behind it, and the two disagreeing is the fact worth showing. */}
+        {gaps ? <Badge tone="danger">bytes missing</Badge> : null}
         <span className="tabular-nums">{keptUntil(receipt.committed_at)}</span>
         <span>·</span>
         <span className="truncate">variant {pinchId(receipt.variant_id, 6, 4)}</span>
@@ -218,7 +224,13 @@ export function EvidenceRow({
 
 // ── The detail ───────────────────────────────────────────────────────────────
 
-export function EvidencePane({ evaluationId }: { evaluationId: string }) {
+export function EvidencePane({
+  evaluationId,
+  gaps,
+}: {
+  evaluationId: string;
+  gaps?: RetentionReport | undefined;
+}) {
   const evidence = useQuery({
     queryKey: ['evaluation-evidence', evaluationId],
     queryFn: async () =>
@@ -250,10 +262,16 @@ export function EvidencePane({ evaluationId }: { evaluationId: string }) {
       </Card>
     );
   }
-  return <Evidence evidence={evidence.data} />;
+  return <Evidence evidence={evidence.data} gaps={gaps} />;
 }
 
-export function Evidence({ evidence }: { evidence: DurableEvaluation }) {
+export function Evidence({
+  evidence,
+  gaps,
+}: {
+  evidence: DurableEvaluation;
+  gaps?: RetentionReport | undefined;
+}) {
   const { receipt, state, manifest, counts } = evidence;
   return (
     <div className="flex min-w-0 flex-col gap-4">
@@ -315,6 +333,7 @@ export function Evidence({ evidence }: { evidence: DurableEvaluation }) {
         </div>
 
         <StateNote state={state} counts={counts ?? undefined} />
+        {gaps ? <GapNote report={gaps} /> : null}
       </Card>
 
       {readable(state) ? (
@@ -357,6 +376,28 @@ function StateNote({ state, counts }: { state: EvidenceState; counts?: ResultCou
       ) : null}
       {state === 'forbidden' ? <ForbiddenCauses mayReadContent={mayReadContent} /> : null}
       {note.next ? <p className="mt-1">{note.next}</p> : null}
+    </div>
+  );
+}
+
+/**
+ * What the last collection pass found behind a header that still reads.
+ *
+ * A summary is one content-addressed object, so a result whose shards are gone
+ * reads as kept until somebody opens a page of it. The pass that deletes what a
+ * result does not hold has to list what it does, so it already knows — this is
+ * that answer, as old as the pass that made it, which is why it is dated.
+ */
+function GapNote({ report }: { report: RetentionReport }) {
+  return (
+    <div className="mt-3 rounded-md border border-danger/40 bg-danger/5 p-3 text-xs text-danger">
+      <p className="font-medium">Objects this result points at are missing from the store.</p>
+      <p className="mt-1">
+        Found by the collection pass of{' '}
+        {report.collected_at ? keptUntil(report.collected_at) : keptUntil(report.ran_at)}. The
+        header above is a separate object and still verifies, which is why the badge beside the
+        title does not say so. Open a page below and it will.
+      </p>
     </div>
   );
 }
@@ -573,6 +614,13 @@ export function Retention({
       {report.failures > 0
         ? ` ${report.failures} consecutive failures since: ${report.error ?? 'no reason reported'}`
         : ''}
+      {report.damaged_count > 0 ? (
+        <span className="text-danger">
+          {' '}
+          {report.damaged_count} kept {report.damaged_count === 1 ? 'result is' : 'results are'}{' '}
+          missing bytes.
+        </span>
+      ) : null}
     </p>
   );
 }

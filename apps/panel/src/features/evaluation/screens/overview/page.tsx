@@ -124,6 +124,10 @@ export function EvaluationPage() {
   );
   const total = reports.data?.pages[0]?.total_known ?? 0;
   const retention = evidence.data?.pages[0]?.retention;
+  // What the last collection pass found missing, by ID. A summary reads one
+  // object and cannot see this, so the row carries it or nobody learns it
+  // without opening every result.
+  const damaged = React.useMemo(() => new Set(retention?.damaged ?? []), [retention]);
   const evidenceFailure = evidence.error instanceof ApiFailure ? evidence.error : undefined;
 
   return (
@@ -239,6 +243,7 @@ export function EvaluationPage() {
                   row.kind === 'evidence' ? (
                     <EvidenceRow
                       evidence={row.item}
+                      gaps={damaged.has(idOf(row))}
                       selected={idOf(row) === search.evidence}
                       onSelect={() => select({ evidence: idOf(row), report: undefined })}
                     />
@@ -263,7 +268,10 @@ export function EvaluationPage() {
         </div>
 
         {search.evidence ? (
-          <EvidencePane evaluationId={search.evidence} />
+          <EvidencePane
+            evaluationId={search.evidence}
+            gaps={damaged.has(search.evidence) ? retention : undefined}
+          />
         ) : (
           <ReportPane
             evaluationId={search.report}

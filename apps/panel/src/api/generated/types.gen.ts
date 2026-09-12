@@ -5420,6 +5420,22 @@ export type RetentionPolicy = {
  */
 export type RetentionReport = {
     collected: number;
+    /**
+     * When the last collection pass ran, which is when `damaged` was measured.
+     * Collection is hourly, so this is older than `ran_at` and says how much.
+     */
+    collected_at?: number | null;
+    /**
+     * Published results the last collection pass found with missing bytes.
+     *
+     * A summary answers from the header, so a result whose shards are gone
+     * reads as complete until somebody opens it. Collection already lists what
+     * each result holds in order to delete the rest, so it already knows —
+     * this is that answer written down rather than a second pass to find it.
+     * Bounded: `damaged_count` is all of them, `damaged` the first few.
+     */
+    damaged?: Array<string>;
+    damaged_count?: number;
     error?: string | null;
     failed_at?: number | null;
     failures: number;

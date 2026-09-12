@@ -19721,6 +19721,25 @@
             "type": "integer",
             "minimum": 0
           },
+          "collected_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "When the last collection pass ran, which is when `damaged` was measured.\nCollection is hourly, so this is older than `ran_at` and says how much."
+          },
+          "damaged": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Published results the last collection pass found with missing bytes.\n\nA summary answers from the header, so a result whose shards are gone\nreads as complete until somebody opens it. Collection already lists what\neach result holds in order to delete the rest, so it already knows —\nthis is that answer written down rather than a second pass to find it.\nBounded: `damaged_count` is all of them, `damaged` the first few."
+          },
+          "damaged_count": {
+            "type": "integer",
+            "minimum": 0
+          },
           "error": {
             "type": [
               "string",

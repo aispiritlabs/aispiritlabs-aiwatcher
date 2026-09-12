@@ -106,6 +106,25 @@ pub struct RetentionReport {
     pub failed_at: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// When the last collection pass ran, which is when `damaged` was measured.
+    /// Collection is hourly, so this is older than `ran_at` and says how much.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collected_at: Option<i64>,
+    /// Published results the last collection pass found with missing bytes.
+    ///
+    /// A summary answers from the header, so a result whose shards are gone
+    /// reads as complete until somebody opens it. Collection already lists what
+    /// each result holds in order to delete the rest, so it already knows —
+    /// this is that answer written down rather than a second pass to find it.
+    /// Bounded: `damaged_count` is all of them, `damaged` the first few.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub damaged: Vec<String>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub damaged_count: usize,
+}
+
+fn is_zero(count: &usize) -> bool {
+    *count == 0
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, utoipa::ToSchema)]

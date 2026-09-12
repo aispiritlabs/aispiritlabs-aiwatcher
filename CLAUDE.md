@@ -1762,7 +1762,11 @@ the review.
   `EvidenceState` rather than an error and never a short page — a page silently
   missing rows reads as a result with fewer cases in it. The cost is stated
   rather than hidden: a result whose shards are gone reads as complete until
-  somebody opens it.
+  somebody opens it — so the pass that already knows says so. Collection has to
+  list what a result holds in order to delete the rest, and the header it read
+  says what it should hold; the difference rides back on the retention report
+  as `damaged`, bounded, and the catalogue marks that row. It is as old as the
+  last hourly pass, which is why it is dated and why it is not a state.
 - **Never resolve one source once per row.** Resolving reads the owner's own
   bytes — a model's artifacts inside a 100 MiB budget, a conversation corpus
   shard by shard — and a catalogue is mostly repetitions of a handful of pairs.

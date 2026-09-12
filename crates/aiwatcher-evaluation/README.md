@@ -278,6 +278,13 @@ Every pass writes `evaluations/retention.json`, returned as `retention` on
 `GET /api/v1/evaluation-results`: when it ran, what it retired and collected,
 and how many consecutive passes have failed.
 
+It also carries `damaged` — the results the last collection pass found short of
+the objects their header names. That is the one thing a summary cannot see, and
+the pass already compares the two lists in order to delete what is in neither,
+so it costs no extra request. The IDs are bounded and `damaged_count` is all of
+them; the minute-by-minute passes carry the last collection's finding rather
+than blanking it, and `collected_at` says how old it is.
+
 To try the pinned fixture on a dedicated local instance:
 
 ```sh

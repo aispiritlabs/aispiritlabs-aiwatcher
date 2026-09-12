@@ -2,8 +2,8 @@
 mod annotations;
 mod conversations;
 use aiwatcher_evaluation::{
-    DatasetKind, Evaluation, EvaluationError, EvaluationManifest, EvidenceState, Result,
-    SourceAuthority, SourceEvidence,
+    CollectionReport, DatasetKind, Evaluation, EvaluationError, EvaluationManifest, EvidenceState,
+    Result, SourceAuthority, SourceEvidence,
 };
 use async_trait::async_trait;
 pub use conversations::ConversationCipher;
@@ -424,18 +424,41 @@ pub fn spawn(
                     let due = collected_at
                         .is_none_or(|last: i64| now - last >= COLLECTION_INTERVAL.as_secs() as i64);
                     match pass(&registry, due, now).await {
-                        Ok((retired, collected)) => {
+                        Ok((retired, collection)) => {
                             if due {
                                 collected_at = Some(now);
+                            }
+                            // Collection is hourly, so the passes in between
+                            // carry its findings rather than blanking them: a
+                            // result with gaps must not vanish from the report
+                            // fifty-nine minutes out of sixty. What each pass
+                            // counts for itself stays its own.
+                            let found = collection.unwrap_or(CollectionReport {
+                                damaged: report.damaged.clone(),
+                                damaged_count: report.damaged_count,
+                                ..CollectionReport::default()
+                            });
+                            if due && found.damaged_count > 0 {
+                                tracing::warn!(
+                                    damaged = found.damaged_count,
+                                    "published evaluation results are missing bytes"
+                                );
                             }
                             report = aiwatcher_evaluation::RetentionReport {
                                 ran_at: now,
                                 retired,
-                                collected,
+                                collected: found.removed,
+                                collected_at,
+                                damaged: found.damaged,
+                                damaged_count: found.damaged_count,
                                 ..Default::default()
                             };
-                            if retired + collected > 0 {
-                                tracing::info!(retired, collected, "evaluation retention pass");
+                            if retired + report.collected > 0 {
+                                tracing::info!(
+                                    retired,
+                                    collected = report.collected,
+                                    "evaluation retention pass"
+                                );
                             }
                         }
                         Err(error) => {
@@ -465,14 +488,13 @@ async fn pass(
     registry: &std::sync::Arc<aiwatcher_evaluation::Registry>,
     collect: bool,
     now: i64,
-) -> Result<(usize, usize)> {
+) -> Result<(usize, Option<CollectionReport>)> {
     // The worker holds the content capability explicitly: retention applies to
     // governed evidence, and a pass that could not read it would keep it.
     let registry = registry.as_ref().clone().with_content_access(true);
-    let collected = if collect {
-        registry.collect_orphans(now).await?
-    } else {
-        0
+    let collected = match collect {
+        true => Some(registry.collect_orphans(now).await?),
+        false => None,
     };
     Ok((registry.sweep("retention-worker", now).await?, collected))
 }

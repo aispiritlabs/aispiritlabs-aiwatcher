@@ -1,7 +1,7 @@
 import { render, screen, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { DurableEvaluation, EvidenceState } from '@/api/generated/types.gen';
-import { Evidence, EvidenceRow, EvidenceUnavailable } from './evidence';
+import { Evidence, EvidenceRow, EvidenceUnavailable, Retention } from './evidence';
 import { ApiFailure } from '@/shared/lib/result';
 import { serve, withQueries } from '@/test/server';
 
@@ -141,4 +141,51 @@ it('says on the row which of the two kinds it is', () => {
   // and this half does not. Finding that out by clicking is the thing to avoid.
   expect(screen.getByText('kept')).toBeTruthy();
   expect(screen.getByText('3/3 scored')).toBeTruthy();
+});
+
+it('marks a kept result whose bytes the last pass could not find, without a second state', () => {
+  render(<EvidenceRow evidence={evidence('complete')} gaps selected={false} onSelect={() => {}} />);
+  // The header verifies, so the state badge is right to read Kept. What the
+  // catalogue cannot see is what the collection pass found behind it.
+  expect(screen.getByText('Kept')).toBeTruthy();
+  expect(screen.getByText('bytes missing')).toBeTruthy();
+});
+
+it('explains in the detail why a kept result is marked as missing bytes', async () => {
+  only();
+  render(
+    withQueries(
+      <Evidence
+        evidence={evidence('complete')}
+        gaps={{
+          ran_at: 1789200000,
+          retired: 0,
+          collected: 0,
+          failures: 0,
+          collected_at: 1789200000,
+          damaged: ['kept-1'],
+          damaged_count: 1,
+        }}
+      />,
+    ),
+  );
+  expect(await screen.findByText(/Objects this result points at are missing/)).toBeTruthy();
+  expect(screen.getByText(/collection pass of/)).toBeTruthy();
+});
+
+it('says how many kept results are missing bytes, beside how the pass itself went', () => {
+  render(
+    <Retention
+      report={{
+        ran_at: 1789200000,
+        retired: 0,
+        collected: 0,
+        failures: 0,
+        collected_at: 1789200000,
+        damaged: ['kept-1', 'kept-2'],
+        damaged_count: 2,
+      }}
+    />,
+  );
+  expect(screen.getByText(/2 kept results are missing bytes/)).toBeTruthy();
 });

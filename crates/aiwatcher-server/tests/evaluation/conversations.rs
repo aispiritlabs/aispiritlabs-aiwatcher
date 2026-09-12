@@ -184,7 +184,14 @@ async fn conversation_evidence_is_sealed_restartable_paged_and_erased_with_its_s
             .unwrap(),
         receipt
     );
-    assert_eq!(restarted.collect_orphans(now() + 7200).await.unwrap(), 0);
+    assert_eq!(
+        restarted
+            .collect_orphans(now() + 7200)
+            .await
+            .unwrap()
+            .removed,
+        0
+    );
     let first = restarted
         .cases(
             &receipt.evaluation_id,
@@ -711,7 +718,7 @@ async fn sealed_content_rejects_plaintext_downgrades_and_concurrent_retries_keep
         publish(&registry, request, "admin", 103).await,
         Err(EvaluationError::Conflict)
     ));
-    assert!(registry.collect_orphans(104).await.unwrap() > 0);
+    assert!(registry.collect_orphans(104).await.unwrap().removed > 0);
     let first = registry
         .cases(
             &receipt.evaluation_id,

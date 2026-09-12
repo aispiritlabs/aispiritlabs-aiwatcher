@@ -12,7 +12,8 @@ mod store;
 
 pub use approval::{Approval, ApprovalPage, ApprovalRecord, Withdrawal, approval_id};
 pub use registry::{
-    PUBLICATION_GRACE_SECONDS, Registry, RegistryConfig, SourceAuthority, SourceEvidence,
+    CollectionReport, PUBLICATION_GRACE_SECONDS, Registry, RegistryConfig, SourceAuthority,
+    SourceEvidence,
 };
 pub use result::*;
 pub use store::EvidenceCipher;

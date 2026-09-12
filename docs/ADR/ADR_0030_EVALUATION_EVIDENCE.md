@@ -436,6 +436,17 @@ cost is stated rather than hidden: a result whose shards are gone reads as
 complete in the catalogue until somebody opens it, where before it was reported
 by any read at all.
 
+**Amended: the pass that already knows says so.** Collection lists what each
+result holds in order to delete the rest, beside the header that says what it
+should hold, so the gap costs it nothing to notice — and noticing is the only
+thing that was missing. `CollectionReport` carries the IDs it found short,
+bounded, onto `RetentionReport` as `damaged` and `damaged_count`, which the
+catalogue already returns; the row is marked and the detail says when the pass
+ran. It is not an eighth `EvidenceState`: the header verifies, the state is
+`complete`, and the two saying different things is the fact. A retired result
+has no header by design and is not damage — the tombstone is read only where
+the header is already missing, so the common result still costs nothing.
+
 **A source is resolved once per admitted pair**, for the length of one list or
 one sweep, because a catalogue is mostly repetitions of a handful of pairs and
 the answer cannot differ between two rows of one pair. Only a verdict about the

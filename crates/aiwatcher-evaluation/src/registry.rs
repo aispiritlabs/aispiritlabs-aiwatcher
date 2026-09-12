@@ -35,6 +35,30 @@ pub struct SourceEvidence {
     pub bundle_digest: Option<String>,
 }
 
+/// What one collection pass removed, and what it found missing.
+///
+/// The gaps are a by-product rather than a second pass: deleting what a result
+/// does not hold means listing what it does, beside the header that says what
+/// it should. A summary answers from that header alone, so this is the only
+/// place that learns a complete-looking result has lost its shards.
+#[derive(Clone, Debug, Default)]
+pub struct CollectionReport {
+    pub removed: usize,
+    /// The first few, so one report stays a small object.
+    pub damaged: Vec<String>,
+    /// All of them.
+    pub damaged_count: usize,
+}
+impl CollectionReport {
+    fn damage(&mut self, id: &str) {
+        self.damaged_count += 1;
+        if self.damaged.len() < DAMAGED_SAMPLE {
+            self.damaged.push(id.into());
+        }
+    }
+}
+const DAMAGED_SAMPLE: usize = 50;
+
 #[derive(Clone, Debug)]
 pub struct RegistryConfig {
     pub max_cases: usize,
@@ -822,7 +846,11 @@ impl Registry {
     /// Collect uncommitted uploads and losing versions without source access.
     /// An immutable claim decides whether an ID can ever publish. We may delete
     /// unclaimed content ONLY after abandonment wins that same atomic gate.
-    pub async fn collect_orphans(&self, now: i64) -> Result<usize> {
+    ///
+    /// It also reports what it found missing, because it cannot do its own job
+    /// without finding out: deleting what a result does not hold means listing
+    /// what it does, beside the header that says what it should.
+    pub async fn collect_orphans(&self, now: i64) -> Result<CollectionReport> {
         let entries = self.store.0.list("evaluations/").await?;
         for entry in &entries {
             if !entry.key.ends_with("/pending.json") {
@@ -846,7 +874,7 @@ impl Registry {
                 }
             }
         }
-        let mut removed = 0;
+        let mut report = CollectionReport::default();
         // Relist so this pass also sees claims created above. Claims are never
         // replaced/deleted; concurrent collectors therefore choose the same set.
         for entry in self.store.0.list("evaluations/").await? {
@@ -864,7 +892,21 @@ impl Registry {
                 // if metadata is unavailable: absence is not evidence of waste.
                 let metadata: Metadata = match self.store.verified(id, &receipt.version).await {
                     Ok(metadata) => metadata,
-                    Err(EvaluationError::Unavailable(_)) => continue,
+                    Err(EvaluationError::Unavailable(_)) => {
+                        // A retired result has no header by design. The
+                        // tombstone is read only here, where the answer is
+                        // already unusual: one get per broken result rather
+                        // than one per result.
+                        if self
+                            .store
+                            .read::<EvidenceState>(&store::tombstone(id))
+                            .await?
+                            .is_none()
+                        {
+                            report.damage(id);
+                        }
+                        continue;
+                    }
                     Err(error) => return Err(error),
                 };
                 keep.insert(format!("{}{}.json", store::content(id), receipt.version));
@@ -873,14 +915,20 @@ impl Registry {
                     keep.insert(format!("{}{}.json", store::content(id), shard.expected));
                 }
             }
+            let mut found = 0;
             for artifact in self.store.0.list(&store::content(id)).await? {
-                if !keep.contains(&artifact.key) {
+                if keep.contains(&artifact.key) {
+                    found += 1;
+                } else {
                     self.store.0.delete(&artifact.key).await?;
-                    removed += 1;
+                    report.removed += 1;
                 }
             }
+            if found != keep.len() {
+                report.damage(id);
+            }
         }
-        Ok(removed)
+        Ok(report)
     }
 }
 

@@ -93,7 +93,14 @@ pub(super) async fn contract(store: Arc<dyn ObjectStore>) {
             async move { publish(&publisher, request("gc-crash", 3), "editor", 100).await },
         );
     paused.reached().await;
-    assert_eq!(collector.collect_orphans(expired - 1).await.unwrap(), 0);
+    assert_eq!(
+        collector
+            .collect_orphans(expired - 1)
+            .await
+            .unwrap()
+            .removed,
+        0
+    );
     assert!(
         collector
             .get("gc-crash", "viewer", 100)
@@ -103,7 +110,7 @@ pub(super) async fn contract(store: Arc<dyn ObjectStore>) {
     );
     task.abort();
     assert!(task.await.unwrap_err().is_cancelled());
-    assert_eq!(collector.collect_orphans(expired).await.unwrap(), 1);
+    assert_eq!(collector.collect_orphans(expired).await.unwrap().removed, 1);
     assert!(content(&store, "gc-crash").await.is_empty());
     assert!(matches!(
         collector.get("gc-crash", "viewer", expired).await,
@@ -131,7 +138,7 @@ pub(super) async fn contract(store: Arc<dyn ObjectStore>) {
             async move { publish(&publisher, request("gc-first", 3), "editor", 100).await },
         );
     paused.reached().await;
-    assert!(collector.collect_orphans(expired).await.unwrap() > 0);
+    assert!(collector.collect_orphans(expired).await.unwrap().removed > 0);
     paused.resume.notify_one();
     assert!(matches!(
         task.await.unwrap(),
@@ -146,7 +153,7 @@ pub(super) async fn contract(store: Arc<dyn ObjectStore>) {
         publish(&publisher, request("commit-first", 3), "editor", 100).await
     });
     paused.reached().await;
-    assert_eq!(collector.collect_orphans(expired).await.unwrap(), 0);
+    assert_eq!(collector.collect_orphans(expired).await.unwrap().removed, 0);
     let detail = collector
         .get("commit-first", "viewer", expired)
         .await
@@ -178,7 +185,7 @@ pub(super) async fn contract(store: Arc<dyn ObjectStore>) {
         Err(EvaluationError::Unavailable(EvidenceState::Expired))
     ));
     assert!(!content(&store, "gc-late-write").await.is_empty());
-    assert!(restarted.collect_orphans(expired).await.unwrap() > 0);
+    assert!(restarted.collect_orphans(expired).await.unwrap().removed > 0);
     assert!(content(&store, "gc-late-write").await.is_empty());
 
     // Losing versions can share expectation/response shards with the winner.
@@ -197,7 +204,7 @@ pub(super) async fn contract(store: Arc<dyn ObjectStore>) {
     losing.cases[0].actual = Some(serde_json::json!({"answer": "different"}));
     let task = tokio::spawn(async move { publish(&publisher, losing, "editor", 100).await });
     paused.reached().await;
-    assert_eq!(collector.collect_orphans(100).await.unwrap(), 2);
+    assert_eq!(collector.collect_orphans(100).await.unwrap().removed, 2);
     paused.resume.notify_one();
     assert!(matches!(
         task.await.unwrap(),
@@ -242,7 +249,7 @@ pub(super) async fn contract(store: Arc<dyn ObjectStore>) {
         Err(EvaluationError::Unavailable(EvidenceState::Expired))
     ));
     assert!(content(&store, "gc-lost-response").await.is_empty());
-    assert_eq!(collector.collect_orphans(expired).await.unwrap(), 0);
+    assert_eq!(collector.collect_orphans(expired).await.unwrap().removed, 0);
 }
 
 #[tokio::test]
@@ -273,7 +280,7 @@ async fn collection_preserves_old_receipts_and_cannot_guess_references_from_miss
         .find(|e| e.key.ends_with("/pending.json"))
         .unwrap();
     store.delete(&pending.key).await.unwrap();
-    assert_eq!(registry.collect_orphans(10000).await.unwrap(), 0);
+    assert_eq!(registry.collect_orphans(10000).await.unwrap().removed, 0);
     assert_eq!(
         registry
             .get("old", "viewer", 10000)
@@ -289,7 +296,9 @@ async fn collection_preserves_old_receipts_and_cannot_guess_references_from_miss
         .find(|e| e.key.contains(&receipt.version))
         .unwrap();
     store.delete(&metadata.key).await.unwrap();
-    assert_eq!(registry.collect_orphans(10000).await.unwrap(), 0);
+    let report = registry.collect_orphans(10000).await.unwrap();
+    assert_eq!(report.removed, 0);
+    assert_eq!(report.damaged, ["old"]);
     assert_eq!(content(&store, "old").await.len(), 2);
     assert_eq!(
         registry
@@ -299,5 +308,56 @@ async fn collection_preserves_old_receipts_and_cannot_guess_references_from_miss
             .unwrap()
             .state,
         EvidenceState::MissingArtifact
+    );
+}
+
+#[tokio::test]
+async fn collection_names_a_result_whose_shards_are_gone_before_anybody_opens_it() {
+    let store: Arc<dyn ObjectStore> = Arc::new(MemoryObjectStore::new());
+    let registry = registry(store.clone(), Arc::new(Source::default()));
+    let kept = publish(&registry, request("kept", 3), "editor", 100)
+        .await
+        .unwrap();
+    let gaps = publish(&registry, request("gaps", 3), "editor", 100)
+        .await
+        .unwrap();
+    publish(&registry, request("forgotten", 3), "editor", 100)
+        .await
+        .unwrap();
+    assert!(registry.forget("forgotten").await.unwrap());
+    let shard = content(&store, "gaps")
+        .await
+        .into_iter()
+        .find(|entry| !entry.key.contains(&gaps.version))
+        .unwrap();
+    store.delete(&shard.key).await.unwrap();
+
+    // The header is one object and it is still there, which is the whole
+    // reason this is worth reporting: a catalogue reads that object and finds
+    // nothing wrong, and the pass that deletes what a result does not hold has
+    // already listed what it does.
+    assert_eq!(
+        registry
+            .get("gaps", "viewer", 200)
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        EvidenceState::Complete
+    );
+    let report = registry.collect_orphans(200).await.unwrap();
+    assert_eq!(report.removed, 0);
+    assert_eq!(report.damaged, ["gaps"]);
+    assert_eq!(report.damaged_count, 1);
+
+    // A result somebody forgot has no header by design, and is not damage.
+    // Opening the damaged one still says so, on the page that holds it.
+    assert_eq!(
+        evidence(&registry, &gaps, "viewer", 200).await,
+        EvidenceState::MissingArtifact
+    );
+    assert_eq!(
+        evidence(&registry, &kept, "viewer", 200).await,
+        EvidenceState::Complete
     );
 }
