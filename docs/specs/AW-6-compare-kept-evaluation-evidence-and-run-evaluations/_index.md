@@ -151,3 +151,13 @@ The comparison itself followed in section 20.
   published the same numbers. Found and left: re-staging a second
   declaration's manifest under an admitted pair changes the bundle digest and
   hides the pair's results
+- 2026-09-12 — two of section 27's calls made by the user (plan section 28).
+  An approval's bundle digest now covers what a bundle adds rather than the
+  manifest's bytes, so staging a second run of an admitted pair no longer hides
+  its results; older approvals still admit, and a pair admitted over other bytes
+  answers 409 `admitted_other_bytes`. A judge may read the conversation archive:
+  `context.judge.reads_archive` is derived and admitted with the pair, the
+  declaration warns in words, the panel holds admitting and starting until the
+  warning is acknowledged, and kept judge replies now hold no words. Live, the
+  whole path ran over a real archive with gemma-4-e2b and the data directory
+  held no plaintext marker afterwards

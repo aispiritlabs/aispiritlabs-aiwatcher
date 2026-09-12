@@ -1,6 +1,6 @@
 # FTI — rekomendacja zakresu i plan rozwoju
 
-Data: 2026-09-11. Status: A1–A4 i AR1 zaimplementowane; B1 zweryfikowane, trwały wycinek B2 i atomowe orphan GC nowych publikacji dostarczone; dodano weryfikowane adaptery Curation, promptów, modeli, Annotations i Conversations; B2/AR2 pozostają otwarte: B2e–B2h, w tym judge (sekcje 9–16). Wyniki odbioru A, ograniczenia i incydent seeda w sekcji 8. Przegląd planu z 2026-09-12 jest w sekcji 17; jego wnioski są wniesione do sekcji 2–7 — etap B ma punkty 8–11 i rozstrzygnięcia wizualne, tabela paczek B2e–B2i, a B3 zależy od B2e, B2f i B2i. Sekcja 19 zmniejsza ograniczenia z sekcji 18; sekcja 20 dostarcza stronę dowodową B3 — porównanie dwóch trwałych wyników; sekcja 21 dostarcza AR3 — wspólny przypadek użycia kompilacji i startu, wyjęty z modułu HTTP; sekcja 22 domyka jego ograniczenie — rejestr definicji rozróżnia niedostępny magazyn, uszkodzony rekord i odmówioną definicję; sekcja 23 dostarcza ostatnią część B3 — różnicę na poziomie przypadków; sekcja 24 dostarcza B4 — typowane oceny, rubryki i rewizje; sekcja 25 dostarcza pierwszą paczkę C0 — scoring zapisanych odpowiedzi jako zarządzany run publikujący własny dowód; sekcja 26 zamyka ograniczenia sekcji 25 — jeden status dla niezatwierdzonej pary, scorer ilościowy z jednostką, archiwum rozmów jako źródło odpowiedzi, judge jako scorer z regułą dopuszczenia z ADR 0030 i formularz startu w panelu. Sekcja 27 poprawia ograniczenia sekcji 26 — ponowienie próby judge'a nie pyta drugi raz i nie kończy się konfliktem, wynik mówi, co obsłużył dostawca, judge widzi pytanie przypadku, próg poziomu z przedziałem zgodności, a panel śledzi uruchomiony run.
+Data: 2026-09-11. Status: A1–A4 i AR1 zaimplementowane; B1 zweryfikowane, trwały wycinek B2 i atomowe orphan GC nowych publikacji dostarczone; dodano weryfikowane adaptery Curation, promptów, modeli, Annotations i Conversations; B2/AR2 pozostają otwarte: B2e–B2h, w tym judge (sekcje 9–16). Wyniki odbioru A, ograniczenia i incydent seeda w sekcji 8. Przegląd planu z 2026-09-12 jest w sekcji 17; jego wnioski są wniesione do sekcji 2–7 — etap B ma punkty 8–11 i rozstrzygnięcia wizualne, tabela paczek B2e–B2i, a B3 zależy od B2e, B2f i B2i. Sekcja 19 zmniejsza ograniczenia z sekcji 18; sekcja 20 dostarcza stronę dowodową B3 — porównanie dwóch trwałych wyników; sekcja 21 dostarcza AR3 — wspólny przypadek użycia kompilacji i startu, wyjęty z modułu HTTP; sekcja 22 domyka jego ograniczenie — rejestr definicji rozróżnia niedostępny magazyn, uszkodzony rekord i odmówioną definicję; sekcja 23 dostarcza ostatnią część B3 — różnicę na poziomie przypadków; sekcja 24 dostarcza B4 — typowane oceny, rubryki i rewizje; sekcja 25 dostarcza pierwszą paczkę C0 — scoring zapisanych odpowiedzi jako zarządzany run publikujący własny dowód; sekcja 26 zamyka ograniczenia sekcji 25 — jeden status dla niezatwierdzonej pary, scorer ilościowy z jednostką, archiwum rozmów jako źródło odpowiedzi, judge jako scorer z regułą dopuszczenia z ADR 0030 i formularz startu w panelu. Sekcja 27 poprawia ograniczenia sekcji 26 — ponowienie próby judge'a nie pyta drugi raz i nie kończy się konfliktem, wynik mówi, co obsłużył dostawca, judge widzi pytanie przypadku, próg poziomu z przedziałem zgodności, a panel śledzi uruchomiony run. Sekcja 28 dopuszcza judge'a nad archiwum rozmów z ostrzeżeniem w kontekście, deklaracji, panelu i logu oraz liczy skrót bundle'a z tego, co bundle dodaje, zamiast z bajtów manifestu.
 
 Podstawa: [katalog funkcji](FTI_FEATURE_CATALOG.md), [analiza braków](FTI_FEATURE_GAPS.md), [plan UX](FTI_UX_WANDB_PLAN.md), [przegląd dokumentacji Langfuse i MLflow](FTI_LANGFUSE_MLFLOW_ANALYSIS.md), [ocena architektury](FTI_ARCHITECTURE_REVIEW.md) oraz aktualny kod. Ocena dotyczy obecności i kontraktów implementacji; nie potwierdza działania konkretnego wdrożenia. Katalog opisuje zakres docelowy, więc liczba jego pozycji nie jest miarą ukończenia produktu.
 
@@ -1873,5 +1873,122 @@ proponuje stage'owania — ale przez API łatwo w nią wejść.
   ponownego zatwierdzenia ma komunikat konfliktu ID.
 - **Panel**: karty i rubryki dalej tylko przez API; kohorta i wariant tylko z
   opublikowanego wyniku — plik przypadków i schematy są w bundle'u operatora.
+- Dalej otwarte na AW-6: **C1** — szablon `generate_and_score`; z B3 — kontekst
+  wariantu w obserwacjach.
+
+## 28. Judge nad archiwum z ostrzeżeniem i skrót bundle'a bez `origin`
+
+Dwie decyzje użytkownika z 27.7: poprawić znalezisko z bundle'em „bardziej
+logiczną opcją" i dopuścić judge'a nad archiwum rozmów z ostrzeżeniem. Trzy
+commity: `c4b3ea1` (skrót bundle'a), `ca43704` (zapamiętane odpowiedzi bez słów),
+`ee7db79` (judge nad archiwum). Reguły są w
+[ADR 0030](ADR/ADR_0030_EVALUATION_EVIDENCE.md), poprawka „a judge over the archive,
+told to everyone, and what a bundle admits", i w Guardrails `CLAUDE.md`.
+
+### 28.1 Zatwierdzenie dopuszcza to, co bundle dodaje
+
+Skrót zapisany w zatwierdzeniu obejmował bajty `manifest.json`, a `origin`
+manifestu nazywa run. Drugi run tej samej pary zmieniał więc skrót, ukrywał
+wszystkie jej wyniki (403) i był odmawiany przy ponownym zatwierdzeniu komunikatem
+o konflikcie dwóch wyników pod jednym ID. Bardziej logiczna z dwóch opcji to
+poprawić sam skrót, nie komunikat: para jest już adresem zatwierdzenia, a
+`ApprovalRecord::bundle_digest` od początku opisywał „to, co adapter sprawdził ponad
+przypięte skróty manifestu". Teraz `aiwatcher_evaluation::bundle_digest` liczy się z
+treści tego, co bundle dodaje — dziś pakietu modelu — i jest `None`, gdy nie dodaje
+nic; format pliku też nie ma znaczenia.
+
+Zatwierdzenia zapisane wcześniej działają dalej: adapter oddaje też
+`earlier_bundle_digest` (stary skrót całej deklaracji), a rejestr przyjmuje
+zgodność z którymkolwiek. Rekord nie jest przepisywany, więc pod starym
+zatwierdzeniem ponowne wgranie innego manifestu dalej zatrzymuje parę — ale
+odmowa ponownego zatwierdzenia to teraz 409 `admitted_other_bytes` z nazwą
+zatwierdzenia i zdaniem „stage the bytes it admitted".
+
+### 28.2 Zapamiętana odpowiedź nie zawiera słów
+
+Warunek wstępny dopuszczenia archiwum. Odpowiedzi judge'a leżały pod deklaracją
+jawnie, bez retencji i usuwania, a model potrafi powtórzyć to, co mu pokazano.
+`JudgeReply::kept` zapisuje odpowiedź kanoniczną, którą `read` czyta dokładnie tak
+jak oryginał: wartość logiczną albo liczbę bez zmian, poziom tylko wtedy, gdy
+pytanie go oferowało, a w miejsce czegokolwiek innego zastępnik odmawiany z tym
+samym powodem. Test porównuje oba odczyty na trzech skalach i czternastu
+odpowiedziach, w tym z sekretem w treści.
+
+### 28.3 Judge nad archiwum, z ostrzeżeniem dla każdego, kto mógłby to zatrzymać
+
+Obie odmowy zniknęły: judge nad kohortą rozmów i zbiór kalibracyjny z dowodu z
+rozmów. Koszt jest ten sam co wcześniej i jest nazwany — dostawca trzyma to, co
+dostał, poza szyfrowaniem, retencją i usuwaniem archiwum. Ostrzeżenie nie jest
+jednym komunikatem, tylko faktem widocznym na każdym etapie:
+
+- **w kontekście**: `context.judge.reads_archive` jest wyprowadzane z rodzaju
+  kohorty i z `from_archive` zbioru kalibracyjnego. Jest częścią `context_id`, więc
+  admin zatwierdzający parę zatwierdza także to. Ręcznie napisany kontekst, który
+  twierdzi inaczej, dostaje 400;
+- **w deklaracji**: `ScoringRunView.warnings` mówi słowami, co dokładnie jest
+  wysyłane (odpowiedzi asystenta; co powiedział człowiek, gdy karta pokazuje
+  wejście; oceny ludzi ze zbioru kalibracyjnego) i do jakiego profilu i modelu.
+  Zdanie jest pisane raz, na serwerze;
+- **w panelu**: formularz Measure pokazuje ostrzeżenie serwera z plakietką „judge
+  reads the archive”. „Stage and admit” i „Start” czekają na zaznaczenie „I
+  understand what this judge is sent”. Panel Approvals czyta `reads_archive` z
+  wybranego `manifest.json` i też czeka na potwierdzenie. Nota judge'a na wyniku
+  mówi to samo, póki wynik jest trzymany;
+- **w logu**: wykonawca loguje ostrzeżenie przy starcie takiego kroku.
+
+Deklarowanie nic nie wysyła, dlatego potwierdzenie jest przy zatwierdzeniu i
+starcie, a nie przy deklaracji. Zbiór kalibracyjny z dowodu z rozmów bierze admin
+(trasa daje dostęp do treści tylko jemu; edytor dostaje 403). Adapter rozmów oddaje
+teraz wejście przypadku (`{"question": prompt}`) dla karty z `input_path`. Wykonawca
+czyta z dostępem do treści także wtedy, gdy archiwum jest tylko w zbiorze
+kalibracyjnym — pod tym samym zatwierdzeniem pary, której kontekst to mówi.
+
+### 28.4 Odbiór
+
+`rtk just check` 23/23 po `ee7db79`. Nowe testy:
+
+- 2 integracyjne przy bundle'u: drugi manifest pary nie ukrywa wyniku, a stare
+  zatwierdzenie działa do zmiany bajtów i potem dostaje 409 z nazwą. Pierwszy z
+  nich upada przy starym skrócie;
+- 1 jednostkowy przy zapamiętanych odpowiedziach (równy odczyt, brak słów);
+- 1 jednostkowy przy kontekście i ostrzeżeniu judge'a nad archiwum;
+- 1 integracyjny na prawdziwym archiwum: kalibracja z dowodu z rozmów (edytor 403,
+  admin `from_archive`), ostrzeżenie, odmowa ręcznego kontekstu, run z judge'em,
+  słowa dotarły do modelu, w magazynie ewaluacji brak jawnych słów;
+- 3 w panelu: blokada w Measure, blokada w Approvals, zdanie w nocie.
+
+Odbiór na żywo: `127.0.0.1:19085` z włączonym archiwum i własnym kluczem,
+`llama-server` z `gemma-4-e2b` na `127.0.0.1:19086`; po odbiorze zatrzymane po PID i
+usunięte.
+
+- przez API: dwie wymiany z markerem `ZEBRA7`, recenzja, eksport
+  `prompt_response`, korpus z 2 wierszami; opublikowany wynik z rozmów i oceny
+  ludzi; zbiór kalibracyjny `from_archive: true`;
+- deklaracja z `"answers": "archive"` i judge'em z `input_path`:
+  `reads_archive: true` i jedno ostrzeżenie wymieniające wszystkie trzy rodzaje
+  wysyłanych słów; kontekst z `reads_archive: false` → 400;
+- run → `completed`, dowód `complete`, 2/2, `correct = 0,5` (Warsaw tak, „five”
+  nie), zgodność 2/2 z przedziałem 34–100%, `served`: `gemma-4-e2b`, 4 odpowiedzi;
+  log wykonawcy z ostrzeżeniem;
+- `grep` całego katalogu danych po markerze: zero plików, archiwum też jest
+  zaszyfrowane. Zapamiętane odpowiedzi: 2, bo pozycje kalibracyjne to te same tury
+  co przypadki, więc pytania są identyczne;
+- skrót bundle'a: po wgraniu manifestu drugiego runu wynik dalej `complete`, a
+  ponowne zatwierdzenie → 200 z tym samym ID;
+- panel na `:5182`: ostrzeżenie serwera, plakietka, Start zablokowany do
+  zaznaczenia i odblokowany po nim, zdanie w nocie judge'a.
+
+### 28.5 Co zostaje
+
+- **Dostawca dostaje słowa archiwum na stałe.** Usunięcie podmiotu w archiwum nie
+  sięga do dostawcy — to jest treść ostrzeżenia, nie brak w kodzie.
+- **Potwierdzenie w panelu nie jest zapisywane.** Zatwierdzenie przez admina
+  kontekstu z `reads_archive` jest trwałym aktem; kto zaznaczył pole przy starcie,
+  nie jest zapisywane osobno.
+- **Stare zatwierdzenia dalej obejmują bajty manifestu**: nowy skrót dostaje tylko
+  zatwierdzenie zapisane od `c4b3ea1`.
+- Z 27.7 bez zmian: rewizja modelu niesprawdzana, próg tylko dla poziomów,
+  zapamiętane odpowiedzi bez retencji (teraz bez słów), karty i rubryki tylko przez
+  API.
 - Dalej otwarte na AW-6: **C1** — szablon `generate_and_score`; z B3 — kontekst
   wariantu w obserwacjach.

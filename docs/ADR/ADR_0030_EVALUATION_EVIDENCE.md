@@ -3,7 +3,8 @@
 - **Status**: accepted; B1 contract and B2 persistence implemented, amended
   2026-09-12 with approvals as a resource, the read/verify split, restore, and
   the admission rule a judge will need, the adapter for a judge this
-  deployment asks, and what that judge is shown and keeps
+  deployment asks, what that judge is shown and keeps, a judge over the
+  archive told to everyone, and a bundle digest over what a bundle adds
 - **Date**: 2026-09-11
 
 ## Context
@@ -864,3 +865,40 @@ person's judgement go through that one mapping, so agreement is about the
 number the result publishes. No floor decides how many calibration items are
 enough; the agreement carries its 95% Wilson interval instead, so three of three
 reads as 100% reaching down to 44%.
+
+## Amendment (2026-09-12, last): a judge over the archive, told to everyone, and what a bundle admits
+
+Two decisions, both reversing a line above.
+
+**A judge may read the conversation archive, and nobody who could stop it is
+left untold.** The earlier amendment refused a judge over a conversation cohort,
+and a calibration set taken from conversation evidence, by name. Both are
+allowed. The cost is unchanged and stated: the provider keeps what it is sent
+outside ADR_0021's encryption, retention and erasure, and nothing here takes it
+back. What carries the decision is that the fact is not left to be noticed:
+
+- `context.judge.reads_archive` is derived — from the cohort's dataset kind and
+  from the calibration set's `from_archive` — and is part of the context, so an
+  admin admitting the pair admits it, and admission refuses a context that says
+  otherwise;
+- a declaration's view carries `warnings` in words, written once on the server;
+- the panel holds admitting and starting until the warning is acknowledged,
+  including in the Approvals panel, and a result's judge note repeats it;
+- the executor logs it when it runs;
+- a calibration set from conversation evidence is taken by an admin, who may
+  read the cases it is about.
+
+What stays here holds none of it: evidence from the archive is sealed as
+before, and a kept judge reply is canonical — the value it scored, or a
+stand-in refused for the same reason — never the reply's words.
+
+**An approval admits what a bundle adds, not which run wrote its manifest.** The
+bundle digest an approval recorded covered the staged `manifest.json` bytes,
+whose `origin` names a run. The second run of an admitted pair therefore changed
+it, hid every result the pair had published, and was refused on re-admission as
+a conflict of two results under one ID. The digest now covers what a bundle adds
+beyond the manifest's pins, by content — a model package, or nothing — which is
+what `ApprovalRecord::bundle_digest` always said it was. An approval recorded
+over the whole declaration still admits against that earlier digest while those
+bytes stand, and a pair admitted over other bytes answers 409
+`admitted_other_bytes`, naming the approval.
