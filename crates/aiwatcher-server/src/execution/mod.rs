@@ -352,6 +352,13 @@ fn launcher(
             keeper,
             shutdown.clone(),
         )),
+        PodRuntime::Docker => Some(pods::spawn_docker(
+            Arc::clone(store),
+            Arc::clone(templates),
+            settings,
+            keeper,
+            shutdown.clone(),
+        )),
         PodRuntime::Kubernetes => {
             cluster_launcher(config, store, templates, settings, keeper, shutdown)
         }
