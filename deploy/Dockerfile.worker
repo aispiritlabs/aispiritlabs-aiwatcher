@@ -1,0 +1,32 @@
+# The image a launched pod runs: the Python SDK's worker, and the example
+# stages for it to register (ADR_0029).
+#
+# A step's image is the *step's* — planner's import image is planner's, built
+# in planner — so this one exists for two narrower jobs: it is what
+# `scripts/e2e-pod-steps.py` runs four pods of against a real cluster, and it
+# is the smallest honest answer to "what does a pod of ours actually contain".
+#
+# `run-attempt` and not `serve`: the pod is told its one attempt in
+# `AIWATCHER_ATTEMPT` and exits when it has reported, which is what makes the
+# Job's `backoffLimit: 0` the engine's retry policy rather than Kubernetes'.
+# The command itself comes from the template, because which tasks a pod
+# registers is the operator's line and not this file's.
+FROM python:3.13-slim-bookworm
+
+# The SDK's own two dependencies (httpx, tenacity) come with it. Nothing here
+# installs a model stack: a stage that needs one ships its own image.
+COPY sdk/python /opt/aiwatcher/sdk
+RUN pip install --no-cache-dir /opt/aiwatcher/sdk \
+  && rm -rf /opt/aiwatcher/sdk/.venv \
+  && useradd --system --uid 10001 --home /var/lib/aiwatcher --create-home stage
+
+# The stages are on the path rather than installed: they are examples of a
+# caller's code, and a caller's code is not part of the SDK's package.
+COPY sdk/python/examples /opt/aiwatcher/examples
+ENV PYTHONPATH=/opt/aiwatcher/examples \
+    PYTHONUNBUFFERED=1
+
+USER stage
+WORKDIR /var/lib/aiwatcher
+# No ENTRYPOINT: the template's command is the whole of what a pod runs, and
+# an entrypoint here would be a second place deciding it.

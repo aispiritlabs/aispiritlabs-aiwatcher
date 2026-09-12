@@ -457,6 +457,22 @@ import-conversation conversation subject basis reference:
 e2e-train:
     ./scripts/e2e-mini-train.py
 
+# Four stages of one import as four pods on the local cluster, against the same
+# four through one long-lived worker — and the review has to be the same bytes
+# (ADR_0029). Also: the chart's Role covers what the launcher calls and no more,
+# a cancel deletes a running pod's Job, a stage over its memory limit fails that
+# stage twice and the ones before it stand, and every pod's log is in the store
+# after the pod is gone. Needs a known-local kubeconfig context, Docker, and the
+# launcher compiled in:
+#
+#   cargo build --bin aiwatcher --features aiwatcher-server/kube
+#
+# It starts its own server on a free port, in a namespace of its own, with a
+# kubeconfig holding one context — so neither the one on :8080 nor any other
+# cluster is touched.
+e2e-pods *args:
+    ./scripts/e2e-pod-steps.py {{args}}
+
 # One managed run that evaluates a prompt, optimises it, evaluates the
 # candidate on held-out cases, records the server's verdict and asks an admin —
 # three times: approved, kept back, and rejected before anybody is asked. Starts

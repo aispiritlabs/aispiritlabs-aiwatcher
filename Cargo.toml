@@ -71,12 +71,21 @@ hex = "0.4.3"
 # *verify* somebody else's signature.
 jsonwebtoken = "9.3.1"
 # The pod launcher's Kubernetes client (ADR_0029), behind `aiwatcher-server`'s
-# `kube` feature for the reason `laser` and `postgres` are optional. `ring`
-# because rustls already puts it in this graph. `k8s-openapi` is generated per
+# `kube` feature for the reason `laser` and `postgres` are optional.
+# `aws-lc-rs` rather than `ring`, which is what this asked for first: reqwest's
+# `rustls` feature selects aws-lc-rs, so the two together put *both* providers
+# in rustls, and rustls then refuses to name a process-level default — which
+# made every call to a cluster panic, in a build that compiled and tested
+# clean. Matching reqwest's is what leaves one. `k8s-openapi` is generated per
 # API version and needs one named: the oldest this release knows, because the
 # launcher only creates a `batch/v1` Job, whose fields it sets have not moved.
-kube = { version = "4.2", default-features = false, features = ["client", "rustls-tls", "ring"] }
+kube = { version = "4.2", default-features = false, features = ["client", "rustls-tls", "aws-lc-rs"] }
 k8s-openapi = { version = "0.28", features = ["v1_32"] }
+# Not for TLS — nothing here speaks it directly — but to *say* which provider
+# this process uses, because the features cannot: `iggy` enables rustls's
+# `ring` under the `laser` feature, so a build with both backends has two of
+# them again and the ambiguity is back. The cluster client installs one.
+rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs"] }
 # The real Laser SDK, over Apache Iggy. Optional: the default build (and every
 # test that does not need a broker) stays free of it, and of the ~360 crates
 # beneath it.

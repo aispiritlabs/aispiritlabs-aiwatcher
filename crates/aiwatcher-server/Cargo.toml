@@ -39,7 +39,7 @@ iggy = ["aiwatcher-bus/iggy"]
 # `futures` because the pod log is read as a stream: the only bound the
 # cluster offers is on the *first* bytes of one, and the part worth keeping is
 # the last. It is already in this graph under kube-rs.
-kube = ["dep:kube", "dep:k8s-openapi", "dep:futures"]
+kube = ["dep:kube", "dep:k8s-openapi", "dep:futures", "dep:rustls"]
 
 [dependencies]
 aiwatcher-core.workspace = true
@@ -58,6 +58,7 @@ aiwatcher-prompts.workspace = true
 aiwatcher-runner.workspace = true
 duckdb = { workspace = true, optional = true }
 kube = { workspace = true, optional = true }
+rustls = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }
 k8s-openapi = { workspace = true, optional = true }
 aiwatcher-auth.workspace = true

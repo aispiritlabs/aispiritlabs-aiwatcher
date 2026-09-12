@@ -51,6 +51,7 @@ impl KubeCluster {
     ///
     /// [`ClusterError::Unavailable`] when no configuration could be read.
     pub async fn connect(namespace: Option<&str>) -> Result<Self, ClusterError> {
+        provider();
         let client = kube::Client::try_default()
             .await
             .map_err(|error| ClusterError::Unavailable(error.to_string()))?;
@@ -79,6 +80,21 @@ impl KubeCluster {
             .collect::<Vec<_>>()
             .join(",")
     }
+}
+
+/// Say which crypto provider this process uses, before the first connection.
+///
+/// rustls asks the process, not the library, and it refuses to guess when more
+/// than one provider is compiled in — which is the state this workspace is in
+/// whenever `laser` is on, because `iggy` brings `ring` and reqwest brings
+/// `aws-lc-rs`. Left unsaid, every call to the cluster panicked inside rustls
+/// rather than failing as a port error, and the launcher's task died with it.
+///
+/// An `Err` means somebody installed one first, which answers the same
+/// question; what matters is that one is installed by the time a client is
+/// built.
+fn provider() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 }
 
 #[async_trait]
