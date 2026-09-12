@@ -1803,6 +1803,35 @@ the review.
   server sent, including a row its own filter would have dropped: the rules
   live where the declarations are, as the pipeline canvas's and the annotation
   canvas's do.
+- **Never record a judgement without the form it was given on.** `3` is
+  excellent on one team's form and a failure on another's, so a rubric is a
+  resource — the question, the words a person and a judge are both given, the
+  answers it admits and which end is better — versioned by its content the way
+  a prompt version is. An assessment names the **concrete version**, never the
+  head: a head moves, and a rewritten set of levels must not silently re-read
+  every score given under the old one. Repeating what the current revision
+  already says lands on that revision rather than writing a second, which is
+  what makes a redelivered write safe and what stops a judge that re-scores
+  nightly from writing a revision a night forever. The cost is stated rather
+  than hidden: what stands is the day it first said so.
+- **Never let one author's judgement stand in for another's.** A standing
+  judgement is identified by its target, its rubric **and its source and
+  author** together, so a person's score and a judge's about one case are two
+  records and both are returned — a key that stopped at target and rubric would
+  make the second writer an editor of the first. And the author never comes
+  from the body for a person: a client that could name the reviewer could file
+  somebody else's judgement, which is `found_by`'s rule in a second registry. A
+  judge is named explicitly, with the session that ran it kept beside it.
+  Nothing checks the target exists — a judgement outlives the trace it is
+  about, which is the whole reason it is written down.
+- **Never let a quality judgement authorise conversation reuse.** A turn's
+  review answers whether this content may be trained on at all; an assessment
+  answers whether the answer was any good. They are two decisions with two
+  owners, and an assessment of the span a turn names moves the review state in
+  neither direction. A reviewer may say "keep this, it was wrong" — and an
+  assessment carries no expected answer either, because the cohort owns those:
+  a better answer somebody proposes is a change to a dataset, made through
+  review rather than recorded as one.
 - **An evaluation report is not redacted.** The Collector strips
   `gen_ai.prompt` and `gen_ai.completion` from spans, and an evaluation forms no
   span, so nothing strips `data.report`. A producer that puts model output there

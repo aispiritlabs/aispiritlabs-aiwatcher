@@ -4499,7 +4499,7 @@
           "evaluation"
         ],
         "summary": "Record one judgement.",
-        "description": "The caller is who filed it, always: a person's judgement is attributed to\nthe session, and a judge's names the judge while the session still says who\nran it. Nothing here checks the target exists — a judgement outlives the\ntrace it is about, which is the whole reason it is written down.",
+        "description": "The caller is who filed it, always: a person's judgement is attributed to\nthe session, and a judge's names the judge while the session still says who\nran it. Nothing here checks the target exists — a judgement outlives the\ntrace it is about, which is the whole reason it is written down.\n\nSafe to send twice: repeating what the current revision already says lands\non that revision rather than recording a second one.",
         "operationId": "record_assessment",
         "requestBody": {
           "content": {

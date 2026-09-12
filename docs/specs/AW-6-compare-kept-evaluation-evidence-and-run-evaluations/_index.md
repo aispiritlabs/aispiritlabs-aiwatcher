@@ -43,9 +43,16 @@ building towards, and it is four things rather than one:
   publish, narrowed by the server and bounded in how far one request walks.
   What is left of B3 is the judge's fourth ADR_0030 condition and the variant
   context on observations.
-- **B4 — assessments.** One trace, span, session or case measurement, with a
-  rubric version, a typed value, an author and a rationale. Human and judge
-  assessments coexist.
+- **B4 — assessments.** **Done** (plan section 24): a rubric is a resource —
+  the question, the words a person and a judge are both given, the answers it
+  admits and which end is better — versioned by its content, and an assessment
+  names the concrete version rather than the head. Human and judge assessments
+  coexist because the standing identity *is* target + rubric + source + author,
+  so neither can edit the other; the author comes from the session for a person
+  and is named explicitly for a judge. A repeat of the current revision lands on
+  it, which makes a retry safe and stops a nightly judge writing a revision a
+  night. Nothing checks the target exists, and nothing carries an expected
+  answer or moves a turn's consent.
 - **AR3 — the compile-and-start use case out of the HTTP module.** **Done**
   (plan section 21): `aiwatcher_execution::start` holds it, `AppState::executions`
   assembles it, and the route, `run_now` and the tick all go through it. The
@@ -92,3 +99,11 @@ The comparison itself followed in section 20.
   declares, never in the browser. An unverified pair keeps its rows, which is
   the one place the two halves of a comparison part company: the cases that
   failed are what somebody opens it to read
+- 2026-09-12 — B4 delivered (plan section 24): typed assessments over versioned
+  rubrics, with revisions. The two rules that did the work are the standing
+  identity — target, rubric, source *and* author, so a person's score and a
+  judge's are two records rather than one overwriting the other — and the
+  repeat that is not a change of mind, which makes a redelivered write safe and
+  keeps a nightly judge from writing a revision a night forever. The panel
+  judges a case where its answer is and colours nothing: which end of a scale
+  is better is the rubric's declaration to make

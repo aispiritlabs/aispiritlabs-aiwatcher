@@ -657,3 +657,47 @@ judge-scored results sharing a context are *not* thereby proven comparable —
 the fourth condition's field has to enter this rule when the adapter lands.
 Until then `LocalSource` refuses a manifest carrying a judge by name, so no
 such evidence exists to compare.
+
+## Amendment (2026-09-12): what an assessment is
+
+The decision above promised B4's shape in one paragraph — one target, a rubric
+version, a typed value, a source, an author, a rationale, a time and a
+revision. Building it settled four things that paragraph left open.
+
+**A rubric is a resource, not a field.** A number with no scale behind it
+cannot be read back: `3` is excellent on one team's form and a failure on
+another's. So the form is authored — the question, the words a person and a
+judge are both given, the answers it admits (a bounded number, named levels in
+the order declared, or a flag) and which end of it is better — and versioned by
+its content, exactly as a prompt version is. An assessment names the concrete
+version rather than the head, so rewriting the levels is a new version and not
+a quiet re-reading of every score already given.
+
+**The standing identity is the mechanism.** "Human and judge assessments
+coexist" is not a rule the code has to remember: a standing judgement is
+addressed by its target, its rubric *and its source and author*, so the two are
+two records and both are returned. A key ending at target and rubric would have
+made the second writer an editor of the first. The author comes from the
+session for a person, never from the body, and a judge is named explicitly with
+the session that ran it kept beside it.
+
+**A repeat is not a revision.** Writing what the current revision already says
+lands on that revision. Without it a lost response and a retry wrote a second
+revision saying the same thing, and a judge re-scoring nightly wrote one a
+night forever. What is given up is the record of having agreed again: the date
+that stands is the first.
+
+**Nothing checks the target exists, and the store is its own.** A judgement
+outlives the trace it is about, which is why it is written down at all — and
+rubrics and assessments live under their own prefixes rather than under
+`evaluations/`, because the sweep and the collection pass each list that whole
+prefix to filter it by suffix. A hundred thousand judgements there would be a
+hundred thousand keys every pass walks past, which is the cost rule that made a
+summary stop reading its own shards.
+
+The two absences the decision named hold, and both are absences rather than
+checks: an assessment carries no expected answer, because the cohort owns those
+and a better answer somebody proposes is a change to a dataset made through
+review; and it carries no consent, because a turn's review answers whether the
+content may be used at all while an assessment answers whether the answer was
+good.

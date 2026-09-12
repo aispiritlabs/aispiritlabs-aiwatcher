@@ -1,6 +1,6 @@
 # FTI — rekomendacja zakresu i plan rozwoju
 
-Data: 2026-09-11. Status: A1–A4 i AR1 zaimplementowane; B1 zweryfikowane, trwały wycinek B2 i atomowe orphan GC nowych publikacji dostarczone; dodano weryfikowane adaptery Curation, promptów, modeli, Annotations i Conversations; B2/AR2 pozostają otwarte: B2e–B2h, w tym judge (sekcje 9–16). Wyniki odbioru A, ograniczenia i incydent seeda w sekcji 8. Przegląd planu z 2026-09-12 jest w sekcji 17; jego wnioski są wniesione do sekcji 2–7 — etap B ma punkty 8–11 i rozstrzygnięcia wizualne, tabela paczek B2e–B2i, a B3 zależy od B2e, B2f i B2i. Sekcja 19 zmniejsza ograniczenia z sekcji 18; sekcja 20 dostarcza stronę dowodową B3 — porównanie dwóch trwałych wyników; sekcja 21 dostarcza AR3 — wspólny przypadek użycia kompilacji i startu, wyjęty z modułu HTTP; sekcja 22 domyka jego ograniczenie — rejestr definicji rozróżnia niedostępny magazyn, uszkodzony rekord i odmówioną definicję; sekcja 23 dostarcza ostatnią część B3 — różnicę na poziomie przypadków.
+Data: 2026-09-11. Status: A1–A4 i AR1 zaimplementowane; B1 zweryfikowane, trwały wycinek B2 i atomowe orphan GC nowych publikacji dostarczone; dodano weryfikowane adaptery Curation, promptów, modeli, Annotations i Conversations; B2/AR2 pozostają otwarte: B2e–B2h, w tym judge (sekcje 9–16). Wyniki odbioru A, ograniczenia i incydent seeda w sekcji 8. Przegląd planu z 2026-09-12 jest w sekcji 17; jego wnioski są wniesione do sekcji 2–7 — etap B ma punkty 8–11 i rozstrzygnięcia wizualne, tabela paczek B2e–B2i, a B3 zależy od B2e, B2f i B2i. Sekcja 19 zmniejsza ograniczenia z sekcji 18; sekcja 20 dostarcza stronę dowodową B3 — porównanie dwóch trwałych wyników; sekcja 21 dostarcza AR3 — wspólny przypadek użycia kompilacji i startu, wyjęty z modułu HTTP; sekcja 22 domyka jego ograniczenie — rejestr definicji rozróżnia niedostępny magazyn, uszkodzony rekord i odmówioną definicję; sekcja 23 dostarcza ostatnią część B3 — różnicę na poziomie przypadków; sekcja 24 dostarcza B4 — typowane oceny, rubryki i rewizje.
 
 Podstawa: [katalog funkcji](FTI_FEATURE_CATALOG.md), [analiza braków](FTI_FEATURE_GAPS.md), [plan UX](FTI_UX_WANDB_PLAN.md), [przegląd dokumentacji Langfuse i MLflow](FTI_LANGFUSE_MLFLOW_ANALYSIS.md), [ocena architektury](FTI_ARCHITECTURE_REVIEW.md) oraz aktualny kod. Ocena dotyczy obecności i kontraktów implementacji; nie potwierdza działania konkretnego wdrożenia. Katalog opisuje zakres docelowy, więc liczba jego pozycji nie jest miarą ukończenia produktu.
 
@@ -1307,4 +1307,114 @@ dotknięte; proces zatrzymany, port zwolniony.
   ale nie jest to strona indeksowana po zmianie.
 - **Judge** (czwarty warunek ADR 0030) i **kontekst wariantu na obserwacjach** —
   bez zmian, tak jak w 20.7.
-- **B4, C0** — bez zmian, karta AW-6.
+- **B4, C0** — bez zmian, karta AW-6. (B4 dostarczone w sekcji 24.)
+
+## 24. B4 — typowane oceny, rubryki i rewizje
+
+Etap B, punkt 7. Do tej pory instancja umiała zapisać, ile przypadków wariant
+zdał; nie umiała zapisać, **co ktoś o tym sądzi** — ani człowiek, ani judge.
+
+### 24.1 Ocena bez formularza to liczba, której nikt nie odczyta
+
+`3` jest znakomite na jednym formularzu i porażką na innym. Więc rubryka jest
+zasobem: pytanie, te same słowa, które dostaje człowiek i judge, zbiór
+odpowiedzi, które dopuszcza, oraz kierunek — którą stroną jest lepiej. Skala ma
+trzy kształty: ograniczona liczba, nazwane poziomy w zadeklarowanej kolejności
+oraz flaga.
+
+Wersja rubryki to skrót jej treści, tak jak wersja promptu. Publikacja tych
+samych słów drugi raz trafia na wersję, która już jest — a przepisanie poziomów
+to nowa wersja, nie zmiana znaczenia tego, co już powiedziano. Ocena zapisuje
+**konkretną wersję**, nigdy nazwy głowy: głowa się przesuwa, a odpowiedź padła
+pod jednym zestawem poziomów. Wcześniejsza wersja pozostaje czytelna.
+
+Nazwa rubryki nie może zawierać separatora ścieżki, bo nazwa jest tym, czym
+czytelnik o formularz prosi.
+
+### 24.2 Ocena człowieka nie nadpisuje oceny judge'a
+
+Mechanizmem jest tożsamość: „stojąca ocena" to cel, rubryka, **źródło i
+autor** razem. Dwie oceny jednego celu pod jedną rubryką — jedna człowieka,
+jedna judge'a — to dwa rekordy i oba wracają z listy. Klucz kończący się na
+celu i rubryce zrobiłby z drugiego piszącego redaktora pierwszego.
+
+Autor nigdy nie pochodzi z ciała żądania dla człowieka: ocena człowieka jest
+oceną sesji, która ją złożyła, bo klient, który mógłby wskazać recenzenta,
+mógłby złożyć cudzą ocenę. Judge jest wskazywany jawnie — i obok zostaje
+`recorded_by`, czyli kto go uruchomił.
+
+Cel jest jeden z czterech: trace, span, migawka sesji albo pomiar przypadku.
+Każdy adresuje coś niezmiennego albo mówi, który moment go takim uczynił —
+sesja rośnie, więc ocena sesji niesie `as_of`. Adres celu liczy serwer; to ta
+sama reguła, przez którą panel nie liczy identyfikatora zatwierdzenia.
+
+**Nic nie sprawdza, czy cel istnieje.** Ocena przeżywa trace, o którym mówi —
+po to się ją zapisuje.
+
+### 24.3 Zmiana zdania to rewizja, a powtórzenie nie jest zmianą zdania
+
+Zapis dokłada rewizję i niczego nie nadpisuje; historia jednej stojącej oceny
+jest stronicowana, bo judge oceniający co noc rośnie bez udziału człowieka.
+
+Powtórzenie tego, co mówi bieżąca rewizja, trafia na tę rewizję — reguła
+wersji promptu, i to ona sprawia, że ponowione wysłanie po utraconej
+odpowiedzi jest bezpieczne, a judge, który nie zmienił zdania, nie pisze
+rewizji co noc na zawsze. Koszt jest nazwany: zostaje data, kiedy powiedział to
+**pierwszy** raz, a nie ostatni, kiedy się z tym zgodził.
+
+### 24.4 Czego ocena nie niesie
+
+**Oczekiwanej odpowiedzi.** Oczekiwania należą do kohorty i rozwiązuje je
+adapter źródła przy czytaniu strony przypadków. Recenzent, który uważa, że
+odpowiedź powinna brzmieć inaczej, proponuje zmianę w zbiorze danych, a nie
+zapisuje ją — to jest ścieżka C4, przez review.
+
+**Zgody na użycie treści.** Review rozmowy odpowiada, czy na tej treści wolno
+trenować; ocena odpowiada, czy odpowiedź była dobra. Ocena spanu, który wskazuje
+turę, nie rusza jej stanu review w żadną stronę — i odwrotnie: zatwierdzenie
+tury zostawia ocenę tam, gdzie była. Recenzent może powiedzieć „zachowaj to,
+było błędne".
+
+### 24.5 Panel nie rozstrzyga, kto miał rację
+
+Oceny otwierają się razem z rozwiniętym wierszem różnicy, bo tam ktoś właśnie
+patrzy na obie odpowiedzi. Kontrolki to własna skala rubryki — trzy przyciski
+na trzy poziomy, „tak" i „nie" na flagę, ograniczone pole liczbowe — czytane z
+tej wersji, którą zapis właśnie utrwali.
+
+Żadna wartość nie jest kolorowana. Czy „good" to dobra wiadomość, deklaruje
+kierunek rubryki, a zamiana dwóch odpowiedzi w jeden werdykt w przeglądarce
+byłaby rozstrzyganiem dokładnie tego, po co deklaracja istnieje. Instancja bez
+rubryki mówi, że ocena potrzebuje formularza, zamiast pokazywać pusty wybór.
+
+### 24.6 Odbiór
+
+`rtk just check` 23/23. Testy: 10 w rejestrze (`evaluation/assessments.rs`), 5
+jednostkowych przy skali, 3 HTTP (autorstwo i role, brak magazynu jako 501,
+jakość kontra zgoda), 4 w panelu, 3 w SDK.
+
+Odbiór na żywo na `127.0.0.1:19084`, własny katalog danych, po odbiorze
+zatrzymane i usunięte:
+
+- rubryka opublikowana, w liście, wersja wskazana skrótem treści;
+- ocena człowieka `bad` i ocena judge'a `good` o tym samym przypadku — obie
+  wracają, `recorded_by` przy judge'u to sesja, która go złożyła;
+- to samo zdanie jeszcze raz → rewizja 1 z pierwotną datą; zmiana zdania →
+  rewizja 2; historia po jednej, kursor schodzi do rewizji 1;
+- przepisanie rubryki → nowa wersja, wcześniejsza nadal czytelna, a nowa ocena
+  pod głową odmówiona z wymienionymi poziomami;
+- odmowy nazywają pole: poziom spoza skali, liczba na skali porządkowej, autor
+  przy ocenie człowieka, `trace_id` przy celu typu `case`, brak `as_of`;
+- panel: rozwinięty wiersz `two-plus-two` pokazuje werdykt judge'a z
+  uzasadnieniem, przełączenie rubryki zmienia kontrolki z „tak/nie" na trzy
+  poziomy, a zapisana ocena człowieka staje obok judge'a. Oba motywy.
+
+### 24.7 Co zostaje
+
+- **Rubryki autoruje się przez API.** Panel ich nie tworzy — to formularz, a
+  pierwszym formularzem w tym panelu ma być ścieżka sterowania po WebSocket.
+- **Ocena jest widoczna tylko przy przypadku.** Trace, span i sesja mają
+  kontrakt i trasę, nie mają ekranu.
+- **Rozbieżność judge'a z ocenami ludzi** nie jest jeszcze liczona; to trzeci
+  warunek judge'a z ADR 0030 i należy do jego adaptera.
+- **C0** — bez zmian, karta AW-6; jego zależność od B4 jest spełniona.

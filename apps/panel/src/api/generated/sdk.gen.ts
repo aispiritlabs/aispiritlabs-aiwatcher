@@ -729,6 +729,9 @@ export const listAssessments = <ThrowOnError extends boolean = false>(options: O
  * the session, and a judge's names the judge while the session still says who
  * ran it. Nothing here checks the target exists — a judgement outlives the
  * trace it is about, which is the whole reason it is written down.
+ *
+ * Safe to send twice: repeating what the current revision already says lands
+ * on that revision rather than recording a second one.
  */
 export const recordAssessment = <ThrowOnError extends boolean = false>(options: Options<RecordAssessmentData, ThrowOnError>): RequestResult<RecordAssessmentResponses, RecordAssessmentErrors, ThrowOnError> => (options.client ?? client).post<RecordAssessmentResponses, RecordAssessmentErrors, ThrowOnError>({
     url: '/api/v1/evaluation-assessments',
