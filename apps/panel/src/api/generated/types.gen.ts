@@ -2362,7 +2362,12 @@ export type ExecutionSummary = {
  * Which definition, at which revision.
  */
 export type ExecutionTarget = {
-    kind: TargetKind;
+    /**
+     * Which registry the name is in. Never guessed from the name: a
+     * `WorkflowSpec` and a `CurationPipeline` may share one, and they compile
+     * through different editors with different provenance.
+     */
+    kind: DefinitionKind;
     name: string;
     /**
      * The immutable revision to compile. Left out, the definition's head is
@@ -6885,30 +6890,6 @@ export type SuiteSummary = {
     succeeded: number;
     suite: string;
 };
-
-/**
- * What kind of definition is being run.
- *
- * Two arms, which is what the enum was for: both compile to the same
- * `ExecutionPlan` from different editors, with different provenance, and the
- * names live in different registries under different prefixes. A
- * `kind` nobody had to send would have to be guessed from the name — and two
- * definitions may share one, which is exactly what `WorkflowSpec` being saved
- * beside `CurationPipeline` allows.
- */
-export const TargetKind = { CURATION_PIPELINE: 'curation_pipeline', WORKFLOW: 'workflow' } as const;
-
-/**
- * What kind of definition is being run.
- *
- * Two arms, which is what the enum was for: both compile to the same
- * `ExecutionPlan` from different editors, with different provenance, and the
- * names live in different registries under different prefixes. A
- * `kind` nobody had to send would have to be guessed from the name — and two
- * definitions may share one, which is exactly what `WorkflowSpec` being saved
- * beside `CurationPipeline` allows.
- */
-export type TargetKind = typeof TargetKind[keyof typeof TargetKind];
 
 /**
  * A number a request has to look like.

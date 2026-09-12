@@ -366,6 +366,45 @@ impl PayloadPolicy {
     }
 }
 
+/// What this deployment decided about a hosted run's words.
+///
+/// Configuration rather than a plan field: which of the two a run gets is the
+/// deployment's answer, and a definition only ever asks.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PayloadDefault {
+    /// `AIWATCHER_EXECUTION_PAYLOADS`.
+    pub policy: PayloadPolicy,
+    /// `AIWATCHER_EXECUTION_PAYLOADS_LOCKED`: a run may not choose its own.
+    pub locked: bool,
+}
+
+impl PayloadDefault {
+    /// What this run gets, given what it asked for.
+    ///
+    /// `None` is the ordinary case — nothing asked, so the deployment's answer.
+    /// A run that asks while the deployment has pinned its choice is refused
+    /// rather than quietly given the pin: the point of asking for `external` on
+    /// a `sealed` instance is to keep words out of the archive, and silently
+    /// putting them in is the failure the lock exists to prevent, reached from
+    /// the other side.
+    ///
+    /// # Errors
+    ///
+    /// The refusal, as prose, when the lock forbids the request.
+    pub fn resolve(self, asked: Option<PayloadPolicy>) -> Result<PayloadPolicy, String> {
+        match asked {
+            None => Ok(self.policy),
+            Some(asked) if asked == self.policy => Ok(asked),
+            Some(_) if self.locked => Err(format!(
+                "this instance pins every hosted run to `{}` \
+                 (AIWATCHER_EXECUTION_PAYLOADS_LOCKED=true)",
+                self.policy.as_str()
+            )),
+            Some(asked) => Ok(asked),
+        }
+    }
+}
+
 /// Where a hosted message's words are, and how big they were.
 ///
 /// Never the words themselves. The digest is of the *plaintext*,

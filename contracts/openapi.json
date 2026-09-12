@@ -14407,7 +14407,8 @@
         ],
         "properties": {
           "kind": {
-            "$ref": "#/components/schemas/TargetKind"
+            "$ref": "#/components/schemas/DefinitionKind",
+            "description": "Which registry the name is in. Never guessed from the name: a\n`WorkflowSpec` and a `CurationPipeline` may share one, and they compile\nthrough different editors with different provenance."
           },
           "name": {
             "type": "string"
@@ -22497,14 +22498,6 @@
             "type": "string"
           }
         }
-      },
-      "TargetKind": {
-        "type": "string",
-        "description": "What kind of definition is being run.\n\nTwo arms, which is what the enum was for: both compile to the same\n`ExecutionPlan` from different editors, with different provenance, and the\nnames live in different registries under different prefixes. A\n`kind` nobody had to send would have to be guessed from the name — and two\ndefinitions may share one, which is exactly what `WorkflowSpec` being saved\nbeside `CurationPipeline` allows.",
-        "enum": [
-          "curation_pipeline",
-          "workflow"
-        ]
       },
       "TensorSpec": {
         "type": "object",

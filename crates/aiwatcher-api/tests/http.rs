@@ -268,7 +268,7 @@ impl Fixture {
             // The shipped default: words stay with the worker and this instance
             // holds a reference. A run may still ask for `sealed`, and is
             // refused here because no archive is wired.
-            execution_payloads: aiwatcher_api::state::PayloadDefault::default(),
+            execution_payloads: aiwatcher_execution::PayloadDefault::default(),
             // Empty, like the shipped default: nothing is curated, so no hub
             // result can be promoted past `unclear`.
             sources: Arc::new(aiwatcher_annotations::SourceCatalog::default()),
@@ -4330,6 +4330,32 @@ async fn a_definition_nobody_saved_is_a_404_and_not_an_empty_run() {
 
     let (status, _) = fixture.get("/api/v1/executions/never-started").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_deployment_that_wired_nothing_says_which_variable_rather_than_404() {
+    // 501, not 404: the route is in the contract and this deployment wired no
+    // store behind it. The same refusal the tick reads — and there it answers
+    // whether the slot stays due, which is what it could not do while this was
+    // an HTTP status: 501 is 5xx, and a scheduler reading 5xx as "come back in
+    // a minute" comes back every minute for ever.
+    let fixture = Fixture::without_registry();
+    let (status, refused) = fixture
+        .post(
+            "/api/v1/executions",
+            json!({ "target": { "kind": "curation_pipeline", "name": "nightly" } }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{refused}");
+    // The workflow store first, because an instance with none runs nothing
+    // whatever else it is missing.
+    assert_eq!(refused["code"], "executions_disabled");
+    assert!(
+        refused["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("AIWATCHER_WORKFLOW_STORE")),
+        "the message names the variable to set: {refused}"
+    );
 }
 
 #[tokio::test]

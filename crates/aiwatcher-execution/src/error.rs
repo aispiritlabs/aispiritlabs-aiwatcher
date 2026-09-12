@@ -118,4 +118,22 @@ pub enum StoreError {
     Encoding(#[from] serde_json::Error),
 }
 
+impl StoreError {
+    /// Whether asking again would be told the same thing.
+    ///
+    /// [`HandleError::says_the_same_next_time`](crate::HandleError::says_the_same_next_time)'s
+    /// half about the store. A message that is too large stays too large and a
+    /// single-process store stays one; a version conflict means somebody else
+    /// appended, which is the store working. [`Self::Backend`] and
+    /// [`Self::Io`] are the honest `false`: they have flattened whatever the
+    /// adapter hit, so the safe answer is that it may have been a bad moment.
+    #[must_use]
+    pub const fn says_the_same_next_time(&self) -> bool {
+        match self {
+            Self::PayloadTooLarge { .. } | Self::SingleProcessOnly | Self::Encoding(_) => true,
+            Self::VersionConflict { .. } | Self::Backend(_) | Self::Io(_) => false,
+        }
+    }
+}
+
 pub type Result<T> = std::result::Result<T, StoreError>;

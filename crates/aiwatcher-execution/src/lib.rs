@@ -49,6 +49,7 @@ pub mod plan;
 pub mod pods;
 pub mod reactor;
 pub mod schedule;
+pub mod start;
 pub mod state;
 pub mod store;
 #[cfg(feature = "testing")]
@@ -71,8 +72,8 @@ pub use error::{CompileError, DecisionError, Result, StoreError};
 pub use facts::{FactContext, PublishedBy, envelopes_for};
 pub use handler::{ExecutionHandler, HandleError, Handled};
 pub use message::{
-    Direction, MessageMetadata, OutboxMessage, PendingMessage, RecordedMessage, RunProjection,
-    WorkflowCommand, WorkflowEvent, WorkflowMessage,
+    Direction, MessageMetadata, OutboxMessage, PayloadDefault, PayloadPolicy, PendingMessage,
+    RecordedMessage, RunProjection, WorkflowCommand, WorkflowEvent, WorkflowMessage,
 };
 pub use outbox::{Published, publish_pending};
 pub use plan::{
@@ -83,6 +84,10 @@ pub use reactor::{Performed, Reactor};
 pub use schedule::{
     Cadence, OverlapPolicy, Schedule, ScheduleReader, ScheduleStore, ScheduledDefinition,
     SlotAdmission, SlotAdmissionRequest, SlotKey, SlotOutcome, SlotRecord, SlotSettlement,
+};
+pub use start::{
+    Decider, ExecutionTarget, Executions, Missing, RunIdentity, StartRefused, StartRequest,
+    StartRun, Started, Window,
 };
 pub use state::{
     Execution, ExecutionId, ExecutionMode, ExecutionOwner, ExecutionState, FailureClass, RunState,

@@ -348,6 +348,32 @@ impl ApiError {
     }
 }
 
+/// A refused start, as the error shape every route already answers with.
+///
+/// The use case's refusal carries *why*, and this is the one place that turns
+/// each reason into a status. The scheduler reads the same refusal and asks it
+/// [`says_the_same_next_time`](aiwatcher_execution::StartRefused::says_the_same_next_time)
+/// instead — which is the whole point of the split, because the status is a
+/// lossy encoding of that question: 502 and 500 are 5xx by number and
+/// permanent by meaning.
+impl From<aiwatcher_execution::StartRefused> for ApiError {
+    fn from(refused: aiwatcher_execution::StartRefused) -> Self {
+        use aiwatcher_execution::{Missing, StartRefused};
+        match refused {
+            StartRefused::NotConfigured(Missing::WorkflowStore) => Self::ExecutionsDisabled,
+            StartRefused::NotConfigured(Missing::PipelineRegistry) => Self::DatasetRegistryDisabled,
+            StartRefused::NotConfigured(Missing::WorkflowRegistry) => {
+                Self::WorkflowDefinitionsDisabled
+            }
+            StartRefused::Unknown(what) => Self::NotFound(what),
+            StartRefused::Invalid(why) => Self::BadRequest(why),
+            StartRefused::Refused { summary, problems } => Self::PlanRefused { summary, problems },
+            StartRefused::Registry(error) => Self::DatasetRegistry(error),
+            StartRefused::Command(error) => Self::Execution(error),
+        }
+    }
+}
+
 /// An authentication failure, as a status the caller can act on.
 ///
 /// Three outcomes, and which one it is decides what the panel does: 401 means

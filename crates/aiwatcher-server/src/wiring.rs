@@ -825,7 +825,7 @@ pub async fn build(config: Config) -> Result<Runtime> {
             Arc::new(aiwatcher_execution::ObjectArtifactCatalog::new(store))
                 as Arc<dyn aiwatcher_execution::ArtifactCatalog>
         }),
-        execution_payloads: aiwatcher_api::state::PayloadDefault {
+        execution_payloads: aiwatcher_execution::PayloadDefault {
             policy: config.execution_payloads,
             locked: config.execution_payloads_locked,
         },

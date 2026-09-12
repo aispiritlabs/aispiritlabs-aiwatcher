@@ -10,47 +10,11 @@ use aiwatcher_bus::{MessageSink, MessageSource};
 use aiwatcher_conversations::Registry as ConversationArchive;
 use aiwatcher_core::ports::{AttemptArtifacts, EditorHost, WorkflowRunner};
 use aiwatcher_datasets::Registry as DatasetRegistry;
-use aiwatcher_execution::message::PayloadPolicy;
-use aiwatcher_execution::{ArtifactCatalog, ExecutionHandler, WorkflowStore};
+use aiwatcher_execution::start::Executions;
+use aiwatcher_execution::{ArtifactCatalog, ExecutionHandler, PayloadDefault, WorkflowStore};
 use aiwatcher_projector::{LiveHub, ReadModel};
 use aiwatcher_prompts::Registry;
 use aiwatcher_training::Registry as TrainingRegistry;
-
-/// What this deployment decided about a hosted run's words.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct PayloadDefault {
-    /// `AIWATCHER_EXECUTION_PAYLOADS`.
-    pub policy: PayloadPolicy,
-    /// `AIWATCHER_EXECUTION_PAYLOADS_LOCKED`: a run may not choose its own.
-    pub locked: bool,
-}
-
-impl PayloadDefault {
-    /// What this run gets, given what it asked for.
-    ///
-    /// `None` is the ordinary case — nothing asked, so the deployment's answer.
-    /// A run that asks while the deployment has pinned its choice is refused
-    /// rather than quietly given the pin: the point of asking for `external` on
-    /// a `sealed` instance is to keep words out of the archive, and silently
-    /// putting them in is the failure the lock exists to prevent, reached from
-    /// the other side.
-    ///
-    /// # Errors
-    ///
-    /// The refusal, as prose, when the lock forbids the request.
-    pub fn resolve(self, asked: Option<PayloadPolicy>) -> Result<PayloadPolicy, String> {
-        match asked {
-            None => Ok(self.policy),
-            Some(asked) if asked == self.policy => Ok(asked),
-            Some(_) if self.locked => Err(format!(
-                "this instance pins every hosted run to `{}` \
-                 (AIWATCHER_EXECUTION_PAYLOADS_LOCKED=true)",
-                self.policy.as_str()
-            )),
-            Some(asked) => Ok(asked),
-        }
-    }
-}
 
 /// How many times one step may be answered, and how big an answer may be.
 ///
@@ -313,6 +277,27 @@ impl AppState {
     pub fn notify_execution_worker(&self) {
         if let Some(worker) = &self.execution_worker {
             worker.notify_waiters();
+        }
+    }
+
+    /// What this deployment can start, and with what.
+    ///
+    /// The one place the use case is assembled, and the reason it is here
+    /// rather than in the route module: the scheduler in the `work` role needs
+    /// the same service, and reaching it through an axum handler's crate is
+    /// what made a tick read HTTP status codes. Borrowed, so this is a handful
+    /// of pointer copies per request and no second owner of a store.
+    #[must_use]
+    pub fn executions(&self) -> Executions<'_, Arc<dyn WorkflowStore>> {
+        Executions {
+            handler: self.executions.as_deref(),
+            pipelines: self.datasets.as_deref(),
+            workflows: self.workflow_definitions.as_deref(),
+            payloads: self.execution_payloads,
+            archive: self.conversations.is_some(),
+            engine: self.query_engine,
+            query_timeout_seconds: self.query_step_timeout_seconds,
+            notify: self.execution_worker.as_deref(),
         }
     }
 }

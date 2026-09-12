@@ -94,6 +94,25 @@ pub enum HandleError {
     NeedsMultiProcess { what: String },
 }
 
+impl HandleError {
+    /// Whether asking again would be told the same thing.
+    ///
+    /// A caller that has to decide *whether to come back* — a scheduler
+    /// settling a slot — cannot read that off a status code: 502 and 500 are
+    /// 5xx by number and permanent by meaning. So the type that knows answers
+    /// it. A command the state would not accept is not accepted on the second
+    /// read either; contention is the store working, and an unreachable one
+    /// may be back.
+    #[must_use]
+    pub const fn says_the_same_next_time(&self) -> bool {
+        match self {
+            Self::Decision(_) | Self::NeedsMultiProcess { .. } => true,
+            Self::Contended { .. } => false,
+            Self::Store(error) => error.says_the_same_next_time(),
+        }
+    }
+}
+
 /// Handles workflow inputs against one store.
 #[derive(Debug)]
 pub struct ExecutionHandler<S> {

@@ -384,7 +384,7 @@ async fn write(
     // tomorrow. It is also what turns a typo in the name into a 404 now — and
     // it is the API's own compiler, the same one the tick will reach for when
     // the slot comes due.
-    let plan = crate::executions::compile_head(&state, kind, &name).await?;
+    let plan = state.executions().compile_head(kind, &name).await?;
 
     // What the tick last did survives an edit. It is a fact about the
     // *definition* — a run was started for it at that slot — and changing the
@@ -414,22 +414,28 @@ async fn write(
             || scheduled.execution_id_for(now),
             |request| scheduled.execution_id_for_request(request),
         );
-        let handled = crate::executions::start(
-            &state,
-            &execution_id,
-            plan,
-            std::collections::BTreeMap::new(),
-            &format!("schedule:{who}"),
-            // A schedule runs a definition this system compiled, so this system
-            // decides it. A hosted run's decider is a worker that has to be
-            // there to receive it, which is not something a tick can arrange.
-            crate::executions::Decider::Local,
-            // The deployment's own, and refused here for the same reason the
-            // route refuses it: a schedule that could not store a turn at nine
-            // tomorrow should say so when it is saved.
-            crate::executions::resolve_payloads(&state, None)?,
-        )
-        .await?;
+        let handled = state
+            .executions()
+            .start(
+                plan,
+                aiwatcher_execution::StartRun {
+                    identity: aiwatcher_execution::RunIdentity::Named(execution_id.clone()),
+                    parameters: std::collections::BTreeMap::new(),
+                    requested_by: format!("schedule:{who}"),
+                    // A schedule runs a definition this system compiled, so
+                    // this system decides it. A hosted run's decider is a
+                    // worker that has to be there to receive it, which is not
+                    // something a tick can arrange.
+                    decided_by: aiwatcher_execution::Decider::Local,
+                    // The deployment's own, and refused here for the same
+                    // reason the route refuses it: a schedule that could not
+                    // store a turn at nine tomorrow should say so when it is
+                    // saved.
+                    payloads: None,
+                },
+            )
+            .await?
+            .handled;
         // Recorded like any other firing, and in the same place the tick
         // records one: a run *was* started for a slot, and a card reading
         // "never fired" straight after somebody watched one start would be a

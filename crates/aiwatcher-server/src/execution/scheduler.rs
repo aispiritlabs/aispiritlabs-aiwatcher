@@ -26,8 +26,8 @@ use std::sync::Arc;
 use aiwatcher_api::state::AppState;
 use aiwatcher_core::Checkpoint;
 use aiwatcher_execution::{
-    ScheduleReader, ScheduleStore, ScheduledDefinition, SlotAdmission, SlotAdmissionRequest,
-    SlotKey, SlotSettlement, WorkflowStore,
+    Decider, RunIdentity, ScheduleReader, ScheduleStore, ScheduledDefinition, SlotAdmission,
+    SlotAdmissionRequest, SlotKey, SlotSettlement, StartRefused, StartRun, WorkflowStore,
 };
 use time::OffsetDateTime;
 use tokio::task::JoinHandle;
@@ -249,14 +249,15 @@ async fn process(
             );
             SlotSettlement::Started { execution_id }
         }
-        Err(failure) => {
-            // This is the only place that can draw the distinction: a
-            // definition that stopped compiling will not compile on
-            // the next tick either, and a store that was unreachable for ten
-            // seconds will. The first is a decision; the second must leave the
-            // slot due, which is what `TryAgain` does.
-            let detail = failure.detail;
-            if failure.permanent {
+        Err(refusal) => {
+            // R2's line, and the refusal answers it. A definition that stopped
+            // compiling will not compile on the next tick either, and neither
+            // will a deployment with no registry behind it; a store that was
+            // unreachable for ten seconds may. The first is a decision; the
+            // second must leave the slot due, which is what `TryAgain` does.
+            let settled = refusal.says_the_same_next_time();
+            let detail = refusal.to_string();
+            if settled {
                 tracing::warn!(
                     definition = %definition.definition_name,
                     slot = %slot,
@@ -279,70 +280,56 @@ async fn process(
     Ok(())
 }
 
-/// Why a slot could not be started, and whether trying again would help.
-struct StartFailure {
-    permanent: bool,
-    detail: String,
-}
-
 /// Compile the head, pin it, and start the run named after this slot.
+///
+/// One call into the use case both this and the route go through
+/// ([`aiwatcher_execution::start`]), rather than into an axum handler's crate:
+/// the tick used to read the **HTTP status** off an `ApiError` to decide
+/// whether the slot should stay due, and a status is a lossy encoding of that
+/// question. A deployment with no dataset registry answers 501, a corrupt
+/// definition 500 and a rejected read 502 — all 5xx, all permanent, all filed
+/// as "come back in a minute", every minute, for ever.
 async fn start_run(
     state: &AppState,
     definition: &ScheduledDefinition,
     slot: OffsetDateTime,
-) -> std::result::Result<String, StartFailure> {
+) -> std::result::Result<String, StartRefused> {
     // The head, read and pinned now. A schedule says *what* to run and never
     // which revision: "every day at nine, the latest saved version" is what
     // somebody setting one means, and the run records the revision it pinned so
     // a bad save is visible in the run rather than silent.
     //
     // Which compiler answers is the definition's kind, and the choice is made
-    // once, in the API, by the same function the schedule route calls before it
-    // agrees to save this. A `match` here as well would be a second answer to
-    // "what does this schedule run": the day a third kind arrives, one side
-    // starts a run and the other refuses to save the schedule for it.
-    let plan = aiwatcher_api::executions::compile_head(
-        state,
-        definition.definition_kind,
-        &definition.definition_name,
-    )
-    .await
-    .map_err(failure_of)?;
+    // once, by the same call the schedule route makes before it agrees to save
+    // this. A `match` here as well would be a second answer to "what does this
+    // schedule run": the day a third kind arrives, one side starts a run and
+    // the other refuses to save the schedule for it.
+    let executions = state.executions();
+    let plan = executions
+        .compile_head(definition.definition_kind, &definition.definition_name)
+        .await?;
 
     let execution_id = definition.execution_id_for(slot);
-    aiwatcher_api::executions::start(
-        state,
-        &execution_id,
-        plan,
-        std::collections::BTreeMap::new(),
-        &format!("schedule:{}", definition.set_by),
-        // The tick compiles a definition and this system runs it. A hosted run
-        // needs a worker present to decide it, which a slot coming due cannot
-        // arrange.
-        aiwatcher_api::executions::Decider::Local,
-        // The deployment's own. Read through the same refusal the route uses,
-        // and classified the same way: a pinned instance with no archive is a
-        // fact about the deployment, so `failure_of` files it as a refusal
-        // rather than as something to come back for.
-        aiwatcher_api::executions::resolve_payloads(state, None).map_err(failure_of)?,
-    )
-    .await
-    .map_err(failure_of)?;
+    executions
+        .start(
+            plan,
+            StartRun {
+                // Derived from the definition and the slot, so two workers that
+                // both notice nine o'clock reach one run.
+                identity: RunIdentity::Named(execution_id.clone()),
+                parameters: std::collections::BTreeMap::new(),
+                requested_by: format!("schedule:{}", definition.set_by),
+                // The tick compiles a definition and this system runs it. A
+                // hosted run needs a worker present to decide it, which a slot
+                // coming due cannot arrange.
+                decided_by: Decider::Local,
+                // The deployment's own. A pinned instance with no archive is a
+                // fact about the deployment, and the refusal says so itself.
+                payloads: None,
+            },
+        )
+        .await?;
     Ok(execution_id.to_string())
-}
-
-/// Which side of R2's line an API refusal falls on.
-///
-/// A 4xx is about the definition and says the same thing every tick; a 5xx is
-/// about something being unreachable and may not. Read from the status the
-/// caller would have been given rather than from the message, because the
-/// message is prose and the status is the classification the API already made.
-fn failure_of(error: aiwatcher_api::ApiError) -> StartFailure {
-    let status = error.status();
-    StartFailure {
-        permanent: status.is_client_error(),
-        detail: error.to_string(),
-    }
 }
 
 /// This process, for the lease on a slot.
