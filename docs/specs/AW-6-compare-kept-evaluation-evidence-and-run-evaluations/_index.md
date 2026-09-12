@@ -46,11 +46,14 @@ building towards, and it is four things rather than one:
   first, and it is what makes the approval resource earn its keep: a managed run
   publishes evidence with no step on the server's host.
 
-Two known follow-ups sit inside the first of those: an index over the evidence
-catalogue (required above roughly a thousand results, and the same change that
-would give it a time order), and uploading an approval bundle through the API,
-which is the last thing standing between a new variant and a host with no
-operator on it.
+Both follow-ups that sat inside the first are done (plan section 19): the
+catalogue has an index and a published order, so its page costs 103 requests
+rather than 152 and the screen carries a period again; and an approval bundle is
+staged through the API, so a new variant needs nothing on the server's host.
+What is left inside B3 is the comparison itself.
 
 ## Log
 - 2026-09-12 — card opened for the remainder of FTI; stage B closed by plan section 18
+- 2026-09-12 — four packages off the limitation list (plan section 19): gaps
+  reported by the pass that already knew, a catalogue index with a published
+  order, bundle upload over the API, and approvals on the screen

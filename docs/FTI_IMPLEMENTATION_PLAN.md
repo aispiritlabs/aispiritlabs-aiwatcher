@@ -724,3 +724,117 @@ wymusza klasę `dark` na `<html>`, więc zrzutu w jasnym nie zrobiłem.
 - **Upload bundle'a zatwierdzenia** — ostatni krok do usunięcia hosta z drogi.
 - **Adapter judge'a** — reguła jest w ADR, kodu nie ma.
 - **AR3** — niezależny, nadal warunek C0.
+
+## 19. Zmniejszenie ograniczeń zapisanych w sekcji 18
+
+Cztery paczki po domknięciu etapu B, wzięte z listy ograniczeń, a nie z listy
+funkcji. Każda zdejmuje coś, co sekcja 18 nazwała kosztem albo brakiem.
+
+| Paczka | Co zdejmuje | Commit |
+| --- | --- | --- |
+| 19.1 Widoczne luki | „wynik bez shardów czyta się jako `complete`” | `31489b7` |
+| 19.2 Indeks katalogu | brak porządku czasowego, próg ~1000, 3 żądania na wiersz | `8f79048`, `24dbfe8` |
+| 19.3 Upload bundle'a | krok na hoście przy nowej parze | `5bfc6ce` |
+| 19.4 Zatwierdzenia w panelu | `listApprovals` bez wywołania, `DELETE` tylko curlem | `671cc0c` |
+
+**Sprostowanie do 18.2.** Usunięcie źródła egzekwuje `sweep` co 60 s — tak było
+od B2f. Na godzinę zeszło wyłącznie zbieranie osieroconych. Zdanie w 18.2 i
+akapit w ADR 0030 mówiły inaczej; oba poprawione.
+
+### 19.1 Luki widoczne bez otwierania wyniku
+
+Przebieg zbierania i tak czyta nagłówek i listuje `content/` każdego wyniku, bo
+inaczej nie wie, co skasować. Różnicę tych dwóch zbiorów wyrzucał. Teraz wraca
+jako `CollectionReport` → `damaged`/`damaged_count` na raporcie retencji, który
+katalog już zwraca; przebiegi minutowe niosą wynik ostatniego godzinnego zamiast
+go zerować. **Zero dodatkowych żądań** w normalnym przypadku — tombstone czyta
+się tylko tam, gdzie nagłówka i tak brakuje.
+
+To nie jest ósmy `EvidenceState`: nagłówek się weryfikuje, stan to `complete`, a
+sprzeczność tych dwóch jest właśnie faktem. Wiersz dostaje plakietkę `bytes
+missing`, szczegół — zdanie z datą przebiegu.
+
+### 19.2 Indeks katalogu, porządek i okres
+
+`evaluations/index/{i64::MAX - committed_at}-{sha256(id)}` z receiptem w środku:
+rosnące listowanie to malejący zegar, a okres to ograniczenie klucza. Pochodny —
+claim jest prawdą, każdy odczyt szczegółu idzie przez niego, a skasowanie całego
+prefiksu nie kasuje dowodów (przebieg zbierania go odbudowuje, tą samą drogą
+trafiają do katalogu wyniki sprzed indeksu).
+
+Wycofanie **znaczy wiersz przed tombstonem**, więc każde okno między trzema
+zapisami pokazuje mniej niż prawdę, nigdy więcej — i dlatego strona nie czyta
+już ani claimu, ani tombstone'a.
+
+| | przed B2f | po B2f | teraz |
+| --- | --- | --- | --- |
+| strona katalogu, 50 wierszy | 400 gets | 152 gets | **103 gets** |
+
+Panel: obie połowy w jednym porządku, `mergeRows` wstrzymuje wiersze starsze niż
+ogon połowy, która ma jeszcze stronę (inaczej lista przestawia się pod czytelnikiem),
+a `onReachEnd` dociąga tę połowę, na którą czeka granica. Kontrolka okresu wraca,
+z domyślnym **„all”** — reszta list domyśla się doby, bo wszystko na nich znika z
+retencją logu; połowa tej istnieje właśnie dlatego, że logu nie ma.
+
+### 19.3 Bajty bundle'a przez API
+
+`PUT /api/v1/evaluation-approvals/{id}/bundle/{name}` (admin), `GET` listuje,
+`DELETE` czyści. Prefiks `evaluation-bundles/` należy do **adaptera**, obok
+`evaluations/`, a nie w środku: czym jest bundle, wie adapter, a rejestr zna
+tylko digest, który mu podano. Port `ApprovalBundles` stoi obok `SourceAuthority`
+i implementuje go ten sam adapter — bez cyklu i bez drugiego crate'u piszącego w
+cudzym układzie kluczy.
+
+Wystawienie bajtów niczego nie dopuszcza: zatwierdzenie rozwiązuje cały bundle i
+przypina jego digest, więc bajty, które przyjdą później, nie poszerzają dopuszczenia
+— zatrzymują odczyt pary. Nazwa członka to jeden segment albo jeden folder
+(`model-artifacts/`); cokolwiek innego jest odmową, nie ścieżką. Wystawione bajty
+mają pierwszeństwo przed katalogiem, więc instancja skonfigurowana wcześniej działa
+jak działała, a instancja bez katalogu w ogóle może dopuścić parę.
+
+### 19.4 Zatwierdzenia na ekranie
+
+Lista z wycofanymi włącznie, kto i kiedy, ile plików wystawiono; wycofanie pyta
+(„Hide every result of this pair? This cannot be undone.”), bo jest ostateczne.
+Wystawienie i dopuszczenie jednym aktem, w kolejności serwera: najpierw bajty,
+potem zatwierdzenie — przerwany upload zostawia instancję taką, jaka była.
+
+Panel **nie liczy** `approval_id`: to digest po kanonicznej deklaracji, więc
+odpowiada `POST /api/v1/evaluation-approvals/address` (czysty, poniżej admina,
+a odmowa to 400 mówiące, co jest nie tak z deklaracją).
+
+### 19.5 Błąd kontraktu, który to znalazło
+
+`components(schemas(...))` to jedna globalna przestrzeń nazw, a `Withdrawal`
+mają i konwersacje, i ewaluacja. Wygrywała ta od korpusu, więc od `004704f`
+kontrakt opisywał `Approval.withdrawn` polami, których ta struktura nie ma — a
+klient TypeScript miał je w typach. Nikt tego pola nie czytał, więc nikt tego nie
+zauważył; znalazł to dopiero ekran, który pisze, kto i kiedy wycofał parę.
+`#[schema(as = ApprovalWithdrawal)]`. Lekcja jest w `CLAUDE.md`.
+
+Przy okazji: `npx tsc --noEmit` nie widzi tego, co `tsc -b` w `npm run build` —
+dwa pola opcjonalne czytane jako wymagane przeszły przez pierwszy i wywróciły
+drugi. Panel sprawdza się buildem.
+
+### 19.6 Odbiór
+
+`just check` 23/23 PASS. Ręcznie na własnej instancji `:19080` z własnym
+katalogiem danych, **bez `AIWATCHER_EVALUATION_SOURCE_DIR`**: wystawienie 10
+plików przez API, dopuszczenie pary, dwie publikacje, skasowanie sharda jednej z
+nich. Katalog pokazał oba wyniki jako `complete` (nazwany koszt B2f), a po
+restarcie raport retencji wymienił `candidate-run-02` w `damaged` i wiersz dostał
+plakietkę. Szczegół: zdanie z datą przebiegu, metryki z nagłówka, strona
+przypadków w stanie `Bytes missing` i bez wierszy. Panel zatwierdzeń: para z
+`admits`, „10 staged”, dwustopniowe wycofanie. **Motyw jasny sprawdzony zrzutem**
+— przez własną kontrolkę Appearance panelu, czego przy B2i nie zrobiłem.
+Instancja zatrzymana, katalog danych usunięty, wpis podglądu cofnięty.
+
+### 19.7 Co zostaje
+
+- **B3, B4, AR3, C0** — bez zmian, karta AW-6.
+- **Chart** wciąż wymaga `volume` przy `enabled`; po 19.3 to już tylko wartość
+  do rozluźnienia, ale pliki `deploy/helm/**` są w tym tygodniu w rękach innej
+  sesji i nie zostały ruszone.
+- **`known_ids`** (most do starych raportów) nadal chodzi po wszystkich claimach,
+  bo musi widzieć też porzucone ID — indeks ich nie ma i nie powinien mieć.
+- **Judge** — reguła w ADR, adaptera nie ma.
