@@ -4,6 +4,7 @@
 
 mod approval;
 mod assessment;
+mod cohort;
 mod comparison;
 mod context;
 mod judge;
@@ -24,6 +25,10 @@ pub use approval::{
 pub use assessment::{
     Assessment, AssessmentHistory, AssessmentPage, AssessmentRequest, AssessmentSource,
     AssessmentTarget, AssessmentTargetQuery, TargetKind, standing_id,
+};
+pub use cohort::{
+    COHORT_CASES, COHORT_EXPECTATIONS_SCHEMA, COHORT_INPUT_SCHEMA, CohortFiles, CohortRequest,
+    DerivedCohort,
 };
 pub use comparison::{
     CaseChange, CaseDiffPage, CaseFilter, CaseOutcome, DiffQuery, EvidenceCaseDelta,

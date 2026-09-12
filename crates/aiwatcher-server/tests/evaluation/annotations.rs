@@ -593,3 +593,83 @@ async fn verified_annotation_reads_enforce_declared_rights_blob_ownership_and_bo
         f.store.put(&target, original).await.unwrap();
     }
 }
+
+#[tokio::test]
+async fn an_export_split_derives_its_first_images_as_a_cohort_nobody_stages() {
+    let mut f = Fixture::new("annotation-derived").await;
+    let owner = Arc::new(Annotations::new(f.store.clone(), "annotations"));
+    let coco = pin(&mut f, &owner).await;
+    let registry = registry(&f, owner);
+    let dataset = f.request.manifest.context.dataset.clone();
+
+    let derived = registry
+        .derive_cohort(
+            &CohortRequest {
+                dataset: dataset.clone(),
+                split: "test".into(),
+                limit: Some(1),
+            },
+            "ada",
+            100,
+        )
+        .await
+        .unwrap();
+    assert_eq!((derived.cohort.case_count, derived.available), (1, 2));
+    // A split an export does not deal is a refusal, as it is at admission.
+    assert!(matches!(
+        registry
+            .derive_cohort(
+                &CohortRequest {
+                    dataset,
+                    split: "holdout".into(),
+                    limit: None,
+                },
+                "ada",
+                100,
+            )
+            .await,
+        Err(EvaluationError::Unavailable(EvidenceState::Forbidden))
+    ));
+
+    let mut request = f.request.clone();
+    let context = &mut request.manifest.context;
+    context.case_manifest = derived.cohort.case_manifest.clone();
+    context.input_schema = derived.cohort.input_schema.clone();
+    context.expectations_schema = derived.cohort.expectations_schema.clone();
+    context.case_count = 1;
+    request.cases.truncate(1);
+    for name in [
+        COHORT_CASES,
+        COHORT_INPUT_SCHEMA,
+        COHORT_EXPECTATIONS_SCHEMA,
+    ] {
+        let _ = tokio::fs::remove_file(f.root.join(name)).await;
+    }
+    f.approve(&request.manifest).await;
+    let receipt = publish(&registry, request, "editor", 101)
+        .await
+        .expect("the adapter derives the one image again and it matches");
+    let evidence = registry
+        .get(&receipt.evaluation_id, "viewer", 102)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(evidence.state, EvidenceState::Complete);
+    let page = registry
+        .cases(
+            &receipt.evaluation_id,
+            &receipt.version,
+            None,
+            None,
+            "viewer",
+            102,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(page.cases.len(), 1);
+    assert_eq!(
+        page.cases[0].measurement.case_id,
+        coco["images"][0]["file_name"].as_str().unwrap()
+    );
+}

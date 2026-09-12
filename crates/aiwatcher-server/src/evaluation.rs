@@ -3,8 +3,8 @@ mod annotations;
 mod conversations;
 use aiwatcher_core::storage::ObjectStore;
 use aiwatcher_evaluation::{
-    CollectionReport, DatasetKind, Evaluation, EvaluationError, EvaluationManifest, EvidenceState,
-    Result, SourceAuthority, SourceEvidence, StagedFile,
+    CohortFiles, CohortRequest, CollectionReport, DatasetKind, Evaluation, EvaluationError,
+    EvaluationManifest, EvidenceState, Result, SourceAuthority, SourceEvidence, StagedFile,
 };
 use async_trait::async_trait;
 pub use conversations::ConversationCipher;
@@ -264,7 +264,7 @@ struct Cases {
     schema_version: u32,
     cases: Vec<SourceCase>,
 }
-#[derive(Deserialize, PartialEq, Eq)]
+#[derive(Deserialize, serde::Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct SourceCase {
     case_id: String,
@@ -439,9 +439,6 @@ impl SourceAuthority for LocalSource {
             Some(&v.generation_config),
             v.response_schema.as_ref(),
             v.tools.as_ref(),
-            Some(&c.case_manifest),
-            Some(&c.input_schema),
-            Some(&c.expectations_schema),
         ]
         .into_iter()
         .flatten()
@@ -449,6 +446,15 @@ impl SourceAuthority for LocalSource {
             // The URI is a pin only. The operator bundle, not the URI, selects
             // bytes, so a manifest can never turn this into an HTTP/file proxy.
             verified(&root, &artifact.name, &artifact.digest, artifact.size_bytes).await?;
+        }
+        // The cohort's three, from the bundle when an operator staged them and
+        // derived again from their owner when nobody did.
+        let mut derived = None;
+        let cases = self
+            .cohort_member(&root, &c.case_manifest, c, &mut derived)
+            .await?;
+        for artifact in [&c.input_schema, &c.expectations_schema] {
+            self.cohort_member(&root, artifact, c, &mut derived).await?;
         }
         // A producer's suite and scorer are files it ran, re-read like every
         // other pin. Evidence this deployment measured has neither: its suite
@@ -467,47 +473,30 @@ impl SourceAuthority for LocalSource {
         let bundle_digest = added;
         let earlier_bundle_digest = Some(hex::encode(earlier.finalize()));
         if c.dataset.kind == DatasetKind::Conversations {
-            let mut evidence = self.conversation_cases(&root, c).await?;
+            let mut evidence = self.conversation_cases(&cases, c).await?;
             evidence.bundle_digest = bundle_digest;
             evidence.earlier_bundle_digest = earlier_bundle_digest;
             return Ok(evidence);
         }
         if c.dataset.kind == DatasetKind::Annotations {
-            let mut evidence = self.annotation_cases(&root, c).await?;
+            let mut evidence = self.annotation_cases(&cases, c).await?;
             evidence.bundle_digest = bundle_digest;
             evidence.earlier_bundle_digest = earlier_bundle_digest;
             return Ok(evidence);
         }
-        let cases: Cases = serde_json::from_slice(
-            &verified(
-                &root,
-                &c.case_manifest.name,
-                &c.case_manifest.digest,
-                c.case_manifest.size_bytes,
-            )
-            .await?,
-        )?;
+        let cases: Cases = serde_json::from_slice(&cases)?;
         if cases.schema_version != 1 || cases.cases.len() as u64 != c.case_count {
             return Err(unavailable(EvidenceState::CorruptArtifact));
         }
         if c.dataset.kind == DatasetKind::Curation {
-            let owner = self
-                .datasets
-                .as_ref()
-                .ok_or_else(|| unavailable(EvidenceState::Forbidden))?;
-            let snapshot = owner
-                .verified_version(&c.dataset.name, &c.dataset.version)
-                .await
-                .map_err(dataset_error)?;
-            let rows: Vec<SourceCase> = snapshot
-                .items
-                .into_iter()
-                .map(|row| serde_json::from_value(serde_json::to_value(row)?))
-                .collect::<std::result::Result<_, _>>()
-                .map_err(|_| unavailable(EvidenceState::CorruptArtifact))?;
+            let rows = self
+                .curation_rows(&c.dataset.name, &c.dataset.version)
+                .await?;
             // Order, IDs, inputs and expectations must agree with the pinned
             // case manifest. Matching only answers would admit different work.
-            if rows != cases.cases {
+            // The owner's first cases, as many as the cohort declares: a cohort
+            // taken with a limit selects a prefix, one without selects them all.
+            if rows.get(..cases.cases.len()) != Some(cases.cases.as_slice()) {
                 return Err(unavailable(EvidenceState::CorruptArtifact));
             }
         }
@@ -532,6 +521,132 @@ impl SourceAuthority for LocalSource {
             earlier_bundle_digest,
         })
     }
+
+    async fn derive_cohort(&self, request: &CohortRequest, _subject: &str) -> Result<CohortFiles> {
+        request.validate()?;
+        match request.dataset.kind {
+            DatasetKind::Curation => {
+                let rows = self
+                    .curation_rows(&request.dataset.name, &request.dataset.version)
+                    .await?;
+                cohort_files(
+                    &rows,
+                    request.limit,
+                    &serde_json::json!({
+                        "type": "object",
+                        "properties": {"question": {"type": "string"}},
+                        "required": ["question"],
+                        "additionalProperties": false
+                    }),
+                    &serde_json::json!({
+                        "type": "object",
+                        "properties": {"answer": {"type": "string"}},
+                        "required": ["answer"],
+                        "additionalProperties": false
+                    }),
+                )
+            }
+            DatasetKind::Annotations => self.annotation_cohort(request).await,
+            DatasetKind::Conversations => self.conversation_cohort(request).await,
+            DatasetKind::External | DatasetKind::Assessments => Err(EvaluationError::Invalid {
+                field: "cohort.dataset.kind".into(),
+                reason: "only a dataset this deployment owns has cases it can derive".into(),
+            }),
+        }
+    }
+}
+
+impl LocalSource {
+    /// Every row of a curation dataset version, as the case it is.
+    async fn curation_rows(&self, name: &str, version: &str) -> Result<Vec<SourceCase>> {
+        let owner = self
+            .datasets
+            .as_ref()
+            .ok_or_else(|| unavailable(EvidenceState::Forbidden))?;
+        let snapshot = owner
+            .verified_version(name, version)
+            .await
+            .map_err(dataset_error)?;
+        snapshot
+            .items
+            .into_iter()
+            .map(|row| serde_json::from_value(serde_json::to_value(row)?))
+            .collect::<std::result::Result<_, _>>()
+            .map_err(|_| unavailable(EvidenceState::CorruptArtifact))
+    }
+
+    /// One file a cohort pins: the bundle's copy when an operator staged one,
+    /// and otherwise the owner's derivation, held to the same pin.
+    ///
+    /// Only a missing member is derived. A staged member that does not hash
+    /// to the pin is the refusal it always was, and a pin the derivation does
+    /// not produce is a file nobody staged — the refusal a bundle missing it
+    /// always got.
+    async fn cohort_member(
+        &self,
+        root: &Bundle,
+        artifact: &aiwatcher_core::ArtifactRef,
+        context: &aiwatcher_evaluation::EvaluationContext,
+        derived: &mut Option<CohortFiles>,
+    ) -> Result<Vec<u8>> {
+        match verified(root, &artifact.name, &artifact.digest, artifact.size_bytes).await {
+            Err(EvaluationError::Unavailable(EvidenceState::DeletedSource))
+                if context.dataset.kind != DatasetKind::External =>
+            {
+                if derived.is_none() {
+                    let request = CohortRequest {
+                        dataset: context.dataset.clone(),
+                        split: context.split.clone(),
+                        limit: Some(context.case_count),
+                    };
+                    *derived = Some(self.derive_cohort(&request, "").await?);
+                }
+                derived
+                    .as_ref()
+                    .and_then(|files| files.pinned(artifact))
+                    .map(<[u8]>::to_vec)
+                    .ok_or_else(|| unavailable(EvidenceState::DeletedSource))
+            }
+            other => other,
+        }
+    }
+}
+
+/// The first `limit` of an owner's cases, as the three files a cohort pins.
+///
+/// Canonical bytes — serde's own encoding of one value, whose maps are
+/// ordered — so the same cases derive the same digests every time they are
+/// derived, which is the whole of what lets nothing be staged.
+fn cohort_files<T: serde::Serialize>(
+    cases: &[T],
+    limit: Option<u64>,
+    input_schema: &serde_json::Value,
+    expectations_schema: &serde_json::Value,
+) -> Result<CohortFiles> {
+    let available = cases.len() as u64;
+    let count = limit.map_or(available, |limit| limit.min(available));
+    let selected = cases
+        .get(..usize::try_from(count).unwrap_or(cases.len()))
+        .unwrap_or(cases);
+    let schema = |shape: &serde_json::Value| {
+        let mut schema = serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema"
+        });
+        if let (Some(target), Some(source)) = (schema.as_object_mut(), shape.as_object()) {
+            target.extend(source.clone());
+        }
+        serde_json::to_vec(&schema)
+    };
+    Ok(CohortFiles {
+        cases: serde_json::to_vec(&serde_json::json!({
+            "schema_version": 1,
+            "cases": selected,
+        }))?,
+        input_schema: schema(input_schema)?,
+        expectations_schema: schema(expectations_schema)?,
+        count,
+        available,
+    })
 }
 
 fn dataset_error(error: aiwatcher_datasets::RegistryError) -> EvaluationError {

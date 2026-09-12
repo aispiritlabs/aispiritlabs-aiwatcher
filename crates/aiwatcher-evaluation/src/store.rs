@@ -143,6 +143,10 @@ pub(crate) fn calibration(version: &str) -> String {
 pub(crate) fn judge_reply(declaration: &str, question: &str) -> String {
     format!("evaluation-judges/replies/{declaration}/{question}.json")
 }
+/// Where a derived cohort's cases came from, under the digest of those cases.
+pub(crate) fn derived_cohort(cases: &str) -> String {
+    format!("evaluation-cohorts/{cases}.json")
+}
 pub(crate) fn scoring_run(id: &str) -> String {
     format!("{SCORING_RUNS}{id}.json")
 }

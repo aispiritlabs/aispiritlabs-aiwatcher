@@ -537,3 +537,213 @@ it("holds admitting and starting until the server's warning about the archive is
   await waitFor(() => expect(onStarted).toHaveBeenCalledWith('e-2'));
   expect(server.countOf('POST', `/evaluation-runs/${DECLARATION}/start`)).toBe(1);
 });
+
+it("takes a cohort from a curation version's first cases, and pins the variant to that dataset", async () => {
+  const derivedCohort = {
+    case_manifest: { ...artifact('cases.json'), digest: 'f'.repeat(64) },
+    case_count: 2,
+    split: 'held-out',
+    input_schema: artifact('input-schema.json'),
+    expectations_schema: artifact('expectations-schema.json'),
+  };
+  const server = drafting({ kind: 'exact_match' }, 'curation', [
+    {
+      method: 'GET',
+      path: '/datasets',
+      answer: {
+        status: 200,
+        body: {
+          datasets: [
+            {
+              name: 'questions-v2',
+              latest: { version: 'b'.repeat(64), row_count: 40, columns: [], created_at: 'x' },
+              versions: [{ version: 'b'.repeat(64), row_count: 40, columns: [], created_at: 'x' }],
+            },
+          ],
+        },
+      },
+    },
+    {
+      method: 'POST',
+      path: '/evaluation-cohorts',
+      answer: {
+        status: 200,
+        body: {
+          request: {},
+          cohort: derivedCohort,
+          available: 40,
+          derived_by: 'ada',
+          derived_at: 1,
+        },
+      },
+    },
+    {
+      method: 'PUT',
+      path: '/evaluation-recordings/answers.json',
+      answer: { status: 200, body: artifact('answers.json') },
+    },
+    {
+      method: 'POST',
+      path: '/evaluation-runs',
+      answer: { status: 200, body: { declaration: { id: DECLARATION } } },
+    },
+  ]);
+  render(
+    withQueries(
+      <Measure
+        declaration={undefined}
+        measured={undefined}
+        onDeclared={vi.fn()}
+        onStarted={vi.fn()}
+        onOpenResult={vi.fn()}
+      />,
+    ),
+  );
+  await choose();
+  await userEvent.click(screen.getByLabelText('A dataset version this deployment owns'));
+  const dataset = screen.getByLabelText('Dataset');
+  await userEvent.selectOptions(
+    dataset,
+    await within(dataset).findByRole('option', { name: 'questions-v2' }),
+  );
+  await userEvent.selectOptions(
+    screen.getByLabelText('Dataset version'),
+    screen.getByRole('option', { name: /40 rows/ }),
+  );
+  const split = screen.getByLabelText('Split');
+  await userEvent.clear(split);
+  await userEvent.type(split, 'held-out');
+  await userEvent.type(screen.getByLabelText('Case limit'), '2');
+  await userEvent.type(screen.getByLabelText('Evaluation ID'), 'candidate-2');
+  await userEvent.upload(screen.getByLabelText('Recording'), recordingFile());
+  await userEvent.click(screen.getByRole('button', { name: 'Declare' }));
+
+  await waitFor(() =>
+    expect(server.calls.some((call) => call.url.endsWith('/evaluation-runs'))).toBe(true),
+  );
+  const asked = server.calls.find((call) => call.url.endsWith('/evaluation-cohorts'))
+    ?.body as Record<string, any>;
+  expect(asked).toEqual({
+    dataset: { kind: 'curation', name: 'questions-v2', version: 'b'.repeat(64) },
+    split: 'held-out',
+    limit: 2,
+  });
+  const declared = server.calls.find(
+    (call) => call.method === 'POST' && call.url.endsWith('/evaluation-runs'),
+  )?.body as Record<string, any>;
+  // The pins are the server's, never worked out here.
+  expect(declared.cohort).toEqual(derivedCohort);
+  expect(declared.variant.dataset).toEqual(asked.dataset);
+});
+
+it("a limit on the result's own cohort is taken from that result's dataset and split", async () => {
+  const server = drafting({ kind: 'exact_match' }, 'curation', [
+    {
+      method: 'POST',
+      path: '/evaluation-cohorts',
+      answer: {
+        status: 200,
+        body: {
+          request: {},
+          cohort: { ...published().manifest.context, case_count: 1 },
+          available: 3,
+          derived_by: 'ada',
+          derived_at: 1,
+        },
+      },
+    },
+    {
+      method: 'PUT',
+      path: '/evaluation-recordings/answers.json',
+      answer: { status: 200, body: artifact('answers.json') },
+    },
+    {
+      method: 'POST',
+      path: '/evaluation-runs',
+      answer: { status: 200, body: { declaration: { id: DECLARATION } } },
+    },
+  ]);
+  render(
+    withQueries(
+      <Measure
+        declaration={undefined}
+        measured={undefined}
+        onDeclared={vi.fn()}
+        onStarted={vi.fn()}
+        onOpenResult={vi.fn()}
+      />,
+    ),
+  );
+  await choose();
+  await userEvent.type(screen.getByLabelText('Case limit'), '1');
+  await userEvent.type(screen.getByLabelText('Evaluation ID'), 'smoke');
+  await userEvent.upload(screen.getByLabelText('Recording'), recordingFile());
+  await userEvent.click(screen.getByRole('button', { name: 'Declare' }));
+  await waitFor(() =>
+    expect(server.calls.some((call) => call.url.endsWith('/evaluation-cohorts'))).toBe(true),
+  );
+  expect(server.calls.find((call) => call.url.endsWith('/evaluation-cohorts'))?.body).toEqual({
+    dataset: { kind: 'curation', name: 'questions', version: 'v1' },
+    split: 'test',
+    limit: 1,
+  });
+});
+
+it('says a derived cohort is the first cases of how many, and that its files are not brought', async () => {
+  serve([
+    { method: 'GET', path: '/auth/config', answer: { status: 200, body: { enabled: false } } },
+    {
+      method: 'GET',
+      path: `/evaluation-runs/${DECLARATION}`,
+      answer: {
+        status: 200,
+        body: {
+          admitted: false,
+          approval_id: APPROVAL,
+          manifest: {
+            ...published().manifest,
+            context: { ...published().manifest.context, case_count: 2 },
+          },
+          cohort: {
+            request: {
+              dataset: { kind: 'curation', name: 'questions', version: 'v1' },
+              split: 'test',
+              limit: 2,
+            },
+            cohort: {},
+            available: 3,
+            derived_by: 'ada',
+            derived_at: 1,
+          },
+          declaration: {
+            id: DECLARATION,
+            declared_by: 'ada',
+            declared_at: 1,
+            run: {
+              evaluation_id: 'smoke',
+              repetition_id: 'measurement-1',
+              variant: published().manifest.variant,
+              cohort: {},
+              scorecard: { name: 'answer-quality', version: VERSION },
+              answers: artifact('answers.json'),
+            },
+          },
+        },
+      },
+    },
+  ]);
+  render(
+    withQueries(
+      <Measure
+        declaration={DECLARATION}
+        measured={undefined}
+        onDeclared={vi.fn()}
+        onStarted={vi.fn()}
+        onOpenResult={vi.fn()}
+      />,
+    ),
+  );
+  expect(await screen.findByText(/the first 2 of 3 cases/)).toBeTruthy();
+  expect(screen.getByText(/derived again from questions when the pair is admitted/)).toBeTruthy();
+  expect(screen.getByText(/responses\.py, generation\.json/)).toBeTruthy();
+});

@@ -4766,6 +4766,140 @@
         }
       }
     },
+    "/api/v1/evaluation-cohorts": {
+      "post": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Take a cohort from a dataset version this deployment owns.",
+        "description": "The first `limit` cases of a version's split, as the owner holds them, with\nthe three files a cohort pins derived here — so a declaration names them\nand nobody writes or stages them. Admitting the pair derives them again from\nthe owner. A conversation corpus's cases are content, so an admin takes a\ncohort from one, as an admin reads its cases.",
+        "operationId": "derive_cohort",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CohortRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DerivedCohort"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/evaluation-cohorts/{cases}": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Where the cases under one digest were derived from, if this deployment\nderived them.",
+        "operationId": "get_derived_cohort",
+        "parameters": [
+          {
+            "name": "cases",
+            "in": "path",
+            "description": "The digest of a cohort's cases",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DerivedCohort"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/evaluation-recordings/{name}": {
       "put": {
         "tags": [
@@ -13129,6 +13263,34 @@
         },
         "additionalProperties": false
       },
+      "CohortRequest": {
+        "type": "object",
+        "description": "Which cases of which dataset version a cohort should select.",
+        "required": [
+          "dataset",
+          "split"
+        ],
+        "properties": {
+          "dataset": {
+            "$ref": "#/components/schemas/DatasetReference",
+            "description": "A curation dataset version, an annotation export or a conversation\ncorpus. What the variant measured must name the same one."
+          },
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The owner's first this-many cases, when fewer than all of them.",
+            "minimum": 1
+          },
+          "split": {
+            "type": "string",
+            "description": "For an annotation export, the split it deals (`train`, `validation`,\n`test`); a conversation corpus is measured on `test`. A curation\nversion has no splits of its own, so there it is the name the cohort\nis given and selects nothing."
+          }
+        },
+        "additionalProperties": false
+      },
       "Comparability": {
         "type": "string",
         "enum": [
@@ -14360,6 +14522,38 @@
       "DefinitionRevision": {
         "type": "string",
         "description": "The immutable, content-addressed version of an authored definition.\n\nA newtype over the digest so that a function taking both a revision and a\n`plan_id` cannot be called with them the wrong way round — they are both\n64 hex characters and they mean different things."
+      },
+      "DerivedCohort": {
+        "type": "object",
+        "description": "A derived cohort, as it was first derived.\n\nKept under the digest of its cases, so a declaration naming those cases can\nsay where they came from — which is what lets an operator admitting it be\ntold that its three files are not theirs to bring. It records a derivation\nand never authorises one: the adapter derives the bytes again every time.",
+        "required": [
+          "request",
+          "cohort",
+          "available",
+          "derived_by",
+          "derived_at"
+        ],
+        "properties": {
+          "available": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many cases the split holds, of which the cohort selects the first\n`cohort.case_count`.",
+            "minimum": 0
+          },
+          "cohort": {
+            "$ref": "#/components/schemas/Cohort"
+          },
+          "derived_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "derived_by": {
+            "type": "string"
+          },
+          "request": {
+            "$ref": "#/components/schemas/CohortRequest"
+          }
+        }
       },
       "DimensionKind": {
         "type": "string",
@@ -23988,6 +24182,17 @@
           "approval_id": {
             "type": "string",
             "description": "The approval that admits this pair, whether or not it exists yet."
+          },
+          "cohort": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DerivedCohort",
+                "description": "Where the cohort's three files came from, when this deployment derived\nthem from a dataset version it owns. An operator admitting the pair\nthen brings only what the variant pins: the adapter derives the rest."
+              }
+            ]
           },
           "declaration": {
             "$ref": "#/components/schemas/DeclaredRun"

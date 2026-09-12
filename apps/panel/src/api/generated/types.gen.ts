@@ -1189,6 +1189,28 @@ export type Cohort = {
     split: string;
 };
 
+/**
+ * Which cases of which dataset version a cohort should select.
+ */
+export type CohortRequest = {
+    /**
+     * A curation dataset version, an annotation export or a conversation
+     * corpus. What the variant measured must name the same one.
+     */
+    dataset: DatasetReference;
+    /**
+     * The owner's first this-many cases, when fewer than all of them.
+     */
+    limit?: number | null;
+    /**
+     * For an annotation export, the split it deals (`train`, `validation`,
+     * `test`); a conversation corpus is measured on `test`. A curation
+     * version has no splits of its own, so there it is the name the cohort
+     * is given and selects nothing.
+     */
+    split: string;
+};
+
 export const Comparability = {
     COMPARABLE: 'comparable',
     INCOMPATIBLE: 'incompatible',
@@ -1889,6 +1911,26 @@ export type DefinitionKind = typeof DefinitionKind[keyof typeof DefinitionKind];
  * 64 hex characters and they mean different things.
  */
 export type DefinitionRevision = string;
+
+/**
+ * A derived cohort, as it was first derived.
+ *
+ * Kept under the digest of its cases, so a declaration naming those cases can
+ * say where they came from — which is what lets an operator admitting it be
+ * told that its three files are not theirs to bring. It records a derivation
+ * and never authorises one: the adapter derives the bytes again every time.
+ */
+export type DerivedCohort = {
+    /**
+     * How many cases the split holds, of which the cohort selects the first
+     * `cohort.case_count`.
+     */
+    available: number;
+    cohort: Cohort;
+    derived_at: number;
+    derived_by: string;
+    request: CohortRequest;
+};
 
 /**
  * What the tree is rooted on.
@@ -7032,6 +7074,7 @@ export type ScoringRunView = {
      * The approval that admits this pair, whether or not it exists yet.
      */
     approval_id: string;
+    cohort?: null | DerivedCohort;
     declaration: DeclaredRun;
     manifest: EvaluationManifest;
     /**
@@ -10484,6 +10527,54 @@ export type GetCalibrationResponses = {
 };
 
 export type GetCalibrationResponse = GetCalibrationResponses[keyof GetCalibrationResponses];
+
+export type DeriveCohortData = {
+    body: CohortRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/evaluation-cohorts';
+};
+
+export type DeriveCohortErrors = {
+    400: ErrorBody;
+    403: ErrorBody;
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type DeriveCohortError = DeriveCohortErrors[keyof DeriveCohortErrors];
+
+export type DeriveCohortResponses = {
+    200: DerivedCohort;
+};
+
+export type DeriveCohortResponse = DeriveCohortResponses[keyof DeriveCohortResponses];
+
+export type GetDerivedCohortData = {
+    body?: never;
+    path: {
+        /**
+         * The digest of a cohort's cases
+         */
+        cases: string;
+    };
+    query?: never;
+    url: '/api/v1/evaluation-cohorts/{cases}';
+};
+
+export type GetDerivedCohortErrors = {
+    400: ErrorBody;
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type GetDerivedCohortError = GetDerivedCohortErrors[keyof GetDerivedCohortErrors];
+
+export type GetDerivedCohortResponses = {
+    200: DerivedCohort;
+};
+
+export type GetDerivedCohortResponse = GetDerivedCohortResponses[keyof GetDerivedCohortResponses];
 
 export type StageRecordingData = {
     body: Array<number>;

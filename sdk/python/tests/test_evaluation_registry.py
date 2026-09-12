@@ -273,3 +273,30 @@ def test_a_calibration_set_is_taken_once_however_often_it_is_asked_for() -> None
         )
     assert taken["version"] == "c" * 64
     assert bodies[0] == bodies[1], "content addressed, so a lost reply is asked again"
+
+
+def test_a_cohort_is_derived_by_the_server_and_asked_for_again_after_a_lost_reply() -> None:
+    bodies: list[bytes] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        bodies.append(request.content)
+        if len(bodies) == 1:
+            raise httpx.ReadError("response lost", request=request)
+        return httpx.Response(
+            200, json={"cohort": {"case_count": 2}, "available": 40, "derived_by": "ada"}
+        )
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(handle)) as http,
+        EvaluationRegistry("http://localhost", client=http, attempts=2) as registry,
+    ):
+        derived = registry.derive_cohort(
+            {
+                "dataset": {"kind": "curation", "name": "questions", "version": "b" * 64},
+                "split": "test",
+                "limit": 2,
+            }
+        )
+    assert derived["available"] == 40
+    assert json.loads(bodies[1])["limit"] == 2
+    assert bodies[0] == bodies[1], "the same cases derive the same pins, so a retry is safe"

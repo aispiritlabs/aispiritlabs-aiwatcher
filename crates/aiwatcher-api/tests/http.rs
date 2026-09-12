@@ -7557,6 +7557,65 @@ async fn judgements_without_an_evaluation_store_say_which_setting_is_missing() {
 
 /// What a run would measure, declared rather than discovered.
 #[tokio::test]
+async fn a_cohort_is_derived_by_an_editor_from_a_dataset_somebody_here_owns_and_by_nobody_else() {
+    let mut fixture = Fixture::behind_a_proxy(false).await;
+    fixture.state.evaluations = Some(Arc::new(
+        aiwatcher_evaluation::Registry::new(
+            Arc::new(MemoryObjectStore::new()),
+            Arc::new(EvaluationSource::default()),
+            Default::default(),
+        )
+        .unwrap(),
+    ));
+    let request = |kind: &str| {
+        json!({"dataset": {"kind": kind, "name": "questions", "version": "b".repeat(64)},
+               "split": "test", "limit": 2})
+    };
+
+    let (status, _) = fixture
+        .post_as(
+            "/api/v1/evaluation-cohorts",
+            "bob",
+            "aiwatcher-viewers",
+            request("curation"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "a reader derives nothing");
+
+    // An external cohort's cases are its producer's to write.
+    let (status, refused) = fixture
+        .post_as(
+            "/api/v1/evaluation-cohorts",
+            "ada",
+            "aiwatcher-editors",
+            request("external"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert!(refused.to_string().contains("owns"), "{refused}");
+
+    // A conversation corpus's cases are content, which an editor may not read.
+    let (status, refused) = fixture
+        .post_as(
+            "/api/v1/evaluation-cohorts",
+            "ada",
+            "aiwatcher-editors",
+            request("conversations"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+
+    let (status, missing) = fixture
+        .get_as(
+            &format!("/api/v1/evaluation-cohorts/{}", "c".repeat(64)),
+            "bob",
+            "aiwatcher-viewers",
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{missing}");
+}
+
+#[tokio::test]
 async fn a_scorecard_is_declared_by_an_editor_and_read_back_at_the_version_that_measured_with_it() {
     let mut fixture = Fixture::behind_a_proxy(false).await;
     fixture.state.evaluations = Some(Arc::new(

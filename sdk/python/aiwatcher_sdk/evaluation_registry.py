@@ -24,6 +24,7 @@ import httpx
 from aiwatcher_sdk.api import ApiError, Transport
 from aiwatcher_sdk.evaluation import (
     ArtifactReference,
+    DatasetReference,
     EvaluationManifest,
     VariantManifest,
     VersionReference,
@@ -206,6 +207,20 @@ class Cohort(TypedDict):
     split: str
     input_schema: ArtifactReference
     expectations_schema: ArtifactReference
+
+
+class CohortRequest(TypedDict):
+    """Which cases of a dataset version this deployment owns a cohort selects.
+
+    ``split`` is the split an annotation export deals, ``test`` for a
+    conversation corpus, and only a name for a curation version, which deals
+    none. ``limit`` takes the owner's first cases rather than a sample; a cohort
+    of some of them compares with nothing measured on all of them.
+    """
+
+    dataset: DatasetReference
+    split: str
+    limit: NotRequired[int]
 
 
 class JudgeSettings(TypedDict, total=False):
@@ -500,6 +515,26 @@ class EvaluationRegistry:
         """
         return self._object(
             self._transport.send("POST", "/api/v1/evaluation-runs", dict(run), idempotent=True)
+        )
+
+    def derive_cohort(self, request: CohortRequest) -> dict[str, Any]:
+        """Take a cohort from a dataset version, as the three files it pins.
+
+        The answer's ``cohort`` goes straight into a :class:`ScoringRun`, with
+        the variant naming the same dataset. Nothing is staged: admitting the
+        pair derives the files again from the owner. A conversation corpus's
+        cases are content, so this raises for anybody but an admin there.
+        """
+        return self._object(
+            self._transport.send(
+                "POST", "/api/v1/evaluation-cohorts", dict(request), idempotent=True
+            )
+        )
+
+    def get_derived_cohort(self, cases: str) -> dict[str, Any]:
+        """Where the cases under this digest were derived from."""
+        return self._object(
+            self._transport.send("GET", "/api/v1/evaluation-cohorts/" + quote(cases, safe=""))
         )
 
     def take_calibration(self, request: CalibrationRequest) -> dict[str, Any]:

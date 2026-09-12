@@ -21,8 +21,12 @@ import * as React from 'react';
 import {
   approveSource,
   declareScoringRun,
+  deriveCohort,
   getScorecard,
   getScoringRun,
+  listConversationExports,
+  listDatasets,
+  listExports,
   listScorecards,
   stageBundle,
   stageRecording,
@@ -31,6 +35,8 @@ import {
 } from '@/api/generated/sdk.gen';
 import type {
   CalibrationVersion,
+  CohortRequest,
+  DatasetKind,
   DurableEvaluation,
   ScoringRun,
   ScoringRunView,
@@ -103,6 +109,30 @@ export function Measure({
   );
 }
 
+/**
+ * Where a run's cohort comes from: the chosen result's own, or a dataset
+ * version this deployment owns. Either way `limit` takes the owner's first
+ * cases — which the server derives, since a subset of a producer's own case
+ * file is nothing anybody here could check.
+ */
+type CohortChoice = {
+  from: 'result' | 'dataset';
+  kind: Extract<DatasetKind, 'curation' | 'annotations' | 'conversations'>;
+  name: string;
+  version: string;
+  split: string;
+  limit: string;
+};
+
+const RESULT_COHORT: CohortChoice = {
+  from: 'result',
+  kind: 'curation',
+  name: '',
+  version: '',
+  split: 'test',
+  limit: '',
+};
+
 /** Published results whose manifest can be measured again. */
 function usePublished(): DurableEvaluation[] {
   const evidence = useEvidence(undefined);
@@ -140,6 +170,7 @@ function Draft({ onDeclared }: { onDeclared: (declaration: string) => void }) {
   // How the run goes rather than what it measures: neither reaches the
   // manifest, and blank is the deployment's own answer.
   const [pace, setPace] = React.useState({ timeout: '', concurrency: '' });
+  const [cohort, setCohort] = React.useState<CohortChoice>(RESULT_COHORT);
 
   const head = cards.data?.scorecards.find((card) => card.name === cardName);
   const card = useQuery({
@@ -163,7 +194,9 @@ function Draft({ onDeclared }: { onDeclared: (declaration: string) => void }) {
       : [],
   );
   const source = published.find((row) => row.receipt.evaluation_id === sourceId);
-  const conversations = source?.manifest?.context.dataset.kind === 'conversations';
+  const conversations =
+    (cohort.from === 'dataset' ? cohort.kind : source?.manifest?.context.dataset.kind) ===
+    'conversations';
   // The archive is the only place a conversation cohort's answers may come
   // from; the server refuses the other pairing, and the form does not offer it.
   const chosenAnswers = conversations ? 'archive' : answers;
@@ -201,17 +234,45 @@ function Draft({ onDeclared }: { onDeclared: (declaration: string) => void }) {
           'could not stage the recording',
         );
       }
+      // The result's own cohort as it was, unless a dataset version or a
+      // limit was chosen: then the server derives it, and the variant names
+      // that dataset, because a manifest's cohort and variant name one.
+      let pinned: ScoringRun['cohort'] = {
+        case_manifest: manifest.context.case_manifest,
+        case_count: manifest.context.case_count,
+        split: manifest.context.split,
+        input_schema: manifest.context.input_schema,
+        expectations_schema: manifest.context.expectations_schema,
+      };
+      let dataset = manifest.variant.dataset;
+      const limit = cohort.limit.trim() ? { limit: Number(cohort.limit) } : {};
+      if (cohort.from === 'dataset' || cohort.limit.trim()) {
+        if (cohort.from === 'dataset' && (!cohort.name.trim() || !cohort.version.trim())) {
+          throw new Error('Choose the dataset version to take the cohort from.');
+        }
+        const request: CohortRequest =
+          cohort.from === 'dataset'
+            ? {
+                dataset: {
+                  kind: cohort.kind,
+                  name: cohort.name.trim(),
+                  version: cohort.version.trim(),
+                },
+                split: cohort.split.trim(),
+                ...limit,
+              }
+            : { dataset: manifest.context.dataset, split: manifest.context.split, ...limit };
+        pinned = answerOf(
+          await deriveCohort({ body: request }),
+          'could not take a cohort from that dataset',
+        ).cohort;
+        dataset = request.dataset;
+      }
       const run: ScoringRun = {
         evaluation_id: evaluationId.trim(),
         repetition_id: repetition.trim(),
-        variant: { ...manifest.variant, experiment_id: experiment.trim() },
-        cohort: {
-          case_manifest: manifest.context.case_manifest,
-          case_count: manifest.context.case_count,
-          split: manifest.context.split,
-          input_schema: manifest.context.input_schema,
-          expectations_schema: manifest.context.expectations_schema,
-        },
+        variant: { ...manifest.variant, experiment_id: experiment.trim(), dataset },
+        cohort: pinned,
         scorecard: { name: head.name, version: head.version },
         answers: staged,
         settings: {
@@ -294,9 +355,12 @@ function Draft({ onDeclared }: { onDeclared: (declaration: string) => void }) {
           ))}
         </select>
         <span className="text-muted-foreground">
-          The same cohort, split and variant pins; only the experiment is renamed.
+          The same variant pins, with the experiment renamed. The cohort is that result&apos;s
+          unless you take one below.
         </span>
       </label>
+
+      <CohortFields value={cohort} onChange={setCohort} />
 
       <label className="flex flex-col gap-1">
         Experiment
@@ -532,6 +596,229 @@ function Draft({ onDeclared }: { onDeclared: (declaration: string) => void }) {
   );
 }
 
+/** Which cases a run measures: the result's own, or a dataset version's first ones. */
+function CohortFields({
+  value,
+  onChange,
+}: {
+  value: CohortChoice;
+  onChange: (value: CohortChoice) => void;
+}) {
+  const fromDataset = value.from === 'dataset';
+  const datasets = useQuery({
+    queryKey: ['measure-datasets'],
+    enabled: fromDataset && value.kind === 'curation',
+    queryFn: async () => answerOf(await listDatasets(), 'could not read the datasets'),
+    retry: false,
+  });
+  const project = value.kind === 'annotations' ? value.name.trim() : '';
+  const exports = useQuery({
+    queryKey: ['measure-annotation-exports', project],
+    enabled: fromDataset && Boolean(project),
+    queryFn: async () =>
+      answerOf(
+        await listExports({ query: { name: project } }),
+        'could not read that project’s exports',
+      ),
+    retry: false,
+  });
+  const corpora = useQuery({
+    queryKey: ['measure-conversation-exports'],
+    enabled: fromDataset && value.kind === 'conversations',
+    queryFn: async () =>
+      answerOf(await listConversationExports(), 'could not read the conversation exports'),
+    retry: false,
+  });
+  const chosen = datasets.data?.datasets.find((row) => row.name === value.name);
+  const set = (patch: Partial<CohortChoice>) => onChange({ ...value, ...patch });
+
+  return (
+    <fieldset className="grid gap-2 rounded border border-border p-3 md:col-span-2 md:grid-cols-3">
+      <legend>Cohort</legend>
+      <label className="flex items-center gap-2">
+        <input
+          type="radio"
+          name="cohort"
+          checked={!fromDataset}
+          onChange={() => set({ from: 'result' })}
+        />
+        The result&apos;s own
+      </label>
+      <label className="flex items-center gap-2 md:col-span-2">
+        <input
+          type="radio"
+          name="cohort"
+          checked={fromDataset}
+          onChange={() => set({ from: 'dataset' })}
+        />
+        A dataset version this deployment owns
+      </label>
+
+      {fromDataset ? (
+        <>
+          <label className="flex flex-col gap-1">
+            Kind
+            <select
+              aria-label="Dataset kind"
+              className={FIELD}
+              value={value.kind}
+              onChange={(event) =>
+                set({
+                  kind: event.target.value as CohortChoice['kind'],
+                  name: '',
+                  version: '',
+                  split: 'test',
+                })
+              }
+            >
+              <option value="curation">curation dataset</option>
+              <option value="annotations">annotation export</option>
+              <option value="conversations">conversation corpus</option>
+            </select>
+          </label>
+          {value.kind === 'curation' ? (
+            <>
+              <label className="flex flex-col gap-1">
+                Dataset
+                <select
+                  aria-label="Dataset"
+                  className={FIELD}
+                  value={value.name}
+                  onChange={(event) => set({ name: event.target.value, version: '' })}
+                >
+                  <option value="">Choose a dataset…</option>
+                  {(datasets.data?.datasets ?? []).map((row) => (
+                    <option key={row.name} value={row.name}>
+                      {row.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex flex-col gap-1">
+                Version
+                <select
+                  aria-label="Dataset version"
+                  className={FIELD}
+                  value={value.version}
+                  onChange={(event) => set({ version: event.target.value })}
+                >
+                  <option value="">Choose a version…</option>
+                  {(chosen?.versions ?? []).map((version) => (
+                    <option key={version.version} value={version.version}>
+                      {pinchId(version.version, 8, 6)} · {version.row_count} rows
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex flex-col gap-1">
+                Split name
+                <input
+                  aria-label="Split"
+                  className={FIELD}
+                  value={value.split}
+                  onChange={(event) => set({ split: event.target.value })}
+                />
+                <span className="text-muted-foreground">
+                  A curation version deals no splits: this names the cohort and selects nothing.
+                </span>
+              </label>
+            </>
+          ) : null}
+          {value.kind === 'annotations' ? (
+            <>
+              <label className="flex flex-col gap-1">
+                Project
+                <input
+                  aria-label="Annotation project"
+                  className={FIELD}
+                  value={value.name}
+                  onChange={(event) => set({ name: event.target.value, version: '' })}
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                Export
+                <select
+                  aria-label="Annotation export"
+                  className={FIELD}
+                  value={value.version}
+                  onChange={(event) => set({ version: event.target.value })}
+                >
+                  <option value="">Choose an export…</option>
+                  {(exports.data?.exports ?? []).map((row) => (
+                    <option key={row.export} value={row.export}>
+                      {pinchId(row.export, 8, 6)} · {row.created_at}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex flex-col gap-1">
+                Split
+                <select
+                  aria-label="Split"
+                  className={FIELD}
+                  value={value.split}
+                  onChange={(event) => set({ split: event.target.value })}
+                >
+                  <option value="test">test</option>
+                  <option value="validation">validation</option>
+                  <option value="train">train</option>
+                </select>
+              </label>
+            </>
+          ) : null}
+          {value.kind === 'conversations' ? (
+            <label className="flex flex-col gap-1 md:col-span-2">
+              Corpus
+              <select
+                aria-label="Conversation corpus"
+                className={FIELD}
+                value={value.version ? `${value.name}@${value.version}` : ''}
+                onChange={(event) => {
+                  const [name = '', version = ''] = event.target.value.split('@');
+                  set({ name, version, split: 'test' });
+                }}
+              >
+                <option value="">Choose a finished export…</option>
+                {(corpora.data?.jobs ?? [])
+                  .filter((job) => job.version)
+                  .map((job) => (
+                    <option key={job.job_id} value={`${job.name}@${job.version}`}>
+                      {job.name} @ {pinchId(job.version ?? '', 8, 6)} · {job.conversations}{' '}
+                      conversations
+                    </option>
+                  ))}
+              </select>
+              <span className="text-muted-foreground">
+                A corpus is measured on its test split. Its cases are content: an admin takes a
+                cohort from one.
+              </span>
+            </label>
+          ) : null}
+          <Refused error={datasets.error ?? exports.error ?? corpora.error} />
+        </>
+      ) : null}
+
+      <label className="flex flex-col gap-1">
+        First cases
+        <input
+          aria-label="Case limit"
+          type="number"
+          min={1}
+          placeholder="all of them"
+          className={FIELD}
+          value={value.limit}
+          onChange={(event) => set({ limit: event.target.value })}
+        />
+      </label>
+      <span className="self-end text-muted-foreground md:col-span-2">
+        The owner&apos;s first cases, in its own order — not a sample. A cohort of some of the cases
+        is its own cohort: its results compare with nothing measured on all of them. The server
+        derives the three files it pins, so nobody stages them.
+      </span>
+    </fieldset>
+  );
+}
+
 /** Freeze what people judged of one result, for the judge to be held to. */
 function Calibration({
   published,
@@ -686,8 +973,17 @@ function Declared({
         </dd>
         <dt className="text-muted-foreground">Cohort</dt>
         <dd>
-          {manifest.context.dataset.name} · {manifest.context.case_count} cases · split{' '}
-          {manifest.context.split}
+          {manifest.context.dataset.name} ·{' '}
+          {view.data.cohort
+            ? `the first ${manifest.context.case_count} of ${view.data.cohort.available} cases`
+            : `${manifest.context.case_count} cases`}{' '}
+          · split {manifest.context.split}
+          {view.data.cohort ? (
+            <span className="text-muted-foreground">
+              {' '}
+              — derived here by {view.data.cohort.derived_by}
+            </span>
+          ) : null}
         </dd>
         <dt className="text-muted-foreground">Answers</dt>
         <dd>
@@ -869,7 +1165,9 @@ function AdmitDeclared({
       <span className="text-muted-foreground">
         {disabled
           ? because
-          : 'The manifest is this declaration’s; bring the files its cohort and variant pin.'}
+          : view.cohort
+            ? `The manifest is this declaration’s, and the cohort’s three files are derived again from ${view.cohort.request.dataset.name} when the pair is admitted; bring the files the variant pins (${view.manifest.variant.code.name}, ${view.manifest.variant.generation_config.name}).`
+            : 'The manifest is this declaration’s; bring the files its cohort and variant pin.'}
       </span>
       <Refused error={admit.error} />
     </form>

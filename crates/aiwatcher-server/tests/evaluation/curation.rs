@@ -338,3 +338,216 @@ async fn server_wiring_uses_the_native_owner_and_preserves_http_roles() {
     server.abort();
     let _ = server.await;
 }
+
+#[tokio::test]
+async fn a_cohort_derived_from_a_curation_version_is_admitted_and_measured_with_nothing_staged() {
+    use aiwatcher_execution::ActivityExecutor;
+    // The case manifest used to be written by hand, or copied from a result
+    // already published, and staged beside the declaration — a second copy
+    // of cases the adapter derives from the owner anyway.
+    let fixture = Fixture::new("derived").await;
+    let registry = Arc::new(fixture.registry());
+    let dataset = fixture.request.manifest.context.dataset.clone();
+    let request = CohortRequest {
+        dataset: dataset.clone(),
+        split: "test".into(),
+        limit: Some(2),
+    };
+    let derived = registry.derive_cohort(&request, "ada", 100).await.unwrap();
+    assert_eq!(derived.cohort.case_count, 2, "the owner's first two");
+    assert_eq!(derived.available, 3);
+    let again = registry.derive_cohort(&request, "bob", 101).await.unwrap();
+    assert_eq!(
+        again.cohort, derived.cohort,
+        "the same cases, the same pins"
+    );
+    assert_eq!(
+        again.derived_by, "ada",
+        "and the first derivation is the one kept"
+    );
+    let whole = registry
+        .derive_cohort(
+            &CohortRequest {
+                limit: None,
+                ..request.clone()
+            },
+            "ada",
+            102,
+        )
+        .await
+        .unwrap();
+    assert_eq!(whole.cohort.case_count, 3);
+    assert_ne!(
+        whole.cohort.case_manifest.digest,
+        derived.cohort.case_manifest.digest
+    );
+
+    let card = Scorecard {
+        name: "derived-answers".into(),
+        description: String::new(),
+        scorers: vec![ScorerSpec {
+            metric: "exact".into(),
+            answer_path: "/answer".into(),
+            expected_path: "/answer".into(),
+            input_path: None,
+            scorer: Scorer::ExactMatch {
+                ignore_case: false,
+                trim: true,
+            },
+        }],
+    };
+    let version = registry
+        .publish_scorecard(&card, "ada", 103)
+        .await
+        .unwrap()
+        .version;
+    let cases: Value = serde_json::from_slice(
+        &tokio::fs::read(fixture.root.join("cases.json"))
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let answers: Vec<RecordedAnswer> = cases["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|case| RecordedAnswer {
+            case_id: case["case_id"].as_str().unwrap().into(),
+            answer: case["expected"].clone(),
+            trace_id: None,
+            span_id: None,
+        })
+        .collect();
+    let recording = registry
+        .stage_recording(
+            "answers.json",
+            serde_json::to_vec(&json!({ "answers": answers })).unwrap(),
+        )
+        .await
+        .unwrap();
+    let run = ScoringRun {
+        evaluation_id: "derived-two".into(),
+        repetition_id: "measurement-1".into(),
+        variant: fixture.request.manifest.variant.clone(),
+        cohort: derived.cohort.clone(),
+        scorecard: VersionReference {
+            name: card.name.clone(),
+            version,
+        },
+        answers: Answers::Recording(recording),
+        judge: None,
+        settings: Default::default(),
+    };
+    let declared = registry
+        .declare_scoring_run(&run, "ada", 104)
+        .await
+        .unwrap();
+    let view = registry
+        .scoring_run_view(&declared.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        view.cohort.as_ref().map(|cohort| &cohort.request),
+        Some(&request),
+        "the declaration says where its cohort came from"
+    );
+
+    // The bundle on this host holds the contract fixture's own cases.json: a
+    // staged member that does not hash to the pin is refused, never replaced.
+    fixture.approve(&view.manifest).await;
+    assert!(matches!(
+        registry.approve(&view.manifest, "operator", 105).await,
+        Err(EvaluationError::Unavailable(EvidenceState::CorruptArtifact))
+    ));
+    for name in [
+        COHORT_CASES,
+        COHORT_INPUT_SCHEMA,
+        COHORT_EXPECTATIONS_SCHEMA,
+    ] {
+        tokio::fs::remove_file(fixture.root.join(name))
+            .await
+            .unwrap();
+    }
+    registry
+        .approve(&view.manifest, "operator", 106)
+        .await
+        .expect("nothing staged, so the adapter derives the three and they match");
+
+    let (command, context) = attempt(&declared.id, "derived-two");
+    let result = aiwatcher_server::execution::scoring::ScoreExecutor::new(Arc::clone(&registry))
+        .execute(&command, &context)
+        .await
+        .expect("the step scores the owner's first two cases");
+    let reported = result.result.unwrap();
+    assert_eq!(reported["selected"], 2, "{reported}");
+    assert_eq!(
+        reported["unscored"], 0,
+        "an answer to the third is not part of it"
+    );
+    let evidence = registry
+        .get("derived-two", "viewer", 107)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(evidence.state, EvidenceState::Complete);
+    assert_eq!(evidence.metrics["exact"], 1.0);
+
+    // A cohort of the first two is not a prefix of some other version.
+    let mut changed = fixture.rows.clone();
+    changed.items[0].insert("expected".into(), json!({"answer": "moved"}));
+    let other = fixture
+        .datasets
+        .publish(changed)
+        .await
+        .unwrap()
+        .dataset
+        .latest
+        .version;
+    let mut elsewhere = view.manifest.clone();
+    elsewhere.context.dataset.version = other.clone();
+    elsewhere.variant.dataset.version = other;
+    fixture.approve(&elsewhere).await;
+    assert!(matches!(
+        registry.approve(&elsewhere, "operator", 108).await,
+        Err(EvaluationError::Unavailable(EvidenceState::DeletedSource))
+    ));
+}
+
+#[tokio::test]
+async fn an_external_or_unowned_dataset_derives_no_cohort_and_says_why() {
+    let fixture = Fixture::new("underivable").await;
+    let registry = fixture.registry();
+    let mut external = fixture.request.manifest.context.dataset.clone();
+    external.kind = DatasetKind::External;
+    let refused = registry
+        .derive_cohort(
+            &CohortRequest {
+                dataset: external,
+                split: "test".into(),
+                limit: None,
+            },
+            "ada",
+            100,
+        )
+        .await
+        .unwrap_err();
+    assert!(refused.to_string().contains("owns"), "{refused}");
+
+    let mut conversations = fixture.request.manifest.context.dataset.clone();
+    conversations.kind = DatasetKind::Conversations;
+    assert!(matches!(
+        registry
+            .derive_cohort(
+                &CohortRequest {
+                    dataset: conversations,
+                    split: "test".into(),
+                    limit: None,
+                },
+                "ada",
+                100,
+            )
+            .await,
+        Err(EvaluationError::Unavailable(EvidenceState::Forbidden))
+    ));
+}

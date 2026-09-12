@@ -464,6 +464,11 @@ pub struct ScoringRunView {
     /// in words. Empty when there is nothing to say.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+    /// Where the cohort's three files came from, when this deployment derived
+    /// them from a dataset version it owns. An operator admitting the pair
+    /// then brings only what the variant pins: the adapter derives the rest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cohort: Option<crate::DerivedCohort>,
 }
 
 /// What a run's manifest commits people to that they should hear before it

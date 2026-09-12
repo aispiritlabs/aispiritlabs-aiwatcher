@@ -1161,3 +1161,99 @@ async fn a_judge_over_the_archive_is_sent_its_words_under_a_context_that_says_so
     let agreement = &evidence.judge.unwrap().agreement[0];
     assert_eq!((agreement.items, agreement.answered), (2, 2));
 }
+
+/// A corpus's first turns, taken as a cohort by an admin and holding none of
+/// the words: its cases are the digests of what was asked and answered.
+#[tokio::test]
+async fn an_admin_derives_a_corpus_cohort_of_digests_and_a_run_measures_just_those_turns() {
+    use aiwatcher_execution::ActivityExecutor;
+    use aiwatcher_server::execution::scoring::ScoreExecutor;
+
+    let mut f = Fixture::new("conversation-derived").await;
+    let archive = owner(f.store.clone());
+    pin(&mut f, &archive).await;
+    let deployment = Arc::new(registry(&f, archive.clone()).with_content_access(false));
+    let admin = registry(&f, archive);
+    let request = CohortRequest {
+        dataset: f.request.manifest.context.dataset.clone(),
+        split: "test".into(),
+        limit: Some(1),
+    };
+
+    assert!(matches!(
+        deployment.derive_cohort(&request, "editor", now()).await,
+        Err(EvaluationError::Unavailable(EvidenceState::Forbidden))
+    ));
+    let derived = admin.derive_cohort(&request, "admin", now()).await.unwrap();
+    assert_eq!((derived.cohort.case_count, derived.available), (1, 2));
+    for entry in f.store.list("evaluation-cohorts/").await.unwrap() {
+        let bytes = f.store.get(&entry.key).await.unwrap().unwrap();
+        assert!(!String::from_utf8_lossy(&bytes).contains("SYNTHETIC_PRIVATE"));
+    }
+
+    let card = Scorecard {
+        name: "archive-first-turn".into(),
+        description: String::new(),
+        scorers: vec![ScorerSpec {
+            metric: "leaked".into(),
+            answer_path: "/answer".into(),
+            expected_path: String::new(),
+            input_path: None,
+            scorer: Scorer::Forbidden {
+                text: "answer_one".into(),
+                ignore_case: true,
+            },
+        }],
+    };
+    let version = deployment
+        .publish_scorecard(&card, "ada", now())
+        .await
+        .unwrap()
+        .version;
+    let run = ScoringRun {
+        evaluation_id: "archive-first-turn".into(),
+        repetition_id: "measurement-1".into(),
+        variant: f.request.manifest.variant.clone(),
+        cohort: derived.cohort.clone(),
+        scorecard: VersionReference {
+            name: card.name.clone(),
+            version,
+        },
+        answers: Answers::Archive(ArchiveWord::Archive),
+        judge: None,
+        settings: Default::default(),
+    };
+    let declared = deployment
+        .declare_scoring_run(&run, "ada", now())
+        .await
+        .unwrap();
+    let manifest = declared
+        .run
+        .manifest(&card, &Rubrics::default(), None, None)
+        .unwrap();
+    for name in [
+        COHORT_CASES,
+        COHORT_INPUT_SCHEMA,
+        COHORT_EXPECTATIONS_SCHEMA,
+    ] {
+        let _ = tokio::fs::remove_file(f.root.join(name)).await;
+    }
+    f.approve(&manifest).await;
+    admin
+        .approve(&manifest, "admin", now())
+        .await
+        .expect("the adapter derives the first turn again and it matches");
+
+    let (command, attempt) = attempt(&declared.id, "archive-first-turn");
+    let reported = ScoreExecutor::new(deployment)
+        .execute(&command, &attempt)
+        .await
+        .expect("the first turn scores under the approval")
+        .result
+        .unwrap();
+    assert_eq!(
+        (reported["selected"].clone(), reported["scored"].clone()),
+        (json!(1), json!(1)),
+        "{reported}"
+    );
+}

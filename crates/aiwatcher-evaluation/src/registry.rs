@@ -26,6 +26,32 @@ pub const PUBLICATION_GRACE_SECONDS: i64 = 3600;
 pub trait SourceAuthority: Send + Sync + std::fmt::Debug {
     async fn resolve(&self, manifest: &EvaluationManifest, subject: &str)
     -> Result<SourceEvidence>;
+
+    /// The cohort files for the first `limit` cases of a dataset version's
+    /// split, derived from its owner the way [`Self::resolve`] derives the
+    /// cases it checks a cohort against — one derivation, so the files a
+    /// declaration pins and the cases admission reads cannot disagree.
+    ///
+    /// The default derives nothing: an adapter that owns no dataset has no
+    /// cases to hand out, and says so rather than inventing a shape.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Invalid`] from the default, and whatever the owner
+    /// refused otherwise.
+    async fn derive_cohort(
+        &self,
+        request: &crate::CohortRequest,
+        _subject: &str,
+    ) -> Result<crate::CohortFiles> {
+        Err(EvaluationError::Invalid {
+            field: "cohort.dataset".into(),
+            reason: format!(
+                "this deployment derives no cohort from a {:?} dataset",
+                request.dataset.kind
+            ),
+        })
+    }
 }
 
 #[derive(Debug, Default)]
@@ -2059,7 +2085,16 @@ impl Registry {
                 .run
                 .manifest(&card.scorecard, &rubrics, calibration.as_ref(), None)?;
         let prepared = Evaluation::prepare(manifest.clone())?;
+        let cohort = self
+            .derived_cohort(&declaration.run.cohort.case_manifest.digest)
+            .await
+            .ok()
+            .flatten()
+            .filter(|derived| {
+                derived.describes(&declaration.run.variant.dataset, &declaration.run.cohort)
+            });
         Ok(Some(crate::ScoringRunView {
+            cohort,
             approval_id: approval_id(prepared.variant_id(), prepared.context_id())?,
             admitted: self.admits(&manifest).await?,
             warnings: crate::warnings(&manifest, &card.scorecard, calibration.as_ref()),
@@ -2146,6 +2181,64 @@ impl Registry {
         subject: &str,
     ) -> Result<BTreeMap<String, serde_json::Value>> {
         Ok(self.cohort_cases(manifest, subject).await?.expected)
+    }
+
+    /// Derive a cohort from a dataset version's owner, and remember where it
+    /// came from.
+    ///
+    /// A conversation corpus's cases are content, so deriving from one takes
+    /// content access, as reading its cases does. What is remembered holds no
+    /// case: the request, the pins and the count.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Invalid`] for a request that selects nothing or a
+    /// dataset nothing here owns, [`EvaluationError::Unavailable`] with
+    /// [`EvidenceState::Forbidden`] for a conversation corpus without content
+    /// access, and whatever the owner refused.
+    pub async fn derive_cohort(
+        &self,
+        request: &crate::CohortRequest,
+        subject: &str,
+        now: i64,
+    ) -> Result<crate::DerivedCohort> {
+        request.validate()?;
+        text(subject, "derived_by")?;
+        if request.dataset.kind == crate::DatasetKind::Conversations && !self.content_access {
+            return Err(EvaluationError::Unavailable(EvidenceState::Forbidden));
+        }
+        let files = self.authority.derive_cohort(request, subject).await?;
+        require(
+            files.count > 0,
+            "cohort.split",
+            "selects no case: the owner holds none for this version and split",
+        )?;
+        let derived = crate::DerivedCohort {
+            request: request.clone(),
+            cohort: files.cohort(&request.split),
+            available: files.available,
+            derived_by: subject.to_owned(),
+            derived_at: now,
+        };
+        let key = crate::store::derived_cohort(&derived.cohort.case_manifest.digest);
+        // Create-only: the first derivation of these cases is the one kept, and
+        // a later one of the same cases says nothing it did not.
+        self.store.create(&key, &derived).await?;
+        Ok(self.store.read(&key).await?.unwrap_or(derived))
+    }
+
+    /// Where the cases under this digest were derived from, if they were.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Storage`] when the store cannot be reached.
+    pub async fn derived_cohort(&self, cases: &str) -> Result<Option<crate::DerivedCohort>> {
+        require(
+            cases.len() == 64 && cases.bytes().all(|b| b.is_ascii_hexdigit()),
+            "cases",
+            "is the SHA-256 digest of a cohort's cases",
+        )?;
+        self.store.read(&crate::store::derived_cohort(cases)).await
     }
 
     /// The same cohort, with what each case was asked beside what it expected.

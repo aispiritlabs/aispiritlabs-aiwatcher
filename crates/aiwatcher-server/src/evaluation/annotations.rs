@@ -1,14 +1,15 @@
 //! Bind approved cases to verified COCO images and their complete expectations.
-use super::{LocalSource, unavailable, verified};
+use super::{LocalSource, unavailable};
 use aiwatcher_annotations::{Error, Split};
 use aiwatcher_evaluation::{
-    EvaluationContext, EvaluationError, EvidenceState, Result, SourceEvidence,
+    CohortFiles, CohortRequest, EvaluationContext, EvaluationError, EvidenceState, Result,
+    SourceEvidence,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
-#[derive(Deserialize, PartialEq)]
+#[derive(Deserialize, serde::Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct Case {
     case_id: String,
@@ -22,48 +23,81 @@ struct Cases {
     cases: Vec<Case>,
 }
 
+fn split_of(name: &str) -> Result<Split> {
+    match name {
+        "train" => Ok(Split::Train),
+        "validation" => Ok(Split::Validation),
+        "test" => Ok(Split::Test),
+        _ => Err(unavailable(EvidenceState::Forbidden)),
+    }
+}
+
 impl LocalSource {
-    pub(super) async fn annotation_cases(
-        &self,
-        root: &super::Bundle,
-        context: &EvaluationContext,
-    ) -> Result<SourceEvidence> {
+    /// Every image an export deals to one split, as a case: the image record
+    /// it asks about and every annotation of it, under the export's categories.
+    async fn annotation_rows(&self, project: &str, export: &str, split: &str) -> Result<Vec<Case>> {
         let owner = self
             .annotations
             .as_ref()
             .ok_or_else(|| unavailable(EvidenceState::Forbidden))?;
-        let split = match context.split.as_str() {
-            "train" => Split::Train,
-            "validation" => Split::Validation,
-            "test" => Split::Test,
-            _ => return Err(unavailable(EvidenceState::Forbidden)),
-        };
         let coco = owner
-            .verified_coco(&context.dataset.name, &context.dataset.version, split)
+            .verified_coco(project, export, split_of(split)?)
             .await
             .map_err(owner_error)?;
-        let artifact = &context.case_manifest;
-        let approved: Cases = serde_json::from_slice(
-            &verified(root, &artifact.name, &artifact.digest, artifact.size_bytes).await?,
-        )
-        .map_err(|_| unavailable(EvidenceState::CorruptArtifact))?;
         let images = coco["images"]
             .as_array()
             .ok_or_else(|| unavailable(EvidenceState::CorruptArtifact))?;
         let annotations = coco["annotations"]
             .as_array()
             .ok_or_else(|| unavailable(EvidenceState::CorruptArtifact))?;
-        let cases: Vec<Case> = images.iter().map(|image| Case {
+        Ok(images.iter().map(|image| Case {
             case_id: image["file_name"].as_str().unwrap_or_default().into(),
             input: image.clone(),
             expected: json!({"categories": coco["categories"], "annotations": annotations.iter().filter(|a| a["image_id"] == image["id"]).collect::<Vec<_>>()}),
-        }).collect();
+        }).collect())
+    }
+
+    /// The first `limit` images of an export's split, as the files a cohort pins.
+    pub(super) async fn annotation_cohort(&self, request: &CohortRequest) -> Result<CohortFiles> {
+        let cases = self
+            .annotation_rows(
+                &request.dataset.name,
+                &request.dataset.version,
+                &request.split,
+            )
+            .await?;
+        super::cohort_files(
+            &cases,
+            request.limit,
+            &json!({"type": "object", "required": ["file_name"]}),
+            &json!({"type": "object", "required": ["categories", "annotations"]}),
+        )
+    }
+
+    pub(super) async fn annotation_cases(
+        &self,
+        pinned: &[u8],
+        context: &EvaluationContext,
+    ) -> Result<SourceEvidence> {
+        let mut cases = self
+            .annotation_rows(
+                &context.dataset.name,
+                &context.dataset.version,
+                &context.split,
+            )
+            .await?;
+        let approved: Cases = serde_json::from_slice(pinned)
+            .map_err(|_| unavailable(EvidenceState::CorruptArtifact))?;
+        // The export's first images, as many as the cohort declares.
+        let selected = usize::try_from(context.case_count)
+            .map_err(|_| unavailable(EvidenceState::CorruptArtifact))?;
         if approved.schema_version != 1
-            || cases.len() as u64 != context.case_count
-            || approved.cases != cases
+            || approved.cases.len() != selected
+            || cases.get(..selected) != Some(approved.cases.as_slice())
         {
             return Err(unavailable(EvidenceState::CorruptArtifact));
         }
+        cases.truncate(selected);
         let inputs = cases
             .iter()
             .map(|case| (case.case_id.clone(), case.input.clone()))
