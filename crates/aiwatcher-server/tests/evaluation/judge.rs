@@ -68,6 +68,7 @@ fn card(rubric: &str) -> Scorecard {
                     name: "helpful".into(),
                     version: rubric.into(),
                 },
+                pass_level: None,
             },
         }],
     }
@@ -169,7 +170,7 @@ async fn declared_under(
             expectations_schema: template.context.expectations_schema.clone(),
         },
         scorecard: VersionReference {
-            name: "judged-quality".into(),
+            name: card.name.clone(),
             version,
         },
         answers: Answers::Recording(recording),
@@ -621,4 +622,156 @@ async fn a_case_without_the_input_a_judge_is_pointed_at_fails_by_name_and_is_not
         (2, 0, 0.0),
         "a calibration item nobody could ask about counts against the judge, not beside it"
     );
+}
+
+#[tokio::test]
+async fn a_level_to_reach_publishes_the_fraction_that_reached_it_and_agreement_on_that() {
+    /// Polite about anything helpful, rude about a flat no, curt otherwise.
+    #[derive(Debug, Default)]
+    struct Levels;
+    #[async_trait]
+    impl JudgeModel for Levels {
+        fn provider(&self) -> &str {
+            "llamacpp"
+        }
+        async fn ask(&self, call: &JudgeCall) -> std::result::Result<JudgeReply, JudgeFailure> {
+            let question = &call.messages[1].content;
+            let level = if question.contains("helpful") {
+                "polite"
+            } else if question.ends_with("no") {
+                "rude"
+            } else {
+                "curt"
+            };
+            Ok(JudgeReply {
+                content: json!({ "value": level }).to_string(),
+                served: Served::default(),
+            })
+        }
+    }
+
+    let registry = Arc::new(registry(
+        Arc::new(MemoryObjectStore::new()),
+        Arc::new(Source::default()),
+    ));
+    let tone = registry
+        .publish_rubric(
+            &Rubric {
+                name: "tone".into(),
+                question: "How polite is the answer?".into(),
+                guidance: String::new(),
+                scale: Scale::Ordinal {
+                    levels: vec!["rude".into(), "curt".into(), "polite".into()],
+                },
+                direction: MetricDirection::Higher,
+            },
+            "ada",
+            now(),
+        )
+        .await
+        .unwrap()
+        .version;
+    let pinned = VersionReference {
+        name: "tone".into(),
+        version: tone.clone(),
+    };
+
+    let mut people = request("people-toned", 2);
+    people.manifest.variant.experiment_id = "earlier".into();
+    people.cases[0].actual = Some(json!({"text": "a helpful answer"}));
+    people.cases[1].actual = Some(json!({"text": "a helpful-sounding dodge"}));
+    publish(&registry, people.clone(), "editor", now())
+        .await
+        .unwrap();
+    // The person put the dodge one level lower than the judge will, and both
+    // are past the bar.
+    for (case, level) in [("case-00000", "polite"), ("case-00001", "curt")] {
+        registry
+            .assess(
+                &AssessmentRequest {
+                    target: AssessmentTarget::Case {
+                        evaluation_id: "people-toned".into(),
+                        case_id: case.into(),
+                        repetition_id: people.manifest.origin.repetition_id.clone(),
+                    },
+                    rubric: "tone".into(),
+                    rubric_version: Some(tone.clone()),
+                    value: AssessmentValue::Level {
+                        value: level.into(),
+                    },
+                    source: AssessmentSource::Human,
+                    author: None,
+                    rationale: String::new(),
+                },
+                "grace",
+                110,
+            )
+            .await
+            .unwrap();
+    }
+    let calibration = registry
+        .take_calibration(
+            &CalibrationRequest {
+                name: "people".into(),
+                evaluation_id: "people-toned".into(),
+                rubrics: vec![pinned.clone()],
+            },
+            "ada",
+            120,
+        )
+        .await
+        .unwrap();
+
+    let card = Scorecard {
+        name: "judged-tone".into(),
+        description: String::new(),
+        scorers: vec![ScorerSpec {
+            metric: "polite_enough".into(),
+            answer_path: "/text".into(),
+            expected_path: String::new(),
+            input_path: None,
+            scorer: Scorer::Judge {
+                rubric: pinned,
+                pass_level: Some("curt".into()),
+            },
+        }],
+    };
+    let declared = declared_under(&registry, &calibration, card).await;
+    let view = registry
+        .scoring_run_view(&declared.id)
+        .await
+        .unwrap()
+        .unwrap();
+    let metric = &view.manifest.context.metrics[0];
+    assert_eq!(
+        (metric.unit.as_str(), metric.aggregation),
+        ("ratio", Aggregation::Rate)
+    );
+    registry
+        .approve(&view.manifest, "operator", now())
+        .await
+        .unwrap();
+
+    let (command, attempt) = attempt(&declared.id, "judged-run");
+    ScoreExecutor::new(Arc::clone(&registry))
+        .judged_by(Arc::new(Levels), 2)
+        .execute(&command, &attempt)
+        .await
+        .expect("the run scores");
+    let evidence = registry
+        .get("judged-run", "reader", now())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        (evidence.metrics["polite_enough"] - 2.0 / 3.0).abs() < 1e-9,
+        "polite and curt reached the bar, rude did not: {:?}",
+        evidence.metrics
+    );
+    let agreement = &evidence.judge.unwrap().agreement[0];
+    assert_eq!(
+        agreement.agreement, 1.0,
+        "the judge and the person differ by a level and agree on what the result counts"
+    );
+    assert!(agreement.agreement_interval.unwrap().low < 0.5);
 }

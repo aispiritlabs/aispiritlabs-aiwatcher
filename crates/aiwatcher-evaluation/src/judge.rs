@@ -388,6 +388,30 @@ pub fn read(
     Ok((value, number))
 }
 
+/// The number a value scores under one metric: [`number`] on the scale, or —
+/// where the card names a level to reach — one when the value is at that level
+/// or on the rubric's better side of it, and nought when it is not.
+///
+/// The judge's reply and the person's judgement go through this one mapping,
+/// so the agreement is about the number the result publishes.
+#[must_use]
+pub fn scored(rubric: &Rubric, pass_level: Option<&str>, value: &AssessmentValue) -> Option<f64> {
+    let position = number(&rubric.scale, value)?;
+    let Some(level) = pass_level else {
+        return Some(position);
+    };
+    let Scale::Ordinal { levels } = &rubric.scale else {
+        return None;
+    };
+    let bar = levels.iter().position(|named| named == level)? as f64;
+    let reached = match rubric.direction {
+        crate::MetricDirection::Higher => position >= bar,
+        crate::MetricDirection::Lower => position <= bar,
+        crate::MetricDirection::None => return None,
+    };
+    Some(if reached { 1.0 } else { 0.0 })
+}
+
 /// The number a value on a scale scores: itself, its position among the
 /// levels, or one and nought.
 #[must_use]
@@ -414,14 +438,51 @@ pub struct JudgeAgreement {
     /// How many of them the judge answered on the rubric's scale. The rest
     /// were asked and are part of the disagreement, not missing from it.
     pub answered: usize,
-    /// The fraction of the set where the judge said what the person said.
+    /// The fraction of the set where the judge's number was the person's.
     /// Over every item rather than over the answered ones, so a judge that
     /// declines the hard cases does not agree its way to a better number.
     pub agreement: f64,
+    /// Where that fraction plausibly lies, given how few items it was counted
+    /// over: the 95% Wilson interval. Three of three is 100% and an interval
+    /// reaching down to 44%; nothing here decides how many items are enough,
+    /// and this is what lets a reader decide instead. Absent over no items.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agreement_interval: Option<AgreementInterval>,
     /// The mean distance between the two over the answered items, in the
     /// metric's unit. Absent when the judge answered none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mean_absolute_difference: Option<f64>,
+}
+
+/// A fraction's 95% interval.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct AgreementInterval {
+    pub low: f64,
+    pub high: f64,
+}
+
+impl AgreementInterval {
+    /// Wilson's score interval for `hits` of `total`, at 95%. Chosen over the
+    /// normal approximation because it stays inside nought and one and does
+    /// not collapse to a point at 0% or 100% — exactly where a small
+    /// calibration set lands.
+    #[must_use]
+    pub fn wilson(hits: usize, total: usize) -> Option<Self> {
+        if total == 0 {
+            return None;
+        }
+        const Z: f64 = 1.959_963_984_540_054;
+        let n = total as f64;
+        let p = hits as f64 / n;
+        let z2 = Z * Z;
+        let denominator = 1.0 + z2 / n;
+        let centre = (p + z2 / (2.0 * n)) / denominator;
+        let margin = Z * (p * (1.0 - p) / n + z2 / (4.0 * n * n)).sqrt() / denominator;
+        Some(Self {
+            low: (centre - margin).max(0.0),
+            high: (centre + margin).min(1.0),
+        })
+    }
 }
 
 /// One thing a provider said it served, and how many of the run's replies
@@ -468,6 +529,7 @@ pub fn agreement(
         ) else {
             continue;
         };
+        let pass_level = spec.scorer.pass_level();
         let mut items = 0;
         let mut matched = 0;
         let mut distances = Vec::new();
@@ -478,7 +540,7 @@ pub fn agreement(
             items += 1;
             let (Some(Some(judge)), Some(person)) = (
                 said.get(&(index, spec.metric.clone())),
-                number(&rubric.scale, &item.value),
+                scored(rubric, pass_level, &item.value),
             ) else {
                 continue;
             };
@@ -498,6 +560,7 @@ pub fn agreement(
             } else {
                 f64::from(matched) / items as f64
             },
+            agreement_interval: AgreementInterval::wilson(matched as usize, items),
             mean_absolute_difference: (!distances.is_empty())
                 .then(|| distances.iter().sum::<f64>() / distances.len() as f64),
         });
@@ -776,6 +839,7 @@ mod tests {
                 input_path: None,
                 scorer: Scorer::Judge {
                     rubric: pinned.clone(),
+                    pass_level: None,
                 },
             }],
         };
@@ -826,6 +890,46 @@ mod tests {
             "two of four: the one it declined is not agreement"
         );
         assert!((helpful.mean_absolute_difference.unwrap() - 1.0 / 3.0).abs() < 1e-9);
+        let interval = helpful.agreement_interval.unwrap();
+        assert!(
+            (interval.low - 0.150).abs() < 1e-3 && (interval.high - 0.850).abs() < 1e-3,
+            "two of four says little: {interval:?}"
+        );
+    }
+
+    #[test]
+    fn a_small_perfect_agreement_says_how_little_it_proves() {
+        let three = AgreementInterval::wilson(3, 3).unwrap();
+        assert_eq!(three.high, 1.0);
+        assert!((three.low - 0.439).abs() < 1e-3, "{three:?}");
+        let hundred = AgreementInterval::wilson(100, 100).unwrap();
+        assert!(hundred.low > 0.96, "{hundred:?}");
+        let none = AgreementInterval::wilson(0, 5).unwrap();
+        assert_eq!(none.low, 0.0);
+        assert!(none.high > 0.4, "{none:?}");
+        assert_eq!(AgreementInterval::wilson(0, 0), None);
+    }
+
+    #[test]
+    fn reaching_a_level_reads_the_rubrics_better_side_for_the_judge_and_the_person_alike() {
+        let levels = |direction| Rubric {
+            direction,
+            ..rubric(Scale::Ordinal {
+                levels: vec!["bad".into(), "fine".into(), "good".into()],
+            })
+        };
+        let level = |value: &str| AssessmentValue::Level {
+            value: value.into(),
+        };
+        let higher = levels(crate::MetricDirection::Higher);
+        assert_eq!(scored(&higher, Some("fine"), &level("good")), Some(1.0));
+        assert_eq!(scored(&higher, Some("fine"), &level("fine")), Some(1.0));
+        assert_eq!(scored(&higher, Some("fine"), &level("bad")), Some(0.0));
+        assert_eq!(scored(&higher, None, &level("good")), Some(2.0));
+        let lower = levels(crate::MetricDirection::Lower);
+        assert_eq!(scored(&lower, Some("fine"), &level("bad")), Some(1.0));
+        assert_eq!(scored(&lower, Some("fine"), &level("good")), Some(0.0));
+        assert_eq!(scored(&higher, Some("shouting"), &level("good")), None);
     }
 
     #[test]

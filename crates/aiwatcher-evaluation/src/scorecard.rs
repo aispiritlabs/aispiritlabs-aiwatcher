@@ -73,7 +73,17 @@ pub enum Scorer {
     /// metric's scale and direction are read rather than restated. Which model
     /// asks, how, and against which human judgements it was calibrated are the
     /// run's to declare: one card measured by two judges is two contexts.
-    Judge { rubric: VersionReference },
+    Judge {
+        rubric: VersionReference,
+        /// On a rubric of named levels, the level an answer has to reach — at
+        /// it, or on the better side of it as the rubric's direction says. The
+        /// metric is then the fraction of cases that did, a claim ordered levels
+        /// can carry. Absent, it is the mean position among the levels, which
+        /// treats them as evenly spaced; absent from the bytes too, so a card
+        /// written before this keeps its version.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pass_level: Option<String>,
+    },
 }
 
 /// The rubric versions a card's judges ask, resolved from the registry.
@@ -125,7 +135,16 @@ impl Scorer {
     #[must_use]
     pub const fn rubric(&self) -> Option<&VersionReference> {
         match self {
-            Self::Judge { rubric } => Some(rubric),
+            Self::Judge { rubric, .. } => Some(rubric),
+            _ => None,
+        }
+    }
+
+    /// The level a judged answer has to reach, when the card names one.
+    #[must_use]
+    pub fn pass_level(&self) -> Option<&str> {
+        match self {
+            Self::Judge { pass_level, .. } => pass_level.as_deref(),
             _ => None,
         }
     }
@@ -148,6 +167,15 @@ impl Scorer {
                 (unit.clone(), MetricDirection::Lower, Aggregation::Mean)
             }
             Self::Forbidden { .. } => ("ratio".into(), MetricDirection::Lower, Aggregation::Rate),
+            // A fraction that reached the level: more of it is better whichever
+            // end of the levels is, because "reached" already read the rubric.
+            Self::Judge {
+                pass_level: Some(_),
+                ..
+            } => {
+                rubric?;
+                ("ratio".into(), MetricDirection::Higher, Aggregation::Rate)
+            }
             Self::Judge { .. } => {
                 let rubric = rubric?;
                 match rubric.scale {
@@ -195,7 +223,13 @@ impl Scorer {
                 )
             }
             Self::Forbidden { text: phrase, .. } => text(phrase, &format!("{field}.text")),
-            Self::Judge { rubric } => rubric.validate(&format!("{field}.rubric")),
+            Self::Judge { rubric, pass_level } => {
+                rubric.validate(&format!("{field}.rubric"))?;
+                match pass_level {
+                    Some(level) => text(level, &format!("{field}.pass_level")),
+                    None => Ok(()),
+                }
+            }
             Self::ExactMatch { .. } | Self::Contains { .. } => Ok(()),
         }
     }
@@ -380,6 +414,20 @@ impl ScorerSpec {
     /// [`EvaluationError::Invalid`] for a judge whose rubric was not resolved.
     pub fn metric(&self, rubrics: &Rubrics) -> Result<MetricDefinition> {
         let rubric = self.scorer.rubric().and_then(|pinned| rubrics.get(pinned));
+        if let (Some(level), Some(rubric)) = (self.scorer.pass_level(), rubric) {
+            let reached = match &rubric.scale {
+                Scale::Ordinal { levels } => levels.iter().any(|named| named == level),
+                Scale::Numeric { .. } | Scale::Flag => false,
+            };
+            require(
+                reached && rubric.direction != MetricDirection::None,
+                &format!("scorecard.scorers.{}.scorer.pass_level", self.metric),
+                &format!(
+                    "names a level to reach, so the rubric has to have named levels, `{level}` \
+                     among them, and say which end of them is better"
+                ),
+            )?;
+        }
         let (unit, direction, aggregation) =
             self.scorer
                 .defines(rubric)
@@ -714,6 +762,7 @@ mod tests {
                     name: "helpful".into(),
                     version: "r".repeat(64),
                 },
+                pass_level: None,
             },
         );
         let before = card(vec![judged.clone()]).version().unwrap();
@@ -748,6 +797,74 @@ mod tests {
         exact.input_path = Some(String::new());
         let refused = card(vec![exact]).validate().unwrap_err();
         assert!(refused.to_string().contains("input_path"), "{refused}");
+    }
+
+    #[test]
+    fn a_level_to_reach_turns_ordered_levels_into_a_fraction_that_reached_it() {
+        let pinned = VersionReference {
+            name: "tone".into(),
+            version: "r".repeat(64),
+        };
+        let levels = |direction| Rubric {
+            name: "tone".into(),
+            question: "How polite is the answer?".into(),
+            guidance: String::new(),
+            scale: Scale::Ordinal {
+                levels: vec!["rude".into(), "curt".into(), "polite".into()],
+            },
+            direction,
+        };
+        let judged = |pass_level: Option<&str>| {
+            spec(
+                "tone",
+                Scorer::Judge {
+                    rubric: pinned.clone(),
+                    pass_level: pass_level.map(Into::into),
+                },
+            )
+        };
+        let rubrics = Rubrics::default().with(&pinned, levels(MetricDirection::Higher));
+        let mean = judged(None).metric(&rubrics).unwrap();
+        assert_eq!(
+            (mean.unit.as_str(), mean.aggregation),
+            ("level", Aggregation::Mean)
+        );
+        let reached = judged(Some("curt")).metric(&rubrics).unwrap();
+        assert_eq!(
+            (
+                reached.unit.as_str(),
+                reached.direction,
+                reached.aggregation
+            ),
+            ("ratio", MetricDirection::Higher, Aggregation::Rate)
+        );
+        assert!(
+            !serde_json::to_string(&judged(None))
+                .unwrap()
+                .contains("pass_level"),
+            "a card that names no level keeps the bytes it had"
+        );
+
+        for (rubrics, level) in [
+            (rubrics.clone(), "shouting"),
+            (
+                Rubrics::default().with(&pinned, levels(MetricDirection::None)),
+                "curt",
+            ),
+            (
+                Rubrics::default().with(
+                    &pinned,
+                    Rubric {
+                        scale: Scale::Flag,
+                        ..levels(MetricDirection::Higher)
+                    },
+                ),
+                "curt",
+            ),
+        ] {
+            let refused = judged(Some(level)).metric(&rubrics).unwrap_err();
+            assert!(refused.to_string().contains("pass_level"), "{refused}");
+        }
     }
 
     #[test]

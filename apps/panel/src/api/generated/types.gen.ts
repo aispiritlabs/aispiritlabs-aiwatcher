@@ -51,6 +51,14 @@ export const Aggregation = {
 export type Aggregation = typeof Aggregation[keyof typeof Aggregation];
 
 /**
+ * A fraction's 95% interval.
+ */
+export type AgreementInterval = {
+    high: number;
+    low: number;
+};
+
+/**
  * One drawn instance.
  */
 export type Annotation = {
@@ -3944,11 +3952,12 @@ export type JobState = typeof JobState[keyof typeof JobState];
  */
 export type JudgeAgreement = {
     /**
-     * The fraction of the set where the judge said what the person said.
+     * The fraction of the set where the judge's number was the person's.
      * Over every item rather than over the answered ones, so a judge that
      * declines the hard cases does not agree its way to a better number.
      */
     agreement: number;
+    agreement_interval?: null | AgreementInterval;
     /**
      * How many of them the judge answered on the rubric's scale. The rest
      * were asked and are part of the disagreement, not missing from it.
@@ -6839,6 +6848,15 @@ export type Scorer = {
     text: string;
 } | {
     kind: 'judge';
+    /**
+     * On a rubric of named levels, the level an answer has to reach — at
+     * it, or on the better side of it as the rubric's direction says. The
+     * metric is then the fraction of cases that did, a claim ordered levels
+     * can carry. Absent, it is the mean position among the levels, which
+     * treats them as evenly spaced; absent from the bytes too, so a card
+     * written before this keeps its version.
+     */
+    pass_level?: string | null;
     rubric: VersionReference;
 };
 

@@ -213,6 +213,7 @@ it('says a model gave these numbers, and how often it agreed with people, uncolo
                 items: 3,
                 answered: 2,
                 agreement: 2 / 3,
+                agreement_interval: { low: 0.208, high: 0.939 },
                 mean_absolute_difference: 0.5,
               },
             ],
@@ -227,6 +228,8 @@ it('says a model gave these numbers, and how often it agreed with people, uncolo
   );
   expect(await screen.findByText(/re-reading will not reproduce it/)).toBeTruthy();
   expect(screen.getByText('67%')).toBeTruthy();
+  // Three items prove little, and the interval says how little.
+  expect(screen.getByText('21–94%')).toBeTruthy();
   // What it declined to answer is shown beside the agreement, not hidden in it.
   expect(screen.getByText('2 of 3')).toBeTruthy();
   // The provider's own word about what answered, both backends of it.

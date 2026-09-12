@@ -455,6 +455,7 @@ function JudgeNote({ evidence }: { evidence: DurableEvaluation }) {
             <tr>
               <th className="font-normal">Metric</th>
               <th className="font-normal">Agreed with people</th>
+              <th className="font-normal">95% interval</th>
               <th className="font-normal">Answered</th>
               <th className="font-normal">Mean distance</th>
             </tr>
@@ -464,6 +465,11 @@ function JudgeNote({ evidence }: { evidence: DurableEvaluation }) {
               <tr key={row.metric}>
                 <td>{row.metric}</td>
                 <td>{`${Math.round(row.agreement * 100)}%`}</td>
+                <td>
+                  {row.agreement_interval
+                    ? `${Math.round(row.agreement_interval.low * 100)}–${Math.round(row.agreement_interval.high * 100)}%`
+                    : '—'}
+                </td>
                 <td>{`${row.answered} of ${row.items}`}</td>
                 <td>{row.mean_absolute_difference?.toFixed(3) ?? '—'}</td>
               </tr>

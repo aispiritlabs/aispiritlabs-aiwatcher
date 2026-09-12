@@ -1906,6 +1906,13 @@ the review.
   expectations and never into a shard. A case without it fails naming the
   path, and a calibration item without it is not asked and counts against the
   judge's agreement rather than out of it.
+  On named levels a card may name a `pass_level`: the metric is then the
+  fraction at that level or on the rubric's better side of it rather than a
+  mean of positions, and the judge's reply and the person's judgement go
+  through that one mapping, so the agreement is about the number the result
+  publishes. Nothing decides how many calibration items are enough; the
+  agreement carries its 95% Wilson interval, which is what says three of three
+  proves little.
 - **Never let a judge answer in a shape it was not asked for.** Every call
   carries the scale as a JSON Schema the provider decodes against, and a reply
   that is still a value of another kind fails its case rather than being read

@@ -687,15 +687,23 @@ pub fn replies(
     let mut judged = asking.refused.clone();
     let mut said = BTreeMap::new();
     for (question, reply) in asking.questions.iter().zip(replies) {
-        let rubric = card
+        let spec = card
             .scorers
             .iter()
-            .find(|spec| spec.metric == question.metric)
+            .find(|spec| spec.metric == question.metric);
+        let rubric = spec
             .and_then(|spec| spec.scorer.rubric())
             .and_then(|pinned| rubrics.get(pinned));
+        let pass_level = spec.and_then(|spec| spec.scorer.pass_level());
         let read = rubric.map_or_else(
             || Err("this metric's rubric was not resolved".to_owned()),
-            |rubric| crate::read(rubric, reply),
+            |rubric| {
+                crate::read(rubric, reply).and_then(|(value, _)| {
+                    crate::scored(rubric, pass_level, &value)
+                        .map(|number| (value, number))
+                        .ok_or_else(|| "the judge answered outside this rubric's scale".to_owned())
+                })
+            },
         );
         match &question.about {
             Asked::Case(case_id) => {

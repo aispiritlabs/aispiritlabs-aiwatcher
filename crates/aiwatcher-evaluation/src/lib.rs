@@ -39,9 +39,10 @@ pub use context::{
     Aggregation, EvaluationContext, JudgeConfiguration, MetricDefinition, MetricDirection,
 };
 pub use judge::{
-    CalibrationItem, CalibrationRequest, CalibrationSet, CalibrationVersion, JudgeAgreement,
-    JudgeCall, JudgeDeclaration, JudgeFailure, JudgeMessage, JudgeModel, JudgeReply, JudgeReport,
-    JudgeSettings, Served, ServedModel, agreement, ask, number, read, reply_schema, served,
+    AgreementInterval, CalibrationItem, CalibrationRequest, CalibrationSet, CalibrationVersion,
+    JudgeAgreement, JudgeCall, JudgeDeclaration, JudgeFailure, JudgeMessage, JudgeModel,
+    JudgeReply, JudgeReport, JudgeSettings, Served, ServedModel, agreement, ask, number, read,
+    reply_schema, scored, served,
 };
 pub use manifest::{EvaluationManifest, EvaluationOrigin, PreparedEvaluation, VariantManifest};
 pub use reference::{DatasetKind, DatasetReference, VersionReference};

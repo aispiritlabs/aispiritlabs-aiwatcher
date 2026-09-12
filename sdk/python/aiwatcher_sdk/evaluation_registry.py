@@ -166,6 +166,10 @@ class Judge(TypedDict):
 
     kind: Literal["judge"]
     rubric: VersionReference
+    #: On a rubric of named levels, the level an answer has to reach — at it or
+    #: on the rubric's better side. The metric is then the fraction that did,
+    #: rather than the mean position among the levels.
+    pass_level: NotRequired[str]
 
 
 Scorer = ExactMatch | Contains | RegexMatch | NumericWithin | AbsoluteError | Forbidden | Judge

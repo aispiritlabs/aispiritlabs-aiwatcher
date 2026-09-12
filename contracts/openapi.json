@@ -11045,6 +11045,24 @@
           "none"
         ]
       },
+      "AgreementInterval": {
+        "type": "object",
+        "description": "A fraction's 95% interval.",
+        "required": [
+          "low",
+          "high"
+        ],
+        "properties": {
+          "high": {
+            "type": "number",
+            "format": "double"
+          },
+          "low": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
       "Annotation": {
         "type": "object",
         "description": "One drawn instance.",
@@ -18460,7 +18478,18 @@
           "agreement": {
             "type": "number",
             "format": "double",
-            "description": "The fraction of the set where the judge said what the person said.\nOver every item rather than over the answered ones, so a judge that\ndeclines the hard cases does not agree its way to a better number."
+            "description": "The fraction of the set where the judge's number was the person's.\nOver every item rather than over the answered ones, so a judge that\ndeclines the hard cases does not agree its way to a better number."
+          },
+          "agreement_interval": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AgreementInterval",
+                "description": "Where that fraction plausibly lies, given how few items it was counted\nover: the 95% Wilson interval. Three of three is 100% and an interval\nreaching down to 44%; nothing here decides how many items are enough,\nand this is what lets a reader decide instead. Absent over no items."
+              }
+            ]
           },
           "answered": {
             "type": "integer",
@@ -23763,6 +23792,13 @@
                 "enum": [
                   "judge"
                 ]
+              },
+              "pass_level": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "On a rubric of named levels, the level an answer has to reach — at\nit, or on the better side of it as the rubric's direction says. The\nmetric is then the fraction of cases that did, a claim ordered levels\ncan carry. Absent, it is the mean position among the levels, which\ntreats them as evenly spaced; absent from the bytes too, so a card\nwritten before this keeps its version."
               },
               "rubric": {
                 "$ref": "#/components/schemas/VersionReference"
