@@ -1047,6 +1047,19 @@ the review.
   itself, and `says_the_same_next_time` is the same question `StoreError` and
   `HandleError` now answer about themselves. The status is one caller's
   rendering of a refusal, never the refusal.
+- **Never flatten a port error into a string.** `PortError` already carries the
+  one bit above — `Unavailable` is worth coming back for and `Rejected` is not
+  — and a registry that maps it to a message has thrown that away before its
+  caller can ask. `DefinitionRegistry` did, and it flattened three different
+  things into one `StoreError::Backend`: a store that could not be reached, a
+  stored definition that will not read back, and a definition that does not
+  compile. For a *registered workflow* a corrupt record was therefore
+  indistinguishable from a bad moment, so its schedule's slot stayed due and
+  its route answered 503 — a promise to come back for something that never
+  would. `DefinitionError` is the three answers, in
+  `aiwatcher_datasets::RegistryError`'s own three words, because the two
+  registries a managed run compiles from answer one question and two
+  vocabularies for it are two answers a release apart.
 - **Never let the compile-and-start use case live in the HTTP module.** Three
   callers ask for a managed run — the route somebody presses, `run_now` on a
   schedule, and the tick that finds a slot due — and what starting *means* is

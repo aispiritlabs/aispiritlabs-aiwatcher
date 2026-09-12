@@ -50,7 +50,10 @@ building towards, and it is four things rather than one:
   scheduler asks the refusal `says_the_same_next_time` rather than reading the
   HTTP status an `ApiError` carries — which was wrong for the three refusals
   that are 5xx by number and permanent by meaning, each leaving a slot due and
-  retried every minute for ever.
+  retried every minute for ever. Its one limitation is closed too (plan section
+  22): the registry a *registered workflow* is read from answers with three
+  errors instead of one string, so a corrupt stored definition is no longer
+  indistinguishable from a store having a bad moment.
 - **C0 — running an evaluation rather than recording one.** `score_existing`
   first, and it is what makes the approval resource earn its keep: a managed run
   publishes evidence with no step on the server's host.
@@ -74,3 +77,9 @@ The comparison itself followed in section 20.
   `aiwatcher_execution::start`, three callers share it, and whether a slot stays
   due is the refusal's own answer rather than a status code's. `TargetKind`
   deleted in favour of `DefinitionKind`; every HTTP status unchanged
+- 2026-09-12 — AR3's own limitation closed (plan section 22): `DefinitionError`
+  replaces a flattened `StoreError::Backend`, in the dataset registry's own
+  three words, so an unreachable store, a corrupt stored definition and a
+  definition that does not compile are three answers. Here the statuses *do*
+  change, because the classification was the thing that was wrong: 500, 502 and
+  422 where there was one 503

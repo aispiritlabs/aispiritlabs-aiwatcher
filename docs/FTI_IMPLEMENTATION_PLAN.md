@@ -1,6 +1,6 @@
 # FTI — rekomendacja zakresu i plan rozwoju
 
-Data: 2026-09-11. Status: A1–A4 i AR1 zaimplementowane; B1 zweryfikowane, trwały wycinek B2 i atomowe orphan GC nowych publikacji dostarczone; dodano weryfikowane adaptery Curation, promptów, modeli, Annotations i Conversations; B2/AR2 pozostają otwarte: B2e–B2h, w tym judge (sekcje 9–16). Wyniki odbioru A, ograniczenia i incydent seeda w sekcji 8. Przegląd planu z 2026-09-12 jest w sekcji 17; jego wnioski są wniesione do sekcji 2–7 — etap B ma punkty 8–11 i rozstrzygnięcia wizualne, tabela paczek B2e–B2i, a B3 zależy od B2e, B2f i B2i. Sekcja 19 zmniejsza ograniczenia z sekcji 18; sekcja 20 dostarcza stronę dowodową B3 — porównanie dwóch trwałych wyników; sekcja 21 dostarcza AR3 — wspólny przypadek użycia kompilacji i startu, wyjęty z modułu HTTP.
+Data: 2026-09-11. Status: A1–A4 i AR1 zaimplementowane; B1 zweryfikowane, trwały wycinek B2 i atomowe orphan GC nowych publikacji dostarczone; dodano weryfikowane adaptery Curation, promptów, modeli, Annotations i Conversations; B2/AR2 pozostają otwarte: B2e–B2h, w tym judge (sekcje 9–16). Wyniki odbioru A, ograniczenia i incydent seeda w sekcji 8. Przegląd planu z 2026-09-12 jest w sekcji 17; jego wnioski są wniesione do sekcji 2–7 — etap B ma punkty 8–11 i rozstrzygnięcia wizualne, tabela paczek B2e–B2i, a B3 zależy od B2e, B2f i B2i. Sekcja 19 zmniejsza ograniczenia z sekcji 18; sekcja 20 dostarcza stronę dowodową B3 — porównanie dwóch trwałych wyników; sekcja 21 dostarcza AR3 — wspólny przypadek użycia kompilacji i startu, wyjęty z modułu HTTP; sekcja 22 domyka jego ograniczenie — rejestr definicji rozróżnia niedostępny magazyn, uszkodzony rekord i odmówioną definicję.
 
 Podstawa: [katalog funkcji](FTI_FEATURE_CATALOG.md), [analiza braków](FTI_FEATURE_GAPS.md), [plan UX](FTI_UX_WANDB_PLAN.md), [przegląd dokumentacji Langfuse i MLflow](FTI_LANGFUSE_MLFLOW_ANALYSIS.md), [ocena architektury](FTI_ARCHITECTURE_REVIEW.md) oraz aktualny kod. Ocena dotyczy obecności i kontraktów implementacji; nie potwierdza działania konkretnego wdrożenia. Katalog opisuje zakres docelowy, więc liczba jego pozycji nie jest miarą ukończenia produktu.
 
@@ -1057,6 +1057,100 @@ Instancja zatrzymana, katalog danych usunięty.
   nierozróżnialne i oba czytają się jako „wróć za chwilę". Dla pipeline'ów
   reguła jest pełna, bo `aiwatcher_datasets::RegistryError` te przypadki
   rozróżnia. Naprawa to zmiana typu błędu tamtego registry — osobna paczka.
+  **Dostarczona w sekcji 22.**
 - **C0** ma teraz swój warunek: nowy scorer jest zadaniem istniejącego workera i
   startuje przez `Executions`, nie przez własny silnik.
+- **B3 (różnica na poziomie przypadków), B4, C0** — bez zmian, karta AW-6.
+
+## 22. Rejestr definicji odpowiada trzema zdaniami zamiast jednym
+
+Sekcja 21 dała odmowie start-u metodę, która odpowiada na jedyne pytanie
+schedulera. Dla pipeline'ów działała od razu, bo
+`aiwatcher_datasets::RegistryError` rozróżnia przypadki. Dla *zarejestrowanych
+workflow* nie działała, i ta paczka jest tym brakiem.
+
+### 22.1 Jeden napis zamiast trzech odpowiedzi
+
+`DefinitionRegistry` mapował **wszystko** na `StoreError::Backend(String)`
+jedną funkcją `fn backend(error: impl Display)`. Wchodziły do niej trzy różne
+rzeczy:
+
+| co się stało | co z tego zostawało | co z tego czytał tick |
+| --- | --- | --- |
+| magazyn obiektów nieosiągalny albo odmówił | tekst | „wróć za chwilę" |
+| zapisany obiekt, który się nie parsuje | tekst | „wróć za chwilę" |
+| definicja, która się nie kompiluje | tekst, bez listy problemów | „wróć za chwilę" |
+
+`PortError` **już niesie** ten jeden bit — `Unavailable` wraca, `Rejected` nie —
+a spłaszczenie go do napisu wyrzuca go, zanim wywołujący zdąży zapytać. Przez
+`HandleError::Store` trafiało to do `StoreError::says_the_same_next_time`, gdzie
+`Backend(_)` jest **uczciwym `false`**: adapter już nie wie, co trafił. Uczciwe
+`false` na spłaszczonym błędzie to jednak wciąż slot należny co minutę dla
+definicji, która nigdy się nie skompiluje.
+
+Ten sam błąd miała trasa HTTP: `503 workflow_store_unavailable` dla wszystkich
+trzech, czyli obietnica powrotu dla czegoś, co nie wróci.
+
+### 22.2 Trzy odpowiedzi, w słownictwie drugiego rejestru
+
+`DefinitionError` ma trzy warianty i są to **te same trzy słowa**, których
+używa `aiwatcher_datasets::RegistryError`:
+
+- `Store(PortError)` — magazyn; `is_retryable()` odpowiada za resztę,
+- `Corrupt { key, message }` — obiekt pod tym kluczem nie jest dokumentem tego
+  rejestru; wiadomość nazywa **który** obiekt,
+- `Refused(Vec<String>)` — definicja się nie kompiluje, z każdym problemem
+  naraz, tak jak odmawia trasa przed magazynem.
+
+Dwa rejestry, z których kompiluje się managed run, odpowiadają na jedno
+pytanie; dwa słownictwa dla niego to dwie odpowiedzi oddalone o jedno wydanie —
+powód, dla którego `Comparability` trafiło do `aiwatcher_core`, zastosowany do
+odmowy zamiast do werdyktu. `StartRefused::Registry` nazywa się teraz
+`Pipelines`, a obok stoi `Definitions`: przy dwóch rejestrach wariant o nazwie
+„Registry" wymaga wiedzy, o który chodzi.
+
+### 22.3 Statusy tutaj się zmieniły — i to jest ta poprawka
+
+Sekcja 21 zachowała każdy kod HTTP, bo zmieniała miejsce, w którym mieszka
+przypadek użycia. Tutaj zmienia się sama klasyfikacja, więc zmieniają się i
+kody — na te, które ten sam rejestr datasetów już oddaje:
+
+| odmowa | przed | teraz |
+| --- | --- | --- |
+| magazyn nieosiągalny | `503 workflow_store_unavailable` | `503 registry_unavailable` |
+| magazyn zrozumiał i odmówił | `503 workflow_store_unavailable` | `502 registry_rejected` |
+| zapisany obiekt się nie parsuje | `503 workflow_store_unavailable` | `500 registry_corrupt` |
+| definicja się nie kompiluje | `503 workflow_store_unavailable` | `422 plan_refused` + `details` |
+
+Dotyczy trzech tras `/api/v1/workflow-definitions` i startu z celem
+`workflow`. Kontrakt wymienia teraz 500 i 502 przy tych trasach, klient
+wygenerowany ponownie; panel czyta je przez `answerOrNone`, więc żaden ekran
+nie zmienia zachowania — zmienia się to, co mówi wiadomość.
+
+### 22.4 Odbiór
+
+`just check` 23/23 PASS. Nowe: 1 test przez prawdziwy rejestr (uszkodzona
+głowa → `Definitions(Corrupt)` nazywający klucz, `says_the_same_next_time()`
+prawda), 1 test HTTP (500 `registry_corrupt` na trasie szczegółu i na starcie),
+oraz cztery nowe wpisy w teście, który trzyma listę odmów rozstrzygniętych i
+odmów wartych powrotu.
+
+Odbiór na własnej instancji `127.0.0.1:19082`, katalogi tymczasowe: zapisany
+workflow `house/import`, harmonogram godzinowy na 14:54 UTC, potem `head.json`
+nadpisany bajtami, które nie są dokumentem.
+
+- trasa szczegółu i `POST /api/v1/executions`: `500 registry_corrupt`,
+  wiadomość nazywa `workflows/heads/a034…dfce.json`;
+- tick o **14:54:23** zapisał na harmonogramie `outcome: "refused"` z tym samym
+  powodem, a `next_run` przeskoczył na `2026-09-12T15:54:00Z`. Przed tą paczką
+  ten sam przypadek był `try_again`: slot należny, ponowienie co minutę bez
+  końca.
+
+Instancja zatrzymana, katalog danych usunięty.
+
+### 22.5 Co zostaje
+
+- **Nieosiągalny magazyn** zweryfikowany testem jednostkowym, nie na żywo:
+  adapter plikowy nie ma jak być chwilowo nieosiągalny. To ta sama granica, co
+  przy pipeline'ach.
 - **B3 (różnica na poziomie przypadków), B4, C0** — bez zmian, karta AW-6.
