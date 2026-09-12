@@ -923,7 +923,7 @@ połowę, której dotyczy.
 ### 20.6 Odbiór
 
 `just check` 23/23 PASS; 6 nowych testów rejestru i 1 akceptacyjny HTTP po
-stronie Rusta, 8 nowych testów panelu (257 łącznie). Ręcznie na własnej
+stronie Rusta, 8 nowych testów panelu (259 łącznie). Ręcznie na własnej
 instancji `127.0.0.1:19080`, z własnym katalogiem danych i **bez
 `AIWATCHER_EVALUATION_SOURCE_DIR`**: trzy pary dopuszczone i opublikowane przez
 API (dwa warianty jednego kontekstu i jeden na innym splicie).
