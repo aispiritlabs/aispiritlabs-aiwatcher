@@ -30,6 +30,7 @@ import { answerOf } from '@/shared/lib/result';
 import { cn, pinchId } from '@/shared/lib/utils';
 
 import { ComparabilityControl } from './comparability';
+import { CaseJudgement } from './judgement';
 
 const CANDIDATES = 50;
 const DIFF_PAGE = 100;
@@ -441,8 +442,10 @@ function CaseAnswers({
     })),
   });
 
+  const measured = answers[0]?.data?.cases[0]?.measurement;
   return (
-    <div className="grid gap-2 rounded-md bg-muted/40 px-3 py-2 sm:grid-cols-2">
+    <div className="rounded-md bg-muted/40 px-3 py-2">
+      <div className="grid gap-2 sm:grid-cols-2">
       {sides.map((side, index) => {
         const answer = answers[index];
         const found = answer?.data?.cases[0];
@@ -472,6 +475,17 @@ function CaseAnswers({
           </div>
         );
       })}
+      </div>
+      {/* Judged where the answer is, and only once this side has been read:
+          the target names the repetition, which is a fact about the
+          measurement rather than about the row that pointed at it. */}
+      {measured ? (
+        <CaseJudgement
+          evaluationId={current.receipt.evaluation_id}
+          caseId={measured.case_id}
+          repetitionId={measured.repetition_id}
+        />
+      ) : null}
     </div>
   );
 }

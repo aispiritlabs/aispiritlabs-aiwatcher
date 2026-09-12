@@ -21,14 +21,14 @@ export type Route = {
 };
 
 export type Server = {
-  /** Every request that reached it, in order. */
-  readonly calls: { method: string; url: string }[];
+  /** Every request that reached it, in order, with what it carried. */
+  readonly calls: { method: string; url: string; body?: unknown }[];
   /** How many times one route was asked. */
   countOf: (method: string, path: string) => number;
 };
 
 export function serve(routes: Route[]): Server {
-  const calls: { method: string; url: string }[] = [];
+  const calls: { method: string; url: string; body?: unknown }[] = [];
   const seen = new Map<Route, number>();
 
   vi.stubGlobal('fetch', async (input: Request | string, init?: RequestInit) => {
@@ -38,7 +38,14 @@ export function serve(routes: Route[]): Server {
     const raw = input instanceof Request ? input.url : String(input);
     const method = (input instanceof Request ? input.method : init?.method) ?? 'GET';
     const url = new URL(raw, 'http://panel.test');
-    calls.push({ method, url: url.pathname });
+    // Kept because what a mutation *sent* is often the assertion: a pinned
+    // version, an ID the browser was handed rather than one it derived.
+    const sent = input instanceof Request ? await input.clone().text() : String(init?.body ?? '');
+    calls.push({
+      method,
+      url: url.pathname,
+      body: sent ? (JSON.parse(sent) as unknown) : undefined,
+    });
 
     const route = routes.find(
       (candidate) => candidate.method === method && url.pathname.endsWith(candidate.path),

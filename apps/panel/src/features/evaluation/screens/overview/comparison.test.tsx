@@ -400,6 +400,12 @@ it('opens a case into what each side answered, read from the route that holds it
         },
       },
     },
+    {
+      method: 'GET',
+      path: '/evaluation-assessments',
+      answer: { status: 200, body: { target_id: 'target-1', assessments: [] } },
+    },
+    { method: 'GET', path: '/evaluation-rubrics', answer: { status: 200, body: { rubrics: [] } } },
   ]);
   render(
     withQueries(
@@ -424,4 +430,10 @@ it('opens a case into what each side answered, read from the route that holds it
   expect(screen.getAllByText('{"answer":"4"}').length).toBe(3);
   expect(server.countOf('GET', '/after/cases')).toBe(1);
   expect(server.countOf('GET', '/before/cases')).toBe(1);
+
+  // And what anybody said about that case opens with it — asked only once
+  // this side has been read, because the target names the repetition and that
+  // is a fact about the measurement rather than about the row pointing at it.
+  expect(await screen.findByText(/Nobody has judged this case yet/)).toBeTruthy();
+  expect(server.countOf('GET', '/evaluation-assessments')).toBe(1);
 });
