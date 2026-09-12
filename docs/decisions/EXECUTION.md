@@ -2,7 +2,7 @@
 
 **The one decision underneath all of these:** a thing that executes work and a
 thing that decides what to execute are different, and only the second belongs to
-this server. Read in date order these eight ADRs are one argument arriving in
+this server. Read in date order these nine ADRs are one argument arriving in
 stages — a query surface, then a chain, then an owner, then a producer, then a
 choice of engine, then a pod of a step's own — and each stage names what would
 make it wrong. Two of them were made wrong on schedule.
@@ -16,7 +16,8 @@ make it wrong. Two of them were made wrong on schedule.
 | [0025](../ADR/ADR_0025_MANAGED_EXECUTION.md) | A managed execution is owned by the server, and the browser only asks for one | Accepted |
 | [0026](../ADR/ADR_0026_ENGINE_AS_PRODUCER.md) | The execution engine is a producer on its own log | Accepted |
 | [0028](../ADR/ADR_0028_QUERY_ENGINES.md) | A deployment chooses its query engine, and a typed query is admitted or runs where code runs | Accepted, 2026-09-11 — amends 0008, 0014 and 0024 |
-| [0029](../ADR/ADR_0029_POD_PER_STEP.md) | A step that needs a pod names an operator's template, and the pod is a worker for one attempt | Accepted, 2026-09-11 — reopens Phase 12; not built yet |
+| [0029](../ADR/ADR_0029_POD_PER_STEP.md) | A step that needs a pod names an operator's template, and the pod is a worker for one attempt | Accepted, 2026-09-11 — reopens Phase 12; built by AW-4, **three amendments**, the last making the backend a choice of three |
+| [0031](../ADR/ADR_0031_POD_ATTEMPT_CREDENTIAL.md) | A pod authenticates as its attempt, with a credential the launcher mints | **Proposed**, 2026-09-12 — builds the stricter mode 0029 deferred and makes it the only one; AW-7 |
 
 ## The arc, in the order it happened
 

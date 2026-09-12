@@ -43,6 +43,7 @@ the record**, and they are what code comments cite.
 | [0029](ADR_0029_POD_PER_STEP.md) | A step that needs a pod names an operator's template, and the pod is a worker for one attempt |
 
 | [0030](ADR_0030_EVALUATION_EVIDENCE.md) | Evaluation owns pinned variants and durable evidence; contract first, persistence next |
+| [0031](ADR_0031_POD_ATTEMPT_CREDENTIAL.md) | A pod authenticates as its attempt, with a credential the launcher mints — **proposed** |
 
 Use [template.md](template.md) for a new one, and add a line to the reading it
 belongs to in [`docs/decisions/`](../decisions/).
