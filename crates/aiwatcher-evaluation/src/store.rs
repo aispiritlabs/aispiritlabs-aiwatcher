@@ -120,6 +120,12 @@ pub(crate) fn rubric_head(name: &str) -> String {
 pub(crate) fn rubric_version(name: &str, version: &str) -> String {
     format!("{RUBRICS}{}/versions/{version}.json", hash(name.as_bytes()))
 }
+/// A declared run is addressed by its own content, so it needs no name and no
+/// head: two starts of one intention land on one document.
+pub(crate) const SCORING_RUNS: &str = "evaluation-runs/";
+pub(crate) fn scoring_run(id: &str) -> String {
+    format!("{SCORING_RUNS}{id}.json")
+}
 pub(crate) fn scorecard_head(name: &str) -> String {
     format!("{SCORECARDS}{}/head.json", hash(name.as_bytes()))
 }

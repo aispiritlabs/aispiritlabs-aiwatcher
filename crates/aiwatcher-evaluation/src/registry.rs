@@ -1519,6 +1519,34 @@ impl Registry {
         crate::scorecard::version(&self.store, name, &version).await
     }
 
+    /// Write down what a run of saved answers will measure.
+    ///
+    /// Addressed by its content, so declaring the same intention twice is the
+    /// same document and a plan that names it names a digest. Idempotent for
+    /// the same reason a prompt version is: the words decide the key.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Invalid`] when a reference or a pinned artifact is
+    /// unusable, and [`EvaluationError::Storage`] when the store cannot be
+    /// reached.
+    pub async fn declare_scoring_run(
+        &self,
+        run: &crate::ScoringRun,
+        declared_by: &str,
+        now: i64,
+    ) -> Result<crate::DeclaredRun> {
+        crate::scoring::declare(&self.store, run, declared_by, now).await
+    }
+
+    /// # Errors
+    ///
+    /// [`EvaluationError::Storage`] when the store cannot be reached.
+    pub async fn scoring_run(&self, id: &str) -> Result<Option<crate::DeclaredRun>> {
+        text(id, "run")?;
+        crate::scoring::declared(&self.store, id).await
+    }
+
     /// Record one judgement. The caller is who filed it, always.
     ///
     /// # Errors

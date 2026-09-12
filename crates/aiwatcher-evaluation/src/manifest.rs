@@ -30,7 +30,7 @@ pub struct VariantManifest {
 }
 
 impl VariantManifest {
-    fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         require(
             self.schema_version == SCHEMA_VERSION,
             "variant.schema_version",

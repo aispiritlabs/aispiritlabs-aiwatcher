@@ -20,6 +20,9 @@ mod assessments;
 #[path = "evaluation/scorecards.rs"]
 mod scorecards;
 
+#[path = "evaluation/scoring.rs"]
+mod scoring;
+
 #[path = "evaluation/cost.rs"]
 mod cost;
 

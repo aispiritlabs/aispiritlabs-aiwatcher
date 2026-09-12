@@ -12,6 +12,7 @@ mod registry;
 mod result;
 mod rubric;
 mod scorecard;
+mod scoring;
 mod store;
 
 pub use aiwatcher_core::Comparability;
@@ -41,6 +42,10 @@ pub use reference::{DatasetKind, DatasetReference, VersionReference};
 pub use rubric::{AssessmentValue, Rubric, RubricHead, RubricPage, RubricVersion, Scale};
 pub use scorecard::{
     Score, Scorecard, ScorecardHead, ScorecardPage, ScorecardVersion, Scorer, ScorerSpec,
+};
+pub use scoring::{
+    Cohort, DeclaredRun, RecordedAnswer, RecordedAnswers, SCORING_ENGINE, SCORING_VERSION, Scored,
+    ScoringRun, StepOrigin, score, scoring_engine,
 };
 
 use serde::Serialize;
