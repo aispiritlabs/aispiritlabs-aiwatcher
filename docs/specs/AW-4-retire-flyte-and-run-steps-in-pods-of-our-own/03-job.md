@@ -228,10 +228,47 @@ outline below is what the spec already fixes.
   a pod's row was read by every launcher pass. The number now comes from the
   run (`dispatched_attempt`), which is where `dispatched` was already read
   from, and `StepSkipped` leaves `settled()`.
-- **Left to a later pass: the step's view links its log.** The catalog holds it
-  against the attempt, and what is missing is a route that lists what an
-  execution produced. That is a contract change, and the log's own requirement
-  — kept, bounded, against the attempt — is met without it.
+- **The reader half of the log is a route per noun, not per kind** (2.4).
+  `GET /executions/{id}/artifacts` answers from `ArtifactCatalog::produced_by`
+  — every artifact a run produced, each carrying the execution, the step and
+  the attempt that made it — and `GET /executions/{id}/artifacts/{digest}`
+  reads one of them as text. A route that listed *logs* would need a second
+  one the first time a step's view wanted its rows; the catalog does not sort
+  by kind and neither does this.
+- **The digest is the whole address, and the execution is what makes that
+  safe** (2.4). The content route checks the digest against what *this run*
+  produced before it reads anything, so it is not an oracle over a store that
+  also holds prompts, datasets, annotations, conversations and training: a
+  digest no row of this run names is a 404 whatever is under it. The bytes go
+  through `AttemptArtifacts::read_bytes` — the proxying port the worker's rows
+  already use — rather than a presigned URL, for the reason ADR_0025's
+  guardrail gives, with the panel in the place of the laptop.
+- **Text, never the stored content type** (2.4). Serving bytes back under a
+  type the object store was told about is how a stored `text/html` becomes a
+  page on this origin. It is decoded lossily, because a pod's stdout is not
+  promised to be UTF-8 and a traceback is worth reading with a byte mangled in
+  it, and refused over 1 MiB — four times the only thing it is expected to be
+  asked for, checked against the declared size before the read and against the
+  object after it.
+- **A 501 rather than an empty list** (2.4), naming `AIWATCHER_PROMPT_STORE`.
+  The catalog and the store are `Some` exactly together, so their absence is
+  one fact with one fix — `StepArtifactsDisabled`, separate from the worker's
+  because the reader is a person on a step's view and a code naming a worker
+  would send them looking at one. The panel keeps the other half of R6: a 501
+  is rendered as the sentence the server sent and never as "this step printed
+  nothing", which is what the two would look like drawn the same way.
+- **One `StepLog`, in both places a managed run is watched** (2.4) — the
+  curation pipeline's run card and the Workflows view, for `AnswerGate`'s
+  reason. It lists **every** attempt's log, newest first, because the retry
+  that succeeded is the uninteresting one; it fetches the list with the step's
+  context and the bytes only on a click; and it is not conditional on the
+  binding, because whether an attempt left a log is the catalog's answer and a
+  list of runtimes in the panel would be a second opinion about it.
+- **`aiwatcher_execution::Provenance` is `ArtifactProvenance` in the contract**
+  (2.4). An OpenAPI components block is one global namespace and a
+  conversation turn already has a `Provenance` in it; two crates may call their
+  own noun the same thing and the document may not. Aliased on the new one, so
+  no stored shape and no generated type moved.
 - **The chart needed nothing for 2.4** (2.4): 2.3's Role already carries jobs
   `delete`, pods `get/list/watch` and `pods/log` `get`, because the ADR named
   them. The one thing the client had to say out loud is
