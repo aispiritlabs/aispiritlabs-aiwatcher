@@ -10,7 +10,6 @@ import { DatasetReference, ExecutionReference } from '@/shared/components/lineag
 
 import { getEvaluation, listEvaluations, listEvaluationSuites } from '@/api/generated/sdk.gen';
 import type {
-  Comparability,
   EvaluationCase,
   EvaluationDetail,
   EvaluationSummary,
@@ -19,6 +18,7 @@ import type {
 } from '@/api/generated/types.gen';
 import { StatusBadge } from '@/shared/components/status-badge';
 import { Approvals } from './approvals';
+import { ComparabilityControl } from './comparability';
 import { EvidencePane, EvidenceRow, EvidenceUnavailable, Retention, useEvidence } from './evidence';
 import type { DurableEvaluation } from '@/api/generated/types.gen';
 import { ApiFailure } from '@/shared/lib/result';
@@ -336,6 +336,8 @@ export function EvaluationPage() {
           <EvidencePane
             evaluationId={search.evidence}
             gaps={damaged.has(search.evidence) ? (retention ?? undefined) : undefined}
+            baseline={search.compare}
+            onCompare={(compare) => select({ compare })}
           />
         ) : (
           <ReportPane
@@ -757,47 +759,6 @@ export function ReportDetail({
   );
 }
 
-/**
- * Comparability, as a control rather than as a fourth sentence.
- *
- * The server distinguishes three states and decides which one this is (A3, and
- * ADR_0030's comparison rules): `comparable` means the deltas below mean
- * something, `unverified` means the evidence for that judgement is missing, and
- * `incompatible` means two facts are being compared that are not one fact. The
- * panel implements none of it — it renders which of the three the server chose,
- * and says plainly that a delta is withheld rather than leaving it absent.
- */
-function ComparabilityControl({ value }: { value: Comparability }) {
-  const SAYS: Record<Comparability, string> = {
-    comparable: 'Deltas below are a like-for-like comparison.',
-    unverified: 'Deltas are withheld: the evidence for a like-for-like comparison is missing.',
-    incompatible:
-      'Deltas are withheld: these two were not measured on the same thing, so a difference between them is not a change.',
-  };
-  return (
-    <div role="group" aria-label="Comparability">
-      <div className="flex flex-wrap items-center gap-1">
-        {(['comparable', 'unverified', 'incompatible'] as const).map((state) => (
-          <span
-            key={state}
-            aria-current={state === value ? 'true' : undefined}
-            className={cn(
-              'rounded-md border px-2 py-0.5',
-              state === value
-                ? state === 'comparable'
-                  ? 'border-primary bg-primary/10 font-medium text-foreground'
-                  : 'border-warning bg-warning/10 font-medium text-foreground'
-                : 'border-border/60 text-muted-foreground/60',
-            )}
-          >
-            {state}
-          </span>
-        ))}
-      </div>
-      <p className="mt-1">{SAYS[value]}</p>
-    </div>
-  );
-}
 
 function Metrics({
   metrics,

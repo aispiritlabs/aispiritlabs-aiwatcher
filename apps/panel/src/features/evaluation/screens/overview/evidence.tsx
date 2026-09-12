@@ -29,6 +29,8 @@ import { useRoleDecision } from '@/shared/lib/auth';
 import { ApiFailure, answerOf } from '@/shared/lib/result';
 import { cn, formatTime, pinchId } from '@/shared/lib/utils';
 
+import { Comparison } from './comparison';
+
 const EVIDENCE_PAGE = 50;
 
 /**
@@ -229,9 +231,13 @@ export function EvidenceRow({
 export function EvidencePane({
   evaluationId,
   gaps,
+  baseline,
+  onCompare,
 }: {
   evaluationId: string;
   gaps?: RetentionReport | undefined;
+  baseline: string | undefined;
+  onCompare: (baseline: string | undefined) => void;
 }) {
   const evidence = useQuery({
     queryKey: ['evaluation-evidence', evaluationId],
@@ -264,15 +270,21 @@ export function EvidencePane({
       </Card>
     );
   }
-  return <Evidence evidence={evidence.data} gaps={gaps} />;
+  return (
+    <Evidence evidence={evidence.data} gaps={gaps} baseline={baseline} onCompare={onCompare} />
+  );
 }
 
 export function Evidence({
   evidence,
   gaps,
+  baseline,
+  onCompare,
 }: {
   evidence: DurableEvaluation;
   gaps?: RetentionReport | undefined;
+  baseline?: string | undefined;
+  onCompare?: ((baseline: string | undefined) => void) | undefined;
 }) {
   const { receipt, state, manifest, counts } = evidence;
   return (
@@ -337,6 +349,14 @@ export function Evidence({
         <StateNote state={state} counts={counts ?? undefined} />
         {gaps ? <GapNote report={gaps} /> : null}
       </Card>
+
+      {/* A comparison is offered whatever this result reads as: a delta the
+          server withholds because one side is no longer readable is the answer
+          somebody came for, and a pane that simply stopped offering it would
+          look like a screen that had never had the feature. */}
+      {onCompare ? (
+        <Comparison evidence={evidence} baseline={baseline} onSelect={onCompare} />
+      ) : null}
 
       {readable(state) ? (
         <>

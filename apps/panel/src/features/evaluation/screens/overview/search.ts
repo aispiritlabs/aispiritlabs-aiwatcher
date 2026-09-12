@@ -23,13 +23,13 @@ import { windowSearchSchema } from '@/shared/components/time-range';
  * outlives that (ADR_0030), so a day would hide what that half is for. It
  * opens on everything and the control narrows.
  *
- * ## Why the metric deltas are not coloured
+ * ## Why a delta is coloured on one half and not on the other
  *
- * Higher is better for a pass rate and worse for a cost, and this page has no
- * way to know which a producer's metric is. Colouring them would mean guessing,
- * and a green number that means "we got more expensive" is worse than a plain
- * one. What *is* unambiguous is a case that passed on the baseline and fails
- * now, so that is the thing that gets a colour.
+ * A folded report's metric is a name a producer sent, and higher is better for
+ * a pass rate and worse for a cost, so colouring one would mean guessing and a
+ * green number could read as "we got more expensive". A pinned context
+ * *declares* the direction per metric, which makes published evidence the one
+ * place a delta may be coloured — and plain where it declares `none`.
  */
 
 export const searchSchema = z.object({
@@ -45,5 +45,15 @@ export const searchSchema = z.object({
   /** Whether the operator's half — which pairs this instance admits — is open. */
   approvals: z.boolean().optional(),
   baseline: z.string().optional(),
+  /**
+   * The published result the open evidence is compared with.
+   *
+   * Not `baseline`: that one is the folded half's, where blank means "the
+   * previous success" and the server picks. Published evidence has no
+   * automatic baseline — the catalogue narrowed to one context is what offers
+   * candidates — so blank there means nothing is being compared, and one name
+   * for two rules would be the control that quietly does something else.
+   */
+  compare: z.string().optional(),
   metrics: z.string().optional(),
 });
