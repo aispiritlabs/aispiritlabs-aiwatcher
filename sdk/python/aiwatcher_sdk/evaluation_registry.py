@@ -6,11 +6,15 @@ Use ``evaluation`` for types without importing the HTTP transport.
 
 The same client carries rubrics and assessments, because they have the same
 owner: a judgement about a case is meaningless beside a result somebody else
-holds.
+holds. And it carries scoring runs — a scorecard, a staged recording and a
+declaration that measures one against the other — because what they publish is
+evidence in this registry, admitted at the same gate as everything else.
 """
 
 from __future__ import annotations
 
+import json
+from collections.abc import Sequence
 from types import TracebackType
 from typing import Any, Literal, NotRequired, Self, TypedDict
 from urllib.parse import quote
@@ -18,7 +22,12 @@ from urllib.parse import quote
 import httpx
 
 from aiwatcher_sdk.api import ApiError, Transport
-from aiwatcher_sdk.evaluation import EvaluationManifest
+from aiwatcher_sdk.evaluation import (
+    ArtifactReference,
+    EvaluationManifest,
+    VariantManifest,
+    VersionReference,
+)
 
 
 class EvaluationRegistryError(ApiError):
@@ -102,6 +111,79 @@ class CaseTarget(TypedDict):
 
 
 AssessmentTarget = TraceTarget | SpanTarget | SessionTarget | CaseTarget
+
+
+class ExactMatch(TypedDict):
+    kind: Literal["exact_match"]
+    ignore_case: NotRequired[bool]
+    trim: NotRequired[bool]
+
+
+class Contains(TypedDict):
+    kind: Literal["contains"]
+    ignore_case: NotRequired[bool]
+
+
+class RegexMatch(TypedDict):
+    """The same question of every answer, so it reads no expected answer."""
+
+    kind: Literal["regex_match"]
+    pattern: str
+
+
+class NumericWithin(TypedDict):
+    kind: Literal["numeric_within"]
+    tolerance: float
+
+
+class Forbidden(TypedDict):
+    """Counted rather than avoided: the server declares lower as better."""
+
+    kind: Literal["forbidden"]
+    text: str
+    ignore_case: NotRequired[bool]
+
+
+Scorer = ExactMatch | Contains | RegexMatch | NumericWithin | Forbidden
+
+
+class ScorerSpec(TypedDict):
+    """One measurement. Which way its metric is better is the server's to say."""
+
+    metric: str
+    scorer: Scorer
+    answer_path: NotRequired[str]
+    expected_path: NotRequired[str]
+
+
+class Scorecard(TypedDict):
+    name: str
+    scorers: list[ScorerSpec]
+    description: NotRequired[str]
+
+
+class RecordedAnswer(TypedDict):
+    case_id: str
+    answer: Any
+    trace_id: NotRequired[str]
+    span_id: NotRequired[str]
+
+
+class Cohort(TypedDict):
+    case_manifest: ArtifactReference
+    case_count: int
+    split: str
+    input_schema: ArtifactReference
+    expectations_schema: ArtifactReference
+
+
+class ScoringRun(TypedDict):
+    evaluation_id: str
+    repetition_id: str
+    variant: VariantManifest
+    cohort: Cohort
+    scorecard: VersionReference
+    answers: ArtifactReference
 
 
 class CaseMeasurement(TypedDict):
@@ -280,6 +362,84 @@ class EvaluationRegistry:
                 + "/"
                 + quote(standing_id, safe=""),
                 params={"before": before, "limit": limit},
+            )
+        )
+
+    def publish_scorecard(self, scorecard: Scorecard) -> dict[str, Any]:
+        """Declare what an evaluation measures.
+
+        Idempotent by content, like a rubric. The metric each scorer writes
+        comes back with its direction and unit, which the server derives: a
+        scorecard carries no code and no opinion about which way is better.
+        """
+        return self._object(
+            self._transport.send(
+                "POST", "/api/v1/evaluation-scorecards", dict(scorecard), idempotent=True
+            )
+        )
+
+    def list_scorecards(self) -> dict[str, Any]:
+        return self._object(self._transport.send("GET", "/api/v1/evaluation-scorecards"))
+
+    def get_scorecard(self, name: str, *, version: str | None = None) -> dict[str, Any]:
+        return self._object(
+            self._transport.send(
+                "GET",
+                "/api/v1/evaluation-scorecards/" + quote(name, safe=""),
+                params={"version": version},
+            )
+        )
+
+    def stage_recording(self, name: str, answers: Sequence[RecordedAnswer]) -> dict[str, Any]:
+        """Keep the answers a scoring run will measure; return their reference.
+
+        The server digests the bytes it received, so they are encoded here the
+        same way every time — a retried upload is the same bytes, and lands on
+        the same reference rather than beside it.
+        """
+        content = json.dumps(
+            {"answers": list(answers)}, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        ).encode()
+        return self._object(
+            self._transport.send(
+                "PUT",
+                "/api/v1/evaluation-recordings/" + quote(name, safe=""),
+                content=content,
+                content_type="application/json",
+                idempotent=True,
+            )
+        )
+
+    def declare_scoring_run(self, run: ScoringRun) -> dict[str, Any]:
+        """Declare a measurement of a staged recording, without starting it.
+
+        The answer carries the manifest a result will publish and the
+        ``approval_id`` that admits it. Admit that manifest — it is derived, and
+        writing it out by hand is a second answer to what the run measures —
+        then call :meth:`start_scoring_run`. Idempotent by content.
+        """
+        return self._object(
+            self._transport.send("POST", "/api/v1/evaluation-runs", dict(run), idempotent=True)
+        )
+
+    def get_scoring_run(self, declaration: str) -> dict[str, Any]:
+        return self._object(
+            self._transport.send("GET", "/api/v1/evaluation-runs/" + quote(declaration, safe=""))
+        )
+
+    def start_scoring_run(self, declaration: str) -> dict[str, Any]:
+        """Start a declared measurement as a managed run.
+
+        Safe to send twice: the declaration is the run's identity, so a repeat
+        reaches the run already going. Raises while nothing admits the pair, and
+        the message names the approval that would.
+        """
+        return self._object(
+            self._transport.send(
+                "POST",
+                "/api/v1/evaluation-runs/" + quote(declaration, safe="") + "/start",
+                {},
+                idempotent=True,
             )
         )
 

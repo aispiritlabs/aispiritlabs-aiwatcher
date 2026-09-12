@@ -140,3 +140,74 @@ def test_a_rubric_is_read_at_the_version_that_will_be_answered_under() -> None:
         EvaluationRegistry("http://localhost", client=http) as registry,
     ):
         assert registry.get_rubric("team helpfulness", version="sha-1")["version"] == "sha-1"
+
+
+def test_a_recording_is_encoded_the_same_way_every_time_so_a_retry_is_the_same_bytes() -> None:
+    # The server names a recording by the digest of the bytes it received. A
+    # retry that re-encoded the answers in another key order would be another
+    # recording, and a declaration naming the first would not name it.
+    bodies: list[bytes] = []
+    attempts = 0
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        bodies.append(request.content)
+        if attempts == 1:
+            raise httpx.ConnectError("lost before the answer arrived", request=request)
+        return httpx.Response(200, json={"name": "answers.json", "digest": "d" * 64})
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(handle)) as http,
+        EvaluationRegistry("http://localhost", client=http, attempts=2) as registry,
+    ):
+        ref = registry.stage_recording(
+            "answers.json",
+            [{"case_id": "two-plus-two", "answer": {"text": "4", "confidence": 0.9}}],
+        )
+
+    assert ref["digest"] == "d" * 64
+    assert attempts == 2
+    assert bodies[0] == bodies[1]
+    assert json.loads(bodies[0]) == {
+        "answers": [{"answer": {"confidence": 0.9, "text": "4"}, "case_id": "two-plus-two"}]
+    }
+
+
+def test_starting_a_declared_run_twice_is_safe_and_names_nothing_but_the_declaration() -> None:
+    seen: list[tuple[str, str, bytes]] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen.append((request.method, request.url.path, request.content))
+        if len(seen) == 1:
+            return httpx.Response(503, json={"message": "the store is having a moment"})
+        return httpx.Response(202, json={"declaration": "a" * 64, "created": False})
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(handle)) as http,
+        EvaluationRegistry("http://localhost", client=http, attempts=2) as registry,
+    ):
+        accepted = registry.start_scoring_run("a" * 64)
+
+    assert accepted["created"] is False
+    assert [method for method, _, _ in seen] == ["POST", "POST"]
+    assert seen[0][1] == f"/api/v1/evaluation-runs/{'a' * 64}/start"
+    assert json.loads(seen[0][2]) == {}
+
+
+def test_a_run_nobody_admitted_raises_with_the_approval_that_would() -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            409,
+            json={
+                "error": "pair_not_admitted",
+                "message": "evaluation: no operator has admitted this pair yet: approval abc",
+            },
+        )
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(handle)) as http,
+        EvaluationRegistry("http://localhost", client=http) as registry,
+        pytest.raises(EvaluationRegistryError, match="approval abc"),
+    ):
+        registry.start_scoring_run("a" * 64)
