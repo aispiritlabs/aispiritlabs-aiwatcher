@@ -35,6 +35,20 @@ pub const SCORING_ENGINE: &str = "aiwatcher.scoring";
 /// results measured under different rules then compare as what they are.
 pub const SCORING_VERSION: &str = "1";
 
+impl EvaluationContext {
+    /// Whether this context was measured by the scorer vocabulary compiled
+    /// into aiwatcher, rather than by code a producer ran.
+    ///
+    /// Asked by name only. A version this deployment does not implement is
+    /// still one of ours, and the refusal that follows says which version this
+    /// binary scores with — rather than asking an adapter for a file nobody
+    /// could ever stage.
+    #[must_use]
+    pub fn scored_here(&self) -> bool {
+        self.scorer.name == SCORING_ENGINE
+    }
+}
+
 #[must_use]
 pub fn scoring_engine() -> VersionReference {
     VersionReference {

@@ -328,3 +328,161 @@ async fn declaring_one_intention_twice_is_one_document_and_a_second_run_is_not()
         run
     );
 }
+
+/// A result this deployment measured, ready to publish, and the registry.
+async fn engine_scored(registry: &Registry, evaluation_id: &str) -> PublishEvaluation {
+    let card = card();
+    let version = registry
+        .publish_scorecard(&card, "ada", 100)
+        .await
+        .unwrap()
+        .version;
+    let run = declaration(evaluation_id, &version);
+    let scored = score(
+        &card,
+        &cohort(),
+        &[
+            said("two-plus-two", "four"),
+            said("capital-pl", "Warsaw"),
+            said("empty-input", ""),
+        ],
+        &run.repetition_id,
+    );
+    PublishEvaluation {
+        manifest: run.manifest(&card, None).unwrap(),
+        status: scored.status,
+        cases: scored.cases,
+    }
+}
+
+#[tokio::test]
+async fn a_direction_edited_after_the_card_declared_it_is_not_admitted_as_the_cards() {
+    let registry = store(cohort());
+    let mut request = engine_scored(&registry, "tampered").await;
+    request.manifest.context.metrics[1].direction = MetricDirection::Higher;
+
+    let refused = registry
+        .approve(&request.manifest, "operator", 100)
+        .await
+        .expect_err("leaking a phrase more often is not an improvement");
+    assert!(refused.to_string().contains("context.metrics"), "{refused}");
+    let refused = registry
+        .publish(request, "editor", 200)
+        .await
+        .expect_err("and publication asks the same question");
+    assert!(refused.to_string().contains("context.metrics"), "{refused}");
+}
+
+#[tokio::test]
+async fn a_scorer_version_this_binary_does_not_implement_is_refused_naming_the_one_it_does() {
+    let registry = store(cohort());
+    let mut request = engine_scored(&registry, "from-the-future").await;
+    request.manifest.context.scorer.version = "2".into();
+
+    let refused = registry
+        .approve(&request.manifest, "operator", 100)
+        .await
+        .expect_err("nothing here measured with version 2");
+    let said = refused.to_string();
+    assert!(said.contains("context.scorer.version"), "{said}");
+    assert!(said.contains(SCORING_VERSION), "{said}");
+}
+
+#[tokio::test]
+async fn a_scoring_run_is_admitted_with_no_suite_or_scorer_file_in_its_bundle() {
+    use aiwatcher_evaluation::ApprovalBundles;
+    use aiwatcher_server::evaluation::LocalSource;
+
+    let store: Arc<dyn ObjectStore> = Arc::new(MemoryObjectStore::new());
+    let adapter = Arc::new(LocalSource::new(None).with_bundles(store.clone()));
+    let registry = Registry::new(store, adapter.clone(), RegistryConfig::default()).unwrap();
+
+    let card = Scorecard {
+        name: "answer-quality".into(),
+        description: String::new(),
+        scorers: vec![ScorerSpec {
+            metric: "exact".into(),
+            answer_path: "/text".into(),
+            expected_path: "/answer".into(),
+            scorer: Scorer::ExactMatch {
+                ignore_case: true,
+                trim: true,
+            },
+        }],
+    };
+    let version = registry
+        .publish_scorecard(&card, "ada", 100)
+        .await
+        .unwrap()
+        .version;
+    let run = declaration("scored-against-the-fixture", &version);
+    let manifest = run.manifest(&card, None).unwrap();
+    let prepared = Evaluation::prepare(manifest.clone()).unwrap();
+    let approval =
+        aiwatcher_evaluation::approval_id(prepared.variant_id(), prepared.context_id()).unwrap();
+
+    // Every pinned file an operator holds — and no suite.json or scorer.py,
+    // because this suite is a card in the registry and this scorer is the
+    // binary.
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../contracts/fixtures/evaluation-v1");
+    for name in [
+        "cases.json",
+        "expectations-schema.json",
+        "generation.json",
+        "input-schema.json",
+        "responses.py",
+        "workflow.json",
+    ] {
+        adapter
+            .stage(&approval, name, std::fs::read(fixture.join(name)).unwrap())
+            .await
+            .unwrap();
+    }
+    adapter
+        .stage(
+            &approval,
+            "manifest.json",
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .await
+        .unwrap();
+    registry.approve(&manifest, "operator", 100).await.unwrap();
+
+    // The expectations are the fixture's own: `{"answer": "4"}` and friends.
+    let expected = registry.cohort(&manifest, "ada").await.unwrap();
+    let scored = score(
+        &card,
+        &expected,
+        &[
+            said("capital-pl", "warsaw"),
+            said("two-plus-two", "four"),
+            said("empty", ""),
+        ],
+        &run.repetition_id,
+    );
+    registry
+        .publish(
+            PublishEvaluation {
+                manifest,
+                status: scored.status,
+                cases: scored.cases,
+            },
+            "ada",
+            200,
+        )
+        .await
+        .unwrap();
+
+    let evidence = registry
+        .get("scored-against-the-fixture", "reader", 300)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(evidence.state, EvidenceState::Complete);
+    let exact = evidence.metrics["exact"];
+    assert!(
+        (exact - 2.0 / 3.0).abs() < 1e-9,
+        "the fixture expects the digit, not the word: {exact}"
+    );
+}

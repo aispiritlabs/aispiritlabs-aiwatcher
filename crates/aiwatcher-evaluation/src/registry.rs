@@ -270,6 +270,7 @@ impl Registry {
         text(subject, "approved_by")?;
         let prepared = Evaluation::prepare(manifest.clone())?;
         self.protected(manifest)?;
+        self.admit_scoring(&manifest.context).await?;
         let id = approval_id(prepared.variant_id(), prepared.context_id())?;
         if let Some(approval) = self.approval(&id).await? {
             require(
@@ -363,6 +364,41 @@ impl Registry {
         }))
     }
 
+    /// What no adapter can read back for evidence this deployment measured.
+    ///
+    /// Every other pin is admitted by re-reading its owner's bytes from the
+    /// operator's bundle, and a producer's suite and scorer are two of those
+    /// files. Here neither is a file. The scorer is this binary's vocabulary,
+    /// so its version is compared with the one compiled in; the suite is a
+    /// scorecard in this registry's own store, so it is read from there — and
+    /// the metrics the context declares must be exactly the ones that card
+    /// derives, or a direction somebody edited would be admitted as the card's.
+    async fn admit_scoring(&self, context: &crate::EvaluationContext) -> Result<()> {
+        if !context.scored_here() {
+            return Ok(());
+        }
+        require(
+            context.scorer.version == crate::SCORING_VERSION,
+            "context.scorer.version",
+            &format!(
+                "this deployment scores with version {}",
+                crate::SCORING_VERSION
+            ),
+        )?;
+        let card = self
+            .scorecard(&context.suite.name, Some(&context.suite.version))
+            .await?
+            .ok_or_else(|| EvaluationError::Invalid {
+                field: "context.suite".into(),
+                reason: "names no scorecard this registry published".into(),
+            })?;
+        require(
+            card.scorecard.metrics() == context.metrics,
+            "context.metrics",
+            "must be exactly the metrics the scorecard declares",
+        )
+    }
+
     /// The gate a publication passes and a read is refused by.
     ///
     /// Absence is not withdrawal: evidence published before an instance kept
@@ -394,6 +430,7 @@ impl Registry {
     ) -> Result<EvaluationReceipt> {
         let prepared = Evaluation::prepare(request.manifest.clone())?;
         let protected = self.protected(&request.manifest)?;
+        self.admit_scoring(&request.manifest.context).await?;
         let id = &request.manifest.origin.evaluation_id;
         if let Some(state) = self
             .store

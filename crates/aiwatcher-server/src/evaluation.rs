@@ -442,8 +442,14 @@ impl SourceAuthority for LocalSource {
             // bytes, so a manifest can never turn this into an HTTP/file proxy.
             verified(&root, &artifact.name, &artifact.digest, artifact.size_bytes).await?;
         }
-        verified(&root, "suite.json", &c.suite.version, None).await?;
-        verified(&root, "scorer.py", &c.scorer.version, None).await?;
+        // A producer's suite and scorer are files it ran, re-read like every
+        // other pin. Evidence this deployment measured has neither: its suite
+        // is a scorecard and its scorer is this binary, and the registry admits
+        // both against their owners before it asks here.
+        if !c.scored_here() {
+            verified(&root, "suite.json", &c.suite.version, None).await?;
+            verified(&root, "scorer.py", &c.scorer.version, None).await?;
+        }
         if let Some(workflow) = &v.workflow {
             verified(&root, "workflow.json", &workflow.version, None).await?;
         }
