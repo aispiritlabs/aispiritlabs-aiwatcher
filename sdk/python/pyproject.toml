@@ -49,6 +49,7 @@ Homepage = "https://github.com/ai-spirit/aiwatcher"
 aiwatcher-worker = "aiwatcher_sdk.worker.__main__:main"
 aiwatcher-runtime = "aiwatcher_sdk.runtime.__main__:main"
 aiwatcher-fetch = "aiwatcher_sdk.serving.fetch:main"
+aiwatcher-llama-cpp = "aiwatcher_sdk.serving.llama_cpp:main"
 
 [build-system]
 requires = ["hatchling"]
