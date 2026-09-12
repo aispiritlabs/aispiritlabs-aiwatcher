@@ -4652,6 +4652,84 @@
         }
       }
     },
+    "/api/v1/evaluation-recordings/{name}": {
+      "put": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Keep the answers a run will measure, and hand back the reference.",
+        "description": "The digest is of the bytes that arrived and never of anything the caller\nclaimed, so a declaration naming it names these exact bytes — and a retry of\nthe run reads what the first attempt read. Staging the same recording twice\nanswers with the same reference.",
+        "operationId": "stage_recording",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "What a reader calls this recording",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactRef"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/evaluation-results": {
       "get": {
         "tags": [
@@ -5254,6 +5332,150 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RubricVersion"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/evaluation-runs": {
+      "post": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Declare a measurement and start it.",
+        "description": "The declaration is written before the run, because the plan names its\ndigest: a run whose declaration was never stored would name a document\nnothing can resolve. Both are idempotent by content, so sending this twice\nis one document and one execution.\n\nThe card is resolved here rather than at score time, so a version nobody\npublished is a refusal now instead of a run that fails in a minute.",
+        "operationId": "start_scoring_run",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScoringRun"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScoringAccepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/evaluation-runs/{id}": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "What a run measures, by the address the plan names it with.",
+        "operationId": "get_scoring_run",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The declaration address a start returned",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeclaredRun"
                 }
               }
             }
@@ -12549,6 +12771,39 @@
         },
         "additionalProperties": false
       },
+      "Cohort": {
+        "type": "object",
+        "description": "Which cases are measured, and what they are measured against.\n\nThe dataset is the variant's: a manifest requires the cohort and the thing\nit measures to name one dataset, and a cohort that could name another would\nbe a result about two.",
+        "required": [
+          "case_manifest",
+          "case_count",
+          "split",
+          "input_schema",
+          "expectations_schema"
+        ],
+        "properties": {
+          "case_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many cases this cohort selects. Declared rather than counted from\nthe manifest's bytes, because it is part of what an operator admits: a\nsource that later resolves another number is a different cohort under\nan admitted pair's name.",
+            "minimum": 1
+          },
+          "case_manifest": {
+            "$ref": "#/components/schemas/ArtifactRef"
+          },
+          "expectations_schema": {
+            "$ref": "#/components/schemas/ArtifactRef"
+          },
+          "input_schema": {
+            "$ref": "#/components/schemas/ArtifactRef"
+          },
+          "split": {
+            "type": "string",
+            "description": "A producer's split name, not proof of independence or permission."
+          }
+        },
+        "additionalProperties": false
+      },
       "Comparability": {
         "type": "string",
         "enum": [
@@ -13742,12 +13997,38 @@
         },
         "additionalProperties": false
       },
+      "DeclaredRun": {
+        "type": "object",
+        "description": "A declaration as it was stored, and who declared it.",
+        "required": [
+          "id",
+          "run",
+          "declared_by",
+          "declared_at"
+        ],
+        "properties": {
+          "declared_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "declared_by": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "run": {
+            "$ref": "#/components/schemas/ScoringRun"
+          }
+        }
+      },
       "DefinitionKind": {
         "type": "string",
         "description": "What kind of definition a plan was compiled from.\n\nPart of a plan's identity, so a curation pipeline and an agent graph that\nhappened to compile to identical steps stay two plans. They have different\neditors, different permissions and different provenance.\n`Ord` so a [`crate::SlotKey`] is, which is what lets the memory adapter keep\nslots in a `BTreeMap` and answer \"this definition's, newest first\" without\na scan of every definition's.",
         "enum": [
           "curation_pipeline",
-          "workflow"
+          "workflow",
+          "evaluation"
         ]
       },
       "DefinitionRevision": {
@@ -22199,6 +22480,29 @@
           {
             "allOf": [
               {
+                "$ref": "#/components/schemas/ScoreEvaluationSpec",
+                "description": "One measurement of answers somebody already recorded, published as\nevidence. Like `PublishDataset` it runs where the ingress is and calls\nnothing outside: it reads pinned bytes, folds them and writes a result."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "runtime"
+                ],
+                "properties": {
+                  "runtime": {
+                    "type": "string",
+                    "enum": [
+                      "score_evaluation"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "One measurement of answers somebody already recorded, published as\nevidence. Like `PublishDataset` it runs where the ingress is and calls\nnothing outside: it reads pinned bytes, folds them and writes a result."
+          },
+          {
+            "allOf": [
+              {
                 "$ref": "#/components/schemas/HumanInputSpec",
                 "description": "Nobody runs it. It waits for somebody to answer."
               },
@@ -22233,6 +22537,7 @@
           "publish_dataset",
           "python_task",
           "container_job",
+          "score_evaluation",
           "human_input"
         ]
       },
@@ -22734,6 +23039,18 @@
           }
         }
       },
+      "ScoreEvaluationSpec": {
+        "type": "object",
+        "description": "What a scoring step measures.\n\nOne field, because everything a run of saved answers needs is in the\ndeclaration Evaluation stored — and that document is addressed by its own\ncontent, so the digest here pins the card, the cohort, the recording and the\nvariant at once. A plan carrying a copy of them would be a second answer to\nwhat this run measures, free to disagree with the first.",
+        "required": [
+          "declaration"
+        ],
+        "properties": {
+          "declaration": {
+            "type": "string"
+          }
+        }
+      },
       "Scorecard": {
         "type": "object",
         "description": "The form itself. Everything here is part of the version: two scorecards\nthat measure different things under one name are two scorecards.",
@@ -22957,6 +23274,66 @@
           },
           "scorer": {
             "$ref": "#/components/schemas/Scorer"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ScoringAccepted": {
+        "type": "object",
+        "description": "An accepted measurement, and the run that will make it.\n\nThe declaration rides back beside the execution because it is the join: a\nrun's projection names a plan and a definition, and what this one measures\nis a document only this address opens.",
+        "required": [
+          "declaration",
+          "execution",
+          "created"
+        ],
+        "properties": {
+          "created": {
+            "type": "boolean",
+            "description": "True when this request started the run, false when the same declaration\nlanded on one that was already going. Both are 202."
+          },
+          "declaration": {
+            "type": "string",
+            "description": "The content address of what this run measures."
+          },
+          "execution": {
+            "$ref": "#/components/schemas/RunProjection",
+            "description": "The store's inline projection after the decision that accepted this."
+          }
+        }
+      },
+      "ScoringRun": {
+        "type": "object",
+        "description": "What a run of saved answers measures, and what it measures it on.",
+        "required": [
+          "evaluation_id",
+          "repetition_id",
+          "variant",
+          "cohort",
+          "scorecard",
+          "answers"
+        ],
+        "properties": {
+          "answers": {
+            "$ref": "#/components/schemas/ArtifactRef",
+            "description": "The recording. Pinned by digest, so the answers cannot change under a\nretry — which is what makes re-running one cheap and honest."
+          },
+          "cohort": {
+            "$ref": "#/components/schemas/Cohort"
+          },
+          "evaluation_id": {
+            "type": "string",
+            "description": "The logical result this run produces. A technical retry reuses it."
+          },
+          "repetition_id": {
+            "type": "string",
+            "description": "An independent measurement of the same variant, not an attempt counter."
+          },
+          "scorecard": {
+            "$ref": "#/components/schemas/VersionReference",
+            "description": "The card, at a concrete version. A head would let a rewrite change what\na started run measures between one attempt and the next."
+          },
+          "variant": {
+            "$ref": "#/components/schemas/VariantManifest"
           }
         },
         "additionalProperties": false

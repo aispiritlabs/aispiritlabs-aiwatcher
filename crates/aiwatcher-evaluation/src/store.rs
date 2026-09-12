@@ -123,6 +123,12 @@ pub(crate) fn rubric_version(name: &str, version: &str) -> String {
 /// A declared run is addressed by its own content, so it needs no name and no
 /// head: two starts of one intention land on one document.
 pub(crate) const SCORING_RUNS: &str = "evaluation-runs/";
+/// The answers a run measures, keyed by the digest of the bytes as they
+/// arrived — never by a name somebody chose, so two recordings cannot occupy
+/// one key and a declaration naming a digest names these exact bytes.
+pub(crate) fn recording(digest: &str) -> String {
+    format!("evaluation-recordings/{digest}.json")
+}
 pub(crate) fn scoring_run(id: &str) -> String {
     format!("{SCORING_RUNS}{id}.json")
 }

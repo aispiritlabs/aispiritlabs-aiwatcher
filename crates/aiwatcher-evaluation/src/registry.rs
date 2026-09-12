@@ -1547,6 +1547,52 @@ impl Registry {
         crate::scoring::declared(&self.store, id).await
     }
 
+    /// Keep the answers a run will measure, and hand back the reference.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Invalid`] when the bytes are not recorded answers,
+    /// and [`EvaluationError::Storage`] when the store cannot be reached.
+    pub async fn stage_recording(
+        &self,
+        name: &str,
+        bytes: Vec<u8>,
+    ) -> Result<aiwatcher_core::ArtifactRef> {
+        crate::scoring::stage(&self.store, name, bytes).await
+    }
+
+    /// The answers a declaration named, re-verified against its digest.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Unavailable`] when the bytes are gone or are not
+    /// what the declaration pinned.
+    pub async fn recording(
+        &self,
+        answers: &aiwatcher_core::ArtifactRef,
+    ) -> Result<crate::RecordedAnswers> {
+        crate::scoring::recorded(&self.store, answers).await
+    }
+
+    /// What the cohort a manifest selects expected each case to answer.
+    ///
+    /// The one door onto the source authority for a caller that has to score
+    /// before it publishes. Resolving it here rather than holding a second
+    /// reference to the adapter keeps the owner's rights, retention and
+    /// deletion checks on one path — the same call publication makes.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the adapter refused: a source that is gone, forbidden, or
+    /// unreachable.
+    pub async fn cohort(
+        &self,
+        manifest: &EvaluationManifest,
+        subject: &str,
+    ) -> Result<BTreeMap<String, serde_json::Value>> {
+        Ok(self.authority.resolve(manifest, subject).await?.expected)
+    }
+
     /// Record one judgement. The caller is who filed it, always.
     ///
     /// # Errors

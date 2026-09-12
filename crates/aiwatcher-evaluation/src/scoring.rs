@@ -10,7 +10,7 @@
 //! a digest rather than carrying a body, and two starts of the same intention
 //! land on one document. Nothing here reads a clock or opens a socket.
 
-use aiwatcher_core::ArtifactRef;
+use aiwatcher_core::{ArtifactKind, ArtifactRef};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -52,6 +52,12 @@ pub fn scoring_engine() -> VersionReference {
 #[serde(deny_unknown_fields)]
 pub struct Cohort {
     pub case_manifest: ArtifactRef,
+    /// How many cases this cohort selects. Declared rather than counted from
+    /// the manifest's bytes, because it is part of what an operator admits: a
+    /// source that later resolves another number is a different cohort under
+    /// an admitted pair's name.
+    #[schema(minimum = 1)]
+    pub case_count: u64,
     /// A producer's split name, not proof of independence or permission.
     pub split: String,
     pub input_schema: ArtifactRef,
@@ -101,6 +107,11 @@ impl ScoringRun {
         text(&self.repetition_id, "run.repetition_id")?;
         self.variant.validate()?;
         artifact(&self.cohort.case_manifest, "run.cohort.case_manifest")?;
+        require(
+            self.cohort.case_count > 0,
+            "run.cohort.case_count",
+            "requires at least one selected case",
+        )?;
         text(&self.cohort.split, "run.cohort.split")?;
         artifact(&self.cohort.input_schema, "run.cohort.input_schema")?;
         artifact(
@@ -124,7 +135,6 @@ impl ScoringRun {
     pub fn manifest(
         &self,
         card: &Scorecard,
-        case_count: u64,
         ran_by: Option<&StepOrigin>,
     ) -> Result<EvaluationManifest> {
         require(
@@ -144,7 +154,7 @@ impl ScoringRun {
             context: EvaluationContext {
                 dataset: self.variant.dataset.clone(),
                 case_manifest: self.cohort.case_manifest.clone(),
-                case_count,
+                case_count: self.cohort.case_count,
                 split: self.cohort.split.clone(),
                 suite: self.scorecard.clone(),
                 scorer: scoring_engine(),
@@ -313,4 +323,58 @@ pub(crate) async fn declare(
 
 pub(crate) async fn declared(store: &Store, id: &str) -> Result<Option<DeclaredRun>> {
     store.read(&store::scoring_run(id)).await
+}
+
+/// Keep a recording, and hand back the reference a declaration names it by.
+///
+/// The digest is of the bytes that arrived and never of anything a caller
+/// claimed — the prompt registry's rule, for the same reason: a content address
+/// somebody else supplied lets two different recordings occupy one key, and a
+/// run would then measure answers it was never pointed at. Staging the same
+/// bytes twice is the same reference.
+pub(crate) async fn stage(store: &Store, name: &str, bytes: Vec<u8>) -> Result<ArtifactRef> {
+    text(name, "recording.name")?;
+    let held: RecordedAnswers =
+        serde_json::from_slice(&bytes).map_err(|error| crate::EvaluationError::Invalid {
+            field: "recording".into(),
+            reason: format!("does not hold recorded answers: {error}"),
+        })?;
+    for (index, answer) in held.answers.iter().enumerate() {
+        text(
+            &answer.case_id,
+            &format!("recording.answers[{index}].case_id"),
+        )?;
+    }
+    let digest = store::hash(&bytes);
+    let size = bytes.len() as u64;
+    store.0.create(&store::recording(&digest), bytes).await?;
+    Ok(ArtifactRef {
+        name: name.to_owned(),
+        // Resolvable only through this deployment's evaluation store, which is
+        // what the digest beside it says: the bytes are the address.
+        uri: format!("evaluation://recordings/{digest}"),
+        digest,
+        size_bytes: Some(size),
+        content_type: "application/json".to_owned(),
+        kind: ArtifactKind::Blob,
+        schema_ref: None,
+    })
+}
+
+/// The answers a declaration named, re-verified against the digest it named.
+pub(crate) async fn recorded(store: &Store, answers: &ArtifactRef) -> Result<RecordedAnswers> {
+    let bytes = store
+        .0
+        .get(&store::recording(&answers.digest))
+        .await?
+        .ok_or(crate::EvaluationError::Unavailable(
+            crate::EvidenceState::MissingArtifact,
+        ))?;
+    if store::hash(&bytes) != answers.digest {
+        return Err(crate::EvaluationError::Unavailable(
+            crate::EvidenceState::CorruptArtifact,
+        ));
+    }
+    serde_json::from_slice(&bytes)
+        .map_err(|_| crate::EvaluationError::Unavailable(crate::EvidenceState::CorruptArtifact))
 }

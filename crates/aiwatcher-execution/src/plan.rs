@@ -72,6 +72,10 @@ pub enum DefinitionKind {
     CurationPipeline,
     /// A declared agent, search or ML workflow.
     Workflow,
+    /// A declared measurement of answers somebody already has. The one kind
+    /// with no name to read a definition from: its declaration is addressed by
+    /// its own content, so the plan names a digest and nothing resolves a head.
+    Evaluation,
 }
 
 impl DefinitionKind {
@@ -80,6 +84,7 @@ impl DefinitionKind {
         match self {
             Self::CurationPipeline => "curation_pipeline",
             Self::Workflow => "workflow",
+            Self::Evaluation => "evaluation",
         }
     }
 }
@@ -121,6 +126,10 @@ pub enum RuntimeBinding {
     /// that one: a claim filter tells the two apart from the row, without
     /// loading the plan.
     ContainerJob(ContainerJobSpec),
+    /// One measurement of answers somebody already recorded, published as
+    /// evidence. Like `PublishDataset` it runs where the ingress is and calls
+    /// nothing outside: it reads pinned bytes, folds them and writes a result.
+    ScoreEvaluation(ScoreEvaluationSpec),
     /// Nobody runs it. It waits for somebody to answer.
     HumanInput(HumanInputSpec),
 }
@@ -138,6 +147,7 @@ pub enum RuntimeKind {
     PublishDataset,
     PythonTask,
     ContainerJob,
+    ScoreEvaluation,
     HumanInput,
 }
 
@@ -152,6 +162,7 @@ impl RuntimeKind {
             Self::PublishDataset => "publish_dataset",
             Self::PythonTask => "python_task",
             Self::ContainerJob => "container_job",
+            Self::ScoreEvaluation => "score_evaluation",
             Self::HumanInput => "human_input",
         }
     }
@@ -221,6 +232,7 @@ impl RuntimeKind {
             | Self::PublishDataset
             | Self::PythonTask
             | Self::ContainerJob
+            | Self::ScoreEvaluation
             | Self::HumanInput => None,
         }
     }
@@ -235,6 +247,7 @@ impl RuntimeBinding {
             Self::DuckDb(_) => RuntimeKind::DuckDb,
             Self::Marimo(_) => RuntimeKind::Marimo,
             Self::PublishDataset(_) => RuntimeKind::PublishDataset,
+            Self::ScoreEvaluation(_) => RuntimeKind::ScoreEvaluation,
             Self::PythonTask(_) => RuntimeKind::PythonTask,
             Self::ContainerJob(_) => RuntimeKind::ContainerJob,
             Self::HumanInput(_) => RuntimeKind::HumanInput,
@@ -266,7 +279,7 @@ impl RuntimeBinding {
             Self::Marimo(spec) => spec.block.as_ref().map(std::slice::from_ref),
             Self::PublishDataset(spec) => spec.block.as_ref().map(std::slice::from_ref),
             Self::HumanInput(spec) => spec.block.as_ref().map(std::slice::from_ref),
-            Self::PythonTask(_) | Self::ContainerJob(_) => None,
+            Self::PythonTask(_) | Self::ContainerJob(_) | Self::ScoreEvaluation(_) => None,
         }
     }
 
@@ -286,6 +299,7 @@ impl RuntimeBinding {
             | Self::PublishDataset(_)
             | Self::PythonTask(_)
             | Self::ContainerJob(_)
+            | Self::ScoreEvaluation(_)
             | Self::HumanInput(_) => None,
         }
     }
@@ -364,6 +378,18 @@ pub struct MarimoStepSpec {
     /// The authored block this step came from, for the editor link.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub block: Option<String>,
+}
+
+/// What a scoring step measures.
+///
+/// One field, because everything a run of saved answers needs is in the
+/// declaration Evaluation stored — and that document is addressed by its own
+/// content, so the digest here pins the card, the cohort, the recording and the
+/// variant at once. A plan carrying a copy of them would be a second answer to
+/// what this run measures, free to disagree with the first.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, ToSchema)]
+pub struct ScoreEvaluationSpec {
+    pub declaration: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, ToSchema)]

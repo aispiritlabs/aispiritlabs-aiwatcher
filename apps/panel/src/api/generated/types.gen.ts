@@ -1093,6 +1093,30 @@ export type ClaimRequest = {
     worker: string;
 };
 
+/**
+ * Which cases are measured, and what they are measured against.
+ *
+ * The dataset is the variant's: a manifest requires the cohort and the thing
+ * it measures to name one dataset, and a cohort that could name another would
+ * be a result about two.
+ */
+export type Cohort = {
+    /**
+     * How many cases this cohort selects. Declared rather than counted from
+     * the manifest's bytes, because it is part of what an operator admits: a
+     * source that later resolves another number is a different cohort under
+     * an admitted pair's name.
+     */
+    case_count: number;
+    case_manifest: ArtifactRef;
+    expectations_schema: ArtifactRef;
+    input_schema: ArtifactRef;
+    /**
+     * A producer's split name, not proof of independence or permission.
+     */
+    split: string;
+};
+
 export const Comparability = {
     COMPARABLE: 'comparable',
     INCOMPATIBLE: 'incompatible',
@@ -1747,6 +1771,16 @@ export type DeciderLeaseBody = {
 };
 
 /**
+ * A declaration as it was stored, and who declared it.
+ */
+export type DeclaredRun = {
+    declared_at: number;
+    declared_by: string;
+    id: string;
+    run: ScoringRun;
+};
+
+/**
  * What kind of definition a plan was compiled from.
  *
  * Part of a plan's identity, so a curation pipeline and an agent graph that
@@ -1756,7 +1790,11 @@ export type DeciderLeaseBody = {
  * slots in a `BTreeMap` and answer "this definition's, newest first" without
  * a scan of every definition's.
  */
-export const DefinitionKind = { CURATION_PIPELINE: 'curation_pipeline', WORKFLOW: 'workflow' } as const;
+export const DefinitionKind = {
+    CURATION_PIPELINE: 'curation_pipeline',
+    WORKFLOW: 'workflow',
+    EVALUATION: 'evaluation'
+} as const;
 
 /**
  * What kind of definition a plan was compiled from.
@@ -6282,6 +6320,8 @@ export type RuntimeBinding = (QueryStepSpec & {
     runtime: 'python_task';
 }) | (ContainerJobSpec & {
     runtime: 'container_job';
+}) | (ScoreEvaluationSpec & {
+    runtime: 'score_evaluation';
 }) | (HumanInputSpec & {
     runtime: 'human_input';
 });
@@ -6297,6 +6337,7 @@ export const RuntimeKind = {
     PUBLISH_DATASET: 'publish_dataset',
     PYTHON_TASK: 'python_task',
     CONTAINER_JOB: 'container_job',
+    SCORE_EVALUATION: 'score_evaluation',
     HUMAN_INPUT: 'human_input'
 } as const;
 
@@ -6556,6 +6597,19 @@ export type Score = {
 };
 
 /**
+ * What a scoring step measures.
+ *
+ * One field, because everything a run of saved answers needs is in the
+ * declaration Evaluation stored — and that document is addressed by its own
+ * content, so the digest here pins the card, the cohort, the recording and the
+ * variant at once. A plan carrying a copy of them would be a second answer to
+ * what this run measures, free to disagree with the first.
+ */
+export type ScoreEvaluationSpec = {
+    declaration: string;
+};
+
+/**
  * The form itself. Everything here is part of the version: two scorecards
  * that measure different things under one name are two scorecards.
  */
@@ -6640,6 +6694,55 @@ export type ScorerSpec = {
      */
     metric: string;
     scorer: Scorer;
+};
+
+/**
+ * An accepted measurement, and the run that will make it.
+ *
+ * The declaration rides back beside the execution because it is the join: a
+ * run's projection names a plan and a definition, and what this one measures
+ * is a document only this address opens.
+ */
+export type ScoringAccepted = {
+    /**
+     * True when this request started the run, false when the same declaration
+     * landed on one that was already going. Both are 202.
+     */
+    created: boolean;
+    /**
+     * The content address of what this run measures.
+     */
+    declaration: string;
+    /**
+     * The store's inline projection after the decision that accepted this.
+     */
+    execution: RunProjection;
+};
+
+/**
+ * What a run of saved answers measures, and what it measures it on.
+ */
+export type ScoringRun = {
+    /**
+     * The recording. Pinned by digest, so the answers cannot change under a
+     * retry — which is what makes re-running one cheap and honest.
+     */
+    answers: ArtifactRef;
+    cohort: Cohort;
+    /**
+     * The logical result this run produces. A technical retry reuses it.
+     */
+    evaluation_id: string;
+    /**
+     * An independent measurement of the same variant, not an attempt counter.
+     */
+    repetition_id: string;
+    /**
+     * The card, at a concrete version. A head would let a rewrite change what
+     * a started run measures between one attempt and the next.
+     */
+    scorecard: VersionReference;
+    variant: VariantManifest;
 };
 
 /**
@@ -10027,6 +10130,32 @@ export type GetAssessmentHistoryResponses = {
 
 export type GetAssessmentHistoryResponse = GetAssessmentHistoryResponses[keyof GetAssessmentHistoryResponses];
 
+export type StageRecordingData = {
+    body: Array<number>;
+    path: {
+        /**
+         * What a reader calls this recording
+         */
+        name: string;
+    };
+    query?: never;
+    url: '/api/v1/evaluation-recordings/{name}';
+};
+
+export type StageRecordingErrors = {
+    400: ErrorBody;
+    403: ErrorBody;
+    501: ErrorBody;
+};
+
+export type StageRecordingError = StageRecordingErrors[keyof StageRecordingErrors];
+
+export type StageRecordingResponses = {
+    200: ArtifactRef;
+};
+
+export type StageRecordingResponse = StageRecordingResponses[keyof StageRecordingResponses];
+
 export type ListResultsData = {
     body?: never;
     path?: never;
@@ -10280,6 +10409,55 @@ export type GetRubricResponses = {
 };
 
 export type GetRubricResponse = GetRubricResponses[keyof GetRubricResponses];
+
+export type StartScoringRunData = {
+    body: ScoringRun;
+    path?: never;
+    query?: never;
+    url: '/api/v1/evaluation-runs';
+};
+
+export type StartScoringRunErrors = {
+    400: ErrorBody;
+    403: ErrorBody;
+    404: ErrorBody;
+    409: ErrorBody;
+    501: ErrorBody;
+    503: ErrorBody;
+};
+
+export type StartScoringRunError = StartScoringRunErrors[keyof StartScoringRunErrors];
+
+export type StartScoringRunResponses = {
+    202: ScoringAccepted;
+};
+
+export type StartScoringRunResponse = StartScoringRunResponses[keyof StartScoringRunResponses];
+
+export type GetScoringRunData = {
+    body?: never;
+    path: {
+        /**
+         * The declaration address a start returned
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/api/v1/evaluation-runs/{id}';
+};
+
+export type GetScoringRunErrors = {
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type GetScoringRunError = GetScoringRunErrors[keyof GetScoringRunErrors];
+
+export type GetScoringRunResponses = {
+    200: DeclaredRun;
+};
+
+export type GetScoringRunResponse = GetScoringRunResponses[keyof GetScoringRunResponses];
 
 export type ListScorecardsData = {
     body?: never;

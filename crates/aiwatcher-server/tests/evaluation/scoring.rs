@@ -78,6 +78,7 @@ fn declaration(evaluation_id: &str, version: &str) -> ScoringRun {
         variant: manifest.variant.clone(),
         cohort: Cohort {
             case_manifest: manifest.context.case_manifest.clone(),
+            case_count: 3,
             split: manifest.context.split.clone(),
             input_schema: manifest.context.input_schema.clone(),
             expectations_schema: manifest.context.expectations_schema.clone(),
@@ -110,10 +111,7 @@ async fn measured(
     publish(
         registry,
         PublishEvaluation {
-            manifest: declared
-                .run
-                .manifest(&card, cohort().len() as u64, None)
-                .unwrap(),
+            manifest: declared.run.manifest(&card, None).unwrap(),
             status: scored.status,
             cases: scored.cases,
         },

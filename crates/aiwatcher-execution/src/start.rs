@@ -403,6 +403,15 @@ impl<S: WorkflowStore> Executions<'_, S> {
                 self.compile_pipeline(&target.name, target.revision.as_deref(), window.resolve())
                     .await
             }
+            // The one kind with nothing to read: a scoring run's declaration
+            // is addressed by its content, so what starts it is the digest and
+            // there is no name whose head could be compiled. That is also what
+            // stops a schedule being saved for one — a schedule says what to
+            // run by name, and this has none.
+            DefinitionKind::Evaluation => Err(StartRefused::Invalid(
+                "a scoring run is started from its declaration rather than compiled from a name"
+                    .to_owned(),
+            )),
             DefinitionKind::Workflow => {
                 if window.asked() {
                     return Err(StartRefused::Invalid(

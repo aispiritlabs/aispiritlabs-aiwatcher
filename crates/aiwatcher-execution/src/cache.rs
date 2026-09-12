@@ -140,7 +140,12 @@ fn code_digest(runtime: &RuntimeBinding) -> Option<String> {
                 .split_once('@')
                 .map(|_| digest(format!("{}\n{pinned}", spec.task_ref).as_bytes()))
         }
-        RuntimeBinding::PublishDataset(_) | RuntimeBinding::HumanInput(_) => None,
+        // Both write somewhere else rather than producing rows, so what a
+        // cache would remember is not what they did. A wait is never cached at
+        // all.
+        RuntimeBinding::PublishDataset(_)
+        | RuntimeBinding::ScoreEvaluation(_)
+        | RuntimeBinding::HumanInput(_) => None,
     }
 }
 

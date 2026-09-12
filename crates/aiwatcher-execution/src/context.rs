@@ -227,6 +227,7 @@ fn allowed_for(
         RuntimeKind::PublishDataset
         | RuntimeKind::PythonTask
         | RuntimeKind::ContainerJob
+        | RuntimeKind::ScoreEvaluation
         | RuntimeKind::HumanInput => Vec::new(),
     };
 

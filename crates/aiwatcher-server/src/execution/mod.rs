@@ -32,6 +32,7 @@ pub mod pods;
 pub mod publish;
 pub mod query;
 pub mod scheduler;
+pub mod scoring;
 pub mod stranded;
 pub mod timers;
 
@@ -189,7 +190,7 @@ pub fn spawn(
         // The one executor that runs where the ingress is, because it executes
         // nothing: it writes a dataset version through the object store this
         // role already holds.
-        let executors = publish::executors(state, artifacts);
+        let executors = publish::executors(state, artifacts).merge(scoring::executors(state));
         if !executors.is_empty() {
             tasks.reactors.push((
                 "serve",

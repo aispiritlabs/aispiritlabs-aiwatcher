@@ -301,6 +301,9 @@ const fn noun(kind: DefinitionKind) -> &'static str {
     match kind {
         DefinitionKind::CurationPipeline => "pipeline",
         DefinitionKind::Workflow => "workflow",
+        // No route here takes it: a scoring run is named by the digest of its
+        // declaration, and a schedule is something said about a name.
+        DefinitionKind::Evaluation => "scoring run",
     }
 }
 

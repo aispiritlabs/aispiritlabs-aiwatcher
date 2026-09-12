@@ -309,7 +309,7 @@ fn node_kind(runtime: &RuntimeBinding) -> &'static str {
         RuntimeBinding::Marimo(_)
         | RuntimeBinding::PythonTask(_)
         | RuntimeBinding::ContainerJob(_) => "chain",
-        RuntimeBinding::PublishDataset(_) => "chain",
+        RuntimeBinding::PublishDataset(_) | RuntimeBinding::ScoreEvaluation(_) => "chain",
         RuntimeBinding::HumanInput(_) => "guardrail",
     }
 }

@@ -88,6 +88,7 @@ const fn claimed_by_the_work_role(kind: RuntimeKind) -> bool {
         // the work role starts the pod and claims nothing (ADR_0029) — and a
         // wait.
         RuntimeKind::PublishDataset
+        | RuntimeKind::ScoreEvaluation
         | RuntimeKind::PythonTask
         | RuntimeKind::ContainerJob
         | RuntimeKind::HumanInput => false,

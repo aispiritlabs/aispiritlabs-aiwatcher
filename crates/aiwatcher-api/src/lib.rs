@@ -8,6 +8,7 @@
 //! | `/prompts` | object store | authored, outlives the runs that used it |
 //! | `/evaluation-rubrics`, `/evaluation-assessments` | object store | what somebody judged, in a form somebody declared — see [`assessments`] |
 //! | `/evaluation-scorecards` | object store | what an evaluation measures, declared rather than discovered — see [`scorecards`] |
+//! | `/evaluation-runs`, `/evaluation-recordings` | object store + workflow store | measuring answers somebody already has — see [`scoring`] |
 //! | `/annotation-*` | object store | the only routes taking image bytes; refusals carry a list |
 //! | `/annotation-import-*` | object store | a staged batch and a resumable job — see [`imports`] |
 //! | `/conversation-*` | encrypted store | `admin` reads content, `editor` writes, `viewer` sees everything but the words |
@@ -44,6 +45,7 @@ pub mod routes;
 pub mod runs;
 pub mod schedules;
 pub mod scorecards;
+pub mod scoring;
 pub mod state;
 pub mod stream;
 pub mod training;

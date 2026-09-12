@@ -7588,6 +7588,98 @@ async fn a_scorecard_is_declared_by_an_editor_and_read_back_at_the_version_that_
     );
 }
 
+/// Declaring a measurement is what starts it, and the declaration is its id.
+#[tokio::test]
+async fn a_scoring_run_is_a_managed_execution_whose_plan_names_the_declaration() {
+    let mut fixture = Fixture::new(false);
+    fixture.state.evaluations = Some(Arc::new(
+        aiwatcher_evaluation::Registry::new(
+            Arc::new(MemoryObjectStore::new()),
+            Arc::new(EvaluationSource::default()),
+            Default::default(),
+        )
+        .unwrap(),
+    ));
+
+    let (status, card) = fixture
+        .post(
+            "/api/v1/evaluation-scorecards",
+            json!({
+                "name": "answer-quality",
+                "scorers": [{"metric": "exact", "answer_path": "/text",
+                             "scorer": {"kind": "exact_match", "trim": true}}]
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{card}");
+
+    // The recording is staged first, which is what gives it a digest nobody
+    // chose — a declaration naming it names these exact bytes.
+    let (status, recording) = fixture
+        .put(
+            "/api/v1/evaluation-recordings/answers.json",
+            json!({"answers": [
+                {"case_id": "case-00000", "answer": {"text": ""}},
+                {"case_id": "case-00001", "answer": {"text": "four"}},
+                {"case_id": "case-00002", "answer": {"text": ""}}
+            ]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{recording}");
+    assert_eq!(recording["digest"].as_str().unwrap_or_default().len(), 64);
+
+    let manifest = durable_request("unused")["manifest"].clone();
+    let run = json!({
+        "evaluation_id": "candidate-scored-here",
+        "repetition_id": manifest["origin"]["repetition_id"],
+        "variant": manifest["variant"],
+        "cohort": {
+            "case_manifest": manifest["context"]["case_manifest"],
+            "case_count": 3,
+            "split": manifest["context"]["split"],
+            "input_schema": manifest["context"]["input_schema"],
+            "expectations_schema": manifest["context"]["expectations_schema"]
+        },
+        "scorecard": {"name": "answer-quality", "version": card["version"]},
+        "answers": recording
+    });
+
+    let (status, accepted) = fixture.post("/api/v1/evaluation-runs", run.clone()).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
+    assert!(accepted["created"].as_bool().expect("a flag"));
+    let execution = &accepted["execution"];
+    assert_eq!(execution["definition_name"], "candidate-scored-here");
+    let steps = execution["steps"].as_array().expect("the steps");
+    assert_eq!(steps.len(), 1);
+    assert_eq!(steps[0]["runtime"], "score_evaluation");
+
+    // The declaration is the content address of the intention, so asking for
+    // the same measurement twice is one document and one run.
+    let (status, again) = fixture.post("/api/v1/evaluation-runs", run).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{again}");
+    assert!(!again["created"].as_bool().expect("a flag"));
+    assert_eq!(
+        again["execution"]["execution_id"], execution["execution_id"],
+        "a repeat lands on the run that is already going"
+    );
+
+    let declaration = accepted["declaration"]
+        .as_str()
+        .expect("the run says what it measures");
+    let (status, declared) = fixture
+        .get(&format!("/api/v1/evaluation-runs/{declaration}"))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{declared}");
+    assert_eq!(declared["run"]["scorecard"]["name"], "answer-quality");
+
+    // A card nobody published is a refusal now rather than a run that fails in
+    // a minute.
+    let mut unknown = declared["run"].clone();
+    unknown["scorecard"]["version"] = json!("f".repeat(64));
+    let (status, refusal) = fixture.post("/api/v1/evaluation-runs", unknown).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{refusal}");
+}
+
 /// One variant of one pinned context, with each case's score spelled out.
 fn scored_request(id: &str, experiment: &str, scores: [f64; 3]) -> Value {
     let mut request = durable_request(id);
