@@ -19,6 +19,8 @@ means it is sitting on that column waiting for something.
 
 - [ ] [AW-4 · Retire Flyte, and run workflow steps in pods of our own](AW-4-retire-flyte-and-run-steps-in-pods-of-our-own/_index.md)
 
+- [ ] [AW-7 · A pod holds its own attempt, and the pod gates run in CI](AW-7-a-pod-holds-its-own-attempt-and-the-pod-gates-run-in-ci/_index.md)
+
 ## Tests
 
 ## Review
