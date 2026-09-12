@@ -27,6 +27,11 @@ class SilentEventSource {
 
 globalThis.EventSource ??= SilentEventSource as unknown as typeof EventSource;
 
+// `scrollIntoView` is not implemented in jsdom at all. The command panel keeps
+// its highlighted row in view with it, and a component must not fail to mount
+// because the environment cannot scroll — in a browser this is the real thing.
+Element.prototype.scrollIntoView ??= function scrollIntoView() {};
+
 // React Testing Library only unmounts by itself when the test framework's
 // `afterEach` is global, and it is not here — imports are explicit in this
 // codebase. Without this every test after the first renders into a document

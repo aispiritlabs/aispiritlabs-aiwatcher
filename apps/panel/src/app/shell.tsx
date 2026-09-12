@@ -1,9 +1,10 @@
 import * as React from 'react';
 import { Link, Outlet, useRouterState } from '@tanstack/react-router';
-import { Activity, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { Activity, PanelLeftClose, PanelLeftOpen, Search } from 'lucide-react';
 
 import { Appearance } from '@/shared/components/appearance';
 import { UserMenu } from '@/shared/components/user-menu';
+import { CommandPanel, useCommandPanel } from '@/app/command-panel';
 import { SECTIONS, areaOf, sectionOf, type NavArea, type NavSection } from '@/app/navigation';
 import { cn } from '@/shared/lib/utils';
 
@@ -62,9 +63,11 @@ export function RootLayout() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const section = sectionOf(pathname);
   const [collapsed, toggle] = useCollapsed();
+  const [commandsOpen, setCommandsOpen] = useCommandPanel();
 
   return (
     <div className="min-h-screen">
+      <CommandPanel open={commandsOpen} onOpenChange={setCommandsOpen} />
       <header className="sticky top-0 z-20 border-b border-border bg-background/80 backdrop-blur">
         <div className="flex items-center gap-4 px-4">
           <Link
@@ -98,6 +101,18 @@ export function RootLayout() {
           </nav>
 
           <div className="ml-auto flex items-center gap-2">
+            {/* Visible as well as bound to a shortcut: a palette nobody is
+                told about is a palette nobody opens, and the hint is where
+                the shortcut gets learnt. */}
+            <button
+              type="button"
+              onClick={() => setCommandsOpen(true)}
+              className="hidden items-center gap-2 rounded border border-border px-2 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground sm:flex"
+            >
+              <Search className="h-3 w-3" />
+              <span>Search or jump to…</span>
+              <kbd className="rounded border border-border px-1 font-mono text-[10px]">⌘K</kbd>
+            </button>
             <Appearance />
             <UserMenu />
           </div>

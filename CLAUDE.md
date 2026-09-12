@@ -815,10 +815,35 @@ what runs a real graph.
   `AreaPlaceholder`, which names what is missing. Never mock data to fill a
   screen — a plausible fake reads as working software.
 - `src/shared/components/ui/primitives.tsx` holds the shadcn-style primitives in use
-  (button, badge, card, stat, id chip). Radix is not a dependency yet — none of
-  those need it. It goes in with the first dialog or select, and TanStack Form
-  with the first form, which will be the WebSocket control path (cancel a run,
-  approve a tool call).
+  (button, badge, card, stat, id chip). Radix is still not a dependency, and the
+  line that said it would arrive with the first dialog is settled the other way:
+  the first dialog is the command panel, and it took **`@floating-ui/react`**.
+  What a centred palette needs is the half of that library which is not about
+  coordinates — a portal, an overlay that locks scroll, a focus trap that
+  returns focus, and dismissal on Escape and outside press that unbinds again —
+  and pulling a component kit in for one of those would decide the panel's whole
+  widget vocabulary as a side effect. TanStack Form still goes in with the first
+  form, which will be the WebSocket control path (cancel a run, approve a tool
+  call).
+- The **command panel** (`src/app/command-panel.tsx`, ⌘K) is in `app/` rather
+  than in `shared/` because it has to know both the navigation and where each
+  feature's filters live, and `shared` may depend on neither — the architecture
+  check enforces that. Two rules carry it. **A command is a route and a search
+  object, and running one is a navigation**: nothing there mutates, the back
+  button undoes it, and that is only possible because every filter in this panel
+  already lives in the URL. And **it is matched, never parsed** — typing selects
+  from a list `app/commands.ts` authors, the way a shell completes a command
+  rather than interpreting a sentence, because a model choosing the route would
+  make navigation a network call that can be wrong, and "it went somewhere else
+  this time" is a bad property for the thing somebody presses to get unlost.
+  Going to a page is *derived* from `app/navigation.ts`, so an area added to the
+  sidebar is reachable without a second list; only the filtered commands are
+  written out, because the cross product of every parameter and value is
+  thousands of rows and almost none of them is a question anybody has.
+  `commands.test.ts` holds every command's search against the **route's own
+  zod schema**, which is the one drift that is otherwise invisible: zod strips a
+  parameter the route does not declare, so the command navigates, the page
+  renders, and the filter silently does nothing. It caught two on the way in.
 
 ### Agent skills
 
