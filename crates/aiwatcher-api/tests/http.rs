@@ -7588,9 +7588,10 @@ async fn a_scorecard_is_declared_by_an_editor_and_read_back_at_the_version_that_
     );
 }
 
-/// Declaring a measurement is what starts it, and the declaration is its id.
+/// A measurement is declared, admitted and then started — and each step is
+/// idempotent, because each is addressed by what it is.
 #[tokio::test]
-async fn a_scoring_run_is_a_managed_execution_whose_plan_names_the_declaration() {
+async fn a_scoring_run_waits_for_an_operator_and_then_is_one_run_however_often_it_is_started() {
     let mut fixture = Fixture::new(false);
     fixture.state.evaluations = Some(Arc::new(
         aiwatcher_evaluation::Registry::new(
@@ -7619,9 +7620,9 @@ async fn a_scoring_run_is_a_managed_execution_whose_plan_names_the_declaration()
         .put(
             "/api/v1/evaluation-recordings/answers.json",
             json!({"answers": [
-                {"case_id": "case-00000", "answer": {"text": ""}},
-                {"case_id": "case-00001", "answer": {"text": "four"}},
-                {"case_id": "case-00002", "answer": {"text": ""}}
+                {"case_id": "capital-pl", "answer": {"text": "Warsaw"}},
+                {"case_id": "two-plus-two", "answer": {"text": "four"}},
+                {"case_id": "empty", "answer": {"text": ""}}
             ]}),
         )
         .await;
@@ -7644,18 +7645,53 @@ async fn a_scoring_run_is_a_managed_execution_whose_plan_names_the_declaration()
         "answers": recording
     });
 
-    let (status, accepted) = fixture.post("/api/v1/evaluation-runs", run.clone()).await;
+    // Declaring writes nothing that runs, and says what an operator would
+    // have to admit — derived, so nobody writes the metrics out by hand.
+    let (status, declared) = fixture.post("/api/v1/evaluation-runs", run.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{declared}");
+    let id = declared["declaration"]["id"].as_str().unwrap().to_owned();
+    let approval = declared["approval_id"].as_str().unwrap().to_owned();
+    assert_eq!(declared["admitted"], false);
+    let published = &declared["manifest"];
+    assert_eq!(published["context"]["suite"]["name"], "answer-quality");
+    assert_eq!(published["context"]["scorer"]["name"], "aiwatcher.scoring");
+    assert_eq!(published["context"]["metrics"][0]["aggregation"], "rate");
+
+    // A run started now could only fail at publication, and that failed run
+    // would be what every later start of this declaration lands on.
+    let (status, refusal) = fixture
+        .post(&format!("/api/v1/evaluation-runs/{id}/start"), json!({}))
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refusal}");
+    assert!(
+        refusal["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains(&approval),
+        "the refusal names the approval that would admit it: {refusal}"
+    );
+
+    let (status, admitted) = fixture
+        .post("/api/v1/evaluation-approvals", published.clone())
+        .await;
+    assert_eq!(status, StatusCode::OK, "{admitted}");
+    assert_eq!(admitted["record"]["approval_id"], approval.as_str());
+
+    let (status, accepted) = fixture
+        .post(&format!("/api/v1/evaluation-runs/{id}/start"), json!({}))
+        .await;
     assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
     assert!(accepted["created"].as_bool().expect("a flag"));
+    assert_eq!(accepted["declaration"], id.as_str());
     let execution = &accepted["execution"];
     assert_eq!(execution["definition_name"], "candidate-scored-here");
     let steps = execution["steps"].as_array().expect("the steps");
     assert_eq!(steps.len(), 1);
     assert_eq!(steps[0]["runtime"], "score_evaluation");
 
-    // The declaration is the content address of the intention, so asking for
-    // the same measurement twice is one document and one run.
-    let (status, again) = fixture.post("/api/v1/evaluation-runs", run).await;
+    let (status, again) = fixture
+        .post(&format!("/api/v1/evaluation-runs/{id}/start"), json!({}))
+        .await;
     assert_eq!(status, StatusCode::ACCEPTED, "{again}");
     assert!(!again["created"].as_bool().expect("a flag"));
     assert_eq!(
@@ -7663,18 +7699,14 @@ async fn a_scoring_run_is_a_managed_execution_whose_plan_names_the_declaration()
         "a repeat lands on the run that is already going"
     );
 
-    let declaration = accepted["declaration"]
-        .as_str()
-        .expect("the run says what it measures");
-    let (status, declared) = fixture
-        .get(&format!("/api/v1/evaluation-runs/{declaration}"))
-        .await;
-    assert_eq!(status, StatusCode::OK, "{declared}");
-    assert_eq!(declared["run"]["scorecard"]["name"], "answer-quality");
+    let (status, redeclared) = fixture.post("/api/v1/evaluation-runs", run).await;
+    assert_eq!(status, StatusCode::OK, "{redeclared}");
+    assert_eq!(redeclared["declaration"]["id"], id.as_str());
+    assert_eq!(redeclared["admitted"], true);
 
     // A card nobody published is a refusal now rather than a run that fails in
     // a minute.
-    let mut unknown = declared["run"].clone();
+    let mut unknown = declared["declaration"]["run"].clone();
     unknown["scorecard"]["version"] = json!("f".repeat(64));
     let (status, refusal) = fixture.post("/api/v1/evaluation-runs", unknown).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{refusal}");

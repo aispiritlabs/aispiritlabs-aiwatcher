@@ -335,6 +335,9 @@ impl ApiError {
                 aiwatcher_evaluation::EvaluationError::Contested => {
                     (StatusCode::CONFLICT, "assessment_contested")
                 }
+                aiwatcher_evaluation::EvaluationError::NotAdmitted(_) => {
+                    (StatusCode::CONFLICT, "pair_not_admitted")
+                }
                 aiwatcher_evaluation::EvaluationError::Unavailable(
                     aiwatcher_evaluation::EvidenceState::Forbidden,
                 ) => (StatusCode::FORBIDDEN, "evidence_forbidden"),

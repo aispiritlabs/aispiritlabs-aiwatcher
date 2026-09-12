@@ -183,6 +183,25 @@ pub struct DeclaredRun {
     pub declared_at: i64,
 }
 
+/// A declaration, with what an operator needs before it may run.
+///
+/// The manifest is served rather than left to be assembled, for the reason an
+/// approval's address is: its metrics are derived from the card, and a person
+/// writing them out by hand to admit the pair would be a second answer to what
+/// this run measures. The execution that will run it is not in it yet, and
+/// does not need to be — an approval admits a variant and a context, never a
+/// particular run of them.
+#[derive(Clone, Debug, Serialize, utoipa::ToSchema)]
+pub struct ScoringRunView {
+    pub declaration: DeclaredRun,
+    pub manifest: EvaluationManifest,
+    /// The approval that admits this pair, whether or not it exists yet.
+    pub approval_id: String,
+    /// Whether a publication of this manifest would pass the operator's gate
+    /// now. A fact at the moment of reading: a withdrawal changes it.
+    pub admitted: bool,
+}
+
 /// What one pass over the recording measured.
 #[derive(Clone, Debug)]
 pub struct Scored {

@@ -45,7 +45,7 @@ pub use scorecard::{
 };
 pub use scoring::{
     Cohort, DeclaredRun, RecordedAnswer, RecordedAnswers, SCORING_ENGINE, SCORING_VERSION, Scored,
-    ScoringRun, StepOrigin, score, scoring_engine,
+    ScoringRun, ScoringRunView, StepOrigin, score, scoring_engine,
 };
 
 use serde::Serialize;
@@ -63,6 +63,10 @@ pub enum EvaluationError {
     Conflict,
     #[error("another revision of this assessment was written first")]
     Contested,
+    /// Nothing admits this variant and context yet. Carries the approval that
+    /// would, because that address is the one thing an operator needs next.
+    #[error("no operator has admitted this pair yet: approval {0}")]
+    NotAdmitted(String),
     #[error("evaluation evidence is {0:?}")]
     Unavailable(EvidenceState),
     #[error("storage: {0}")]

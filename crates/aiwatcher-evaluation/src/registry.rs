@@ -1547,6 +1547,51 @@ impl Registry {
         crate::scoring::declared(&self.store, id).await
     }
 
+    /// A declaration with the manifest it publishes and the approval that
+    /// admits it.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Unavailable`] when the card the declaration pinned is
+    /// gone, and [`EvaluationError::Storage`] when the store cannot be reached.
+    pub async fn scoring_run_view(&self, id: &str) -> Result<Option<crate::ScoringRunView>> {
+        let Some(declaration) = self.scoring_run(id).await? else {
+            return Ok(None);
+        };
+        let pinned = &declaration.run.scorecard;
+        let card = self
+            .scorecard(&pinned.name, Some(&pinned.version))
+            .await?
+            .ok_or(EvaluationError::Unavailable(EvidenceState::MissingArtifact))?;
+        let manifest = declaration.run.manifest(&card.scorecard, None)?;
+        let prepared = Evaluation::prepare(manifest.clone())?;
+        Ok(Some(crate::ScoringRunView {
+            approval_id: approval_id(prepared.variant_id(), prepared.context_id())?,
+            admitted: self.admits(&manifest).await?,
+            manifest,
+            declaration,
+        }))
+    }
+
+    /// Whether a publication of this manifest would pass the operator's gate.
+    ///
+    /// The gate itself, asked without publishing: a caller that checked for an
+    /// approval record on its own would be a second answer to what admitted
+    /// means, and the first one also knows about withdrawal.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Invalid`] when the manifest does not prepare, and
+    /// [`EvaluationError::Storage`] when the store cannot be reached.
+    pub async fn admits(&self, manifest: &EvaluationManifest) -> Result<bool> {
+        let prepared = Evaluation::prepare(manifest.clone())?;
+        match self.admitted(&prepared, true).await {
+            Ok(_) => Ok(true),
+            Err(EvaluationError::Unavailable(EvidenceState::Forbidden)) => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
     /// Keep the answers a run will measure, and hand back the reference.
     ///
     /// # Errors

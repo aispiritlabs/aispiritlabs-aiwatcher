@@ -5364,9 +5364,9 @@
         "tags": [
           "evaluation"
         ],
-        "summary": "Declare a measurement and start it.",
-        "description": "The declaration is written before the run, because the plan names its\ndigest: a run whose declaration was never stored would name a document\nnothing can resolve. Both are idempotent by content, so sending this twice\nis one document and one execution.\n\nThe card is resolved here rather than at score time, so a version nobody\npublished is a refusal now instead of a run that fails in a minute.",
-        "operationId": "start_scoring_run",
+        "summary": "Declare a measurement.",
+        "description": "Writes nothing that runs. What comes back is the declaration with the\nmanifest a result of it publishes and the approval that admits that pair,\nbecause an operator has to admit it before it may publish and the metrics\nin that manifest are derived from the card — a second copy written out by\nhand is a second answer to what this run measures. Idempotent by content.\n\nThe card is resolved here rather than at score time, so a version nobody\npublished is a refusal now instead of a run that fails in a minute.",
+        "operationId": "declare_scoring_run",
         "requestBody": {
           "content": {
             "application/json": {
@@ -5378,12 +5378,12 @@
           "required": true
         },
         "responses": {
-          "202": {
+          "200": {
             "description": "",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ScoringAccepted"
+                  "$ref": "#/components/schemas/ScoringRunView"
                 }
               }
             }
@@ -5418,8 +5418,123 @@
               }
             }
           },
-          "409": {
+          "501": {
             "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/evaluation-runs/{id}": {
+      "get": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "What a run measures, what it publishes, and whether it may yet.",
+        "operationId": "get_scoring_run",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The declaration address",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScoringRunView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/evaluation-runs/{id}/start": {
+      "post": {
+        "tags": [
+          "evaluation"
+        ],
+        "summary": "Start the declared measurement.",
+        "description": "Refused while nothing admits the pair, naming the approval that would. A\nrun started without one could only fail when it tried to publish, and that\nfailed run would then be what every later start of the same declaration\nlands on. Once admitted, repeating this reaches the run already going.",
+        "operationId": "start_scoring_run",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The declaration address",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScoringAccepted"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No operator has admitted this pair; the message names the approval",
             "content": {
               "application/json": {
                 "schema": {
@@ -5439,58 +5554,6 @@
             }
           },
           "503": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/evaluation-runs/{id}": {
-      "get": {
-        "tags": [
-          "evaluation"
-        ],
-        "summary": "What a run measures, by the address the plan names it with.",
-        "operationId": "get_scoring_run",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "description": "The declaration address a start returned",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DeclaredRun"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "501": {
             "description": "",
             "content": {
               "application/json": {
@@ -23337,6 +23400,32 @@
           }
         },
         "additionalProperties": false
+      },
+      "ScoringRunView": {
+        "type": "object",
+        "description": "A declaration, with what an operator needs before it may run.\n\nThe manifest is served rather than left to be assembled, for the reason an\napproval's address is: its metrics are derived from the card, and a person\nwriting them out by hand to admit the pair would be a second answer to what\nthis run measures. The execution that will run it is not in it yet, and\ndoes not need to be — an approval admits a variant and a context, never a\nparticular run of them.",
+        "required": [
+          "declaration",
+          "manifest",
+          "approval_id",
+          "admitted"
+        ],
+        "properties": {
+          "admitted": {
+            "type": "boolean",
+            "description": "Whether a publication of this manifest would pass the operator's gate\nnow. A fact at the moment of reading: a withdrawal changes it."
+          },
+          "approval_id": {
+            "type": "string",
+            "description": "The approval that admits this pair, whether or not it exists yet."
+          },
+          "declaration": {
+            "$ref": "#/components/schemas/DeclaredRun"
+          },
+          "manifest": {
+            "$ref": "#/components/schemas/EvaluationManifest"
+          }
+        }
       },
       "Sdk": {
         "oneOf": [

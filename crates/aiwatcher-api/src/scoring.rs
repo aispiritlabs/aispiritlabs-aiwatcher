@@ -5,17 +5,19 @@
 //! model of the application under test, so what it costs is a fold and what it
 //! proves is the measurement.
 //!
-//! Three routes and one shape between them. A recording is staged first, which
-//! is what gives it a digest nobody chose; a declaration names that digest
-//! together with the card, the cohort and the variant, and is addressed by its
-//! own content; and starting one is an ordinary managed execution whose plan
-//! carries that address. Repeating a declaration therefore lands on the run
-//! that is already going rather than beside it — an independent repetition is
-//! a different declaration, because it is a different measurement.
+//! Four steps, each idempotent. A recording is staged, which is what gives it a
+//! digest nobody chose. A declaration names that digest with the card, the
+//! cohort and the variant, is addressed by its own content, and answers with
+//! the manifest it will publish and the approval that admits it — so an
+//! operator admits the pair from what the server derived rather than from what
+//! they wrote out. Starting it is then an ordinary managed execution whose plan
+//! carries the declaration's address, and repeating a start lands on the run
+//! already going. An independent repetition is a different declaration,
+//! because it is a different measurement.
 
 use aiwatcher_auth::Role;
 use aiwatcher_core::ArtifactRef;
-use aiwatcher_evaluation::{DeclaredRun, ScoringRun};
+use aiwatcher_evaluation::{DeclaredRun, EvaluationError, ScoringRun, ScoringRunView};
 use aiwatcher_execution::message::RunProjection;
 use aiwatcher_execution::plan::{
     CachePolicy, DefinitionKind, DefinitionRevision, ExecutionPlan, PlanStep, RetryPolicy,
@@ -59,7 +61,12 @@ pub struct ScoringAccepted {
 
 /// This module's operations, as the contract they satisfy.
 #[derive(OpenApi)]
-#[openapi(paths(stage_recording, start_scoring_run, get_scoring_run))]
+#[openapi(paths(
+    stage_recording,
+    declare_scoring_run,
+    get_scoring_run,
+    start_scoring_run
+))]
 struct Api;
 
 /// The operations this module serves. Composed by [`crate::openapi`].
@@ -74,8 +81,12 @@ pub fn router() -> Router<AppState> {
             "/api/v1/evaluation-recordings/{name}",
             put(stage_recording).layer(axum::extract::DefaultBodyLimit::max(100 * 1024 * 1024)),
         )
-        .route("/api/v1/evaluation-runs", post(start_scoring_run))
+        .route("/api/v1/evaluation-runs", post(declare_scoring_run))
         .route("/api/v1/evaluation-runs/{id}", get(get_scoring_run))
+        .route(
+            "/api/v1/evaluation-runs/{id}/start",
+            post(start_scoring_run),
+        )
 }
 
 fn registry(state: &AppState) -> ApiResult<&aiwatcher_evaluation::Registry> {
@@ -111,25 +122,25 @@ async fn stage_recording(
     ))
 }
 
-/// Declare a measurement and start it.
+/// Declare a measurement.
 ///
-/// The declaration is written before the run, because the plan names its
-/// digest: a run whose declaration was never stored would name a document
-/// nothing can resolve. Both are idempotent by content, so sending this twice
-/// is one document and one execution.
+/// Writes nothing that runs. What comes back is the declaration with the
+/// manifest a result of it publishes and the approval that admits that pair,
+/// because an operator has to admit it before it may publish and the metrics
+/// in that manifest are derived from the card — a second copy written out by
+/// hand is a second answer to what this run measures. Idempotent by content.
 ///
 /// The card is resolved here rather than at score time, so a version nobody
 /// published is a refusal now instead of a run that fails in a minute.
 #[utoipa::path(post, path = "/api/v1/evaluation-runs", request_body = ScoringRun,
-    responses((status = 202, body = ScoringAccepted), (status = 400, body = crate::error::ErrorBody),
+    responses((status = 200, body = ScoringRunView), (status = 400, body = crate::error::ErrorBody),
     (status = 403, body = crate::error::ErrorBody), (status = 404, body = crate::error::ErrorBody),
-    (status = 409, body = crate::error::ErrorBody), (status = 501, body = crate::error::ErrorBody),
-    (status = 503, body = crate::error::ErrorBody)), tag = "evaluation")]
-async fn start_scoring_run(
+    (status = 501, body = crate::error::ErrorBody)), tag = "evaluation")]
+async fn declare_scoring_run(
     State(state): State<AppState>,
     caller: Caller,
     Json(run): Json<ScoringRun>,
-) -> ApiResult<(StatusCode, Json<ScoringAccepted>)> {
+) -> ApiResult<Json<ScoringRunView>> {
     let requester = caller.require(Role::Editor)?.log_subject().to_owned();
     let evaluations = registry(&state)?;
     run.validate()?;
@@ -145,17 +156,57 @@ async fn start_scoring_run(
     let declared = evaluations
         .declare_scoring_run(&run, &requester, now())
         .await?;
+    view(evaluations, &declared.id).await.map(Json)
+}
 
+/// What a run measures, what it publishes, and whether it may yet.
+#[utoipa::path(get, path = "/api/v1/evaluation-runs/{id}",
+    params(("id" = String, Path, description = "The declaration address")),
+    responses((status = 200, body = ScoringRunView), (status = 404, body = crate::error::ErrorBody),
+    (status = 501, body = crate::error::ErrorBody)), tag = "evaluation")]
+async fn get_scoring_run(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+) -> ApiResult<Json<ScoringRunView>> {
+    caller.require(Role::Viewer)?;
+    view(registry(&state)?, &id).await.map(Json)
+}
+
+/// Start the declared measurement.
+///
+/// Refused while nothing admits the pair, naming the approval that would. A
+/// run started without one could only fail when it tried to publish, and that
+/// failed run would then be what every later start of the same declaration
+/// lands on. Once admitted, repeating this reaches the run already going.
+#[utoipa::path(post, path = "/api/v1/evaluation-runs/{id}/start",
+    params(("id" = String, Path, description = "The declaration address")),
+    responses((status = 202, body = ScoringAccepted), (status = 403, body = crate::error::ErrorBody),
+    (status = 404, body = crate::error::ErrorBody),
+    (status = 409, body = crate::error::ErrorBody, description = "No operator has admitted this pair; the message names the approval"),
+    (status = 501, body = crate::error::ErrorBody), (status = 503, body = crate::error::ErrorBody)),
+    tag = "evaluation")]
+async fn start_scoring_run(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(id): Path<String>,
+) -> ApiResult<(StatusCode, Json<ScoringAccepted>)> {
+    let requester = caller.require(Role::Editor)?.log_subject().to_owned();
+    let evaluations = registry(&state)?;
+    let viewed = view(evaluations, &id).await?;
+    if !viewed.admitted {
+        return Err(EvaluationError::NotAdmitted(viewed.approval_id).into());
+    }
     let started = state
         .executions()
         .start(
-            plan_for(&declared),
+            plan_for(&viewed.declaration),
             StartRun {
                 // The declaration is the content address of the intention, so
                 // starting one twice is one run by construction and no header
                 // decides it. Measuring the same variant again is a second
                 // repetition, which is a different declaration.
-                identity: RunIdentity::Key(declared.id.clone()),
+                identity: RunIdentity::Key(viewed.declaration.id.clone()),
                 parameters: Default::default(),
                 requested_by: requester,
                 decided_by: Default::default(),
@@ -166,11 +217,18 @@ async fn start_scoring_run(
     Ok((
         StatusCode::ACCEPTED,
         Json(ScoringAccepted {
-            declaration: declared.id,
+            declaration: viewed.declaration.id,
             execution: started.handled.projection,
             created: !started.handled.duplicate,
         }),
     ))
+}
+
+async fn view(evaluations: &aiwatcher_evaluation::Registry, id: &str) -> ApiResult<ScoringRunView> {
+    evaluations
+        .scoring_run_view(id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("scoring run {id}")))
 }
 
 /// The one-step plan that measures one declaration.
@@ -196,24 +254,6 @@ fn plan_for(declared: &DeclaredRun) -> ExecutionPlan {
         }],
         Vec::new(),
     )
-}
-
-/// What a run measures, by the address the plan names it with.
-#[utoipa::path(get, path = "/api/v1/evaluation-runs/{id}",
-    params(("id" = String, Path, description = "The declaration address a start returned")),
-    responses((status = 200, body = DeclaredRun), (status = 404, body = crate::error::ErrorBody),
-    (status = 501, body = crate::error::ErrorBody)), tag = "evaluation")]
-async fn get_scoring_run(
-    State(state): State<AppState>,
-    caller: Caller,
-    Path(id): Path<String>,
-) -> ApiResult<Json<DeclaredRun>> {
-    caller.require(Role::Viewer)?;
-    registry(&state)?
-        .scoring_run(&id)
-        .await?
-        .map(Json)
-        .ok_or_else(|| ApiError::NotFound(format!("scoring run {id}")))
 }
 
 fn now() -> i64 {

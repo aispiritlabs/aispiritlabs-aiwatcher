@@ -6746,6 +6746,30 @@ export type ScoringRun = {
 };
 
 /**
+ * A declaration, with what an operator needs before it may run.
+ *
+ * The manifest is served rather than left to be assembled, for the reason an
+ * approval's address is: its metrics are derived from the card, and a person
+ * writing them out by hand to admit the pair would be a second answer to what
+ * this run measures. The execution that will run it is not in it yet, and
+ * does not need to be — an approval admits a variant and a context, never a
+ * particular run of them.
+ */
+export type ScoringRunView = {
+    /**
+     * Whether a publication of this manifest would pass the operator's gate
+     * now. A fact at the moment of reading: a withdrawal changes it.
+     */
+    admitted: boolean;
+    /**
+     * The approval that admits this pair, whether or not it exists yet.
+     */
+    approval_id: string;
+    declaration: DeclaredRun;
+    manifest: EvaluationManifest;
+};
+
+/**
  * Which SDK produced an event.
  *
  * Serialised as a plain string with an unknown value passing through: an SDK
@@ -10410,35 +10434,33 @@ export type GetRubricResponses = {
 
 export type GetRubricResponse = GetRubricResponses[keyof GetRubricResponses];
 
-export type StartScoringRunData = {
+export type DeclareScoringRunData = {
     body: ScoringRun;
     path?: never;
     query?: never;
     url: '/api/v1/evaluation-runs';
 };
 
-export type StartScoringRunErrors = {
+export type DeclareScoringRunErrors = {
     400: ErrorBody;
     403: ErrorBody;
     404: ErrorBody;
-    409: ErrorBody;
     501: ErrorBody;
-    503: ErrorBody;
 };
 
-export type StartScoringRunError = StartScoringRunErrors[keyof StartScoringRunErrors];
+export type DeclareScoringRunError = DeclareScoringRunErrors[keyof DeclareScoringRunErrors];
 
-export type StartScoringRunResponses = {
-    202: ScoringAccepted;
+export type DeclareScoringRunResponses = {
+    200: ScoringRunView;
 };
 
-export type StartScoringRunResponse = StartScoringRunResponses[keyof StartScoringRunResponses];
+export type DeclareScoringRunResponse = DeclareScoringRunResponses[keyof DeclareScoringRunResponses];
 
 export type GetScoringRunData = {
     body?: never;
     path: {
         /**
-         * The declaration address a start returned
+         * The declaration address
          */
         id: string;
     };
@@ -10454,10 +10476,41 @@ export type GetScoringRunErrors = {
 export type GetScoringRunError = GetScoringRunErrors[keyof GetScoringRunErrors];
 
 export type GetScoringRunResponses = {
-    200: DeclaredRun;
+    200: ScoringRunView;
 };
 
 export type GetScoringRunResponse = GetScoringRunResponses[keyof GetScoringRunResponses];
+
+export type StartScoringRunData = {
+    body?: never;
+    path: {
+        /**
+         * The declaration address
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/api/v1/evaluation-runs/{id}/start';
+};
+
+export type StartScoringRunErrors = {
+    403: ErrorBody;
+    404: ErrorBody;
+    /**
+     * No operator has admitted this pair; the message names the approval
+     */
+    409: ErrorBody;
+    501: ErrorBody;
+    503: ErrorBody;
+};
+
+export type StartScoringRunError = StartScoringRunErrors[keyof StartScoringRunErrors];
+
+export type StartScoringRunResponses = {
+    202: ScoringAccepted;
+};
+
+export type StartScoringRunResponse = StartScoringRunResponses[keyof StartScoringRunResponses];
 
 export type ListScorecardsData = {
     body?: never;
