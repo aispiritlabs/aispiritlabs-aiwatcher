@@ -42,6 +42,7 @@ fn card() -> Scorecard {
                 metric: "exact".into(),
                 answer_path: "/text".into(),
                 expected_path: String::new(),
+                input_path: None,
                 scorer: Scorer::ExactMatch {
                     ignore_case: false,
                     trim: true,
@@ -51,6 +52,7 @@ fn card() -> Scorecard {
                 metric: "leaked".into(),
                 answer_path: "/text".into(),
                 expected_path: String::new(),
+                input_path: None,
                 scorer: Scorer::Forbidden {
                     text: "ssn".into(),
                     ignore_case: true,
@@ -181,6 +183,7 @@ async fn a_distance_is_published_as_a_mean_in_its_own_unit_rather_than_as_a_rate
             metric: "estimate_error".into(),
             answer_path: "/minutes".into(),
             expected_path: "/minutes".into(),
+            input_path: None,
             scorer: Scorer::AbsoluteError {
                 unit: "minutes".into(),
             },
@@ -495,6 +498,7 @@ async fn a_scoring_run_is_admitted_with_no_suite_or_scorer_file_in_its_bundle() 
             metric: "exact".into(),
             answer_path: "/text".into(),
             expected_path: "/answer".into(),
+            input_path: None,
             scorer: Scorer::ExactMatch {
                 ignore_case: true,
                 trim: true,

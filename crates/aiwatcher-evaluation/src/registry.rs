@@ -31,6 +31,12 @@ pub trait SourceAuthority: Send + Sync + std::fmt::Debug {
 #[derive(Debug, Default)]
 pub struct SourceEvidence {
     pub expected: BTreeMap<String, serde_json::Value>,
+    /// What each case was asked, where the owner keeps it. Read only by a
+    /// judge a card points at it, and never published: a result's shards hold
+    /// what was answered and what was expected. An adapter whose cases have no
+    /// input it can hand over leaves it empty, and a judge pointed at one is
+    /// told so per case.
+    pub inputs: BTreeMap<String, serde_json::Value>,
     pub expires_at: Option<i64>,
     /// What this adapter admitted beyond the manifest's own pinned digests.
     /// An approval records it, so bytes cannot change under an admitted pair.
@@ -1838,9 +1844,27 @@ impl Registry {
     pub async fn calibrated(
         &self,
         set: &crate::CalibrationSet,
+        with_inputs: bool,
         subject: &str,
         now: i64,
     ) -> Result<crate::scoring::Calibrated> {
+        // What those cases were asked lives with the result's source rather
+        // than in its shards, so it is resolved there — and only when a judge
+        // is to be shown it, because a source that went away since would
+        // otherwise refuse a calibration that never needed it.
+        let inputs = if with_inputs {
+            let header = self
+                .get(&set.result.name, subject, now)
+                .await?
+                .filter(|header| header.receipt.version == set.result.version)
+                .ok_or(EvaluationError::Unavailable(EvidenceState::DeletedSource))?;
+            let manifest = header
+                .manifest
+                .ok_or(EvaluationError::Unavailable(header.state))?;
+            self.cohort_cases(&manifest, subject).await?.inputs
+        } else {
+            BTreeMap::new()
+        };
         let wanted: BTreeSet<(&str, &str)> = set
             .items
             .iter()
@@ -1879,7 +1903,11 @@ impl Registry {
                             case.measurement.case_id.clone(),
                             case.measurement.repetition_id.clone(),
                         ),
-                        (actual, case.expected),
+                        crate::scoring::Shown {
+                            input: inputs.get(&case.measurement.case_id).cloned(),
+                            answer: actual,
+                            expected: case.expected,
+                        },
                     );
                 }
             }
@@ -2079,11 +2107,28 @@ impl Registry {
         manifest: &EvaluationManifest,
         subject: &str,
     ) -> Result<BTreeMap<String, serde_json::Value>> {
+        Ok(self.cohort_cases(manifest, subject).await?.expected)
+    }
+
+    /// The same cohort, with what each case was asked beside what it expected.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the adapter refused, as for [`Registry::cohort`].
+    pub async fn cohort_cases(
+        &self,
+        manifest: &EvaluationManifest,
+        subject: &str,
+    ) -> Result<crate::CohortCases> {
         // Before the adapter, as publication does: a conversation cohort's
         // expectations are content, and reading them is the thing the gate is
         // about rather than something it checks afterwards.
         self.protected(manifest)?;
-        Ok(self.authority.resolve(manifest, subject).await?.expected)
+        let source = self.authority.resolve(manifest, subject).await?;
+        Ok(crate::CohortCases {
+            expected: source.expected,
+            inputs: source.inputs,
+        })
     }
 
     /// The answers a declaration reads, from wherever it said they are.

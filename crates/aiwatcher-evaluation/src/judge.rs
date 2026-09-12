@@ -265,12 +265,15 @@ pub trait JudgeModel: Send + Sync + std::fmt::Debug {
 ///
 /// Every word comes from the rubric, then the run's own instructions; the
 /// shape of the reply is fixed here so a reply can be read without guessing.
-/// Changing these words changes what a judge measures, which is a new
-/// `SCORING_VERSION`.
+/// What the case was asked comes first when the card shows it, because an
+/// answer is judged against its question. Changing these words for a card
+/// that already asked something changes what a judge measures, which is a new
+/// `SCORING_VERSION`; a card that shows no input is sent what it always was.
 #[must_use]
 pub fn ask(
     rubric: &Rubric,
     judge: &JudgeDeclaration,
+    input: Option<&serde_json::Value>,
     answer: &serde_json::Value,
     expected: Option<&serde_json::Value>,
 ) -> JudgeCall {
@@ -298,7 +301,10 @@ pub fn ask(
         system.push_str(&format!("\n{}\n", judge.settings.instructions));
     }
     system.push_str("\nReply with only a JSON object of the form {\"value\": ...}.");
-    let mut user = format!("Answer:\n{}", rendered(answer));
+    let mut user = input.map_or_else(String::new, |input| {
+        format!("Input:\n{}\n\n", rendered(input))
+    });
+    user.push_str(&format!("Answer:\n{}", rendered(answer)));
     if let Some(expected) = expected {
         user.push_str(&format!("\n\nExpected answer:\n{}", rendered(expected)));
     }
@@ -686,6 +692,7 @@ mod tests {
                 levels: vec!["bad".into(), "good".into()],
             }),
             &judge(),
+            None,
             &json!("Warsaw"),
             Some(&json!({"city": "Warsaw"})),
         );
@@ -705,6 +712,17 @@ mod tests {
             "Answer:\nWarsaw\n\nExpected answer:\n{\"city\":\"Warsaw\"}"
         );
         assert_eq!((call.model.as_str(), call.seed), ("gemma", Some(7)));
+        let asked = ask(
+            &rubric(Scale::Flag),
+            &judge(),
+            Some(&json!("What is the capital of Poland?")),
+            &json!("Warsaw"),
+            None,
+        );
+        assert_eq!(
+            asked.messages[1].content, "Input:\nWhat is the capital of Poland?\n\nAnswer:\nWarsaw",
+            "the question first, when the card shows it"
+        );
         assert_eq!(
             call.schema["properties"]["value"]["enum"],
             serde_json::json!(["bad", "good"]),
@@ -755,6 +773,7 @@ mod tests {
                 metric: "helpful".into(),
                 answer_path: String::new(),
                 expected_path: String::new(),
+                input_path: None,
                 scorer: Scorer::Judge {
                     rubric: pinned.clone(),
                 },

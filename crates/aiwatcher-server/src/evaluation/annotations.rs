@@ -64,11 +64,16 @@ impl LocalSource {
         {
             return Err(unavailable(EvidenceState::CorruptArtifact));
         }
+        let inputs = cases
+            .iter()
+            .map(|case| (case.case_id.clone(), case.input.clone()))
+            .collect();
         Ok(SourceEvidence {
             expected: cases
                 .into_iter()
                 .map(|case| (case.case_id, case.expected))
                 .collect::<BTreeMap<_, _>>(),
+            inputs,
             expires_at: None,
             bundle_digest: None,
         })

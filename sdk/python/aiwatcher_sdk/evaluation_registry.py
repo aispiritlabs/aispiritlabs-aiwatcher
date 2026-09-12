@@ -178,6 +178,9 @@ class ScorerSpec(TypedDict):
     scorer: Scorer
     answer_path: NotRequired[str]
     expected_path: NotRequired[str]
+    #: A JSON Pointer into the case's input, shown to a judge before the
+    #: answer; ``""`` shows all of it. Refused for any scorer but a judge.
+    input_path: NotRequired[str]
 
 
 class Scorecard(TypedDict):

@@ -544,8 +544,37 @@ pub struct JudgeQuestion {
     pub call: JudgeCall,
 }
 
-/// A calibration result's answer to one case, and what that case expected.
-pub type Calibrated = BTreeMap<(String, String), (serde_json::Value, serde_json::Value)>;
+/// What a cohort selects, as its owner resolved it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CohortCases {
+    /// What each selected case expected — the cohort, for the fold.
+    pub expected: BTreeMap<String, serde_json::Value>,
+    /// What each case was asked, where the owner keeps it; for a judge only.
+    pub inputs: BTreeMap<String, serde_json::Value>,
+}
+
+/// What a person was shown about one case of a calibration result.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Shown {
+    pub answer: serde_json::Value,
+    pub expected: serde_json::Value,
+    /// Resolved only when a judge is to be shown it.
+    pub input: Option<serde_json::Value>,
+}
+
+/// A calibration result's cases, keyed by case and repetition.
+pub type Calibrated = BTreeMap<(String, String), Shown>;
+
+/// The questions a run puts to its judge, and the cases it could not ask
+/// about, with why.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Asking {
+    pub questions: Vec<JudgeQuestion>,
+    /// A case whose input the card points at and the cohort does not hold.
+    /// Its reason reaches the fold, where it fails the case like any other
+    /// unreadable one rather than as a judge nobody asked.
+    pub refused: Judged,
+}
 
 /// Every question a run's judge is asked.
 ///
@@ -553,27 +582,30 @@ pub type Calibrated = BTreeMap<(String, String), (serde_json::Value, serde_json:
 /// twice is not scored, so it is not asked about either — and one per
 /// calibration item under that metric's rubric, put the answer the person was
 /// shown. A case whose answer has nothing where the card points is not asked
-/// about: the fold says why, as it does for every other scorer.
+/// about: the fold says why, as it does for every other scorer. Nor is a case
+/// whose input the card shows and the cohort does not hold, and that reason is
+/// handed back; a calibration item in the same position is not asked either,
+/// and counts against the judge's agreement like every item it did not answer.
 #[must_use]
 pub fn questions(
     run: &ScoringRun,
     card: &Scorecard,
     rubrics: &Rubrics,
-    cohort: &BTreeMap<String, serde_json::Value>,
+    cohort: &CohortCases,
     answers: &[RecordedAnswer],
     calibration: &CalibrationSet,
     calibrated: &Calibrated,
-) -> Vec<JudgeQuestion> {
+) -> Asking {
+    let mut asking = Asking::default();
     let Some(judge) = &run.judge else {
-        return Vec::new();
+        return asking;
     };
     let mut once: BTreeMap<&str, Vec<&RecordedAnswer>> = BTreeMap::new();
     for answer in answers {
-        if cohort.contains_key(&answer.case_id) {
+        if cohort.expected.contains_key(&answer.case_id) {
             once.entry(&answer.case_id).or_default().push(answer);
         }
     }
-    let mut asked = Vec::new();
     for spec in &card.scorers {
         let Some(pinned) = spec.scorer.rubric() else {
             continue;
@@ -581,22 +613,38 @@ pub fn questions(
         let Some(rubric) = rubrics.get(pinned) else {
             continue;
         };
-        let mut put = |about: Asked, answer: &serde_json::Value, expected: &serde_json::Value| {
-            if let Ok((answer, expected)) = spec.sides(answer, expected) {
-                let expected = spec.compares_with_expected().then_some(expected);
-                asked.push(JudgeQuestion {
-                    about,
-                    metric: spec.metric.clone(),
-                    call: crate::ask(rubric, judge, answer, expected),
-                });
-            }
+        let mut put = |about: Asked,
+                       answer: &serde_json::Value,
+                       expected: &serde_json::Value,
+                       input: Option<&serde_json::Value>| {
+            let Ok((answer, expected)) = spec.sides(answer, expected) else {
+                return;
+            };
+            let input = match spec.shown_input(input) {
+                Ok(input) => input,
+                Err(reason) => {
+                    if let Asked::Case(case_id) = about {
+                        asking
+                            .refused
+                            .insert((case_id, spec.metric.clone()), Score::Unscored(reason));
+                    }
+                    return;
+                }
+            };
+            let expected = spec.compares_with_expected().then_some(expected);
+            asking.questions.push(JudgeQuestion {
+                about,
+                metric: spec.metric.clone(),
+                call: crate::ask(rubric, judge, input, answer, expected),
+            });
         };
         for (case_id, answered) in &once {
             if let [answer] = answered.as_slice() {
                 put(
                     Asked::Case((*case_id).to_owned()),
                     &answer.answer,
-                    &cohort[*case_id],
+                    &cohort.expected[*case_id],
+                    cohort.inputs.get(*case_id),
                 );
             }
         }
@@ -604,36 +652,41 @@ pub fn questions(
             if item.rubric != *pinned {
                 continue;
             }
-            if let Some((answer, expected)) =
-                calibrated.get(&(item.case_id.clone(), item.repetition_id.clone()))
+            if let Some(shown) = calibrated.get(&(item.case_id.clone(), item.repetition_id.clone()))
             {
-                put(Asked::Calibration(index), answer, expected);
+                put(
+                    Asked::Calibration(index),
+                    &shown.answer,
+                    &shown.expected,
+                    shown.input.as_ref(),
+                );
             }
         }
     }
-    asked
+    asking
 }
 
 /// What the judge's replies score, for the fold and for the agreement.
 ///
-/// `replies` is in the order of `questions`. A reply that is not a value on
-/// the rubric's scale scores nothing: the case is a failure with the reason,
-/// and a calibration item it answered that way counts against the judge.
+/// `replies` is in the order of the questions asked. A reply that is not a
+/// value on the rubric's scale scores nothing: the case is a failure with the
+/// reason, and a calibration item it answered that way counts against the
+/// judge. A case that could not be asked about carries its own reason.
 #[must_use]
 pub fn replies(
     run: &ScoringRun,
     card: &Scorecard,
     rubrics: &Rubrics,
     calibration: &CalibrationSet,
-    questions: &[JudgeQuestion],
+    asking: &Asking,
     replies: &[crate::JudgeReply],
 ) -> (Judged, Option<crate::JudgeReport>) {
     let Some(judge) = &run.judge else {
         return (Judged::new(), None);
     };
-    let mut judged = Judged::new();
+    let mut judged = asking.refused.clone();
     let mut said = BTreeMap::new();
-    for (question, reply) in questions.iter().zip(replies) {
+    for (question, reply) in asking.questions.iter().zip(replies) {
         let rubric = card
             .scorers
             .iter()
@@ -792,6 +845,7 @@ mod tests {
                 metric: "measured".into(),
                 answer_path: "/answer".into(),
                 expected_path: String::new(),
+                input_path: None,
                 scorer,
             }],
         }

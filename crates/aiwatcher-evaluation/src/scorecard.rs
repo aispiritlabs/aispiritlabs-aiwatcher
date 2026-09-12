@@ -278,6 +278,13 @@ pub struct ScorerSpec {
     /// The same, into the case's expected answer.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub expected_path: String,
+    /// A JSON Pointer into the case's input, shown to a judge before the
+    /// answer — empty for the whole input. Absent shows it nothing, so a card
+    /// written before a judge could see the question keeps its version and
+    /// asks what it asked. Only a judge reads it: every other scorer compares
+    /// an answer with an expectation, and the question changes neither.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_path: Option<String>,
     pub scorer: Scorer,
 }
 
@@ -291,7 +298,40 @@ impl ScorerSpec {
             &format!("{field}.expected_path"),
             "this scorer reads no expected answer",
         )?;
+        if let Some(path) = &self.input_path {
+            pointer(path, &format!("{field}.input_path"))?;
+            require(
+                self.scorer.rubric().is_some(),
+                &format!("{field}.input_path"),
+                "only a judge is shown the case's input",
+            )?;
+        }
         self.scorer.validate(&format!("{field}.scorer"))
+    }
+
+    /// The part of a case's input a judge is shown, when this spec shows one.
+    ///
+    /// `Ok(None)` when it shows nothing; an error naming the path when it
+    /// shows something and the cohort gave this case nothing there — a judge
+    /// asked about an answer without the question it was pointed at would be
+    /// asked a different question.
+    pub(crate) fn shown_input<'a>(
+        &self,
+        input: Option<&'a serde_json::Value>,
+    ) -> std::result::Result<Option<&'a serde_json::Value>, String> {
+        let Some(path) = &self.input_path else {
+            return Ok(None);
+        };
+        input
+            .and_then(|input| input.pointer(path))
+            .map(Some)
+            .ok_or_else(|| {
+                if path.is_empty() {
+                    "the cohort gives this case no input".to_owned()
+                } else {
+                    format!("the cohort gives this case no input at {path}")
+                }
+            })
     }
 
     /// Whether this measurement reads the case's expected answer.
@@ -557,6 +597,7 @@ mod tests {
             metric: metric.into(),
             answer_path: String::new(),
             expected_path: String::new(),
+            input_path: None,
             scorer,
         }
     }
@@ -665,6 +706,51 @@ mod tests {
     }
 
     #[test]
+    fn only_a_judge_is_shown_the_case_input_and_a_card_that_shows_none_keeps_its_version() {
+        let judged = spec(
+            "helpful",
+            Scorer::Judge {
+                rubric: VersionReference {
+                    name: "helpful".into(),
+                    version: "r".repeat(64),
+                },
+            },
+        );
+        let before = card(vec![judged.clone()]).version().unwrap();
+        assert!(
+            !serde_json::to_string(&card(vec![judged.clone()]))
+                .unwrap()
+                .contains("input_path"),
+            "absent from the bytes a version addresses"
+        );
+        let mut shown = judged;
+        shown.input_path = Some("/question".into());
+        assert!(card(vec![shown.clone()]).validate().is_ok());
+        assert_ne!(card(vec![shown.clone()]).version().unwrap(), before);
+        assert_eq!(
+            shown.shown_input(Some(&json!({"question": "Why?"}))),
+            Ok(Some(&json!("Why?")))
+        );
+        let missing = shown
+            .shown_input(Some(&json!({"text": "Why?"})))
+            .unwrap_err();
+        assert!(missing.contains("/question"), "{missing}");
+        assert!(shown.shown_input(None).is_err());
+
+        let mut exact = spec(
+            "exact",
+            Scorer::ExactMatch {
+                ignore_case: false,
+                trim: false,
+            },
+        );
+        assert_eq!(exact.shown_input(Some(&json!("ignored"))), Ok(None));
+        exact.input_path = Some(String::new());
+        let refused = card(vec![exact]).validate().unwrap_err();
+        assert!(refused.to_string().contains("input_path"), "{refused}");
+    }
+
+    #[test]
     fn a_pattern_that_does_not_compile_is_refused_before_a_run_reads_it() {
         let refused = card(vec![spec(
             "formatted",
@@ -683,6 +769,7 @@ mod tests {
             metric: "exact".into(),
             answer_path: "/text".into(),
             expected_path: String::new(),
+            input_path: None,
             scorer: Scorer::ExactMatch {
                 ignore_case: false,
                 trim: false,

@@ -115,6 +115,10 @@ impl LocalSource {
         }
         Ok(SourceEvidence {
             expected,
+            // What somebody said to the assistant is content too, and the one
+            // reader of an input is a judge, which the archive's words never
+            // reach.
+            inputs: BTreeMap::new(),
             expires_at: Some(source.expires_at.unix_timestamp()),
             bundle_digest: None,
         })

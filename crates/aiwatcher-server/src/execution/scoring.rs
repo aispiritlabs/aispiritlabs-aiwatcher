@@ -173,10 +173,13 @@ impl ActivityExecutor for ScoreExecutor {
             .clone()
             .with_content_access(manifest.context.dataset.kind == DatasetKind::Conversations);
         let cohort = evaluations
-            .cohort(&manifest, &subject)
+            .cohort_cases(&manifest, &subject)
             .await
             .map_err(refusal)?;
-        let answers = evaluations.answers(run, &cohort).await.map_err(refusal)?;
+        let answers = evaluations
+            .answers(run, &cohort.expected)
+            .await
+            .map_err(refusal)?;
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
 
         let (judged, report, asked) = match (&run.judge, &self.judge) {
@@ -202,11 +205,16 @@ impl ActivityExecutor for ScoreExecutor {
                     .ok_or_else(|| {
                         ActivityError::user_code("the calibration set this run names is gone")
                     })?;
+                let shows_inputs = card
+                    .scorecard
+                    .scorers
+                    .iter()
+                    .any(|spec| spec.input_path.is_some());
                 let calibrated = evaluations
-                    .calibrated(&taken.calibration, &subject, now)
+                    .calibrated(&taken.calibration, shows_inputs, &subject, now)
                     .await
                     .map_err(refusal)?;
-                let asked = questions(
+                let asking = questions(
                     run,
                     &card.scorecard,
                     &rubrics,
@@ -224,7 +232,11 @@ impl ActivityExecutor for ScoreExecutor {
                 ));
                 let said = super::judge::ask_all(
                     &remembering,
-                    asked.iter().map(|question| question.call.clone()).collect(),
+                    asking
+                        .questions
+                        .iter()
+                        .map(|question| question.call.clone())
+                        .collect(),
                     *concurrency,
                 )
                 .await
@@ -237,16 +249,16 @@ impl ActivityExecutor for ScoreExecutor {
                     &card.scorecard,
                     &rubrics,
                     &taken.calibration,
-                    &asked,
+                    &asking,
                     &said,
                 );
-                (judged, report, asked.len())
+                (judged, report, asking.questions.len())
             }
         };
 
         let scored = score_with(
             &card.scorecard,
-            &cohort,
+            &cohort.expected,
             &answers,
             &run.repetition_id,
             &judged,
@@ -282,10 +294,10 @@ impl ActivityExecutor for ScoreExecutor {
                 "variant_id": receipt.variant_id,
                 "context_id": receipt.context_id,
                 "status": status,
-                "selected": cohort.len(),
+                "selected": cohort.expected.len(),
                 "scored": measured - failed,
                 "failed": failed,
-                "unscored": cohort.len() - measured,
+                "unscored": cohort.expected.len() - measured,
                 "judge_questions": asked,
                 "judge": report,
             })),
@@ -374,6 +386,7 @@ mod tests {
                 metric: "exact".into(),
                 answer_path: "/text".into(),
                 expected_path: String::new(),
+                input_path: None,
                 scorer: Scorer::ExactMatch {
                     ignore_case: false,
                     trim: true,

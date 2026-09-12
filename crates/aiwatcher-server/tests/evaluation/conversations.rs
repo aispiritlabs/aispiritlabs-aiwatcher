@@ -763,6 +763,7 @@ async fn the_archives_own_answers_are_scored_under_an_admins_approval_and_stay_s
         metric: metric.into(),
         answer_path: "/answer".into(),
         expected_path: String::new(),
+        input_path: None,
         scorer,
     };
     let card = Scorecard {

@@ -13,6 +13,7 @@ fn spec(metric: &str, scorer: Scorer) -> ScorerSpec {
         metric: metric.into(),
         answer_path: String::new(),
         expected_path: String::new(),
+        input_path: None,
         scorer,
     }
 }

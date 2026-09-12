@@ -115,6 +115,14 @@ impl SourceAuthority for Source {
             expected: (0..manifest.context.case_count)
                 .map(|n| (format!("case-{n:05}"), serde_json::json!({"answer": ""})))
                 .collect(),
+            inputs: (0..manifest.context.case_count)
+                .map(|n| {
+                    (
+                        format!("case-{n:05}"),
+                        serde_json::json!({"question": format!("question {n}")}),
+                    )
+                })
+                .collect(),
             ..Default::default()
         })
     }
@@ -569,6 +577,11 @@ async fn approved_local_fixture_is_verified_and_unknown_native_sources_are_refus
     assert_eq!(
         evidence.expected["empty"],
         serde_json::json!({"answer": ""})
+    );
+    assert_eq!(
+        evidence.inputs["capital-pl"],
+        serde_json::json!({"question": "What is the capital of Poland?"}),
+        "what a case asked is handed over beside what it expected, for a judge to be shown"
     );
     manifest.context.dataset.kind = DatasetKind::Conversations;
     manifest.variant.dataset.kind = DatasetKind::Conversations;

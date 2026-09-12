@@ -61,12 +61,15 @@ function published(kind = 'curation') {
   };
 }
 
-function card(scorer: unknown) {
+function card(scorer: unknown, shown?: string) {
   return {
     version: VERSION,
     published_by: 'ada',
     published_at: 1,
-    scorecard: { name: 'answer-quality', scorers: [{ metric: 'exact', scorer }] },
+    scorecard: {
+      name: 'answer-quality',
+      scorers: [{ metric: 'exact', scorer, ...(shown === undefined ? {} : { input_path: shown }) }],
+    },
   };
 }
 
@@ -78,7 +81,12 @@ function recordingFile(): File {
   });
 }
 
-function drafting(scorer: unknown, kind = 'curation', extra: Parameters<typeof serve>[0] = []) {
+function drafting(
+  scorer: unknown,
+  kind = 'curation',
+  extra: Parameters<typeof serve>[0] = [],
+  shown?: string,
+) {
   return serve([
     { method: 'GET', path: '/auth/config', answer: { status: 200, body: { enabled: false } } },
     {
@@ -101,7 +109,7 @@ function drafting(scorer: unknown, kind = 'curation', extra: Parameters<typeof s
     {
       method: 'GET',
       path: '/evaluation-scorecards/answer-quality',
-      answer: { status: 200, body: card(scorer) },
+      answer: { status: 200, body: card(scorer, shown) },
     },
     {
       method: 'GET',
@@ -238,6 +246,7 @@ it('asks for a calibration set before declaring a run whose card asks a judge', 
   );
   await choose();
   expect(await screen.findByText(/This card asks a model about helpful/)).toBeTruthy();
+  expect(screen.getByText(/never what the case asked/)).toBeTruthy();
   await userEvent.type(screen.getByLabelText('Evaluation ID'), 'judged-1');
   await userEvent.upload(screen.getByLabelText('Recording'), recordingFile());
   await userEvent.click(screen.getByRole('button', { name: 'Declare' }));
@@ -318,4 +327,26 @@ it('says who has to admit a declared pair, and follows the run once it starts', 
   expect(onStarted).not.toHaveBeenCalled();
   await userEvent.click(screen.getByRole('button', { name: 'Start' }));
   await waitFor(() => expect(onStarted).toHaveBeenCalledWith('e-1'));
+});
+
+it("says what of a case's question a judge is shown, as the card points", async () => {
+  drafting(
+    { kind: 'judge', rubric: { name: 'helpful', version: 'r'.repeat(64) } },
+    'curation',
+    [],
+    '/question',
+  );
+  render(
+    withQueries(
+      <Measure
+        declaration={undefined}
+        measured={undefined}
+        onDeclared={vi.fn()}
+        onStarted={vi.fn()}
+        onOpenResult={vi.fn()}
+      />,
+    ),
+  );
+  await choose();
+  expect(await screen.findByText(/exact sees the case's input at \/question\./)).toBeTruthy();
 });

@@ -23788,6 +23788,13 @@
             "type": "string",
             "description": "The same, into the case's expected answer."
           },
+          "input_path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A JSON Pointer into the case's input, shown to a judge before the\nanswer — empty for the whole input. Absent shows it nothing, so a card\nwritten before a judge could see the question keeps its version and\nasks what it asked. Only a judge reads it: every other scorer compares\nan answer with an expectation, and the question changes neither."
+          },
           "metric": {
             "type": "string",
             "description": "The metric this writes. Unique within the scorecard, because a case\ncarries one number per name and the second writer would win silently."

@@ -6856,6 +6856,14 @@ export type ScorerSpec = {
      */
     expected_path?: string;
     /**
+     * A JSON Pointer into the case's input, shown to a judge before the
+     * answer — empty for the whole input. Absent shows it nothing, so a card
+     * written before a judge could see the question keeps its version and
+     * asks what it asked. Only a judge reads it: every other scorer compares
+     * an answer with an expectation, and the question changes neither.
+     */
+    input_path?: string | null;
+    /**
      * The metric this writes. Unique within the scorecard, because a case
      * carries one number per name and the second writer would win silently.
      */

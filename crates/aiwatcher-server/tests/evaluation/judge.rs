@@ -62,6 +62,7 @@ fn card(rubric: &str) -> Scorecard {
             metric: "helpful".into(),
             answer_path: "/text".into(),
             expected_path: String::new(),
+            input_path: None,
             scorer: Scorer::Judge {
                 rubric: VersionReference {
                     name: "helpful".into(),
@@ -130,6 +131,14 @@ async fn declared(
     calibration: &CalibrationVersion,
     rubric: &str,
 ) -> DeclaredRun {
+    declared_under(registry, calibration, card(rubric)).await
+}
+
+async fn declared_under(
+    registry: &Registry,
+    calibration: &CalibrationVersion,
+    card: Scorecard,
+) -> DeclaredRun {
     let template = request("judged-run", 3).manifest;
     let recording = registry
         .stage_recording(
@@ -144,7 +153,7 @@ async fn declared(
         .await
         .unwrap();
     let version = registry
-        .publish_scorecard(&card(rubric), "ada", now())
+        .publish_scorecard(&card, "ada", now())
         .await
         .unwrap()
         .version;
@@ -503,5 +512,113 @@ async fn a_retried_judged_attempt_asks_only_what_was_not_answered_and_lands_on_i
         model.answered.lock().unwrap().len(),
         5,
         "nothing was asked twice"
+    );
+}
+
+#[tokio::test]
+async fn a_judge_is_shown_what_each_case_asked_where_the_card_points_and_told_when_it_is_missing() {
+    let registry = Arc::new(registry(
+        Arc::new(MemoryObjectStore::new()),
+        Arc::new(Source::default()),
+    ));
+    let rubric = registry
+        .publish_rubric(&helpful(), "ada", now())
+        .await
+        .unwrap()
+        .version;
+    let calibration = calibrated(&registry, &rubric).await;
+    let mut shown = card(&rubric);
+    shown.scorers[0].input_path = Some("/question".into());
+    let declared = declared_under(&registry, &calibration, shown).await;
+    let view = registry
+        .scoring_run_view(&declared.id)
+        .await
+        .unwrap()
+        .unwrap();
+    registry
+        .approve(&view.manifest, "operator", now())
+        .await
+        .unwrap();
+
+    let model = Arc::new(Scripted::default());
+    let (command, attempt) = attempt(&declared.id, "judged-run");
+    ScoreExecutor::new(Arc::clone(&registry))
+        .judged_by(model.clone(), 2)
+        .execute(&command, &attempt)
+        .await
+        .expect("the run scores");
+    let asked = model.asked.lock().unwrap().clone();
+    assert!(
+        asked.contains(&"Input:\nquestion 2\n\nAnswer:\nmumble".to_owned()),
+        "a case's question comes before its answer: {asked:?}"
+    );
+    assert!(
+        asked.contains(&"Input:\nquestion 1\n\nAnswer:\na helpful-sounding dodge".to_owned()),
+        "a calibration item is shown what its people's case asked, from that result's source: \
+         {asked:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_case_without_the_input_a_judge_is_pointed_at_fails_by_name_and_is_not_asked() {
+    let registry = Arc::new(registry(
+        Arc::new(MemoryObjectStore::new()),
+        Arc::new(Source::default()),
+    ));
+    let rubric = registry
+        .publish_rubric(&helpful(), "ada", now())
+        .await
+        .unwrap()
+        .version;
+    let calibration = calibrated(&registry, &rubric).await;
+    let mut shown = card(&rubric);
+    shown.scorers[0].input_path = Some("/context".into());
+    let declared = declared_under(&registry, &calibration, shown).await;
+    let view = registry
+        .scoring_run_view(&declared.id)
+        .await
+        .unwrap()
+        .unwrap();
+    registry
+        .approve(&view.manifest, "operator", now())
+        .await
+        .unwrap();
+
+    let model = Arc::new(Scripted::default());
+    let (command, attempt) = attempt(&declared.id, "judged-run");
+    let reported = ScoreExecutor::new(Arc::clone(&registry))
+        .judged_by(model.clone(), 2)
+        .execute(&command, &attempt)
+        .await
+        .expect("the step ends with a failed result rather than an error")
+        .result
+        .unwrap();
+    assert_eq!(reported["judge_questions"], 0);
+    assert!(model.asked.lock().unwrap().is_empty());
+    let evidence = registry
+        .get("judged-run", "reader", now())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(evidence.status, Some(ResultStatus::Failed));
+    let page = registry
+        .cases(
+            "judged-run",
+            &evidence.receipt.version,
+            None,
+            None,
+            "reader",
+            now(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let reason = page.cases[0].measurement.error.clone().unwrap();
+    assert!(reason.contains("no input at /context"), "{reason}");
+    let agreement = &evidence.judge.unwrap().agreement[0];
+    assert_eq!(
+        (agreement.items, agreement.answered, agreement.agreement),
+        (2, 0, 0.0),
+        "a calibration item nobody could ask about counts against the judge, not beside it"
     );
 }

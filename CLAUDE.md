@@ -1900,6 +1900,12 @@ the review.
   report's `served` and compared with nothing, because a provider's name for a
   model is an alias, a file or a dated snapshot, and a refusal on spelling
   would refuse every honest one.
+  What a case asked reaches a judge only where the card points (`input_path`,
+  absent from every card that shows nothing, so their versions do not move):
+  the source adapter hands it over as `SourceEvidence::inputs`, beside the
+  expectations and never into a shard. A case without it fails naming the
+  path, and a calibration item without it is not asked and counts against the
+  judge's agreement rather than out of it.
 - **Never let a judge answer in a shape it was not asked for.** Every call
   carries the scale as a JSON Schema the provider decodes against, and a reply
   that is still a value of another kind fails its case rather than being read

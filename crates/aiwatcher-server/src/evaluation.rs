@@ -271,7 +271,7 @@ struct SourceCase {
     input: Question,
     expected: Answer,
 }
-#[derive(Deserialize, PartialEq, Eq)]
+#[derive(Deserialize, serde::Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct Question {
     question: String,
@@ -504,18 +504,21 @@ impl SourceAuthority for LocalSource {
             }
         }
         let mut expected = BTreeMap::new();
+        let mut inputs = BTreeMap::new();
         for case in cases.cases {
             if case.case_id.is_empty()
                 || case.input.question.len() > 256 * 1024
                 || expected
-                    .insert(case.case_id, serde_json::to_value(case.expected)?)
+                    .insert(case.case_id.clone(), serde_json::to_value(case.expected)?)
                     .is_some()
             {
                 return Err(unavailable(EvidenceState::CorruptArtifact));
             }
+            inputs.insert(case.case_id, serde_json::to_value(case.input)?);
         }
         Ok(SourceEvidence {
             expected,
+            inputs,
             expires_at: None,
             bundle_digest,
         })

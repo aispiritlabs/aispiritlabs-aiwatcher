@@ -50,9 +50,10 @@ pub use scorecard::{
     Rubrics, Score, Scorecard, ScorecardHead, ScorecardPage, ScorecardVersion, Scorer, ScorerSpec,
 };
 pub use scoring::{
-    Answers, ArchiveWord, Asked, Calibrated, Cohort, DeclaredRun, JudgeQuestion, Judged,
-    RecordedAnswer, RecordedAnswers, SCORING_ENGINE, SCORING_VERSION, Scored, ScoringRun,
-    ScoringRunView, StepOrigin, archived, questions, replies, score, score_with, scoring_engine,
+    Answers, ArchiveWord, Asked, Asking, Calibrated, Cohort, CohortCases, DeclaredRun,
+    JudgeQuestion, Judged, RecordedAnswer, RecordedAnswers, SCORING_ENGINE, SCORING_VERSION,
+    Scored, ScoringRun, ScoringRunView, Shown, StepOrigin, archived, questions, replies, score,
+    score_with, scoring_engine,
 };
 
 use serde::Serialize;

@@ -152,6 +152,12 @@ function Draft({ onDeclared }: { onDeclared: (declaration: string) => void }) {
     spec.scorer.kind === 'judge' ? [spec.scorer.rubric] : [],
   );
   const asksJudge = rubrics.length > 0;
+  // What each judged metric is shown of the case's question, as the card says.
+  const shownInputs = (card.data?.scorecard.scorers ?? []).flatMap((spec) =>
+    spec.scorer.kind === 'judge' && spec.input_path !== undefined && spec.input_path !== null
+      ? [`${spec.metric} sees the case's input${spec.input_path ? ` at ${spec.input_path}` : ''}`]
+      : [],
+  );
   const source = published.find((row) => row.receipt.evaluation_id === sourceId);
   const conversations = source?.manifest?.context.dataset.kind === 'conversations';
   // The archive is the only place a conversation cohort's answers may come
@@ -355,7 +361,10 @@ function Draft({ onDeclared }: { onDeclared: (declaration: string) => void }) {
           <p className="text-muted-foreground md:col-span-3">
             This card asks a model about {rubrics.map((rubric) => rubric.name).join(', ')}. The
             result will say so, and carry how far the model agreed with the people it is calibrated
-            against.
+            against.{' '}
+            {shownInputs.length > 0
+              ? `${shownInputs.join('; ')}.`
+              : 'It is shown the answer and never what the case asked.'}
           </p>
           <label className="flex flex-col gap-1">
             Profile
