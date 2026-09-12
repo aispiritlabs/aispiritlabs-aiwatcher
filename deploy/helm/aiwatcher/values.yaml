@@ -396,6 +396,20 @@ execution:
   # that wants notebook blocks has to say where one is, deliberately.
   mlPipelineUrl: ""
 
+  # The judge a scorecard may ask (ADR_0030's judge rule): an OpenAI-compatible
+  # base address, `…/v1`, and the profile it speaks, `openai` or `llamacpp`.
+  # Both or neither — the profile is pinned in every result a judge measured, so
+  # it is declared rather than guessed from the address. Only the work role asks
+  # the judge; both roles are told the profile, because a judged run is refused
+  # at start where it could not be claimed. A credential, when the endpoint
+  # wants one, is read from a Secret this release does not create.
+  judge:
+    url: ""
+    provider: ""
+    tokenSecret:
+      name: ""
+      key: token
+
   # Steps that run in a pod of their own (ADR_0029). No templates is the
   # default and means none: a step naming one is refused when it is registered.
   # Needs `store: postgres`, because a pod is a second process claiming its

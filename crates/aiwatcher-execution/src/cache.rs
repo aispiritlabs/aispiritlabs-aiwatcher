@@ -145,6 +145,7 @@ fn code_digest(runtime: &RuntimeBinding) -> Option<String> {
         // all.
         RuntimeBinding::PublishDataset(_)
         | RuntimeBinding::ScoreEvaluation(_)
+        | RuntimeBinding::JudgeEvaluation(_)
         | RuntimeBinding::HumanInput(_) => None,
     }
 }

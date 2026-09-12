@@ -59,6 +59,8 @@ fn row(receipt: EvaluationReceipt, state: EvidenceState) -> DurableEvaluation {
         status: None,
         counts: None,
         metrics: BTreeMap::new(),
+        reproducible: true,
+        judge: None,
     }
 }
 
@@ -206,6 +208,9 @@ struct Metadata {
     counts: ResultCounts,
     metrics: BTreeMap<String, f64>,
     shards: Vec<Shard>,
+    /// Beside the numbers it qualifies, in the one object a summary reads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    judge: Option<crate::JudgeReport>,
 }
 
 impl Registry {
@@ -392,11 +397,53 @@ impl Registry {
                 field: "context.suite".into(),
                 reason: "names no scorecard this registry published".into(),
             })?;
+        let rubrics = self.rubrics_for(&card.scorecard).await?;
         require(
-            card.scorecard.metrics() == context.metrics,
+            card.scorecard.metrics(&rubrics)? == context.metrics,
             "context.metrics",
             "must be exactly the metrics the scorecard declares",
-        )
+        )?;
+        let asks = card.scorecard.judges();
+        let Some(judge) = &context.judge else {
+            return require(
+                asks.is_empty(),
+                "context.judge",
+                "the scorecard asks a judge, and a result it measured names one",
+            );
+        };
+        require(
+            !asks.is_empty(),
+            "context.judge",
+            "names a judge the scorecard does not ask",
+        )?;
+        // The judge's own rule rather than the bytes rule: its settings and
+        // its calibration set are read from this registry by the digests the
+        // context pins, because a model's answer is not something to re-read.
+        require(
+            matches!(judge.provider.as_str(), "openai" | "llamacpp"),
+            "context.judge.provider",
+            "names a judge profile this deployment does not implement",
+        )?;
+        crate::judge::settings(&self.store, &judge.configuration)
+            .await?
+            .ok_or_else(|| EvaluationError::Invalid {
+                field: "context.judge.configuration".into(),
+                reason: "names judge settings no run declared".into(),
+            })?;
+        require(
+            judge.calibration_dataset.kind == crate::DatasetKind::Assessments,
+            "context.judge.calibration_dataset",
+            "a judge is calibrated against people's judgements",
+        )?;
+        let taken = self
+            .calibration(&judge.calibration_dataset.version)
+            .await?
+            .filter(|taken| taken.calibration.name == judge.calibration_dataset.name)
+            .ok_or_else(|| EvaluationError::Invalid {
+                field: "context.judge.calibration_dataset".into(),
+                reason: "names no calibration set this registry took".into(),
+            })?;
+        covers(&taken.calibration, &asks)
     }
 
     /// The gate a publication passes and a read is refused by.
@@ -433,6 +480,7 @@ impl Registry {
         let prepared = Evaluation::prepare(request.manifest.clone())?;
         let protected = self.protected(&request.manifest)?;
         self.admit_scoring(&request.manifest.context).await?;
+        judged_as_declared(&request)?;
         let id = &request.manifest.origin.evaluation_id;
         if let Some(state) = self
             .store
@@ -515,6 +563,7 @@ impl Registry {
             counts,
             metrics,
             shards,
+            judge: request.judge.clone(),
         };
         require(
             bytes.saturating_add(canonical(&metadata)?.len()) <= self.config.max_bytes,
@@ -858,6 +907,8 @@ impl Registry {
                 result.status = Some(metadata.status);
                 result.counts = Some(metadata.counts.clone());
                 result.metrics = metadata.metrics.clone();
+                result.reproducible = metadata.manifest.context.judge.is_none();
+                result.judge = metadata.judge.clone();
                 return Ok((result, Some(metadata)));
             }
             Err(EvaluationError::Unavailable(state)) => {
@@ -1475,6 +1526,47 @@ fn aggregate(request: &PublishEvaluation) -> Result<BTreeMap<String, f64>> {
     Ok(result)
 }
 
+/// Whether a calibration set holds a person's judgement under every rubric a
+/// card's judges ask. One rubric with none would be a judge reported as
+/// calibrated on the strength of another rubric's people.
+fn covers(set: &crate::CalibrationSet, asked: &[&crate::VersionReference]) -> Result<()> {
+    for pinned in asked {
+        require(
+            set.items.iter().any(|item| item.rubric == **pinned),
+            "calibration",
+            &format!(
+                "holds no human judgement under {} version {}; a judge calibrated against \
+                 nothing is refused rather than defaulted",
+                pinned.name, pinned.version
+            ),
+        )?;
+    }
+    Ok(())
+}
+
+/// A judged result carries its agreement, and only a judged result does.
+fn judged_as_declared(request: &PublishEvaluation) -> Result<()> {
+    match (&request.manifest.context.judge, &request.judge) {
+        (None, None) => Ok(()),
+        (Some(judge), Some(report)) => require(
+            request.manifest.context.scored_here()
+                && report.calibration.name == judge.calibration_dataset.name
+                && report.calibration.version == judge.calibration_dataset.version,
+            "judge",
+            "reports agreement against a calibration set other than the one the context pins",
+        ),
+        (Some(_), None) => Err(EvaluationError::Invalid {
+            field: "judge".into(),
+            reason: "a judged result carries how far the judge agreed with its calibration set"
+                .into(),
+        }),
+        (None, Some(_)) => Err(EvaluationError::Invalid {
+            field: "judge".into(),
+            reason: "reports a judge's agreement for a context that names no judge".into(),
+        }),
+    }
+}
+
 /// Rubrics and the judgements made under them.
 ///
 /// The same door as the evidence, because the owner is the same and a
@@ -1536,7 +1628,233 @@ impl Registry {
         published_by: &str,
         now: i64,
     ) -> Result<crate::ScorecardVersion> {
-        crate::scorecard::publish(&self.store, scorecard, published_by, now).await
+        let rubrics = self.rubrics_for(scorecard).await?;
+        crate::scorecard::publish(&self.store, scorecard, &rubrics, published_by, now).await
+    }
+
+    /// The rubric versions a card's judges ask, resolved.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Invalid`] naming a rubric version nobody published,
+    /// and [`EvaluationError::Storage`] when the store cannot be reached.
+    pub async fn rubrics_for(&self, scorecard: &crate::Scorecard) -> Result<crate::Rubrics> {
+        let mut rubrics = crate::Rubrics::default();
+        for pinned in scorecard.judges() {
+            let published = self
+                .rubric(&pinned.name, Some(&pinned.version))
+                .await?
+                .ok_or_else(|| EvaluationError::Invalid {
+                    field: "scorecard.scorers.scorer.rubric".into(),
+                    reason: format!(
+                        "{} has no published version {}",
+                        pinned.name, pinned.version
+                    ),
+                })?;
+            rubrics = rubrics.with(pinned, published.rubric);
+        }
+        Ok(rubrics)
+    }
+
+    /// Freeze the judgements people made of one result's cases, as the set a
+    /// judge is calibrated against.
+    ///
+    /// Only a person's judgement, and only under the rubric versions asked for:
+    /// a revision made under other words answered another question. The result
+    /// is read at the version it has now, and the set names that version, so
+    /// the judge is later put the same answers the people were.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Invalid`] when the result is not readable, is
+    /// conversation evidence, or holds no human judgement under those rubrics;
+    /// [`EvaluationError::Storage`] when the store cannot be reached.
+    pub async fn take_calibration(
+        &self,
+        request: &crate::CalibrationRequest,
+        subject: &str,
+        now: i64,
+    ) -> Result<crate::CalibrationVersion> {
+        text(&request.name, "calibration.name")?;
+        require(
+            (1..=32).contains(&request.rubrics.len()),
+            "calibration.rubrics",
+            "requires 1–32 rubric versions",
+        )?;
+        for pinned in &request.rubrics {
+            pinned.validate("calibration.rubrics")?;
+            self.rubric(&pinned.name, Some(&pinned.version))
+                .await?
+                .ok_or_else(|| EvaluationError::Invalid {
+                    field: "calibration.rubrics".into(),
+                    reason: format!(
+                        "{} has no published version {}",
+                        pinned.name, pinned.version
+                    ),
+                })?;
+        }
+        let unreadable = || EvaluationError::Invalid {
+            field: "calibration.evaluation_id".into(),
+            reason: "names no result whose cases can be read now".into(),
+        };
+        let header = self
+            .get(&request.evaluation_id, subject, now)
+            .await?
+            .filter(|header| {
+                matches!(
+                    header.state,
+                    EvidenceState::Complete | EvidenceState::Partial
+                )
+            })
+            .ok_or_else(unreadable)?;
+        let manifest = header.manifest.as_ref().ok_or_else(unreadable)?;
+        // A judge is put what the people were shown, and a provider is where
+        // it is put: the archive's words do not go there.
+        require(
+            manifest.context.dataset.kind != crate::DatasetKind::Conversations,
+            "calibration.evaluation_id",
+            "is conversation evidence, whose answers a judge's provider may not be sent",
+        )?;
+        let mut items = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let page = self
+                .cases(
+                    &request.evaluation_id,
+                    &header.receipt.version,
+                    cursor.as_deref(),
+                    Some(200),
+                    subject,
+                    now,
+                )
+                .await?
+                .filter(|page| {
+                    matches!(page.state, EvidenceState::Complete | EvidenceState::Partial)
+                })
+                .ok_or_else(unreadable)?;
+            for case in &page.cases {
+                let target = crate::AssessmentTarget::Case {
+                    evaluation_id: request.evaluation_id.clone(),
+                    case_id: case.measurement.case_id.clone(),
+                    repetition_id: case.measurement.repetition_id.clone(),
+                };
+                for said in self.assessments(&target).await?.assessments {
+                    if said.source != crate::AssessmentSource::Human {
+                        continue;
+                    }
+                    let Some(pinned) = request.rubrics.iter().find(|pinned| {
+                        pinned.name == said.rubric && pinned.version == said.rubric_version
+                    }) else {
+                        continue;
+                    };
+                    items.push(crate::CalibrationItem {
+                        case_id: case.measurement.case_id.clone(),
+                        repetition_id: case.measurement.repetition_id.clone(),
+                        rubric: pinned.clone(),
+                        value: said.value,
+                        author: said.author,
+                        standing_id: said.standing_id,
+                        revision: said.revision,
+                    });
+                }
+            }
+            match page.next_cursor {
+                Some(next) => cursor = Some(next),
+                None => break,
+            }
+        }
+        items.sort_by(|a, b| {
+            (&a.case_id, &a.repetition_id, &a.rubric.name, &a.author).cmp(&(
+                &b.case_id,
+                &b.repetition_id,
+                &b.rubric.name,
+                &b.author,
+            ))
+        });
+        let set = crate::CalibrationSet {
+            name: request.name.clone(),
+            result: crate::VersionReference {
+                name: request.evaluation_id.clone(),
+                version: header.receipt.version,
+            },
+            items,
+        };
+        let asked: Vec<&crate::VersionReference> = request.rubrics.iter().collect();
+        covers(&set, &asked)?;
+        crate::judge::keep_calibration(&self.store, set, subject, now).await
+    }
+
+    /// One calibration set, re-verified against its own address.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Unavailable`] when the stored set is not the one
+    /// its address names.
+    pub async fn calibration(&self, version: &str) -> Result<Option<crate::CalibrationVersion>> {
+        crate::judge::calibration(&self.store, version).await
+    }
+
+    /// The answers a calibration set's people were shown, from the result it
+    /// names at the version it names.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Unavailable`] when that result can no longer be
+    /// read at that version.
+    pub async fn calibrated(
+        &self,
+        set: &crate::CalibrationSet,
+        subject: &str,
+        now: i64,
+    ) -> Result<crate::scoring::Calibrated> {
+        let wanted: BTreeSet<(&str, &str)> = set
+            .items
+            .iter()
+            .map(|item| (item.case_id.as_str(), item.repetition_id.as_str()))
+            .collect();
+        let mut found = crate::scoring::Calibrated::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let page = self
+                .cases(
+                    &set.result.name,
+                    &set.result.version,
+                    cursor.as_deref(),
+                    Some(200),
+                    subject,
+                    now,
+                )
+                .await?
+                .ok_or(EvaluationError::Unavailable(EvidenceState::DeletedSource))?;
+            // A page that could not be read is not a page with nobody on it:
+            // a judge calibrated against the answers that happened to load is
+            // reported against fewer people than the set holds.
+            if !matches!(page.state, EvidenceState::Complete | EvidenceState::Partial) {
+                return Err(EvaluationError::Unavailable(page.state));
+            }
+            for case in page.cases {
+                let key = (
+                    case.measurement.case_id.as_str(),
+                    case.measurement.repetition_id.as_str(),
+                );
+                if wanted.contains(&key)
+                    && let Some(actual) = case.measurement.actual
+                {
+                    found.insert(
+                        (
+                            case.measurement.case_id.clone(),
+                            case.measurement.repetition_id.clone(),
+                        ),
+                        (actual, case.expected),
+                    );
+                }
+            }
+            match page.next_cursor {
+                Some(next) => cursor = Some(next),
+                None => break,
+            }
+        }
+        Ok(found)
     }
 
     /// # Errors
@@ -1592,6 +1910,26 @@ impl Registry {
             .await?
             .ok_or(EvaluationError::Unavailable(EvidenceState::MissingArtifact))?;
         run.check(&card.scorecard)?;
+        if let Some(judge) = &run.judge {
+            let taken = self
+                .calibration(&judge.calibration.version)
+                .await?
+                .filter(|taken| taken.calibration.name == judge.calibration.name)
+                .ok_or_else(|| EvaluationError::Invalid {
+                    field: "run.judge.calibration".into(),
+                    reason: "names no calibration set this registry took".into(),
+                })?;
+            require(
+                taken.calibration.result.name != run.evaluation_id,
+                "run.judge.calibration",
+                "is taken from this run's own result; a judge is calibrated on answers people \
+                 already judged, not on the ones it is about to",
+            )?;
+            covers(&taken.calibration, &card.scorecard.judges())?;
+            // The settings' bytes, where admission reads them by the digest the
+            // context will pin — before the declaration that names them.
+            crate::judge::keep_settings(&self.store, &judge.settings).await?;
+        }
         crate::scoring::declare(&self.store, run, declared_by, now).await
     }
 
@@ -1619,7 +1957,8 @@ impl Registry {
             .scorecard(&pinned.name, Some(&pinned.version))
             .await?
             .ok_or(EvaluationError::Unavailable(EvidenceState::MissingArtifact))?;
-        let manifest = declaration.run.manifest(&card.scorecard, None)?;
+        let rubrics = self.rubrics_for(&card.scorecard).await?;
+        let manifest = declaration.run.manifest(&card.scorecard, &rubrics, None)?;
         let prepared = Evaluation::prepare(manifest.clone())?;
         Ok(Some(crate::ScoringRunView {
             approval_id: approval_id(prepared.variant_id(), prepared.context_id())?,

@@ -156,7 +156,19 @@ class Forbidden(TypedDict):
     ignore_case: NotRequired[bool]
 
 
-Scorer = ExactMatch | Contains | RegexMatch | NumericWithin | AbsoluteError | Forbidden
+class Judge(TypedDict):
+    """A model's answer to a rubric's question about the answer.
+
+    The rubric version is where every word the model is given comes from, and
+    where the metric's scale and direction are read. Which model asks, and the
+    people it is calibrated against, are the run's :class:`JudgeDeclaration`.
+    """
+
+    kind: Literal["judge"]
+    rubric: VersionReference
+
+
+Scorer = ExactMatch | Contains | RegexMatch | NumericWithin | AbsoluteError | Forbidden | Judge
 
 
 class ScorerSpec(TypedDict):
@@ -189,6 +201,35 @@ class Cohort(TypedDict):
     expectations_schema: ArtifactReference
 
 
+class JudgeSettings(TypedDict, total=False):
+    #: Said after the rubric's own words, never instead of them.
+    instructions: str
+    temperature: float
+    seed: int
+    max_tokens: int
+
+
+class JudgeDeclaration(TypedDict):
+    """Which judge measures a run whose card asks one.
+
+    ``provider`` is the deployment's judge profile, ``openai`` or ``llamacpp``;
+    a start on a deployment with another one, or none, is refused.
+    ``calibration`` is the name and version :meth:`EvaluationRegistry.take_calibration`
+    returned.
+    """
+
+    provider: Literal["openai", "llamacpp"]
+    model: VersionReference
+    calibration: VersionReference
+    settings: NotRequired[JudgeSettings]
+
+
+class CalibrationRequest(TypedDict):
+    name: str
+    evaluation_id: str
+    rubrics: list[VersionReference]
+
+
 class ScoringRun(TypedDict):
     evaluation_id: str
     repetition_id: str
@@ -200,6 +241,8 @@ class ScoringRun(TypedDict):
     #: and never staged in the clear. Over the archive a card may read no
     #: expectation, because the expectation is the response being measured.
     answers: ArtifactReference | Literal["archive"]
+    #: Required exactly when the card asks a judge, and refused otherwise.
+    judge: NotRequired[JudgeDeclaration]
 
 
 class CaseMeasurement(TypedDict):
@@ -436,6 +479,27 @@ class EvaluationRegistry:
         """
         return self._object(
             self._transport.send("POST", "/api/v1/evaluation-runs", dict(run), idempotent=True)
+        )
+
+    def take_calibration(self, request: CalibrationRequest) -> dict[str, Any]:
+        """Freeze what people judged of one published result, for a judge.
+
+        Only a person's judgement under the rubric versions named is taken, and
+        the set is addressed by its content, so taking it twice is the same set.
+        Raises when nobody judged the result under one of those rubrics: a
+        judge calibrated against nothing is refused rather than defaulted.
+        """
+        return self._object(
+            self._transport.send(
+                "POST", "/api/v1/evaluation-calibrations", dict(request), idempotent=True
+            )
+        )
+
+    def get_calibration(self, version: str) -> dict[str, Any]:
+        return self._object(
+            self._transport.send(
+                "GET", "/api/v1/evaluation-calibrations/" + quote(version, safe="")
+            )
         )
 
     def get_scoring_run(self, declaration: str) -> dict[str, Any]:

@@ -308,6 +308,33 @@
               "type": "string"
             }
           }
+        },
+        "judge": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "description": "An OpenAI-compatible base address for the judge a scorecard may ask. Empty asks none.",
+              "type": "string"
+            },
+            "provider": {
+              "enum": [
+                "",
+                "openai",
+                "llamacpp"
+              ]
+            },
+            "tokenSecret": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "key": {
+                  "type": "string"
+                }
+              }
+            }
+          }
         }
       }
     },

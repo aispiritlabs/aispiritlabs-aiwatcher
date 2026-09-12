@@ -544,6 +544,22 @@ pub struct Config {
     /// steps and no notebooks — which is why they are two variables rather
     /// than one "curation services" switch.
     pub ml_pipeline_url: Option<String>,
+    /// The judge a scorecard may ask, for a `judge_evaluation` step: the base
+    /// address of an OpenAI-compatible endpoint, `…/v1`. Absent, this process
+    /// registers no judge executor and claims no such attempt — the query
+    /// engine's shape — and a judged run's start is refused naming it.
+    pub judge_url: Option<String>,
+    /// Which profile that endpoint speaks: `openai` or `llamacpp`. Declared,
+    /// never detected, and pinned in every result a judge measured, so it is
+    /// required together with the address rather than defaulted.
+    pub judge_provider: Option<String>,
+    /// A bearer credential for the judge, when its endpoint wants one.
+    pub judge_token: Option<String>,
+    /// How many questions are put to the judge at once. A provider that rate
+    /// limits turns an over-eager number into a step that retries itself.
+    pub judge_concurrency: usize,
+    /// How long one question to the judge may take.
+    pub judge_timeout: Duration,
     /// How long a managed query step may run, in seconds, whichever engine
     /// runs it. `None` keeps the compiler's five minutes, which fits a query
     /// over the read model and not one over a corpus on disk. Raise it with
@@ -685,6 +701,11 @@ impl Default for Config {
             query_engine: QueryEngine::Flow,
             query_url: None,
             ml_pipeline_url: None,
+            judge_url: None,
+            judge_provider: None,
+            judge_token: None,
+            judge_concurrency: 2,
+            judge_timeout: Duration::from_secs(120),
             query_step_timeout_seconds: None,
             reactor_owner: None,
             // A second. Shorter than the conversation and import queues'
@@ -977,6 +998,43 @@ impl Config {
         if let Some(raw) = var("AIWATCHER_ML_PIPELINE_URL") {
             config.ml_pipeline_url = Some(raw.trim_end_matches('/').to_owned());
         }
+        if let Some(raw) = var("AIWATCHER_JUDGE_URL") {
+            config.judge_url = Some(raw.trim_end_matches('/').to_owned());
+        }
+        if let Some(raw) = var("AIWATCHER_JUDGE_PROVIDER") {
+            if !matches!(raw.as_str(), "openai" | "llamacpp") {
+                return Err(ConfigError::Invalid {
+                    name: "AIWATCHER_JUDGE_PROVIDER",
+                    value: raw,
+                    expected: "judge profile (openai, llamacpp)",
+                });
+            }
+            config.judge_provider = Some(raw);
+        }
+        config.judge_token = var("AIWATCHER_JUDGE_TOKEN");
+        if let Some(raw) = var("AIWATCHER_JUDGE_CONCURRENCY") {
+            config.judge_concurrency =
+                raw.parse()
+                    .ok()
+                    .filter(|count| *count > 0)
+                    .ok_or(ConfigError::Invalid {
+                        name: "AIWATCHER_JUDGE_CONCURRENCY",
+                        value: raw,
+                        expected: "whole number of questions above nought",
+                    })?;
+        }
+        if let Some(raw) = var("AIWATCHER_JUDGE_TIMEOUT_SECONDS") {
+            config.judge_timeout = raw
+                .parse()
+                .ok()
+                .filter(|seconds| *seconds > 0)
+                .map(Duration::from_secs)
+                .ok_or(ConfigError::Invalid {
+                    name: "AIWATCHER_JUDGE_TIMEOUT_SECONDS",
+                    value: raw,
+                    expected: "whole number of seconds above nought",
+                })?;
+        }
         config.reactor_owner = var("AIWATCHER_REACTOR_OWNER");
         if let Some(raw) = var("AIWATCHER_EXECUTION_POLL_SECONDS") {
             config.execution_poll =
@@ -1071,6 +1129,23 @@ impl Config {
     /// [`ConfigError`] naming the variable that is missing or unusable, and
     /// what made it required.
     pub fn validate(&self) -> Result<(), ConfigError> {
+        // One without the other is a judge nobody can ask, or a profile with
+        // nothing to speak it to — and the second would be pinned in results.
+        match (&self.judge_url, &self.judge_provider) {
+            (Some(_), None) => {
+                return Err(ConfigError::Required {
+                    name: "AIWATCHER_JUDGE_PROVIDER",
+                    because: "AIWATCHER_JUDGE_URL is set",
+                });
+            }
+            (None, Some(_)) => {
+                return Err(ConfigError::Required {
+                    name: "AIWATCHER_JUDGE_URL",
+                    because: "AIWATCHER_JUDGE_PROVIDER is set",
+                });
+            }
+            _ => {}
+        }
         if self.bus == BackendKind::Laser && self.laser_connection_string.is_none() {
             return Err(ConfigError::Missing {
                 name: "AIWATCHER_LASER_CONNECTION_STRING",
@@ -1802,6 +1877,41 @@ mod tests {
         assert_eq!(
             config.conversation_policy,
             ConversationPolicyMode::Protected
+        );
+    }
+
+    #[test]
+    fn a_judge_address_and_its_profile_are_one_setting_in_two_halves() {
+        for (config, missing) in [
+            (
+                Config {
+                    judge_url: Some("http://127.0.0.1:8083/v1".into()),
+                    ..Config::default()
+                },
+                "AIWATCHER_JUDGE_PROVIDER",
+            ),
+            (
+                Config {
+                    judge_provider: Some("llamacpp".into()),
+                    ..Config::default()
+                },
+                "AIWATCHER_JUDGE_URL",
+            ),
+        ] {
+            let error = config.validate().expect_err("refused");
+            assert!(
+                matches!(error, ConfigError::Required { name, .. } if name == missing),
+                "{error}"
+            );
+        }
+        assert!(
+            Config {
+                judge_url: Some("http://127.0.0.1:8083/v1".into()),
+                judge_provider: Some("llamacpp".into()),
+                ..Config::default()
+            }
+            .validate()
+            .is_ok()
         );
     }
 

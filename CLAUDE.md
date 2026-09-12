@@ -151,7 +151,7 @@ Crates, in dependency order. A crate may only depend on ones above it.
 | `aiwatcher-annotations` | Vector image annotations for **any** vision domain — it ships no vocabulary, and the project's label schema carries the domain (ADR_0020). Sliced by noun: `images/` (one picture — head, revisions, review, bytes, bulk import), `imports/` (the staged batch and the queued job that reads it, ADR_0022), `project`, `export`, `license` (what may be done with the data), `schema`, `shapes`, `sources` (a catalogue an instance loads), `integrations/` — `hubs` (Kaggle and Hugging Face) and `fetch`, the bounded downloader every outbound byte goes through. `registry` is the facade and the only public door; `store` is the private key layout every slice reads through. |
 | `aiwatcher-conversations` | Governed conversation training data: the `turn` contract, consent and retention, the **encrypted** archive, the human review gate, and the resumable export job that freezes a corpus. The one authored store that is off by default, whose content is sealed, and whose deletions delete. Sliced by noun: `turn`, `policy`, `redaction`, `review`, `archive/` (the store and its retention clock, `crypt` beneath it), `export/` (the job, `format` beneath it). `registry` is the facade and the only public door; `store` is the private key layout. |
 | `aiwatcher-training` | Training runs and the model versions they produce. The one registry here whose contents never came from the event log: a run is a record that grows in place, and a promotion is refused without a held-out score. `package` is what a serving runtime is handed — the runtime, the entry point, the shapes, and every artifact with its digest (ADR_0023). |
-| `aiwatcher-evaluation` | Pinned variant/context contracts and durable evidence (ADR_0030). `Evaluation::prepare` validates declarations; `Registry` owns immutable publication, paging, erasure and **approvals** — the pair an operator admitted, which is what lets one instance hold a baseline and a candidate at once — through a `SourceAuthority` adapter. It also measures: a **scorecard** declares named scorers and derives each metric's direction, and a **scoring run** folds a staged recording, or a conversation cohort's own archived responses, against one and publishes the result — admitted against the scorecard and the compiled vocabulary rather than a bundle's files. Legacy reports remain in Projector with an explicit API read bridge. |
+| `aiwatcher-evaluation` | Pinned variant/context contracts and durable evidence (ADR_0030). `Evaluation::prepare` validates declarations; `Registry` owns immutable publication, paging, erasure and **approvals** — the pair an operator admitted, which is what lets one instance hold a baseline and a candidate at once — through a `SourceAuthority` adapter. It also measures: a **scorecard** declares named scorers and derives each metric's direction, and a **scoring run** folds a staged recording, or a conversation cohort's own archived responses, against one — asking a calibrated **judge** first when the card names a rubric — and publishes the result — admitted against the scorecard and the compiled vocabulary rather than a bundle's files. Legacy reports remain in Projector with an explicit API read bridge. |
 | `aiwatcher-datasets` | Curation recipes, the dataset versions they produce, and the **block pipelines** of ADR_0024 — a chain of source, transform, notebook, approval and view, refused as a whole with every problem at once. Nothing here executes anything; the panel drives the chain because the engines are three different systems. |
 | `aiwatcher-execution` | Owned execution (ADR_0025, ADR_0026): the compiled `ExecutionPlan` and its `plan_id`, the states, the attempts, the pure `decide`/`evolve`, the cache key, the compiler from ADR_0024's blocks, the atomic command handler, the claim table, the `ContextSnapshot` that reopens a block, the fact encoder and the outbox publisher. Three ports: `WorkflowStore` (`memory | file | postgres | duckdb`, the last two behind features so `sqlx` and DuckDB's C++ amalgamation are out of every build that does not ask for them — the shape `laser` has in `aiwatcher-bus`), `ActivityExecutor` (what a reactor does with a claimed attempt) and `ArtifactCatalog` (metadata, lineage, the cache index). Executes nothing itself, and holds no second copy of `aiwatcher-jobs`' rules — it calls them. |
 | `aiwatcher-runner` | The workflow rerun dispatcher: one HTTP POST to one configured endpoint, behind `core::ports::WorkflowRunner`. |
@@ -1876,6 +1876,39 @@ the review.
   answers to archived questions unsealed, unretained and unerasable; and a card
   over it reads no expectation, because the expectation is the response being
   measured.
+- **Never admit a judge under the bytes rule, or a judged result without its
+  agreement.** A `judge` scorer names a rubric version, and its metric's scale
+  and direction are the rubric's. The run declares the rest — the profile
+  (`openai | llamacpp`), the model and the revision pinned, the settings (pinned
+  by digest as `context.judge.configuration`) and a **calibration set**: the
+  human judgements of a published result's cases under those rubric versions,
+  frozen by content through `POST /evaluation-calibrations`. Admission reads the
+  settings and the set from this registry and refuses a set with no person's
+  judgement under any rubric the card asks; publication refuses a judged result
+  without the agreement the run measured on that set, counted over every item
+  so a judge that declines the hard cases does not agree its way up. The
+  evidence says `reproducible: false`, and a comparison of it says `judged`.
+- **Never let a judge answer in a shape it was not asked for.** Every call
+  carries the scale as a JSON Schema the provider decodes against, and a reply
+  that is still a value of another kind fails its case rather than being read
+  generously: gemma, told "true or false", answered `"false"` in quotes, so
+  every case it said no to failed and only its yeses were counted. And a
+  reason never quotes a reply, nor a provider refusal its body — a reply can
+  repeat the answer it was shown.
+- **Never send the archive's words to a judge.** A judge over a conversation
+  cohort, and a calibration set taken from conversation evidence, are refused by
+  name: asking a judge is sending what it reads to a provider.
+- **Never ask a judge from the `serve` role, or start a judged run nothing will
+  claim.** A judged run is `judge_evaluation`, claimed where
+  `AIWATCHER_JUDGE_URL` and `AIWATCHER_JUDGE_PROVIDER` are — a socket and a
+  credential, the query engine's reason. The start route refuses with 501
+  `judge_disabled` on a deployment without one and 422 naming both profiles on
+  one with another, because a started run nobody claims waits for ever.
+- **Never publish evidence aiwatcher measures through the producer's route.**
+  `POST /evaluation-results` answers 403 `measured_here` for a context scored by
+  `aiwatcher.scoring`: the first publication of an ID wins, and anybody with an
+  editor's token could otherwise put numbers under a declared run's name before
+  the run did.
 - **An evaluation report is not redacted.** The Collector strips
   `gen_ai.prompt` and `gen_ai.completion` from spans, and an evaluation forms no
   span, so nothing strips `data.report`. A producer that puts model output there

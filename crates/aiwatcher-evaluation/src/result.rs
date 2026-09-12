@@ -44,6 +44,11 @@ pub struct PublishEvaluation {
     pub status: ResultStatus,
     /// Missing selected cases remain unscored; never implicitly successful.
     pub cases: Vec<CaseMeasurement>,
+    /// How far the judge agreed with the people it was calibrated against.
+    /// Present exactly when the context names a judge, and only ever written
+    /// by the run that asked it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub judge: Option<crate::JudgeReport>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
@@ -73,6 +78,12 @@ pub struct DurableEvaluation {
     pub status: Option<ResultStatus>,
     pub counts: Option<ResultCounts>,
     pub metrics: BTreeMap<String, f64>,
+    /// Whether every number here can be had again by re-reading the evidence.
+    /// False once a model judged any of them: those numbers are what it said
+    /// at the time, and the agreement beside them is how far to trust it.
+    pub reproducible: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub judge: Option<crate::JudgeReport>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, utoipa::ToSchema)]

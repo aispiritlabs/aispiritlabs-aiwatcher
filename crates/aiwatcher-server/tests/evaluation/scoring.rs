@@ -88,6 +88,7 @@ fn declaration(evaluation_id: &str, version: &str) -> ScoringRun {
             version: version.into(),
         },
         answers: Answers::Recording(manifest.context.case_manifest.clone()),
+        judge: None,
     }
 }
 
@@ -111,9 +112,13 @@ async fn measured(
     publish(
         registry,
         PublishEvaluation {
-            manifest: declared.run.manifest(&card, None).unwrap(),
+            manifest: declared
+                .run
+                .manifest(&card, &Rubrics::default(), None)
+                .unwrap(),
             status: scored.status,
             cases: scored.cases,
+            judge: None,
         },
         "editor",
         200,
@@ -207,9 +212,10 @@ async fn a_distance_is_published_as_a_mean_in_its_own_unit_rather_than_as_a_rate
     publish(
         &registry,
         PublishEvaluation {
-            manifest: run.manifest(&card, None).unwrap(),
+            manifest: run.manifest(&card, &Rubrics::default(), None).unwrap(),
             status: scored.status,
             cases: scored.cases,
+            judge: None,
         },
         "editor",
         200,
@@ -433,9 +439,10 @@ async fn engine_scored(registry: &Registry, evaluation_id: &str) -> PublishEvalu
         &run.repetition_id,
     );
     PublishEvaluation {
-        manifest: run.manifest(&card, None).unwrap(),
+        manifest: run.manifest(&card, &Rubrics::default(), None).unwrap(),
         status: scored.status,
         cases: scored.cases,
+        judge: None,
     }
 }
 
@@ -500,7 +507,7 @@ async fn a_scoring_run_is_admitted_with_no_suite_or_scorer_file_in_its_bundle() 
         .unwrap()
         .version;
     let run = declaration("scored-against-the-fixture", &version);
-    let manifest = run.manifest(&card, None).unwrap();
+    let manifest = run.manifest(&card, &Rubrics::default(), None).unwrap();
     let prepared = Evaluation::prepare(manifest.clone()).unwrap();
     let approval =
         aiwatcher_evaluation::approval_id(prepared.variant_id(), prepared.context_id()).unwrap();
@@ -551,6 +558,7 @@ async fn a_scoring_run_is_admitted_with_no_suite_or_scorer_file_in_its_bundle() 
                 manifest,
                 status: scored.status,
                 cases: scored.cases,
+                judge: None,
             },
             "ada",
             200,

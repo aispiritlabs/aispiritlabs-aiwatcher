@@ -129,6 +129,11 @@ pub struct AppState {
     /// compiler's own five minutes. Read by the one compile that starts runs,
     /// so a scheduled run and a clicked one carry the same limit.
     pub query_step_timeout_seconds: Option<u64>,
+    /// The judge profile this deployment asks (`AIWATCHER_JUDGE_PROVIDER`),
+    /// when it has a judge. Read by the start of a judged scoring run, so a run
+    /// declared for another profile, or on a deployment with none, is refused
+    /// when it is started rather than left for nothing to claim.
+    pub judge_provider: Option<String>,
     /// Vector image annotations and the training exports built from them.
     /// Same store, third prefix, and the same reason all three are here rather
     /// than on the log: a training label has to outlive every run that used
@@ -319,6 +324,7 @@ impl std::fmt::Debug for AppState {
                 "pod_templates",
                 &self.pod_templates.as_ref().map(|templates| templates.len()),
             )
+            .field("judge_provider", &self.judge_provider)
             .field("workflow_runner", &self.runner)
             .field("editor", &self.editor)
             .field("auth", &self.auth)

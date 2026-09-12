@@ -16,11 +16,12 @@
 //! scorer counts rather than an opinion about it.
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
     Aggregation, EvaluationError, MetricDefinition, MetricDirection, Result, SCHEMA_VERSION,
-    digest, require,
+    VersionReference, digest, require,
+    rubric::{Rubric, Scale},
     store::{self, Store},
     text,
 };
@@ -65,6 +66,36 @@ pub enum Scorer {
         #[serde(default)]
         ignore_case: bool,
     },
+    /// A model's answer to a rubric's question about this answer.
+    ///
+    /// Named by the rubric version it asks, which is where every word the model
+    /// is given comes from — the same form a person answers — and where the
+    /// metric's scale and direction are read rather than restated. Which model
+    /// asks, how, and against which human judgements it was calibrated are the
+    /// run's to declare: one card measured by two judges is two contexts.
+    Judge { rubric: VersionReference },
+}
+
+/// The rubric versions a card's judges ask, resolved from the registry.
+///
+/// Resolved rather than copied into the card: a rubric version is immutable
+/// and already has an owner, so the card names it and a reader asks there.
+#[derive(Clone, Debug, Default)]
+pub struct Rubrics(BTreeMap<(String, String), Rubric>);
+
+impl Rubrics {
+    #[must_use]
+    pub fn with(mut self, reference: &VersionReference, rubric: Rubric) -> Self {
+        self.0
+            .insert((reference.name.clone(), reference.version.clone()), rubric);
+        self
+    }
+
+    #[must_use]
+    pub fn get(&self, reference: &VersionReference) -> Option<&Rubric> {
+        self.0
+            .get(&(reference.name.clone(), reference.version.clone()))
+    }
 }
 
 /// One scorer's answer about one case.
@@ -86,44 +117,55 @@ impl Scorer {
                 | Self::Contains { .. }
                 | Self::NumericWithin { .. }
                 | Self::AbsoluteError { .. }
+                | Self::Judge { .. }
         )
     }
 
-    /// Which way this scorer's metric is better.
-    ///
-    /// A fact about what the scorer counts: a forbidden phrase and a distance
-    /// are both better when there is less of them.
+    /// The rubric this scorer asks, when it is a judge.
     #[must_use]
-    pub const fn direction(&self) -> MetricDirection {
+    pub const fn rubric(&self) -> Option<&VersionReference> {
         match self {
-            Self::Forbidden { .. } | Self::AbsoluteError { .. } => MetricDirection::Lower,
-            _ => MetricDirection::Higher,
+            Self::Judge { rubric } => Some(rubric),
+            _ => None,
         }
     }
 
-    /// How a result folds this scorer's per-case numbers into one.
+    /// What this scorer's metric is: its unit, which way is better, and how a
+    /// result folds its per-case numbers into one.
     ///
-    /// A pass-or-fail scorer's aggregate is the fraction that passed — a rate,
-    /// which is also what bounds each case's number to nought or one. A
-    /// quantity is averaged, because a count of distances means nothing.
-    #[must_use]
-    pub const fn aggregation(&self) -> Aggregation {
-        match self {
-            Self::AbsoluteError { .. } => Aggregation::Mean,
-            _ => Aggregation::Rate,
-        }
-    }
-
-    /// What a number this scorer writes is in.
-    ///
-    /// Derived for a verdict, and the author's own word for a quantity — the
-    /// one field a scorecard states about its metric, because nothing else can.
-    #[must_use]
-    pub fn unit(&self) -> String {
-        match self {
-            Self::AbsoluteError { unit } => unit.clone(),
-            _ => "ratio".into(),
-        }
+    /// Which way is better is a fact about what the scorer counts — a
+    /// forbidden phrase and a distance are both better when there is less of
+    /// them — and a judge's is the rubric's declaration. A pass-or-fail
+    /// scorer's aggregate is the fraction that passed, a rate, which also
+    /// bounds each case's number to nought or one; a quantity is averaged,
+    /// because a count of distances means nothing. The unit is derived for a
+    /// verdict, read from the scale for a judge, and the author's own word for
+    /// a distance — the one thing a scorecard states about its metric, because
+    /// nothing else can. `None` for a judge whose rubric was not resolved.
+    fn defines(&self, rubric: Option<&Rubric>) -> Option<(String, MetricDirection, Aggregation)> {
+        Some(match self {
+            Self::AbsoluteError { unit } => {
+                (unit.clone(), MetricDirection::Lower, Aggregation::Mean)
+            }
+            Self::Forbidden { .. } => ("ratio".into(), MetricDirection::Lower, Aggregation::Rate),
+            Self::Judge { .. } => {
+                let rubric = rubric?;
+                match rubric.scale {
+                    // A position on the levels as declared, from nought: the
+                    // rubric orders them, and a mean of positions is the one
+                    // number a set of levels folds into.
+                    Scale::Ordinal { .. } => ("level".into(), rubric.direction, Aggregation::Mean),
+                    Scale::Numeric { .. } => ("score".into(), rubric.direction, Aggregation::Mean),
+                    Scale::Flag => ("ratio".into(), rubric.direction, Aggregation::Rate),
+                }
+            }
+            Self::ExactMatch { .. }
+            | Self::Contains { .. }
+            | Self::RegexMatch { .. }
+            | Self::NumericWithin { .. } => {
+                ("ratio".into(), MetricDirection::Higher, Aggregation::Rate)
+            }
+        })
     }
 
     fn validate(&self, field: &str) -> Result<()> {
@@ -153,6 +195,7 @@ impl Scorer {
                 )
             }
             Self::Forbidden { text: phrase, .. } => text(phrase, &format!("{field}.text")),
+            Self::Judge { rubric } => rubric.validate(&format!("{field}.rubric")),
             Self::ExactMatch { .. } | Self::Contains { .. } => Ok(()),
         }
     }
@@ -201,6 +244,9 @@ impl Scorer {
                 ))),
                 None => Score::Unscored("this scorer reads text and the answer is not".into()),
             },
+            // A model is asked before the fold and its answer handed in; the
+            // fold itself opens no socket.
+            Self::Judge { .. } => Score::Unscored("nobody asked the judge about this case".into()),
         }
     }
 }
@@ -248,30 +294,65 @@ impl ScorerSpec {
         self.scorer.validate(&format!("{field}.scorer"))
     }
 
+    /// Whether this measurement reads the case's expected answer.
+    ///
+    /// Every comparing scorer reads it, whole when no path narrows it; a judge
+    /// is shown it only when the card points it somewhere.
+    #[must_use]
+    pub fn compares_with_expected(&self) -> bool {
+        match self.scorer {
+            Scorer::Judge { .. } => !self.expected_path.is_empty(),
+            _ => self.scorer.reads_expected(),
+        }
+    }
+
     /// What this scorer measured about one case.
     #[must_use]
     pub fn measure(&self, answer: &serde_json::Value, expected: &serde_json::Value) -> Score {
+        match self.sides(answer, expected) {
+            Ok((answer, expected)) => self.scorer.score(answer, expected),
+            Err(reason) => Score::Unscored(reason),
+        }
+    }
+
+    /// The two values this scorer reads, or why one of them is not there.
+    pub(crate) fn sides<'a>(
+        &self,
+        answer: &'a serde_json::Value,
+        expected: &'a serde_json::Value,
+    ) -> std::result::Result<(&'a serde_json::Value, &'a serde_json::Value), String> {
         let Some(answer) = answer.pointer(&self.answer_path) else {
-            return Score::Unscored(format!("the answer has nothing at {}", self.answer_path));
+            return Err(format!("the answer has nothing at {}", self.answer_path));
         };
         let Some(expected) = expected.pointer(&self.expected_path) else {
-            return Score::Unscored(format!(
+            return Err(format!(
                 "the expected answer has nothing at {}",
                 self.expected_path
             ));
         };
-        self.scorer.score(answer, expected)
+        Ok((answer, expected))
     }
 
     /// The metric definition a published context carries for this scorer.
-    #[must_use]
-    pub fn metric(&self) -> MetricDefinition {
-        MetricDefinition {
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Invalid`] for a judge whose rubric was not resolved.
+    pub fn metric(&self, rubrics: &Rubrics) -> Result<MetricDefinition> {
+        let rubric = self.scorer.rubric().and_then(|pinned| rubrics.get(pinned));
+        let (unit, direction, aggregation) =
+            self.scorer
+                .defines(rubric)
+                .ok_or_else(|| EvaluationError::Invalid {
+                    field: format!("scorecard.scorers.{}", self.metric),
+                    reason: "names a rubric version this registry has not published".into(),
+                })?;
+        Ok(MetricDefinition {
             name: self.metric.clone(),
-            unit: self.scorer.unit(),
-            direction: self.scorer.direction(),
-            aggregation: self.scorer.aggregation(),
-        }
+            unit,
+            direction,
+            aggregation,
+        })
     }
 }
 
@@ -334,9 +415,26 @@ impl Scorecard {
     }
 
     /// The metrics a result measured under this card declares.
+    ///
+    /// # Errors
+    ///
+    /// [`EvaluationError::Invalid`] for a judge whose rubric was not resolved.
+    pub fn metrics(&self, rubrics: &Rubrics) -> Result<Vec<MetricDefinition>> {
+        self.scorers
+            .iter()
+            .map(|spec| spec.metric(rubrics))
+            .collect()
+    }
+
+    /// The rubric versions this card's judges ask, each once.
     #[must_use]
-    pub fn metrics(&self) -> Vec<MetricDefinition> {
-        self.scorers.iter().map(ScorerSpec::metric).collect()
+    pub fn judges(&self) -> Vec<&VersionReference> {
+        let mut seen = BTreeSet::new();
+        self.scorers
+            .iter()
+            .filter_map(|spec| spec.scorer.rubric())
+            .filter(|rubric| seen.insert((&rubric.name, &rubric.version)))
+            .collect()
     }
 }
 
@@ -371,10 +469,14 @@ pub struct ScorecardPage {
 pub(crate) async fn publish(
     store: &Store,
     scorecard: &Scorecard,
+    rubrics: &Rubrics,
     published_by: &str,
     now: i64,
 ) -> Result<ScorecardVersion> {
     scorecard.validate()?;
+    // Derived now, so a judge naming a rubric nobody published is refused at
+    // publication rather than at the first run that asks it.
+    scorecard.metrics(rubrics)?;
     let version = scorecard.version()?;
     let key = store::scorecard_version(&scorecard.name, &version);
     let published = ScorecardVersion {
@@ -390,19 +492,24 @@ pub(crate) async fn publish(
         let existing: ScorecardVersion = store.read(&key).await?.ok_or(
             EvaluationError::Unavailable(crate::EvidenceState::CorruptArtifact),
         )?;
-        head_to(store, &existing, now).await?;
+        head_to(store, &existing, rubrics, now).await?;
         return Ok(existing);
     }
-    head_to(store, &published, now).await?;
+    head_to(store, &published, rubrics, now).await?;
     Ok(published)
 }
 
-async fn head_to(store: &Store, version: &ScorecardVersion, now: i64) -> Result<()> {
+async fn head_to(
+    store: &Store,
+    version: &ScorecardVersion,
+    rubrics: &Rubrics,
+    now: i64,
+) -> Result<()> {
     let head = ScorecardHead {
         name: version.scorecard.name.clone(),
         version: version.version.clone(),
         description: version.scorecard.description.clone(),
-        metrics: version.scorecard.metrics(),
+        metrics: version.scorecard.metrics(rubrics)?,
         updated_at: now,
     };
     store
@@ -480,7 +587,7 @@ mod tests {
                 },
             ),
         ]);
-        let metrics = card.metrics();
+        let metrics = card.metrics(&Rubrics::default()).unwrap();
         assert_eq!(metrics[0].direction, MetricDirection::Higher);
         assert_eq!(
             metrics[1].direction,
@@ -498,7 +605,7 @@ mod tests {
                 unit: "seconds".into(),
             },
         );
-        let metric = latency.metric();
+        let metric = latency.metric(&Rubrics::default()).unwrap();
         assert_eq!(
             metric.unit, "seconds",
             "the one thing the scorer cannot know"

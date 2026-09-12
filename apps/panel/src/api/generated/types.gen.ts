@@ -855,6 +855,62 @@ export type Cadence = {
 };
 
 /**
+ * One person's judgement of one case, which a judge is measured against.
+ */
+export type CalibrationItem = {
+    author: string;
+    case_id: string;
+    repetition_id: string;
+    revision: number;
+    rubric: VersionReference;
+    /**
+     * The revision that stood when the set was taken. A later change of mind
+     * is a later set, never a quiet re-reading of this one.
+     */
+    standing_id: string;
+    value: AssessmentValue;
+};
+
+/**
+ * What a caller asks to be frozen.
+ */
+export type CalibrationRequest = {
+    evaluation_id: string;
+    name: string;
+    /**
+     * The rubric versions whose human judgements are taken.
+     */
+    rubrics: Array<VersionReference>;
+};
+
+/**
+ * The human judgements a judge is calibrated against, frozen.
+ *
+ * Taken from a published result, whose answers stay readable at the version
+ * named, and from the assessments people made of its cases under the rubric
+ * versions asked for — so the judge is put the same answers, under the same
+ * words, that the people were.
+ */
+export type CalibrationSet = {
+    items: Array<CalibrationItem>;
+    name: string;
+    /**
+     * The evaluation, by its ID and the result version its cases are read at.
+     */
+    result: VersionReference;
+};
+
+/**
+ * One frozen set, and who took it.
+ */
+export type CalibrationVersion = {
+    calibration: CalibrationSet;
+    taken_at: number;
+    taken_by: string;
+    version: string;
+};
+
+/**
  * A reason, for the one command that carries one.
  */
 export type CancelBody = {
@@ -1559,7 +1615,8 @@ export const DatasetKind = {
     CURATION: 'curation',
     ANNOTATIONS: 'annotations',
     CONVERSATIONS: 'conversations',
-    EXTERNAL: 'external'
+    EXTERNAL: 'external',
+    ASSESSMENTS: 'assessments'
 } as const;
 
 export type DatasetKind = typeof DatasetKind[keyof typeof DatasetKind];
@@ -1917,11 +1974,18 @@ export type Direction = typeof Direction[keyof typeof Direction];
 
 export type DurableEvaluation = {
     counts?: null | ResultCounts;
+    judge?: null | JudgeReport;
     manifest?: null | EvaluationManifest;
     metrics: {
         [key: string]: number;
     };
     receipt: EvaluationReceipt;
+    /**
+     * Whether every number here can be had again by re-reading the evidence.
+     * False once a model judged any of them: those numbers are what it said
+     * at the time, and the agreement beside them is how far to trust it.
+     */
+    reproducible: boolean;
     state: EvidenceState;
     status?: null | ResultStatus;
 };
@@ -2411,6 +2475,15 @@ export type EvidenceComparison = {
     baseline: DurableEvaluation;
     comparability: Comparability;
     current: DurableEvaluation;
+    /**
+     * A model judged some of these numbers, on one side or both. Comparable
+     * all the same when the contexts match — the same judge, settings and
+     * calibration are part of what matched — but a delta here includes what
+     * the judge itself varies by, and each side's agreement with its
+     * calibration set is how far to trust either number. Reading two such
+     * results like two re-readable ones is the mistake this field is for.
+     */
+    judged: boolean;
     /**
      * Every metric either side reported or the context declared, so one that
      * appeared, disappeared or was never measured at all is visible.
@@ -3865,11 +3938,88 @@ export const JobState = {
  */
 export type JobState = typeof JobState[keyof typeof JobState];
 
+/**
+ * How far a judge agreed with the people it was calibrated against, for one
+ * metric.
+ */
+export type JudgeAgreement = {
+    /**
+     * The fraction of the set where the judge said what the person said.
+     * Over every item rather than over the answered ones, so a judge that
+     * declines the hard cases does not agree its way to a better number.
+     */
+    agreement: number;
+    /**
+     * How many of them the judge answered on the rubric's scale. The rest
+     * were asked and are part of the disagreement, not missing from it.
+     */
+    answered: number;
+    /**
+     * The human judgements the set holds under this rubric.
+     */
+    items: number;
+    /**
+     * The mean distance between the two over the answered items, in the
+     * metric's unit. Absent when the judge answered none.
+     */
+    mean_absolute_difference?: number | null;
+    metric: string;
+    rubric: VersionReference;
+};
+
 export type JudgeConfiguration = {
     calibration_dataset: DatasetReference;
     configuration: ArtifactRef;
     model: VersionReference;
     provider: string;
+};
+
+/**
+ * Which judge a run is measured by.
+ */
+export type JudgeDeclaration = {
+    /**
+     * A calibration set this registry took, by its name and digest.
+     */
+    calibration: VersionReference;
+    /**
+     * The model the provider is asked for, and the revision the author pins.
+     * Nothing can check a provider served that revision, which is part of why
+     * the result is marked as a model's word rather than re-readable bytes.
+     */
+    model: VersionReference;
+    /**
+     * The judge profile this deployment was configured with — `openai` or
+     * `llamacpp`. A profile is declared rather than detected, and a run
+     * declared for one is refused by a deployment holding the other.
+     */
+    provider: string;
+    settings?: JudgeSettings;
+};
+
+/**
+ * What a judge-scored result carries beside its numbers.
+ */
+export type JudgeReport = {
+    agreement: Array<JudgeAgreement>;
+    calibration: VersionReference;
+};
+
+/**
+ * How a judge is asked, beyond the rubric's own words.
+ *
+ * Part of the evidence's context through its digest, so asking at another
+ * temperature is another measurement rather than the same one again.
+ */
+export type JudgeSettings = {
+    /**
+     * Said after the rubric, never instead of it: a person and a judge are
+     * given the same form, and this is what only the model is told.
+     */
+    instructions?: string;
+    max_tokens?: number;
+    seed?: number | null;
+    temperature?: number;
 };
 
 /**
@@ -5243,6 +5393,7 @@ export type PublishEvaluation = {
      * Missing selected cases remain unscored; never implicitly successful.
      */
     cases: Array<CaseMeasurement>;
+    judge?: null | JudgeReport;
     manifest: EvaluationManifest;
     status: ResultStatus;
 };
@@ -6322,6 +6473,8 @@ export type RuntimeBinding = (QueryStepSpec & {
     runtime: 'container_job';
 }) | (ScoreEvaluationSpec & {
     runtime: 'score_evaluation';
+}) | (ScoreEvaluationSpec & {
+    runtime: 'judge_evaluation';
 }) | (HumanInputSpec & {
     runtime: 'human_input';
 });
@@ -6338,6 +6491,7 @@ export const RuntimeKind = {
     PYTHON_TASK: 'python_task',
     CONTAINER_JOB: 'container_job',
     SCORE_EVALUATION: 'score_evaluation',
+    JUDGE_EVALUATION: 'judge_evaluation',
     HUMAN_INPUT: 'human_input'
 } as const;
 
@@ -6676,6 +6830,9 @@ export type Scorer = {
     ignore_case?: boolean;
     kind: 'forbidden';
     text: string;
+} | {
+    kind: 'judge';
+    rubric: VersionReference;
 };
 
 /**
@@ -6760,6 +6917,7 @@ export type ScoringRun = {
      * The logical result this run produces. A technical retry reuses it.
      */
     evaluation_id: string;
+    judge?: null | JudgeDeclaration;
     /**
      * An independent measurement of the same variant, not an attempt counter.
      */
@@ -10181,6 +10339,52 @@ export type GetAssessmentHistoryResponses = {
 
 export type GetAssessmentHistoryResponse = GetAssessmentHistoryResponses[keyof GetAssessmentHistoryResponses];
 
+export type TakeCalibrationData = {
+    body: CalibrationRequest;
+    path?: never;
+    query?: never;
+    url: '/api/v1/evaluation-calibrations';
+};
+
+export type TakeCalibrationErrors = {
+    400: ErrorBody;
+    403: ErrorBody;
+    501: ErrorBody;
+};
+
+export type TakeCalibrationError = TakeCalibrationErrors[keyof TakeCalibrationErrors];
+
+export type TakeCalibrationResponses = {
+    200: CalibrationVersion;
+};
+
+export type TakeCalibrationResponse = TakeCalibrationResponses[keyof TakeCalibrationResponses];
+
+export type GetCalibrationData = {
+    body?: never;
+    path: {
+        /**
+         * The calibration set's content address
+         */
+        version: string;
+    };
+    query?: never;
+    url: '/api/v1/evaluation-calibrations/{version}';
+};
+
+export type GetCalibrationErrors = {
+    404: ErrorBody;
+    501: ErrorBody;
+};
+
+export type GetCalibrationError = GetCalibrationErrors[keyof GetCalibrationErrors];
+
+export type GetCalibrationResponses = {
+    200: CalibrationVersion;
+};
+
+export type GetCalibrationResponse = GetCalibrationResponses[keyof GetCalibrationResponses];
+
 export type StageRecordingData = {
     body: Array<number>;
     path: {
@@ -10244,7 +10448,7 @@ export type PublishResultData = {
 export type PublishResultErrors = {
     400: ErrorBody;
     /**
-     * `evidence_forbidden`: the pair was withdrawn, its bundle changed, or the caller may not read the source
+     * `evidence_forbidden`: the pair was withdrawn, its bundle changed, or the caller may not read the source; `measured_here`: evidence aiwatcher scores is published by its run
      */
     403: ErrorBody;
     /**
@@ -10533,6 +10737,10 @@ export type StartScoringRunErrors = {
      * `pair_not_admitted`: no operator has admitted this pair yet; the message names the approval
      */
     409: ErrorBody;
+    /**
+     * The run asks a judge profile this deployment does not have
+     */
+    422: ErrorBody;
     501: ErrorBody;
     503: ErrorBody;
 };

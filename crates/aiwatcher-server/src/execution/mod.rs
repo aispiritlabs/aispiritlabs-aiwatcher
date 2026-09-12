@@ -26,6 +26,7 @@ pub mod datafusion;
 pub mod duckdb;
 pub mod editor;
 pub mod flow;
+pub mod judge;
 pub mod marimo;
 pub mod measure;
 pub mod pods;
@@ -272,8 +273,9 @@ pub fn spawn(
         // working state" stays local to it, and a deployment may run managed
         // query steps and no notebooks or the other way round. The query half
         // is the one engine `AIWATCHER_QUERY_ENGINE` names.
-        let executors =
-            query::executors(config, artifacts).merge(marimo::executors(config, artifacts));
+        let executors = query::executors(config, artifacts)
+            .merge(marimo::executors(config, artifacts))
+            .merge(scoring::judged(state, config));
         // Judged against the registry the claim filter is built from, so the
         // two cannot disagree about what this process performs. Started even
         // when that registry is empty, which is when it has the most to say.
@@ -285,7 +287,7 @@ pub fn spawn(
         if executors.is_empty() {
             tracing::info!(
                 "the work role holds no runtime executor; nothing is claimed \
-                 (AIWATCHER_QUERY_URL, AIWATCHER_ML_PIPELINE_URL)"
+                 (AIWATCHER_QUERY_URL, AIWATCHER_ML_PIPELINE_URL, AIWATCHER_JUDGE_URL)"
             );
         } else {
             tasks.reactors.push((

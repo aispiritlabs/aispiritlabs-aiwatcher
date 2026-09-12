@@ -49,6 +49,13 @@ pub struct EvidenceComparison {
     /// rather than a change. Comparable, and not the question somebody thinks
     /// they are asking — which is why it is a field rather than a reason.
     pub same_variant: bool,
+    /// A model judged some of these numbers, on one side or both. Comparable
+    /// all the same when the contexts match — the same judge, settings and
+    /// calibration are part of what matched — but a delta here includes what
+    /// the judge itself varies by, and each side's agreement with its
+    /// calibration set is how far to trust either number. Reading two such
+    /// results like two re-readable ones is the mistake this field is for.
+    pub judged: bool,
     /// Every metric either side reported or the context declared, so one that
     /// appeared, disappeared or was never measured at all is visible.
     pub metrics: Vec<EvidenceMetricDelta>,
@@ -183,6 +190,7 @@ pub(crate) fn compare(
 
     EvidenceComparison {
         same_variant: current.receipt.variant_id == baseline.receipt.variant_id,
+        judged: !current.reproducible || !baseline.reproducible,
         current,
         baseline,
         comparability,

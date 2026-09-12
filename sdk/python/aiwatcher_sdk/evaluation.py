@@ -37,7 +37,7 @@ class VersionReference(TypedDict):
 
 
 class DatasetReference(TypedDict):
-    kind: Literal["curation", "annotations", "conversations", "external"]
+    kind: Literal["curation", "annotations", "conversations", "external", "assessments"]
     name: str
     version: str
 

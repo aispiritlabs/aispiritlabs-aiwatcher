@@ -129,6 +129,14 @@ pub(crate) const SCORING_RUNS: &str = "evaluation-runs/";
 pub(crate) fn recording(digest: &str) -> String {
     format!("evaluation-recordings/{digest}.json")
 }
+/// A judge's settings, under the digest a context pins them by.
+pub(crate) fn judge_settings(digest: &str) -> String {
+    format!("evaluation-judges/settings/{digest}.json")
+}
+/// A frozen set of human judgements, under its own content address.
+pub(crate) fn calibration(version: &str) -> String {
+    format!("evaluation-judges/calibrations/{version}.json")
+}
 pub(crate) fn scoring_run(id: &str) -> String {
     format!("{SCORING_RUNS}{id}.json")
 }

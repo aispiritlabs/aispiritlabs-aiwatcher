@@ -23,6 +23,9 @@ mod scorecards;
 #[path = "evaluation/scoring.rs"]
 mod scoring;
 
+#[path = "evaluation/judge.rs"]
+mod judge;
+
 #[path = "evaluation/cost.rs"]
 mod cost;
 
@@ -43,6 +46,58 @@ mod comparison;
 mod prompts;
 #[path = "evaluation/staging.rs"]
 mod staging;
+
+/// One attempt at a scoring step, the way the reactor hands it to an executor.
+fn attempt(
+    declaration: &str,
+    evaluation: &str,
+) -> (
+    aiwatcher_execution::ActivityCommand,
+    aiwatcher_execution::ActivityContext,
+) {
+    use aiwatcher_execution::plan::{
+        CachePolicy, DefinitionKind, DefinitionRevision, ExecutionPlan, PlanStep, RetryPolicy,
+        ScoreEvaluationSpec,
+    };
+    let step = PlanStep {
+        id: "score".to_owned(),
+        runtime: aiwatcher_execution::RuntimeBinding::ScoreEvaluation(ScoreEvaluationSpec {
+            declaration: declaration.to_owned(),
+        }),
+        inputs: Vec::new(),
+        outputs: Vec::new(),
+        retry: RetryPolicy::default(),
+        timeout_seconds: 60,
+        cache: CachePolicy::Never,
+    };
+    let plan = ExecutionPlan::seal(
+        DefinitionKind::Evaluation,
+        evaluation.to_owned(),
+        DefinitionRevision(declaration.to_owned()),
+        vec![step.clone()],
+        Vec::new(),
+    );
+    (
+        aiwatcher_execution::ActivityCommand {
+            key: aiwatcher_execution::AttemptKey::new(
+                aiwatcher_execution::ExecutionId::new(format!("exec-{evaluation}")),
+                "score",
+                1,
+            ),
+            command_id: aiwatcher_core::MessageId::new(format!("dispatch-{evaluation}")),
+            step,
+            inputs: Vec::new(),
+            parameters: BTreeMap::new(),
+            answers: Vec::new(),
+        },
+        aiwatcher_execution::ActivityContext {
+            owner: "serve".to_owned(),
+            timeout: std::time::Duration::from_secs(60),
+            context_id: format!("exec-{evaluation}/score/1"),
+            plan: Arc::new(plan),
+        },
+    )
+}
 
 #[derive(Debug, Default)]
 struct Source {
@@ -85,6 +140,7 @@ fn request(id: &str, count: u64) -> PublishEvaluation {
             .collect(),
         manifest,
         status: ResultStatus::Succeeded,
+        judge: None,
     }
 }
 fn registry(store: Arc<dyn ObjectStore>, source: Arc<Source>) -> Registry {

@@ -744,57 +744,6 @@ async fn sealed_content_rejects_plaintext_downgrades_and_concurrent_retries_keep
     );
 }
 
-/// One attempt at a scoring step, the way the reactor hands it to an executor.
-fn attempt(
-    declaration: &str,
-) -> (
-    aiwatcher_execution::ActivityCommand,
-    aiwatcher_execution::ActivityContext,
-) {
-    use aiwatcher_execution::plan::{
-        CachePolicy, DefinitionKind, DefinitionRevision, ExecutionPlan, PlanStep, RetryPolicy,
-        ScoreEvaluationSpec,
-    };
-    let step = PlanStep {
-        id: "score".to_owned(),
-        runtime: aiwatcher_execution::RuntimeBinding::ScoreEvaluation(ScoreEvaluationSpec {
-            declaration: declaration.to_owned(),
-        }),
-        inputs: Vec::new(),
-        outputs: Vec::new(),
-        retry: RetryPolicy::default(),
-        timeout_seconds: 60,
-        cache: CachePolicy::Never,
-    };
-    let plan = ExecutionPlan::seal(
-        DefinitionKind::Evaluation,
-        "archive-scored".to_owned(),
-        DefinitionRevision(declaration.to_owned()),
-        vec![step.clone()],
-        Vec::new(),
-    );
-    (
-        aiwatcher_execution::ActivityCommand {
-            key: aiwatcher_execution::AttemptKey::new(
-                aiwatcher_execution::ExecutionId::new("exec-archive".to_owned()),
-                "score",
-                1,
-            ),
-            command_id: aiwatcher_core::MessageId::new("dispatch-archive".to_owned()),
-            step,
-            inputs: Vec::new(),
-            parameters: BTreeMap::new(),
-            answers: Vec::new(),
-        },
-        aiwatcher_execution::ActivityContext {
-            owner: "serve".to_owned(),
-            timeout: std::time::Duration::from_secs(60),
-            context_id: "exec-archive/score/1".to_owned(),
-            plan: Arc::new(plan),
-        },
-    )
-}
-
 /// What the archive says was answered is measured by a run, read only under
 /// the approval an admin gave that pair, and kept as sealed as the archive.
 #[tokio::test]
@@ -857,6 +806,7 @@ async fn the_archives_own_answers_are_scored_under_an_admins_approval_and_stay_s
             version,
         },
         answers: Answers::Archive(ArchiveWord::Archive),
+        judge: None,
     };
 
     // Over the archive, an expectation is the very response being measured.
@@ -895,9 +845,12 @@ async fn the_archives_own_answers_are_scored_under_an_admins_approval_and_stay_s
         .declare_scoring_run(&run, "ada", now())
         .await
         .unwrap();
-    let manifest = declared.run.manifest(&card, None).unwrap();
+    let manifest = declared
+        .run
+        .manifest(&card, &Rubrics::default(), None)
+        .unwrap();
     let executor = ScoreExecutor::new(deployment.clone());
-    let (command, attempt) = attempt(&declared.id);
+    let (command, attempt) = attempt(&declared.id, "archive-scored");
 
     // Before an admin admitted the pair there is no authority to read it under,
     // so the step reads nothing and publishes nothing.
@@ -943,7 +896,7 @@ async fn the_archives_own_answers_are_scored_under_an_admins_approval_and_stay_s
     );
     assert_eq!(evidence.metrics["synthetic"], 1.0);
     let origin = evidence.manifest.unwrap().origin;
-    assert_eq!(origin.execution_id.as_deref(), Some("exec-archive"));
+    assert_eq!(origin.execution_id.as_deref(), Some("exec-archive-scored"));
     assert_eq!(
         deployment
             .get("archive-scored", "editor", now())

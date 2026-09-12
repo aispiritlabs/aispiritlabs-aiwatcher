@@ -1,32 +1,30 @@
 //! Measuring answers somebody already recorded, where the ingress is.
 //!
-//! The second binding that runs in the `serve` role, and for the first one's
-//! reason: it executes nothing. It reads a declaration, a card and a recording
-//! this deployment already holds, folds them, and writes the result through the
-//! registry the panel reads. No model of the application under test is called —
-//! that is what `score_existing` means — so a new card measuring an unchanged
-//! recording differs from the last one by the measurement alone.
+//! The second binding in the `serve` role, for the first one's reason: it
+//! executes nothing. It reads a declaration, a card and the answers this
+//! deployment holds, folds them, and publishes through the registry the panel
+//! reads — calling no model of the application under test, so a new card over
+//! unchanged answers differs from the last result by the measurement alone.
+//! The plan carries the declaration's digest, so a retry reads exactly what the
+//! first attempt read.
 //!
-//! **The declaration is the whole input.** The plan carries its digest, so the
-//! card, the cohort, the recording and the variant are pinned together and a
-//! retry reads exactly what the first attempt read.
+//! **The approval is the only authority.** Nothing here admits anything, and a
+//! conversation cohort's cases are content a request reads only for an admin.
+//! Nobody's session is here to ask, and asking whoever pressed start would make
+//! an editor's click a way to read it — so the gate is asked first, and only a
+//! pair an admin admitted is read with content access.
 //!
-//! **Publication still needs an admitted pair.** Nothing here approves
-//! anything: a run whose variant and context nobody admitted is refused by the
-//! registry, in the same words a producer's publication is.
-//!
-//! **And the approval is what opens the archive.** A conversation cohort's
-//! cases are content, which a request reads only for an admin. Nobody's session
-//! is here to ask, and asking the person who pressed start would make an
-//! editor's click a way to read it — so the gate is asked first, and only a
-//! pair an admin admitted, content and all, is read with content access.
+//! **A card that asks a judge is the same step in the other role.** Asking a
+//! model is a socket and a credential, so that kind is `judge_evaluation`,
+//! claimed where `AIWATCHER_JUDGE_URL` is. Every question is put before the
+//! fold runs, so the fold still opens nothing.
 
 use std::sync::Arc;
 
 use aiwatcher_api::state::AppState;
 use aiwatcher_evaluation::{
-    DatasetKind, EvaluationError, EvidenceState, PublishEvaluation, Registry as Evaluations,
-    StepOrigin, score,
+    DatasetKind, EvaluationError, EvidenceState, JudgeFailure, JudgeModel, Judged,
+    PublishEvaluation, Registry as Evaluations, StepOrigin, questions, replies, score_with,
 };
 use aiwatcher_execution::{
     ActivityCommand, ActivityContext, ActivityError, ActivityExecutor, ActivityResult,
@@ -50,22 +48,63 @@ pub fn executors(state: &AppState) -> ExecutorRegistry {
     registry.with(Arc::new(ScoreExecutor::new(Arc::clone(evaluations))))
 }
 
+/// The judging executor, if this deployment has a registry and a judge.
+///
+/// Either missing registers nothing, so a `judge_evaluation` attempt waits for
+/// a process that holds both rather than failing in one that holds neither.
+#[must_use]
+pub fn judged(state: &AppState, config: &crate::config::Config) -> ExecutorRegistry {
+    let registry = ExecutorRegistry::new();
+    let Some(evaluations) = state.evaluations.as_ref() else {
+        return registry;
+    };
+    let judge = match super::judge::OpenAiJudge::from_config(config) {
+        Ok(Some(judge)) => judge,
+        Ok(None) => return registry,
+        Err(error) => {
+            tracing::error!(%error, "the judge client did not build; no judged run is claimed here");
+            return registry;
+        }
+    };
+    tracing::info!(provider = judge.provider(), "the work role asks a judge");
+    registry.with(Arc::new(
+        ScoreExecutor::new(Arc::clone(evaluations))
+            .judged_by(Arc::new(judge), config.judge_concurrency),
+    ))
+}
+
 #[derive(Debug)]
 pub struct ScoreExecutor {
     evaluations: Arc<Evaluations>,
+    judge: Option<(Arc<dyn JudgeModel>, usize)>,
 }
 
 impl ScoreExecutor {
     #[must_use]
     pub const fn new(evaluations: Arc<Evaluations>) -> Self {
-        Self { evaluations }
+        Self {
+            evaluations,
+            judge: None,
+        }
+    }
+
+    /// The same executor, asking this judge this many questions at a time —
+    /// and so performing `judge_evaluation` rather than `score_evaluation`.
+    #[must_use]
+    pub fn judged_by(mut self, judge: Arc<dyn JudgeModel>, concurrency: usize) -> Self {
+        self.judge = Some((judge, concurrency));
+        self
     }
 }
 
 #[async_trait]
 impl ActivityExecutor for ScoreExecutor {
     fn runtime(&self) -> RuntimeKind {
-        RuntimeKind::ScoreEvaluation
+        if self.judge.is_some() {
+            RuntimeKind::JudgeEvaluation
+        } else {
+            RuntimeKind::ScoreEvaluation
+        }
     }
 
     async fn execute(
@@ -73,7 +112,9 @@ impl ActivityExecutor for ScoreExecutor {
         command: &ActivityCommand,
         _: &ActivityContext,
     ) -> Result<ActivityResult, ActivityError> {
-        let RuntimeBinding::ScoreEvaluation(spec) = &command.step.runtime else {
+        let (RuntimeBinding::ScoreEvaluation(spec) | RuntimeBinding::JudgeEvaluation(spec)) =
+            &command.step.runtime
+        else {
             return Err(ActivityError::user_code("this step does not score"));
         };
         let declared = self
@@ -100,9 +141,15 @@ impl ActivityExecutor for ScoreExecutor {
                 ))
             })?;
 
+        let rubrics = self
+            .evaluations
+            .rubrics_for(&card.scorecard)
+            .await
+            .map_err(refusal)?;
         let manifest = run
             .manifest(
                 &card.scorecard,
+                &rubrics,
                 Some(&StepOrigin {
                     execution_id: command.key.execution_id.to_string(),
                     step_id: Some(command.key.step_id.clone()),
@@ -130,8 +177,73 @@ impl ActivityExecutor for ScoreExecutor {
             .await
             .map_err(refusal)?;
         let answers = evaluations.answers(run, &cohort).await.map_err(refusal)?;
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
 
-        let scored = score(&card.scorecard, &cohort, &answers, &run.repetition_id);
+        let (judged, report, asked) = match (&run.judge, &self.judge) {
+            (None, _) => (Judged::new(), None, 0),
+            (Some(_), None) => {
+                return Err(ActivityError::user_code(
+                    "this card asks a judge, and this process holds none",
+                ));
+            }
+            (Some(declared), Some((judge, concurrency))) => {
+                if declared.provider != judge.provider() {
+                    return Err(ActivityError::user_code(format!(
+                        "this run was declared for judge profile {} and this deployment's is {} \
+                         (AIWATCHER_JUDGE_PROVIDER)",
+                        declared.provider,
+                        judge.provider()
+                    )));
+                }
+                let taken = evaluations
+                    .calibration(&declared.calibration.version)
+                    .await
+                    .map_err(refusal)?
+                    .ok_or_else(|| {
+                        ActivityError::user_code("the calibration set this run names is gone")
+                    })?;
+                let calibrated = evaluations
+                    .calibrated(&taken.calibration, &subject, now)
+                    .await
+                    .map_err(refusal)?;
+                let asked = questions(
+                    run,
+                    &card.scorecard,
+                    &rubrics,
+                    &cohort,
+                    &answers,
+                    &taken.calibration,
+                    &calibrated,
+                );
+                let said = super::judge::ask_all(
+                    judge,
+                    asked.iter().map(|question| question.call.clone()).collect(),
+                    *concurrency,
+                )
+                .await
+                .map_err(|failure| match failure {
+                    JudgeFailure::Unavailable(_) => ActivityError::transient(failure.to_string()),
+                    JudgeFailure::Refused(_) => ActivityError::user_code(failure.to_string()),
+                })?;
+                let (judged, report) = replies(
+                    run,
+                    &card.scorecard,
+                    &rubrics,
+                    &taken.calibration,
+                    &asked,
+                    &said,
+                );
+                (judged, report, asked.len())
+            }
+        };
+
+        let scored = score_with(
+            &card.scorecard,
+            &cohort,
+            &answers,
+            &run.repetition_id,
+            &judged,
+        );
         let (status, measured, failed) = (
             scored.status,
             scored.cases.len(),
@@ -147,9 +259,10 @@ impl ActivityExecutor for ScoreExecutor {
                     manifest,
                     status,
                     cases: scored.cases,
+                    judge: report.clone(),
                 },
                 &subject,
-                time::OffsetDateTime::now_utc().unix_timestamp(),
+                now,
             )
             .await
             .map_err(refusal)?;
@@ -166,6 +279,8 @@ impl ActivityExecutor for ScoreExecutor {
                 "scored": measured - failed,
                 "failed": failed,
                 "unscored": cohort.len() - measured,
+                "judge_questions": asked,
+                "judge": report,
             })),
             diagnostics: None,
             awaiting: None,
@@ -281,6 +396,7 @@ mod tests {
                 version: version.into(),
             },
             answers: aiwatcher_evaluation::Answers::Recording(answers),
+            judge: None,
         }
     }
 
@@ -357,7 +473,7 @@ mod tests {
             .approve(
                 &declared
                     .run
-                    .manifest(&card(), None)
+                    .manifest(&card(), &aiwatcher_evaluation::Rubrics::default(), None)
                     .expect("a manifest derives"),
                 "operator",
                 100,
@@ -380,12 +496,10 @@ mod tests {
         .await;
 
         let (command, context) = attempt(&declaration);
-        let result = ScoreExecutor {
-            evaluations: Arc::clone(&registry),
-        }
-        .execute(&command, &context)
-        .await
-        .expect("the step scores");
+        let result = ScoreExecutor::new(Arc::clone(&registry))
+            .execute(&command, &context)
+            .await
+            .expect("the step scores");
         let reported = result.result.expect("a scoring step reports what it did");
         assert_eq!(reported["status"], "succeeded");
         assert_eq!(reported["scored"], 2);
@@ -436,12 +550,10 @@ mod tests {
             .expect("a run declares");
 
         let (command, context) = attempt(&declared.id);
-        let refused = ScoreExecutor {
-            evaluations: Arc::clone(&registry),
-        }
-        .execute(&command, &context)
-        .await
-        .expect_err("nothing admitted this variant and context");
+        let refused = ScoreExecutor::new(Arc::clone(&registry))
+            .execute(&command, &context)
+            .await
+            .expect_err("nothing admitted this variant and context");
         assert_eq!(
             refused.class,
             FailureClass::UserCode,
@@ -460,12 +572,10 @@ mod tests {
     async fn a_run_whose_declaration_nobody_stored_says_so_rather_than_scoring_nothing() {
         let registry = evaluations(cohort()).await;
         let (command, context) = attempt(&"a".repeat(64));
-        let refused = ScoreExecutor {
-            evaluations: registry,
-        }
-        .execute(&command, &context)
-        .await
-        .expect_err("there is no declaration under that address");
+        let refused = ScoreExecutor::new(registry)
+            .execute(&command, &context)
+            .await
+            .expect_err("there is no declaration under that address");
         assert!(refused.to_string().contains("no scoring run is declared"));
     }
 }

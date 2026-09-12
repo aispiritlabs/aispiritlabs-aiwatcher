@@ -14,10 +14,17 @@
 //! carries the declaration's address, and repeating a start lands on the run
 //! already going. An independent repetition is a different declaration,
 //! because it is a different measurement.
+//!
+//! A card may ask a judge. Then a calibration set is taken first — the
+//! judgements people made of a published result's cases — and the declaration
+//! names it with the judge's profile, model and settings; the run is claimed in
+//! the work role, where the judge's address and credential are.
 
 use aiwatcher_auth::Role;
 use aiwatcher_core::ArtifactRef;
-use aiwatcher_evaluation::{DeclaredRun, ScoringRun, ScoringRunView};
+use aiwatcher_evaluation::{
+    CalibrationRequest, CalibrationVersion, DeclaredRun, ScoringRun, ScoringRunView,
+};
 use aiwatcher_execution::message::RunProjection;
 use aiwatcher_execution::plan::{
     CachePolicy, DefinitionKind, DefinitionRevision, ExecutionPlan, PlanStep, RetryPolicy,
@@ -39,6 +46,9 @@ use crate::state::AppState;
 /// Generous, because the work is bounded by the cohort rather than by anything
 /// this process waits on: nothing here opens a socket to a model.
 const SCORING_TIMEOUT_SECONDS: u64 = 900;
+/// The same for a run that asks a judge, which waits on a model once per
+/// judged case and once per calibration item.
+const JUDGED_TIMEOUT_SECONDS: u64 = 3600;
 /// The one step such a plan has. Named rather than numbered, because it is
 /// what the waterfall and a context lookup address it by.
 const SCORING_STEP: &str = "score";
@@ -65,7 +75,9 @@ pub struct ScoringAccepted {
     stage_recording,
     declare_scoring_run,
     get_scoring_run,
-    start_scoring_run
+    start_scoring_run,
+    take_calibration,
+    get_calibration
 ))]
 struct Api;
 
@@ -86,6 +98,11 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v1/evaluation-runs/{id}/start",
             post(start_scoring_run),
+        )
+        .route("/api/v1/evaluation-calibrations", post(take_calibration))
+        .route(
+            "/api/v1/evaluation-calibrations/{version}",
+            get(get_calibration),
         )
 }
 
@@ -183,6 +200,7 @@ async fn get_scoring_run(
     params(("id" = String, Path, description = "The declaration address")),
     responses((status = 202, body = ScoringAccepted), (status = 403, body = crate::error::ErrorBody),
     (status = 404, body = crate::error::ErrorBody),
+    (status = 422, body = crate::error::ErrorBody, description = "The run asks a judge profile this deployment does not have"),
     (status = 409, body = crate::error::ErrorBody, description = "`pair_not_admitted`: no operator has admitted this pair yet; the message names the approval"),
     (status = 501, body = crate::error::ErrorBody), (status = 503, body = crate::error::ErrorBody)),
     tag = "evaluation")]
@@ -197,6 +215,23 @@ async fn start_scoring_run(
     // The gate's own refusal: not yet names the approval, and withdrawn is the
     // same 403 a producer's publication of that pair gets.
     evaluations.admission(&viewed.manifest).await?;
+    // Before a run exists rather than after: a judged run on a deployment with
+    // no judge, or with another profile, is one nothing would ever claim.
+    if let Some(judge) = &viewed.declaration.run.judge {
+        let deployed = state
+            .judge_provider
+            .as_deref()
+            .ok_or(ApiError::JudgeDisabled)?;
+        if judge.provider != deployed {
+            return Err(ApiError::PlanRefused {
+                summary: "this run asks a judge this deployment does not have".to_owned(),
+                problems: vec![format!(
+                    "declared for judge profile {}, and AIWATCHER_JUDGE_PROVIDER is {deployed}",
+                    judge.provider
+                )],
+            });
+        }
+    }
     let started = state
         .executions()
         .start(
@@ -224,6 +259,47 @@ async fn start_scoring_run(
     ))
 }
 
+/// Freeze what people judged of one result, as a judge's calibration set.
+///
+/// Only a person's judgement, and only under the rubric versions named: a
+/// judgement made under other words answered another question. Addressed by
+/// its content, so taking the same judgements twice is the same set — and a
+/// person changing their mind later is a later set, never this one re-read.
+#[utoipa::path(post, path = "/api/v1/evaluation-calibrations", request_body = CalibrationRequest,
+    responses((status = 200, body = CalibrationVersion), (status = 400, body = crate::error::ErrorBody),
+    (status = 403, body = crate::error::ErrorBody), (status = 501, body = crate::error::ErrorBody)),
+    tag = "evaluation")]
+async fn take_calibration(
+    State(state): State<AppState>,
+    caller: Caller,
+    Json(request): Json<CalibrationRequest>,
+) -> ApiResult<Json<CalibrationVersion>> {
+    let requester = caller.require(Role::Editor)?.log_subject().to_owned();
+    Ok(Json(
+        registry(&state)?
+            .take_calibration(&request, &requester, now())
+            .await?,
+    ))
+}
+
+/// One calibration set, at the address a declaration names it by.
+#[utoipa::path(get, path = "/api/v1/evaluation-calibrations/{version}",
+    params(("version" = String, Path, description = "The calibration set's content address")),
+    responses((status = 200, body = CalibrationVersion), (status = 404, body = crate::error::ErrorBody),
+    (status = 501, body = crate::error::ErrorBody)), tag = "evaluation")]
+async fn get_calibration(
+    State(state): State<AppState>,
+    caller: Caller,
+    Path(version): Path<String>,
+) -> ApiResult<Json<CalibrationVersion>> {
+    caller.require(Role::Viewer)?;
+    registry(&state)?
+        .calibration(&version)
+        .await?
+        .map(Json)
+        .ok_or_else(|| ApiError::NotFound(format!("calibration set {version}")))
+}
+
 async fn view(evaluations: &aiwatcher_evaluation::Registry, id: &str) -> ApiResult<ScoringRunView> {
     evaluations
         .scoring_run_view(id)
@@ -237,19 +313,31 @@ async fn view(evaluations: &aiwatcher_evaluation::Registry, id: &str) -> ApiResu
 /// declaration is addressed by its content, and that address is both the plan's
 /// revision and the only thing its step carries.
 fn plan_for(declared: &DeclaredRun) -> ExecutionPlan {
+    let spec = ScoreEvaluationSpec {
+        declaration: declared.id.clone(),
+    };
+    let (runtime, timeout_seconds) = if declared.run.judge.is_some() {
+        (
+            RuntimeBinding::JudgeEvaluation(spec),
+            JUDGED_TIMEOUT_SECONDS,
+        )
+    } else {
+        (
+            RuntimeBinding::ScoreEvaluation(spec),
+            SCORING_TIMEOUT_SECONDS,
+        )
+    };
     ExecutionPlan::seal(
         DefinitionKind::Evaluation,
         declared.run.evaluation_id.clone(),
         DefinitionRevision(declared.id.clone()),
         vec![PlanStep {
             id: SCORING_STEP.to_owned(),
-            runtime: RuntimeBinding::ScoreEvaluation(ScoreEvaluationSpec {
-                declaration: declared.id.clone(),
-            }),
+            runtime,
             inputs: Vec::new(),
             outputs: Vec::new(),
             retry: RetryPolicy::default(),
-            timeout_seconds: SCORING_TIMEOUT_SECONDS,
+            timeout_seconds,
             cache: CachePolicy::Never,
         }],
         Vec::new(),

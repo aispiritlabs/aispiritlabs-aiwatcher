@@ -417,6 +417,19 @@ later as "holds no object".
 {{- with .Values.execution.mlPipelineUrl }}
 - { name: AIWATCHER_ML_PIPELINE_URL, value: {{ . | quote }} }
 {{- end }}
+{{- with .Values.execution.judge }}
+{{- if .url }}
+- { name: AIWATCHER_JUDGE_URL, value: {{ .url | quote }} }
+- { name: AIWATCHER_JUDGE_PROVIDER, value: {{ required "execution.judge.provider is required beside execution.judge.url: openai or llamacpp" .provider | quote }} }
+{{- if .tokenSecret.name }}
+- name: AIWATCHER_JUDGE_TOKEN
+  valueFrom:
+    secretKeyRef:
+      name: {{ .tokenSecret.name }}
+      key: {{ .tokenSecret.key }}
+{{- end }}
+{{- end }}
+{{- end }}
 {{- if .Values.execution.pods.templates }}
 # Both roles read the templates: `serve` checks a step against them when it is
 # registered, and the role holding the reactors checks again before it starts

@@ -130,6 +130,11 @@ pub enum RuntimeBinding {
     /// evidence. Like `PublishDataset` it runs where the ingress is and calls
     /// nothing outside: it reads pinned bytes, folds them and writes a result.
     ScoreEvaluation(ScoreEvaluationSpec),
+    /// The same measurement when its card asks a judge. A kind of its own
+    /// because where it runs differs: asking a model is a socket and a
+    /// credential, which belong to the work role, and a claim filter tells the
+    /// two apart from the row without loading the declaration.
+    JudgeEvaluation(ScoreEvaluationSpec),
     /// Nobody runs it. It waits for somebody to answer.
     HumanInput(HumanInputSpec),
 }
@@ -148,6 +153,7 @@ pub enum RuntimeKind {
     PythonTask,
     ContainerJob,
     ScoreEvaluation,
+    JudgeEvaluation,
     HumanInput,
 }
 
@@ -163,6 +169,7 @@ impl RuntimeKind {
             Self::PythonTask => "python_task",
             Self::ContainerJob => "container_job",
             Self::ScoreEvaluation => "score_evaluation",
+            Self::JudgeEvaluation => "judge_evaluation",
             Self::HumanInput => "human_input",
         }
     }
@@ -233,6 +240,7 @@ impl RuntimeKind {
             | Self::PythonTask
             | Self::ContainerJob
             | Self::ScoreEvaluation
+            | Self::JudgeEvaluation
             | Self::HumanInput => None,
         }
     }
@@ -248,6 +256,7 @@ impl RuntimeBinding {
             Self::Marimo(_) => RuntimeKind::Marimo,
             Self::PublishDataset(_) => RuntimeKind::PublishDataset,
             Self::ScoreEvaluation(_) => RuntimeKind::ScoreEvaluation,
+            Self::JudgeEvaluation(_) => RuntimeKind::JudgeEvaluation,
             Self::PythonTask(_) => RuntimeKind::PythonTask,
             Self::ContainerJob(_) => RuntimeKind::ContainerJob,
             Self::HumanInput(_) => RuntimeKind::HumanInput,
@@ -279,7 +288,10 @@ impl RuntimeBinding {
             Self::Marimo(spec) => spec.block.as_ref().map(std::slice::from_ref),
             Self::PublishDataset(spec) => spec.block.as_ref().map(std::slice::from_ref),
             Self::HumanInput(spec) => spec.block.as_ref().map(std::slice::from_ref),
-            Self::PythonTask(_) | Self::ContainerJob(_) | Self::ScoreEvaluation(_) => None,
+            Self::PythonTask(_)
+            | Self::ContainerJob(_)
+            | Self::ScoreEvaluation(_)
+            | Self::JudgeEvaluation(_) => None,
         }
     }
 
@@ -300,6 +312,7 @@ impl RuntimeBinding {
             | Self::PythonTask(_)
             | Self::ContainerJob(_)
             | Self::ScoreEvaluation(_)
+            | Self::JudgeEvaluation(_)
             | Self::HumanInput(_) => None,
         }
     }

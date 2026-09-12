@@ -189,6 +189,7 @@ impl Fixture {
             answer_limits: Default::default(),
             query_engine: aiwatcher_datasets::QueryEngine::Flow,
             query_step_timeout_seconds: None,
+            judge_provider: None,
             read_model: Arc::clone(&read_model),
             live: Arc::clone(&live),
             source: Arc::clone(&bus) as _,
@@ -7711,6 +7712,147 @@ async fn a_scoring_run_waits_for_an_operator_and_then_is_one_run_however_often_i
     unknown["scorecard"]["version"] = json!("f".repeat(64));
     let (status, refusal) = fixture.post("/api/v1/evaluation-runs", unknown).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{refusal}");
+}
+
+/// A card that asks a judge runs where a judge of its profile is, and nowhere
+/// it would wait for ever — and what aiwatcher measures, only its run publishes.
+#[tokio::test]
+async fn a_judged_scoring_run_starts_only_where_a_judge_of_its_profile_is() {
+    let mut fixture = Fixture::new(false);
+    fixture.state.evaluations = Some(Arc::new(
+        aiwatcher_evaluation::Registry::new(
+            Arc::new(MemoryObjectStore::new()),
+            Arc::new(EvaluationSource::default()),
+            Default::default(),
+        )
+        .unwrap(),
+    ));
+    let (status, rubric) = fixture
+        .post(
+            "/api/v1/evaluation-rubrics",
+            json!({"name": "helpful", "question": "Does it help?",
+                   "scale": {"kind": "flag"}, "direction": "higher"}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{rubric}");
+    let rubric = rubric["version"].as_str().unwrap().to_owned();
+
+    // People judged an earlier result, and that is what the judge is held to.
+    let people = durable_request("people-judged");
+    let (status, _) = fixture
+        .post("/api/v1/evaluation-approvals", people["manifest"].clone())
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, receipt) = fixture.post("/api/v1/evaluation-results", people).await;
+    assert_eq!(status, StatusCode::OK, "{receipt}");
+    let (status, judged) = fixture
+        .post(
+            "/api/v1/evaluation-assessments",
+            json!({"target": {"kind": "case", "evaluation_id": "people-judged",
+                              "case_id": "capital-pl", "repetition_id": "measurement-1"},
+                   "rubric": "helpful", "rubric_version": rubric,
+                   "value": {"type": "flag", "value": true}}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{judged}");
+    let (status, calibration) = fixture
+        .post(
+            "/api/v1/evaluation-calibrations",
+            json!({"name": "people", "evaluation_id": "people-judged",
+                   "rubrics": [{"name": "helpful", "version": rubric}]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{calibration}");
+    let calibration = calibration["version"].as_str().unwrap().to_owned();
+    let (status, read) = fixture
+        .get(&format!("/api/v1/evaluation-calibrations/{calibration}"))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{read}");
+    assert_eq!(read["calibration"]["items"].as_array().unwrap().len(), 1);
+
+    let (status, card) = fixture
+        .post(
+            "/api/v1/evaluation-scorecards",
+            json!({"name": "judged", "scorers": [{"metric": "helpful", "answer_path": "/text",
+                   "scorer": {"kind": "judge", "rubric": {"name": "helpful", "version": rubric}}}]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{card}");
+    let (status, recording) = fixture
+        .put(
+            "/api/v1/evaluation-recordings/answers.json",
+            json!({"answers": [{"case_id": "capital-pl", "answer": {"text": "Warsaw"}}]}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{recording}");
+    let manifest = durable_request("unused")["manifest"].clone();
+    let mut variant = manifest["variant"].clone();
+    variant["experiment_id"] = json!("judged");
+    let (status, declared) = fixture
+        .post(
+            "/api/v1/evaluation-runs",
+            json!({
+                "evaluation_id": "judged-run",
+                "repetition_id": "measurement-1",
+                "variant": variant,
+                "cohort": {
+                    "case_manifest": manifest["context"]["case_manifest"],
+                    "case_count": 3,
+                    "split": manifest["context"]["split"],
+                    "input_schema": manifest["context"]["input_schema"],
+                    "expectations_schema": manifest["context"]["expectations_schema"]
+                },
+                "scorecard": {"name": "judged", "version": card["version"]},
+                "answers": recording,
+                "judge": {"provider": "llamacpp",
+                          "model": {"name": "gemma-4-e2b", "version": "ud-q4-k-xl"},
+                          "calibration": {"name": "people", "version": calibration}}
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{declared}");
+    let id = declared["declaration"]["id"].as_str().unwrap().to_owned();
+    let published = declared["manifest"].clone();
+    assert_eq!(
+        published["context"]["judge"]["calibration_dataset"]["kind"],
+        "assessments"
+    );
+    let (status, admitted) = fixture
+        .post("/api/v1/evaluation-approvals", published.clone())
+        .await;
+    assert_eq!(status, StatusCode::OK, "{admitted}");
+
+    let start = format!("/api/v1/evaluation-runs/{id}/start");
+    let (status, refusal) = fixture.post(&start, json!({})).await;
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{refusal}");
+    assert_eq!(refusal["code"], "judge_disabled");
+
+    fixture.state.judge_provider = Some("openai".into());
+    let (status, refusal) = fixture.post(&start, json!({})).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refusal}");
+    assert!(
+        refusal.to_string().contains("AIWATCHER_JUDGE_PROVIDER"),
+        "{refusal}"
+    );
+
+    fixture.state.judge_provider = Some("llamacpp".into());
+    let (status, accepted) = fixture.post(&start, json!({})).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
+    assert_eq!(
+        accepted["execution"]["steps"][0]["runtime"], "judge_evaluation",
+        "claimed where the judge's address and credential are"
+    );
+
+    // Numbers under the run's name, published by somebody else first, would be
+    // the ones every later reader got.
+    let (status, refused) = fixture
+        .post(
+            "/api/v1/evaluation-results",
+            json!({"manifest": published, "status": "succeeded", "cases": []}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    assert_eq!(refused["code"], "measured_here");
 }
 
 /// Not yet admitted is one answer whoever asks, and it is not the answer a

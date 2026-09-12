@@ -54,6 +54,9 @@ pub struct Wiring {
     pub query_engine: QueryEngine,
     pub query_url: bool,
     pub ml_pipeline_url: bool,
+    /// The judge's address and profile, which a judged scoring run needs both
+    /// of and an evaluation registry beside them.
+    pub judge: bool,
     /// Both executors write a step's rows to the object store, and neither is
     /// built without one, whatever address it was given.
     pub object_store: bool,
@@ -67,6 +70,7 @@ impl Wiring {
             query_engine: config.query_engine,
             query_url: config.query_url.is_some(),
             ml_pipeline_url: config.ml_pipeline_url.is_some(),
+            judge: config.judge_url.is_some() && config.judge_provider.is_some(),
             object_store,
         }
     }
@@ -83,7 +87,8 @@ const fn claimed_by_the_work_role(kind: RuntimeKind) -> bool {
         RuntimeKind::FlowPhp
         | RuntimeKind::DataFusion
         | RuntimeKind::DuckDb
-        | RuntimeKind::Marimo => true,
+        | RuntimeKind::Marimo
+        | RuntimeKind::JudgeEvaluation => true,
         // The serve role's reactor, a worker by its queue, a pod by its key —
         // the work role starts the pod and claims nothing (ADR_0029) — and a
         // wait.
@@ -194,6 +199,16 @@ pub fn explain(stranded: Stranded, wiring: &Wiring) -> String {
                 wiring.object_store
             ),
         ),
+        None if runtime == RuntimeKind::JudgeEvaluation => format!(
+            "{head}: {}. Unless another work process holds a judge, {pending}",
+            if wiring.judge {
+                "AIWATCHER_JUDGE_URL and AIWATCHER_JUDGE_PROVIDER are set, and there is no \
+                 evaluation registry or the judge client did not build (see the error logged at \
+                 start-up)"
+            } else {
+                "AIWATCHER_JUDGE_URL or AIWATCHER_JUDGE_PROVIDER is unset"
+            },
+        ),
         None => format!(
             "{head}: no {} executor is registered in this process. Unless another work process \
              holds one, {pending}",
@@ -298,6 +313,7 @@ mod tests {
             query_engine: QueryEngine::DataFusion,
             query_url: true,
             ml_pipeline_url: false,
+            judge: false,
             object_store: true,
         }
     }
@@ -419,6 +435,23 @@ mod tests {
         assert!(said.contains("AIWATCHER_QUERY_URL is unset"), "{said}");
         assert!(said.contains("AIWATCHER_QUERY_ENGINE=datafusion"), "{said}");
         assert!(!said.contains("between runs"), "{said}");
+    }
+
+    #[test]
+    fn a_judged_attempt_names_the_two_settings_a_judge_needs() {
+        let said = explain(
+            Stranded {
+                runtime: RuntimeKind::JudgeEvaluation,
+                attempts: 1,
+            },
+            &datafusion(),
+        );
+        assert!(
+            said.contains("AIWATCHER_JUDGE_URL or AIWATCHER_JUDGE_PROVIDER is unset"),
+            "{said}"
+        );
+        assert!(claimed_by_the_work_role(RuntimeKind::JudgeEvaluation));
+        assert!(!claimed_by_the_work_role(RuntimeKind::ScoreEvaluation));
     }
 
     #[test]

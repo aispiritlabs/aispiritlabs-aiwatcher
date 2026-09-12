@@ -75,7 +75,8 @@
         "curation",
         "annotations",
         "conversations",
-        "external"
+        "external",
+        "assessments"
       ],
       "type": "string"
     },

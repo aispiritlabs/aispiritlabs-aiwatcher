@@ -6,6 +6,7 @@ mod approval;
 mod assessment;
 mod comparison;
 mod context;
+mod judge;
 mod manifest;
 mod reference;
 mod registry;
@@ -37,16 +38,21 @@ pub use store::EvidenceCipher;
 pub use context::{
     Aggregation, EvaluationContext, JudgeConfiguration, MetricDefinition, MetricDirection,
 };
+pub use judge::{
+    CalibrationItem, CalibrationRequest, CalibrationSet, CalibrationVersion, JudgeAgreement,
+    JudgeCall, JudgeDeclaration, JudgeFailure, JudgeMessage, JudgeModel, JudgeReply, JudgeReport,
+    JudgeSettings, agreement, ask, number, read, reply_schema,
+};
 pub use manifest::{EvaluationManifest, EvaluationOrigin, PreparedEvaluation, VariantManifest};
 pub use reference::{DatasetKind, DatasetReference, VersionReference};
 pub use rubric::{AssessmentValue, Rubric, RubricHead, RubricPage, RubricVersion, Scale};
 pub use scorecard::{
-    Score, Scorecard, ScorecardHead, ScorecardPage, ScorecardVersion, Scorer, ScorerSpec,
+    Rubrics, Score, Scorecard, ScorecardHead, ScorecardPage, ScorecardVersion, Scorer, ScorerSpec,
 };
 pub use scoring::{
-    Answers, ArchiveWord, Cohort, DeclaredRun, RecordedAnswer, RecordedAnswers, SCORING_ENGINE,
-    SCORING_VERSION, Scored, ScoringRun, ScoringRunView, StepOrigin, archived, score,
-    scoring_engine,
+    Answers, ArchiveWord, Asked, Calibrated, Cohort, DeclaredRun, JudgeQuestion, Judged,
+    RecordedAnswer, RecordedAnswers, SCORING_ENGINE, SCORING_VERSION, Scored, ScoringRun,
+    ScoringRunView, StepOrigin, archived, questions, replies, score, score_with, scoring_engine,
 };
 
 use serde::Serialize;

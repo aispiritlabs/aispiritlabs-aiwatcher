@@ -15,8 +15,9 @@ use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeMap;
 
 use crate::{
-    CaseMeasurement, DatasetKind, EvaluationContext, EvaluationManifest, EvaluationOrigin, Result,
-    ResultStatus, SCHEMA_VERSION, Scorecard, VariantManifest, VersionReference, digest,
+    CalibrationSet, CaseMeasurement, DatasetKind, DatasetReference, EvaluationContext,
+    EvaluationManifest, EvaluationOrigin, JudgeCall, JudgeConfiguration, JudgeDeclaration, Result,
+    ResultStatus, Rubrics, SCHEMA_VERSION, Scorecard, VariantManifest, VersionReference, digest,
     reference::artifact,
     require,
     scorecard::Score,
@@ -195,6 +196,10 @@ pub struct ScoringRun {
     /// names — so the answers cannot change under a retry, which is what makes
     /// re-running one cheap and honest.
     pub answers: Answers,
+    /// The judge, when the card asks one. Absent otherwise, and absent from
+    /// the content address then, so a declaration from before judges keeps it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub judge: Option<JudgeDeclaration>,
 }
 
 impl ScoringRun {
@@ -215,6 +220,9 @@ impl ScoringRun {
             "run.cohort.expectations_schema",
         )?;
         self.scorecard.validate("run.scorecard")?;
+        if let Some(judge) = &self.judge {
+            judge.validate()?;
+        }
         let conversations = self.variant.dataset.kind == DatasetKind::Conversations;
         match &self.answers {
             Answers::Recording(recording) => {
@@ -240,18 +248,37 @@ impl ScoringRun {
     ///
     /// The archive's answer to a case is the response its expectation was
     /// read from, so a scorer comparing the two measures a response against
-    /// itself and would report perfect agreement about nothing.
+    /// itself and would report perfect agreement about nothing. A judge is
+    /// declared exactly when the card asks one, and never over the archive:
+    /// asking one is sending what it is asked about to a provider, and the
+    /// archive's words do not leave the archive.
     pub fn check(&self, card: &Scorecard) -> Result<()> {
         require(
             card.name == self.scorecard.name,
             "run.scorecard.name",
             "names a different card from the one resolved",
         )?;
-        if matches!(self.answers, Answers::Archive(_))
+        let asks_a_judge = !card.judges().is_empty();
+        require(
+            asks_a_judge == self.judge.is_some(),
+            "run.judge",
+            if asks_a_judge {
+                "the card asks a judge, so the run declares which one and its calibration"
+            } else {
+                "the card asks no judge, so the run declares none"
+            },
+        )?;
+        let archive = matches!(self.answers, Answers::Archive(_));
+        require(
+            !(archive && asks_a_judge),
+            "run.judge",
+            "a judge is a model call to a provider, and the archive's words do not leave the              archive",
+        )?;
+        if archive
             && let Some(spec) = card
                 .scorers
                 .iter()
-                .find(|spec| spec.scorer.reads_expected())
+                .find(|spec| spec.compares_with_expected())
         {
             return Err(crate::EvaluationError::Invalid {
                 field: "run.scorecard".into(),
@@ -279,9 +306,23 @@ impl ScoringRun {
     pub fn manifest(
         &self,
         card: &Scorecard,
+        rubrics: &Rubrics,
         ran_by: Option<&StepOrigin>,
     ) -> Result<EvaluationManifest> {
         self.check(card)?;
+        let judge = match &self.judge {
+            Some(judge) => Some(JudgeConfiguration {
+                provider: judge.provider.clone(),
+                model: judge.model.clone(),
+                configuration: judge.settings.artifact()?.0,
+                calibration_dataset: DatasetReference {
+                    kind: DatasetKind::Assessments,
+                    name: judge.calibration.name.clone(),
+                    version: judge.calibration.version.clone(),
+                },
+            }),
+            None => None,
+        };
         Ok(EvaluationManifest {
             schema_version: SCHEMA_VERSION,
             origin: EvaluationOrigin {
@@ -300,8 +341,8 @@ impl ScoringRun {
                 scorer: scoring_engine(),
                 input_schema: self.cohort.input_schema.clone(),
                 expectations_schema: self.cohort.expectations_schema.clone(),
-                judge: None,
-                metrics: card.metrics(),
+                judge,
+                metrics: card.metrics(rubrics)?,
             },
         })
     }
@@ -362,6 +403,26 @@ pub fn score(
     answers: &[RecordedAnswer],
     repetition_id: &str,
 ) -> Scored {
+    score_with(card, cohort, answers, repetition_id, &Judged::new())
+}
+
+/// What a judge said about each case it was asked about, keyed by the case
+/// and the metric, as the number its reply scored or why it scored none.
+pub type Judged = BTreeMap<(String, String), Score>;
+
+/// The same fold, with a judge's answers handed in.
+///
+/// The model was asked before this runs, so the fold still reads no clock and
+/// opens no socket; a judge scorer reads the answer the map holds for its case,
+/// and a case nobody asked about is unscored like any other unreadable one.
+#[must_use]
+pub fn score_with(
+    card: &Scorecard,
+    cohort: &BTreeMap<String, serde_json::Value>,
+    answers: &[RecordedAnswer],
+    repetition_id: &str,
+    judged: &Judged,
+) -> Scored {
     let mut found: BTreeMap<&str, Vec<&RecordedAnswer>> = BTreeMap::new();
     for answer in answers {
         if let Some((case_id, _)) = cohort.get_key_value(&answer.case_id) {
@@ -378,7 +439,7 @@ pub fn score(
             // One publication is one repetition, so two answers to one case
             // are two measurements this result has no way to tell apart.
             [] | [_, _, ..] => Err("the recording holds more than one answer for this case".into()),
-            [answer] => measure(card, answer, expected),
+            [answer] => measure(card, answer, expected, judged),
         };
         let answer = answers.first();
         let trace_id = answer.and_then(|answer| answer.trace_id.clone());
@@ -425,10 +486,21 @@ fn measure(
     card: &Scorecard,
     answer: &RecordedAnswer,
     expected: &serde_json::Value,
+    judged: &Judged,
 ) -> std::result::Result<BTreeMap<String, f64>, String> {
     let mut metrics = BTreeMap::new();
     for spec in &card.scorers {
-        match spec.measure(&answer.answer, expected) {
+        let score = match (spec.scorer.rubric(), spec.sides(&answer.answer, expected)) {
+            (_, Err(reason)) => Score::Unscored(reason),
+            (Some(_), Ok(_)) => judged
+                .get(&(answer.case_id.clone(), spec.metric.clone()))
+                .cloned()
+                .unwrap_or_else(|| {
+                    Score::Unscored("nobody asked the judge about this case".into())
+                }),
+            (None, Ok(_)) => spec.measure(&answer.answer, expected),
+        };
+        match score {
             Score::Measured(value) => {
                 metrics.insert(spec.metric.clone(), value);
             }
@@ -452,6 +524,145 @@ fn clip(reason: &str) -> String {
         Some(_) => reason.to_owned(),
         None => "unscorable".to_owned(),
     }
+}
+
+/// What a question to the judge is about.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Asked {
+    /// A case this run measures.
+    Case(String),
+    /// An item of the calibration set, by its position.
+    Calibration(usize),
+}
+
+/// One question a run puts to its judge.
+#[derive(Clone, Debug, PartialEq)]
+pub struct JudgeQuestion {
+    pub about: Asked,
+    pub metric: String,
+    pub call: JudgeCall,
+}
+
+/// A calibration result's answer to one case, and what that case expected.
+pub type Calibrated = BTreeMap<(String, String), (serde_json::Value, serde_json::Value)>;
+
+/// Every question a run's judge is asked.
+///
+/// One per judge metric for each case the fold will score — a case answered
+/// twice is not scored, so it is not asked about either — and one per
+/// calibration item under that metric's rubric, put the answer the person was
+/// shown. A case whose answer has nothing where the card points is not asked
+/// about: the fold says why, as it does for every other scorer.
+#[must_use]
+pub fn questions(
+    run: &ScoringRun,
+    card: &Scorecard,
+    rubrics: &Rubrics,
+    cohort: &BTreeMap<String, serde_json::Value>,
+    answers: &[RecordedAnswer],
+    calibration: &CalibrationSet,
+    calibrated: &Calibrated,
+) -> Vec<JudgeQuestion> {
+    let Some(judge) = &run.judge else {
+        return Vec::new();
+    };
+    let mut once: BTreeMap<&str, Vec<&RecordedAnswer>> = BTreeMap::new();
+    for answer in answers {
+        if cohort.contains_key(&answer.case_id) {
+            once.entry(&answer.case_id).or_default().push(answer);
+        }
+    }
+    let mut asked = Vec::new();
+    for spec in &card.scorers {
+        let Some(pinned) = spec.scorer.rubric() else {
+            continue;
+        };
+        let Some(rubric) = rubrics.get(pinned) else {
+            continue;
+        };
+        let mut put = |about: Asked, answer: &serde_json::Value, expected: &serde_json::Value| {
+            if let Ok((answer, expected)) = spec.sides(answer, expected) {
+                let expected = spec.compares_with_expected().then_some(expected);
+                asked.push(JudgeQuestion {
+                    about,
+                    metric: spec.metric.clone(),
+                    call: crate::ask(rubric, judge, answer, expected),
+                });
+            }
+        };
+        for (case_id, answered) in &once {
+            if let [answer] = answered.as_slice() {
+                put(
+                    Asked::Case((*case_id).to_owned()),
+                    &answer.answer,
+                    &cohort[*case_id],
+                );
+            }
+        }
+        for (index, item) in calibration.items.iter().enumerate() {
+            if item.rubric != *pinned {
+                continue;
+            }
+            if let Some((answer, expected)) =
+                calibrated.get(&(item.case_id.clone(), item.repetition_id.clone()))
+            {
+                put(Asked::Calibration(index), answer, expected);
+            }
+        }
+    }
+    asked
+}
+
+/// What the judge's replies score, for the fold and for the agreement.
+///
+/// `replies` is in the order of `questions`. A reply that is not a value on
+/// the rubric's scale scores nothing: the case is a failure with the reason,
+/// and a calibration item it answered that way counts against the judge.
+#[must_use]
+pub fn replies(
+    run: &ScoringRun,
+    card: &Scorecard,
+    rubrics: &Rubrics,
+    calibration: &CalibrationSet,
+    questions: &[JudgeQuestion],
+    replies: &[crate::JudgeReply],
+) -> (Judged, Option<crate::JudgeReport>) {
+    let Some(judge) = &run.judge else {
+        return (Judged::new(), None);
+    };
+    let mut judged = Judged::new();
+    let mut said = BTreeMap::new();
+    for (question, reply) in questions.iter().zip(replies) {
+        let rubric = card
+            .scorers
+            .iter()
+            .find(|spec| spec.metric == question.metric)
+            .and_then(|spec| spec.scorer.rubric())
+            .and_then(|pinned| rubrics.get(pinned));
+        let read = rubric.map_or_else(
+            || Err("this metric's rubric was not resolved".to_owned()),
+            |rubric| crate::read(rubric, reply),
+        );
+        match &question.about {
+            Asked::Case(case_id) => {
+                judged.insert(
+                    (case_id.clone(), question.metric.clone()),
+                    match read {
+                        Ok((_, number)) => Score::Measured(number),
+                        Err(reason) => Score::Unscored(reason),
+                    },
+                );
+            }
+            Asked::Calibration(index) => {
+                said.insert(
+                    (*index, question.metric.clone()),
+                    read.ok().map(|(_, number)| number),
+                );
+            }
+        }
+    }
+    let report = crate::agreement(card, rubrics, &judge.calibration, calibration, &said);
+    (judged, Some(report))
 }
 
 pub(crate) async fn declare(
@@ -567,6 +778,7 @@ mod tests {
                 version: "a".repeat(64),
             },
             answers,
+            judge: None,
         }
     }
 

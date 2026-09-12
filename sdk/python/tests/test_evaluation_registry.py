@@ -249,3 +249,27 @@ def test_a_distance_is_sent_with_the_unit_its_author_named() -> None:
         "kind": "absolute_error",
         "unit": "minutes",
     }
+
+
+def test_a_calibration_set_is_taken_once_however_often_it_is_asked_for() -> None:
+    bodies: list[bytes] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        bodies.append(request.content)
+        if len(bodies) == 1:
+            raise httpx.ReadError("response lost", request=request)
+        return httpx.Response(200, json={"version": "c" * 64, "calibration": {"items": []}})
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(handle)) as http,
+        EvaluationRegistry("http://localhost", client=http, attempts=2) as registry,
+    ):
+        taken = registry.take_calibration(
+            {
+                "name": "people",
+                "evaluation_id": "baseline",
+                "rubrics": [{"name": "helpful", "version": "r" * 64}],
+            }
+        )
+    assert taken["version"] == "c" * 64
+    assert bodies[0] == bodies[1], "content addressed, so a lost reply is asked again"

@@ -10,6 +10,9 @@ pub enum DatasetKind {
     Annotations,
     Conversations,
     External,
+    /// Judgements people made under a rubric, frozen as a judge's calibration
+    /// set. Never a cohort: it is what a judge is measured against.
+    Assessments,
 }
 
 /// `version` is the owner's immutable revision, never a deployment label.

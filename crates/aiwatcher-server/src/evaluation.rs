@@ -350,8 +350,11 @@ impl SourceAuthority for LocalSource {
                 | DatasetKind::Curation
                 | DatasetKind::Annotations
                 | DatasetKind::Conversations
-        ) || manifest.context.judge.is_some()
+        ) || (manifest.context.judge.is_some() && !manifest.context.scored_here())
         {
+            // A producer's judge still has no adapter (ADR_0030). A judge this
+            // deployment asked was admitted by the registry under the judge's
+            // own rule before this was called.
             return Err(unavailable(EvidenceState::Forbidden));
         }
         let asked = Evaluation::prepare(manifest.clone())?;

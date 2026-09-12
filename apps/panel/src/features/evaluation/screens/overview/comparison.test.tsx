@@ -30,6 +30,7 @@ function result(id: string, context = 'bb22'): DurableEvaluation {
     counts: { selected: 4, scored: 4, failed: 0, unscored: 0 },
     manifest: null,
     status: 'succeeded',
+    reproducible: true,
   };
 }
 
@@ -43,6 +44,7 @@ function comparison(
     comparability: 'comparable',
     reasons: [],
     same_variant: false,
+    judged: false,
     metrics,
     ...extra,
   };

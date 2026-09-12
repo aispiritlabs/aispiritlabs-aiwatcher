@@ -25,6 +25,7 @@ function evidence(state: EvidenceState, extra: Partial<DurableEvaluation> = {}):
     counts: { selected: 3, scored: 3, failed: 0, unscored: 0 },
     manifest: null,
     status: 'succeeded',
+    reproducible: true,
     ...extra,
   };
 }

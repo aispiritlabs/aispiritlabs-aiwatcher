@@ -19,7 +19,7 @@ export interface VersionReference {
 }
 
 export interface DatasetReference {
-  kind: 'curation' | 'annotations' | 'conversations' | 'external';
+  kind: 'curation' | 'annotations' | 'conversations' | 'external' | 'assessments';
   name: string;
   version: string;
 }

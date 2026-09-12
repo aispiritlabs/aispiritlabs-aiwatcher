@@ -298,7 +298,7 @@ struct CasesQuery {
 /// approval, as starting a scoring run is; a withdrawn pair stays a 403.
 #[utoipa::path(post, path = "/api/v1/evaluation-results", request_body = PublishEvaluation,
     responses((status = 200, body = EvaluationReceipt), (status = 400, body = crate::error::ErrorBody),
-    (status = 403, body = crate::error::ErrorBody, description = "`evidence_forbidden`: the pair was withdrawn, its bundle changed, or the caller may not read the source"),
+    (status = 403, body = crate::error::ErrorBody, description = "`evidence_forbidden`: the pair was withdrawn, its bundle changed, or the caller may not read the source; `measured_here`: evidence aiwatcher scores is published by its run"),
     (status = 409, body = crate::error::ErrorBody, description = "`pair_not_admitted` names the approval that would admit the pair; `evaluation_conflict` is a different body under this ID"),
     (status = 410, body = crate::error::ErrorBody), (status = 503, body = crate::error::ErrorBody)), tag = "evaluation")]
 async fn publish_result(
@@ -307,6 +307,9 @@ async fn publish_result(
     Json(request): Json<PublishEvaluation>,
 ) -> ApiResult<Json<EvaluationReceipt>> {
     caller.require(Role::Editor)?;
+    if request.manifest.context.scored_here() {
+        return Err(ApiError::MeasuredHere);
+    }
     Ok(Json(
         registry(&state)?
             .clone()
@@ -567,6 +570,7 @@ fn legacy_detail(detail: DurableEvaluation, page: Option<CasePage>) -> ApiResult
                     aiwatcher_evaluation::DatasetKind::Annotations => "annotations",
                     aiwatcher_evaluation::DatasetKind::Conversations => "conversations",
                     aiwatcher_evaluation::DatasetKind::External => "external",
+                    aiwatcher_evaluation::DatasetKind::Assessments => "assessments",
                 }
                 .into(),
             ),

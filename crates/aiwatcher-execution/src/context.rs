@@ -228,6 +228,7 @@ fn allowed_for(
         | RuntimeKind::PythonTask
         | RuntimeKind::ContainerJob
         | RuntimeKind::ScoreEvaluation
+        | RuntimeKind::JudgeEvaluation
         | RuntimeKind::HumanInput => Vec::new(),
     };
 

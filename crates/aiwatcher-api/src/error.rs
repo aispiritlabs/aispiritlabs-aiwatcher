@@ -67,6 +67,23 @@ pub enum ApiError {
     #[error("this instance has no workflow runner configured (AIWATCHER_WORKFLOW_RUNNER)")]
     RunnerDisabled,
 
+    /// A scoring run whose card asks a judge, on a deployment that has none.
+    /// Refused at start rather than started for no process to claim.
+    #[error("this instance asks no judge (AIWATCHER_JUDGE_URL, AIWATCHER_JUDGE_PROVIDER)")]
+    JudgeDisabled,
+
+    /// Evidence this deployment measures, sent to the route a producer uses.
+    ///
+    /// The run that measured it publishes it, through the registry, with the
+    /// agreement and the origin only that run knows. Accepted here, anybody
+    /// with an editor's token could publish numbers under a declared run's
+    /// name before the run did — and the first publication of an ID wins.
+    #[error(
+        "evidence scored by aiwatcher.scoring is published by the run that measured it, never \
+         through this route"
+    )]
+    MeasuredHere,
+
     /// No notebook runtime address, or no object store to read a step's rows
     /// from. Both are needed and either alone is useless, so one variant says
     /// so rather than two that a caller would have to tell apart.
@@ -278,6 +295,8 @@ impl ApiError {
             // null runner that answered 202 would be worse than this: it would
             // report success for a rerun that never happened.
             Self::RunnerDisabled => (StatusCode::NOT_IMPLEMENTED, "runner_disabled"),
+            Self::JudgeDisabled => (StatusCode::NOT_IMPLEMENTED, "judge_disabled"),
+            Self::MeasuredHere => (StatusCode::FORBIDDEN, "measured_here"),
             Self::EditorDisabled => (StatusCode::NOT_IMPLEMENTED, "editor_disabled"),
             Self::Editor(error) => match error {
                 aiwatcher_core::ports::PortError::Rejected { .. } => {
