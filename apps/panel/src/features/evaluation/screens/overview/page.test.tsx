@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { EvaluationPage } from './page';
 import { serve, withQueries } from '@/test/server';
@@ -37,6 +37,31 @@ it('sends the explicit baseline and shows incompatibility, coverage and both par
       method: 'GET',
       path: '/evaluations',
       answer: { status: 200, body: { evaluations: [], total_known: 0 } },
+    },
+    {
+      method: 'GET',
+      path: '/evaluation-results',
+      answer: {
+        status: 200,
+        body: {
+          evaluations: [
+            {
+              receipt: {
+                evaluation_id: 'kept-1',
+                version: 'ff00',
+                variant_id: 'aa11',
+                context_id: 'bb22',
+                committed_at: 1789200000,
+                expires_at: 1791792000,
+              },
+              state: 'complete',
+              metrics: {},
+              counts: { selected: 3, scored: 3, failed: 0, unscored: 0 },
+            },
+          ],
+          retention: { ran_at: 1789200000, retired: 0, collected: 0, failures: 0 },
+        },
+      },
     },
     {
       method: 'GET',
@@ -86,6 +111,15 @@ it('sends the explicit baseline and shows incompatibility, coverage and both par
   expect(screen.getByText('lr · differs')).toBeTruthy();
   expect(screen.getByText('0.2')).toBeTruthy();
   expect(screen.queryByText('Regressed')).toBeNull();
+  // A3's three states are a control, not a fourth sentence in a paragraph, and
+  // the delta the server refused to compute has to look refused. An empty cell
+  // there reads as "no change".
+  const comparability = screen.getByRole('group', { name: 'Comparability' });
+  expect(within(comparability).getByText('incompatible').getAttribute('aria-current')).toBe('true');
+  expect(within(comparability).getByText('comparable').getAttribute('aria-current')).toBeNull();
+  expect(screen.getByText('withheld')).toBeTruthy();
+  // Whether retention is running, beside the catalogue it prunes.
+  expect(screen.getByText(/Retention last ran/)).toBeTruthy();
 });
 
 it('keeps a missing explicit baseline visible as an error instead of claiming an automatic result', async () => {

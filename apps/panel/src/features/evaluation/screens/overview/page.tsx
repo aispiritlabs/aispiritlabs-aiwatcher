@@ -10,6 +10,7 @@ import { DatasetReference, ExecutionReference } from '@/shared/components/lineag
 
 import { getEvaluation, listEvaluations, listEvaluationSuites } from '@/api/generated/sdk.gen';
 import type {
+  Comparability,
   EvaluationCase,
   EvaluationDetail,
   EvaluationSummary,
@@ -17,7 +18,9 @@ import type {
   SuiteSummary,
 } from '@/api/generated/types.gen';
 import { StatusBadge } from '@/shared/components/status-badge';
-import { DEFAULT_WINDOW_SECONDS, TimeRange, windowParam } from '@/shared/components/time-range';
+import { EvidencePane, EvidenceRow, EvidenceUnavailable, Retention, useEvidence } from './evidence';
+import type { DurableEvaluation } from '@/api/generated/types.gen';
+import { ApiFailure } from '@/shared/lib/result';
 import {
   Badge,
   Button,
@@ -34,10 +37,24 @@ const routeApi = getRouteApi('/evaluation');
 
 const REPORT_PAGE = 50;
 
+/**
+ * One list, two provenances.
+ *
+ * `evidence` is kept on purpose and outlives the traces behind it; `report` is
+ * a fold of the event log and goes when that log's retention takes it. What you
+ * can do with them differs, so the row says which it is rather than leaving
+ * somebody to find out by clicking.
+ */
+type Row =
+  { kind: 'evidence'; item: DurableEvaluation } | { kind: 'report'; item: EvaluationSummary };
+
+function idOf(row: Row): string {
+  return row.kind === 'evidence' ? row.item.receipt.evaluation_id : row.item.evaluation_id;
+}
+
 export function EvaluationPage() {
   const search = routeApi.useSearch();
   const navigate = routeApi.useNavigate();
-  const windowSeconds = search.window ?? DEFAULT_WINDOW_SECONDS;
   const [baselineDraft, setBaselineDraft] = React.useState(search.baseline ?? '');
   React.useEffect(() => setBaselineDraft(search.baseline ?? ''), [search.baseline]);
 
@@ -58,8 +75,14 @@ export function EvaluationPage() {
     refetchInterval: 15_000,
   });
 
+  // Kept evidence and folded reports are one question — "which measurements do
+  // we have" — so they are one list, and every row says which it is. The two
+  // sets never overlap: the API excludes a committed registry ID from the
+  // legacy listing rather than reporting it twice.
+  const evidence = useEvidence();
+
   const reports = useInfiniteQuery({
-    queryKey: ['evaluations', search.suite, search.dataset, search.status, search.q, windowSeconds],
+    queryKey: ['evaluations', search.suite, search.dataset, search.status, search.q],
     initialPageParam: undefined as string | undefined,
     queryFn: async ({ pageParam }) => {
       const response = await listEvaluations({
@@ -68,9 +91,6 @@ export function EvaluationPage() {
           dataset: search.dataset,
           status: search.status,
           search: search.q || undefined,
-          // A report is dated by when it finished, not when it started: a
-          // twenty-minute batch is normal here. See the projector's `window`.
-          window_seconds: windowParam(windowSeconds),
           after: pageParam,
           limit: REPORT_PAGE,
         },
@@ -84,11 +104,27 @@ export function EvaluationPage() {
     refetchInterval: 10_000,
   });
 
-  const rows = React.useMemo(
+  const reportRows = React.useMemo(
     () => reports.data?.pages.flatMap((page) => page.evaluations) ?? [],
     [reports.data],
   );
+  const evidenceRows = React.useMemo(
+    () => evidence.data?.pages.flatMap((page) => page.evaluations) ?? [],
+    [evidence.data],
+  );
+  // Kept first, and not by preference: the catalogue has no time order to
+  // interleave by (ADR_0030), so a merge that pretended to one would be
+  // inventing it. Provenance is on every row instead.
+  const rows: Row[] = React.useMemo(
+    () => [
+      ...evidenceRows.map((item) => ({ kind: 'evidence' as const, item })),
+      ...reportRows.map((item) => ({ kind: 'report' as const, item })),
+    ],
+    [evidenceRows, reportRows],
+  );
   const total = reports.data?.pages[0]?.total_known ?? 0;
+  const retention = evidence.data?.pages[0]?.retention;
+  const evidenceFailure = evidence.error instanceof ApiFailure ? evidence.error : undefined;
 
   return (
     <div className="flex flex-col gap-4">
@@ -101,12 +137,6 @@ export function EvaluationPage() {
             them.
           </p>
         </div>
-        <TimeRange
-          value={windowSeconds}
-          onChange={(seconds) =>
-            void navigate({ search: (previous) => ({ ...previous, window: seconds }) })
-          }
-        />
       </div>
 
       <LocalViews
@@ -147,7 +177,7 @@ export function EvaluationPage() {
           />
         </label>
         <datalist id="baseline-options">
-          {rows
+          {reportRows
             .filter((row) => row.evaluation_id !== search.report)
             .map((row) => (
               <option value={row.evaluation_id} key={row.evaluation_id}>
@@ -177,49 +207,70 @@ export function EvaluationPage() {
       />
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]">
-        <Card className="overflow-hidden">
-          {reports.isError ? (
-            <EmptyState
-              title="Could not reach the API"
-              hint="Is the aiwatcher server running? The panel proxies /api to it in development."
-            />
-          ) : rows.length === 0 && !reports.isLoading ? (
-            <EmptyState
-              title="No evaluation reports in this window"
-              hint={
-                windowSeconds
-                  ? 'Nothing finished in the selected period. Widen it, or pick “all”.'
-                  : "Publish an eval.completed event — the Python SDK's record_evaluation is one call — and it will appear here."
-              }
-            />
-          ) : (
-            <VirtualList
-              items={rows}
-              className="max-h-[34rem]"
-              estimateSize={62}
-              keyOf={(row) => row.evaluation_id}
-              onReachEnd={() => {
-                if (reports.hasNextPage && !reports.isFetchingNextPage) {
-                  void reports.fetchNextPage();
+        <div className="flex min-w-0 flex-col gap-2">
+          <Card className="overflow-hidden">
+            {reports.isError ? (
+              <EmptyState
+                title="Could not reach the API"
+                hint="Is the aiwatcher server running? The panel proxies /api to it in development."
+              />
+            ) : rows.length === 0 && !reports.isLoading && !evidence.isLoading ? (
+              <EmptyState
+                title="No evaluation reports and no kept evidence"
+                hint="Publish an eval.completed event — the Python SDK's record_evaluation is one call — or publish durable evidence through /api/v1/evaluation-results."
+              />
+            ) : (
+              <VirtualList
+                items={rows}
+                className="max-h-[34rem]"
+                estimateSize={62}
+                keyOf={(row) => `${row.kind}:${idOf(row)}`}
+                onReachEnd={() => {
+                  // The kept half first, then the folded half, in the order
+                  // they are drawn in.
+                  if (evidence.hasNextPage && !evidence.isFetchingNextPage) {
+                    void evidence.fetchNextPage();
+                  } else if (reports.hasNextPage && !reports.isFetchingNextPage) {
+                    void reports.fetchNextPage();
+                  }
+                }}
+                isFetchingMore={reports.isFetchingNextPage || evidence.isFetchingNextPage}
+                renderRow={(row) =>
+                  row.kind === 'evidence' ? (
+                    <EvidenceRow
+                      evidence={row.item}
+                      selected={idOf(row) === search.evidence}
+                      onSelect={() => select({ evidence: idOf(row), report: undefined })}
+                    />
+                  ) : (
+                    <ReportRow
+                      report={row.item}
+                      selected={idOf(row) === search.report}
+                      onSelect={() => select({ report: idOf(row), evidence: undefined })}
+                    />
+                  )
                 }
-              }}
-              isFetchingMore={reports.isFetchingNextPage}
-              renderRow={(row) => (
-                <ReportRow
-                  report={row}
-                  selected={row.evaluation_id === search.report}
-                  onSelect={() => select({ report: row.evaluation_id })}
-                />
-              )}
-            />
+              />
+            )}
+          </Card>
+          {evidenceFailure ? (
+            <Card>
+              <EvidenceUnavailable failure={evidenceFailure} />
+            </Card>
+          ) : (
+            <Retention report={retention} loading={evidence.isLoading} />
           )}
-        </Card>
+        </div>
 
-        <ReportPane
-          evaluationId={search.report}
-          baselineId={search.baseline}
-          selectedMetrics={search.metrics?.split(',')}
-        />
+        {search.evidence ? (
+          <EvidencePane evaluationId={search.evidence} />
+        ) : (
+          <ReportPane
+            evaluationId={search.report}
+            baselineId={search.baseline}
+            selectedMetrics={search.metrics?.split(',')}
+          />
+        )}
       </div>
     </div>
   );
@@ -520,10 +571,15 @@ export function ReportDetail({
         <h3 className="text-sm font-semibold">Comparison evidence</h3>
         {comparison ? (
           <>
-            <p>
-              {comparison.comparability} · baseline {comparison.baseline_id}
+            <ComparabilityControl value={comparison.comparability} />
+            <p className="mt-2">
+              baseline{' '}
+              <IdChip
+                value={pinchId(comparison.baseline_id, 10, 8)}
+                full={comparison.baseline_id}
+              />
             </p>
-            <ul>
+            <ul className="mt-1 list-disc pl-4">
               {comparison.reasons.map((reason) => (
                 <li key={reason}>{reason}</li>
               ))}
@@ -538,12 +594,6 @@ export function ReportDetail({
                 ? 'All reported details retained.'
                 : 'Partial details — this is not a complete regression analysis.'}
             </p>
-            {comparison.comparability !== 'comparable' && (
-              <p>
-                Quality deltas and changed-case conclusions are withheld until compatibility is
-                verified.
-              </p>
-            )}
           </>
         ) : (
           <p>
@@ -613,6 +663,7 @@ export function ReportDetail({
             (metric) => !selectedMetrics?.length || selectedMetrics.includes(metric.name),
           )}
           baselineId={comparison?.baseline_id}
+          withheld={Boolean(comparison) && comparison?.comparability !== 'comparable'}
         />
         <ParameterComparison
           entries={[
@@ -633,14 +684,59 @@ export function ReportDetail({
   );
 }
 
+/**
+ * Comparability, as a control rather than as a fourth sentence.
+ *
+ * The server distinguishes three states and decides which one this is (A3, and
+ * ADR_0030's comparison rules): `comparable` means the deltas below mean
+ * something, `unverified` means the evidence for that judgement is missing, and
+ * `incompatible` means two facts are being compared that are not one fact. The
+ * panel implements none of it — it renders which of the three the server chose,
+ * and says plainly that a delta is withheld rather than leaving it absent.
+ */
+function ComparabilityControl({ value }: { value: Comparability }) {
+  const SAYS: Record<Comparability, string> = {
+    comparable: 'Deltas below are a like-for-like comparison.',
+    unverified: 'Deltas are withheld: the evidence for a like-for-like comparison is missing.',
+    incompatible:
+      'Deltas are withheld: these two were not measured on the same thing, so a difference between them is not a change.',
+  };
+  return (
+    <div role="group" aria-label="Comparability">
+      <div className="flex flex-wrap items-center gap-1">
+        {(['comparable', 'unverified', 'incompatible'] as const).map((state) => (
+          <span
+            key={state}
+            aria-current={state === value ? 'true' : undefined}
+            className={cn(
+              'rounded-md border px-2 py-0.5',
+              state === value
+                ? state === 'comparable'
+                  ? 'border-primary bg-primary/10 font-medium text-foreground'
+                  : 'border-warning bg-warning/10 font-medium text-foreground'
+                : 'border-border/60 text-muted-foreground/60',
+            )}
+          >
+            {state}
+          </span>
+        ))}
+      </div>
+      <p className="mt-1">{SAYS[value]}</p>
+    </div>
+  );
+}
+
 function Metrics({
   metrics,
   comparison,
   baselineId,
+  withheld,
 }: {
   metrics: Record<string, number>;
   comparison?: MetricDelta[];
   baselineId?: string;
+  /** The server refused to compute deltas. Drawn as withheld, never as absent. */
+  withheld?: boolean;
 }) {
   // With a baseline, the comparison already lists every metric either side
   // reported — including one that appeared or disappeared, which is exactly
@@ -664,10 +760,20 @@ function Metrics({
         <table className="w-full text-left text-sm">
           <thead>
             <tr>
-              <th scope="col" className="px-4 py-1.5">Metric</th>
-              <th scope="col" className="px-4 py-1.5 text-right">Current</th>
-              {baselineId && <th scope="col" className="px-4 py-1.5 text-right">Baseline</th>}
-              <th scope="col" className="px-4 py-1.5 text-right">Delta</th>
+              <th scope="col" className="px-4 py-1.5">
+                Metric
+              </th>
+              <th scope="col" className="px-4 py-1.5 text-right">
+                Current
+              </th>
+              {baselineId && (
+                <th scope="col" className="px-4 py-1.5 text-right">
+                  Baseline
+                </th>
+              )}
+              <th scope="col" className="px-4 py-1.5 text-right">
+                Delta
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -685,7 +791,13 @@ function Metrics({
                   </td>
                 )}
                 <td className="w-24 px-4 py-1.5 text-right text-xs tabular-nums">
-                  <Delta value={row.delta} />
+                  {/* An empty cell reads as "no change". A withheld delta is a
+                      decision the server made and has to look like one. */}
+                  {withheld ? (
+                    <span className="text-muted-foreground">withheld</span>
+                  ) : (
+                    <Delta value={row.delta} />
+                  )}
                 </td>
               </tr>
             ))}

@@ -1,4 +1,3 @@
-import { windowSearchSchema } from '@/shared/components/time-range';
 import { z } from 'zod';
 
 /**
@@ -15,6 +14,15 @@ import { z } from 'zod';
  * `eval.*` events produce no span and no row in the runs list. See
  * `crates/aiwatcher-projector/src/evaluations.rs`.
  *
+ * ## Why there is no period control
+ *
+ * Half of this list is not folded from that log: durable evidence is kept on
+ * purpose, under its own retention (ADR_0030), and its store is keyed by the
+ * hash of an evaluation ID — so the catalogue's order is the order of a hash
+ * and a period would narrow nothing. One control that narrowed half the rows
+ * and not the other half is a control people re-read before every click, so
+ * there is none, and the log-folded half lists everything it still holds.
+ *
  * ## Why the metric deltas are not coloured
  *
  * Higher is better for a pass rate and worse for a cost, and this page has no
@@ -25,13 +33,14 @@ import { z } from 'zod';
  */
 
 export const searchSchema = z.object({
-  ...windowSearchSchema,
   suite: z.string().optional(),
   dataset: z.string().optional(),
   status: z.enum(['running', 'succeeded', 'failed']).optional(),
   q: z.string().optional(),
-  /** The report open in the pane on the right. */
+  /** The log-folded report open in the pane on the right. */
   report: z.string().optional(),
+  /** The durable evidence open in the pane on the right, which is the other kind. */
+  evidence: z.string().optional(),
   baseline: z.string().optional(),
   metrics: z.string().optional(),
 });

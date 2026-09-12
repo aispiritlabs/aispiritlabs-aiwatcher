@@ -387,7 +387,7 @@ function EvaluationsViewer({
         </div>
         <Link
           to="/evaluation"
-          search={{ dataset: reference, window: 0 }}
+          search={{ dataset: reference }}
           className="text-xs text-primary hover:underline"
         >
           Open full Evaluation view
@@ -426,7 +426,6 @@ function EvaluationsViewer({
                       dataset: evaluation.dataset ?? undefined,
                       suite: evaluation.suite,
                       report: evaluation.evaluation_id,
-                      window: 0,
                     }}
                     className="font-medium text-primary hover:underline"
                   >
