@@ -28,10 +28,17 @@ come off, the schema goes on, and a subagent therefore always terminates with an
 answer instead of a dangling tool call. ``max_steps`` counts model requests, so
 the Scout case — search once, then extract — is ``max_steps=2``.
 
-What stays with the caller is what a tool result *means*: whether an empty
-search is a failure, whether a tool error should end the cycle, how the answer
-is validated. :attr:`SubagentResult.tool_runs` is there to be checked, and this
-module never decides on the application's behalf.
+A tool that fails is reported back to the model while a tool-capable step
+remains, because an error it can read is an error it can retry with different
+arguments. On the last such step there is nothing left to retry *with* — the
+next step withholds the tools — so the failure is raised as
+:class:`SubagentToolError` rather than handed to a model that could only answer
+around it, which is the one thing a sourced answer must never do.
+
+What stays with the caller is what a *successful* tool result means: whether an
+empty search counts as an answer, how the result is validated, what an
+unsearched question is worth. :attr:`SubagentResult.tool_runs` is there to be
+checked, and this module never decides that on the application's behalf.
 """
 
 from __future__ import annotations
@@ -51,7 +58,7 @@ from aiwatcher_agentic.tools import Tool, ToolCall, Toolset, Toolsets
 from aiwatcher_agentic.tracer import LLMTracer
 from aiwatcher_agentic.usage import RunUsage, UsageLimits
 
-__all__ = ["Subagent", "SubagentResult", "ToolRun"]
+__all__ = ["Subagent", "SubagentResult", "SubagentToolError", "ToolRun"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +68,14 @@ class ToolRun:
     name: str
     output: str
     succeeded: bool
+
+
+class SubagentToolError(RuntimeError):
+    """A tool failed on the last step that could still have called one."""
+
+    def __init__(self, subagent: str, run: ToolRun) -> None:
+        self.run = run
+        super().__init__(f"subagent {subagent!r} could not use {run.name!r}: {run.output}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,7 +160,9 @@ class Subagent[T]:
         # a second caller landing between the tool step and the answering step
         # would answer from somebody else's tool result.
         with self._agent.turn_lock:
-            for _ in range(self._max_steps - 1):
+            # Counts down the steps that may still call a tool: what a failure
+            # means depends on whether another attempt could follow it.
+            for retries_left in reversed(range(self._max_steps - 1)):
                 steps += 1
                 result = self._agent.run(message, self._context, history=turns)
                 self._absorb(usage, self._agent.run_usage)
@@ -156,7 +173,10 @@ class Subagent[T]:
                     break
                 turns.append(message if isinstance(message, Message) else UserMessage(str(message)))
                 turns.append(AssistantMessage(result.response_text))
-                message = ToolMessage(self._call_tools(result.tool_calls, tool_runs))
+                output, failed = self._call_tools(result.tool_calls, tool_runs)
+                if failed is not None and not retries_left:
+                    raise SubagentToolError(self._name, failed)
+                message = ToolMessage(output)
             steps += 1
             answer = self._agent.run(
                 message, replace(self._context, offer_tools=False), history=turns
@@ -169,8 +189,11 @@ class Subagent[T]:
             steps=steps,
         )
 
-    def _call_tools(self, calls: Sequence[ToolCall], recorded: list[ToolRun]) -> str:
+    def _call_tools(
+        self, calls: Sequence[ToolCall], recorded: list[ToolRun]
+    ) -> tuple[str, ToolRun | None]:
         outputs: list[str] = []
+        failed: ToolRun | None = None
         for call in calls:
             ran = self._agent.run_tool(call, tracer=self._tracer)
             if ran is None:
@@ -178,15 +201,11 @@ class Subagent[T]:
                     f"subagent {self._name!r} asked for {call[0]!r}, which its toolset could "
                     "neither run nor name as missing."
                 )
-            # A tool that failed is reported back to the model rather than
-            # raised: the model asked for it, and an error it can read is an
-            # error it can answer around. Whether that is acceptable is the
-            # caller's to decide from `tool_runs`.
-            recorded.append(
-                ToolRun(name=ran.tool_call[0], output=ran.output, succeeded=ran.success)
-            )
+            run = ToolRun(name=ran.tool_call[0], output=ran.output, succeeded=ran.success)
+            recorded.append(run)
             outputs.append(ran.output)
-        return "\n".join(outputs)
+            failed = failed or (None if run.succeeded else run)
+        return "\n".join(outputs), failed
 
     @staticmethod
     def _absorb(total: RunUsage, step: RunUsage) -> None:

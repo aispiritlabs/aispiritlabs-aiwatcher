@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from aiwatcher_agentic.model import ModelResponse
 from aiwatcher_agentic.prompts import GemmaPromptBuilder
 from aiwatcher_agentic.structured_output import PydanticOutput
-from aiwatcher_agentic.subagent import Subagent, ToolRun
+from aiwatcher_agentic.subagent import Subagent, SubagentToolError, ToolRun
 from aiwatcher_agentic.usage import UsageLimits
 
 
@@ -34,6 +34,13 @@ def lookup(query: str) -> str:
 def explode(query: str) -> str:
     """Fail the way a tool fails."""
     raise RuntimeError(f"no catalogue for {query}")
+
+
+def picky(query: str) -> str:
+    """Refuse an empty query the way a search provider does."""
+    if not query:
+        raise ValueError("empty query")
+    return f"found:{query}"
 
 
 class ScriptedModel:
@@ -126,7 +133,7 @@ def test_a_step_that_answers_instead_of_reaching_for_a_tool_is_asked_again_for_t
     assert "tools" not in model.requests[1][1]
 
 
-def test_a_tool_that_failed_is_reported_back_and_left_for_the_caller_to_judge() -> None:
+def test_a_tool_that_failed_with_no_attempt_left_stops_the_run() -> None:
     model = ScriptedModel('{"name":"explode","parameters":{"query":"beton"}}', '{"price":0}')
     subagent: Subagent[Price] = Subagent(
         "catalog",
@@ -136,13 +143,35 @@ def test_a_tool_that_failed_is_reported_back_and_left_for_the_caller_to_judge() 
         structured_output=PydanticOutput(Price),
     )
 
+    with pytest.raises(SubagentToolError, match="could not use 'explode'") as raised:
+        subagent.run("ile kosztuje beton")
+
+    assert "no catalogue for beton" in raised.value.run.output
+    # The answering step never ran: with the tools already withheld there was
+    # nothing the model could have done but invent a price.
+    assert len(model.requests) == 1
+
+
+def test_a_tool_that_failed_with_an_attempt_left_goes_back_to_the_model() -> None:
+    model = ScriptedModel(
+        '{"name":"picky","parameters":{"query":""}}',
+        '{"name":"picky","parameters":{"query":"beton"}}',
+        '{"price":42}',
+    )
+    subagent: Subagent[Price] = Subagent(
+        "catalog",
+        ScriptedProvider(model),
+        prompt_builder=GemmaPromptBuilder(system_prompt="Answer from the catalogue."),
+        tools=[picky],
+        structured_output=PydanticOutput(Price),
+        max_steps=3,
+    )
+
     result = subagent.run("ile kosztuje beton")
 
-    assert [run.succeeded for run in result.tool_runs] == [False]
-    assert "no catalogue for beton" in result.tool_runs[0].output
-    # The model saw the failure and answered around it; whether that answer is
-    # acceptable is not this type's call.
-    assert result.content == Price(price=0)
+    assert [run.succeeded for run in result.tool_runs] == [False, True]
+    assert "empty query" in str(model.requests[1][0])
+    assert result.content == Price(price=42)
 
 
 def test_usage_covers_every_step_and_not_only_the_last() -> None:
