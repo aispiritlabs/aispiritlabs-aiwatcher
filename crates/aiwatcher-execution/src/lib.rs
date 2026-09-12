@@ -68,7 +68,7 @@ pub use claim::{AttemptKey, AttemptRow, AttemptWrite, ClaimFilter, tally_unclaim
 pub use compile::{CompileOptions, compile_curation};
 pub use context::{ContextAction, ContextSnapshot, RunAction, allowed_run_actions};
 pub use decide::{Decision, Now, decide, evolve, idempotency_key, initial_state, replay};
-pub use error::{CompileError, DecisionError, Result, StoreError};
+pub use error::{CompileError, DecisionError, DefinitionError, Result, StoreError};
 pub use facts::{FactContext, PublishedBy, envelopes_for};
 pub use handler::{ExecutionHandler, HandleError, Handled};
 pub use message::{

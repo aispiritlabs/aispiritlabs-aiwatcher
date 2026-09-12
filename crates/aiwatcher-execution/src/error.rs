@@ -1,9 +1,10 @@
-//! What a decision, a compilation or a store refuses, and why.
+//! What a decision, a compilation, a registry or a store refuses, and why.
 //!
 //! Each variant says what a caller should do differently. `NotStarted` and
 //! `AlreadyFinished` are both "this command does not apply", and separating
 //! them is what turns a 409 body into something somebody can act on.
 
+use aiwatcher_core::ports::PortError;
 use thiserror::Error;
 
 use crate::state::StateType;
@@ -87,6 +88,52 @@ impl CompileError {
     pub fn problems(&self) -> &[String] {
         let Self::Refused(problems) = self;
         problems
+    }
+}
+
+/// What the registry of authored workflow definitions refuses.
+///
+/// Three answers rather than one string, because a scheduler has one question
+/// about a refusal: does it say the same thing on the next tick? An object
+/// store that could not be reached does not. A stored object that will not
+/// read back does, and so does a definition that does not compile. Flattened
+/// together — which they were — a corrupt registered workflow read as a bad
+/// moment, and its slot was left due and retried every minute for ever.
+///
+/// The three words are [`aiwatcher_datasets::RegistryError`]'s own, for the
+/// two registries a managed run may be started from. One question answered in
+/// two vocabularies is two answers a release apart.
+///
+/// [`aiwatcher_datasets::RegistryError`]: https://docs.rs/aiwatcher-datasets
+#[derive(Debug, Error)]
+pub enum DefinitionError {
+    #[error("the workflow definition registry could not use its object store: {0}")]
+    Store(#[from] PortError),
+
+    #[error("stored object {key} is not a workflow definition document: {message}")]
+    Corrupt { key: String, message: String },
+
+    /// Every problem at once, as [`CompileError`] reports them: the store's
+    /// own door refuses what the route in front of it already refused, and a
+    /// caller that reaches it directly deserves the same list.
+    #[error("the workflow definition was refused: {}", .0.join("; "))]
+    Refused(Vec<String>),
+}
+
+impl DefinitionError {
+    /// Whether asking again would be told the same thing.
+    ///
+    /// [`StoreError::says_the_same_next_time`]'s question, asked of the other
+    /// registry a managed run is compiled from. Only an unreachable store is
+    /// worth coming back for: a store that understood the read and refused it
+    /// refuses it identically, and neither a corrupt object nor a definition
+    /// that does not compile changes on a timer.
+    #[must_use]
+    pub const fn says_the_same_next_time(&self) -> bool {
+        match self {
+            Self::Store(port) => !port.is_retryable(),
+            Self::Corrupt { .. } | Self::Refused(_) => true,
+        }
     }
 }
 

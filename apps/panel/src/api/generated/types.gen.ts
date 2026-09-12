@@ -11317,7 +11317,9 @@ export type ListWorkflowDefinitionsData = {
 };
 
 export type ListWorkflowDefinitionsErrors = {
+    500: ErrorBody;
     501: ErrorBody;
+    502: ErrorBody;
     503: ErrorBody;
 };
 
@@ -11339,7 +11341,9 @@ export type RegisterWorkflowData = {
 export type RegisterWorkflowErrors = {
     403: ErrorBody;
     422: ErrorBody;
+    500: ErrorBody;
     501: ErrorBody;
+    502: ErrorBody;
     503: ErrorBody;
 };
 
@@ -11364,7 +11368,9 @@ export type GetWorkflowDefinitionData = {
 
 export type GetWorkflowDefinitionErrors = {
     404: ErrorBody;
+    500: ErrorBody;
     501: ErrorBody;
+    502: ErrorBody;
     503: ErrorBody;
 };
 

@@ -110,6 +110,10 @@ struct Fixture {
     /// bytes a pod's launcher would have put, which the port has no way to.
     /// `None` when this instance has no object store.
     artifacts: Option<Arc<MemoryArtifacts>>,
+    /// The object store behind `state.workflow_definitions`, for the same
+    /// reason: what a registry does with bytes that are not one of its
+    /// documents is only reachable by writing some.
+    definitions: Option<Arc<MemoryObjectStore>>,
 }
 
 impl Fixture {
@@ -178,6 +182,7 @@ impl Fixture {
         let live = Arc::new(LiveHub::default());
         let health = HealthState::new();
         let artifacts = registry_enabled.then(|| Arc::new(MemoryArtifacts::default()));
+        let definitions = registry_enabled.then(|| Arc::new(MemoryObjectStore::new()));
         let state = AppState {
             evaluations: None,
             evaluation_bundles: None,
@@ -200,9 +205,9 @@ impl Fixture {
                     "datasets",
                 ))
             }),
-            workflow_definitions: registry_enabled.then(|| {
+            workflow_definitions: definitions.clone().map(|store| {
                 Arc::new(aiwatcher_execution::definition::DefinitionRegistry::new(
-                    Arc::new(MemoryObjectStore::new()),
+                    store,
                 ))
             }),
             // None, like `just run`: a step asking for a pod is refused at
@@ -288,6 +293,7 @@ impl Fixture {
             read_model,
             live,
             artifacts,
+            definitions,
         }
     }
 
@@ -6418,6 +6424,55 @@ fn authored_worker_workflow() -> Value {
         {"id":"persist", "task_ref":"persist@1", "queue":"planner-import", "timeout_seconds":30,
          "inputs":[{"step":"acquire","output":"rows"}]}
     ]})
+}
+
+/// A registered workflow whose stored head no longer reads back.
+///
+/// One 503 used to cover every way this registry could refuse — so a corrupt
+/// definition and a store that was down for ten seconds arrived as the same
+/// answer, and the tick that reads it kept a slot due for a definition that
+/// was never going to compile again.
+#[tokio::test]
+async fn a_stored_definition_that_will_not_read_back_is_not_a_store_to_come_back_to() {
+    use aiwatcher_core::prompts::ObjectStore as _;
+    let fixture = Fixture::new(false);
+    let (status, saved) = fixture
+        .post("/api/v1/workflow-definitions", authored_worker_workflow())
+        .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+
+    let objects = fixture.definitions.clone().expect("this instance has one");
+    let head = objects
+        .list("workflows/heads/")
+        .await
+        .expect("the head the registration wrote")
+        .remove(0)
+        .key;
+    objects
+        .put(&head, b"{not a definition".to_vec())
+        .await
+        .expect("bytes that are not one of this registry's documents");
+
+    let (status, refused) = fixture.get("/api/v1/workflow-definitions/sdk-import").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{refused}");
+    assert_eq!(refused["code"], "registry_corrupt");
+    assert!(
+        refused["message"]
+            .as_str()
+            .is_some_and(|message| message.contains(&head)),
+        "the message names the object rather than the registry: {refused}"
+    );
+
+    // And the same refusal reaches the route that starts a run, which is where
+    // the scheduler reads it — as `says_the_same_next_time`, never as 5xx.
+    let (status, refused) = fixture
+        .post(
+            "/api/v1/executions",
+            json!({ "target": { "kind": "workflow", "name": "sdk-import" } }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{refused}");
+    assert_eq!(refused["code"], "registry_corrupt");
 }
 
 #[tokio::test]

@@ -8,7 +8,7 @@
 //! is asking and which id the run gets, and both of those are inputs.
 //!
 //! It lived in the HTTP module, which made the scheduler a client of an axum
-//! router: it called in, got an [`ApiError`] back, and read the **status code**
+//! router: it called in, got an `ApiError` back, and read the **status code**
 //! to decide whether the slot should stay due. That is a lossy encoding of the
 //! one question it had — 502 and 500 are 5xx by number and permanent by
 //! meaning, so a corrupt definition and an object store that refused the read
@@ -22,8 +22,6 @@
 //! `Idempotency-Key`. Everything between the two is here.
 //!
 //! ADR_0025.
-//!
-//! [`ApiError`]: https://docs.rs/aiwatcher-api
 
 use std::collections::BTreeMap;
 
@@ -36,6 +34,7 @@ use utoipa::ToSchema;
 
 use crate::compile::CompileOptions;
 use crate::definition::DefinitionRegistry;
+use crate::error::DefinitionError;
 use crate::handler::{ExecutionHandler, Handled};
 use crate::message::{PayloadDefault, PayloadPolicy};
 use crate::plan::{DefinitionKind, ResolvedWindow};
@@ -263,9 +262,15 @@ pub enum StartRefused {
         problems: Vec<String>,
     },
 
-    /// What the registry the definition was read from refused.
+    /// What the curation pipeline registry refused.
     #[error(transparent)]
-    Registry(#[from] RegistryError),
+    Pipelines(#[from] RegistryError),
+
+    /// What the workflow definition registry refused. Two variants rather than
+    /// one, because two registries answer here and a reader of a refusal has
+    /// to know which of them said it.
+    #[error(transparent)]
+    Definitions(#[from] DefinitionError),
 
     /// What the transaction that starts a run refused.
     #[error(transparent)]
@@ -287,12 +292,14 @@ impl StartRefused {
             Self::NotConfigured(_) | Self::Unknown(_) | Self::Invalid(_) | Self::Refused { .. } => {
                 true
             }
-            // The only half of a registry failure worth coming back for. A
-            // rejected request is refused identically forever, and a stored
-            // object that will not parse does not start parsing.
-            Self::Registry(error) => {
+            // The only half of a registry failure worth coming back for, and
+            // the same half on both of them. A rejected request is refused
+            // identically forever, and a stored object that will not parse
+            // does not start parsing.
+            Self::Pipelines(error) => {
                 !matches!(error, RegistryError::Store(port) if port.is_retryable())
             }
+            Self::Definitions(error) => error.says_the_same_next_time(),
             Self::Command(error) => error.says_the_same_next_time(),
         }
     }
@@ -551,8 +558,7 @@ impl<S: WorkflowStore> Executions<'_, S> {
             .ok_or(StartRefused::NotConfigured(Missing::WorkflowRegistry))?;
         let saved = registry
             .get(name, revision)
-            .await
-            .map_err(HandleError::Store)?
+            .await?
             .ok_or_else(|| StartRefused::Unknown(format!("workflow {name}")))?;
         saved
             .definition
@@ -886,6 +892,68 @@ mod tests {
         assert!(refused.says_the_same_next_time());
     }
 
+    /// A registered workflow whose stored head will not read back.
+    ///
+    /// The slot this schedule owns is settled rather than left due, which is
+    /// the whole difference: the same case used to arrive as one opaque
+    /// string, read as an unreachable store, and be retried every minute for
+    /// ever behind a card that said it was still trying.
+    #[tokio::test]
+    async fn a_corrupt_registered_workflow_settles_its_slot_rather_than_asking_again() {
+        let objects = store();
+        let registry = DefinitionRegistry::new(objects.clone());
+        let definition: crate::definition::WorkflowSpec =
+            serde_json::from_value(serde_json::json!(
+                {"name": "house/import", "version": "1", "steps": [
+                    {"id": "acquire", "task_ref": "acquire@1", "queue": "local",
+                     "timeout_seconds": 30, "outputs": ["rows"]}
+                ]}
+            ))
+            .expect("a workflow this deployment would run");
+        registry
+            .save(
+                definition,
+                "operator".to_owned(),
+                time::OffsetDateTime::now_utc(),
+            )
+            .await
+            .expect("a definition that compiles saves");
+
+        let head = objects
+            .list("workflows/heads/")
+            .await
+            .expect("the head this registry just wrote")
+            .remove(0)
+            .key;
+        objects
+            .put(&head, b"{not a definition".to_vec())
+            .await
+            .expect("something else entirely, under the key the head is at");
+
+        let executions = Executions::<MemoryWorkflowStore> {
+            handler: None,
+            pipelines: None,
+            workflows: Some(&registry),
+            payloads: PayloadDefault::default(),
+            archive: false,
+            engine: QueryEngine::default(),
+            query_timeout_seconds: None,
+            notify: None,
+        };
+        let refusal = executions
+            .compile_head(DefinitionKind::Workflow, "house/import")
+            .await
+            .expect_err("bytes that are not a workflow definition");
+        let StartRefused::Definitions(DefinitionError::Corrupt { key, .. }) = &refusal else {
+            panic!("{refusal} should say which object, and that it is this registry's");
+        };
+        assert_eq!(key, &head);
+        assert!(
+            refusal.says_the_same_next_time(),
+            "a stored object that will not parse does not start parsing"
+        );
+    }
+
     #[test]
     fn only_a_bad_moment_is_worth_coming_back_for() {
         // The three that a status code could not tell apart, all 5xx and all
@@ -905,6 +973,20 @@ mod tests {
             })
             .into(),
             HandleError::Decision(crate::DecisionError::AlreadyStarted).into(),
+            // And the same three from the other registry a start compiles
+            // from. These read as a bad moment until the day this package
+            // gave that registry an error type with three answers in it.
+            DefinitionError::Corrupt {
+                key: "workflows/heads/abc.json".to_owned(),
+                message: "expected value".to_owned(),
+            }
+            .into(),
+            DefinitionError::Store(PortError::Rejected {
+                target: "the object store",
+                message: "that prefix is not readable".to_owned(),
+            })
+            .into(),
+            DefinitionError::Refused(vec!["step 'fit' names no runtime".to_owned()]).into(),
         ];
         for refusal in settled {
             assert!(
@@ -920,6 +1002,11 @@ mod tests {
             })
             .into(),
             HandleError::Contended { retries: 8 }.into(),
+            DefinitionError::Store(PortError::Unavailable {
+                target: "the object store",
+                message: "connection refused".to_owned(),
+            })
+            .into(),
         ];
         for refusal in come_back {
             assert!(

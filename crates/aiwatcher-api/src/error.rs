@@ -190,6 +190,12 @@ pub enum ApiError {
     #[error(transparent)]
     DatasetRegistry(#[from] aiwatcher_datasets::RegistryError),
 
+    /// The other registry a managed run may be compiled from. No `#[from]`:
+    /// a definition that does not compile becomes a 422 carrying every
+    /// problem, which is [`ApiError::PlanRefused`] rather than this.
+    #[error(transparent)]
+    WorkflowDefinitions(aiwatcher_execution::DefinitionError),
+
     #[error(transparent)]
     AnnotationRegistry(#[from] aiwatcher_annotations::Error),
 
@@ -317,6 +323,7 @@ impl ApiError {
             Self::Bus(_) => (StatusCode::BAD_REQUEST, "bad_request"),
             Self::Registry(error) => registry_parts(error),
             Self::DatasetRegistry(error) => dataset_registry_parts(error),
+            Self::WorkflowDefinitions(error) => definition_registry_parts(error),
             Self::AnnotationRegistry(error) => annotation_registry_parts(error),
             Self::Evaluation(error) => match error {
                 aiwatcher_evaluation::EvaluationError::Invalid { .. } => {
@@ -368,8 +375,33 @@ impl From<aiwatcher_execution::StartRefused> for ApiError {
             StartRefused::Unknown(what) => Self::NotFound(what),
             StartRefused::Invalid(why) => Self::BadRequest(why),
             StartRefused::Refused { summary, problems } => Self::PlanRefused { summary, problems },
-            StartRefused::Registry(error) => Self::DatasetRegistry(error),
+            StartRefused::Pipelines(error) => Self::DatasetRegistry(error),
+            StartRefused::Definitions(error) => error.into(),
             StartRefused::Command(error) => Self::Execution(error),
+        }
+    }
+}
+
+/// A refused read of an authored workflow definition, as a status.
+///
+/// The same three answers the dataset registry already gives, because it is
+/// the same question: a store that could not be reached is a 503 worth
+/// repeating, one that understood the read and refused it is a 502 that will
+/// refuse it identically, and an object that will not read back is a 500 that
+/// no amount of waiting fixes. It was one 503 for all three — a promise that
+/// a corrupt definition would come back.
+impl From<aiwatcher_execution::DefinitionError> for ApiError {
+    fn from(error: aiwatcher_execution::DefinitionError) -> Self {
+        use aiwatcher_execution::DefinitionError;
+        match error {
+            // Every problem at once, the way the route in front of the store
+            // already answers: a summary and `details`, never one sentence
+            // with semicolons in it.
+            DefinitionError::Refused(problems) => Self::PlanRefused {
+                summary: "workflow definition is invalid".to_owned(),
+                problems,
+            },
+            other => Self::WorkflowDefinitions(other),
         }
     }
 }
@@ -522,6 +554,24 @@ fn dataset_registry_parts(error: &aiwatcher_datasets::RegistryError) -> (StatusC
         }
         RegistryError::Store(_) => (StatusCode::BAD_GATEWAY, "registry_rejected"),
         RegistryError::Corrupt { .. } => (StatusCode::INTERNAL_SERVER_ERROR, "registry_corrupt"),
+    }
+}
+
+/// A refused definition read, as a status — the dataset registry's three,
+/// for the registry a workflow is compiled from.
+fn definition_registry_parts(
+    error: &aiwatcher_execution::DefinitionError,
+) -> (StatusCode, &'static str) {
+    use aiwatcher_execution::DefinitionError;
+    match error {
+        DefinitionError::Store(port) if port.is_retryable() => {
+            (StatusCode::SERVICE_UNAVAILABLE, "registry_unavailable")
+        }
+        DefinitionError::Store(_) => (StatusCode::BAD_GATEWAY, "registry_rejected"),
+        DefinitionError::Corrupt { .. } => (StatusCode::INTERNAL_SERVER_ERROR, "registry_corrupt"),
+        // Reached only by constructing the variant directly: `From` turns a
+        // refusal into the 422 that carries its problems.
+        DefinitionError::Refused(_) => (StatusCode::UNPROCESSABLE_ENTITY, "plan_refused"),
     }
 }
 

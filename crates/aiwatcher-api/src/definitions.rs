@@ -44,7 +44,8 @@ pub(crate) fn registry(state: &AppState) -> ApiResult<&Arc<DefinitionRegistry>> 
 
 #[utoipa::path(post, path = "/api/v1/workflow-definitions", request_body = WorkflowSpec,
     responses((status = 200, body = SavedWorkflow), (status = 403, body = crate::error::ErrorBody),
-        (status = 422, body = crate::error::ErrorBody), (status = 501, body = crate::error::ErrorBody),
+        (status = 422, body = crate::error::ErrorBody), (status = 500, body = crate::error::ErrorBody),
+        (status = 501, body = crate::error::ErrorBody), (status = 502, body = crate::error::ErrorBody),
         (status = 503, body = crate::error::ErrorBody)), tag = "execution")]
 async fn register_workflow(
     State(state): State<AppState>,
@@ -72,23 +73,18 @@ async fn register_workflow(
     }
     let saved = registry(&state)?
         .save(body, requested_by, time::OffsetDateTime::now_utc())
-        .await
-        .map_err(aiwatcher_execution::HandleError::Store)?;
+        .await?;
     Ok(Json(saved))
 }
 
 #[utoipa::path(get, path = "/api/v1/workflow-definitions",
-    responses((status = 200, body = Vec<SavedWorkflow>), (status = 501, body = crate::error::ErrorBody),
+    responses((status = 200, body = Vec<SavedWorkflow>), (status = 500, body = crate::error::ErrorBody),
+        (status = 501, body = crate::error::ErrorBody), (status = 502, body = crate::error::ErrorBody),
         (status = 503, body = crate::error::ErrorBody)), tag = "execution")]
 async fn list_workflow_definitions(
     State(state): State<AppState>,
 ) -> ApiResult<Json<Vec<SavedWorkflow>>> {
-    Ok(Json(
-        registry(&state)?
-            .list()
-            .await
-            .map_err(aiwatcher_execution::HandleError::Store)?,
-    ))
+    Ok(Json(registry(&state)?.list().await?))
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]
@@ -99,7 +95,8 @@ struct RevisionQuery {
 #[utoipa::path(get, path = "/api/v1/workflow-definitions/{name}",
     params(("name" = String, Path), RevisionQuery),
     responses((status = 200, body = SavedWorkflow), (status = 404, body = crate::error::ErrorBody),
-        (status = 501, body = crate::error::ErrorBody), (status = 503, body = crate::error::ErrorBody)), tag = "execution")]
+        (status = 500, body = crate::error::ErrorBody), (status = 501, body = crate::error::ErrorBody),
+        (status = 502, body = crate::error::ErrorBody), (status = 503, body = crate::error::ErrorBody)), tag = "execution")]
 async fn get_workflow_definition(
     State(state): State<AppState>,
     Path(name): Path<String>,
@@ -107,8 +104,7 @@ async fn get_workflow_definition(
 ) -> ApiResult<Json<SavedWorkflow>> {
     registry(&state)?
         .get(&name, query.revision.as_deref())
-        .await
-        .map_err(aiwatcher_execution::HandleError::Store)?
+        .await?
         .map(Json)
         .ok_or_else(|| ApiError::NotFound(format!("workflow definition {name}")))
 }
