@@ -362,6 +362,7 @@ export function Evidence({
         </div>
 
         <StateNote state={state} counts={counts ?? undefined} />
+        {evidence.reproducible ? null : <JudgeNote evidence={evidence} />}
         {gaps ? <GapNote report={gaps} /> : null}
       </Card>
 
@@ -419,6 +420,59 @@ function StateNote({ state, counts }: { state: EvidenceState; counts?: ResultCou
       ) : null}
       {state === 'forbidden' ? <ForbiddenCauses mayReadContent={mayReadContent} /> : null}
       {note.next ? <p className="mt-1">{note.next}</p> : null}
+    </div>
+  );
+}
+
+/**
+ * Numbers a model gave, and how far to trust it.
+ *
+ * Every other number on this screen can be had again by re-reading the bytes
+ * behind it. These cannot: a judge answered at the time, so the result carries
+ * how often it agreed with the people it was calibrated against. Agreement is
+ * not a delta and is not coloured — whether 0.8 is good enough is the reader's
+ * call, made beside the number.
+ */
+function JudgeNote({ evidence }: { evidence: DurableEvaluation }) {
+  const judge = evidence.manifest?.context.judge;
+  const report = evidence.judge;
+  return (
+    <div className="mt-3 rounded-md border border-warning/40 bg-warning/5 p-3 text-xs">
+      <p className="font-medium">
+        Measured by a model at the time — re-reading will not reproduce it.
+      </p>
+      {judge ? (
+        <p className="mt-1 text-muted-foreground">
+          {judge.provider} · {judge.model.name} @ {judge.model.version}, calibrated on{' '}
+          {judge.calibration_dataset.name}.
+        </p>
+      ) : null}
+      {report ? (
+        <table className="mt-2 w-full text-left">
+          <thead className="text-muted-foreground">
+            <tr>
+              <th className="font-normal">Metric</th>
+              <th className="font-normal">Agreed with people</th>
+              <th className="font-normal">Answered</th>
+              <th className="font-normal">Mean distance</th>
+            </tr>
+          </thead>
+          <tbody>
+            {report.agreement.map((row) => (
+              <tr key={row.metric}>
+                <td>{row.metric}</td>
+                <td>{`${Math.round(row.agreement * 100)}%`}</td>
+                <td>{`${row.answered} of ${row.items}`}</td>
+                <td>{row.mean_absolute_difference?.toFixed(3) ?? '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <p className="mt-1 text-danger">
+          This result carries no agreement with its calibration set.
+        </p>
+      )}
     </div>
   );
 }

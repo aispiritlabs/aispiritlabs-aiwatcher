@@ -44,6 +44,17 @@ export const searchSchema = z.object({
   evidence: z.string().optional(),
   /** Whether the operator's half — which pairs this instance admits — is open. */
   approvals: z.boolean().optional(),
+  /** Whether the form that starts a measurement is open. */
+  measure: z.boolean().optional(),
+  /**
+   * The declared run that form is following, once there is one.
+   *
+   * In the URL because a managed run outlives the tab: a reload, or a link sent
+   * to the operator who has to admit it, lands on the same declaration.
+   */
+  declaration: z.string().optional(),
+  /** The execution that declaration started, which a start answers with. */
+  measured: z.string().optional(),
   baseline: z.string().optional(),
   /**
    * The published result the open evidence is compared with.

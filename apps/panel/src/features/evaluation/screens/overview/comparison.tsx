@@ -205,6 +205,12 @@ function Verdict({
           measurement moves when nothing changed — rather than the effect of a change.
         </p>
       ) : null}
+      {comparison.judged && comparison.comparability === 'comparable' ? (
+        <p className="rounded-md bg-muted/60 px-3 py-2">
+          A model judged these numbers. The difference below includes how much the judge itself
+          varies; each result's agreement with its calibration set is how far to trust either side.
+        </p>
+      ) : null}
       <Deltas metrics={comparison.metrics} />
       {/* Stated rather than left to be discovered: the two headers are what a
           comparison costs, and the cases behind them are two full reads —

@@ -18,6 +18,7 @@ import type {
 } from '@/api/generated/types.gen';
 import { StatusBadge } from '@/shared/components/status-badge';
 import { Approvals } from './approvals';
+import { Measure } from './measure';
 import { ComparabilityControl } from './comparability';
 import { EvidencePane, EvidenceRow, EvidenceUnavailable, Retention, useEvidence } from './evidence';
 import type { DurableEvaluation } from '@/api/generated/types.gen';
@@ -195,6 +196,20 @@ export function EvaluationPage() {
           <TimeRange value={window} onChange={(seconds) => select({ window: seconds })} />
           <Button
             size="sm"
+            variant={search.measure ? 'default' : 'outline'}
+            aria-pressed={search.measure === true}
+            onClick={() =>
+              select(
+                search.measure
+                  ? { measure: undefined, declaration: undefined, measured: undefined }
+                  : { measure: true },
+              )
+            }
+          >
+            Measure
+          </Button>
+          <Button
+            size="sm"
             variant={search.approvals ? 'default' : 'outline'}
             aria-pressed={search.approvals === true}
             onClick={() => select({ approvals: search.approvals ? undefined : true })}
@@ -203,6 +218,15 @@ export function EvaluationPage() {
           </Button>
         </div>
       </div>
+      {search.measure ? (
+        <Measure
+          declaration={search.declaration}
+          measured={search.measured}
+          onDeclared={(declaration) => select({ declaration, measured: undefined })}
+          onStarted={(measured) => select({ measured })}
+          onOpenResult={(evidence) => select({ evidence, report: undefined })}
+        />
+      ) : null}
       {search.approvals ? <Approvals /> : null}
 
       <LocalViews

@@ -190,3 +190,39 @@ it('says how many kept results are missing bytes, beside how the pass itself wen
   );
   expect(screen.getByText(/2 kept results are missing bytes/)).toBeTruthy();
 });
+
+it('says a model gave these numbers, and how often it agreed with people, uncoloured', async () => {
+  only([
+    {
+      method: 'GET',
+      path: '/cases',
+      answer: { status: 200, body: { version: 'ff00', cases: [], state: 'complete' } },
+    },
+  ]);
+  render(
+    withQueries(
+      <Evidence
+        evidence={evidence('complete', {
+          reproducible: false,
+          judge: {
+            calibration: { name: 'people-on-baseline', version: 'f'.repeat(64) },
+            agreement: [
+              {
+                metric: 'correct',
+                rubric: { name: 'correct', version: 'r'.repeat(64) },
+                items: 3,
+                answered: 2,
+                agreement: 2 / 3,
+                mean_absolute_difference: 0.5,
+              },
+            ],
+          },
+        })}
+      />,
+    ),
+  );
+  expect(await screen.findByText(/re-reading will not reproduce it/)).toBeTruthy();
+  expect(screen.getByText('67%')).toBeTruthy();
+  // What it declined to answer is shown beside the agreement, not hidden in it.
+  expect(screen.getByText('2 of 3')).toBeTruthy();
+});

@@ -827,6 +827,13 @@ what runs a real graph.
   declares `MetricDirection` per metric; a folded report's metric is a name a
   producer sent, so colouring one there would be guessing whether a rise is an
   improvement or a bill.
+  Its **Measure** form is the start of a scoring run, and it derives nothing
+  either: the cohort and the variant are a published result's, the metrics, the
+  approval and the run's identity come back from the server, and the
+  declaration and the run it started live in the URL. Admitting from there
+  stages the files the cohort pins beside the declaration's own manifest, so
+  nobody writes one out. A judged result says it is a model's word and shows
+  its agreement with people uncoloured.
 - `annotations` is the one area that draws. Its canvas puts an `<img>` and an
   `<svg>` in one transformed container, both sized to the image's *natural*
   pixels, so SVG user units are image coordinates and no shape ever carries a
