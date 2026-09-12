@@ -369,6 +369,36 @@ outline below is what the spec already fixes.
   own log, in JSON, because a step's process lives inside the server and nothing
   outside it can list one — and the two assertions that are about a process
   being *gone* ask `pgrep`.
+- **A container is worth a third backend because of what the second gave up**
+  (2.7). The process backend runs neither the step's image nor its limits, and
+  those are two of the three things ADR_0029 was written for. An engine runs
+  both, on a machine that has one and no cluster — so the memory phase is asked
+  of it and passes with the cluster's own `OOMKilled (exit 137)`, from the
+  engine's own flag.
+- **The engine is the record, so this backend keeps no state** (2.7). A
+  container carries the manifest's labels *and* its annotations as engine
+  labels, so `docker ps` + one `docker inspect` is the listing the launcher
+  reads and a container outlives the server that asked for it — the cluster's
+  property, which the process backend cannot have and pays for with a map and a
+  `Drop`.
+- **The client, not the socket** (2.7). A machine with an engine has the client;
+  the five calls used here are the stable half of its interface, and an HTTP
+  client against a socket whose path and permissions differ per installation
+  would be a dependency and a configuration question for a development backend.
+  The cost is a process per call on a two-second loop, and is stated.
+- **Swap is pinned to the memory limit** (2.7). A pod has none and the engine's
+  own default grants as much again, under which a stage over its limit is slow
+  rather than stopped — and being stopped is the whole reason a limit is set.
+  The one place this backend configures rather than copies.
+- **The template's `imagePullPolicy` is honoured** (2.7). A locally built image
+  that was never pushed is exactly the case this is for, so `IfNotPresent` and
+  an absent policy both mean `--pull=missing`, `Never` means never, `Always`
+  means always. Read from the manifest rather than assumed.
+- **Found by running it** (2.7): a listing filter with no `label=` prefix. The
+  engine refuses such a filter rather than matching everything, so `jobs()`
+  failed every pass while the launches went on working — seven containers left
+  behind, and a cancel that waited for a lease instead of stopping a container.
+  The gate caught it on both counts.
 
 ## Tasks
 
@@ -422,10 +452,13 @@ outline below is what the spec already fixes.
       in aiwatcher's own gate (`just e2e-pods`); naming a template on planner's
       own four is planner's commit*
 
-### Part 3 — the other backend (the owner's ask, 2026-09-12)
+### Part 3 — the other backends (the owner's ask, 2026-09-12)
 - [x] 2.6 `AIWATCHER_POD_RUNTIME=process`: the same launcher against this host,
       one process per attempt, proven by `just e2e-processes` — *what a pod is
       is the deployment's*, *a host refuses what it cannot keep*
+- [x] 2.7 `AIWATCHER_POD_RUNTIME=docker`: one container per attempt on this
+      host's own engine — the step's image under the template's limits, so the
+      memory phase holds too — proven by `just e2e-docker`
 
 ## Log
 - 2026-09-11 12:50 — job planned: Part 1 in three passes cut where other sessions' work sits, five decisions, ten tasks; Part 2 outlined
@@ -439,3 +472,4 @@ outline below is what the spec already fixes.
 - 2026-09-12 01:10 — 2.4 built (`c713a1e`): the launcher's pass gained a watch — the cluster's own Jobs and pods listing, read once each per pass — which ends a dead pod's attempt as `Infrastructure` with the cluster's own reason (`OOMKilled`, `DeadlineExceeded`, an exit code), ends and deletes a Job no pod claimed within its template's start allowance, and stops a cancelling or already-ended run's pods as `Policy` so the cancel completes rather than waiting out a lease; the attempt rides as three annotations so it can be read back; the log is the last 256 KiB through a `Tail` that compiles in every build, stored under the artifacts prefix and recorded in the catalog against the attempt, after which the Job is deleted (`DeleteParams::background()`, or the pod outlives it); a log that could not be read or stored leaves the Job for the next pass. `RunState::cancelling()`/`is_cancelling()` replace matching a badge's string, and the cancel that left a dispatched attempt in the claim table for ever — `StepSkipped` retiring attempt `0` — is fixed in the handler. Clippy `-Dwarnings --all-features`, execution 160 + 13 + 23 + 14 + 15 + 12, server 93 + 38 and 93 with `kube`, API 156 + 24, the postgres (5 + 7) and duckdb (4) store contracts, `just chart-check`, `cargo deny` and `just openapi-check` green
 - 2026-09-12 07:55 — 2.5 built (`0ec11aa`, `409ec5d`), and AW-4's exit is green on a real cluster: `just e2e-pods` runs an import's four stages as four pods on the local Kubernetes and the same four through one long-lived worker, and compares them — every stage's output has one digest across both paths, while the artifacts saying who ran each stage differ, four pod names against one worker's. Beside it: the chart's Role covers each call the launcher makes and refuses four it must not, a cancel deleted `analyze`'s Job and reached `cancelled` in 2.3s with `persist` never started, a stage taking 512MiB against its 192Mi limit failed twice as `infrastructure` with the cluster's own `OOMKilled (exit 137)` while the stages before it stood, and every pod's log was in the store with no Job left behind. It found the bug that mattered: two rustls crypto providers in one process meant the launcher panicked on its first call to any cluster, in a build that was green everywhere else. Clippy `-Dwarnings --all-features`, `cargo test --workspace --all-targets` (47 suites), server 93 + 38 with `kube`, `just sdk-check` 450, `just chart-check`, `just openapi-check` and `cargo deny` green
 - 2026-09-12 09:34 — 2.6 built (`c77a997`, `aaf09fc`): the launcher's backend is a setting — `AIWATCHER_POD_RUNTIME=kubernetes|process` — and `ProcessCluster` is the second `Cluster`, one process per attempt from the same manifest, with a slot limit that queues rather than refuses, both streams into one 256 KiB tail, a delete that kills, a `Drop` that stops what is left, and refusals for `envFrom`, a volume and any environment value but the downward API's own name. Templates in the work role no longer need the `kube` feature under this runtime, and a namespace beside it is refused. 15 new tests (12 on the backend against real processes, 3 on the config); `just e2e-processes` green on a binary built with no cargo feature, no image and no kubeconfig — four distinct pod names, one digest per stage against the worker, a cancel in 2.0s, every log in the store — and `just e2e-pods` still green on orbstack, memory phase included
+- 2026-09-12 09:59 — 2.7 built (`29c2978`, `ff3df98`): `AIWATCHER_POD_RUNTIME=docker` — `DockerCluster`, a third `Cluster`, one container per attempt from the same manifest, with the step's image under the template's limits, swap pinned to the limit, `imagePullPolicy` honoured, the manifest's labels and annotations as engine labels so the engine is the record, `OOMKilled` read off its own flag as the cluster's word, and `docker logs` through one `sh -c … 2>&1` so both streams arrive in the engine's order. The manifest's *reading* half moved into `pods::manifest` (`program`, `annotations_of`, `labels_of`) and `bounded` beside `Tail`, so the two backends outside a cluster read one representation. 8 new unit tests (the whole `docker run` line, the labels, the ceiling, the pull policy, the refusals, the endings, one container read back) and 2 config tests widened; `just e2e-docker` green on all six phases including memory, `just e2e-processes` and `just e2e-pods` still green after the refactor. Found by running it: a `docker ps` filter needs its `label=` prefix or the engine refuses it — the listing failed every pass, seven containers were left behind and a cancel waited for a lease

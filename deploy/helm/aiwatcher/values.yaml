@@ -402,11 +402,11 @@ execution:
   # attempt against the same store.
   pods:
     # A step's pod is a Job in this cluster, and this chart offers no other
-    # backend on purpose. `AIWATCHER_POD_RUNTIME=process` runs each attempt as
-    # a process on the host the work role is on — no image, no resource limit,
-    # and gone when that process is (ADR_0029, amended) — which is a
-    # development answer for a machine with no cluster, and in a cluster would
-    # be step code running in this pod, with this service account.
+    # backend on purpose. `AIWATCHER_POD_RUNTIME=docker` runs each attempt as a
+    # container on the host the work role is on, and `=process` as a bare
+    # process with no image and no limit (ADR_0029, amended): development
+    # answers for a machine with no cluster, and in a cluster either would be
+    # step code running beside the API, with this pod's service account.
     #
     # One per name, the operator's; no route writes one. Each lists the images
     # it runs (repositories, matched exactly and never by prefix — the step

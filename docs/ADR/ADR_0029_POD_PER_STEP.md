@@ -365,55 +365,77 @@ consequence of naming a log by the hash of its own bytes is worth writing down:
 identical output is one object, so pods cannot be counted by counting logs.
 
 
-## Amendment, 2026-09-12: the backend is a choice, and one of them is this host
+## Amendment, 2026-09-12: the backend is a choice, and two of them are this host
 
 The decision above says a step's pod is a `batch/v1` Job, and that is one
 answer to a question it did not separate out: *what a pod is* is the
 deployment's, and the plan must not know. A `container_job` step names a
 template and an image on that template's list, and where that runs is nobody's
-business but the operator's — so `AIWATCHER_POD_RUNTIME` is `kubernetes`
-(the default) or `process`, and the second runs each attempt as a process on
-the host the work role is on.
+business but the operator's — so `AIWATCHER_POD_RUNTIME` is one of three.
 
-**Why it exists.** aiwatcher is developed on machines with no cluster, and
+| | image | limits | needs | a pod outlives the server |
+|---|---|---|---|---|
+| `kubernetes` (default) | yes | yes | a cluster, the `kube` feature | yes |
+| `docker` | yes | yes | a container engine | yes |
+| `process` | no | no | nothing | no |
+
+**Why they exist.** aiwatcher is developed on machines with no cluster, and
 `ContainerJob` was the one binding that could not be run or verified on one:
 the refusal at start named a cargo feature, and everything past it needed
-Kubernetes. A deployment small enough to be one process has the same problem
-for real. What the process backend buys is that the whole path — the derived
-name, the claim by key, the lease, the watch, the cancel, the log in the
-catalog — runs and is asserted where there is nothing to install.
+Kubernetes. A deployment small enough to be one host has the same problem for
+real. What these buy is that the whole path — the derived name, the claim by
+key, the lease, the watch, the cancel, the log in the catalog — runs and is
+asserted where there is nothing to install.
 
-**What it keeps.** Everything the launcher decides, because the backend is
-asked the same four questions and is sent the same manifest: exactly one
-process per attempt, named from the key; a start allowance while it waits for
-a free slot, which is how a host answers what a scheduler answers; the pod's
-own word for how it ended, an exit code or a signal; the last 256 KiB in the
-catalog against the attempt that printed it; and a delete that kills it.
+**What they keep.** Everything the launcher decides, because each backend is
+asked the same four questions and is sent the same manifest: exactly one pod
+per attempt, named from the key; a start allowance while it waits, which is how
+a host answers what a scheduler answers; the pod's own word for how it ended;
+the last 256 KiB in the catalog against the attempt that printed it; and a
+delete that stops it. `docker` keeps two more things, and they are the reason
+to prefer it where there is an engine: the step runs **its declared image**,
+and it runs under the template's **limits**, so a stage over its memory ask is
+stopped by the kernel with `OOMKilled` — the cluster's own word, from the
+engine's own flag — instead of taking the host's memory.
 
-**What it cannot keep, and says rather than pretends.** The image is recorded
-and never run — the command is the template's and the host's — and so are the
-resource requests, the limits, the security context, the service account and
-the node selector. A stage over its memory ask is not stopped here; it takes
-the host's memory, which is why the gate's memory phase is asked of the cluster
-backend only. And a process dies with the server that started it, where a Job
-outlives a launcher's restart and is picked up by the next one.
+**What they cannot keep, and say rather than pretend.** A node selector, a
+service account and a security context are a cluster's answers and are ignored
+by both. `process` ignores the image and the limits as well: the command is the
+template's and the host's, a stage over its memory ask is not stopped, and a
+process dies with the server that started it, where a Job or a container
+outlives a launcher's restart and is found again by its labels. Swap is the one
+place `docker` is configured rather than copied: it is pinned to the memory
+limit, because a pod has none and the engine's own default grants as much again
+— under which a limit makes a stage slow rather than stopped.
 
-**What it refuses instead of ignoring.** Everything the *program* would read or
-authenticate as: a template naming `envFrom`, a volume, or an environment value
-from anywhere but the downward API's own `metadata.name` ends the attempt as a
-validation failure naming it. Ignored, that would be running something else
-under a step's name — the program without the credential it was written to
-hold, which fails somewhere else entirely and says nothing about why.
+**What they refuse instead of ignoring.** Everything the *program* would read
+or authenticate as: a template naming `envFrom`, a volume, or an environment
+value from anywhere but the downward API's own `metadata.name` ends the attempt
+as a validation failure naming it. Ignored, that would be running something
+else under a step's name — the program without the credential it was written to
+hold, which fails somewhere else entirely and says nothing about why. The
+reading of a manifest lives beside its writing, in `pods::manifest`, so the two
+backends that are not a cluster read one representation rather than being
+handed a second description of it.
 
-**Why the chart offers it nowhere.** A release in a cluster asking for it would
-be running step code in the API pod, with that pod's service account, its
-egress and its memory. The variable exists, and no value renders it: this is
-the `file` workflow store's shape — a development backend that says so by name
-(ADR_0025) — and `AIWATCHER_POD_NAMESPACE` beside it is refused at start,
-because one of the two is what somebody meant.
+**Why `docker` drives the command line.** A machine with an engine has the
+client, the five calls used here are the stable half of its interface, and an
+HTTP client against a socket whose path and permissions differ per installation
+would be a dependency and a configuration question for a development backend.
+The cost is a process per call, on a loop that runs every two seconds.
 
-Proven by `just e2e-processes`: the same five things `just e2e-pods` proves,
-against a binary built with no cargo feature at all, no image and no
-kubeconfig — minus the memory phase, which is not asked. Where a cluster is
-asked for a Job listing, that run reads the launcher's own log instead: a
+**Why the chart offers neither.** A release in a cluster asking for one would be
+running step code beside the API — in the API pod for `process`, on the node's
+own engine for `docker`, with that pod's service account and its memory. The
+variable exists, and no value renders it: this is the `file` workflow store's
+shape, a development backend that says so by name (ADR_0025), and
+`AIWATCHER_POD_NAMESPACE` beside either is refused at start, because one of the
+two is what somebody meant.
+
+Proven by `just e2e-docker` and `just e2e-processes`: the same phases
+`just e2e-pods` proves, against a binary built with no cargo feature at all.
+The container run asks all six, the memory one included and passing on the
+cluster's own words; the process run is not asked that one, and says so.
+Where a cluster is asked for a Job listing, the container run asks the engine
+for a container listing and the process run reads the launcher's own log — a
 step's process lives inside the server and no `kubectl` can see it.

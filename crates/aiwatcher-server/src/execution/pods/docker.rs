@@ -18,14 +18,9 @@
 //! container runtime's. The first two are ignored, the last two refused with
 //! the rest of what a program would read ([`manifest::program`]).
 //!
-//! Two choices worth stating. It drives the **command line** rather than the
-//! engine's socket: a machine with Docker has the client, the five calls here
-//! are the stable half of its interface, and an HTTP client against a socket
-//! whose path and permissions differ per installation would be a dependency
-//! and a configuration question for a development backend. And swap is pinned
-//! to the memory limit, because a pod has none and Docker's own default is to
-//! grant as much again — under which a stage over its limit is slow rather
-//! than stopped, which is the one thing the limit is for.
+//! Why this drives the command line rather than the engine's socket, and why
+//! swap is pinned to the memory limit, are in ADR_0029's amendments with the
+//! rest of what a backend that is not a cluster may and may not do.
 
 use std::collections::BTreeMap;
 use std::io::ErrorKind;
