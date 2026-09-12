@@ -20,6 +20,7 @@ use std::time::Duration;
 
 use aiwatcher_evaluation::{
     EvaluationError, JudgeCall, JudgeFailure, JudgeModel, JudgeReply, Registry as Evaluations,
+    Served,
 };
 use async_trait::async_trait;
 use serde_json::{Value, json};
@@ -121,8 +122,24 @@ impl JudgeModel for OpenAiJudge {
             })?;
         Ok(JudgeReply {
             content: content.to_owned(),
+            served: Served {
+                model: named(&body["model"]),
+                fingerprint: named(&body["system_fingerprint"]),
+            },
         })
     }
+}
+
+/// A provider's name for something, as one bounded line, or nothing.
+fn named(value: &Value) -> Option<String> {
+    let name: String = value
+        .as_str()?
+        .chars()
+        .filter(|letter| !letter.is_control())
+        .take(200)
+        .collect();
+    let name = name.trim();
+    (!name.is_empty()).then(|| name.to_owned())
 }
 
 /// A status and the provider's own words about it, bounded.
@@ -267,7 +284,10 @@ mod tests {
                 return Err(JudgeFailure::Unavailable("503".into()));
             }
             self.asked.lock().expect("a lock").push(asked.clone());
-            Ok(JudgeReply { content: asked })
+            Ok(JudgeReply {
+                content: asked,
+                served: Served::default(),
+            })
         }
     }
 
@@ -311,6 +331,22 @@ mod tests {
             ask_all(&judge, calls, 1).await,
             Err(JudgeFailure::Unavailable(_))
         ));
+    }
+
+    #[test]
+    fn a_providers_name_for_what_served_is_one_bounded_line_or_nothing() {
+        assert_eq!(
+            named(&json!("gpt-4o-2024-08-06")).as_deref(),
+            Some("gpt-4o-2024-08-06")
+        );
+        assert_eq!(named(&json!("b6500-\nabc")).as_deref(), Some("b6500-abc"));
+        assert_eq!(
+            named(&json!("x".repeat(500))).map(|name| name.len()),
+            Some(200)
+        );
+        assert_eq!(named(&json!("  ")), None);
+        assert_eq!(named(&json!(7)), None);
+        assert_eq!(named(&Value::Null), None);
     }
 
     #[test]

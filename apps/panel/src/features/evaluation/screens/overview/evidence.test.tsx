@@ -216,6 +216,10 @@ it('says a model gave these numbers, and how often it agreed with people, uncolo
                 mean_absolute_difference: 0.5,
               },
             ],
+            served: [
+              { model: 'gpt-4o-2024-08-06', fingerprint: 'fp_a', replies: 4 },
+              { model: 'gpt-4o-2024-08-06', fingerprint: 'fp_b', replies: 1 },
+            ],
           },
         })}
       />,
@@ -225,4 +229,7 @@ it('says a model gave these numbers, and how often it agreed with people, uncolo
   expect(screen.getByText('67%')).toBeTruthy();
   // What it declined to answer is shown beside the agreement, not hidden in it.
   expect(screen.getByText('2 of 3')).toBeTruthy();
+  // The provider's own word about what answered, both backends of it.
+  expect(screen.getByText(/gpt-4o-2024-08-06 \(fp_a\) answered 4 replies/)).toBeTruthy();
+  expect(screen.getByText(/\(fp_b\) answered 1 reply\./)).toBeTruthy();
 });

@@ -4003,6 +4003,13 @@ export type JudgeDeclaration = {
 export type JudgeReport = {
     agreement: Array<JudgeAgreement>;
     calibration: VersionReference;
+    /**
+     * What the provider said served the replies, over every question the run
+     * asked. The declared model and revision are the author's word; this is
+     * the provider's, and more than one row means the run's answers did not
+     * all come from one thing. Empty when no reply named anything.
+     */
+    served?: Array<ServedModel>;
 };
 
 /**
@@ -6962,6 +6969,16 @@ export type ScoringRunView = {
  */
 export type Sdk = 'Python' | 'Typescript' | 'Rust' | {
     Other: string;
+};
+
+/**
+ * One thing a provider said it served, and how many of the run's replies
+ * said so.
+ */
+export type ServedModel = {
+    fingerprint?: string | null;
+    model?: string | null;
+    replies: number;
 };
 
 /**

@@ -34,7 +34,13 @@ impl JudgeModel for Scripted {
         } else {
             json!({"value": question.contains("helpful")}).to_string()
         };
-        Ok(JudgeReply { content })
+        Ok(JudgeReply {
+            content,
+            served: Served {
+                model: Some("gemma-4-E2B-it-UD-Q4_K_XL.gguf".into()),
+                fingerprint: Some("b6500-abc123".into()),
+            },
+        })
     }
 }
 
@@ -258,6 +264,15 @@ async fn a_judged_run_publishes_what_the_model_said_beside_how_far_it_agreed_wit
         helpful.agreement, 0.5,
         "it called the dodge helpful and the person did not"
     );
+    assert_eq!(
+        report.served,
+        vec![ServedModel {
+            model: Some("gemma-4-E2B-it-UD-Q4_K_XL.gguf".into()),
+            fingerprint: Some("b6500-abc123".into()),
+            replies: 5,
+        }],
+        "what the provider said served every reply, beside what the run declared"
+    );
     let page = registry
         .cases(
             "judged-run",
@@ -431,6 +446,7 @@ async fn a_retried_judged_attempt_asks_only_what_was_not_answered_and_lands_on_i
             Ok(JudgeReply {
                 content: json!({"value": question.contains("helpful") == (again % 2 == 0)})
                     .to_string(),
+                served: Served::default(),
             })
         }
     }

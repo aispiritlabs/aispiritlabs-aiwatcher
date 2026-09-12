@@ -41,7 +41,7 @@ pub use context::{
 pub use judge::{
     CalibrationItem, CalibrationRequest, CalibrationSet, CalibrationVersion, JudgeAgreement,
     JudgeCall, JudgeDeclaration, JudgeFailure, JudgeMessage, JudgeModel, JudgeReply, JudgeReport,
-    JudgeSettings, agreement, ask, number, read, reply_schema,
+    JudgeSettings, Served, ServedModel, agreement, ask, number, read, reply_schema, served,
 };
 pub use manifest::{EvaluationManifest, EvaluationOrigin, PreparedEvaluation, VariantManifest};
 pub use reference::{DatasetKind, DatasetReference, VersionReference};

@@ -20,6 +20,7 @@ import type {
   DurableEvaluation,
   EvidenceCase,
   EvidenceState,
+  JudgeReport,
   ResultCounts,
   ResultStatus,
   RetentionReport,
@@ -447,6 +448,7 @@ function JudgeNote({ evidence }: { evidence: DurableEvaluation }) {
           {judge.calibration_dataset.name}.
         </p>
       ) : null}
+      {report ? <Served report={report} /> : null}
       {report ? (
         <table className="mt-2 w-full text-left">
           <thead className="text-muted-foreground">
@@ -474,6 +476,30 @@ function JudgeNote({ evidence }: { evidence: DurableEvaluation }) {
         </p>
       )}
     </div>
+  );
+}
+
+/**
+ * What the provider said answered, beside what the run declared.
+ *
+ * The declaration is the author's word and nothing can check it; this is the
+ * provider's own, read off every reply. Two rows mean the run's answers did not
+ * all come from one backend, which is worth saying rather than choosing one.
+ */
+function Served({ report }: { report: JudgeReport }) {
+  if (report.served === undefined || report.served.length === 0) {
+    return <p className="mt-1 text-muted-foreground">The provider named nothing it served.</p>;
+  }
+  return (
+    <ul className="mt-1 text-muted-foreground">
+      {report.served.map((row) => (
+        <li key={`${row.model ?? ''}|${row.fingerprint ?? ''}`}>
+          {`The provider said ${row.model ?? 'an unnamed model'}`}
+          {row.fingerprint ? ` (${row.fingerprint})` : ''}
+          {` answered ${row.replies} ${row.replies === 1 ? 'reply' : 'replies'}.`}
+        </li>
+      ))}
+    </ul>
   );
 }
 

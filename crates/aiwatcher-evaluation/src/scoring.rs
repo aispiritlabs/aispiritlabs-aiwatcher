@@ -272,7 +272,8 @@ impl ScoringRun {
         require(
             !(archive && asks_a_judge),
             "run.judge",
-            "a judge is a model call to a provider, and the archive's words do not leave the              archive",
+            "a judge is a model call to a provider, and the archive's words do not leave the \
+             archive",
         )?;
         if archive
             && let Some(spec) = card
@@ -661,7 +662,8 @@ pub fn replies(
             }
         }
     }
-    let report = crate::agreement(card, rubrics, &judge.calibration, calibration, &said);
+    let mut report = crate::agreement(card, rubrics, &judge.calibration, calibration, &said);
+    report.served = crate::served(replies);
     (judged, Some(report))
 }
 

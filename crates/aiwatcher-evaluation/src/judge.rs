@@ -217,6 +217,26 @@ pub struct JudgeCall {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JudgeReply {
     pub content: String,
+    /// What the provider said it answered with. Kept beside the reply rather
+    /// than checked against the declaration: the words a provider uses for a
+    /// model are its own — an alias, a file, a dated snapshot — and a refusal
+    /// on a spelling would refuse every honest provider that spells it another
+    /// way.
+    #[serde(default)]
+    pub served: Served,
+}
+
+/// A provider's own claim about what served one reply.
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct Served {
+    /// The response's `model`: what the provider says answered, which for a
+    /// hosted API is often the dated snapshot a moving name resolved to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// The response's `system_fingerprint`: the backend configuration, which
+    /// changes when the provider changes what serves the same model name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
 }
 
 /// Why no reply came back.
@@ -398,11 +418,28 @@ pub struct JudgeAgreement {
     pub mean_absolute_difference: Option<f64>,
 }
 
+/// One thing a provider said it served, and how many of the run's replies
+/// said so.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ServedModel {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
+    pub replies: usize,
+}
+
 /// What a judge-scored result carries beside its numbers.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct JudgeReport {
     pub calibration: VersionReference,
     pub agreement: Vec<JudgeAgreement>,
+    /// What the provider said served the replies, over every question the run
+    /// asked. The declared model and revision are the author's word; this is
+    /// the provider's, and more than one row means the run's answers did not
+    /// all come from one thing. Empty when no reply named anything.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub served: Vec<ServedModel>,
 }
 
 /// Fold what a judge said about the calibration set into agreement per metric.
@@ -462,7 +499,27 @@ pub fn agreement(
     JudgeReport {
         calibration: calibration.clone(),
         agreement,
+        served: Vec::new(),
     }
+}
+
+/// Which served models a set of replies names, counted, in a stable order —
+/// the report is part of the bytes a result's version is the address of.
+#[must_use]
+pub fn served<'a>(replies: impl IntoIterator<Item = &'a JudgeReply>) -> Vec<ServedModel> {
+    let mut counted: BTreeMap<&Served, usize> = BTreeMap::new();
+    for reply in replies {
+        *counted.entry(&reply.served).or_default() += 1;
+    }
+    counted
+        .into_iter()
+        .filter(|(served, _)| served.model.is_some() || served.fingerprint.is_some())
+        .map(|(served, replies)| ServedModel {
+            model: served.model.clone(),
+            fingerprint: served.fingerprint.clone(),
+            replies,
+        })
+        .collect()
 }
 
 /// The address of one question, over every byte the port would send.
@@ -618,6 +675,7 @@ mod tests {
     fn reply(content: &str) -> JudgeReply {
         JudgeReply {
             content: content.into(),
+            served: Served::default(),
         }
     }
 
@@ -749,6 +807,35 @@ mod tests {
             "two of four: the one it declined is not agreement"
         );
         assert!((helpful.mean_absolute_difference.unwrap() - 1.0 / 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn served_models_are_counted_in_one_order_and_a_reply_that_named_nothing_is_not_a_row() {
+        let by = |model: &str, fingerprint: &str| JudgeReply {
+            content: String::new(),
+            served: Served {
+                model: Some(model.into()),
+                fingerprint: Some(fingerprint.into()),
+            },
+        };
+        let replies = [
+            by("gpt-4o-2024-08-06", "fp_b"),
+            reply("{}"),
+            by("gpt-4o-2024-08-06", "fp_a"),
+            by("gpt-4o-2024-08-06", "fp_b"),
+        ];
+        let counted = served(&replies);
+        assert_eq!(
+            counted
+                .iter()
+                .map(|row| (row.fingerprint.as_deref(), row.replies))
+                .collect::<Vec<_>>(),
+            vec![(Some("fp_a"), 1), (Some("fp_b"), 2)],
+            "two backends answered one run, and the order does not depend on which came first"
+        );
+        let mut reversed = replies.clone();
+        reversed.reverse();
+        assert_eq!(served(&reversed), counted);
     }
 
     #[test]

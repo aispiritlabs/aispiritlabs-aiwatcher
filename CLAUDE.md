@@ -1895,6 +1895,11 @@ the review.
   without the agreement the run measured on that set, counted over every item
   so a judge that declines the hard cases does not agree its way up. The
   evidence says `reproducible: false`, and a comparison of it says `judged`.
+  The declared revision stays the author's word: what the provider said served
+  each reply — its `model` and `system_fingerprint` — is counted into the
+  report's `served` and compared with nothing, because a provider's name for a
+  model is an alias, a file or a dated snapshot, and a refusal on spelling
+  would refuse every honest one.
 - **Never let a judge answer in a shape it was not asked for.** Every call
   carries the scale as a JSON Schema the provider decodes against, and a reply
   that is still a value of another kind fails its case rather than being read

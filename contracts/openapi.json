@@ -18555,6 +18555,13 @@
           },
           "calibration": {
             "$ref": "#/components/schemas/VersionReference"
+          },
+          "served": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ServedModel"
+            },
+            "description": "What the provider said served the replies, over every question the run\nasked. The declared model and revision are the author's word; this is\nthe provider's, and more than one row means the run's answers did not\nall come from one thing. Empty when no reply named anything."
           }
         }
       },
@@ -23941,6 +23948,31 @@
           }
         ],
         "description": "Which SDK produced an event.\n\nSerialised as a plain string with an unknown value passing through: an SDK\nthis backend has never heard of must still be able to publish."
+      },
+      "ServedModel": {
+        "type": "object",
+        "description": "One thing a provider said it served, and how many of the run's replies\nsaid so.",
+        "required": [
+          "replies"
+        ],
+        "properties": {
+          "fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "replies": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
       },
       "SetScheduleBody": {
         "type": "object",
