@@ -1,6 +1,6 @@
 # FTI — rekomendacja zakresu i plan rozwoju
 
-Data: 2026-09-11. Status: A1–A4 i AR1 zaimplementowane; B1 zweryfikowane, trwały wycinek B2 i atomowe orphan GC nowych publikacji dostarczone; dodano weryfikowane adaptery Curation, promptów, modeli, Annotations i Conversations; B2/AR2 pozostają otwarte: B2e–B2h, w tym judge (sekcje 9–16). Wyniki odbioru A, ograniczenia i incydent seeda w sekcji 8. Przegląd planu z 2026-09-12 jest w sekcji 17; jego wnioski są wniesione do sekcji 2–7 — etap B ma punkty 8–11 i rozstrzygnięcia wizualne, tabela paczek B2e–B2i, a B3 zależy od B2e, B2f i B2i. Sekcja 19 zmniejsza ograniczenia z sekcji 18; sekcja 20 dostarcza stronę dowodową B3 — porównanie dwóch trwałych wyników; sekcja 21 dostarcza AR3 — wspólny przypadek użycia kompilacji i startu, wyjęty z modułu HTTP; sekcja 22 domyka jego ograniczenie — rejestr definicji rozróżnia niedostępny magazyn, uszkodzony rekord i odmówioną definicję; sekcja 23 dostarcza ostatnią część B3 — różnicę na poziomie przypadków; sekcja 24 dostarcza B4 — typowane oceny, rubryki i rewizje; sekcja 25 dostarcza pierwszą paczkę C0 — scoring zapisanych odpowiedzi jako zarządzany run publikujący własny dowód; sekcja 26 zamyka ograniczenia sekcji 25 — jeden status dla niezatwierdzonej pary, scorer ilościowy z jednostką, archiwum rozmów jako źródło odpowiedzi, judge jako scorer z regułą dopuszczenia z ADR 0030 i formularz startu w panelu. Sekcja 27 poprawia ograniczenia sekcji 26 — ponowienie próby judge'a nie pyta drugi raz i nie kończy się konfliktem, wynik mówi, co obsłużył dostawca, judge widzi pytanie przypadku, próg poziomu z przedziałem zgodności, a panel śledzi uruchomiony run. Sekcja 28 dopuszcza judge'a nad archiwum rozmów z ostrzeżeniem w kontekście, deklaracji, panelu i logu oraz liczy skrót bundle'a z tego, co bundle dodaje, zamiast z bajtów manifestu. Sekcja 29 domyka luki C0 — anulowanie i timeout zatrzymują krok, deklaracja ma własny timeout i współbieżność, kohortę wyprowadza serwer z wersji datasetu z limitem przypadków — i dodaje metryki DeepEval, Opik i każdego adaptera za jednym kontraktem serwisu scorerów.
+Data: 2026-09-11. Status: A1–A4 i AR1 zaimplementowane; B1 zweryfikowane, trwały wycinek B2 i atomowe orphan GC nowych publikacji dostarczone; dodano weryfikowane adaptery Curation, promptów, modeli, Annotations i Conversations; B2/AR2 pozostają otwarte: B2e–B2h, w tym judge (sekcje 9–16). Wyniki odbioru A, ograniczenia i incydent seeda w sekcji 8. Przegląd planu z 2026-09-12 jest w sekcji 17; jego wnioski są wniesione do sekcji 2–7 — etap B ma punkty 8–11 i rozstrzygnięcia wizualne, tabela paczek B2e–B2i, a B3 zależy od B2e, B2f i B2i. Sekcja 19 zmniejsza ograniczenia z sekcji 18; sekcja 20 dostarcza stronę dowodową B3 — porównanie dwóch trwałych wyników; sekcja 21 dostarcza AR3 — wspólny przypadek użycia kompilacji i startu, wyjęty z modułu HTTP; sekcja 22 domyka jego ograniczenie — rejestr definicji rozróżnia niedostępny magazyn, uszkodzony rekord i odmówioną definicję; sekcja 23 dostarcza ostatnią część B3 — różnicę na poziomie przypadków; sekcja 24 dostarcza B4 — typowane oceny, rubryki i rewizje; sekcja 25 dostarcza pierwszą paczkę C0 — scoring zapisanych odpowiedzi jako zarządzany run publikujący własny dowód; sekcja 26 zamyka ograniczenia sekcji 25 — jeden status dla niezatwierdzonej pary, scorer ilościowy z jednostką, archiwum rozmów jako źródło odpowiedzi, judge jako scorer z regułą dopuszczenia z ADR 0030 i formularz startu w panelu. Sekcja 27 poprawia ograniczenia sekcji 26 — ponowienie próby judge'a nie pyta drugi raz i nie kończy się konfliktem, wynik mówi, co obsłużył dostawca, judge widzi pytanie przypadku, próg poziomu z przedziałem zgodności, a panel śledzi uruchomiony run. Sekcja 28 dopuszcza judge'a nad archiwum rozmów z ostrzeżeniem w kontekście, deklaracji, panelu i logu oraz liczy skrót bundle'a z tego, co bundle dodaje, zamiast z bajtów manifestu. Sekcja 29 domyka luki C0 — anulowanie i timeout zatrzymują krok, deklaracja ma własny timeout i współbieżność, kohortę wyprowadza serwer z wersji datasetu z limitem przypadków — i dodaje metryki DeepEval, Opik i każdego adaptera za jednym kontraktem serwisu scorerów. Sekcja 30 zamyka cztery ograniczenia sekcji 29 — zapis w toku kończy się mimo terminu, anulowanie dociera do silników zapytań i notebooków, metryki frameworków oceniane modelem mają zgodność z ludźmi, serwis scorerów ma token, obraz i chart, a karty powstają w panelu — i dostarcza C1: generowanie odpowiedzi przez workera i ich ocenę, z baseline'em obok kandydata.
 
 Podstawa: [katalog funkcji](FTI_FEATURE_CATALOG.md), [analiza braków](FTI_FEATURE_GAPS.md), [plan UX](FTI_UX_WANDB_PLAN.md), [przegląd dokumentacji Langfuse i MLflow](FTI_LANGFUSE_MLFLOW_ANALYSIS.md), [ocena architektury](FTI_ARCHITECTURE_REVIEW.md) oraz aktualny kod. Ocena dotyczy obecności i kontraktów implementacji; nie potwierdza działania konkretnego wdrożenia. Katalog opisuje zakres docelowy, więc liczba jego pozycji nie jest miarą ukończenia produktu.
 
@@ -2188,5 +2188,190 @@ przywrócony, na `:8080` i `:18080` nic nie nasłuchiwało przed i po.
   panelu.
 - Z odbioru etapu C dalej otwarte: **C1** `generate_and_score` (baseline i kandydat
   przez cały proces z generowaniem), **C2** Experiments, **C3** bramka CI, **C4**
+  feedback → przypadek testowy, test śmierci workera i Joba na klastrze dla kroku
+  podowego; z B3 — kontekst wariantu w obserwacjach.
+
+## 30. Ograniczenia sekcji 29 i C1 — generowanie i ocena
+
+Użytkownik wskazał cztery punkty z 29.6 do zrobienia i C1: kalibrację metryk
+frameworków ocenianych modelem, porzucony krok Flow lub notebooka działający dalej
+w runtime, termin egzekwowany teraz dla publikacji datasetu, oraz serwis scorerów
+bez uwierzytelnienia i manifestów, z kartami frameworków tylko przez API. Osiem
+commitów: `6c81337` (zapis w toku i termin publikacji), `ff6f1e0` (kalibracja
+metryk frameworków), `2ce5ae1` (trasy anulowania w runtime'ach), `81de54d`
+(token, obraz i chart serwisu scorerów), `5e1d9e6` (edytor kart w panelu),
+`4b72041` (formatowanie), `ce46b58` (C1), `e90c974` (drobne poprawki po odbiorze).
+Reguły są w [ADR 0030](ADR/ADR_0030_EVALUATION_EVIDENCE.md) (poprawka „later"
+z 2026-09-13), [ADR 0025](ADR/ADR_0025_MANAGED_EXECUTION.md) i
+[ADR 0028](ADR/ADR_0028_QUERY_ENGINES.md) (poprawki z 2026-09-13) oraz w Guardrails
+`CLAUDE.md`.
+
+### 30.1 Zapis w toku kończy się, a publikacja ma czas zapytania
+
+Od sekcji 29 reaktor egzekwuje termin każdego kroku, więc wersja datasetu pisana
+dłużej niż dwie minuty byłaby porzucana po łasce i pisana od nowa przez
+ponowienie. Wykonawca po ostatnim spojrzeniu na sygnał bierze
+`StopSignal::committing()` — strażnik `Committing` — na czas zapisu, który musi
+się skończyć, a reaktor czeka na niego dowolnie długo po łasce i daje świeżą łaskę
+po jego końcu. Biorą go krok publikacji datasetu i krok scoringu wokół publikacji
+wyniku. Stop, który przyszedł przed `committing()`, jest odmową i nic nie zaczyna.
+Termin kroku publikacji podąża za skonfigurowanym `query_timeout_seconds`, z 120 s
+jako podłogą, bo czytane wiersze są wynikiem tego zapytania.
+
+### 30.2 Anulowanie dociera do runtime'u
+
+Kontrakt silników zapytań i runtime notebooków dostał siódmą, odpowiednio ósmą
+trasę: `POST …/executions/{key}/cancel`. Odpowiada tylko dla klucza, który serwis
+wykonuje (`{"state": "cancelling"}`); dla innego tak jak lookup i nic nie zostawia.
+
+- **DataFusion i DuckDB**: sandbox trzyma proces dziecka pod kluczem i go zabija;
+  prośba przed startem jest zapamiętana (15 min), więc zapytanie w kolejce nie
+  rusza; odpowiedź 409 „The query was cancelled", a dziecko, które odpowiedziało
+  w chwili anulowania, zostaje z wynikiem.
+- **Flow**: żądania FrankenPHP to wątki jednego procesu, więc zabić się nie da —
+  trasa zapisuje znacznik obok notatki klucza, a `QueryRunner` pobiera wiersze
+  partiami (`limit()->get()` zamiast `fetch()`) i sprawdza znacznik między nimi;
+  `QueryCancelled` → 409.
+- **Notebooki**: `subprocess.Popen` z własną sesją i `communicate(timeout)`;
+  anulowanie zabija grupę procesów (notebook z pulą workerów zabiera ją ze sobą),
+  timeout też; `NotebookCancelledError` → 409.
+
+W Rust `cancel` wykonawców Flow, DataFusion, DuckDB i marimo woła trasę z
+limitem 5 s; 404 starszego silnika to „nie ma kogo zapytać". Odmowa żądania, które
+zostało zatrzymane, raportuje stop, a nie 409 czytane jako błąd użytkownika —
+`StopSignal::or_stopped`.
+
+### 30.3 Kalibracja metryk frameworków
+
+Projekt z 29.6 („próg metryki wobec `pass_level` rubryki"), pod regułą judge'a z
+ADR 0030:
+
+- **Karta** — `Scorer::External.calibration`: wersja rubryki, `pass_at` metryki
+  (zaliczenie na nim albo po lepszej stronie z katalogu) i `pass_level` dla
+  rubryki z poziomami; rubryka tak/nie zalicza lepszą odpowiedzią. Dwa werdykty,
+  bo 0,83 relewancji i „dobre" są na różnych skalach. Publikacja odmawia: metryki
+  lub rubryki bez lepszego końca, progu poza zakresem z katalogu, nieistniejącego
+  poziomu, rubryki liczbowej.
+- **Deklaracja** — `external_calibration` nazywa zbiór kalibracyjny wzięty pod tą
+  rubryką (może to być ten sam, co judge'a); kontekst przypina go jako
+  `CalibrationPin` z wyprowadzonym `reads_archive`. Dopuszczenie trzyma go do karty
+  jak zbiór judge'a; wynik skalibrowany na innych ludziach to inny kontekst, a
+  porównanie mówi „Different calibration of framework metrics".
+- **Run** pyta metrykę o każdy element zbioru pod rubryką, pokazując odpowiedź,
+  którą widzieli ludzie; element niezadany i bez liczby liczy się przeciwko.
+  Wynik niesie `external`: udział elementów o zgodnych werdyktach ze wszystkich,
+  przedział Wilsona i udział różnych werdyktów wśród odpowiedzianych. Publikacja
+  odmawia kontekstu skalibrowanego bez raportu i raportu wobec innego zbioru.
+- **Nadal słowo modelu**: `reproducible: false`; ostrzeżenie mówi teraz, gdzie
+  zgodność jest mierzona. Panel: formularz Measure bierze jeden zbiór dla judge'a
+  i metryk frameworków (sekcja „Held against people"), dowód pokazuje tabelę
+  zgodności przy nocie frameworka.
+
+### 30.4 Serwis scorerów: token, obraz i chart
+
+- `AIWATCHER_SCORERS_TOKEN`: obie trasy chcą tokenu `Bearer` (porównanie w stałym
+  czasie), `/health` nie; work role wysyła go już jako `AIWATCHER_SCORER_TOKEN`.
+  Bez tokenu serwis mówi przy starcie, że jest bez uwierzytelnienia.
+- `deploy/Dockerfile.scorers`: oba frameworki, uid 10001, tylko do odczytu,
+  `HOME` i katalog roboczy w `/tmp`. Zmierzone: 174 MiB po imporcie obu
+  frameworków, 280 MiB z klientami modelu metryk ocenianych; obraz 471 MB.
+- Chart, blok `scorers`: Service ClusterIP, Deployment, NetworkPolicy wpuszczająca
+  tylko `server` i `worker`, token i poświadczenie modelu z Secretów, obie role
+  dostają `AIWATCHER_SCORER_URL`; `execution.scorerUrl` dla serwisu spoza
+  release'u. Render odmawia bez magazynu workflow i przy modelu podanym
+  niepełnie. Egress otwarty — model metryk nie jest znany chartowi.
+  `release-images.yml` publikuje obraz, `build-images.sh --scorers` go buduje,
+  `docs/INSTALL.md` ma „Framework metrics".
+
+### 30.5 Karty w panelu
+
+Panel „Scorecards" na stronie Evaluation: lista kart z metrykami i formularz
+publikacji — scorery wkompilowane, judge na wersji rubryki z poziomem, metryka
+frameworka wybrana z zapisanego katalogu z polem na każdy parametr według rodzaju,
+ścieżka wejścia dla metryki czytającej pytanie, i dla metryki ocenianej modelem
+rubryka, `pass_at` i poziom kalibracji. Formularz wysyła poprawnie typowane body i
+nic, co wyprowadza serwer (bez `declared`, bez kierunku, bez reguł); pokazuje, co
+publikacja przypięła, a wdrożenie bez serwisu scorerów — nazwę zmiennej.
+
+### 30.6 C1 — szablon generowania i oceny
+
+`Answers::Generated` — `{"generated_by": {"task": "name@version", "queue": …,
+"params"?}}` — robi z planu runu trzy kroki:
+
+1. `evaluation_cases` (serve role, nowy `RuntimeKind`): cohorta czytana pod
+   dopuszczeniem pary, wiersze `{case_id, input}` — nigdy oczekiwania;
+2. `generate` (`python_task` na kolejce z deklaracji): zadanie workera dostaje
+   wiersze i parametry `declaration`, `evaluation_id`, `repetition_id`,
+   `variant` (manifest wariantu) i `params`, pisze `answers`;
+3. `score` (ten sam krok co C0) czyta odpowiedzi ze swojego wejścia — ponowienie
+   nie pyta aplikacji drugi raz.
+
+Odmowy: generowanie nad kohortą rozmów (pytania trafiłyby do workera poza
+archiwum), start bez magazynu obiektów (501 `worker_artifacts_disabled`), zadanie
+bez `@wersji`, wiersz workera, który nie jest odpowiedzią (błąd kroku z numerem
+wiersza, nic nieopublikowane). SDK: `aiwatcher_sdk.worker.generation_task` owija
+funkcję na przypadek, `Declined` pomija przypadek (bez oceny, nie zero),
+`Generated` niesie `trace_id`/`span_id`; odpowiedzi pisane raz, na końcu. Panel:
+w Measure „Generated now, by a worker's task" z zadaniem, kolejką i parametrami
+oraz „Baseline, measured the same way" — druga deklaracja różniąca się tylko
+wariantem i ID (`…-baseline`), śledzona obok i z przyciskiem porównania po
+opublikowaniu obu. `just e2e-generate` przechodzi baseline, kandydata i powtórzenie
+odmawiające jednego przypadku na własnym serwerze.
+
+### 30.7 Odbiór
+
+`just check` zielony po commitach; `just sdk-check` (488), `just
+query-contract-check` (z nowym testem anulowania przez prawdziwy fork server),
+`just query-check` (171 testów PHP), `just ml-pipeline-check` (77),
+`just scorers-check` (21), `just chart-check`, testy panelu Evaluation (61).
+`just e2e-generate`: 7/7 — trzy runy przez `cases → generate → score`; worker
+dostał tylko pytania; kandydat 1,0 wobec 0,0 baseline'u na jednym kontekście,
+porównanie `comparable` z deltą +1,0; powtórzenie z odmówionym przypadkiem ma
+3/4 ocenione i 1 bez oceny, a jego porównanie jest `unverified` z powodem; wynik
+nazywa wykonanie i krok, przypadki nazywają trace; ponowny start trafia w ten sam
+run (`created: false`).
+
+Odbiór na żywo: aiwatcher na `127.0.0.1:19385` (WAL, magazyn workflow w pamięci),
+`llama-server` z `gemma-4-e2b` na `:19386`, obraz `aiwatcher-scorers` w
+kontenerze tylko do odczytu na `:19387` z tokenem, DuckDB na `:19381`, panel na
+`:5382`; po odbiorze zatrzymane po PID, kontener usunięty, `launch.json`
+przywrócony; na `:8080` i `:18080` nic nie nasłuchiwało przed i po.
+
+- kontener bez tokenu → 401 z nazwą zmiennej; work role zapisał katalog przez
+  token (deepeval 4.2.2 i opik 2.2.59, model gemma);
+- baseline i kandydat wygenerowane przez workera SDK: `comparable`, `exact`
+  0,0 → 1,0;
+- kalibracja: rubryka `on-topic` (tak/nie), 4 oceny ludzi na wyniku baseline'u,
+  zbiór 4 elementów; karta `deepeval.answer_relevancy` z `pass_at` 0,5 przypięta
+  do 4.2.2 + gemma; run kandydata `cases → generate → score` zakończony w 10,6 s,
+  `relevancy` 1,0, `reproducible: false`, `external`: 4 z 4 odpowiedziane,
+  zgodność 100 %, przedział 51–100 %;
+- anulowanie: pipeline DuckDB z transformacją śpiącą 120 s, anulowany po ~60 s
+  pracy → run `cancelled` 0,6 s po komendzie; log reaktora „asking a running
+  attempt to stop", silnik `query.cancelled` i odpowiedź 409, pamięć klucza
+  `absent`, próba z klasą `policy`;
+- panel: karta `capitals-framework` opublikowana z formularza (framework, metryka,
+  ścieżka wejścia, kalibracja) z przypięciem pokazanym pod formularzem; dowód
+  skalibrowanego wyniku z tabelą 100 % / 51–100 % / 4 z 4 / 0 %; Measure z opcją
+  generowania i wyborem baseline'u. Odbiór znalazł jedną rzecz — pełny skrót
+  wersji rubryki w zdaniu ostrzeżenia — poprawioną w `e90c974`.
+
+### 30.8 Co zostaje
+
+- **Flow zatrzymuje się tylko między partiami wierszy**: długi pojedynczy odczyt
+  albo końcowa agregacja dochodzi do `set_time_limit`. Zapis w toku
+  (`Committing`), który zawiśnie, jest ograniczony tylko limitami klienta
+  magazynu.
+- **Kalibracja to zgodność werdyktów**: próg `pass_at` wybiera autor karty, nic go
+  nie dobiera; rubryki liczbowe są odmawiane; zbiór kalibracyjny jest niezależny
+  od kohorty runu.
+- **Generowanie ufa workerowi co do kodu**: zadanie dostaje manifest wariantu, ale
+  nic nie sprawdza, że wykonało przypięty `code` i `generation_config`; kohorty
+  rozmów są odmawiane; jedno zadanie na wariant, równoległość przypadków należy do
+  zadania; baseline w formularzu tylko przy generowaniu.
+- **Serwis scorerów**: token opcjonalny, egress otwarty; brak wpisu w docker
+  compose; obraz publikuje dopiero workflow wydania.
+- **Edytor kart** nie pokazuje wersji ani różnic i nie zaczyna od istniejącej karty.
+- Z odbioru etapu C dalej otwarte: **C2** Experiments, **C3** bramka CI, **C4**
   feedback → przypadek testowy, test śmierci workera i Joba na klastrze dla kroku
   podowego; z B3 — kontekst wariantu w obserwacjach.

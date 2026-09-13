@@ -63,6 +63,7 @@ just e2e-pods         # four stages as four pods on a local cluster, against the
 just e2e-docker       # the same four as four containers on this host: the image and its limits, no cluster
 just e2e-processes    # the same four as four processes on this host: no cluster, no image, no cargo feature
 just e2e-train        # the whole chain: annotate → export → fit a real tiny model → promote
+just e2e-generate     # a baseline and a candidate generate answers on a worker, are scored and compared
 just serve-model      # verify the promoted package's digests, load it, serve it, watch the label
 just onnx-version     # re-express that model as an ONNX graph, check it agrees, move the label
 just ml-pipeline-serve # the marimo notebook runtime on :8082, for notebook blocks
@@ -153,7 +154,7 @@ Crates, in dependency order. A crate may only depend on ones above it.
 | `aiwatcher-annotations` | Vector image annotations for **any** vision domain — it ships no vocabulary, and the project's label schema carries the domain (ADR_0020). Sliced by noun: `images/` (one picture — head, revisions, review, bytes, bulk import), `imports/` (the staged batch and the queued job that reads it, ADR_0022), `project`, `export`, `license` (what may be done with the data), `schema`, `shapes`, `sources` (a catalogue an instance loads), `integrations/` — `hubs` (Kaggle and Hugging Face) and `fetch`, the bounded downloader every outbound byte goes through. `registry` is the facade and the only public door; `store` is the private key layout every slice reads through. |
 | `aiwatcher-conversations` | Governed conversation training data: the `turn` contract, consent and retention, the **encrypted** archive, the human review gate, and the resumable export job that freezes a corpus. The one authored store that is off by default, whose content is sealed, and whose deletions delete. Sliced by noun: `turn`, `policy`, `redaction`, `review`, `archive/` (the store and its retention clock, `crypt` beneath it), `export/` (the job, `format` beneath it). `registry` is the facade and the only public door; `store` is the private key layout. |
 | `aiwatcher-training` | Training runs and the model versions they produce. The one registry here whose contents never came from the event log: a run is a record that grows in place, and a promotion is refused without a held-out score. `package` is what a serving runtime is handed — the runtime, the entry point, the shapes, and every artifact with its digest (ADR_0023). |
-| `aiwatcher-evaluation` | Pinned variant/context contracts and durable evidence (ADR_0030). `Evaluation::prepare` validates declarations; `Registry` owns immutable publication, paging, erasure and **approvals** — the pair an operator admitted, which is what lets one instance hold a baseline and a candidate at once — through a `SourceAuthority` adapter. It also measures: a **scorecard** declares named scorers and derives each metric's direction, and a **scoring run** folds a staged recording, or a conversation cohort's own archived responses, against one — asking a calibrated **judge** first when the card names a rubric, and the **scorer service** when it names a framework's metric — and publishes the result — admitted against the scorecard and the compiled vocabulary rather than a bundle's files. A run's **cohort** may be derived from a dataset version the deployment owns, first cases only when limited. `external` is the scorer service's contract, and the one module that knows one exists. Legacy reports remain in Projector with an explicit API read bridge. |
+| `aiwatcher-evaluation` | Pinned variant/context contracts and durable evidence (ADR_0030). `Evaluation::prepare` validates declarations; `Registry` owns immutable publication, paging, erasure and **approvals** — the pair an operator admitted, which is what lets one instance hold a baseline and a candidate at once — through a `SourceAuthority` adapter. It also measures: a **scorecard** declares named scorers and derives each metric's direction, and a **scoring run** folds a staged recording, a conversation cohort's own archived responses, or answers a worker's task **generates** for each case's input, against one — asking a calibrated **judge** first when the card names a rubric, and the **scorer service** when it names a framework's metric, held against people when the card says so — and publishes the result — admitted against the scorecard and the compiled vocabulary rather than a bundle's files. A run's **cohort** may be derived from a dataset version the deployment owns, first cases only when limited. `external` is the scorer service's contract, and the one module that knows one exists. Legacy reports remain in Projector with an explicit API read bridge. |
 | `aiwatcher-datasets` | Curation recipes, the dataset versions they produce, and the **block pipelines** of ADR_0024 — a chain of source, transform, notebook, approval and view, refused as a whole with every problem at once. Nothing here executes anything; the panel drives the chain because the engines are three different systems. |
 | `aiwatcher-execution` | Owned execution (ADR_0025, ADR_0026): the compiled `ExecutionPlan` and its `plan_id`, the states, the attempts, the pure `decide`/`evolve`, the cache key, the compiler from ADR_0024's blocks, the atomic command handler, the claim table, the `ContextSnapshot` that reopens a block, the fact encoder and the outbox publisher. Three ports: `WorkflowStore` (`memory | file | postgres | duckdb`, the last two behind features so `sqlx` and DuckDB's C++ amalgamation are out of every build that does not ask for them — the shape `laser` has in `aiwatcher-bus`), `ActivityExecutor` (what a reactor does with a claimed attempt) and `ArtifactCatalog` (metadata, lineage, the cache index). Executes nothing itself, and holds no second copy of `aiwatcher-jobs`' rules — it calls them. |
 | `aiwatcher-runner` | The workflow rerun dispatcher: one HTTP POST to one configured endpoint, behind `core::ports::WorkflowRunner`. |
@@ -179,7 +180,8 @@ a worker thread, so a run does not hold the loop that serves everything else —
 and serves the same file as a live app for the block's editor (`just
 ml-pipeline-check`). `services/scorers` runs a scorecard's **framework metrics** —
 DeepEval's and Opik's, each an adapter behind a two-route contract whose
-fixtures the Rust half reads too — for an `external_evaluation` step (`just
+fixtures the Rust half reads too — for an `external_evaluation` step, behind a
+bearer token and installed by the chart's `scorers` block (`just
 scorers-check`; `services/scorers/README.md`). `just check` covers none of them —
 PHP and a Python toolchain may not be on a machine that only touches the Rust
 crates — but **CI runs each**, in their own jobs and once per query engine,
@@ -522,7 +524,7 @@ area.
    imported the engine and never ran one, under `open` admission (the default: the
    query is code, run as a notebook's cell is, with ceilings and no credentials) or
    `strict` (parsed and admitted from the engine's own vocabulary, ADR_0008's shape
-   in Python). One contract — the six `/query` routes, one `catalog.json` — and a
+   in Python). One contract — the seven `/query` routes, one `catalog.json` — and a
    conformance suite asking every engine the same four questions.
 
 ## Conventions
@@ -833,8 +835,15 @@ what runs a real graph.
   declares `MetricDirection` per metric; a folded report's metric is a name a
   producer sent, so colouring one there would be guessing whether a rise is an
   improvement or a bill.
-  Its **Measure** form is the start of a scoring run, and it derives nothing
-  either: the variant is a published result's, the cohort is that result's or
+  Its **Scorecards** panel publishes the card a run is declared against — the
+  compiled scorers, a judge's rubric, a framework's metric picked from the
+  catalog the work role recorded with a field per parameter, and the people it is
+  held against — and sends nothing the server derives: no `declared`, no
+  direction. Its **Measure** form is the start of a scoring run, and it derives
+  nothing either: the variant is a published result's, the answers are a
+  recording, the archive's or a worker's task generating them — with a baseline,
+  a second declaration differing in its variant and ID alone, followed beside it
+  and compared once both have published — the cohort is that result's or
   one the server derived from a dataset version (`POST
   /evaluation-cohorts`, with the case limit), the metrics, the approval and the
   run's identity come back from the server, and the declaration and the run it
@@ -1886,10 +1895,14 @@ the review.
   another release or model; the service refuses the same request with a 409.
   A reply is a number or the adapter's own sentence — the contract has no field
   for a framework's reason — kept per declaration and question as a judge's is.
-  A metric a model graded carries `measured_by` with that model, reads as not
-  reproducible, and is warned about as uncalibrated: a rubric judge publishes
-  its agreement with people, and a framework's model does not. The service
-  turns every framework's phoning home off before importing it.
+  A metric a model graded carries `measured_by` with that model and reads as not
+  reproducible. It is warned about as uncalibrated unless the card holds it
+  against people — a rubric, the metric's `pass_at` and the rubric's
+  `pass_level` — when the run names a calibration set, the context pins it as
+  `external_calibration`, and the result carries `external`: how often the two
+  verdicts matched over every item, with the Wilson interval, as a judge's
+  agreement is counted. The service turns every framework's phoning home off
+  before importing it, and given a token wants it on both routes.
 - **Never publish a case that answered some of the metrics.** A scored case
   carries every declared metric or it is a failure with a reason and none of
   them: a case in three averages out of four gives each metric its own
@@ -1975,6 +1988,17 @@ the review.
   credential, the query engine's reason. The start route refuses with 501
   `judge_disabled` on a deployment without one and 422 naming both profiles on
   one with another, because a started run nobody claims waits for ever.
+- **Never hand a generator what a case expected.** A run whose answers a
+  worker's task generates starts with `evaluation_cases`, which reads the cohort
+  under the pair's admission and writes each case's `case_id` and `input` —
+  nothing else — for the task to read; the expectations stay with the owner and
+  the score step. A generator that could read them could answer by copying, and
+  nothing in the numbers would say so. The score step reads the rows the
+  completed generation attempt wrote, from its own input, so a retry never asks
+  the application again; a case the task declined is unscored, never zero. Not
+  over the conversation archive, whose questions would reach a worker outside its
+  seal. A baseline is a second declaration differing in its variant and ID alone,
+  which is what gives the two one context.
 - **Never ask anybody to stage a cohort this deployment can derive.** A
   curation version's, an annotation export's and a conversation corpus's cases
   are already derived from their owners at admission, so `POST
@@ -1994,9 +2018,14 @@ the review.
   (`Watch`): a run that is cancelling or has ended, or a deadline that passed,
   sets `ActivityContext::stop`, calls `cancel`, and abandons an executor that has
   not returned within the grace, reporting `Policy` or `Timeout`. An executor
-  doing work in pieces checks the signal between them and never after it began
-  to publish. A worker hears it at its next heartbeat as 409
-  `execution_stopping`, with its attempt already settled.
+  doing work in pieces checks the signal between them, and one past its last
+  look holds `Committing` across what has to finish — a dataset version, a
+  result — which the reactor waits for however long it takes. A query engine
+  and the notebook runtime are told through `…/executions/{key}/cancel`, and a
+  refusal of the request that was stopped reports the stop
+  (`StopSignal::or_stopped`), never a 409 read as user code. A worker hears it
+  at its next heartbeat as 409 `execution_stopping`, with its attempt already
+  settled.
 - **Never ask a judge the same question twice in one run.** Every reply is
   kept under the declaration and the digest of the question before the fold
   reads it (`evaluation-judges/replies/`), and a retry reads it back. Re-asked,

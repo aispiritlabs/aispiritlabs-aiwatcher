@@ -114,10 +114,11 @@ expose it on a public interface.
 |------|-------|
 | `block.py` | what a notebook imports — the fallback for `rows` and `params` |
 | `step.py` | one run: import the notebook, `App.run(defs=…)`, read `output` |
+| `stopping.py` | a managed run stopped by its key: the process group killed, a request before it starts kept |
 | `runner.py` | the process that happens in — bounded, timed, isolated |
 | `staging.py` | the rows a block reads, on disk, under a name both sides compute |
 | `notebooks.py` | the notebook files and their history: list, read, pin, and the two checks before a write |
-| `service.py` | the seven control routes, with marimo's app host under them |
+| `service.py` | the eight control routes, with marimo's app host under them |
 | `log.py` | console for a person, JSON for a collector |
 | `notebooks/` | the notebooks themselves: `pii_detection.py` and `titanic_features.py` |
 | `.revisions/` | one exact source per digest, kept forever — **the one directory here that must survive** |

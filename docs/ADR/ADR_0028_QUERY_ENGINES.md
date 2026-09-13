@@ -45,7 +45,7 @@ a chain written for another engine than the deployment's is refused when it is s
 a 422 naming the block and both engines, and no run. The panel shows such content and
 does not run it.
 
-**One contract, proved.** Every engine serves the six `/query` routes with Flow's answer
+**One contract, proved.** Every engine serves the seven `/query` routes with Flow's answer
 — the 1 000-row cap and `truncated`, `deterministic`, `window_applied`, `digest` — over
 one declared catalog, `services/query/contract/catalog.json`, which Flow loads too. A
 conformance suite asks each engine the benchmark's four questions in its own language
@@ -171,3 +171,17 @@ each service under 85 MiB.
   sharded dataset versions).
 - Flow becoming fast enough over a corpus that the Python engines' costs stop buying
   anything — the 548.8 s is the number to re-measure.
+
+## Amendment (2026-09-13): a managed query can be stopped
+
+The reactor asks a running attempt to stop when its run is cancelled or its
+deadline passes (ADR_0025, amended), and an engine that could not be told went
+on running the query to its own ceiling. So the contract gains a seventh route,
+`POST /query/executions/{key}/cancel`, answered for a key the engine is running
+and as the lookup would for any other. A Python engine kills the query's child
+and answers the query 409; Flow, whose requests share no memory — and under
+FrankenPHP one pid — writes a marker beside the key's note and the query reads it
+between the batches it fetches, so a query blocked inside one long read or one
+final aggregation still runs to `set_time_limit`. An engine without the route
+answers 404 and is left to its ceiling, which is what every engine did before.
+

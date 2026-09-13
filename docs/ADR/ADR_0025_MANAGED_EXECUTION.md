@@ -168,3 +168,26 @@ opposite one: workflow traffic large enough that one PostgreSQL is the
 bottleneck for both the claim queue and the stream, at which point the claim
 queue is what moves to a topic (the plan's section 11.1 says what would make
 that right).
+
+## Amendment (2026-09-13): a step stops, and a write it began finishes
+
+A cancel was cooperative for pods and for nothing else: `ActivityExecutor::cancel`
+existed and the reactor never called it, and `timeout_seconds` held only where an
+executor handed it to an HTTP client. The reactor now watches every attempt it
+performs. A run that is cancelling or has ended, or a deadline that passed, sets
+the attempt's `StopSignal`, calls `cancel` — which for a query engine and the
+notebook runtime is now a route that stops the work there (ADR_0028, amended) —
+and abandons an executor that has not returned within a grace, reporting
+`Policy` for a stopped run and `Timeout` for a deadline. A worker hears it at its
+next heartbeat, as 409 `execution_stopping`.
+
+Two consequences are rules. **A write that has to finish is waited for**: an
+executor past its last look holds `Committing` across a dataset version's write
+or a result's publication, and the reactor waits for it however far past the
+grace — cut off, it would be written again from the start by the retry.
+**A runtime's refusal of the request it was stopped in reports the stop**
+(`StopSignal::or_stopped`), never the 409 or the closed connection it came as,
+which would read as user code or an outage and be retried. A publish step's
+deadline follows a configured query timeout, with two minutes as its floor,
+because the rows it reads are what that query produced.
+

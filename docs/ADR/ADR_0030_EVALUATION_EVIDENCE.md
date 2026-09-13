@@ -966,3 +966,58 @@ ended, or a deadline that passed, sets the attempt's stop signal, and the
 scoring step drops a judge's or a service's questions in flight and publishes
 nothing it had not already begun to. A worker hears the same at its next
 heartbeat, as 409 `execution_stopping`.
+
+## Amendment (2026-09-13, later): a framework's model held against people, and answers generated now
+
+Two additions, and again neither moves a context written before it.
+
+**A framework's graded metric may carry agreement with people.** The amendment
+above published such a metric warned as uncalibrated and named calibration as
+an addition behind the same card; this is that addition, and it keeps the rubric
+judge's rule rather than a looser one:
+
+- **The card says what agreeing means.** `Scorer::External.calibration` names a
+  rubric version, the metric's `pass_at` — a pass at it or on the side the
+  catalog declared better — and, on named levels, the `pass_level` a person's
+  judgement passes at; a yes-or-no rubric passes on its better answer. A verdict
+  on each side, because a relevancy of 0.83 and "good" are on different scales
+  and only "passed" is a claim both make. Refused at publication: a metric or a
+  rubric with no better end, a bar outside the declared range, a level the
+  rubric lacks, a numeric rubric.
+- **The run names the people, and the context pins them.** `external_calibration`
+  on the declaration names a calibration set taken under that rubric — possibly
+  the one a judge names too — and the context pins it as a `CalibrationPin` with
+  `reads_archive` derived from where the set was taken. Admission holds it to the
+  card as it holds a judge's: present exactly when the card calibrates, a set this
+  registry took, covering every rubric asked, the archive flag as derived. A
+  result calibrated on other people is a different context.
+- **Agreement is counted as a judge's is.** The step asks the metric about every
+  item under the rubric, put the answer the person was shown; an item it could
+  not be asked about, or one the service scored nothing for, counts against it.
+  The result carries `external`: per metric, the fraction of all items whose two
+  verdicts matched, its Wilson interval, and the share of answered items they
+  differed on. Publication refuses a calibrated context without it and a report
+  against another set.
+- **It is still a model's word.** `reproducible` stays false; the warning now
+  says where its agreement is measured instead of that nothing measured it.
+
+**A run's answers may be generated when it runs.** C0 scored answers somebody
+already had; C1's template generates them. `Answers::Generated` names a worker
+task (`name@version`) and its queue — never code — and the plan is three steps:
+`evaluation_cases` in the serve role reads the cohort under the pair's admission
+and writes each case's input as rows **and nothing the case expected**, the task
+answers each case told the variant manifest it answers as, and the score step
+reads the rows it wrote from its own input. What makes the answers honest:
+
+- **A generator never sees an expectation.** It could otherwise answer by
+  copying one, and nothing in the numbers would say so.
+- **A retry never asks the application again.** The score step reads the answers
+  the completed generation attempt produced, pinned in the run; a rerun of the
+  whole measurement is a new repetition.
+- **A declined case is unscored, not zero**, so coverage says what was missing
+  and a comparison with it is withheld as unverified.
+- **Not over the conversation archive.** Each case's question would reach a
+  worker as a row outside the archive's seal, retention and erasure.
+
+A baseline and a candidate are two declarations that differ in their variant and
+evaluation ID alone, so their contexts match and the comparison above applies.
