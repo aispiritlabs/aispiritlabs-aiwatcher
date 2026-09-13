@@ -26,7 +26,11 @@ over what it answered, each with nothing but the policy and the run declaration:
    admitted through the line too: the server stages the model's package from
    its own registry, the job sends the weights and the workflow's declaration
    by digest, and the job passes — while a job that forgot the weights is an
-   error naming the member and the route to send it to.
+   error naming the member and the route to send it to;
+8. a variant naming a model this deployment never registered is admitted too,
+   by the digest of its own package: a job that sends the weights and not the
+   package is an error naming `model-package.json`, and one that sends both
+   passes, its approval carrying the package's digest.
 
     cargo build --bin aiwatcher   # once
     just e2e-gate
@@ -497,6 +501,68 @@ def main() -> int:
             and len(through) == 1
             and through[0].get("bundle_digest") is not None,
             {"forgot": told.get("reasons"), "passed": decided.get("reasons"), "through": through},
+        )
+
+        # A model nobody here registered: its version is its package's digest.
+        package = home / "model-package.json"
+        package.write_bytes(
+            json.dumps(
+                {
+                    "runtime": "weights",
+                    "artifacts": [
+                        {
+                            "name": "weights",
+                            "uri": "s3://elsewhere/capitals.bin",
+                            "digest": hashlib.sha256(weights.read_bytes()).hexdigest(),
+                            "size_bytes": len(weights.read_bytes()),
+                            "content_type": "",
+                            "kind": "model",
+                        }
+                    ],
+                }
+            ).encode()
+        )
+        elsewhere = json.loads(json.dumps(run))
+        elsewhere["variant"]["model"] = {
+            "name": "capitals-elsewhere",
+            "version": hashlib.sha256(package.read_bytes()).hexdigest(),
+        }
+        unsent, unsent_told, _ = job(
+            home,
+            elsewhere,
+            commit="c8",
+            style="terse-south",
+            evaluation_id="capitals-c8",
+            staged=(weights,),
+        )
+        sent, sent_decided, _ = job(
+            home,
+            elsewhere,
+            commit="c9",
+            style="terse-south",
+            evaluation_id="capitals-c9",
+            staged=(package, weights),
+        )
+        approvals = ok(*call("GET", "/api/v1/evaluation-approvals"), "listing the approvals")
+        addressed = [
+            approval["record"]
+            for approval in approvals["approvals"]
+            if approval["record"]["variant_id"] == sent_decided.get("variant_id")
+        ]
+        check(
+            8,
+            "a variant naming a model nobody here registered is admitted by its package's digest",
+            unsent == 3
+            and any("model-package.json" in reason for reason in unsent_told.get("reasons", []))
+            and sent == 0
+            and sent_decided.get("verdict") == "pass"
+            and len(addressed) == 1
+            and addressed[0].get("bundle_digest") is not None,
+            {
+                "unsent": unsent_told.get("reasons"),
+                "sent": sent_decided.get("reasons"),
+                "approval": addressed,
+            },
         )
     finally:
         server.terminate()

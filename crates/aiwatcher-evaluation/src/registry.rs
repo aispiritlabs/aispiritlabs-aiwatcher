@@ -2,8 +2,9 @@
 use crate::{
     Aggregation, Approval, ApprovalRecord, CaseDiffPage, CaseMeasurement, CasePage, Comparability,
     DiffQuery, DurableEvaluation, DurablePage, Evaluation, EvaluationError, EvaluationManifest,
-    EvaluationReceipt, EvidenceCase, EvidenceState, PreparedEvaluation, PublishEvaluation, Result,
-    ResultCounts, ResultStatus, RetentionReport, Withdrawal, approval_id, canonical,
+    EvaluationReceipt, EvidenceCase, EvidenceState, PinnedMember, PreparedEvaluation,
+    PublishEvaluation, Result, ResultCounts, ResultStatus, RetentionReport, Withdrawal,
+    approval_id, canonical,
     comparison::{comparability, diff_case, merged},
     require,
     store::{self, Claim, Pending, Store},
@@ -607,7 +608,8 @@ impl Registry {
         // What the model and workflow references imply, as their owners here
         // declare it, before anything is staged: a variant naming either that
         // this adapter derives nothing for is one a line cannot admit.
-        let implied = bundles.pinned_members(&manifest.variant).await?;
+        let mut sent = BTreeMap::new();
+        let mut implied = bundles.pinned_members(&manifest.variant, &sent).await?;
         require(
             (manifest.variant.model.is_none() && manifest.variant.workflow.is_none())
                 || !implied.is_empty(),
@@ -649,55 +651,74 @@ impl Registry {
                 })?;
             bundles.stage(&id, &artifact.name, bytes).await?;
         }
-        for member in implied {
-            require(
-                member.digest.len() == 64
-                    && member
-                        .digest
-                        .bytes()
-                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
-                "variant",
-                &format!(
-                    "{} is pinned by {}, which is not a lowercase sha256 digest a line can \
-                     find bytes under",
-                    member.name, member.digest
-                ),
-            )?;
-            let bytes = match member.bytes {
-                Some(derived) => derived,
-                None => self
-                    .store
-                    .0
-                    .get(&store::variant_artifact(&member.digest))
-                    .await?
-                    .filter(|bytes| {
-                        store::hash(bytes) == member.digest
-                            && member
-                                .size_bytes
-                                .is_none_or(|size| size == bytes.len() as u64)
-                    })
-                    .ok_or_else(|| EvaluationError::Invalid {
-                        field: "variant".into(),
-                        reason: format!(
-                            "{} needs {} ({}), and no bytes were staged under that digest; \
-                             send them to PUT /api/v1/evaluation-variant-artifacts/{} first",
-                            member.name,
-                            member.digest,
-                            member.size_bytes.map_or_else(
-                                || "any size".to_owned(),
-                                |size| format!("{size} bytes")
-                            ),
-                            member.name.rsplit('/').next().unwrap_or(&member.name),
-                        ),
-                    })?,
-            };
-            bundles.stage(&id, &member.name, bytes).await?;
+        // A member may name more once it is staged — a package nobody here
+        // registered lists its artifacts only inside itself — so ask again
+        // until nothing new is named. A package names no package, so the
+        // second answer is the last one that can add anything.
+        for _ in 0..3 {
+            let fresh: Vec<PinnedMember> = implied
+                .into_iter()
+                .filter(|member| !sent.contains_key(&member.name))
+                .collect();
+            if fresh.is_empty() {
+                break;
+            }
+            for member in fresh {
+                let bytes = self.implied_bytes(&member).await?;
+                bundles.stage(&id, &member.name, bytes.clone()).await?;
+                sent.insert(member.name, bytes);
+            }
+            implied = bundles.pinned_members(&manifest.variant, &sent).await?;
         }
         let approved_by = format!(
             "line {} ({}), started by {started_by}",
             line.record.line_id, line.record.admitted_by
         );
         self.approve(manifest, &approved_by, now).await.map(Some)
+    }
+
+    /// The bytes behind one member a variant implies: what its owner derived,
+    /// or what a pipeline sent under its digest.
+    async fn implied_bytes(&self, member: &PinnedMember) -> Result<Vec<u8>> {
+        require(
+            member.digest.len() == 64
+                && member
+                    .digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+            "variant",
+            &format!(
+                "{} is pinned by {}, which is not a lowercase sha256 digest a line can find \
+                 bytes under",
+                member.name, member.digest
+            ),
+        )?;
+        if let Some(derived) = &member.bytes {
+            return Ok(derived.clone());
+        }
+        self.store
+            .0
+            .get(&store::variant_artifact(&member.digest))
+            .await?
+            .filter(|bytes| {
+                store::hash(bytes) == member.digest
+                    && member
+                        .size_bytes
+                        .is_none_or(|size| size == bytes.len() as u64)
+            })
+            .ok_or_else(|| EvaluationError::Invalid {
+                field: "variant".into(),
+                reason: format!(
+                    "{} needs {} ({}), and no bytes were staged under that digest; send them \
+                     to PUT /api/v1/evaluation-variant-artifacts/{} first",
+                    member.name,
+                    member.digest,
+                    member
+                        .size_bytes
+                        .map_or_else(|| "any size".to_owned(), |size| format!("{size} bytes")),
+                    member.name.rsplit('/').next().unwrap_or(&member.name),
+                ),
+            })
     }
 
     /// Propose a case for a dataset; answers the review and whether this

@@ -16,10 +16,12 @@ could not say:
 - ``2`` incomplete — a scorer failed or a case went unanswered, which never passes;
 - ``3`` error — nothing admits the pair, the run failed, or the two do not compare.
 
-A variant naming a registered model or a workflow is admitted through a line
-too: the server stages the model's package from its own registry, and the job
+A variant naming a model or a workflow is admitted through a line too: the
+server stages a registered model's package from its own registry, and the job
 sends the bytes nobody there holds — the model's weights, the workflow's
-declaration — with ``--stage``, addressed by their digest.
+declaration, and the ``model-package.json`` of a model the server never
+registered, whose digest is that variant's model version — with ``--stage``,
+addressed by their digest.
 
 It records what a reader needs later beside the verdict: the commit, the card
 version the context pins, the variant's ID — what the deployed application

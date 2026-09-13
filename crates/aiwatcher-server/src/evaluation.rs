@@ -357,38 +357,44 @@ impl aiwatcher_evaluation::ApprovalBundles for LocalSource {
     /// digest; a workflow's declaration by the digest the variant pins. The
     /// weights and the declaration are bytes this deployment does not hold, so
     /// they are named here and sent by whoever measures.
+    ///
+    /// A model this deployment never registered is addressed by its package
+    /// instead: the variant's version is the digest of `model-package.json`,
+    /// which a pipeline sends like the weights, and whose artifacts are named
+    /// once it is staged.
     async fn pinned_members(
         &self,
         variant: &aiwatcher_evaluation::VariantManifest,
+        staged: &std::collections::BTreeMap<String, Vec<u8>>,
     ) -> Result<Vec<aiwatcher_evaluation::PinnedMember>> {
         use aiwatcher_evaluation::PinnedMember;
         let mut members = Vec::new();
         if let Some(model) = &variant.model {
-            let owner = self
-                .training
-                .as_ref()
-                .ok_or_else(|| unavailable(EvidenceState::Forbidden))?;
-            let package = owner
-                .verified_version(&model.name, &model.version)
-                .await
-                .map_err(training_error)?
-                .package
-                .ok_or_else(|| EvaluationError::Invalid {
-                    field: "variant.model".into(),
-                    reason: format!(
-                        "{} @ {} was registered without a package, so nothing says which \
-                         artifacts it is",
-                        model.name, model.version
-                    ),
-                })?;
-            let declared = serde_json::to_vec(&package)?;
-            members.push(PinnedMember {
-                name: "model-package.json".into(),
-                digest: hex::encode(Sha256::digest(&declared)),
-                size_bytes: Some(declared.len() as u64),
-                bytes: Some(declared),
-            });
-            for artifact in &package.artifacts {
+            let package = match self.registered_package(model).await? {
+                Some(package) => {
+                    let declared = serde_json::to_vec(&package)?;
+                    members.push(PinnedMember {
+                        name: PACKAGE.into(),
+                        digest: hex::encode(Sha256::digest(&declared)),
+                        size_bytes: Some(declared.len() as u64),
+                        bytes: Some(declared),
+                    });
+                    Some(package)
+                }
+                None => {
+                    members.push(PinnedMember {
+                        name: PACKAGE.into(),
+                        digest: model.version.clone(),
+                        size_bytes: None,
+                        bytes: None,
+                    });
+                    staged
+                        .get(PACKAGE)
+                        .map(|bytes| addressed_package(model, bytes))
+                        .transpose()?
+                }
+            };
+            for artifact in package.iter().flat_map(|package| &package.artifacts) {
                 members.push(PinnedMember {
                     name: format!("{ARTIFACTS}{}", artifact.name),
                     digest: artifact.digest.clone(),
@@ -406,6 +412,64 @@ impl aiwatcher_evaluation::ApprovalBundles for LocalSource {
             });
         }
         Ok(members)
+    }
+}
+
+/// What a bundle calls a model's package.
+const PACKAGE: &str = "model-package.json";
+
+/// A package a variant addresses by its own digest, as its bytes declare it:
+/// the bytes hash to the version, and the package is one ADR_0023 admits.
+fn addressed_package(
+    model: &aiwatcher_evaluation::VersionReference,
+    bytes: &[u8],
+) -> Result<aiwatcher_training::ModelPackage> {
+    let invalid = |reason: String| EvaluationError::Invalid {
+        field: "variant.model".into(),
+        reason,
+    };
+    if hex::encode(Sha256::digest(bytes)) != model.version {
+        return Err(invalid(format!(
+            "{} @ {} names a package by its digest, and the {PACKAGE} staged does not hash to it",
+            model.name, model.version
+        )));
+    }
+    let package: aiwatcher_training::ModelPackage = serde_json::from_slice(bytes)
+        .map_err(|error| invalid(format!("{PACKAGE} is not a model package: {error}")))?;
+    package.validate().map_err(|error| {
+        invalid(format!(
+            "{PACKAGE} is not one a model may be served from: {error}"
+        ))
+    })?;
+    Ok(package)
+}
+
+impl LocalSource {
+    /// The package the training registry holds for this model version, or
+    /// `None` when this deployment holds no such version — or no registry —
+    /// and the variant's version is to be read as a package's own digest.
+    async fn registered_package(
+        &self,
+        model: &aiwatcher_evaluation::VersionReference,
+    ) -> Result<Option<aiwatcher_training::ModelPackage>> {
+        let Some(owner) = self.training.as_ref() else {
+            return Ok(None);
+        };
+        match owner.verified_version(&model.name, &model.version).await {
+            Ok(version) => version
+                .package
+                .map(Some)
+                .ok_or_else(|| EvaluationError::Invalid {
+                    field: "variant.model".into(),
+                    reason: format!(
+                        "{} @ {} was registered without a package, so nothing says which \
+                     artifacts it is",
+                        model.name, model.version
+                    ),
+                }),
+            Err(aiwatcher_training::Error::NotFound(_)) => Ok(None),
+            Err(error) => Err(training_error(error)),
+        }
     }
 }
 
@@ -449,27 +513,37 @@ impl SourceAuthority for LocalSource {
         let v = &manifest.variant;
         let c = &manifest.context;
         if let Some(model) = &v.model {
-            let owner = self
-                .training
-                .as_ref()
-                .ok_or_else(|| unavailable(EvidenceState::Forbidden))?;
-            let version = owner
-                .verified_version(&model.name, &model.version)
-                .await
-                .map_err(training_error)?;
-            let package = version
-                .package
-                .ok_or_else(|| unavailable(EvidenceState::Forbidden))?;
-            // Historical model IDs bind artifact digests, not the whole package.
-            // The operator approves its full declaration separately; no URI is fetched.
-            let declared = root.bytes("model-package.json", 1024 * 1024).await?;
+            let declared = root.bytes(PACKAGE, 1024 * 1024).await?;
             earlier.update(&declared);
-            let approved: aiwatcher_training::ModelPackage = serde_json::from_slice(&declared)
-                .map_err(|_| unavailable(EvidenceState::CorruptArtifact))?;
-            if serde_json::to_value(&approved)? != serde_json::to_value(&package)? {
-                return Err(unavailable(EvidenceState::Forbidden));
-            }
-            added = Some(aiwatcher_evaluation::bundle_digest(&approved)?);
+            // A package that hashes to the version is one the variant addresses
+            // by its own bytes — a model this deployment never registered. Any
+            // other is the training registry's version, held to its owner.
+            let package = if hex::encode(Sha256::digest(&declared)) == model.version {
+                addressed_package(model, &declared)
+                    .map_err(|_| unavailable(EvidenceState::CorruptArtifact))?
+            } else {
+                let owner = self
+                    .training
+                    .as_ref()
+                    .ok_or_else(|| unavailable(EvidenceState::Forbidden))?;
+                let version = owner
+                    .verified_version(&model.name, &model.version)
+                    .await
+                    .map_err(training_error)?;
+                let package = version
+                    .package
+                    .ok_or_else(|| unavailable(EvidenceState::Forbidden))?;
+                // Historical model IDs bind artifact digests, not the whole
+                // package. The operator approves its full declaration
+                // separately; no URI is fetched.
+                let approved: aiwatcher_training::ModelPackage = serde_json::from_slice(&declared)
+                    .map_err(|_| unavailable(EvidenceState::CorruptArtifact))?;
+                if serde_json::to_value(&approved)? != serde_json::to_value(&package)? {
+                    return Err(unavailable(EvidenceState::Forbidden));
+                }
+                package
+            };
+            added = Some(aiwatcher_evaluation::bundle_digest(&package)?);
             let artifacts = root.within("model-artifacts").await?;
             let mut remaining = 100 * 1024 * 1024;
             for artifact in &package.artifacts {

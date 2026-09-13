@@ -34,8 +34,17 @@ pub trait ApprovalBundles: Send + Sync + std::fmt::Debug {
     /// as this adapter's owners declare them. A line stages these to approve a
     /// variant nobody staged a bundle for. Empty from an adapter that derives
     /// none, which a line then refuses for a variant naming either.
-    async fn pinned_members(&self, variant: &crate::VariantManifest) -> Result<Vec<PinnedMember>> {
-        let _ = variant;
+    ///
+    /// `staged` is what the line has staged of them so far, by bundle name,
+    /// and a member may imply more once its bytes are there: a package nobody
+    /// here registered names its artifacts only inside itself. A line asks
+    /// again after staging until nothing new is named.
+    async fn pinned_members(
+        &self,
+        variant: &crate::VariantManifest,
+        staged: &std::collections::BTreeMap<String, Vec<u8>>,
+    ) -> Result<Vec<PinnedMember>> {
+        let _ = (variant, staged);
         Ok(Vec::new())
     }
 }
@@ -43,8 +52,9 @@ pub trait ApprovalBundles: Send + Sync + std::fmt::Debug {
 /// One member a variant's references imply, by its bundle name.
 ///
 /// `bytes` is what an owner derived — a model's package, read from the training
-/// registry — and absent for bytes nobody here holds: a model's weights or a
-/// workflow's declaration, which a pipeline sends by digest to
+/// registry — and absent for bytes nobody here holds: a model's weights, a
+/// workflow's declaration, or the package of a model this deployment never
+/// registered, which a pipeline sends by digest to
 /// `PUT /api/v1/evaluation-variant-artifacts/{name}` and the line copies from
 /// there, held to `digest`. No URI is fetched either way.
 #[derive(Clone, Debug, PartialEq, Eq)]

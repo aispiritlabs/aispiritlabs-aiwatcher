@@ -357,7 +357,10 @@ async fn a_model_and_a_workflow_imply_the_members_a_line_stages_and_where_their_
         version: registered.version.version.clone(),
     });
 
-    let members = source.pinned_members(&variant).await.unwrap();
+    let members = source
+        .pinned_members(&variant, &std::collections::BTreeMap::new())
+        .await
+        .unwrap();
 
     let names: Vec<&str> = members.iter().map(|member| member.name.as_str()).collect();
     assert_eq!(
@@ -385,5 +388,77 @@ async fn a_model_and_a_workflow_imply_the_members_a_line_stages_and_where_their_
         members[2].digest,
         variant.workflow.as_ref().unwrap().version,
         "a workflow's declaration, by the digest the variant pins"
+    );
+}
+
+/// A model this deployment never registered is named by its package's own
+/// digest: the package is a member a pipeline sends, and the artifacts inside
+/// it are named once it is staged.
+#[tokio::test]
+async fn a_model_nobody_here_registered_is_named_by_its_package_and_its_artifacts_follow_it() {
+    use aiwatcher_evaluation::ApprovalBundles;
+    use sha2::Digest;
+    use std::collections::BTreeMap;
+    let package = serde_json::to_vec(&serde_json::json!({
+        "runtime": "weights",
+        "artifacts": [{
+            "name": "weights", "uri": "s3://elsewhere/capitals.bin", "digest": "cd".repeat(32),
+            "size_bytes": 7, "content_type": "", "kind": "model"
+        }]
+    }))
+    .unwrap();
+    let digest = hex::encode(sha2::Sha256::digest(&package));
+    // A registry that holds other models, and none by this digest.
+    let training = Arc::new(aiwatcher_training::Registry::new(
+        Arc::new(MemoryObjectStore::new()),
+        "training",
+    ));
+    let source = LocalSource::new(None).with_training(training);
+    let mut variant = request("unregistered", 1).manifest.variant;
+    variant.workflow = None;
+    variant.model = Some(VersionReference {
+        name: "capitals-elsewhere".into(),
+        version: digest.clone(),
+    });
+
+    let first = source
+        .pinned_members(&variant, &BTreeMap::new())
+        .await
+        .unwrap();
+    assert_eq!(first.len(), 1, "{first:?}");
+    assert_eq!(
+        (
+            first[0].name.as_str(),
+            first[0].digest.as_str(),
+            first[0].bytes.is_none()
+        ),
+        ("model-package.json", digest.as_str(), true),
+        "the package is nobody's here to derive: a pipeline sends it"
+    );
+
+    let staged = BTreeMap::from([("model-package.json".to_owned(), package.clone())]);
+    let then = source.pinned_members(&variant, &staged).await.unwrap();
+    assert_eq!(
+        then.iter()
+            .map(|member| (member.name.as_str(), member.digest.clone()))
+            .collect::<Vec<_>>(),
+        [
+            ("model-package.json", digest.clone()),
+            ("model-artifacts/weights", "cd".repeat(32))
+        ]
+    );
+
+    let mut other = package;
+    other.push(b' ');
+    let refused = source
+        .pinned_members(
+            &variant,
+            &BTreeMap::from([("model-package.json".to_owned(), other)]),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        refused.to_string().contains("does not hash to it"),
+        "{refused}"
     );
 }
