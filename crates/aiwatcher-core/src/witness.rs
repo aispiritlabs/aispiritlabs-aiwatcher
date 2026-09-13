@@ -76,9 +76,59 @@ pub fn digest(key: &[u8; 32], said: Said, text: &str) -> String {
     hex
 }
 
-/// A JSON value as one text: keys sorted, nothing between tokens — Python's
-/// `json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)`
-/// for everything but a float the two languages spell differently.
+/// A number as JavaScript's `String(number)` spells it: the shortest digits
+/// that read back as the same double, in positional notation from a millionth
+/// up to 10²¹ and in exponent notation outside. An integer JSON carries exactly
+/// is spelled exactly. Python's `repr` and Rust's formatting choose the same
+/// digits and spell them differently; this is the one spelling both write.
+#[must_use]
+pub fn number(value: &serde_json::Number) -> String {
+    if value.is_i64() || value.is_u64() {
+        return value.to_string();
+    }
+    let float = value.as_f64().unwrap_or(0.0);
+    if float == 0.0 || !float.is_finite() {
+        return "0".to_owned();
+    }
+    let sign = if float < 0.0 { "-" } else { "" };
+    let shortest = format!("{:e}", float.abs());
+    let (mantissa, exponent) = shortest.split_once('e').unwrap_or((&shortest, "0"));
+    let digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
+    let digits = digits.trim_end_matches('0');
+    let digits = if digits.is_empty() { "0" } else { digits };
+    let exponent: i64 = exponent.parse().unwrap_or(0);
+    let count = i64::try_from(digits.len()).unwrap_or(i64::MAX);
+    let point = exponent + 1;
+    let spelled = if count <= point && point <= 21 {
+        format!(
+            "{digits}{}",
+            "0".repeat(usize::try_from(point - count).unwrap_or(0))
+        )
+    } else if 0 < point && point <= 21 {
+        let (whole, fraction) = digits.split_at(usize::try_from(point).unwrap_or(0));
+        format!("{whole}.{fraction}")
+    } else if -6 < point && point <= 0 {
+        format!(
+            "0.{}{digits}",
+            "0".repeat(usize::try_from(-point).unwrap_or(0))
+        )
+    } else {
+        let sign = if point - 1 < 0 { '-' } else { '+' };
+        let (first, rest) = digits.split_at(1);
+        let rest = if rest.is_empty() {
+            String::new()
+        } else {
+            format!(".{rest}")
+        };
+        format!("{first}{rest}e{sign}{}", (point - 1).abs())
+    };
+    format!("{sign}{spelled}")
+}
+
+/// A JSON value as one text: keys sorted by code point, nothing between
+/// tokens, strings escaped as JSON escapes them, and every number as
+/// [`number`] spells it — so Python and Rust write the same bytes for one
+/// value, a float included.
 #[must_use]
 pub fn canonical(value: &Value) -> String {
     match value {
@@ -95,6 +145,7 @@ pub fn canonical(value: &Value) -> String {
             let inner: Vec<String> = items.iter().map(canonical).collect();
             format!("[{}]", inner.join(","))
         }
+        Value::Number(value) => number(value),
         other => other.to_string(),
     }
 }
@@ -173,6 +224,39 @@ mod tests {
                 &[b"Test Using Larger Than Block-Size Key - Hash Key First"]
             )),
             "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54"
+        );
+    }
+
+    /// The vectors `sdk/python/tests/test_gateway.py` holds its spelling to,
+    /// each as JavaScript's `String(number)` writes it.
+    #[test]
+    fn a_number_is_spelled_the_one_way_both_languages_write_it() {
+        for (value, spelled) in [
+            (json!(0.1), "0.1"),
+            (json!(1e21), "1e+21"),
+            (json!(1e-7), "1e-7"),
+            (json!(123_456_789.125), "123456789.125"),
+            (json!(-0.0), "0"),
+            (json!(1.0), "1"),
+            (json!(5e-324), "5e-324"),
+            (
+                json!(1.797_693_134_862_315_7e308),
+                "1.7976931348623157e+308",
+            ),
+            (json!(100.0), "100"),
+            (json!(1e20), "100000000000000000000"),
+            (json!(0.000_001), "0.000001"),
+            (json!(1.23e-18), "1.23e-18"),
+            (json!(-3.75e-8), "-3.75e-8"),
+            (json!(42), "42"),
+            (json!(-7), "-7"),
+            (json!(u64::MAX), "18446744073709551615"),
+        ] {
+            assert_eq!(canonical(&value), spelled, "{value}");
+        }
+        assert_eq!(
+            canonical(&json!({"score": 0.5, "labels": ["a", 2.0]})),
+            r#"{"labels":["a",2],"score":0.5}"#
         );
     }
 

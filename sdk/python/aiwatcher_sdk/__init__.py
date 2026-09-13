@@ -29,7 +29,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from collections.abc import Generator
+from collections.abc import Generator, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Protocol
@@ -1203,20 +1203,30 @@ class LlmCall(Scope):
             headers[PROMPT_HEADER] = f"{name}@{version}"
         return headers
 
-    def caller_body(self, **variables: object) -> dict[str, Any]:
+    def caller_body(
+        self, *, answer_from: Mapping[str, Any] | None = None, **variables: object
+    ) -> dict[str, Any]:
         """The body field a gateway reads about this call, beside :meth:`caller_headers`.
 
         Pass the values the prompt version was rendered with, and send the
         result as part of the request's body (``extra_body=`` on an OpenAI
         client). A gateway removes the field before the provider sees it,
         renders the named version with these values and looks for exactly that
-        text in the request — and publishes, under its own credential, keyed
-        digests of the request's messages, of these values where it found them
-        rendered, and of the reply. So a case's input among them and an answer
-        that is the reply are a witness's word, and none of it reaches the log
-        as words.
+        text in the request — and for nothing else in it — and publishes, under
+        its own credential, keyed digests of the request's messages, of these
+        values where it found them rendered, and of the reply. So a case's input
+        among them and an answer that is the reply are a witness's word, and
+        none of it reaches the log as words.
+
+        ``answer_from`` says how the application takes its answer out of the
+        reply, when it is not the reply itself: ``{"json_pointer": "/label"}``
+        or ``{"between": ["Answer:", "\\n"]}``. The gateway takes it the same
+        way, so an answer read out of a reply is witnessed as that reply's.
         """
-        return {GATEWAY_FIELD: {"variables": dict(variables)}}
+        told: dict[str, Any] = {"variables": dict(variables)}
+        if answer_from is not None:
+            told["answer_from"] = dict(answer_from)
+        return {GATEWAY_FIELD: told}
 
     def first_token(self) -> None:
         """Call once, when the first token arrives. Drives time-to-first-token."""

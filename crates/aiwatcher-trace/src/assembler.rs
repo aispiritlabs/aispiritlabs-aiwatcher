@@ -642,6 +642,13 @@ fn request_attributes(event: &RecordedEvent) -> Vec<Attr> {
         {
             out.push(attr(own::prompt::VERIFIED, verified));
         }
+        if let Some(exact) = event
+            .data
+            .get("prompt_exact")
+            .and_then(serde_json::Value::as_bool)
+        {
+            out.push(attr(own::prompt::EXACT, exact));
+        }
     }
     out
 }

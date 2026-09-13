@@ -512,6 +512,11 @@ function TracesNote({ traces }: { traces: GenerationTrace }) {
           {`${traces.witnessed_answer} of ${traces.answers} are, word for word, a reply a witness relayed for their run — an answer made around the gateway, or reshaped from what came back, is not.`}
         </p>
       ) : null}
+      {traces.witnessed_exchange != null ? (
+        <p>
+          {`${traces.witnessed_exchange} of ${traces.answers} were one witnessed call's reply to a request holding their case's input and nothing but the pinned prompt and its values.`}
+        </p>
+      ) : null}
       {traces.witnessed_input != null ? (
         <p>
           {`${traces.witnessed_input} of ${traces.answers} had a witnessed request holding their case's input.`}

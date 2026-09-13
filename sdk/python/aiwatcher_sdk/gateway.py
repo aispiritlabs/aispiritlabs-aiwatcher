@@ -29,9 +29,11 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import decimal
 import hashlib
 import hmac
 import json
+import math
 import os
 import re
 import threading
@@ -49,7 +51,11 @@ from aiwatcher_sdk import CALLER_RUN_HEADER, GATEWAY_FIELD, PROMPT_HEADER, Aiwat
 
 __all__ = [
     "Gateway",
+    "PromptFound",
     "PromptSource",
+    "canonical",
+    "canonical_number",
+    "extracted",
     "holds_template",
     "main",
     "witness_digest",
@@ -85,8 +91,141 @@ def witness_digest(key: bytes, said: str, text: str) -> str:
     return hmac.new(key, message, hashlib.sha256).hexdigest()[:32]
 
 
-def _canonical(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+def canonical_number(value: int | float) -> str:
+    """A number as JavaScript's ``String(number)`` spells it — ``aiwatcher_core::witness::number``.
+
+    The shortest digits that read back as the same double, positional from a
+    millionth up to 10²¹ and in exponent notation outside; an integer a double
+    or a 64-bit integer holds exactly is spelled exactly.
+    """
+    if isinstance(value, int) and -(2**63) <= value < 2**64:
+        return str(value)
+    number = float(value)
+    if number == 0 or not math.isfinite(number):
+        return "0"
+    sign = "-" if number < 0 else ""
+    exact = decimal.Decimal(repr(abs(number)))
+    digits_tuple, exponent = exact.as_tuple().digits, int(exact.as_tuple().exponent)
+    digits = "".join(str(digit) for digit in digits_tuple).rstrip("0") or "0"
+    exponent += len(digits_tuple) - len(digits)
+    count = len(digits)
+    point = exponent + count
+    if count <= point <= 21:
+        spelled = digits + "0" * (point - count)
+    elif 0 < point <= 21:
+        spelled = f"{digits[:point]}.{digits[point:]}"
+    elif -6 < point <= 0:
+        spelled = "0." + "0" * -point + digits
+    else:
+        rest = f".{digits[1:]}" if count > 1 else ""
+        spelled = f"{digits[0]}{rest}e{'-' if point - 1 < 0 else '+'}{abs(point - 1)}"
+    return sign + spelled
+
+
+def canonical(value: Any) -> str:
+    """A JSON value as one text, byte for byte as ``aiwatcher_core::witness::canonical``
+    writes it: keys sorted by code point, nothing between tokens, JSON's string
+    escapes, and every number as :func:`canonical_number` spells it."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return canonical_number(value)
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, Mapping):
+        return (
+            "{"
+            + ",".join(
+                f"{json.dumps(str(key), ensure_ascii=False)}:{canonical(value[key])}"
+                for key in sorted(value, key=str)
+            )
+            + "}"
+        )
+    if isinstance(value, (list, tuple)):
+        return "[" + ",".join(canonical(item) for item in value) + "]"
+    return json.dumps(str(value), ensure_ascii=False)
+
+
+def extracted(text: str, rule: Mapping[str, Any]) -> str | None:
+    """What an application says it takes as its answer out of a reply's text.
+
+    ``{"json_pointer": "/label"}`` reads the reply as JSON and takes the value at
+    that pointer (RFC 6901) — text as itself, anything else in its canonical
+    form; ``{"between": ["Answer:", "\\n"]}`` takes what follows the first
+    occurrence of the first marker, up to the first occurrence of the second
+    after it (or the end, where the second is ``null``). ``None`` when the rule
+    is not one of those or finds nothing.
+    """
+    pointer = rule.get("json_pointer")
+    if isinstance(pointer, str) and (pointer == "" or pointer.startswith("/")):
+        try:
+            found: Any = json.loads(text)
+        except ValueError:
+            return None
+        for token in pointer.split("/")[1:] if pointer else []:
+            token = token.replace("~1", "/").replace("~0", "~")
+            if isinstance(found, Mapping) and token in found:
+                found = found[token]
+            elif isinstance(found, list) and token.isdigit() and int(token) < len(found):
+                found = found[int(token)]
+            else:
+                return None
+        return found if isinstance(found, str) else canonical(found)
+    between = rule.get("between")
+    if (
+        isinstance(between, list)
+        and len(between) == 2
+        and isinstance(between[0], str)
+        and between[0]
+        and (between[1] is None or (isinstance(between[1], str) and between[1]))
+    ):
+        start = text.find(between[0])
+        if start < 0:
+            return None
+        rest = text[start + len(between[0]) :]
+        if between[1] is not None:
+            end = rest.find(between[1])
+            if end < 0:
+                return None
+            rest = rest[:end]
+        return rest
+    return None
+
+
+@dataclass(frozen=True)
+class PromptFound:
+    """What the gateway found of the prompt a request names."""
+
+    name: str
+    version: str
+    #: The request's text holds the version's template: rendered, or its literal parts.
+    verified: bool
+    #: It holds it rendered with exactly the values the caller sent.
+    rendered: bool
+    #: And nothing else: every message is the rendered template or those values.
+    exact: bool
+
+
+@dataclass(frozen=True)
+class Told:
+    """What the caller said about its call, in the body field the provider never sees."""
+
+    variables: Mapping[str, Any] | None = None
+    #: How the caller takes its answer out of the reply — see :func:`extracted`.
+    answer_from: Mapping[str, Any] | None = None
+
+    @classmethod
+    def read(cls, field: Any) -> Told:
+        if not isinstance(field, Mapping):
+            return cls()
+        variables = field.get("variables")
+        answer_from = field.get("answer_from")
+        return cls(
+            variables=variables if isinstance(variables, Mapping) else None,
+            answer_from=answer_from if isinstance(answer_from, Mapping) else None,
+        )
 
 
 class PromptSource(Protocol):
@@ -125,17 +264,41 @@ def _texts_asked(body: Mapping[str, Any]) -> list[str]:
     return [text for text in texts if text.strip(_WHITE_SPACE)]
 
 
-def _holds_rendered(template: str, variables: Mapping[str, Any], texts: Sequence[str]) -> bool:
-    """Whether a text holds ``template`` rendered with exactly these values — the
-    registry's placeholder syntax, as :meth:`~aiwatcher_sdk.prompts.PromptVersion.render`
-    fills it."""
+def _rendered(template: str, variables: Mapping[str, Any]) -> str | None:
+    """``template`` rendered with these values, as
+    :meth:`~aiwatcher_sdk.prompts.PromptVersion.render` fills it; ``None`` when a
+    placeholder has no value."""
     names = set(_PLACEHOLDER.findall(template))
     if not names <= set(variables):
+        return None
+    rendered = _PLACEHOLDER.sub(lambda match: str(variables[match.group(1)]), template)
+    return rendered.strip(_WHITE_SPACE) or None
+
+
+def _holds_rendered(template: str, variables: Mapping[str, Any], texts: Sequence[str]) -> bool:
+    """Whether a text holds ``template`` rendered with exactly these values."""
+    rendered = _rendered(template, variables)
+    return rendered is not None and any(rendered in text for text in [*texts, "\n".join(texts)])
+
+
+def _holds_only(template: str, variables: Mapping[str, Any], texts: Sequence[str]) -> bool:
+    """Whether the request's text is nothing but ``template`` rendered and the
+    values it was rendered with, with whitespace between them — so nothing the
+    application added, such as an answer it wants repeated, rides beside them."""
+    rendered = _rendered(template, variables)
+    if rendered is None:
         return False
-    rendered = _PLACEHOLDER.sub(lambda match: str(variables[match.group(1)]), template).strip(
-        _WHITE_SPACE
-    )
-    return bool(rendered) and any(rendered in text for text in [*texts, "\n".join(texts)])
+    rest = "\n".join(texts)
+    if rendered not in rest:
+        return False
+    pieces = [
+        rendered,
+        *sorted({str(value) for value in variables.values()}, key=len, reverse=True),
+    ]
+    for piece in pieces:
+        if piece.strip(_WHITE_SPACE):
+            rest = rest.replace(piece, "\n")
+    return not rest.strip(_WHITE_SPACE)
 
 
 def _digested(key: bytes, said: str, texts: Sequence[str]) -> list[str]:
@@ -269,9 +432,8 @@ class Gateway:
         named: str | None,
         body: Mapping[str, Any],
         variables: Mapping[str, Any] | None = None,
-    ) -> tuple[str, str, bool, bool] | None:
-        """The prompt a request names, whether its text holds that template, and
-        whether it holds it rendered with exactly ``variables``.
+    ) -> PromptFound | None:
+        """The prompt a request names, and what its text holds of that template.
 
         ``None`` when it names none, or the registry could not be asked.
         """
@@ -281,14 +443,17 @@ class Gateway:
         try:
             template = self.template(name, version)
         except PromptMissingError:
-            return name, version, False, False
+            return PromptFound(name, version, verified=False, rendered=False, exact=False)
         except Exception:  # noqa: BLE001 — an unreachable registry verifies nothing
             return None
         texts = _texts_asked(body)
         rendered = variables is not None and _holds_rendered(template, variables, texts)
+        exact = rendered and variables is not None and _holds_only(template, variables, texts)
         messages = body.get("messages")
         literal = isinstance(messages, list) and holds_template(template, messages)
-        return name, version, rendered or literal, rendered
+        return PromptFound(
+            name, version, verified=rendered or literal, rendered=rendered, exact=exact
+        )
 
     def digests_asked(
         self, body: Mapping[str, Any], variables: Mapping[str, Any] | None, rendered: bool
@@ -300,25 +465,32 @@ class Gateway:
         texts = _texts_asked(body)
         if rendered and variables is not None:
             texts.extend(
-                value if isinstance(value, str) else _canonical(value)
+                value if isinstance(value, str) else canonical(value)
                 for value in variables.values()
             )
         return _digested(self.key, "asked", texts)
 
-    def digests_replied(self, relayed: Relayed) -> list[str]:
-        """Keyed digests of each reply, as text and, where it is JSON, as its
-        canonical form — which is how an answer that parsed it is compared."""
+    def digests_replied(
+        self, relayed: Relayed, answer_from: Mapping[str, Any] | None = None
+    ) -> list[str]:
+        """Keyed digests of each reply — as text, where it is JSON as its
+        canonical form, and as what the caller said it takes out of it
+        (``answer_from``), taken here — which is how an answer is compared."""
         if self.key is None or not relayed.replies:
             return []
         texts: list[str] = []
         for text in relayed.replies.values():
             if len(text) > MOST_REPLY_CHARS:
                 continue
+            if answer_from is not None:
+                taken = extracted(text, answer_from)
+                if taken is not None and taken.strip(_WHITE_SPACE):
+                    texts.append(taken)
             texts.append(text)
             with contextlib.suppress(ValueError):
                 parsed = json.loads(text)
                 if isinstance(parsed, (dict, list)):
-                    texts.append(_canonical(parsed))
+                    texts.append(canonical(parsed))
         return _digested(self.key, "replied", texts)
 
     # ── Relaying ─────────────────────────────────────────────────────────
@@ -362,17 +534,19 @@ class Gateway:
         *,
         caller: str | None,
         requested: str | None,
-        prompt: tuple[str, str, bool, bool] | None,
+        prompt: PromptFound | None,
         relayed: Relayed,
         status: int,
         started: float,
         asked: Sequence[str] = (),
+        answer_from: Mapping[str, Any] | None = None,
     ) -> None:
         """One call, as the gateway saw it — with nothing that was said in it."""
         request: dict[str, Any] = {"provider": "aiwatcher-gateway"}
         if prompt is not None:
-            request["prompt"] = (prompt[0], prompt[1])
-            request["prompt_verified"] = prompt[2]
+            request["prompt"] = (prompt.name, prompt.version)
+            request["prompt_verified"] = prompt.verified
+            request["prompt_exact"] = prompt.exact
         with (
             contextlib.suppress(Exception),
             self.telemetry.run(f"gateway-{uuid.uuid4().hex}", caller_run_id=caller) as run,
@@ -389,7 +563,7 @@ class Gateway:
                 outcome["response_model"] = relayed.served_model
             if asked:
                 outcome["asked_digests"] = list(asked)
-            replied = self.digests_replied(relayed)
+            replied = self.digests_replied(relayed, answer_from)
             if replied:
                 outcome["replied_digests"] = replied
             call.usage(
@@ -448,14 +622,14 @@ class Gateway:
                 started = time.monotonic()
                 # What the application says about the call is for the gateway,
                 # never for the provider.
-                variables: Mapping[str, Any] | None = None
+                told = Told()
                 if GATEWAY_FIELD in body:
-                    told = body.pop(GATEWAY_FIELD)
-                    named = told.get("variables") if isinstance(told, Mapping) else None
-                    variables = named if isinstance(named, Mapping) else None
+                    told = Told.read(body.pop(GATEWAY_FIELD))
                     raw = json.dumps(body, separators=(",", ":")).encode()
-                prompt = gateway.verified(self.headers.get(PROMPT_HEADER), body, variables)
-                asked = gateway.digests_asked(body, variables, prompt is not None and prompt[3])
+                prompt = gateway.verified(self.headers.get(PROMPT_HEADER), body, told.variables)
+                asked = gateway.digests_asked(
+                    body, told.variables, prompt is not None and prompt.rendered
+                )
                 relayed = Relayed()
                 try:
                     status, content_type, chunks = gateway.forward(self.path, raw, authorization)
@@ -488,6 +662,7 @@ class Gateway:
                     status=int(status),
                     started=started,
                     asked=asked,
+                    answer_from=told.answer_from,
                 )
 
         return Handler

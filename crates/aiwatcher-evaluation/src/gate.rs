@@ -53,10 +53,12 @@ pub struct GatePolicy {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub require_witness: bool,
     /// Every generated answer must also be, word for word, a reply a witness
-    /// relayed for its run, to a request that held its case's input — which an
-    /// application calling its provider around the gateway, or answering other
-    /// than the model did, cannot show; fewer is `incomplete`. Off by default:
-    /// an application that reshapes a reply before answering has none to show.
+    /// relayed for its run — or what the application said, before the reply
+    /// came, it would take out of it — to a request that held its case's input
+    /// and, where the variant pins a prompt, nothing but that prompt rendered
+    /// and its values, the answer not among them: which an application calling
+    /// its provider around the gateway, or telling the model what to say,
+    /// cannot show; fewer is `incomplete`. Off by default.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub require_witnessed_answer: bool,
 }

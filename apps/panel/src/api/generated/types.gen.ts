@@ -3722,10 +3722,12 @@ export type GatePolicy = {
     require_witness?: boolean;
     /**
      * Every generated answer must also be, word for word, a reply a witness
-     * relayed for its run, to a request that held its case's input — which an
-     * application calling its provider around the gateway, or answering other
-     * than the model did, cannot show; fewer is `incomplete`. Off by default:
-     * an application that reshapes a reply before answering has none to show.
+     * relayed for its run — or what the application said, before the reply
+     * came, it would take out of it — to a request that held its case's input
+     * and, where the variant pins a prompt, nothing but that prompt rendered
+     * and its values, the answer not among them: which an application calling
+     * its provider around the gateway, or telling the model what to say,
+     * cannot show; fewer is `incomplete`. Off by default.
      */
     require_witnessed_answer?: boolean;
     /**
@@ -3829,6 +3831,12 @@ export type GenerationTrace = {
      * run; absent when the variant pins neither a model nor a prompt.
      */
     witnessed_answer?: number | null;
+    /**
+     * Answers one witnessed call relayed as its reply to a request that held
+     * their case's input and nothing but the pinned prompt and its values;
+     * absent when the variant pins no prompt.
+     */
+    witnessed_exchange?: number | null;
     /**
      * Answers whose case's input such a run found in the request it relayed;
      * absent when the variant pins neither a model nor a prompt.

@@ -158,6 +158,9 @@ pub mod aiwatcher {
         /// version's template in it, with its variables filled — what a
         /// gateway reports, and never the application about itself.
         pub const VERIFIED: &str = "aiwatcher.prompt.verified";
+        /// Whether that host found the request's text to be nothing but the
+        /// template rendered and the values it was rendered with.
+        pub const EXACT: &str = "aiwatcher.prompt.exact";
     }
 
     /// Which declared variant answered in the run: Evaluation's content

@@ -40,6 +40,9 @@ pub struct TracedCall {
     /// version's template in it: a gateway's word, absent from the
     /// application's own calls.
     pub prompt_verified: Option<bool>,
+    /// Whether that host found the request's text to be nothing but the
+    /// template rendered and the values it was rendered with.
+    pub prompt_exact: Option<bool>,
     /// The credential both ends of the call's span were published under.
     pub published_by: Option<String>,
     /// What the call reported using.
@@ -188,6 +191,13 @@ pub struct TracedAnswer {
     /// neither a model nor a prompt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub witnessed_input: Option<bool>,
+    /// One such call did all of it at once: it relayed this answer as its
+    /// reply, to a request holding the case's input and nothing but the pinned
+    /// prompt rendered and the values it was rendered with — the answer not
+    /// among them. Absent when the variant pins no prompt, which is what says
+    /// what a request should hold.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub witnessed_exchange: Option<bool>,
     /// The credentials whose runs witnessed it, each once.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub witnessed_by: Vec<String>,
@@ -273,6 +283,11 @@ pub struct GenerationTrace {
     /// absent when the variant pins neither a model nor a prompt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub witnessed_input: Option<usize>,
+    /// Answers one witnessed call relayed as its reply to a request that held
+    /// their case's input and nothing but the pinned prompt and its values;
+    /// absent when the variant pins no prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub witnessed_exchange: Option<usize>,
     /// Answers whose serving runs were published under their own run's
     /// credential, which witnesses nothing: one token on two hosts.
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -315,6 +330,7 @@ impl GenerationTrace {
             witnessed_prompt: counted(|row| row.witnessed_prompt),
             witnessed_answer: counted(|row| row.witnessed_answer),
             witnessed_input: counted(|row| row.witnessed_input),
+            witnessed_exchange: counted(|row| row.witnessed_exchange),
             self_witnessed: rows.iter().filter(|row| row.self_witnessed).count(),
             witnesses: {
                 let mut witnesses: Vec<String> = rows
@@ -410,6 +426,7 @@ impl GenerationTrace {
     pub fn answers_witnessed(&self) -> bool {
         self.witnessed_answer.is_none_or(|on| on == self.answers)
             && self.witnessed_input.is_none_or(|on| on == self.answers)
+            && self.witnessed_exchange.is_none_or(|on| on == self.answers)
     }
 
     /// What a witness did not show of the answers and the questions, in words;
@@ -432,6 +449,17 @@ impl GenerationTrace {
         {
             said.push(format!(
                 "{} of {} answers had no request a witness relayed holding their case's input",
+                self.answers - on,
+                self.answers
+            ));
+        }
+        if let Some(on) = self.witnessed_exchange
+            && on < self.answers
+        {
+            said.push(format!(
+                "{} of {} answers had no one witnessed call relaying them as its reply to a \
+                 request holding their case's input and nothing but the pinned prompt and its \
+                 values — words beside those, such as an answer to repeat, witness nothing",
                 self.answers - on,
                 self.answers
             ));
@@ -625,6 +653,7 @@ pub fn trace_answers(
             witnessed_answer: (variant.model.is_some() || variant.prompt.is_some())
                 .then_some(false),
             witnessed_input: (variant.model.is_some() || variant.prompt.is_some()).then_some(false),
+            witnessed_exchange: variant.prompt.as_ref().map(|_| false),
             witnessed_by: Vec::new(),
             self_witnessed: false,
             served_models: Vec::new(),
@@ -730,15 +759,31 @@ pub fn trace_answers(
                             .iter()
                             .any(|text| digests.contains(&digest(key, said, text)))
                     };
-                    if holds(&call.replied, Said::Replied, answered_as(&answer.answer)) {
+                    let replied = holds(&call.replied, Said::Replied, answered_as(&answer.answer));
+                    let input = witnesses
+                        .inputs
+                        .get(&answer.case_id)
+                        .is_some_and(|input| holds(&call.asked, Said::Asked, asked_as(input)));
+                    if replied {
                         row.witnessed_answer = Some(true);
                         vouched = true;
                     }
-                    if let Some(input) = witnesses.inputs.get(&answer.case_id)
-                        && holds(&call.asked, Said::Asked, asked_as(input))
-                    {
+                    if input {
                         row.witnessed_input = Some(true);
                         vouched = true;
+                    }
+                    let on_the_prompt = variant.prompt.as_ref().is_some_and(|pin| {
+                        call.prompt_name.as_deref() == Some(pin.name.as_str())
+                            && call.prompt_version.as_deref() == Some(pin.version.as_str())
+                            && call.prompt_verified == Some(true)
+                    });
+                    if replied
+                        && input
+                        && on_the_prompt
+                        && call.prompt_exact == Some(true)
+                        && !holds(&call.asked, Said::Asked, answered_as(&answer.answer))
+                    {
+                        row.witnessed_exchange = Some(true);
                     }
                 }
                 if let Some(pinned) = &variant.model
@@ -919,6 +964,7 @@ mod tests {
             prompt_version: Some("p".repeat(64)),
             served_model: None,
             prompt_verified: None,
+            prompt_exact: None,
             published_by: Some("worker".to_owned()),
             input_tokens: 12,
             output_tokens: 3,
@@ -988,6 +1034,7 @@ mod tests {
                 witnessed_prompt: Some(0),
                 witnessed_answer: Some(0),
                 witnessed_input: Some(0),
+                witnessed_exchange: Some(0),
                 self_witnessed: 0,
                 witnesses: Vec::new(),
                 served: Vec::new(),
@@ -1689,6 +1736,7 @@ mod tests {
             prompt_name: Some("capitals".to_owned()),
             prompt_version: Some("p".repeat(64)),
             prompt_verified: Some(true),
+            prompt_exact: Some(true),
             published_by: Some("gateway".to_owned()),
             replied,
             asked,
@@ -1721,6 +1769,26 @@ mod tests {
                     vec![digest(&forged, Said::Asked, &question("Peru"))],
                 )),
             ),
+            (
+                "told-to-repeat".to_owned(),
+                run_with(relayed(
+                    vec![digest(&key, Said::Replied, "Paris")],
+                    vec![
+                        digest(&key, Said::Asked, &question("France")),
+                        digest(&key, Said::Asked, "Paris"),
+                    ],
+                )),
+            ),
+            (
+                "padded".to_owned(),
+                run_with(TracedCall {
+                    prompt_exact: Some(false),
+                    ..relayed(
+                        vec![digest(&key, Said::Replied, "Paris")],
+                        vec![digest(&key, Said::Asked, &question("France"))],
+                    )
+                }),
+            ),
         ]);
         let inputs = BTreeMap::from([
             (
@@ -1735,6 +1803,14 @@ mod tests {
                 "c3".to_owned(),
                 serde_json::json!({"question": question("Peru")}),
             ),
+            (
+                "c4".to_owned(),
+                serde_json::json!({"question": question("France")}),
+            ),
+            (
+                "c5".to_owned(),
+                serde_json::json!({"question": question("France")}),
+            ),
         ]);
         let witnesses = Witnesses::named(vec!["gateway".to_owned()])
             .keyed([("gateway".to_owned(), key)])
@@ -1748,6 +1824,8 @@ mod tests {
                 answer("c1", Some("through")),
                 answer("c2", Some("around")),
                 answer("c3", Some("forged")),
+                answer("c4", Some("told-to-repeat")),
+                answer("c5", Some("padded")),
             ],
             &runs,
             None,
@@ -1776,8 +1854,14 @@ mod tests {
                 trace.witnessed_input,
                 trace.witnessed_prompt
             ),
-            (Some(1), Some(1), Some(3))
+            (Some(3), Some(3), Some(5))
         );
+        assert_eq!(
+            [&rows[0], &rows[3], &rows[4]].map(|row| row.witnessed_exchange),
+            [Some(true), Some(false), Some(false)],
+            "the answer in the request, or words beside the prompt, witness no exchange"
+        );
+        assert_eq!(trace.witnessed_exchange, Some(1));
         assert!(trace.witnessed() && !trace.answers_witnessed());
         assert!(
             trace.unwitnessed_answers()[0].contains("made around the gateway"),

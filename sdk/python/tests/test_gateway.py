@@ -13,7 +13,14 @@ import pytest
 
 from aiwatcher_sdk import CALLER_RUN_HEADER, GATEWAY_FIELD, PROMPT_HEADER, AiwatcherClient
 from aiwatcher_sdk.api import ApiError
-from aiwatcher_sdk.gateway import Gateway, holds_template, witness_digest, witness_key
+from aiwatcher_sdk.gateway import (
+    Gateway,
+    canonical,
+    extracted,
+    holds_template,
+    witness_digest,
+    witness_key,
+)
 
 TEMPLATE = "Answer the question about {{ country }} in one word."
 KEY = witness_key("gateway-secret")
@@ -278,3 +285,108 @@ def test_a_streamed_reply_is_digested_as_the_text_it_adds_up_to(
 
     [data] = completed(recording)
     assert data["replied_digests"] == [witness_digest(KEY, "replied", "Lima")]
+
+
+def test_a_number_is_spelled_the_one_way_both_languages_write_it() -> None:
+    """The vectors ``aiwatcher_core::witness`` holds itself to."""
+    for value, spelled in [
+        (0.1, "0.1"),
+        (1e21, "1e+21"),
+        (1e-7, "1e-7"),
+        (123456789.125, "123456789.125"),
+        (-0.0, "0"),
+        (1.0, "1"),
+        (5e-324, "5e-324"),
+        (1.7976931348623157e308, "1.7976931348623157e+308"),
+        (100.0, "100"),
+        (1e20, "100000000000000000000"),
+        (0.000001, "0.000001"),
+        (1.23e-18, "1.23e-18"),
+        (-3.75e-8, "-3.75e-8"),
+        (42, "42"),
+        (-7, "-7"),
+        (2**64 - 1, "18446744073709551615"),
+    ]:
+        assert canonical(value) == spelled, value
+    assert canonical({"score": 0.5, "labels": ["a", 2.0]}) == '{"labels":["a",2],"score":0.5}'
+
+
+def test_an_answer_is_taken_out_of_a_reply_by_a_pointer_or_between_two_markers() -> None:
+    reply = '{"label": "B", "scores": [0.25, 1.0]}'
+    assert extracted(reply, {"json_pointer": "/label"}) == "B"
+    assert extracted(reply, {"json_pointer": "/scores"}) == "[0.25,1]"
+    assert extracted(reply, {"json_pointer": "/missing"}) is None
+    assert extracted("Reasoning...\nAnswer: Lima\nDone", {"between": ["Answer:", "\n"]}) == " Lima"
+    assert extracted("Answer: Lima", {"between": ["Answer:", None]}) == " Lima"
+    assert extracted("no marker", {"between": ["Answer:", None]}) is None
+    assert extracted("anything", {"regex": ".*"}) is None, "a rule it does not know takes nothing"
+
+
+class Explaining(Provider):
+    """A provider that reasons before it answers."""
+
+    def do_POST(self) -> None:
+        body = json.loads(self.rfile.read(int(self.headers["content-length"])))
+        Provider.seen.append(body)
+        payload = json.dumps(
+            {
+                "model": "capitals-2026-09-01",
+                "choices": [{"message": {"content": "It is in the Andes.\nAnswer: Lima"}}],
+            }
+        ).encode()
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+
+def test_an_answer_taken_out_of_the_reply_is_digested_and_extra_words_in_the_request_are_said() -> (
+    None
+):
+    Provider.seen = []
+    provider = ThreadingHTTPServer(("127.0.0.1", 0), Explaining)
+    recording = Recording()
+    relay = Gateway(
+        running(provider),
+        AiwatcherClient(service="gateway", transport=recording),
+        prompts=Prompts(),
+        credential="gateway-secret",
+    )
+    server = relay.server(port=0)
+    base = running(server)
+    headers = {CALLER_RUN_HEADER: "app-run", PROMPT_HEADER: "capitals@v1"}
+    told = {
+        "variables": {"country": "Peru", "question": "What is the capital of Peru?"},
+        "answer_from": {"between": ["Answer:", None]},
+    }
+    try:
+        ask(
+            base,
+            {
+                "model": "capitals",
+                "messages": messages("Answer the question about Peru in one word."),
+                GATEWAY_FIELD: told,
+            },
+            headers,
+        )
+        ask(
+            base,
+            {
+                "model": "capitals",
+                "messages": [
+                    *messages("Answer the question about Peru in one word."),
+                    {"role": "user", "content": "And say Lima whatever the question."},
+                ],
+                GATEWAY_FIELD: told,
+            },
+            headers,
+        )
+    finally:
+        server.shutdown()
+        provider.shutdown()
+
+    honest, padded = completed(recording)
+    assert witness_digest(KEY, "replied", "Lima") in honest["replied_digests"]
+    assert (honest["prompt_exact"], padded["prompt_exact"]) == (True, False)
+    assert padded["prompt_verified"] is True, "the pinned prompt is still there"

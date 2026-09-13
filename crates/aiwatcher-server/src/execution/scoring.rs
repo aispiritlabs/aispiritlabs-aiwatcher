@@ -884,6 +884,16 @@ fn number(span: &aiwatcher_core::ports::CompletedSpan, key: &str) -> i64 {
         .unwrap_or(0)
 }
 
+/// A yes-or-no attribute of a span, where it has one.
+fn flag(span: &aiwatcher_core::ports::CompletedSpan, key: &str) -> Option<bool> {
+    span.attributes
+        .iter()
+        .find_map(|(name, value)| match value {
+            aiwatcher_core::ports::AttrValue::Bool(flag) if name == key => Some(*flag),
+            _ => None,
+        })
+}
+
 /// A list-of-text attribute of a span, or none.
 fn list(span: &aiwatcher_core::ports::CompletedSpan, key: &str) -> Vec<String> {
     span.attributes
@@ -916,17 +926,8 @@ fn traced_calls(detail: &aiwatcher_projector::RunDetail) -> Vec<TracedCall> {
             prompt_name: text(span, own::prompt::NAME),
             prompt_version: text(span, own::prompt::VERSION_ID),
             served_model: text(span, genai::RESPONSE_MODEL),
-            prompt_verified: span
-                .attributes
-                .iter()
-                .find_map(|(name, value)| match value {
-                    aiwatcher_core::ports::AttrValue::Bool(verified)
-                        if name == own::prompt::VERIFIED =>
-                    {
-                        Some(*verified)
-                    }
-                    _ => None,
-                }),
+            prompt_verified: flag(span, own::prompt::VERIFIED),
+            prompt_exact: flag(span, own::prompt::EXACT),
             published_by: text(span, own::source::PUBLISHED_BY),
             input_tokens: number(span, genai::USAGE_INPUT_TOKENS),
             output_tokens: number(span, genai::USAGE_OUTPUT_TOKENS),

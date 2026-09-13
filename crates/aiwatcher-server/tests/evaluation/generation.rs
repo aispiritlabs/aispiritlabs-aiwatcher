@@ -527,7 +527,7 @@ async fn the_traces_of_generated_answers_say_how_many_ran_on_the_pinned_prompt_a
     assert_eq!(
         traced.result.as_ref().unwrap()["traces"],
         json!({"answers": 3, "named": 2, "seen": 1, "on_prompt": 1, "witnessed_prompt": 0,
-               "witnessed_answer": 0, "witnessed_input": 0})
+               "witnessed_answer": 0, "witnessed_input": 0, "witnessed_exchange": 0})
     );
 
     let (command, context) = step(
@@ -712,6 +712,8 @@ async fn a_serving_host_witnesses_the_model_and_a_run_off_the_pinned_workflow_is
     use aiwatcher_core::witness::{Said, digest, key_for};
     let key = key_for("serving-secret");
     let served_call = json!({"call_id": "serve-1", "model": "support-model", "model_version": "v7",
+        "prompt_name": "support-bot", "prompt_version": PROMPT,
+        "prompt_verified": true, "prompt_exact": true,
         "replied_digests": [digest(&key, Said::Replied, r#"{"text":""}"#)],
         "asked_digests": [digest(&key, Said::Asked, "question 0")]});
     folded_run(
@@ -779,8 +781,8 @@ async fn a_serving_host_witnesses_the_model_and_a_run_off_the_pinned_workflow_is
     assert_eq!(
         traced.result.as_ref().unwrap()["traces"],
         json!({"answers": 2, "named": 2, "seen": 2, "on_prompt": 2, "on_model": 2,
-               "on_workflow": 2, "witnessed_model": 1, "witnessed_prompt": 0,
-               "witnessed_answer": 1, "witnessed_input": 1,
+               "on_workflow": 2, "witnessed_model": 1, "witnessed_prompt": 1,
+               "witnessed_answer": 1, "witnessed_input": 1, "witnessed_exchange": 1,
                "self_witnessed": 1, "witnesses": ["serving"],
                "served": [{"model": "support-model-q4", "answers": 2}]}),
         "the serving run the worker's own credential published is no witness"
