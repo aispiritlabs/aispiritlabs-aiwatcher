@@ -103,6 +103,7 @@ fn row(receipt: EvaluationReceipt, state: EvidenceState) -> DurableEvaluation {
         judge: None,
         external: None,
         usage: None,
+        traces: None,
     }
 }
 
@@ -265,6 +266,8 @@ struct Metadata {
     /// Derived from the cases at publication; absent when none reported any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     usage: Option<crate::ResultUsage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    traces: Option<crate::GenerationTrace>,
 }
 
 impl Registry {
@@ -923,6 +926,12 @@ impl Registry {
         self.admit_scoring(&request.manifest.context).await?;
         judged_as_declared(&request)?;
         calibrated_as_declared(&request)?;
+        require(
+            request.traces.is_none() || request.manifest.context.scored_here(),
+            "traces",
+            "says what the traces of generated answers showed, and only a run this deployment \
+             measured looked at them",
+        )?;
         let id = &request.manifest.origin.evaluation_id;
         if let Some(state) = self
             .store
@@ -1008,6 +1017,7 @@ impl Registry {
             judge: request.judge.clone(),
             external: request.external.clone(),
             usage: crate::ResultUsage::of(&request.cases),
+            traces: request.traces.clone(),
         };
         require(
             bytes.saturating_add(canonical(&metadata)?.len()) <= self.config.max_bytes,
@@ -1419,6 +1429,7 @@ impl Registry {
                 result.judge = metadata.judge.clone();
                 result.external = metadata.external.clone();
                 result.usage = metadata.usage.clone();
+                result.traces = metadata.traces.clone();
                 return Ok((result, Some(metadata)));
             }
             Err(EvaluationError::Unavailable(state)) => {

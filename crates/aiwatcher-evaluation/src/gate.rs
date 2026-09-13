@@ -36,6 +36,12 @@ pub struct GatePolicy {
     /// even beside a better average.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub critical_cases: Vec<String>,
+    /// Every generated answer must be seen on the log made on the variant's
+    /// pinned prompt and model; fewer is `incomplete`. Off by default, because
+    /// telemetry is best effort and a trace that never arrived contradicts
+    /// nothing — a pipeline that ships only what its traces show turns it on.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub require_traces: bool,
 }
 
 impl GatePolicy {
@@ -164,6 +170,26 @@ pub fn decide(
             counts.failed, counts.selected, counts.unscored
         ));
     }
+    let untraced =
+        policy.require_traces
+            && match &candidate.traces {
+                None => {
+                    reasons.push(
+                        "the policy requires every answer seen on the variant's pins, and the \
+                     candidate's answers were not generated here, so no trace was read"
+                            .to_owned(),
+                    );
+                    true
+                }
+                Some(traces) if !traces.complete() => {
+                    reasons.extend(traces.shortfall().into_iter().map(|missing| {
+                        format!("the policy requires every answer traced: {missing}")
+                    }));
+                    true
+                }
+                Some(_) => false,
+            };
+    let incomplete = incomplete || untraced;
 
     let ignored: BTreeSet<&str> = policy.ignore.iter().map(String::as_str).collect();
     let mut regressed = false;

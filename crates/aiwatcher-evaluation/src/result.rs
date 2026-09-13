@@ -151,6 +151,10 @@ pub struct PublishEvaluation {
     /// in their calibration set. Present exactly when the context pins one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external: Option<crate::ExternalReport>,
+    /// What the traces of generated answers showed they were made with. Only
+    /// ever written by the run that generated them, for a context scored here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub traces: Option<crate::GenerationTrace>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
@@ -191,6 +195,10 @@ pub struct DurableEvaluation {
     /// What its answers took, over the cases that reported it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<ResultUsage>,
+    /// For answers a worker generated: how many the traces showed made on the
+    /// variant's pinned prompt and model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub traces: Option<crate::GenerationTrace>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, utoipa::ToSchema)]

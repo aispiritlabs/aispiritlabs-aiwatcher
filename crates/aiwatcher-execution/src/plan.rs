@@ -146,6 +146,12 @@ pub enum RuntimeBinding {
     /// pair's admission, which is the serve role's registry, and writes rows a
     /// worker reads.
     EvaluationCases(ScoreEvaluationSpec),
+    /// What the traces of a worker's generated answers show they were made
+    /// with: the run each answer names, as this deployment's log folded it,
+    /// held to the variant's prompt and model. A kind of its own because the
+    /// log's fold lives in the serve role alone, and the score step after it
+    /// may be claimed in the work role.
+    EvaluationTraces(ScoreEvaluationSpec),
     /// Nobody runs it. It waits for somebody to answer.
     HumanInput(HumanInputSpec),
 }
@@ -167,6 +173,7 @@ pub enum RuntimeKind {
     JudgeEvaluation,
     ExternalEvaluation,
     EvaluationCases,
+    EvaluationTraces,
     HumanInput,
 }
 
@@ -185,6 +192,7 @@ impl RuntimeKind {
             Self::JudgeEvaluation => "judge_evaluation",
             Self::ExternalEvaluation => "external_evaluation",
             Self::EvaluationCases => "evaluation_cases",
+            Self::EvaluationTraces => "evaluation_traces",
             Self::HumanInput => "human_input",
         }
     }
@@ -258,6 +266,7 @@ impl RuntimeKind {
             | Self::JudgeEvaluation
             | Self::ExternalEvaluation
             | Self::EvaluationCases
+            | Self::EvaluationTraces
             | Self::HumanInput => None,
         }
     }
@@ -276,6 +285,7 @@ impl RuntimeBinding {
             Self::JudgeEvaluation(_) => RuntimeKind::JudgeEvaluation,
             Self::ExternalEvaluation(_) => RuntimeKind::ExternalEvaluation,
             Self::EvaluationCases(_) => RuntimeKind::EvaluationCases,
+            Self::EvaluationTraces(_) => RuntimeKind::EvaluationTraces,
             Self::PythonTask(_) => RuntimeKind::PythonTask,
             Self::ContainerJob(_) => RuntimeKind::ContainerJob,
             Self::HumanInput(_) => RuntimeKind::HumanInput,
@@ -312,7 +322,8 @@ impl RuntimeBinding {
             | Self::ScoreEvaluation(_)
             | Self::JudgeEvaluation(_)
             | Self::ExternalEvaluation(_)
-            | Self::EvaluationCases(_) => None,
+            | Self::EvaluationCases(_)
+            | Self::EvaluationTraces(_) => None,
         }
     }
 
@@ -336,6 +347,7 @@ impl RuntimeBinding {
             | Self::JudgeEvaluation(_)
             | Self::ExternalEvaluation(_)
             | Self::EvaluationCases(_)
+            | Self::EvaluationTraces(_)
             | Self::HumanInput(_) => None,
         }
     }

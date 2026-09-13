@@ -85,6 +85,10 @@ pub struct Cohort {
 pub struct RecordedAnswer {
     pub case_id: String,
     pub answer: serde_json::Value,
+    /// The run the answer was made in, on this deployment's log: what a
+    /// generated answer is held to the variant's prompt and model through.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trace_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -173,8 +177,10 @@ pub const GENERATED_WITH: &str = "generated_with";
 /// digests of what it holds and the score step holds them to the pins before
 /// it reads an answer. It is the worker's word, checked for agreement and not
 /// proved: a task that echoed the pins would pass, and nothing here can tell.
-/// The model, prompt and workflow are references a task resolves through a
-/// registry, not bytes it holds, and are not reported.
+/// The model and prompt are references a task resolves through a registry,
+/// not bytes it holds, so they are held to the pins through the traces of the
+/// runs the answers name instead ([`crate::trace_answers`]); a workflow is not
+/// held to anything yet.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GeneratedWith {
@@ -292,6 +298,7 @@ pub fn archived(cohort: &BTreeMap<String, serde_json::Value>) -> Vec<RecordedAns
         .map(|(case_id, response)| RecordedAnswer {
             case_id: case_id.clone(),
             answer: response.clone(),
+            run_id: None,
             trace_id: None,
             span_id: None,
             usage: None,

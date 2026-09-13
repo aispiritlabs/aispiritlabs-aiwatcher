@@ -58,11 +58,16 @@ const SCORING_STEP: &str = "score";
 /// under the pair's admission, and the worker's task answering them.
 const CASES_STEP: &str = "cases";
 const GENERATE_STEP: &str = "generate";
+/// After it, where the log's fold is: the run each answer names, held to the
+/// variant's prompt and model.
+const TRACES_STEP: &str = "traces";
 /// Reading a cohort is one read of its owner, bounded by the cohort.
 const CASES_TIMEOUT_SECONDS: u64 = 300;
 /// The application answering every case. As long as a judged step, because it
 /// is the same kind of wait: a model, once per case.
 const GENERATION_TIMEOUT_SECONDS: u64 = 3600;
+/// Waiting for the application's telemetry to reach the log, and reading it.
+const TRACES_TIMEOUT_SECONDS: u64 = 300;
 
 /// An accepted measurement, and the run that will make it.
 ///
@@ -594,6 +599,20 @@ fn plan_for(declared: &DeclaredRun, variant_id: &str, external: bool) -> Executi
                         // A model's answers are not a function of their inputs.
                         cache: CachePolicy::Never,
                     },
+                    PlanStep {
+                        id: TRACES_STEP.to_owned(),
+                        runtime: RuntimeBinding::EvaluationTraces(ScoreEvaluationSpec {
+                            declaration: declared.id.clone(),
+                        }),
+                        inputs: vec![InputBinding::Step {
+                            step: GENERATE_STEP.to_owned(),
+                            output: aiwatcher_evaluation::GENERATED_ANSWERS.to_owned(),
+                        }],
+                        outputs: vec![rows(aiwatcher_evaluation::GENERATION_TRACES)],
+                        retry: RetryPolicy::default(),
+                        timeout_seconds: TRACES_TIMEOUT_SECONDS,
+                        cache: CachePolicy::Never,
+                    },
                     score(
                         [
                             aiwatcher_evaluation::GENERATED_ANSWERS,
@@ -603,7 +622,12 @@ fn plan_for(declared: &DeclaredRun, variant_id: &str, external: bool) -> Executi
                             step: GENERATE_STEP.to_owned(),
                             output: output.to_owned(),
                         })
-                        .to_vec(),
+                        .into_iter()
+                        .chain([InputBinding::Step {
+                            step: TRACES_STEP.to_owned(),
+                            output: aiwatcher_evaluation::GENERATION_TRACES.to_owned(),
+                        }])
+                        .collect(),
                     ),
                 ],
                 vec![
@@ -613,6 +637,10 @@ fn plan_for(declared: &DeclaredRun, variant_id: &str, external: bool) -> Executi
                     },
                     PlanEdge {
                         from: GENERATE_STEP.to_owned(),
+                        to: TRACES_STEP.to_owned(),
+                    },
+                    PlanEdge {
+                        from: TRACES_STEP.to_owned(),
                         to: SCORING_STEP.to_owned(),
                     },
                 ],
@@ -723,7 +751,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_answers_are_three_steps_and_the_worker_sees_the_cases_never_the_expectations() {
+    fn generated_answers_are_four_steps_and_the_worker_sees_the_cases_never_the_expectations() {
         let mut run = declared(Default::default(), false);
         run.run.answers =
             aiwatcher_evaluation::Answers::Generated(aiwatcher_evaluation::Generated {
@@ -741,13 +769,19 @@ mod tests {
             .collect();
         assert_eq!(
             kinds,
-            ["evaluation_cases", "python_task", "score_evaluation"]
+            [
+                "evaluation_cases",
+                "python_task",
+                "evaluation_traces",
+                "score_evaluation"
+            ]
         );
         let RuntimeBinding::PythonTask(generate) = &plan.steps[1].runtime else {
             panic!("a worker's task");
         };
         assert_eq!(generate.task_ref, "support-bot.answer@3");
         assert_eq!(generate.params["declaration"], run.id);
+        assert_eq!(generate.params["variant_id"], "variant");
         assert_eq!(generate.params["params"]["temperature"], 0);
         assert!(generate.params["variant"].is_object());
         assert_eq!(
@@ -768,12 +802,25 @@ mod tests {
         );
         assert_eq!(
             plan.steps[2].inputs,
-            ["answers", "generated_with"].map(|output| InputBinding::Step {
+            [InputBinding::Step {
                 step: GENERATE_STEP.to_owned(),
+                output: "answers".to_owned()
+            }],
+            "the traces step reads the runs the answers name"
+        );
+        assert_eq!(
+            plan.steps[3].inputs,
+            [
+                (GENERATE_STEP, "answers"),
+                (GENERATE_STEP, "generated_with"),
+                (TRACES_STEP, "traces")
+            ]
+            .map(|(step, output)| InputBinding::Step {
+                step: step.to_owned(),
                 output: output.to_owned()
             }),
-            "the score step reads what the worker wrote"
+            "the score step reads what the worker wrote and what its traces showed"
         );
-        assert_eq!(plan.edges.len(), 2);
+        assert_eq!(plan.edges.len(), 3);
     }
 }

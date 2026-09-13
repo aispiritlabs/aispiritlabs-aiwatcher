@@ -27,9 +27,10 @@ use std::sync::Arc;
 use aiwatcher_api::state::AppState;
 use aiwatcher_evaluation::{
     DatasetKind, EvaluationError, EvidenceState, ExternalScorers, GENERATED_ANSWERS,
-    GENERATED_WITH, GeneratedWith, JudgeFailure, JudgeModel, Judged, PublishEvaluation,
-    RecordedAnswer, Registry as Evaluations, ScorerFailure, StepOrigin, VariantManifest,
-    external_questions, external_replies, questions, replies, score_with,
+    GENERATED_WITH, GENERATION_TRACES, GeneratedWith, GenerationTrace, JudgeFailure, JudgeModel,
+    Judged, PublishEvaluation, RecordedAnswer, Registry as Evaluations, ScorerFailure, StepOrigin,
+    TracedAnswer, TracedCall, TracedRun, VariantManifest, external_questions, external_replies,
+    questions, replies, score_with, trace_answers,
 };
 use aiwatcher_execution::{
     ActivityCommand, ActivityContext, ActivityError, ActivityExecutor, ActivityResult,
@@ -58,13 +59,21 @@ pub fn executors(state: &AppState, artifacts: Option<&Artifacts>) -> ExecutorReg
     }
     let registry = registry.with(Arc::new(scoring));
     // A run whose answers a worker generates starts by handing it the cases,
-    // which needs somewhere to put them. No object store, no such step here —
-    // it waits for a process that has one.
+    // which needs somewhere to put them, and reads the traces of what came
+    // back off this role's fold of the log. No object store, no such steps
+    // here — they wait for a process that has one.
     match artifacts {
-        Some(artifacts) => registry.with(Arc::new(CasesExecutor {
-            evaluations: Arc::clone(evaluations),
-            artifacts: artifacts.clone(),
-        })),
+        Some(artifacts) => registry
+            .with(Arc::new(CasesExecutor {
+                evaluations: Arc::clone(evaluations),
+                artifacts: artifacts.clone(),
+            }))
+            .with(Arc::new(TracesExecutor {
+                evaluations: Arc::clone(evaluations),
+                artifacts: artifacts.clone(),
+                read_model: Arc::clone(&state.read_model),
+                wait: TELEMETRY_WAIT,
+            })),
         None => registry,
     }
 }
@@ -169,7 +178,7 @@ impl ScoreExecutor {
         &self,
         command: &ActivityCommand,
         variant: &VariantManifest,
-    ) -> Result<Vec<RecordedAnswer>, ActivityError> {
+    ) -> Result<(Vec<RecordedAnswer>, Option<GenerationTrace>), ActivityError> {
         let Some(artifacts) = &self.artifacts else {
             return Err(ActivityError::user_code(
                 "this run's answers were generated, and this process holds no object store to \
@@ -220,23 +229,45 @@ impl ScoreExecutor {
                 disagreements.join("; ")
             )));
         }
-        artifacts
-            .read_rows(input(GENERATED_ANSWERS)?)
-            .await?
-            .into_iter()
-            .enumerate()
-            .map(|(index, row)| {
-                serde_json::from_value::<RecordedAnswer>(serde_json::Value::Object(
-                    row.into_iter().collect(),
-                ))
-                .map_err(|error| {
-                    ActivityError::user_code(format!(
-                        "the generation step's row {index} is not an answer \
-                         ({{\"case_id\", \"answer\", \"trace_id\"?, \"span_id\"?}}): {error}"
-                    ))
-                })
-            })
-            .collect()
+        let mut answers = read_answers(artifacts, input(GENERATED_ANSWERS)?).await?;
+        // What the traces step found, when the plan has one: a run started
+        // before it was part of the template has none, and says nothing.
+        let traces = match command
+            .inputs
+            .iter()
+            .find(|input| input.name == GENERATION_TRACES)
+        {
+            Some(traced) => {
+                let rows = artifacts
+                    .read_rows(traced)
+                    .await?
+                    .into_iter()
+                    .map(|row| {
+                        serde_json::from_value::<TracedAnswer>(serde_json::Value::Object(
+                            row.into_iter().collect(),
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|error| {
+                        ActivityError::user_code(format!(
+                            "the traces step's `{GENERATION_TRACES}` is not what the traces \
+                             showed: {error}"
+                        ))
+                    })?;
+                // A case leads to the trace its run was seen in, when the
+                // application did not name one itself.
+                for answer in &mut answers {
+                    if answer.trace_id.is_none()
+                        && let Some(row) = rows.iter().find(|row| row.case_id == answer.case_id)
+                    {
+                        answer.trace_id.clone_from(&row.trace_id);
+                    }
+                }
+                Some(GenerationTrace::of(&rows))
+            }
+            None => None,
+        };
+        Ok((answers, traces))
     }
 
     /// The same executor, putting cases to this scorer service this many at a
@@ -323,12 +354,15 @@ impl ActivityExecutor for ScoreExecutor {
             .cohort_cases(&manifest, &subject)
             .await
             .map_err(refusal)?;
-        let answers = match run.answers.generation() {
+        let (answers, traces) = match run.answers.generation() {
             Some(_) => self.generated(command, &run.variant).await?,
-            None => evaluations
-                .answers(run, &cohort.expected)
-                .await
-                .map_err(refusal)?,
+            None => (
+                evaluations
+                    .answers(run, &cohort.expected)
+                    .await
+                    .map_err(refusal)?,
+                None,
+            ),
         };
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
 
@@ -533,6 +567,7 @@ impl ActivityExecutor for ScoreExecutor {
                     cases: scored.cases,
                     judge: report.clone(),
                     external: external_report.clone(),
+                    traces: traces.clone(),
                 },
                 &subject,
                 now,
@@ -556,6 +591,7 @@ impl ActivityExecutor for ScoreExecutor {
                 "scorer_questions": external_asked,
                 "judge": report,
                 "external": external_report,
+                "traces": traces,
             })),
             diagnostics: None,
             awaiting: None,
@@ -646,6 +682,204 @@ impl ActivityExecutor for CasesExecutor {
             awaiting: None,
             // The cohort is pinned, but a result is only ever read by the run
             // that produced it: the generation after it is never cached.
+            cacheable: false,
+        })
+    }
+}
+
+/// The answers a generation step wrote, one row each.
+async fn read_answers(
+    artifacts: &Artifacts,
+    written: &aiwatcher_core::ArtifactRef,
+) -> Result<Vec<RecordedAnswer>, ActivityError> {
+    artifacts
+        .read_rows(written)
+        .await?
+        .into_iter()
+        .enumerate()
+        .map(|(index, row)| {
+            serde_json::from_value::<RecordedAnswer>(serde_json::Value::Object(
+                row.into_iter().collect(),
+            ))
+            .map_err(|error| {
+                ActivityError::user_code(format!(
+                    "the generation step's row {index} is not an answer ({{\"case_id\", \
+                     \"answer\", \"run_id\"?, \"trace_id\"?, \"span_id\"?, \"usage\"?}}): {error}"
+                ))
+            })
+        })
+        .collect()
+}
+
+/// How long the traces step waits for the application's telemetry to reach
+/// the log: the SDK flushes every second, and the fold follows the log closely.
+const TELEMETRY_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// The step between a generation and its scoring: the run each answer names,
+/// read off this deployment's fold of the log and held to the variant's prompt
+/// and model.
+///
+/// In the serve role, because the fold is there and nowhere else. It waits a
+/// bounded while for runs still arriving — telemetry is sent in batches — and
+/// then reports what it saw: a run the log never received is unseen and
+/// counted, while a run whose calls contradict the pins fails the step with
+/// every contradiction named, and nothing is published.
+#[derive(Debug)]
+pub struct TracesExecutor {
+    evaluations: Arc<Evaluations>,
+    artifacts: Artifacts,
+    read_model: Arc<aiwatcher_projector::ReadModel>,
+    wait: std::time::Duration,
+}
+
+impl TracesExecutor {
+    #[must_use]
+    pub fn new(
+        evaluations: Arc<Evaluations>,
+        artifacts: Artifacts,
+        read_model: Arc<aiwatcher_projector::ReadModel>,
+        wait: std::time::Duration,
+    ) -> Self {
+        Self {
+            evaluations,
+            artifacts,
+            read_model,
+            wait,
+        }
+    }
+
+    /// The runs named, as the fold holds them once each has ended and every
+    /// model call it started has a span.
+    async fn finished(
+        &self,
+        named: &std::collections::BTreeSet<&str>,
+    ) -> std::collections::BTreeMap<String, TracedRun> {
+        use aiwatcher_core::attrs::{aiwatcher as own, genai};
+        let mut runs = std::collections::BTreeMap::new();
+        for run_id in named {
+            let Some(detail) = self.read_model.run(run_id).await else {
+                continue;
+            };
+            let text = |span: &aiwatcher_core::ports::CompletedSpan, key: &str| {
+                span.attributes
+                    .iter()
+                    .find_map(|(name, value)| match value {
+                        aiwatcher_core::ports::AttrValue::Str(text) if name == key => {
+                            Some(text.clone())
+                        }
+                        _ => None,
+                    })
+            };
+            let calls: Vec<TracedCall> = detail
+                .spans
+                .iter()
+                .filter(|span| {
+                    text(span, genai::OPERATION_NAME).as_deref() == Some(genai::operation::CHAT)
+                })
+                .map(|span| TracedCall {
+                    model: text(span, genai::REQUEST_MODEL),
+                    model_version: text(span, own::model::VERSION),
+                    prompt_name: text(span, own::prompt::NAME),
+                    prompt_version: text(span, own::prompt::VERSION_ID),
+                })
+                .collect();
+            if detail.summary.status == aiwatcher_projector::RunStatus::Running
+                || (calls.len() as u64) < detail.summary.llm_calls
+            {
+                continue;
+            }
+            runs.insert(
+                (*run_id).to_owned(),
+                TracedRun {
+                    trace_id: Some(detail.summary.trace_id.to_hex()),
+                    variant_id: detail.summary.variant_id.clone(),
+                    evaluation_id: detail.summary.evaluation_id.clone(),
+                    calls,
+                },
+            );
+        }
+        runs
+    }
+}
+
+#[async_trait]
+impl ActivityExecutor for TracesExecutor {
+    fn runtime(&self) -> RuntimeKind {
+        RuntimeKind::EvaluationTraces
+    }
+
+    async fn execute(
+        &self,
+        command: &ActivityCommand,
+        context: &ActivityContext,
+    ) -> Result<ActivityResult, ActivityError> {
+        let RuntimeBinding::EvaluationTraces(spec) = &command.step.runtime else {
+            return Err(ActivityError::user_code("this step reads no traces"));
+        };
+        let Prepared {
+            declared, manifest, ..
+        } = prepare(&self.evaluations, &spec.declaration, command).await?;
+        let prepared = aiwatcher_evaluation::Evaluation::prepare(manifest)
+            .map_err(|error| ActivityError::user_code(error.to_string()))?;
+        let written = command
+            .inputs
+            .iter()
+            .find(|input| input.name == GENERATED_ANSWERS)
+            .ok_or_else(|| {
+                ActivityError::user_code(format!(
+                    "the traces step reads the generation's `{GENERATED_ANSWERS}`, and none was \
+                     bound"
+                ))
+            })?;
+        let answers = read_answers(&self.artifacts, written).await?;
+        let named: std::collections::BTreeSet<&str> = answers
+            .iter()
+            .filter_map(|answer| answer.run_id.as_deref())
+            .collect();
+        let deadline = tokio::time::Instant::now() + self.wait;
+        let runs = loop {
+            context.stop.check()?;
+            let runs = self.finished(&named).await;
+            if runs.len() == named.len() || tokio::time::Instant::now() >= deadline {
+                break runs;
+            }
+            tokio::select! {
+                reason = context.stop.stopped() => return Err(reason.as_error()),
+                () = tokio::time::sleep(std::time::Duration::from_millis(250)) => {}
+            }
+        };
+        let rows = trace_answers(
+            &declared.run.variant,
+            prepared.variant_id(),
+            &declared.run.evaluation_id,
+            &answers,
+            &runs,
+        )
+        .map_err(|contradictions| {
+            ActivityError::user_code(format!(
+                "the traces of these answers contradict what the variant pins, so they are not \
+                 the variant's — {}",
+                contradictions.join("; ")
+            ))
+        })?;
+        let trace = GenerationTrace::of(&rows);
+        let table: Vec<std::collections::BTreeMap<String, serde_json::Value>> = rows
+            .iter()
+            .map(|row| {
+                serde_json::to_value(row)
+                    .ok()
+                    .and_then(|value| value.as_object().cloned())
+                    .map(|object| object.into_iter().collect())
+                    .unwrap_or_default()
+            })
+            .collect();
+        let artifact = self.artifacts.put_rows(GENERATION_TRACES, &table).await?;
+        Ok(ActivityResult {
+            outputs: vec![artifact],
+            result: Some(json!({ "traces": trace, "shortfall": trace.shortfall() })),
+            diagnostics: None,
+            awaiting: None,
+            // What the log holds moves, so what it showed is read again.
             cacheable: false,
         })
     }

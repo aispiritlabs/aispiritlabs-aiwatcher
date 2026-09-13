@@ -250,6 +250,8 @@ class CaseUsage(TypedDict, total=False):
 class RecordedAnswer(TypedDict):
     case_id: str
     answer: Any
+    #: The run it was made in, on aiwatcher's log.
+    run_id: NotRequired[str]
     trace_id: NotRequired[str]
     span_id: NotRequired[str]
     usage: NotRequired[CaseUsage]

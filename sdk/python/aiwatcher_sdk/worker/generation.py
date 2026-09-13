@@ -11,22 +11,34 @@ as, so one worker can serve a baseline and a candidate — and says what it
 generates with, which is held to the variant's pins.
 
     @generation_task("support-bot.answer", version="3", generated_with=holding)
-    def answer(case: Case, run: Generation) -> JsonValue:
-        return support_bot(case.input, prompt=run.variant["prompt"])
+    def answer(case: Case, run: Generation) -> Generated:
+        with run.traced(telemetry, case) as traced:
+            said = support_bot(case.input, prompt=run.variant["prompt"], telemetry=traced)
+        return Generated(said, run_id=traced.correlation.run_id)
+
+What the answer names — the run it was made in — is how aiwatcher holds it to
+the variant's prompt and model: the traces step reads that run off the log and
+refuses answers whose model calls rendered another prompt version or were
+served by another model version.
 """
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import time
-from collections.abc import Callable
+import uuid
+from collections.abc import Callable, Generator
 from dataclasses import dataclass
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from aiwatcher_sdk.task import Task
 from aiwatcher_sdk.task_errors import TaskError
 from aiwatcher_sdk.worker.context import get_task_context
 from aiwatcher_sdk.worker.contract import JsonObject, JsonValue
+
+if TYPE_CHECKING:
+    from aiwatcher_sdk import AiwatcherClient, RunContext
 
 #: What the step before reads the cohort into, and what this task writes.
 CASES = "cases"
@@ -61,17 +73,36 @@ class Generation:
     #: so a trace says which variant made it and that a measurement did.
     variant_id: str = ""
 
+    @contextlib.contextmanager
+    def traced(self, client: AiwatcherClient, case: Case) -> Generator[RunContext, None, None]:
+        """The application's run for one case, named as this variant's and this measurement's.
+
+        Its id is new for every call, so a retried attempt's runs are not folded
+        into the first one's; name it on the answer
+        (``Generated(…, run_id=traced.correlation.run_id)``) and every model call
+        made inside it is what the answer is held to.
+        """
+        with client.run(
+            f"generate-{self.evaluation_id}-{case.case_id}-{uuid.uuid4().hex[:12]}",
+            variant_id=self.variant_id or None,
+            evaluation_id=self.evaluation_id,
+        ) as run:
+            yield run
+
 
 @dataclass(frozen=True)
 class Generated:
-    """An answer, the trace of making it, and the tokens it cost.
+    """An answer, the run and trace of making it, and the tokens it cost.
 
-    The tokens are the application's count, since only it saw its model's
+    ``run_id`` is the application's run on aiwatcher's log — what the answer is
+    held to the variant's prompt and model through; ``Generation.traced`` opens
+    one. The tokens are the application's count, since only it saw its model's
     reply; left ``None`` they are not counted, which is never zero. How long
     the answer took is measured here, around the call that made it.
     """
 
     answer: JsonValue
+    run_id: str | None = None
     trace_id: str | None = None
     span_id: str | None = None
     input_tokens: int | None = None
@@ -99,7 +130,8 @@ class GeneratedWith:
     task says what it holds before it answers anything, is refused before a
     model is asked when that is not what the variant pins, and writes it beside
     the answers for aiwatcher's score step to hold to the same pins. It is the
-    worker's word, checked for agreement rather than proved.
+    worker's word, checked for agreement rather than proved. The prompt and model
+    are held through the traces of the runs the answers name instead.
     """
 
     code: str
@@ -214,6 +246,8 @@ def generation_task(
                     continue
                 answered = produced if isinstance(produced, Generated) else Generated(produced)
                 written: JsonObject = {"case_id": case.case_id, "answer": answered.answer}
+                if answered.run_id is not None:
+                    written["run_id"] = answered.run_id
                 if answered.trace_id is not None:
                     written["trace_id"] = answered.trace_id
                 if answered.span_id is not None:

@@ -3,8 +3,11 @@
 use super::*;
 use aiwatcher_execution::{ActivityExecutor, FailureClass};
 use aiwatcher_server::execution::artifacts::Artifacts;
-use aiwatcher_server::execution::scoring::{CasesExecutor, ScoreExecutor};
+use aiwatcher_server::execution::scoring::{CasesExecutor, ScoreExecutor, TracesExecutor};
 use serde_json::json;
+
+/// The prompt version the declared variant pins.
+const PROMPT: &str = "5b0c1e9a8f7d6c5b4a3928171605f4e3d2c1b0a99887766554433221100ffeed";
 
 fn now() -> i64 {
     time::OffsetDateTime::now_utc().unix_timestamp()
@@ -28,10 +31,15 @@ async fn declared(registry: &Registry) -> DeclaredRun {
         .unwrap()
         .version;
     let template = request("generated-run", 3).manifest;
+    let mut variant = template.variant.clone();
+    variant.prompt = Some(VersionReference {
+        name: "support-bot".into(),
+        version: PROMPT.into(),
+    });
     let run = ScoringRun {
         evaluation_id: "generated-run".into(),
         repetition_id: template.origin.repetition_id.clone(),
-        variant: template.variant.clone(),
+        variant,
         cohort: Cohort {
             case_manifest: template.context.case_manifest.clone(),
             case_count: 3,
@@ -321,6 +329,230 @@ async fn answers_a_task_generated_with_other_code_than_the_variant_pins_are_neve
         silent.message.contains("wrote no `generated_with`"),
         "{}",
         silent.message
+    );
+    assert!(
+        registry
+            .get("generated-run", "reader", now())
+            .await
+            .unwrap()
+            .is_none(),
+        "nothing was published"
+    );
+}
+
+/// An application's run on this deployment's log: the variant and result it
+/// names, and one model call on `prompt`.
+async fn application_run(
+    read_model: &aiwatcher_projector::ReadModel,
+    run_id: &str,
+    variant_id: &str,
+    prompt: &str,
+) {
+    use aiwatcher_core::{EventEnvelope, EventType, Sdk, Source as Producer};
+    let at = time::OffsetDateTime::now_utc();
+    let mut assembler = aiwatcher_trace::SpanAssembler::default();
+    let call = json!({"call_id": "c1", "model": "support-model", "prompt_name": "support-bot",
+                      "prompt_version": prompt});
+    for (position, (event_type, data)) in [
+        (
+            EventType::RunStarted,
+            json!({"evaluation_id": "generated-run"}),
+        ),
+        (EventType::LlmStarted, call.clone()),
+        (EventType::LlmCompleted, call),
+        (EventType::RunCompleted, json!({})),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut envelope = EventEnvelope::new(
+            event_type,
+            run_id,
+            at,
+            Producer::new("support-bot", Sdk::Python),
+        )
+        .with_data(data);
+        envelope.variant_id = Some(variant_id.to_owned());
+        let recorded = envelope.record(position as u64 + 1, position as u64 + 1, at, None);
+        read_model.apply(&recorded).await;
+        read_model
+            .record_spans(&assembler.ingest(&recorded).spans)
+            .await;
+    }
+}
+
+async fn answers_in(
+    artifacts: &Artifacts,
+    runs: &[(&str, Option<&str>)],
+) -> aiwatcher_core::ArtifactRef {
+    artifacts
+        .put_rows(
+            "answers",
+            &runs
+                .iter()
+                .map(|(case_id, run_id)| {
+                    let mut row = BTreeMap::from([
+                        ("case_id".to_owned(), json!(case_id)),
+                        ("answer".to_owned(), json!({"text": ""})),
+                    ]);
+                    if let Some(run_id) = run_id {
+                        row.insert("run_id".to_owned(), json!(run_id));
+                    }
+                    row
+                })
+                .collect(),
+        )
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn the_traces_of_generated_answers_say_how_many_ran_on_the_pinned_prompt_and_the_result_carries_it()
+ {
+    let registry = Arc::new(registry(
+        Arc::new(MemoryObjectStore::new()),
+        Arc::new(Source::default()),
+    ));
+    let artifacts = Artifacts::new(Arc::new(MemoryObjectStore::new()));
+    let declared = declared(&registry).await;
+    let view = registry
+        .scoring_run_view(&declared.id)
+        .await
+        .unwrap()
+        .unwrap();
+    let read_model = Arc::new(aiwatcher_projector::ReadModel::default());
+    application_run(&read_model, "run-on-the-pin", &view.variant_id, PROMPT).await;
+    let spec = aiwatcher_execution::plan::ScoreEvaluationSpec {
+        declaration: declared.id.clone(),
+    };
+
+    // One answer made on the pinned prompt, one whose run never reached the
+    // log, one that names no run at all.
+    let answers = answers_in(
+        &artifacts,
+        &[
+            ("case-00000", Some("run-on-the-pin")),
+            ("case-00001", Some("run-never-sent")),
+            ("case-00002", None),
+        ],
+    )
+    .await;
+    let (command, context) = step(
+        &declared.id,
+        "traces",
+        aiwatcher_execution::RuntimeBinding::EvaluationTraces(spec.clone()),
+        vec![answers.clone()],
+    );
+    let traced = TracesExecutor::new(
+        Arc::clone(&registry),
+        artifacts.clone(),
+        Arc::clone(&read_model),
+        std::time::Duration::ZERO,
+    )
+    .execute(&command, &context)
+    .await
+    .expect("nothing the traces show contradicts the pins");
+    assert_eq!(
+        traced.result.as_ref().unwrap()["traces"],
+        json!({"answers": 3, "named": 2, "seen": 1, "on_prompt": 1})
+    );
+
+    let (command, context) = step(
+        &declared.id,
+        "score",
+        aiwatcher_execution::RuntimeBinding::ScoreEvaluation(spec),
+        vec![
+            answers,
+            generated_with(&artifacts, &declared, None).await,
+            traced.outputs[0].clone(),
+        ],
+    );
+    ScoreExecutor::new(Arc::clone(&registry))
+        .reading_from(artifacts)
+        .execute(&command, &context)
+        .await
+        .expect("the answers score");
+    let evidence = registry
+        .get("generated-run", "reader", now())
+        .await
+        .unwrap()
+        .unwrap();
+    let traces = evidence
+        .traces
+        .clone()
+        .expect("a generated result says what its traces showed");
+    assert_eq!(
+        (traces.answers, traces.seen, traces.on_prompt),
+        (3, 1, Some(1))
+    );
+    assert!(!traces.complete());
+    let page = registry
+        .cases(
+            "generated-run",
+            &evidence.receipt.version,
+            None,
+            None,
+            "reader",
+            now(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let seen = page
+        .cases
+        .iter()
+        .find(|case| case.measurement.case_id == "case-00000")
+        .unwrap();
+    assert_eq!(
+        seen.measurement.trace_id,
+        Some(aiwatcher_core::TraceId::derive("run-on-the-pin").to_hex()),
+        "the case leads to the trace its run was seen in, which the answer never named"
+    );
+}
+
+#[tokio::test]
+async fn answers_whose_traces_show_another_prompt_version_are_never_scored() {
+    let registry = Arc::new(registry(
+        Arc::new(MemoryObjectStore::new()),
+        Arc::new(Source::default()),
+    ));
+    let artifacts = Artifacts::new(Arc::new(MemoryObjectStore::new()));
+    let declared = declared(&registry).await;
+    let view = registry
+        .scoring_run_view(&declared.id)
+        .await
+        .unwrap()
+        .unwrap();
+    let read_model = Arc::new(aiwatcher_projector::ReadModel::default());
+    let other = "f".repeat(64);
+    application_run(&read_model, "run-off-the-pin", &view.variant_id, &other).await;
+    let answers = answers_in(&artifacts, &[("case-00000", Some("run-off-the-pin"))]).await;
+    let (command, context) = step(
+        &declared.id,
+        "traces",
+        aiwatcher_execution::RuntimeBinding::EvaluationTraces(
+            aiwatcher_execution::plan::ScoreEvaluationSpec {
+                declaration: declared.id.clone(),
+            },
+        ),
+        vec![answers],
+    );
+
+    let refused = TracesExecutor::new(
+        Arc::clone(&registry),
+        artifacts,
+        read_model,
+        std::time::Duration::ZERO,
+    )
+    .execute(&command, &context)
+    .await
+    .unwrap_err();
+
+    assert_eq!(refused.class, FailureClass::UserCode);
+    assert!(
+        refused.message.contains(&other) && refused.message.contains(PROMPT),
+        "names both versions: {}",
+        refused.message
     );
     assert!(
         registry

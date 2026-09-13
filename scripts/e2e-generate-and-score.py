@@ -13,7 +13,7 @@ process, the report leads to the execution and the trace, a repeated start does
 not measure twice, missing observations lower the visible coverage, and the two
 results compare. The template is
 
-    cases ──► generate (a worker's task) ──► score
+    cases ──► generate (a worker's task) ──► traces ──► score
 
 once per variant: the serve role reads the cohort's inputs under the pair's
 admission, a worker answers each case with the variant it is told, and the same
@@ -27,13 +27,14 @@ nothing and says the same thing every time:
 
 What it checks:
 
-1. both runs complete, three steps each, the generation on a worker;
+1. both runs complete, four steps each, the generation on a worker;
 2. the worker was handed each case's question and nothing it expected;
 3. the candidate scores higher than the baseline, on the same context;
 4. the comparison is `comparable`, and names the metric's rise;
 5. the case the repetition declined is unscored, not a zero: coverage drops,
    and its comparison with the baseline is withheld as unverified;
-6. a result names its execution and step, and a case names its trace;
+6. a result names its execution and step, and a case names the trace its
+   run was seen in — which the application never had to know;
 7. starting a declaration again lands on the run it started, not a second one;
 8. a variant pinning code the worker does not hold fails before a case is
    answered, naming both digests, and publishes nothing.
@@ -44,6 +45,11 @@ What it checks:
     served naming the candidate are counted with their durations and tokens,
     while the runs it made answering the measurement's cases are counted apart
     and in no figure — and the baseline, served nowhere, is observed nowhere.
+11. the traces of every generated answer showed it made on the pinned prompt,
+    and the result says so: every answer seen, every one on the prompt;
+12. a worker whose application renders another version of the pinned prompt
+    fails at the traces step naming both versions, and publishes nothing —
+    though what it generated with agrees with every pin it holds.
 
 It starts **its own** aiwatcher, from `target/debug/aiwatcher` or
 `AIWATCHER_BINARY`, on a free port with every byte under a temporary directory,
@@ -154,25 +160,26 @@ def answer(case: Case, run: Generation) -> JsonValue | Generated | Declined:
     capital = dict(CAPITALS)[country]
     if run.params.get("decline") == country:
         return Declined("the application would not say")
-    # The application's run for this case: the variant's, and a measurement's.
+    # The application's run for this case: the variant's, and a measurement's —
+    # and the prompt version it renders, which is the variant's unless the run
+    # was told to render another.
+    rendered = str(run.params.get("render_version") or prompt["version"])
+    if rendered != prompt["version"]:
+        with PromptRegistry(BASE) as prompts:
+            text = prompts.get_version(str(prompt["name"]), rendered).text
     with (
-        TELEMETRY[0].run(
-            f"generate-{run.evaluation_id}-{case.case_id}-{time.time_ns()}",
-            variant_id=run.variant_id,
-            evaluation_id=run.evaluation_id,
-        ) as traced,
+        run.traced(TELEMETRY[0], case) as traced,
         traced.agent("capitals") as agent,
-        agent.llm(
-            model="capitals-stand-in", prompt=(str(prompt["name"]), str(prompt["version"]))
-        ) as llm,
+        agent.llm(model="capitals-stand-in", prompt=(str(prompt["name"]), rendered)) as llm,
     ):
         said = application(text, country, capital)
         llm.usage(prompt_tokens=len(question.split()), completion_tokens=len(said.split()))
-    # The trace this answer was made in, derived as the SDK derives a run's.
-    trace = hashlib.sha256(f"{run.evaluation_id}/{case.case_id}".encode()).hexdigest()[:32]
     # What a model would have counted: the question in, the words out.
     return Generated(
-        said, trace_id=trace, input_tokens=len(question.split()), output_tokens=len(said.split())
+        said,
+        run_id=traced.correlation.run_id,
+        input_tokens=len(question.split()),
+        output_tokens=len(said.split()),
     )
 
 
@@ -454,7 +461,9 @@ def main() -> int:
             1,
             "both runs complete through cases, generate and score",
             set(states.values()) == {"completed"}
-            and all(sorted(ids) == ["cases", "generate", "score"] for ids in steps.values()),
+            and all(
+                sorted(ids) == ["cases", "generate", "score", "traces"] for ids in steps.values()
+            ),
             {"states": states, "steps": steps},
         )
         check(
@@ -527,7 +536,7 @@ def main() -> int:
         ]
         check(
             6,
-            "the result names its execution and step, and its cases their traces",
+            "the result names its execution and step, and its cases the traces their runs had",
             origin.get("execution_id") == started["candidate"]["execution"]["execution_id"]
             and origin.get("step_id") == "score"
             and len(traced) == len(CAPITALS),
@@ -629,6 +638,69 @@ def main() -> int:
             and baseline_seen.get("runs") == 0
             and baseline_seen.get("measured_runs", 0) >= len(CAPITALS),
             {"candidate": seen, "baseline": baseline_seen},
+        )
+
+        traces = {which: result.get("traces") or {} for which, result in results.items()}
+        check(
+            11,
+            "every generated answer's trace showed it made on the pinned prompt",
+            traces["candidate"]
+            == {
+                "answers": len(CAPITALS),
+                "named": len(CAPITALS),
+                "seen": len(CAPITALS),
+                "on_prompt": len(CAPITALS),
+            }
+            and traces["declining"].get("on_prompt") == len(CAPITALS) - 1,
+            traces,
+        )
+
+        pins = {
+            which: views[which]["declaration"]["run"]["variant"]["prompt"]["version"]
+            for which in ("baseline", "candidate")
+        }
+        rendering = declare(
+            "candidate",
+            dataset,
+            cohort,
+            card,
+            repetition="measurement-3",
+            params={"render_version": pins["baseline"]},
+        )
+        misrendered = followed(
+            ok(
+                *call("POST", f"/api/v1/evaluation-runs/{rendering['declaration']['id']}/start")[
+                    :2
+                ],
+                "starting the run that renders another prompt",
+            )["execution"]["execution_id"]
+        )
+        told = json.dumps(misrendered["execution"])
+        check(
+            12,
+            "answers whose traces show another version of the pinned prompt are never scored",
+            misrendered["execution"]["state"]["state_type"] == "failed"
+            and [
+                step["step_id"]
+                for step in misrendered["execution"]["steps"]
+                if '"failed"' in json.dumps(step)
+            ]
+            == ["traces"]
+            and pins["baseline"] in told
+            and pins["candidate"] in told
+            and call(
+                "GET",
+                f"/api/v1/evaluation-results/{rendering['declaration']['run']['evaluation_id']}",
+            )[0]
+            == 404,
+            {
+                "state": misrendered["execution"]["state"]["state_type"],
+                "failed_at": [
+                    step["step_id"]
+                    for step in misrendered["execution"]["steps"]
+                    if '"failed"' in json.dumps(step)
+                ],
+            },
         )
     finally:
         worker.stop()

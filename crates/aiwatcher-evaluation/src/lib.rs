@@ -20,6 +20,7 @@ mod rubric;
 mod scorecard;
 mod scoring;
 mod store;
+mod traced;
 
 pub use aiwatcher_core::Comparability;
 pub use approval::{
@@ -50,6 +51,9 @@ pub use registry::{
 pub use result::*;
 pub use review::{CaseProposal, ReviewAction, ReviewContent, ReviewItem, ReviewPage, ReviewState};
 pub use store::EvidenceCipher;
+pub use traced::{
+    GENERATION_TRACES, GenerationTrace, TracedAnswer, TracedCall, TracedRun, trace_answers,
+};
 
 pub use context::{
     Aggregation, CalibrationPin, EvaluationContext, ExternalMeasure, JudgeConfiguration,

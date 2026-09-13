@@ -1056,3 +1056,60 @@ def test_a_worker_holding_other_code_than_the_variant_pins_answers_nothing() -> 
     assert sha256(CODE).hexdigest() in report["message"]
     assert older.code in report["message"]
     assert "answers" not in api.artifacts
+
+
+class Recorded:
+    def __init__(self) -> None:
+        self.events: list[dict[str, Any]] = []
+
+    def send(self, batch: list[dict[str, Any]]) -> None:
+        self.events.extend(batch)
+
+    def close(self) -> None:
+        return None
+
+
+def test_a_traced_run_is_named_by_its_answer_and_names_the_variant_and_measurement() -> None:
+    from aiwatcher_sdk.worker import (
+        Case,
+        Generated,
+        GeneratedWith,
+        Generation,
+        generation_task,
+    )
+
+    recorded = Recorded()
+    application = AiwatcherClient(service="support-bot", transport=recorded)
+    holding = GeneratedWith.of(code=CODE, generation_config=GENERATION_CONFIG)
+
+    @generation_task("support-bot.answer", version="3", generated_with=lambda _run: holding)
+    def answer(case: Case, run: Generation) -> Any:
+        with (
+            run.traced(application, case) as traced,
+            traced.agent("bot") as agent,
+            agent.llm(model="support-model", prompt=("support-bot", "p" * 64)),
+        ):
+            pass
+        return Generated({"text": "Paris"}, run_id=traced.correlation.run_id)
+
+    api = WorkerApi(generation_assignment(pinned_variant()))
+    api.artifacts["cases"] = [{"case_id": "case-1", "input": {"question": "capital"}}]
+    process = Worker(
+        "http://aiwatcher.invalid",
+        "queue-token",
+        queues=["evaluation"],
+        tasks=[answer],
+        name="worker-1",
+        client=httpx.Client(transport=httpx.MockTransport(api.handle)),
+        telemetry=AiwatcherClient(service="test", transport=NullTransport()),
+    )
+    with process:
+        assert process.run_once()
+
+    [row] = api.artifacts["answers"]
+    started = [event for event in recorded.events if event["event_type"] == "run.started"]
+    assert len(started) == 1
+    assert row["run_id"] == started[0]["run_id"]
+    assert started[0]["variant_id"] == "v" * 64
+    assert started[0]["data"] == {"evaluation_id": "candidate-1"}
+    assert {event["variant_id"] for event in recorded.events} == {"v" * 64}

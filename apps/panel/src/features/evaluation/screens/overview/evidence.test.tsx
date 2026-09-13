@@ -468,3 +468,28 @@ it('shows how often a calibrated framework metric agreed with people, as two ver
   expect(screen.getByText('0.50 over 4 pairs')).toBeTruthy();
   expect(screen.getByText('0.4 would agree 100% — fitted on these same items')).toBeTruthy();
 });
+
+it('says how many generated answers their traces showed on the pins, as counts', async () => {
+  only([
+    {
+      method: 'GET',
+      path: '/cases',
+      answer: { status: 200, body: { version: 'ff00', cases: [], state: 'complete' } },
+    },
+  ]);
+  render(
+    withQueries(
+      <Evidence
+        evidence={evidence('complete', {
+          traces: { answers: 4, named: 3, seen: 3, on_prompt: 3 },
+        })}
+      />,
+    ),
+  );
+  expect(
+    await screen.findByText(
+      'Generated answers, held to their traces: 3 of 4 seen on the log, 3 on the pinned prompt.',
+    ),
+  ).toBeTruthy();
+  expect(screen.getByText(/1 named no run/)).toBeTruthy();
+});

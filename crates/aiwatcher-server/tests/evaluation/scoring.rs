@@ -66,6 +66,7 @@ fn said(case_id: &str, text: &str) -> RecordedAnswer {
     RecordedAnswer {
         case_id: case_id.into(),
         answer: json!({ "text": text }),
+        run_id: None,
         trace_id: None,
         span_id: None,
         usage: None,
@@ -125,6 +126,7 @@ async fn measured(
             cases: scored.cases,
             judge: None,
             external: None,
+            traces: None,
         },
         "editor",
         200,
@@ -203,6 +205,7 @@ async fn a_distance_is_published_as_a_mean_in_its_own_unit_rather_than_as_a_rate
     let answer = |case_id: &str, minutes: f64| RecordedAnswer {
         case_id: case_id.into(),
         answer: json!({ "minutes": minutes }),
+        run_id: None,
         trace_id: None,
         span_id: None,
         usage: None,
@@ -227,6 +230,7 @@ async fn a_distance_is_published_as_a_mean_in_its_own_unit_rather_than_as_a_rate
             cases: scored.cases,
             judge: None,
             external: None,
+            traces: None,
         },
         "editor",
         200,
@@ -457,6 +461,7 @@ async fn engine_scored(registry: &Registry, evaluation_id: &str) -> PublishEvalu
         cases: scored.cases,
         judge: None,
         external: None,
+        traces: None,
     }
 }
 
@@ -577,6 +582,7 @@ async fn a_scoring_run_is_admitted_with_no_suite_or_scorer_file_in_its_bundle() 
                 cases: scored.cases,
                 judge: None,
                 external: None,
+                traces: None,
             },
             "ada",
             200,

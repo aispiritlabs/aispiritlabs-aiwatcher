@@ -21,6 +21,7 @@ import type {
   EvidenceCase,
   EvidenceState,
   ExternalAgreement,
+  GenerationTrace,
   JudgeAgreement,
   JudgeReport,
   ResultCounts,
@@ -369,6 +370,7 @@ export function Evidence({
           <JudgeNote evidence={evidence} />
         )}
         <FrameworkNote evidence={evidence} />
+        {evidence.traces ? <TracesNote traces={evidence.traces} /> : null}
         {gaps ? <GapNote report={gaps} /> : null}
       </Card>
 
@@ -438,6 +440,48 @@ function StateNote({ state, counts }: { state: EvidenceState; counts?: ResultCou
 function judgedByARubric(evidence: DurableEvaluation): boolean {
   if (evidence.judge || evidence.manifest?.context.judge) return true;
   return !(evidence.manifest?.context.metrics ?? []).some((metric) => metric.measured_by?.model);
+}
+
+/**
+ * What the traces of generated answers showed, as the server counted it.
+ *
+ * Counts, never a verdict: the run refused answers whose traces contradicted
+ * the variant's prompt or model before it published anything, so what is left
+ * to say is how much the traces covered — and fewer than all is shown as
+ * fewer, not as a failure, because a trace that never arrived contradicts
+ * nothing. Whether that is enough is a gate's policy.
+ */
+function TracesNote({ traces }: { traces: GenerationTrace }) {
+  const complete =
+    traces.seen === traces.answers &&
+    (traces.on_prompt ?? traces.answers) === traces.answers &&
+    (traces.on_model ?? traces.answers) === traces.answers;
+  const pinned = [
+    traces.on_prompt === undefined || traces.on_prompt === null
+      ? null
+      : `${traces.on_prompt} on the pinned prompt`,
+    traces.on_model === undefined || traces.on_model === null
+      ? null
+      : `${traces.on_model} on the pinned model`,
+  ].filter(Boolean);
+  return (
+    <div
+      className={cn(
+        'mt-3 rounded-md px-3 py-2 text-xs',
+        complete ? 'bg-muted/60 text-muted-foreground' : 'bg-warning/10 text-warning',
+      )}
+    >
+      <p>
+        {`Generated answers, held to their traces: ${traces.seen} of ${traces.answers} seen on the log`}
+        {pinned.length > 0 ? `, ${pinned.join(' and ')}` : ''}.
+      </p>
+      <p>
+        {complete
+          ? 'Every answer was seen made on what the variant pins that a trace can show.'
+          : `${traces.answers - traces.named} named no run; a run the log never received contradicts nothing, and is counted rather than refused.`}
+      </p>
+    </div>
+  );
 }
 
 /**

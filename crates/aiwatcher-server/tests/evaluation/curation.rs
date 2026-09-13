@@ -414,6 +414,7 @@ async fn a_cohort_derived_from_a_curation_version_is_admitted_and_measured_with_
         .map(|case| RecordedAnswer {
             case_id: case["case_id"].as_str().unwrap().into(),
             answer: case["expected"].clone(),
+            run_id: None,
             trace_id: None,
             span_id: None,
             usage: None,

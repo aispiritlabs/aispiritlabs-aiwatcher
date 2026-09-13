@@ -15976,6 +15976,17 @@
               }
             ]
           },
+          "traces": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GenerationTrace",
+                "description": "For answers a worker generated: how many the traces showed made on the\nvariant's pinned prompt and model."
+              }
+            ]
+          },
           "usage": {
             "oneOf": [
               {
@@ -19044,6 +19055,10 @@
             },
             "description": "Metrics shown and not held."
           },
+          "require_traces": {
+            "type": "boolean",
+            "description": "Every generated answer must be seen on the log made on the variant's\npinned prompt and model; fewer is `incomplete`. Off by default, because\ntelemetry is best effort and a trace that never arrived contradicts\nnothing — a pipeline that ships only what its traces show turns it on."
+          },
           "tolerance": {
             "type": "object",
             "description": "How far worse than the baseline a metric may be, in its own unit. A\nmetric not named here may not get worse at all.",
@@ -19123,6 +19138,47 @@
           "incomplete",
           "error"
         ]
+      },
+      "GenerationTrace": {
+        "type": "object",
+        "description": "What a generated result says the traces of its answers showed.\n\nCounts rather than a verdict: how many answers there were, how many named\nthe run they were made in, how many of those runs the log held, and how\nmany ran on the pinned prompt and model. A reader — or a gate — decides\nwhether fewer than all is enough.",
+        "required": [
+          "answers",
+          "named",
+          "seen"
+        ],
+        "properties": {
+          "answers": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "named": {
+            "type": "integer",
+            "description": "Answers naming the run they were made in.",
+            "minimum": 0
+          },
+          "on_model": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Seen runs with a call served by the pinned model version; absent when\nthe variant pins no model.",
+            "minimum": 0
+          },
+          "on_prompt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Seen runs with a call on the pinned prompt version; absent when the\nvariant pins no prompt.",
+            "minimum": 0
+          },
+          "seen": {
+            "type": "integer",
+            "description": "Of those, runs this deployment's log held, ended, when the step looked.",
+            "minimum": 0
+          }
+        }
       },
       "Geometry": {
         "oneOf": [
@@ -23345,6 +23401,17 @@
           },
           "status": {
             "$ref": "#/components/schemas/ResultStatus"
+          },
+          "traces": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GenerationTrace",
+                "description": "What the traces of generated answers showed they were made with. Only\never written by the run that generated them, for a context scored here."
+              }
+            ]
           }
         },
         "additionalProperties": false
@@ -25376,6 +25443,29 @@
           {
             "allOf": [
               {
+                "$ref": "#/components/schemas/ScoreEvaluationSpec",
+                "description": "What the traces of a worker's generated answers show they were made\nwith: the run each answer names, as this deployment's log folded it,\nheld to the variant's prompt and model. A kind of its own because the\nlog's fold lives in the serve role alone, and the score step after it\nmay be claimed in the work role."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "runtime"
+                ],
+                "properties": {
+                  "runtime": {
+                    "type": "string",
+                    "enum": [
+                      "evaluation_traces"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "What the traces of a worker's generated answers show they were made\nwith: the run each answer names, as this deployment's log folded it,\nheld to the variant's prompt and model. A kind of its own because the\nlog's fold lives in the serve role alone, and the score step after it\nmay be claimed in the work role."
+          },
+          {
+            "allOf": [
+              {
                 "$ref": "#/components/schemas/HumanInputSpec",
                 "description": "Nobody runs it. It waits for somebody to answer."
               },
@@ -25414,6 +25504,7 @@
           "judge_evaluation",
           "external_evaluation",
           "evaluation_cases",
+          "evaluation_traces",
           "human_input"
         ]
       },
@@ -26689,6 +26780,8 @@
           "declaration",
           "manifest",
           "approval_id",
+          "variant_id",
+          "context_id",
           "admitted"
         ],
         "properties": {
@@ -26711,11 +26804,18 @@
               }
             ]
           },
+          "context_id": {
+            "type": "string"
+          },
           "declaration": {
             "$ref": "#/components/schemas/DeclaredRun"
           },
           "manifest": {
             "$ref": "#/components/schemas/EvaluationManifest"
+          },
+          "variant_id": {
+            "type": "string",
+            "description": "The variant the result is published as: what an application serving it\nnames on its runs (`variant_id` on the envelope), so what it is observed\ndoing stands beside what it scored."
           },
           "warnings": {
             "type": "array",

@@ -100,6 +100,7 @@ const fn claimed_by_the_work_role(kind: RuntimeKind) -> bool {
         RuntimeKind::PublishDataset
         | RuntimeKind::ScoreEvaluation
         | RuntimeKind::EvaluationCases
+        | RuntimeKind::EvaluationTraces
         | RuntimeKind::PythonTask
         | RuntimeKind::ContainerJob
         | RuntimeKind::HumanInput => false,

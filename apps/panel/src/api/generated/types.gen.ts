@@ -2227,6 +2227,7 @@ export type DurableEvaluation = {
     reproducible: boolean;
     state: EvidenceState;
     status?: null | ResultStatus;
+    traces?: null | GenerationTrace;
     usage?: null | ResultUsage;
 };
 
@@ -3625,6 +3626,13 @@ export type GatePolicy = {
      */
     ignore?: Array<string>;
     /**
+     * Every generated answer must be seen on the log made on the variant's
+     * pinned prompt and model; fewer is `incomplete`. Off by default, because
+     * telemetry is best effort and a trace that never arrived contradicts
+     * nothing — a pipeline that ships only what its traces show turns it on.
+     */
+    require_traces?: boolean;
+    /**
      * How far worse than the baseline a metric may be, in its own unit. A
      * metric not named here may not get worse at all.
      */
@@ -3660,6 +3668,36 @@ export const GateVerdict = {
 } as const;
 
 export type GateVerdict = typeof GateVerdict[keyof typeof GateVerdict];
+
+/**
+ * What a generated result says the traces of its answers showed.
+ *
+ * Counts rather than a verdict: how many answers there were, how many named
+ * the run they were made in, how many of those runs the log held, and how
+ * many ran on the pinned prompt and model. A reader — or a gate — decides
+ * whether fewer than all is enough.
+ */
+export type GenerationTrace = {
+    answers: number;
+    /**
+     * Answers naming the run they were made in.
+     */
+    named: number;
+    /**
+     * Seen runs with a call served by the pinned model version; absent when
+     * the variant pins no model.
+     */
+    on_model?: number | null;
+    /**
+     * Seen runs with a call on the pinned prompt version; absent when the
+     * variant pins no prompt.
+     */
+    on_prompt?: number | null;
+    /**
+     * Of those, runs this deployment's log held, ended, when the step looked.
+     */
+    seen: number;
+};
 
 /**
  * What was drawn.
@@ -5995,6 +6033,7 @@ export type PublishEvaluation = {
     judge?: null | JudgeReport;
     manifest: EvaluationManifest;
     status: ResultStatus;
+    traces?: null | GenerationTrace;
 };
 
 /**
@@ -7142,6 +7181,8 @@ export type RuntimeBinding = (QueryStepSpec & {
     runtime: 'external_evaluation';
 }) | (ScoreEvaluationSpec & {
     runtime: 'evaluation_cases';
+}) | (ScoreEvaluationSpec & {
+    runtime: 'evaluation_traces';
 }) | (HumanInputSpec & {
     runtime: 'human_input';
 });
@@ -7161,6 +7202,7 @@ export const RuntimeKind = {
     JUDGE_EVALUATION: 'judge_evaluation',
     EXTERNAL_EVALUATION: 'external_evaluation',
     EVALUATION_CASES: 'evaluation_cases',
+    EVALUATION_TRACES: 'evaluation_traces',
     HUMAN_INPUT: 'human_input'
 } as const;
 
@@ -7825,8 +7867,15 @@ export type ScoringRunView = {
      */
     approval_id: string;
     cohort?: null | DerivedCohort;
+    context_id: string;
     declaration: DeclaredRun;
     manifest: EvaluationManifest;
+    /**
+     * The variant the result is published as: what an application serving it
+     * names on its runs (`variant_id` on the envelope), so what it is observed
+     * doing stands beside what it scored.
+     */
+    variant_id: string;
     /**
      * What whoever declares, admits or starts this run should be told first,
      * in words. Empty when there is nothing to say.
