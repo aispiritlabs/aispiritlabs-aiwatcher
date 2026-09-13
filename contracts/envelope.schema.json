@@ -69,7 +69,7 @@
     },
     "variant_id": {
       "type": "string",
-      "description": "Which declared variant answered in this run: the content address Evaluation derives from a variant's pins (ADR_0030). Groups runs by the configuration that answered, so what a variant did in production can stand beside what it scored. Not checked against anything declared. A run made to answer a measurement's case also names that result as data.evaluation_id on run.started, which keeps it out of the variant's observations."
+      "description": "Which declared variant answered in this run: the content address Evaluation derives from a variant's pins (ADR_0030). Groups runs by the configuration that answered, so what a variant did in production can stand beside what it scored. Not checked against anything declared. A run made to answer a measurement's case also names that result as data.evaluation_id on run.started, which keeps it out of the variant's observations. A run that served another run's model call — a model server's — names that run as data.caller_run_id on its run.started. Who published an event is never a field here: the ingest route records the credential it authenticated."
     },
     "sequence": {
       "type": "integer",

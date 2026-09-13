@@ -49,7 +49,19 @@ What it checks:
     and the result says so: every answer seen, every one on the prompt;
 12. a worker whose application renders another version of the pinned prompt
     fails at the traces step naming both versions, and publishes nothing —
-    though what it generated with agrees with every pin it holds.
+    though what it generated with agrees with every pin it holds;
+13. a variant that also pins a model nobody here registered and a workflow is
+    seen, on every answer, executing the pinned workflow and calling the pinned
+    model — and a model server publishing its own run under its own credential,
+    naming the call it served, is a second witness to that model's version on
+    every one: the log records each run as published by the token that sent it;
+14. an application that steps through a node the pinned workflow does not
+    declare fails at the traces step naming the node, and publishes nothing.
+
+The server runs behind a stand-in authenticating proxy: a person's requests
+carry its headers, and the application, the model server and the worker each
+publish with a token of their own, which is what makes the model server's word
+another credential's.
 
 It starts **its own** aiwatcher, from `target/debug/aiwatcher` or
 `AIWATCHER_BINARY`, on a free port with every byte under a temporary directory,
@@ -78,7 +90,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "sdk" / "python"))
 
-from aiwatcher_sdk import AiwatcherClient  # noqa: E402
+from aiwatcher_sdk import CALLER_RUN_HEADER, AiwatcherClient  # noqa: E402
 from aiwatcher_sdk.prompts import PromptRegistry  # noqa: E402
 from aiwatcher_sdk.worker import (  # noqa: E402
     Case,
@@ -99,6 +111,38 @@ RUN_WITHIN = 90.0
 BASE = ""
 
 QUEUE = "e2e-generate"
+
+#: Three credentials, as three hosts hold them: the application's, a model
+#: server's, and the worker's, which may claim this queue's work.
+APPLICATION_SECRET = "a1" * 16
+SERVING_SECRET = "5e" * 16
+WORKER_SECRET = "0b" * 16
+#: What a person's request carries from the proxy in front of the server.
+PERSON = {
+    "x-authentik-uid": "e2e",
+    "x-authentik-username": "e2e",
+    "x-authentik-groups": "aiwatcher-admins",
+}
+
+#: The pinned workflow's declaration, and the model a model server serves.
+WORKFLOW = json.dumps({"nodes": ["answer"], "edges": []}).encode()
+WEIGHTS = b"the capitals model's weights\n"
+PACKAGE = json.dumps(
+    {
+        "runtime": "weights",
+        "artifacts": [
+            {
+                "name": "weights",
+                "uri": "s3://elsewhere/capitals.bin",
+                "digest": hashlib.sha256(WEIGHTS).hexdigest(),
+                "size_bytes": len(WEIGHTS),
+                "content_type": "",
+                "kind": "model",
+            }
+        ],
+    }
+).encode()
+MODEL = {"name": "capitals-served", "version": hashlib.sha256(PACKAGE).hexdigest()}
 PROMPT = "e2e.capitals"
 DATASET = "capitals"
 TERMINAL = {"completed", "failed", "cancelled", "crashed"}
@@ -118,8 +162,23 @@ PROMPTS = {
 #: What the worker was handed, to check nothing it expected reached it.
 HANDED: list[dict[str, Any]] = []
 
-#: The application's own telemetry, pointed at the server once it is up.
+#: The application's own telemetry, pointed at the server once it is up, and
+#: the model server's, under a credential of its own.
 TELEMETRY: list[AiwatcherClient] = []
+SERVING: list[AiwatcherClient] = []
+
+
+def model_server(caller: dict[str, str], model: dict[str, Any]) -> None:
+    """A model server answering one request: its own run, naming the caller's."""
+    with (
+        SERVING[0].run(f"serve-{time.time_ns()}", caller_run_id=caller[CALLER_RUN_HEADER]) as run,
+        run.agent("serving") as agent,
+        agent.llm(model=str(model["name"]), model_version=str(model["version"])),
+    ):
+        pass
+    # A server reports on its own clock; this one before it answers, so the
+    # stand-in says the same thing every time.
+    SERVING[0].flush()
 
 
 # ── The application, and the task a worker hosts. ────────────────────────────
@@ -152,7 +211,7 @@ def answer(case: Case, run: Generation) -> JsonValue | Generated | Declined:
     HANDED.extend(context.read_artifact("cases") if not HANDED else [])
     prompt = run.variant["prompt"]
     assert isinstance(prompt, dict)
-    with PromptRegistry(BASE) as prompts:
+    with PromptRegistry(BASE, token=APPLICATION_SECRET) as prompts:
         text = prompts.get_version(str(prompt["name"]), str(prompt["version"])).text
     assert isinstance(case.input, dict)
     question = str(case.input["question"])
@@ -165,8 +224,29 @@ def answer(case: Case, run: Generation) -> JsonValue | Generated | Declined:
     # was told to render another.
     rendered = str(run.params.get("render_version") or prompt["version"])
     if rendered != prompt["version"]:
-        with PromptRegistry(BASE) as prompts:
+        with PromptRegistry(BASE, token=APPLICATION_SECRET) as prompts:
             text = prompts.get_version(str(prompt["name"]), rendered).text
+    model = run.variant.get("model")
+    if isinstance(model, dict):
+        # The application as an execution of the workflow the variant pins,
+        # calling the pinned model on a server that reports its own runs.
+        with run.traced_workflow(TELEMETRY[0], case, "capitals-app", nodes=["answer"]) as flow:
+            for node in ("answer", "improvise") if run.params.get("stray") else ("answer",):
+                with (
+                    flow.node(node) as stage,
+                    stage.agent("capitals") as agent,
+                    agent.llm(
+                        model=str(model["name"]),
+                        model_version=str(model["version"]),
+                        prompt=(str(prompt["name"]), rendered),
+                    ) as llm,
+                ):
+                    model_server(llm.caller_headers(), model)
+                    said = application(text, country, capital)
+                    llm.usage(
+                        prompt_tokens=len(question.split()), completion_tokens=len(said.split())
+                    )
+        return Generated(said, run_id=flow.correlation.run_id)
     with (
         run.traced(TELEMETRY[0], case) as traced,
         traced.agent("capitals") as agent,
@@ -209,6 +289,14 @@ def serve(home: Path) -> subprocess.Popen[bytes]:
         "AIWATCHER_INGEST_ENABLED": "true",
         "AIWATCHER_SEED_FILE": "none",
         "AIWATCHER_LOG": "warn",
+        "AIWATCHER_AUTH_MODE": "proxy",
+        "AIWATCHER_AUTH_INGEST_TOKENS": ",".join(
+            [
+                f"application={APPLICATION_SECRET}",
+                f"serving={SERVING_SECRET}",
+                f"worker[{QUEUE}]={WORKER_SECRET}",
+            ]
+        ),
     }
     log = (home / "server.log").open("wb")
     process = subprocess.Popen(  # noqa: S603 — the binary this repository builds
@@ -231,7 +319,9 @@ def call(
     method: str, path: str, body: Any = None, *, raw: bytes | None = None
 ) -> tuple[int, Any, bytes]:
     data = raw if raw is not None else None if body is None else json.dumps(body).encode()
-    request = urllib.request.Request(BASE + path, data=data, method=method)
+    request = urllib.request.Request(  # noqa: S310 — our own server
+        BASE + path, data=data, method=method, headers=PERSON
+    )
     request.add_header(
         "Content-Type", "application/octet-stream" if raw is not None else "application/json"
     )
@@ -334,16 +424,23 @@ def declare(
     repetition: str = "measurement-1",
     params: dict[str, Any] | None = None,
     code: bytes | None = None,
+    served: bool = False,
+    suffix: str = "",
 ) -> dict[str, Any]:
-    """Declare one variant's run, admit its pair, and return the view."""
-    with PromptRegistry(BASE) as prompts:
+    """Declare one variant's run, admit its pair, and return the view.
+
+    ``served`` also pins the model a model server serves and the workflow the
+    application executes, and stages what those imply beside the rest.
+    """
+    with PromptRegistry(BASE, token=APPLICATION_SECRET) as prompts:
         version = prompts.publish(PROMPT, PROMPTS[which], author="e2e").version_id
     code = code_of(which) if code is None else code
     generation = generation_of(which)
     run = {
         "evaluation_id": f"capitals-{which}"
         + ("" if repetition == "measurement-1" else f"-{repetition}")
-        + ("" if code == code_of(which) else "-unheld"),
+        + ("" if code == code_of(which) else "-unheld")
+        + suffix,
         "repetition_id": repetition,
         "variant": {
             "schema_version": 1,
@@ -364,15 +461,23 @@ def declare(
         },
         "settings": {"timeout_seconds": 300},
     }
+    staged = [("application.py", code), ("generation.json", generation)]
+    if served:
+        run["variant"]["model"] = MODEL
+        run["variant"]["workflow"] = {
+            "name": "capitals-app",
+            "version": hashlib.sha256(WORKFLOW).hexdigest(),
+        }
+        staged += [
+            ("model-package.json", PACKAGE),
+            ("model-artifacts/weights", WEIGHTS),
+            ("workflow.json", WORKFLOW),
+        ]
     view = ok(*call("POST", "/api/v1/evaluation-runs", run)[:2], f"declaring the {which} run")
     approval = view["approval_id"]
-    # The operator's act: the manifest and the two files the variant pins. The
+    # The operator's act: the manifest and the files the variant pins. The
     # cohort's three are derived again from the dataset version, never staged.
-    for name, content in (
-        ("manifest.json", json.dumps(view["manifest"]).encode()),
-        ("application.py", code),
-        ("generation.json", generation),
-    ):
+    for name, content in (("manifest.json", json.dumps(view["manifest"]).encode()), *staged):
         ok(
             *call("PUT", f"/api/v1/evaluation-approvals/{approval}/bundle/{name}", raw=content)[:2],
             f"staging {name}",
@@ -408,14 +513,18 @@ def main() -> int:
 
     home = Path(tempfile.mkdtemp(prefix="aiwatcher-e2e-generate-"))
     server = serve(home / "server")
-    TELEMETRY.append(AiwatcherClient(service="e2e-capitals", base_url=BASE))
+    TELEMETRY.append(
+        AiwatcherClient(service="e2e-capitals", base_url=BASE, token=APPLICATION_SECRET)
+    )
+    SERVING.append(AiwatcherClient(service="e2e-model-server", base_url=BASE, token=SERVING_SECRET))
     worker = Worker(
         BASE,
+        WORKER_SECRET,
         queues=[QUEUE],
         tasks=[answer],
         name="e2e-generate-worker",
         poll_interval=0.1,
-        telemetry=AiwatcherClient(service="e2e-generate", base_url=BASE),
+        telemetry=AiwatcherClient(service="e2e-generate", base_url=BASE, token=WORKER_SECRET),
     )
     serving = threading.Thread(target=worker.run, name="e2e-generate-worker", daemon=True)
     serving.start()
@@ -603,7 +712,12 @@ def main() -> int:
         # The candidate, deployed: the same application serving somebody, each
         # run naming the variant the result was published as.
         variant_id = candidate.get("variant_id", "")
-        production = AiwatcherClient(service="e2e-capitals", base_url=BASE, variant_id=variant_id)
+        production = AiwatcherClient(
+            service="e2e-capitals",
+            base_url=BASE,
+            token=APPLICATION_SECRET,
+            variant_id=variant_id,
+        )
         served = 5
         for request in range(served):
             with (
@@ -701,6 +815,86 @@ def main() -> int:
                     if '"failed"' in json.dumps(step)
                 ],
             },
+        )
+
+        # A variant also pinning a model nobody here registered and a workflow:
+        # the application executes the workflow, and a model server reports
+        # the call it served under its own credential.
+        flowing = declare("candidate", dataset, cohort, card, served=True, suffix="-served")
+        flowed = followed(
+            ok(
+                *call("POST", f"/api/v1/evaluation-runs/{flowing['declaration']['id']}/start")[:2],
+                "starting the run on a served model and a pinned workflow",
+            )["execution"]["execution_id"]
+        )
+        SERVING[0].flush()
+        evaluation = flowing["declaration"]["run"]["evaluation_id"]
+        witnessed = (call("GET", f"/api/v1/evaluation-results/{evaluation}")[1] or {}).get(
+            "traces"
+        ) or {}
+        spans = call("GET", "/api/v1/runs?limit=200")[1] or {}
+        publishers = {
+            run.get("published_by")
+            for run in spans.get("runs", [])
+            if run["run_id"].startswith(("generate-capitals-candidate-served", "serve-"))
+        }
+        check(
+            13,
+            "every answer is seen executing the pinned workflow on the pinned model, and a model "
+            "server's own run under another credential witnesses the version for each",
+            flowed["execution"]["state"]["state_type"] == "completed"
+            and witnessed
+            == {
+                "answers": len(CAPITALS),
+                "named": len(CAPITALS),
+                "seen": len(CAPITALS),
+                "on_prompt": len(CAPITALS),
+                "on_model": len(CAPITALS),
+                "on_workflow": len(CAPITALS),
+                "witnessed_model": len(CAPITALS),
+            }
+            and publishers == {"application", "serving"},
+            {
+                "state": flowed["execution"]["state"]["state_type"],
+                "traces": witnessed,
+                "published_by": sorted(str(name) for name in publishers),
+            },
+        )
+
+        straying = declare(
+            "candidate",
+            dataset,
+            cohort,
+            card,
+            repetition="measurement-4",
+            params={"stray": True},
+            served=True,
+            suffix="-served",
+        )
+        strayed = followed(
+            ok(
+                *call("POST", f"/api/v1/evaluation-runs/{straying['declaration']['id']}/start")[:2],
+                "starting the run whose application steps off the pinned workflow",
+            )["execution"]["execution_id"]
+        )
+        told = json.dumps(strayed["execution"])
+        check(
+            14,
+            "answers whose run stepped through a node the pinned workflow lacks are never scored",
+            strayed["execution"]["state"]["state_type"] == "failed"
+            and [
+                step["step_id"]
+                for step in strayed["execution"]["steps"]
+                if '"failed"' in json.dumps(step)
+            ]
+            == ["traces"]
+            and "improvise" in told
+            and call(
+                "GET",
+                f"/api/v1/evaluation-results/{straying['declaration']['run']['evaluation_id']}",
+            )[0]
+            == 404,
+            {"state": strayed["execution"]["state"]["state_type"]},
         )
     finally:
         worker.stop()

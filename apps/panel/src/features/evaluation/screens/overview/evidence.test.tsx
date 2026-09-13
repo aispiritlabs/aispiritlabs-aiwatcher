@@ -509,6 +509,42 @@ it('says how many generated answers their traces showed on the pins, as counts',
   expect(screen.getByText(/1 named no run/)).toBeTruthy();
 });
 
+it('says which answers a serving host witnessed, which ran the pinned workflow, and what providers said served them', async () => {
+  only([
+    {
+      method: 'GET',
+      path: '/cases',
+      answer: { status: 200, body: { version: 'ff00', cases: [], state: 'complete' } },
+    },
+  ]);
+  render(
+    withQueries(
+      <Evidence
+        evidence={evidence('complete', {
+          traces: {
+            answers: 2,
+            named: 2,
+            seen: 2,
+            on_model: 2,
+            on_workflow: 2,
+            witnessed_model: 1,
+            served: [{ model: 'support-model-q4', answers: 2 }],
+          },
+        })}
+      />,
+    ),
+  );
+  expect(
+    await screen.findByText(
+      'Generated answers, held to their traces: 2 of 2 seen on the log, 2 on the pinned model and 2 executing the pinned workflow.',
+    ),
+  ).toBeTruthy();
+  expect(
+    screen.getByText(/1 of 2 had a serving host's own run, under another credential/),
+  ).toBeTruthy();
+  expect(screen.getByText(/support-model-q4 \(2 answers\) — compared with nothing/)).toBeTruthy();
+});
+
 it("opens a result's first case where it is judged, and proposes it by where its row says it sits", async () => {
   const server = serve([
     { method: 'GET', path: '/auth/config', answer: { status: 200, body: { enabled: false } } },

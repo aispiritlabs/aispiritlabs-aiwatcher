@@ -1022,3 +1022,48 @@ fn every_span_of_a_variant_s_run_names_it_and_a_call_names_its_model_version() {
         Some("v7")
     );
 }
+
+/// A span says who published it only where one credential sent both of its
+/// ends: an end somebody else sent is neither publisher's word.
+#[test]
+fn a_span_names_its_publisher_only_when_one_credential_sent_both_ends() {
+    let mut run = Run::new("run-published");
+    let call = |id: &str| json!({ "call_id": id, "model": "capitals", "model_version": "v7" });
+    let mut events = vec![
+        run.emit(EventType::RunStarted, None, json!({})),
+        run.after(5).emit(EventType::LlmStarted, None, call("own")),
+        run.after(40)
+            .emit(EventType::LlmCompleted, None, call("own")),
+        run.after(5)
+            .emit(EventType::LlmStarted, None, call("finished-by-another")),
+        run.after(40)
+            .emit(EventType::LlmCompleted, None, call("finished-by-another")),
+        run.after(5).emit(EventType::RunCompleted, None, json!({})),
+    ];
+    for event in &mut events {
+        event.metadata.published_by = Some("serving".to_owned());
+    }
+    events[4].metadata.published_by = Some("worker".to_owned());
+    let mut assembler = SpanAssembler::default();
+    let assembled = collect(&mut assembler, &events);
+
+    let llm: Vec<Option<&str>> = assembled
+        .spans
+        .iter()
+        .filter(|span| string_attr(span, "gen_ai.operation.name") == Some("chat"))
+        .map(|span| string_attr(span, "aiwatcher.source.published_by"))
+        .collect();
+    assert_eq!(llm.len(), 2, "{:?}", names(&assembled.spans));
+    assert_eq!(
+        llm.iter()
+            .filter(|named| **named == Some("serving"))
+            .count(),
+        1,
+        "the call both of whose ends the serving host sent names it"
+    );
+    assert_eq!(
+        llm.iter().filter(|named| named.is_none()).count(),
+        1,
+        "the call another credential finished names nobody"
+    );
+}

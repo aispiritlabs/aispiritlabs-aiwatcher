@@ -72,6 +72,7 @@ pub fn executors(state: &AppState, artifacts: Option<&Artifacts>) -> ExecutorReg
                 evaluations: Arc::clone(evaluations),
                 artifacts: artifacts.clone(),
                 read_model: Arc::clone(&state.read_model),
+                bundles: state.evaluation_bundles.clone(),
                 wait: TELEMETRY_WAIT,
             })),
         None => registry,
@@ -729,6 +730,9 @@ pub struct TracesExecutor {
     evaluations: Arc<Evaluations>,
     artifacts: Artifacts,
     read_model: Arc<aiwatcher_projector::ReadModel>,
+    /// Where the pair's bundle is read: the declaration of a pinned workflow,
+    /// which a run's own declaration is compared with.
+    bundles: Option<Arc<dyn aiwatcher_evaluation::ApprovalBundles>>,
     wait: std::time::Duration,
 }
 
@@ -744,62 +748,122 @@ impl TracesExecutor {
             evaluations,
             artifacts,
             read_model,
+            bundles: None,
             wait,
         }
     }
 
+    /// Where the declaration of a pinned workflow is read from.
+    #[must_use]
+    pub fn reading_bundles_from(
+        mut self,
+        bundles: Arc<dyn aiwatcher_evaluation::ApprovalBundles>,
+    ) -> Self {
+        self.bundles = Some(bundles);
+        self
+    }
+
     /// The runs named, as the fold holds them once each has ended and every
-    /// model call it started has a span.
+    /// model call it started has a span — with the calls runs published by a
+    /// serving host say they served for each.
     async fn finished(
         &self,
         named: &std::collections::BTreeSet<&str>,
     ) -> std::collections::BTreeMap<String, TracedRun> {
-        use aiwatcher_core::attrs::{aiwatcher as own, genai};
+        let mut serving = self.read_model.serving(named).await;
         let mut runs = std::collections::BTreeMap::new();
         for run_id in named {
             let Some(detail) = self.read_model.run(run_id).await else {
                 continue;
             };
-            let text = |span: &aiwatcher_core::ports::CompletedSpan, key: &str| {
-                span.attributes
-                    .iter()
-                    .find_map(|(name, value)| match value {
-                        aiwatcher_core::ports::AttrValue::Str(text) if name == key => {
-                            Some(text.clone())
-                        }
-                        _ => None,
-                    })
-            };
-            let calls: Vec<TracedCall> = detail
-                .spans
-                .iter()
-                .filter(|span| {
-                    text(span, genai::OPERATION_NAME).as_deref() == Some(genai::operation::CHAT)
-                })
-                .map(|span| TracedCall {
-                    model: text(span, genai::REQUEST_MODEL),
-                    model_version: text(span, own::model::VERSION),
-                    prompt_name: text(span, own::prompt::NAME),
-                    prompt_version: text(span, own::prompt::VERSION_ID),
-                })
-                .collect();
+            let calls = traced_calls(&detail);
             if detail.summary.status == aiwatcher_projector::RunStatus::Running
                 || (calls.len() as u64) < detail.summary.llm_calls
             {
                 continue;
             }
+            let servers = serving.remove(*run_id).unwrap_or_default();
+            // A serving host's run still open is a witness not yet finished
+            // saying what it served; the answer's run waits with it.
+            if servers.iter().any(|server| {
+                server.summary.status == aiwatcher_projector::RunStatus::Running
+                    || (traced_calls(server).len() as u64) < server.summary.llm_calls
+            }) {
+                continue;
+            }
+            let served_for_it = servers.iter().flat_map(traced_calls).collect();
+            let summary = detail.summary;
             runs.insert(
                 (*run_id).to_owned(),
                 TracedRun {
-                    trace_id: Some(detail.summary.trace_id.to_hex()),
-                    variant_id: detail.summary.variant_id.clone(),
-                    evaluation_id: detail.summary.evaluation_id.clone(),
+                    trace_id: Some(summary.trace_id.to_hex()),
+                    variant_id: summary.variant_id,
+                    evaluation_id: summary.evaluation_id,
                     calls,
+                    published_by: summary.published_by,
+                    workflow: summary.workflow,
+                    workflow_topology: summary.workflow_topology,
+                    nodes_run: summary.nodes_run,
+                    served_for_it,
                 },
             );
         }
         runs
     }
+
+    /// The shape of the workflow the variant pins, from the declaration the
+    /// pair's bundle holds under its digest; `None` where that names no node.
+    async fn pinned_shape(
+        &self,
+        approval_id: &str,
+        pin: &aiwatcher_evaluation::VersionReference,
+    ) -> Result<Option<aiwatcher_core::topology::Topology>, ActivityError> {
+        let Some(bundles) = &self.bundles else {
+            return Ok(None);
+        };
+        let Some(bytes) = bundles
+            .member(approval_id, "workflow.json")
+            .await
+            .map_err(refusal)?
+        else {
+            return Ok(None);
+        };
+        if hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&bytes)) != pin.version {
+            return Err(ActivityError::user_code(format!(
+                "the workflow.json this pair's bundle holds is not the declaration {} @ {} pins",
+                pin.name, pin.version
+            )));
+        }
+        Ok(serde_json::from_slice(&bytes)
+            .ok()
+            .and_then(|declaration| aiwatcher_core::topology::Topology::read(&declaration)))
+    }
+}
+
+/// A run's model calls, as their spans say.
+fn traced_calls(detail: &aiwatcher_projector::RunDetail) -> Vec<TracedCall> {
+    use aiwatcher_core::attrs::{aiwatcher as own, genai};
+    let text = |span: &aiwatcher_core::ports::CompletedSpan, key: &str| {
+        span.attributes
+            .iter()
+            .find_map(|(name, value)| match value {
+                aiwatcher_core::ports::AttrValue::Str(text) if name == key => Some(text.clone()),
+                _ => None,
+            })
+    };
+    detail
+        .spans
+        .iter()
+        .filter(|span| text(span, genai::OPERATION_NAME).as_deref() == Some(genai::operation::CHAT))
+        .map(|span| TracedCall {
+            model: text(span, genai::REQUEST_MODEL),
+            model_version: text(span, own::model::VERSION),
+            prompt_name: text(span, own::prompt::NAME),
+            prompt_version: text(span, own::prompt::VERSION_ID),
+            served_model: text(span, genai::RESPONSE_MODEL),
+            published_by: text(span, own::source::PUBLISHED_BY),
+        })
+        .collect()
 }
 
 #[async_trait]
@@ -848,12 +912,22 @@ impl ActivityExecutor for TracesExecutor {
                 () = tokio::time::sleep(std::time::Duration::from_millis(250)) => {}
             }
         };
+        let shape = match &declared.run.variant.workflow {
+            Some(pin) => {
+                let approval =
+                    aiwatcher_evaluation::approval_id(prepared.variant_id(), prepared.context_id())
+                        .map_err(refusal)?;
+                self.pinned_shape(&approval, pin).await?
+            }
+            None => None,
+        };
         let rows = trace_answers(
             &declared.run.variant,
             prepared.variant_id(),
             &declared.run.evaluation_id,
             &answers,
             &runs,
+            shape.as_ref(),
         )
         .map_err(|contradictions| {
             ActivityError::user_code(format!(

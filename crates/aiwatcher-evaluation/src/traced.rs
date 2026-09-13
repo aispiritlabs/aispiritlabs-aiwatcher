@@ -1,27 +1,33 @@
 //! What the traces of generated answers show they were made with.
 //!
 //! `generated_with` is the task's word about the code and configuration it
-//! holds. A variant also pins a prompt and a model, which a task resolves
-//! through a registry rather than holds — so the witness for those is the
-//! application's own telemetry, folded by this deployment: each answer may name
-//! the run it was made in, and that run's model calls say which prompt version
-//! they rendered and which model version served them. The traces step reads
-//! those runs off the log before the score step reads an answer.
+//! holds. A variant also pins a prompt, a model and a workflow, which a task
+//! resolves or runs rather than holds — so the witness for those is telemetry,
+//! folded by this deployment: each answer may name the run it was made in, and
+//! that run's model calls say which prompt version they rendered and which
+//! model version served them, and its declaration says which workflow shape it
+//! executed. The traces step reads those runs off the log before the score step
+//! reads an answer.
 //!
 //! It refuses what the traces contradict — a run naming another variant or
 //! another result, a call on another version of the pinned prompt, a call to
-//! the pinned model at another version — because those answers are not the
-//! variant's. What the traces merely do not show is reported and not refused:
-//! telemetry is best effort by design, and a run the log never received says
-//! nothing either way. The result carries how many answers were seen on the
-//! pinned prompt and model, and a gate may require all of them.
+//! the pinned model at another version, a run declaring the pinned workflow in
+//! another shape or stepping through a node it does not have — because those
+//! answers are not the variant's. What the traces merely do not show is
+//! reported and not refused: telemetry is best effort by design, and a run the
+//! log never received says nothing either way. The result carries how many
+//! answers were seen on each pin, and a gate may require all of them.
 //!
-//! Still not a proof. The telemetry comes from the same host as the answers,
-//! and an application that reported the pins while calling something else would
-//! pass; what it can no longer do is report something else and pass.
+//! The application's telemetry comes from the same host as its answers, so an
+//! application that reported the pins while calling something else passes.
+//! What it cannot report for itself is another credential's word: a serving
+//! host that publishes its own run under its own token, naming the run whose
+//! call it served, is a second witness to which model version answered — and an
+//! answer that has one is counted apart, which a gate may require too.
 
 use std::collections::BTreeMap;
 
+use aiwatcher_core::topology::Topology;
 use serde::{Deserialize, Serialize};
 
 use crate::{RecordedAnswer, VariantManifest};
@@ -36,6 +42,10 @@ pub struct TracedCall {
     pub model_version: Option<String>,
     pub prompt_name: Option<String>,
     pub prompt_version: Option<String>,
+    /// What the provider said served the call, `gen_ai.response.model`.
+    pub served_model: Option<String>,
+    /// The credential both ends of the call's span were published under.
+    pub published_by: Option<String>,
 }
 
 /// A run an answer names, as the log folded it once it had ended and every
@@ -47,6 +57,16 @@ pub struct TracedRun {
     pub variant_id: Option<String>,
     pub evaluation_id: Option<String>,
     pub calls: Vec<TracedCall>,
+    /// The credential the run's start was published under.
+    pub published_by: Option<String>,
+    /// The workflow the run names, and the digest of the shape it declared.
+    pub workflow: Option<String>,
+    pub workflow_topology: Option<String>,
+    /// The workflow nodes it started a step of.
+    pub nodes_run: Vec<String>,
+    /// Calls other runs say they served for this one: a serving host's run
+    /// naming it as the caller, each call with its own publisher.
+    pub served_for_it: Vec<TracedCall>,
 }
 
 /// What the traces showed about one answer.
@@ -70,14 +90,38 @@ pub struct TracedAnswer {
     /// the variant pins no model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_model: Option<bool>,
+    /// The run declared the pinned workflow's shape and stepped only through
+    /// its nodes. Absent when the variant pins no workflow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_workflow: Option<bool>,
+    /// A run published under another credential than this answer's run said it
+    /// served one of its calls on the pinned model version. Absent when the
+    /// variant pins no model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub witnessed_model: Option<bool>,
+    /// What providers said served the run's calls, each once.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub served_models: Vec<String>,
+    /// The variant pins a workflow whose declaration this step could read no
+    /// node of, so no run was seen executing it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub workflow_undeclared: bool,
+}
+
+/// One model a provider said served generated answers, and how many.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct GenerationServed {
+    pub model: String,
+    /// Answers whose run had a call this model served.
+    pub answers: usize,
 }
 
 /// What a generated result says the traces of its answers showed.
 ///
 /// Counts rather than a verdict: how many answers there were, how many named
 /// the run they were made in, how many of those runs the log held, and how
-/// many ran on the pinned prompt and model. A reader — or a gate — decides
-/// whether fewer than all is enough.
+/// many ran on each pin. A reader — or a gate — decides whether fewer than all
+/// is enough.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct GenerationTrace {
     pub answers: usize,
@@ -93,6 +137,22 @@ pub struct GenerationTrace {
     /// the variant pins no model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_model: Option<usize>,
+    /// Seen runs that declared the pinned workflow's shape and stepped only
+    /// through its nodes; absent when the variant pins no workflow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_workflow: Option<usize>,
+    /// The declaration of the pinned workflow names no node this step could
+    /// read, so no run can be seen executing it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub workflow_undeclared: bool,
+    /// Seen runs whose call on the pinned model version a run published under
+    /// another credential says it served; absent when the variant pins no model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub witnessed_model: Option<usize>,
+    /// What providers said served the calls, compared with nothing: a provider's
+    /// name for a model is an alias, a file or a dated snapshot.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub served: Vec<GenerationServed>,
 }
 
 impl GenerationTrace {
@@ -105,12 +165,28 @@ impl GenerationTrace {
                 .filter(|_| !rows.is_empty())
                 .map(|sides| sides.into_iter().filter(|on| *on).count())
         };
+        let mut served: BTreeMap<&str, usize> = BTreeMap::new();
+        for row in rows {
+            for model in &row.served_models {
+                *served.entry(model.as_str()).or_default() += 1;
+            }
+        }
         Self {
             answers: rows.len(),
             named: rows.iter().filter(|row| row.run_id.is_some()).count(),
             seen: rows.iter().filter(|row| row.seen).count(),
             on_prompt: counted(|row| row.on_prompt),
             on_model: counted(|row| row.on_model),
+            on_workflow: counted(|row| row.on_workflow),
+            workflow_undeclared: rows.iter().any(|row| row.workflow_undeclared),
+            witnessed_model: counted(|row| row.witnessed_model),
+            served: served
+                .into_iter()
+                .map(|(model, answers)| GenerationServed {
+                    model: model.to_owned(),
+                    answers,
+                })
+                .collect(),
         }
     }
 
@@ -121,6 +197,14 @@ impl GenerationTrace {
         self.seen == self.answers
             && self.on_prompt.is_none_or(|on| on == self.answers)
             && self.on_model.is_none_or(|on| on == self.answers)
+            && self.on_workflow.is_none_or(|on| on == self.answers)
+    }
+
+    /// Whether every answer on a pinned model had a second credential's word
+    /// for the model version that served it.
+    #[must_use]
+    pub fn witnessed(&self) -> bool {
+        self.witnessed_model.is_none_or(|on| on == self.answers)
     }
 
     /// What is missing, in words; empty when [`Self::complete`].
@@ -141,12 +225,23 @@ impl GenerationTrace {
                 self.named
             ));
         }
-        for (what, on) in [("prompt", self.on_prompt), ("model", self.on_model)] {
+        if self.workflow_undeclared {
+            said.push(
+                "the declaration of the pinned workflow names no node this step could read, so no \
+                 run can be seen executing it"
+                    .to_owned(),
+            );
+        }
+        for (what, on) in [
+            ("call on the pinned prompt", self.on_prompt),
+            ("call on the pinned model", self.on_model),
+            ("execution of the pinned workflow", self.on_workflow),
+        ] {
             if let Some(on) = on
                 && on < self.seen
             {
                 said.push(format!(
-                    "{} of {} seen runs show no call on the pinned {what}",
+                    "{} of {} seen runs show no {what}",
                     self.seen - on,
                     self.seen
                 ));
@@ -154,13 +249,30 @@ impl GenerationTrace {
         }
         said
     }
+
+    /// What a second witness did not show, in words; empty when
+    /// [`Self::witnessed`].
+    #[must_use]
+    pub fn unwitnessed(&self) -> Vec<String> {
+        match self.witnessed_model {
+            Some(on) if on < self.answers => vec![format!(
+                "{} of {} answers have no run published under another credential saying it \
+                 served their call on the pinned model",
+                self.answers - on,
+                self.answers
+            )],
+            _ => Vec::new(),
+        }
+    }
 }
 
 /// Hold each generated answer to the run it names.
 ///
 /// `runs` holds the runs the log had, ended and complete; a run an answer names
-/// and `runs` lacks is unseen. Errors carry every contradiction at once, each
-/// naming the case, the run and both sides.
+/// and `runs` lacks is unseen. `workflow` is the shape of the declaration the
+/// variant pins, read from its bytes, or `None` where those name no node.
+/// Errors carry every contradiction at once, each naming the case, the run and
+/// both sides.
 ///
 /// # Errors
 ///
@@ -171,9 +283,11 @@ pub fn trace_answers(
     evaluation_id: &str,
     answers: &[RecordedAnswer],
     runs: &BTreeMap<String, TracedRun>,
+    workflow: Option<&Topology>,
 ) -> std::result::Result<Vec<TracedAnswer>, Vec<String>> {
     let mut rows = Vec::with_capacity(answers.len());
     let mut contradictions = Vec::new();
+    let pinned_shape = workflow.map(Topology::digest);
     for answer in answers {
         let traced = answer.run_id.as_ref().and_then(|run_id| runs.get(run_id));
         let mut row = TracedAnswer {
@@ -183,6 +297,10 @@ pub fn trace_answers(
             trace_id: traced.and_then(|run| run.trace_id.clone()),
             on_prompt: variant.prompt.as_ref().map(|_| false),
             on_model: variant.model.as_ref().map(|_| false),
+            on_workflow: variant.workflow.as_ref().map(|_| false),
+            witnessed_model: variant.model.as_ref().map(|_| false),
+            served_models: Vec::new(),
+            workflow_undeclared: variant.workflow.is_some() && workflow.is_none(),
         };
         if let (Some(run_id), Some(run)) = (&answer.run_id, traced) {
             let mut said = |sentence: String| {
@@ -207,6 +325,11 @@ pub fn trace_answers(
                 ));
             }
             for call in &run.calls {
+                if let Some(served) = &call.served_model
+                    && !row.served_models.contains(served)
+                {
+                    row.served_models.push(served.clone());
+                }
                 if let Some(pinned) = &variant.prompt {
                     let version = call.prompt_version.as_deref();
                     if version == Some(pinned.version.as_str()) {
@@ -234,6 +357,63 @@ pub fn trace_answers(
                         None => {}
                     }
                 }
+            }
+            if let Some(pinned) = &variant.model {
+                // Another credential's word, or none: a call the answer's own
+                // publisher reported for a serving run is still its word.
+                for call in &run.served_for_it {
+                    let independent = matches!(
+                        (&call.published_by, &run.published_by),
+                        (Some(witness), Some(answerer)) if witness != answerer
+                    );
+                    if !independent || call.model.as_deref() != Some(pinned.name.as_str()) {
+                        continue;
+                    }
+                    match call.model_version.as_deref() {
+                        Some(version) if version == pinned.version => {
+                            row.witnessed_model = Some(true);
+                        }
+                        Some(version) => said(format!(
+                            "{} says it served this run's call with {} at {version}, and the \
+                             variant pins {}",
+                            call.published_by.as_deref().unwrap_or("another publisher"),
+                            pinned.name,
+                            pinned.version
+                        )),
+                        None => {}
+                    }
+                }
+            }
+            if let Some(pinned) = &variant.workflow
+                && run.workflow.as_deref() == Some(pinned.name.as_str())
+            {
+                let mut on = pinned_shape.is_some();
+                if let (Some(declared), Some(shape)) = (&run.workflow_topology, &pinned_shape)
+                    && declared != shape
+                {
+                    on = false;
+                    said(format!(
+                        "the run declared {} in another shape than the declaration the variant \
+                         pins",
+                        pinned.name
+                    ));
+                }
+                if run.workflow_topology.is_none() {
+                    on = false;
+                }
+                if let Some(shape) = workflow {
+                    for node in &run.nodes_run {
+                        if !shape.nodes.contains(node) {
+                            on = false;
+                            said(format!(
+                                "the run stepped through {node}, which the declaration of {} the \
+                                 variant pins does not name",
+                                pinned.name
+                            ));
+                        }
+                    }
+                }
+                row.on_workflow = Some(on);
             }
         }
         rows.push(row);
@@ -306,6 +486,8 @@ mod tests {
             model_version: Some("v7".to_owned()),
             prompt_name: Some("capitals".to_owned()),
             prompt_version: Some("p".repeat(64)),
+            served_model: None,
+            published_by: Some("worker".to_owned()),
         }
     }
 
@@ -315,6 +497,8 @@ mod tests {
             variant_id: Some("variant".to_owned()),
             evaluation_id: Some("answers".to_owned()),
             calls,
+            published_by: Some("worker".to_owned()),
+            ..TracedRun::default()
         }
     }
 
@@ -340,7 +524,7 @@ mod tests {
             answer("c4", None),
         ];
 
-        let rows = trace_answers(&variant(), "variant", "answers", &answers, &runs)
+        let rows = trace_answers(&variant(), "variant", "answers", &answers, &runs, None)
             .expect("nothing contradicts the pins");
         let trace = GenerationTrace::of(&rows);
 
@@ -352,6 +536,10 @@ mod tests {
                 seen: 2,
                 on_prompt: Some(2),
                 on_model: Some(2),
+                on_workflow: None,
+                workflow_undeclared: false,
+                witnessed_model: Some(0),
+                served: Vec::new(),
             }
         );
         assert!(!trace.complete());
@@ -388,6 +576,7 @@ mod tests {
             "answers",
             &[answer("c1", Some("r1"))],
             &runs,
+            None,
         )
         .expect_err("the trace contradicts the pins");
 
@@ -405,6 +594,7 @@ mod tests {
                 variant_id: Some("baseline".to_owned()),
                 evaluation_id: Some("answers-baseline".to_owned()),
                 calls: vec![on_the_pins()],
+                ..TracedRun::default()
             },
         )]);
 
@@ -414,6 +604,7 @@ mod tests {
             "answers",
             &[answer("c1", Some("r1"))],
             &runs,
+            None,
         )
         .expect_err("another variant's run");
 
@@ -447,10 +638,190 @@ mod tests {
             "answers",
             &[answer("c1", Some("r1"))],
             &runs,
+            None,
         )
         .expect("no version is no contradiction");
 
         let trace = GenerationTrace::of(&rows);
         assert_eq!((trace.on_prompt, trace.on_model), (None, Some(0)));
+    }
+
+    fn workflow_variant() -> VariantManifest {
+        VariantManifest {
+            model: None,
+            prompt: None,
+            workflow: Some(VersionReference {
+                name: "capitals-app".to_owned(),
+                version: "w".repeat(64),
+            }),
+            ..variant()
+        }
+    }
+
+    fn shape(edges: &[(&str, &str)]) -> Topology {
+        Topology::read(&serde_json::json!({
+            "nodes": ["retrieve", "answer"],
+            "edges": edges.iter().map(|(from, to)| [from, to]).collect::<Vec<_>>(),
+        }))
+        .expect("a shape")
+    }
+
+    fn workflow_run(declared: &Topology, nodes_run: &[&str]) -> TracedRun {
+        TracedRun {
+            workflow: Some("capitals-app".to_owned()),
+            workflow_topology: Some(declared.digest()),
+            nodes_run: nodes_run.iter().map(|node| (*node).to_owned()).collect(),
+            ..run(Vec::new())
+        }
+    }
+
+    #[test]
+    fn a_run_that_declared_the_pinned_shape_and_stayed_on_it_is_seen_executing_it() {
+        let pinned = shape(&[("retrieve", "answer")]);
+        let runs = BTreeMap::from([
+            (
+                "r1".to_owned(),
+                workflow_run(&pinned, &["retrieve", "answer"]),
+            ),
+            (
+                "r2".to_owned(),
+                TracedRun {
+                    workflow_topology: None,
+                    ..workflow_run(&pinned, &["answer"])
+                },
+            ),
+        ]);
+
+        let rows = trace_answers(
+            &workflow_variant(),
+            "variant",
+            "answers",
+            &[answer("c1", Some("r1")), answer("c2", Some("r2"))],
+            &runs,
+            Some(&pinned),
+        )
+        .expect("nothing contradicts the pinned shape");
+        let trace = GenerationTrace::of(&rows);
+
+        assert_eq!(
+            trace.on_workflow,
+            Some(1),
+            "a run that declared nothing is not seen on it"
+        );
+        assert_eq!(
+            trace.shortfall(),
+            ["1 of 2 seen runs show no execution of the pinned workflow".to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_run_declaring_the_pinned_workflow_in_another_shape_or_stepping_off_it_is_refused() {
+        let pinned = shape(&[("retrieve", "answer")]);
+        let runs = BTreeMap::from([
+            (
+                "other-shape".to_owned(),
+                workflow_run(&shape(&[("answer", "retrieve")]), &[]),
+            ),
+            (
+                "off-the-graph".to_owned(),
+                workflow_run(&pinned, &["retrieve", "improvise"]),
+            ),
+        ]);
+
+        let refused = trace_answers(
+            &workflow_variant(),
+            "variant",
+            "answers",
+            &[
+                answer("c1", Some("other-shape")),
+                answer("c2", Some("off-the-graph")),
+            ],
+            &runs,
+            Some(&pinned),
+        )
+        .expect_err("both contradict the pinned declaration");
+
+        assert!(refused[0].contains("another shape"), "{refused:?}");
+        assert!(refused[1].contains("improvise"), "{refused:?}");
+    }
+
+    #[test]
+    fn a_serving_host_s_word_counts_only_under_another_credential_and_contradicts_under_one() {
+        let mut pins = variant();
+        pins.prompt = None;
+        let served = |publisher: &str, version: &str| TracedCall {
+            model: Some("capitals-model".to_owned()),
+            model_version: Some(version.to_owned()),
+            served_model: Some("capitals-model-q4".to_owned()),
+            published_by: Some(publisher.to_owned()),
+            ..TracedCall::default()
+        };
+        let runs = BTreeMap::from([
+            (
+                "witnessed".to_owned(),
+                TracedRun {
+                    served_for_it: vec![served("serving", "v7")],
+                    ..run(vec![TracedCall {
+                        served_model: Some("capitals-model-q4".to_owned()),
+                        ..on_the_pins()
+                    }])
+                },
+            ),
+            (
+                "self-reported".to_owned(),
+                TracedRun {
+                    served_for_it: vec![served("worker", "v7")],
+                    ..run(vec![on_the_pins()])
+                },
+            ),
+        ]);
+
+        let rows = trace_answers(
+            &pins,
+            "variant",
+            "answers",
+            &[
+                answer("c1", Some("witnessed")),
+                answer("c2", Some("self-reported")),
+            ],
+            &runs,
+            None,
+        )
+        .expect("nothing contradicts the pins");
+        let trace = GenerationTrace::of(&rows);
+        assert_eq!(
+            (trace.on_model, trace.witnessed_model),
+            (Some(2), Some(1)),
+            "a serving run the worker's own credential published is the worker's word"
+        );
+        assert!(trace.complete() && !trace.witnessed());
+        assert_eq!(
+            trace.served,
+            [GenerationServed {
+                model: "capitals-model-q4".to_owned(),
+                answers: 1
+            }]
+        );
+
+        let contradicted = BTreeMap::from([(
+            "r1".to_owned(),
+            TracedRun {
+                served_for_it: vec![served("serving", "v6")],
+                ..run(vec![on_the_pins()])
+            },
+        )]);
+        let refused = trace_answers(
+            &pins,
+            "variant",
+            "answers",
+            &[answer("c1", Some("r1"))],
+            &contradicted,
+            None,
+        )
+        .expect_err("the serving host served another version");
+        assert!(
+            refused[0].contains("serving says it served") && refused[0].contains("v6"),
+            "{refused:?}"
+        );
     }
 }

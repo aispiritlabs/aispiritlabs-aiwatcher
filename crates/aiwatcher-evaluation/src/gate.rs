@@ -37,11 +37,18 @@ pub struct GatePolicy {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub critical_cases: Vec<String>,
     /// Every generated answer must be seen on the log made on the variant's
-    /// pinned prompt and model; fewer is `incomplete`. Off by default, because
-    /// telemetry is best effort and a trace that never arrived contradicts
-    /// nothing — a pipeline that ships only what its traces show turns it on.
+    /// pinned prompt, model and workflow; fewer is `incomplete`. Off by
+    /// default, because telemetry is best effort and a trace that never arrived
+    /// contradicts nothing — a pipeline that ships only what its traces show
+    /// turns it on.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub require_traces: bool,
+    /// Every generated answer on a pinned model must also have a serving
+    /// host's word for the version that served it, published under another
+    /// credential than the application's; fewer is `incomplete`. Off by
+    /// default: only a host that reports its own runs can give one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub require_witness: bool,
 }
 
 impl GatePolicy {
@@ -189,7 +196,25 @@ pub fn decide(
                 }
                 Some(_) => false,
             };
-    let incomplete = incomplete || untraced;
+    let unwitnessed = policy.require_witness
+        && match &candidate.traces {
+            None => {
+                reasons.push(
+                    "the policy requires a serving host's word for every answer's model, and the \
+                     candidate's answers were not generated here, so no trace was read"
+                        .to_owned(),
+                );
+                true
+            }
+            Some(traces) if !traces.witnessed() => {
+                reasons.extend(traces.unwitnessed().into_iter().map(|missing| {
+                    format!("the policy requires every answer witnessed: {missing}")
+                }));
+                true
+            }
+            Some(_) => false,
+        };
+    let incomplete = incomplete || untraced || unwitnessed;
 
     let ignored: BTreeSet<&str> = policy.ignore.iter().map(String::as_str).collect();
     let mut regressed = false;

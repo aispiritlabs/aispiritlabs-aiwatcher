@@ -47,6 +47,14 @@ pub trait ApprovalBundles: Send + Sync + std::fmt::Debug {
         let _ = (variant, staged);
         Ok(Vec::new())
     }
+    /// One member's bytes, as the pair's bundle holds them: what a step holds a
+    /// variant to beyond a digest — the declaration of the workflow it pins,
+    /// which a run's own declaration is compared with. `None` when nothing is
+    /// staged under that name, or this adapter keeps nothing it can hand back.
+    async fn member(&self, approval_id: &str, name: &str) -> Result<Option<Vec<u8>>> {
+        let _ = (approval_id, name);
+        Ok(None)
+    }
 }
 
 /// One member a variant's references imply, by its bundle name.

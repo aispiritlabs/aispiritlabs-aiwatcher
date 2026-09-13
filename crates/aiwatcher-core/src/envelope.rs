@@ -172,6 +172,16 @@ pub struct EventEnvelope {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub variant_id: Option<String>,
 
+    /// The credential the ingest route authenticated this event's batch under —
+    /// an ingest token's name, a person's subject. Never read from the wire: a
+    /// producer that could name its own publisher could name another's, so it
+    /// is not deserialised and not serialised, and only the route that checked
+    /// the credential writes it. An event a broker delivered carries none, since
+    /// nothing here authenticated who published it.
+    #[serde(skip)]
+    #[schema(ignore)]
+    pub published_by: Option<String>,
+
     /// Producer-side counter within the run. Gaps here mean lost events; it is
     /// the only way to notice a producer that dropped a batch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -221,6 +231,7 @@ impl EventEnvelope {
             workflow_run_id: None,
             agent_id: None,
             variant_id: None,
+            published_by: None,
             sequence: None,
             trace_id: None,
             span_id: None,
@@ -390,6 +401,7 @@ impl EventEnvelope {
                 workflow_run_id,
                 agent_id: self.agent_id,
                 variant_id: self.variant_id,
+                published_by: self.published_by,
                 sequence: self.sequence,
                 span_key,
                 schema_version: self.schema_version,
@@ -439,6 +451,11 @@ pub struct RecordedMetadata {
     /// before it, which reads as a run that named no variant.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub variant_id: Option<String>,
+    /// See [`EventEnvelope::published_by`]: who the ingest route authenticated
+    /// this event under. Absent from an event a broker delivered, and from
+    /// every record written before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub published_by: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sequence: Option<u64>,
 
@@ -722,6 +739,44 @@ mod tests {
         let recorded = wire.record(1, 1, datetime!(2026-08-27 18:20:12 UTC), None);
 
         assert_eq!(recorded.metadata.variant_id.as_deref(), Some("4f1c"));
+    }
+
+    #[test]
+    fn a_producer_cannot_name_its_own_publisher_and_the_route_that_checked_it_can() {
+        let wire: EventEnvelope = serde_json::from_value(serde_json::json!({
+            "event_type": "run.started",
+            "occurred_at": "2026-08-27T18:20:11Z",
+            "run_id": "run-1",
+            "published_by": "serving",
+            "source": { "service": "support-bot", "sdk": "python" },
+        }))
+        .expect("an envelope");
+        assert!(wire.published_by.is_none(), "not read from the wire");
+        assert!(
+            serde_json::to_value(EventEnvelope {
+                published_by: Some("worker".into()),
+                ..wire.clone()
+            })
+            .expect("encodes")
+            .get("published_by")
+            .is_none(),
+            "and not put back on it, so a broker never carries one"
+        );
+
+        let recorded = EventEnvelope {
+            published_by: Some("worker".into()),
+            ..wire
+        }
+        .record(1, 1, datetime!(2026-08-27 18:20:12 UTC), None);
+        assert_eq!(recorded.metadata.published_by.as_deref(), Some("worker"));
+        let stored: RecordedEvent =
+            serde_json::from_value(serde_json::to_value(&recorded).expect("encodes"))
+                .expect("reads");
+        assert_eq!(
+            stored.metadata.published_by.as_deref(),
+            Some("worker"),
+            "a stored record keeps what the route wrote"
+        );
     }
 
     #[test]

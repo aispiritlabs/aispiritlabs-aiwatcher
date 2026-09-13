@@ -1142,6 +1142,10 @@ export const getEvaluation = <ThrowOnError extends boolean = false>(options: Opt
  * an authentik service account holding a token for this audience, or a
  * bearer the operator issued. Reading runs and writing them are different
  * permissions in every deployment that has more than one team.
+ *
+ * Every event is recorded as published by that identity — the token's name or
+ * the person's subject — whatever the body says, which is what lets a reader
+ * tell one publisher's word from another's.
  */
 export const ingest = <ThrowOnError extends boolean = false>(options: Options<IngestData, ThrowOnError>): RequestResult<IngestResponses, IngestErrors, ThrowOnError> => (options.client ?? client).post<IngestResponses, IngestErrors, ThrowOnError>({
     url: '/api/v1/events',

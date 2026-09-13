@@ -104,6 +104,10 @@ pub mod aiwatcher {
         pub const SERVICE: &str = "aiwatcher.source.service";
         pub const INSTANCE: &str = "aiwatcher.source.instance";
         pub const SDK: &str = "aiwatcher.source.sdk";
+        /// The credential ingest authenticated the span's events under — see
+        /// `EventEnvelope::published_by`. Only where one credential sent both
+        /// ends: a span two credentials wrote is neither one's word.
+        pub const PUBLISHED_BY: &str = "aiwatcher.source.published_by";
     }
 
     pub mod span {

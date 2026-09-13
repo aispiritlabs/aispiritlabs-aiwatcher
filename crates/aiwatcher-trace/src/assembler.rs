@@ -419,6 +419,15 @@ impl SpanAssembler {
             }
         };
         self.pop_container(&span);
+        // A span whose end another credential sent is neither publisher's
+        // word, so it names none: a call a serving host reported must not be
+        // finished by whoever else learnt its run's ID.
+        let mut span = span;
+        let published = event.metadata.published_by.as_deref();
+        span.attributes.retain(|(key, value)| {
+            *key != own::source::PUBLISHED_BY
+                || matches!(value, AttrValue::Str(text) if Some(text.as_str()) == published)
+        });
 
         let status = if ok {
             SpanStatus::Ok
@@ -547,6 +556,9 @@ fn base_attributes(event: &RecordedEvent) -> Vec<Attr> {
     }
     if let Some(variant) = &metadata.variant_id {
         out.push(attr(own::variant::ID, variant.as_str()));
+    }
+    if let Some(publisher) = &metadata.published_by {
+        out.push(attr(own::source::PUBLISHED_BY, publisher.as_str()));
     }
     match event.event_type.subject() {
         Subject::Llm => out.push(attr(genai::OPERATION_NAME, genai::operation::CHAT)),

@@ -17,9 +17,11 @@ generates with, which is held to the variant's pins.
         return Generated(said, run_id=traced.correlation.run_id)
 
 What the answer names — the run it was made in — is how aiwatcher holds it to
-the variant's prompt and model: the traces step reads that run off the log and
-refuses answers whose model calls rendered another prompt version or were
-served by another model version.
+the variant's prompt, model and workflow: the traces step reads that run off
+the log and refuses answers whose model calls rendered another prompt version
+or were served by another model version, or whose run declared the pinned
+workflow in another shape (``run.traced_workflow``). A model server that sends
+its own run for the call (``llm.caller_headers()``) is a second witness.
 """
 
 from __future__ import annotations
@@ -30,7 +32,7 @@ import time
 import uuid
 from collections.abc import Callable, Generator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from aiwatcher_sdk.task import Task
 from aiwatcher_sdk.task_errors import TaskError
@@ -38,7 +40,7 @@ from aiwatcher_sdk.worker.context import get_task_context
 from aiwatcher_sdk.worker.contract import JsonObject, JsonValue
 
 if TYPE_CHECKING:
-    from aiwatcher_sdk import AiwatcherClient, RunContext
+    from aiwatcher_sdk import AiwatcherClient, RunContext, WorkflowContext
 
 #: What the step before reads the cohort into, and what this task writes.
 CASES = "cases"
@@ -88,6 +90,35 @@ class Generation:
             evaluation_id=self.evaluation_id,
         ) as run:
             yield run
+
+    @contextlib.contextmanager
+    def traced_workflow(
+        self,
+        client: AiwatcherClient,
+        case: Case,
+        workflow_id: str,
+        *,
+        nodes: list[str] | list[dict[str, Any]],
+        edges: list[tuple[str, str]] | list[dict[str, Any]] | None = None,
+    ) -> Generator[WorkflowContext, None, None]:
+        """The same run, as an execution of the workflow the variant pins.
+
+        It declares ``nodes`` and ``edges``, and each stage opened with
+        ``flow.node(…)`` is a step of that run — which is what the answer is
+        held to beside the prompt and the model: a run declaring the pinned
+        workflow in another shape, or stepping through a node the pinned
+        declaration does not have, is not the variant's. Name the run on the
+        answer as with :meth:`traced` (``run_id=flow.correlation.run_id``).
+        """
+        with client.workflow(
+            workflow_id,
+            nodes=nodes,
+            edges=edges,
+            run_id=f"generate-{self.evaluation_id}-{case.case_id}-{uuid.uuid4().hex[:12]}",
+            variant_id=self.variant_id or None,
+            evaluation_id=self.evaluation_id,
+        ) as flow:
+            yield flow
 
 
 @dataclass(frozen=True)

@@ -50,7 +50,13 @@ def __getattr__(name: str) -> Any:
 
 SCHEMA_VERSION = 1
 
+#: The header a request to a model server carries to name the run whose model
+#: call it is — see :meth:`LlmCall.caller_headers` — and a server reads to name
+#: that run on its own (``client.run(…, caller_run_id=…)``).
+CALLER_RUN_HEADER = "Aiwatcher-Caller-Run"
+
 __all__ = [
+    "CALLER_RUN_HEADER",
     "SCHEMA_VERSION",
     "AgentContext",
     "AiwatcherClient",
@@ -396,6 +402,7 @@ class AiwatcherClient:
         correlation_id: str | None = None,
         variant_id: str | None = None,
         evaluation_id: str | None = None,
+        caller_run_id: str | None = None,
     ) -> Generator[RunContext, None, None]:
         """One execution of an agent. Becomes one trace.
 
@@ -408,6 +415,11 @@ class AiwatcherClient:
         was observed doing beside what it scored. `evaluation_id` says the run
         answers a case of that published result rather than somebody using the
         application, which keeps a benchmark out of those observations.
+
+        `caller_run_id` says this run served a model call another run made —
+        what a model server passes when a request carries
+        :data:`CALLER_RUN_HEADER`. Published under the server's own credential,
+        it is a second witness to which model version answered that call.
         """
         context = Correlation(
             run_id=run_id,
@@ -422,9 +434,12 @@ class AiwatcherClient:
             correlation_id=correlation_id or _new_id(),
         )
         run_context = RunContext(self, context)
-        self.emit(
-            "run.started", context, {"evaluation_id": evaluation_id} if evaluation_id else None
-        )
+        started = {
+            key: value
+            for key, value in (("evaluation_id", evaluation_id), ("caller_run_id", caller_run_id))
+            if value
+        }
+        self.emit("run.started", context, started or None)
         try:
             yield run_context
         except BaseException as error:
@@ -571,6 +586,8 @@ class AiwatcherClient:
         execution_id: str | None = None,
         run_id: str | None = None,
         conversation_id: str | None = None,
+        variant_id: str | None = None,
+        evaluation_id: str | None = None,
     ) -> Generator[WorkflowContext, None, None]:
         """One execution of an orchestration, and the shape it is executing.
 
@@ -595,6 +612,9 @@ class AiwatcherClient:
         the run *is* the execution, which is right whenever the whole workflow
         runs in one process. A stage-per-pod orchestrator must pass the same
         value from every pod — its own execution id is the obvious choice.
+
+        `variant_id` and `evaluation_id` mean what they mean on :meth:`run`: the
+        variant answering, and the measurement a run answers a case for.
         """
         resolved_nodes = _normalize_nodes(nodes)
         resolved_edges = _normalize_edges(edges)
@@ -603,8 +623,11 @@ class AiwatcherClient:
             conversation_id=conversation_id,
             workflow_id=workflow_id,
             workflow_run_id=execution_id,
+            variant_id=variant_id or self._variant_id,
         )
-        self.emit("run.started", context)
+        self.emit(
+            "run.started", context, {"evaluation_id": evaluation_id} if evaluation_id else None
+        )
         if resolved_nodes or resolved_edges:
             self.emit(
                 "workflow.declared",
@@ -1150,6 +1173,16 @@ class LlmCall(Scope):
 
     def elapsed_ms(self) -> float:
         return (time.monotonic() - self._started) * 1000
+
+    def caller_headers(self) -> dict[str, str]:
+        """The header a model server reads to name the run whose call it served.
+
+        Send it with the request this call makes; a server on
+        :mod:`aiwatcher_sdk.serving` publishes its own run naming this one, under
+        its own credential, which is a witness to the model version that
+        answered that the application's telemetry cannot be for itself.
+        """
+        return {CALLER_RUN_HEADER: self._context.run_id}
 
     def first_token(self) -> None:
         """Call once, when the first token arrives. Drives time-to-first-token."""

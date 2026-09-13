@@ -10,6 +10,12 @@
  * languages should not have to hold two mental models.
  */
 
+/**
+ * The header a request to a model server carries to name the run whose model
+ * call it is, and a server reads to name that run on its own (`callerRunId`).
+ */
+export const CALLER_RUN_HEADER = 'Aiwatcher-Caller-Run';
+
 export const SCHEMA_VERSION = 1;
 
 export type Sdk = 'python' | 'typescript' | 'rust' | (string & {});
@@ -267,6 +273,11 @@ export class AiwatcherClient {
    * that published result rather than somebody using the application, which
    * keeps a benchmark out of what the variant was observed doing.
    *
+   * `callerRunId` says this run served a model call another run made — what a
+   * model server passes when a request carries `CALLER_RUN_HEADER`. Published
+   * under the server's own credential, it is a second witness to which model
+   * version answered that call.
+   *
    * `run.failed` is emitted for any thrown value, including a cancellation —
    * a cancelled run that never reports an end looks identical to a hung one.
    */
@@ -280,6 +291,7 @@ export class AiwatcherClient {
           correlationId?: string;
           variantId?: string;
           evaluationId?: string;
+          callerRunId?: string;
         }
       | undefined,
     body: (run: RunScope) => Promise<T>,
@@ -295,11 +307,10 @@ export class AiwatcherClient {
         : {}),
       ...(variantId ? { variantId } : {}),
     };
-    this.emit(
-      'run.started',
-      context,
-      options?.evaluationId ? { evaluation_id: options.evaluationId } : {},
-    );
+    this.emit('run.started', context, {
+      ...(options?.evaluationId ? { evaluation_id: options.evaluationId } : {}),
+      ...(options?.callerRunId ? { caller_run_id: options.callerRunId } : {}),
+    });
     try {
       const result = await body(new RunScope(this, context));
       this.emit('run.completed', context, { status: 'succeeded' });

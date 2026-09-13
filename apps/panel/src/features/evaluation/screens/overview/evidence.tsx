@@ -454,18 +454,18 @@ function judgedByARubric(evidence: DurableEvaluation): boolean {
  * nothing. Whether that is enough is a gate's policy.
  */
 function TracesNote({ traces }: { traces: GenerationTrace }) {
+  const counted = (value: number | null | undefined) => value ?? traces.answers;
   const complete =
     traces.seen === traces.answers &&
-    (traces.on_prompt ?? traces.answers) === traces.answers &&
-    (traces.on_model ?? traces.answers) === traces.answers;
+    counted(traces.on_prompt) === traces.answers &&
+    counted(traces.on_model) === traces.answers &&
+    counted(traces.on_workflow) === traces.answers;
   const pinned = [
-    traces.on_prompt === undefined || traces.on_prompt === null
-      ? null
-      : `${traces.on_prompt} on the pinned prompt`,
-    traces.on_model === undefined || traces.on_model === null
-      ? null
-      : `${traces.on_model} on the pinned model`,
+    traces.on_prompt == null ? null : `${traces.on_prompt} on the pinned prompt`,
+    traces.on_model == null ? null : `${traces.on_model} on the pinned model`,
+    traces.on_workflow == null ? null : `${traces.on_workflow} executing the pinned workflow`,
   ].filter(Boolean);
+  const served = traces.served ?? [];
   return (
     <div
       className={cn(
@@ -482,6 +482,28 @@ function TracesNote({ traces }: { traces: GenerationTrace }) {
           ? 'Every answer was seen made on what the variant pins that a trace can show.'
           : `${traces.answers - traces.named} named no run; a run the log never received contradicts nothing, and is counted rather than refused.`}
       </p>
+      {traces.workflow_undeclared ? (
+        <p>
+          The declaration of the pinned workflow names no node that could be read, so no run could
+          be seen executing it.
+        </p>
+      ) : null}
+      {/* The application's telemetry is its own word; a serving host's run,
+          published under another credential, is somebody else's. */}
+      {traces.witnessed_model != null ? (
+        <p>
+          {`${traces.witnessed_model} of ${traces.answers} had a serving host's own run, under another credential, saying it served the call on the pinned model version.`}
+        </p>
+      ) : null}
+      {served.length > 0 ? (
+        <p>
+          {`What providers said served the calls: ${served
+            .map(
+              (row) => `${row.model} (${row.answers} ${row.answers === 1 ? 'answer' : 'answers'})`,
+            )
+            .join(', ')} — compared with nothing.`}
+        </p>
+      ) : null}
     </div>
   );
 }

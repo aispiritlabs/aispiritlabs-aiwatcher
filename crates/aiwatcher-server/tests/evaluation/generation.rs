@@ -24,7 +24,16 @@ fn card() -> Scorecard {
     .unwrap()
 }
 
+/// The variant pins the prompt alone: what a trace shows of a workflow or a
+/// model is the business of the tests that pin one.
 async fn declared(registry: &Registry) -> DeclaredRun {
+    declared_with(registry, |variant| variant.workflow = None).await
+}
+
+async fn declared_with(
+    registry: &Registry,
+    pins: impl FnOnce(&mut aiwatcher_evaluation::VariantManifest),
+) -> DeclaredRun {
     let version = registry
         .publish_scorecard(&card(), "ada", now())
         .await
@@ -36,6 +45,7 @@ async fn declared(registry: &Registry) -> DeclaredRun {
         name: "support-bot".into(),
         version: PROMPT.into(),
     });
+    pins(&mut variant);
     let run = ScoringRun {
         evaluation_id: "generated-run".into(),
         repetition_id: template.origin.repetition_id.clone(),
@@ -381,6 +391,68 @@ async fn application_run(
     }
 }
 
+/// Events of one run folded as the serve role folds them: into the read model
+/// and, through the assembler, into its spans — each published under
+/// `publisher`, as the ingest route records the credential it checked.
+async fn folded_run(
+    read_model: &aiwatcher_projector::ReadModel,
+    run_id: &str,
+    publisher: &str,
+    workflow: Option<&str>,
+    events: Vec<(aiwatcher_core::EventType, serde_json::Value)>,
+) {
+    use aiwatcher_core::{EventEnvelope, Sdk, Source as Producer};
+    let at = time::OffsetDateTime::now_utc();
+    let mut assembler = aiwatcher_trace::SpanAssembler::default();
+    for (position, (event_type, data)) in events.into_iter().enumerate() {
+        let mut envelope = EventEnvelope::new(
+            event_type,
+            run_id,
+            at,
+            Producer::new("support-bot", Sdk::Python),
+        )
+        .with_data(data);
+        envelope.workflow_id = workflow.map(ToOwned::to_owned);
+        envelope.published_by = Some(publisher.to_owned());
+        let recorded = envelope.record(position as u64 + 1, position as u64 + 1, at, None);
+        read_model.apply(&recorded).await;
+        read_model
+            .record_spans(&assembler.ingest(&recorded).spans)
+            .await;
+    }
+}
+
+/// A bundle that holds one workflow declaration and nothing else.
+#[derive(Debug)]
+struct Declaration(Vec<u8>);
+
+#[async_trait::async_trait]
+impl aiwatcher_evaluation::ApprovalBundles for Declaration {
+    async fn stage(
+        &self,
+        _: &str,
+        name: &str,
+        bytes: Vec<u8>,
+    ) -> aiwatcher_evaluation::Result<aiwatcher_evaluation::StagedFile> {
+        Ok(aiwatcher_evaluation::StagedFile {
+            name: name.to_owned(),
+            size_bytes: bytes.len() as u64,
+        })
+    }
+    async fn staged(
+        &self,
+        _: &str,
+    ) -> aiwatcher_evaluation::Result<Vec<aiwatcher_evaluation::StagedFile>> {
+        Ok(Vec::new())
+    }
+    async fn discard(&self, _: &str) -> aiwatcher_evaluation::Result<usize> {
+        Ok(0)
+    }
+    async fn member(&self, _: &str, name: &str) -> aiwatcher_evaluation::Result<Option<Vec<u8>>> {
+        Ok((name == "workflow.json").then(|| self.0.clone()))
+    }
+}
+
 async fn answers_in(
     artifacts: &Artifacts,
     runs: &[(&str, Option<&str>)],
@@ -562,4 +634,167 @@ async fn answers_whose_traces_show_another_prompt_version_are_never_scored() {
             .is_none(),
         "nothing was published"
     );
+}
+
+#[tokio::test]
+async fn a_serving_host_witnesses_the_model_and_a_run_off_the_pinned_workflow_is_refused() {
+    use aiwatcher_core::EventType;
+    use sha2::Digest;
+    let registry = Arc::new(registry(
+        Arc::new(MemoryObjectStore::new()),
+        Arc::new(Source::default()),
+    ));
+    let artifacts = Artifacts::new(Arc::new(MemoryObjectStore::new()));
+    let declaration = br#"{"nodes": ["retrieve", "answer"], "edges": [["retrieve", "answer"]]}"#;
+    let declared = declared_with(&registry, |variant| {
+        variant.model = Some(VersionReference {
+            name: "support-model".into(),
+            version: "v7".into(),
+        });
+        variant.workflow = Some(VersionReference {
+            name: "support-app".into(),
+            version: hex::encode(sha2::Sha256::digest(declaration)),
+        });
+    })
+    .await;
+    let read_model = Arc::new(aiwatcher_projector::ReadModel::default());
+    let call = |node: &str| {
+        json!({"call_id": format!("c-{node}"), "model": "support-model", "model_version": "v7",
+               "prompt_name": "support-bot", "prompt_version": PROMPT,
+               "response_model": "support-model-q4"})
+    };
+    let application = |run_id: &'static str, nodes: &'static [&'static str]| {
+        let mut events = vec![
+            (
+                EventType::RunStarted,
+                json!({"evaluation_id": "generated-run"}),
+            ),
+            (
+                EventType::WorkflowDeclared,
+                serde_json::from_slice(declaration).unwrap(),
+            ),
+        ];
+        for node in nodes {
+            events.push((
+                EventType::StepStarted,
+                json!({"node": node, "call_id": format!("s-{node}")}),
+            ));
+            events.push((EventType::LlmStarted, call(node)));
+            events.push((EventType::LlmCompleted, call(node)));
+            events.push((
+                EventType::StepCompleted,
+                json!({"node": node, "call_id": format!("s-{node}")}),
+            ));
+        }
+        events.push((EventType::RunCompleted, json!({})));
+        (run_id, events)
+    };
+    for (run_id, events) in [
+        application("run-served", &["retrieve", "answer"]),
+        application("run-self-served", &["answer"]),
+    ] {
+        folded_run(&read_model, run_id, "worker", Some("support-app"), events).await;
+    }
+    // The serving host's run, under its own credential, naming the call it
+    // served — and one the worker published for itself, which is its own word.
+    let served_call =
+        json!({"call_id": "serve-1", "model": "support-model", "model_version": "v7"});
+    folded_run(
+        &read_model,
+        "serve-1",
+        "serving",
+        None,
+        vec![
+            (
+                EventType::RunStarted,
+                json!({"caller_run_id": "run-served"}),
+            ),
+            (EventType::LlmStarted, served_call.clone()),
+            (EventType::LlmCompleted, served_call),
+            (EventType::RunCompleted, json!({})),
+        ],
+    )
+    .await;
+    let self_call = json!({"call_id": "serve-2", "model": "support-model", "model_version": "v7"});
+    folded_run(
+        &read_model,
+        "serve-2",
+        "worker",
+        None,
+        vec![
+            (
+                EventType::RunStarted,
+                json!({"caller_run_id": "run-self-served"}),
+            ),
+            (EventType::LlmStarted, self_call.clone()),
+            (EventType::LlmCompleted, self_call),
+            (EventType::RunCompleted, json!({})),
+        ],
+    )
+    .await;
+
+    let spec = aiwatcher_execution::plan::ScoreEvaluationSpec {
+        declaration: declared.id.clone(),
+    };
+    let answers = answers_in(
+        &artifacts,
+        &[
+            ("case-00000", Some("run-served")),
+            ("case-00001", Some("run-self-served")),
+        ],
+    )
+    .await;
+    let (command, context) = step(
+        &declared.id,
+        "traces",
+        aiwatcher_execution::RuntimeBinding::EvaluationTraces(spec.clone()),
+        vec![answers],
+    );
+    let traced = TracesExecutor::new(
+        Arc::clone(&registry),
+        artifacts.clone(),
+        Arc::clone(&read_model),
+        std::time::Duration::ZERO,
+    )
+    .reading_bundles_from(Arc::new(Declaration(declaration.to_vec())))
+    .execute(&command, &context)
+    .await
+    .expect("nothing contradicts the pins");
+    assert_eq!(
+        traced.result.as_ref().unwrap()["traces"],
+        json!({"answers": 2, "named": 2, "seen": 2, "on_prompt": 2, "on_model": 2,
+               "on_workflow": 2, "witnessed_model": 1,
+               "served": [{"model": "support-model-q4", "answers": 2}]}),
+        "the serving run the worker's own credential published is no witness"
+    );
+
+    // A run that stepped through a node the pinned declaration does not have.
+    let (run_id, mut events) = application("run-off-the-graph", &["answer"]);
+    events.insert(
+        2,
+        (
+            EventType::StepStarted,
+            json!({"node": "improvise", "call_id": "s-improvise"}),
+        ),
+    );
+    folded_run(&read_model, run_id, "worker", Some("support-app"), events).await;
+    let answers = answers_in(&artifacts, &[("case-00000", Some("run-off-the-graph"))]).await;
+    let (command, context) = step(
+        &declared.id,
+        "traces",
+        aiwatcher_execution::RuntimeBinding::EvaluationTraces(spec),
+        vec![answers],
+    );
+    let refused = TracesExecutor::new(
+        Arc::clone(&registry),
+        artifacts,
+        read_model,
+        std::time::Duration::ZERO,
+    )
+    .reading_bundles_from(Arc::new(Declaration(declaration.to_vec())))
+    .execute(&command, &context)
+    .await
+    .unwrap_err();
+    assert_eq!(refused.class, FailureClass::UserCode);
+    assert!(refused.message.contains("improvise"), "{}", refused.message);
 }

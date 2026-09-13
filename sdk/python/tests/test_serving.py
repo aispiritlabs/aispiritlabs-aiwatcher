@@ -927,8 +927,12 @@ def test_an_inference_report_carries_no_inputs_and_no_outputs(tmp_path: Path) ->
     state = Server(registry, "m", telemetry, loaders=available(onnx=False))
     state.start()
 
-    state.record(rows=4, duration_ms=1.5, outcome="succeeded", model=state.current)
+    state.record(
+        rows=4, duration_ms=1.5, outcome="succeeded", model=state.current, caller_run_id="app-run"
+    )
 
+    started = [event for event in transport.events if event["event_type"] == "run.started"]
+    assert started[0]["data"] == {"caller_run_id": "app-run"}, "the run whose call it served"
     completed = [event for event in transport.events if event["event_type"] == "llm.completed"]
     assert len(completed) == 1
     data = completed[0]["data"]

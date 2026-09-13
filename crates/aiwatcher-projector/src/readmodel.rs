@@ -39,6 +39,11 @@ pub enum RunStatus {
     Failed,
 }
 
+/// How many workflow nodes a run keeps the names of. A traversal with more
+/// is a graph the workflow fold draws; a run keeps enough to say whether it
+/// stepped outside the one a variant pins.
+pub const MAX_NODES_RUN: usize = 64;
+
 /// One row in the runs table.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RunSummary {
@@ -67,6 +72,27 @@ pub struct RunSummary {
     /// variant was observed doing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evaluation_id: Option<String>,
+    /// The credential the ingest route authenticated the run's start under — an
+    /// ingest token's name, a person's subject. Absent where a broker delivered
+    /// it, and nothing here authenticated who did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub published_by: Option<String>,
+    /// The run whose model call this run served, from `run.started`'s
+    /// `caller_run_id`: a serving host saying which request it answered, so a
+    /// call can be seen from the side that served it as well as the side that
+    /// made it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caller_run_id: Option<String>,
+    /// The shape of the workflow this run declared, as
+    /// [`aiwatcher_core::topology::Topology::digest`] reads its own
+    /// `workflow.declared` — node IDs and edges, never the producer's version
+    /// string. The last declaration naming a node wins.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_topology: Option<String>,
+    /// The workflow nodes this run started a step of, in first-seen order, at
+    /// most [`MAX_NODES_RUN`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nodes_run: Vec<String>,
     #[serde(with = "time::serde::rfc3339")]
     pub started_at: OffsetDateTime,
     /// The newest event folded into this row, ended or not.
@@ -111,6 +137,10 @@ impl RunSummary {
             workflow: None,
             variant_id: None,
             evaluation_id: None,
+            published_by: None,
+            caller_run_id: None,
+            workflow_topology: None,
+            nodes_run: Vec::new(),
             started_at: event.metadata.occurred_at,
             last_event_at: event.metadata.occurred_at,
             ended_at: None,
@@ -159,8 +189,29 @@ impl RunSummary {
         let subject = event.event_type.subject();
         let phase = event.event_type.phase();
 
-        if subject == Subject::Run && phase == Some(Phase::Start) && self.evaluation_id.is_none() {
-            self.evaluation_id = event.data_str("evaluation_id").map(ToOwned::to_owned);
+        if subject == Subject::Run && phase == Some(Phase::Start) {
+            if self.evaluation_id.is_none() {
+                self.evaluation_id = event.data_str("evaluation_id").map(ToOwned::to_owned);
+            }
+            if self.published_by.is_none() {
+                self.published_by = event.metadata.published_by.clone();
+            }
+            if self.caller_run_id.is_none() {
+                self.caller_run_id = event.data_str("caller_run_id").map(ToOwned::to_owned);
+            }
+        }
+        if event.event_type == EventType::WorkflowDeclared
+            && let Some(shape) = aiwatcher_core::topology::Topology::read(&event.data)
+        {
+            self.workflow_topology = Some(shape.digest());
+        }
+        if subject == Subject::Step
+            && phase == Some(Phase::Start)
+            && self.nodes_run.len() < MAX_NODES_RUN
+            && let Some(node) = event.data_str("node")
+            && !self.nodes_run.iter().any(|known| known == node)
+        {
+            self.nodes_run.push(node.to_owned());
         }
 
         if subject == Subject::Llm && phase == Some(Phase::Start) {
@@ -475,6 +526,36 @@ impl ReadModel {
                 .then_with(|| a.span_id.to_hex().cmp(&b.span_id.to_hex()))
         });
         Some(RunDetail { summary, spans })
+    }
+
+    /// The runs that say they served a call one of `callers` made — a serving
+    /// host's run naming the request it answered, by `caller_run_id` — keyed by
+    /// the run they served. One pass over what is held.
+    pub async fn serving(
+        &self,
+        callers: &std::collections::BTreeSet<&str>,
+    ) -> std::collections::BTreeMap<String, Vec<RunDetail>> {
+        let state = self.state.read().await;
+        let mut found: std::collections::BTreeMap<String, Vec<RunDetail>> =
+            std::collections::BTreeMap::new();
+        for summary in state.runs.values() {
+            let Some(caller) = summary
+                .caller_run_id
+                .as_deref()
+                .filter(|caller| callers.contains(caller))
+            else {
+                continue;
+            };
+            found.entry(caller.to_owned()).or_default().push(RunDetail {
+                summary: summary.clone(),
+                spans: state
+                    .spans
+                    .get(&summary.run_id)
+                    .cloned()
+                    .unwrap_or_default(),
+            });
+        }
+        found
     }
 
     pub async fn list(&self, filter: &RunFilter) -> RunPage {
@@ -813,6 +894,10 @@ mod tests {
             workflow: None,
             variant_id: None,
             evaluation_id: None,
+            published_by: None,
+            caller_run_id: None,
+            workflow_topology: None,
+            nodes_run: Vec::new(),
             started_at: datetime!(2026-08-27 18:20:00 UTC),
             last_event_at: datetime!(2026-08-27 18:20:00 UTC),
             ended_at: None,
@@ -1068,5 +1153,98 @@ mod tests {
 
         let observed = model.variant_observations(&["v1"], None).await;
         assert_eq!((observed[0].runs, observed[0].measured_runs), (1, 1));
+    }
+
+    /// What a traces step reads off a run beyond its calls: who published its
+    /// start, the shape it declared, the nodes it stepped through — and, from a
+    /// serving host's own run, which run's call it served.
+    #[tokio::test]
+    async fn a_run_s_publisher_shape_and_steps_are_folded_and_a_serving_run_is_found_by_its_caller()
+    {
+        use aiwatcher_core::{EventEnvelope, Sdk, Source};
+
+        let model = ReadModel::new(ReadModelConfig::default());
+        let at = datetime!(2026-09-13 09:00:00 UTC);
+        let events = [
+            (
+                "answer",
+                EventType::RunStarted,
+                "worker",
+                serde_json::json!({}),
+            ),
+            (
+                "answer",
+                EventType::WorkflowDeclared,
+                "worker",
+                serde_json::json!({ "nodes": ["retrieve", "answer"], "edges": [["retrieve", "answer"]] }),
+            ),
+            (
+                "answer",
+                EventType::StepStarted,
+                "worker",
+                serde_json::json!({ "node": "retrieve" }),
+            ),
+            (
+                "answer",
+                EventType::StepStarted,
+                "worker",
+                serde_json::json!({ "node": "answer" }),
+            ),
+            (
+                "answer",
+                EventType::StepStarted,
+                "worker",
+                serde_json::json!({ "node": "answer" }),
+            ),
+            (
+                "served",
+                EventType::RunStarted,
+                "serving",
+                serde_json::json!({ "caller_run_id": "answer" }),
+            ),
+            (
+                "elsewhere",
+                EventType::RunStarted,
+                "serving",
+                serde_json::json!({}),
+            ),
+        ];
+        for (position, (run_id, event_type, publisher, data)) in events.into_iter().enumerate() {
+            let mut envelope =
+                EventEnvelope::new(event_type, run_id, at, Source::new("bot", Sdk::Python))
+                    .with_data(data);
+            envelope.workflow_id = Some("capitals-app".to_owned());
+            envelope.published_by = Some(publisher.to_owned());
+            let position = position as u64 + 1;
+            model
+                .apply(&envelope.record(position, position, at, None))
+                .await;
+        }
+
+        let answer = model.run("answer").await.expect("folded").summary;
+        assert_eq!(answer.published_by.as_deref(), Some("worker"));
+        assert_eq!(
+            answer.workflow_topology,
+            aiwatcher_core::topology::Topology::read(&serde_json::json!({
+                "nodes": ["answer", "retrieve"],
+                "edges": [{"from": "retrieve", "to": "answer"}]
+            }))
+            .map(|shape| shape.digest())
+        );
+        assert_eq!(answer.nodes_run, ["retrieve", "answer"]);
+
+        let serving = model
+            .serving(&std::collections::BTreeSet::from(["answer"]))
+            .await;
+        let found: Vec<(&str, Option<&str>)> = serving["answer"]
+            .iter()
+            .map(|run| {
+                (
+                    run.summary.run_id.as_str(),
+                    run.summary.published_by.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(found, [("served", Some("serving"))]);
     }
 }

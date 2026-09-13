@@ -2238,6 +2238,73 @@ async fn a_producer_publishes_with_a_token_and_still_cannot_rerun() {
     assert_eq!(status, StatusCode::FORBIDDEN);
 }
 
+#[tokio::test]
+async fn every_event_is_recorded_as_published_by_the_credential_that_sent_it() {
+    // The one fact a producer cannot write about itself: two tokens publish,
+    // one claiming in its body to be the other, and the log records who each
+    // one authenticated as.
+    use aiwatcher_bus::MessageSource;
+    let fixture = Fixture::behind_a_proxy(true).await;
+    let batch = |run_id: &str| {
+        json!({
+            "events": [{
+                "event_type": "run.started",
+                "occurred_at": "2026-08-27T18:20:11Z",
+                "run_id": run_id,
+                "published_by": "planner",
+                "source": { "service": "planner", "sdk": "python" },
+                "data": {}
+            }]
+        })
+    };
+    for (token, run_id) in [(INGEST_SECRET, "run-agent"), (WORKER_SECRET, "run-worker")] {
+        let (status, body) = fixture
+            .request(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/events")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::from(batch(run_id).to_string()))
+                    .expect("request"),
+            )
+            .await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    }
+    let (status, body) = fixture
+        .post_as(
+            "/api/v1/events",
+            "alice",
+            "aiwatcher-editors",
+            batch("run-person"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+
+    let events = fixture
+        .bus
+        .read(&Checkpoint::beginning(), 10)
+        .await
+        .expect("events");
+    let published: Vec<(&str, Option<&str>)> = events
+        .iter()
+        .map(|event| {
+            (
+                event.metadata.run_id.as_str(),
+                event.metadata.published_by.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        published,
+        [
+            ("run-agent", Some("agents")),
+            ("run-worker", Some("houses")),
+            ("run-person", Some("alice")),
+        ]
+    );
+}
+
 // ── Annotations ──────────────────────────────────────────────────────────────
 
 const ANNOTATION_PROJECT: &str = "corpora/example";

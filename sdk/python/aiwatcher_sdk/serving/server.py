@@ -42,7 +42,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Protocol
 
-from aiwatcher_sdk import AiwatcherClient
+from aiwatcher_sdk import CALLER_RUN_HEADER, AiwatcherClient
 from aiwatcher_sdk.serving.artifact import ArtifactReader, FileReader, LoadError
 from aiwatcher_sdk.serving.loader import Loaded, Loader, load
 from aiwatcher_sdk.serving.runtimes import available
@@ -454,6 +454,7 @@ class Server:
         model: Loaded | None,
         label: str = LABEL,
         traffic: str = "primary",
+        caller_run_id: str | None = None,
     ) -> None:
         """One inference, as telemetry — and with nothing that was said in it.
 
@@ -467,12 +468,19 @@ class Server:
         What it carries is the model, the version, the runtime, the row count,
         the latency and the outcome. What it never carries is ``instances`` or
         ``predictions``.
+
+        ``caller_run_id`` is the run whose call this served, when the request
+        named one in :data:`~aiwatcher_sdk.CALLER_RUN_HEADER`. Published under
+        this server's credential, it is a witness to which version answered that
+        the calling application's own telemetry cannot be.
         """
         if self._telemetry is None or model is None:
             return
         with (
             contextlib.suppress(Exception),
-            self._telemetry.run(f"serve-{model.version[:12]}-{time.time_ns()}") as run,
+            self._telemetry.run(
+                f"serve-{model.version[:12]}-{time.time_ns()}", caller_run_id=caller_run_id
+            ) as run,
             run.agent("serving") as agent,
             agent.llm(
                 model=model.name,
@@ -622,6 +630,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         started = time.monotonic()
+        caller = self.headers.get(CALLER_RUN_HEADER) or None
         try:
             instances, threshold = self.read_request(model.predictor.features)
         except ValueError as error:
@@ -631,6 +640,7 @@ class Handler(BaseHTTPRequestHandler):
                 duration_ms=(time.monotonic() - started) * 1000,
                 outcome="rejected",
                 model=model,
+                caller_run_id=caller,
             )
             self.send_json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
             return
@@ -645,6 +655,7 @@ class Handler(BaseHTTPRequestHandler):
                 duration_ms=(time.monotonic() - started) * 1000,
                 outcome="failed",
                 model=model,
+                caller_run_id=caller,
             )
             self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(error)})
             return
@@ -652,7 +663,13 @@ class Handler(BaseHTTPRequestHandler):
             self.gate.release()
 
         duration_ms = (time.monotonic() - started) * 1000
-        state.record(rows=len(instances), duration_ms=duration_ms, outcome="succeeded", model=model)
+        state.record(
+            rows=len(instances),
+            duration_ms=duration_ms,
+            outcome="succeeded",
+            model=model,
+            caller_run_id=caller,
+        )
         classes = model.predictor.classes
         self.send_json(
             HTTPStatus.OK,

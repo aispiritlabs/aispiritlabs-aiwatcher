@@ -352,6 +352,21 @@ impl aiwatcher_evaluation::ApprovalBundles for LocalSource {
         Ok(removed)
     }
 
+    async fn member(&self, approval_id: &str, name: &str) -> Result<Option<Vec<u8>>> {
+        let root = match self.bundle(approval_id).await {
+            Ok((root, _)) => root,
+            Err(EvaluationError::Unavailable(
+                EvidenceState::DeletedSource | EvidenceState::Forbidden,
+            )) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        match root.bytes(name, 1024 * 1024).await {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(EvaluationError::Unavailable(EvidenceState::DeletedSource)) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
     /// A model's package as the training registry holds it — the declaration
     /// admission compares with the owner's — and each of its artifacts by
     /// digest; a workflow's declaration by the digest the variant pins. The

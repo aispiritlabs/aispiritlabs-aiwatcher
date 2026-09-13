@@ -243,3 +243,25 @@ async fn a_policy_requiring_traces_holds_a_result_no_trace_was_read_for_incomple
         decision.reasons
     );
 }
+
+#[tokio::test]
+async fn a_policy_requiring_a_witness_holds_a_result_nobody_served_incomplete() {
+    let decision = gated(
+        &[Some(1.0), Some(0.0)],
+        &[Some(1.0), Some(1.0)],
+        GatePolicy {
+            require_witness: true,
+            ..GatePolicy::default()
+        },
+    )
+    .await;
+    assert_eq!(decision.verdict, GateVerdict::Incomplete);
+    assert!(
+        decision
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("serving host's word")),
+        "{:?}",
+        decision.reasons
+    );
+}

@@ -58,6 +58,10 @@ pub struct IngestResponse {
 /// an authentik service account holding a token for this audience, or a
 /// bearer the operator issued. Reading runs and writing them are different
 /// permissions in every deployment that has more than one team.
+///
+/// Every event is recorded as published by that identity — the token's name or
+/// the person's subject — whatever the body says, which is what lets a reader
+/// tell one publisher's word from another's.
 #[utoipa::path(
     post,
     path = "/api/v1/events",
@@ -74,7 +78,10 @@ async fn ingest(
     caller: Caller,
     Json(request): Json<IngestRequest>,
 ) -> ApiResult<(StatusCode, Json<IngestResponse>)> {
-    caller.require(aiwatcher_auth::Role::Editor)?;
+    let publisher = caller
+        .require(aiwatcher_auth::Role::Editor)?
+        .log_subject()
+        .to_owned();
     let Some(sink) = state.sink.as_ref() else {
         return Err(ApiError::IngestDisabled);
     };
@@ -86,7 +93,15 @@ async fn ingest(
     }
 
     let accepted = request.events.len();
-    let result = sink.append(request.events).await?;
+    let events = request
+        .events
+        .into_iter()
+        .map(|envelope| EventEnvelope {
+            published_by: Some(publisher.clone()),
+            ..envelope
+        })
+        .collect();
+    let result = sink.append(events).await?;
     Ok((
         // 202: the log accepted it; the projections follow asynchronously.
         StatusCode::ACCEPTED,

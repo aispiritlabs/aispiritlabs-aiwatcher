@@ -3690,11 +3690,19 @@ export type GatePolicy = {
     ignore?: Array<string>;
     /**
      * Every generated answer must be seen on the log made on the variant's
-     * pinned prompt and model; fewer is `incomplete`. Off by default, because
-     * telemetry is best effort and a trace that never arrived contradicts
-     * nothing — a pipeline that ships only what its traces show turns it on.
+     * pinned prompt, model and workflow; fewer is `incomplete`. Off by
+     * default, because telemetry is best effort and a trace that never arrived
+     * contradicts nothing — a pipeline that ships only what its traces show
+     * turns it on.
      */
     require_traces?: boolean;
+    /**
+     * Every generated answer on a pinned model must also have a serving
+     * host's word for the version that served it, published under another
+     * credential than the application's; fewer is `incomplete`. Off by
+     * default: only a host that reports its own runs can give one.
+     */
+    require_witness?: boolean;
     /**
      * How far worse than the baseline a metric may be, in its own unit. A
      * metric not named here may not get worse at all.
@@ -3733,12 +3741,23 @@ export const GateVerdict = {
 export type GateVerdict = typeof GateVerdict[keyof typeof GateVerdict];
 
 /**
+ * One model a provider said served generated answers, and how many.
+ */
+export type GenerationServed = {
+    /**
+     * Answers whose run had a call this model served.
+     */
+    answers: number;
+    model: string;
+};
+
+/**
  * What a generated result says the traces of its answers showed.
  *
  * Counts rather than a verdict: how many answers there were, how many named
  * the run they were made in, how many of those runs the log held, and how
- * many ran on the pinned prompt and model. A reader — or a gate — decides
- * whether fewer than all is enough.
+ * many ran on each pin. A reader — or a gate — decides whether fewer than all
+ * is enough.
  */
 export type GenerationTrace = {
     answers: number;
@@ -3757,9 +3776,29 @@ export type GenerationTrace = {
      */
     on_prompt?: number | null;
     /**
+     * Seen runs that declared the pinned workflow's shape and stepped only
+     * through its nodes; absent when the variant pins no workflow.
+     */
+    on_workflow?: number | null;
+    /**
      * Of those, runs this deployment's log held, ended, when the step looked.
      */
     seen: number;
+    /**
+     * What providers said served the calls, compared with nothing: a provider's
+     * name for a model is an alias, a file or a dated snapshot.
+     */
+    served?: Array<GenerationServed>;
+    /**
+     * Seen runs whose call on the pinned model version a run published under
+     * another credential says it served; absent when the variant pins no model.
+     */
+    witnessed_model?: number | null;
+    /**
+     * The declaration of the pinned workflow names no node this step could
+     * read, so no run can be seen executing it.
+     */
+    workflow_undeclared?: boolean;
 };
 
 /**
@@ -6356,6 +6395,12 @@ export type RecordedMetadata = {
     message_id: MessageId;
     occurred_at: string;
     parent_span_id?: null | SpanId;
+    /**
+     * See [`EventEnvelope::published_by`]: who the ingest route authenticated
+     * this event under. Absent from an event a broker delivered, and from
+     * every record written before it.
+     */
+    published_by?: string | null;
     run_id: string;
     schema_version: number;
     sequence?: number | null;
@@ -7150,6 +7195,13 @@ export type RunStatus = typeof RunStatus[keyof typeof RunStatus];
 export type RunSummary = {
     agents: Array<string>;
     cached_tokens: number;
+    /**
+     * The run whose model call this run served, from `run.started`'s
+     * `caller_run_id`: a serving host saying which request it answered, so a
+     * call can be seen from the side that served it as well as the side that
+     * made it.
+     */
+    caller_run_id?: string | null;
     conversation_id?: string | null;
     duration_ms?: number | null;
     ended_at?: string | null;
@@ -7180,7 +7232,18 @@ export type RunSummary = {
      */
     last_event_at: string;
     llm_calls: number;
+    /**
+     * The workflow nodes this run started a step of, in first-seen order, at
+     * most [`MAX_NODES_RUN`].
+     */
+    nodes_run?: Array<string>;
     output_tokens: number;
+    /**
+     * The credential the ingest route authenticated the run's start under — an
+     * ingest token's name, a person's subject. Absent where a broker delivered
+     * it, and nothing here authenticated who did.
+     */
+    published_by?: string | null;
     run_id: string;
     /**
      * Every producing service seen on this run, in first-seen order.
@@ -7202,6 +7265,13 @@ export type RunSummary = {
      * The orchestration this run executes, when the producer names one.
      */
     workflow?: string | null;
+    /**
+     * The shape of the workflow this run declared, as
+     * [`aiwatcher_core::topology::Topology::digest`] reads its own
+     * `workflow.declared` — node IDs and edges, never the producer's version
+     * string. The last declaration naming a node wins.
+     */
+    workflow_topology?: string | null;
 };
 
 /**

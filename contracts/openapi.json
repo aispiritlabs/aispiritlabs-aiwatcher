@@ -6990,7 +6990,7 @@
           "ingest"
         ],
         "summary": "Publish events over HTTP.",
-        "description": "The fallback path for clients that cannot reach Laser. Returns 403 when the\ninstance is configured without a sink.\n\nWriter, not viewer: this is the one read-model route that puts something in\nthe durable log, and an agent that publishes here is a machine identity —\nan authentik service account holding a token for this audience, or a\nbearer the operator issued. Reading runs and writing them are different\npermissions in every deployment that has more than one team.",
+        "description": "The fallback path for clients that cannot reach Laser. Returns 403 when the\ninstance is configured without a sink.\n\nWriter, not viewer: this is the one read-model route that puts something in\nthe durable log, and an agent that publishes here is a machine identity —\nan authentik service account holding a token for this audience, or a\nbearer the operator issued. Reading runs and writing them are different\npermissions in every deployment that has more than one team.\n\nEvery event is recorded as published by that identity — the token's name or\nthe person's subject — whatever the body says, which is what lets a reader\ntell one publisher's word from another's.",
         "operationId": "ingest",
         "requestBody": {
           "content": {
@@ -19274,7 +19274,11 @@
           },
           "require_traces": {
             "type": "boolean",
-            "description": "Every generated answer must be seen on the log made on the variant's\npinned prompt and model; fewer is `incomplete`. Off by default, because\ntelemetry is best effort and a trace that never arrived contradicts\nnothing — a pipeline that ships only what its traces show turns it on."
+            "description": "Every generated answer must be seen on the log made on the variant's\npinned prompt, model and workflow; fewer is `incomplete`. Off by\ndefault, because telemetry is best effort and a trace that never arrived\ncontradicts nothing — a pipeline that ships only what its traces show\nturns it on."
+          },
+          "require_witness": {
+            "type": "boolean",
+            "description": "Every generated answer on a pinned model must also have a serving\nhost's word for the version that served it, published under another\ncredential than the application's; fewer is `incomplete`. Off by\ndefault: only a host that reports its own runs can give one."
           },
           "tolerance": {
             "type": "object",
@@ -19356,9 +19360,27 @@
           "error"
         ]
       },
+      "GenerationServed": {
+        "type": "object",
+        "description": "One model a provider said served generated answers, and how many.",
+        "required": [
+          "model",
+          "answers"
+        ],
+        "properties": {
+          "answers": {
+            "type": "integer",
+            "description": "Answers whose run had a call this model served.",
+            "minimum": 0
+          },
+          "model": {
+            "type": "string"
+          }
+        }
+      },
       "GenerationTrace": {
         "type": "object",
-        "description": "What a generated result says the traces of its answers showed.\n\nCounts rather than a verdict: how many answers there were, how many named\nthe run they were made in, how many of those runs the log held, and how\nmany ran on the pinned prompt and model. A reader — or a gate — decides\nwhether fewer than all is enough.",
+        "description": "What a generated result says the traces of its answers showed.\n\nCounts rather than a verdict: how many answers there were, how many named\nthe run they were made in, how many of those runs the log held, and how\nmany ran on each pin. A reader — or a gate — decides whether fewer than all\nis enough.",
         "required": [
           "answers",
           "named",
@@ -19390,10 +19412,37 @@
             "description": "Seen runs with a call on the pinned prompt version; absent when the\nvariant pins no prompt.",
             "minimum": 0
           },
+          "on_workflow": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Seen runs that declared the pinned workflow's shape and stepped only\nthrough its nodes; absent when the variant pins no workflow.",
+            "minimum": 0
+          },
           "seen": {
             "type": "integer",
             "description": "Of those, runs this deployment's log held, ended, when the step looked.",
             "minimum": 0
+          },
+          "served": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GenerationServed"
+            },
+            "description": "What providers said served the calls, compared with nothing: a provider's\nname for a model is an alias, a file or a dated snapshot."
+          },
+          "witnessed_model": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Seen runs whose call on the pinned model version a run published under\nanother credential says it served; absent when the variant pins no model.",
+            "minimum": 0
+          },
+          "workflow_undeclared": {
+            "type": "boolean",
+            "description": "The declaration of the pinned workflow names no node this step could\nread, so no run can be seen executing it."
           }
         }
       },
@@ -24123,6 +24172,13 @@
               }
             ]
           },
+          "published_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "See [`EventEnvelope::published_by`]: who the ingest route authenticated\nthis event under. Absent from an event a broker delivered, and from\nevery record written before it."
+          },
           "run_id": {
             "type": "string"
           },
@@ -25344,6 +25400,13 @@
             "type": "integer",
             "format": "int64"
           },
+          "caller_run_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The run whose model call this run served, from `run.started`'s\n`caller_run_id`: a serving host saying which request it answered, so a\ncall can be seen from the side that served it as well as the side that\nmade it."
+          },
           "conversation_id": {
             "type": [
               "string",
@@ -25400,9 +25463,23 @@
             "format": "int64",
             "minimum": 0
           },
+          "nodes_run": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The workflow nodes this run started a step of, in first-seen order, at\nmost [`MAX_NODES_RUN`]."
+          },
           "output_tokens": {
             "type": "integer",
             "format": "int64"
+          },
+          "published_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The credential the ingest route authenticated the run's start under — an\ningest token's name, a person's subject. Absent where a broker delivered\nit, and nothing here authenticated who did."
           },
           "run_id": {
             "type": "string"
@@ -25442,6 +25519,13 @@
               "null"
             ],
             "description": "The orchestration this run executes, when the producer names one."
+          },
+          "workflow_topology": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The shape of the workflow this run declared, as\n[`aiwatcher_core::topology::Topology::digest`] reads its own\n`workflow.declared` — node IDs and edges, never the producer's version\nstring. The last declaration naming a node wins."
           }
         }
       },

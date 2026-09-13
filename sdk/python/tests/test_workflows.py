@@ -258,3 +258,33 @@ def test_a_run_of_a_client_that_names_no_variant_sends_none(
         pass
 
     assert all("variant_id" not in event for event in transport.events)
+
+
+def test_a_model_call_hands_its_server_the_run_it_is_and_the_server_names_it(
+    client: AiwatcherClient, transport: RecordingTransport
+) -> None:
+    # A second witness: the server's own run names the call it served.
+    from aiwatcher_sdk import CALLER_RUN_HEADER
+
+    with client.run("app-run") as run, run.agent("bot") as agent, agent.llm(model="m") as call:
+        headers = call.caller_headers()
+    with client.run("serve-1", caller_run_id=headers[CALLER_RUN_HEADER]):
+        pass
+
+    assert headers == {CALLER_RUN_HEADER: "app-run"}
+    served = [event for event in transport.of_type("run.started") if event["run_id"] == "serve-1"]
+    assert served[0]["data"] == {"caller_run_id": "app-run"}
+
+
+def test_a_workflow_run_can_name_the_variant_and_the_measurement_it_answers(
+    client: AiwatcherClient, transport: RecordingTransport
+) -> None:
+    with client.workflow(
+        "capitals-app", nodes=["answer"], variant_id="v-candidate", evaluation_id="answers-1"
+    ):
+        pass
+
+    started = transport.of_type("run.started")[0]
+    assert started["variant_id"] == "v-candidate"
+    assert started["data"] == {"evaluation_id": "answers-1"}
+    assert transport.of_type("workflow.declared")[0]["variant_id"] == "v-candidate"
