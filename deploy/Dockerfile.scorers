@@ -1,0 +1,64 @@
+# syntax=docker/dockerfile:1.7
+#
+# The scorer service (services/scorers): DeepEval's and Opik's metrics behind
+# the two-route contract an `external_evaluation` step speaks.
+#
+# Both frameworks, because the catalog is what a card pins and an image that
+# left one out would describe itself differently from the service a card was
+# published against. `AIWATCHER_SCORERS_ADAPTERS` still narrows what loads.
+#
+#   docker build -f deploy/Dockerfile.scorers -t aiwatcher-scorers .
+
+# The interpreter both frameworks publish wheels for, and the uv CI pins
+# (.github/workflows/ci.yml).
+ARG PYTHON_VERSION=3.13
+ARG UV_VERSION=0.12.7
+
+FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
+
+FROM python:${PYTHON_VERSION}-slim AS python-base
+
+# ── 1: the environment ───────────────────────────────────────────────────────
+FROM python-base AS build
+COPY --from=uv /uv /usr/local/bin/uv
+# Bytecode compiled here, because the root filesystem is read-only at run time;
+# files copied rather than linked, because the environment leaves this stage;
+# and the image's interpreter rather than one uv would download.
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=never \
+    UV_PROJECT_ENVIRONMENT=/app/.venv
+WORKDIR /src
+# The manifest and the lock first, so a source-only change reuses the
+# framework layer — which is most of the image.
+COPY services/scorers/pyproject.toml services/scorers/uv.lock services/scorers/README.md ./
+RUN uv sync --frozen --no-dev --no-install-project --extra deepeval --extra opik
+COPY services/scorers/aiwatcher_scorers aiwatcher_scorers
+# Not editable: the image carries the environment and none of `/src`.
+RUN uv sync --frozen --no-dev --no-editable --extra deepeval --extra opik
+
+# ── 2: what ships ────────────────────────────────────────────────────────────
+FROM python-base AS scorers
+
+COPY --from=build /app/.venv /app/.venv
+RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin scorers
+
+# Every interface rather than the service's 127.0.0.1: in a pod the port is
+# reached over the pod network, and what admits only aiwatcher's roles is the
+# chart's NetworkPolicy and the bearer token, not the bind address. Off a
+# cluster, run `just scorers-serve`, which keeps the localhost default.
+#
+# HOME and the working directory are /tmp, the chart's emptyDir: DeepEval keeps
+# a `.deepeval` directory beside where it runs, Opik and LiteLLM look for
+# configuration under the home directory, and the root filesystem is read-only.
+ENV PATH=/app/.venv/bin:$PATH \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    HOME=/tmp \
+    AIWATCHER_SCORERS_HOST=0.0.0.0 \
+    AIWATCHER_SCORERS_PORT=8083
+
+WORKDIR /tmp
+USER 10001
+EXPOSE 8083
+CMD ["python", "-m", "aiwatcher_scorers"]

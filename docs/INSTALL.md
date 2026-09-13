@@ -15,7 +15,7 @@ is left for you.
 
 ## What gets installed, and what does not
 
-The chart can install ten things. Seven of them are things a cluster may
+The chart can install eleven things. Seven of them are things a cluster may
 already run:
 
 | Component | Default | Detected? |
@@ -23,6 +23,7 @@ already run:
 | aiwatcher server (projector + API) | always | — |
 | panel (nginx + the React build) | always | — |
 | Query engine — Flow, DataFusion or DuckDB (the Query tab, recipes, a chain's query step) | **off** | — |
+| Scorer service — DeepEval's and Opik's metrics for a scorecard | **off** | — |
 | OpenTelemetry Collector | installed | detected, but **never** reused automatically |
 | VictoriaTraces | installed | yes → `mode: external` |
 | VictoriaMetrics | installed | yes → `mode: external` |
@@ -272,6 +273,36 @@ surface bound to localhost, and a cluster that wants notebook blocks has to name
 one deliberately in `execution.mlPipelineUrl`. A process with no address for a
 runtime registers no executor for it and therefore claims none of its work —
 absence is a working state, not a failure.
+
+**Framework metrics.** A scorecard that names DeepEval's or Opik's metrics is
+measured by the scorer service (`services/scorers`), which the role holding the
+reactors records the catalog of and asks about each case. `scorers.enabled`
+installs one beside this release and points `AIWATCHER_SCORER_URL` at it;
+`execution.scorerUrl` names one somewhere else instead.
+
+```yaml
+scorers:
+  enabled: true
+  adapters: "deepeval,opik"
+  model:                    # the model every graded metric asks; all three or none
+    url: http://llama.models.svc:8080/v1
+    name: gemma-4-e2b
+    revision: ud-q4-k-xl
+    profile: llamacpp
+  tokenSecret:              # created by you: kubectl create secret generic aiwatcher-scorers --from-literal=token=…
+    name: aiwatcher-scorers
+    key: token
+```
+
+It is sent the cases it scores — over a conversation cohort, the archive's
+words — so the Service is ClusterIP with no ingress path, with
+`networkPolicy.enabled` only the server and the worker are let in, and with
+`tokenSecret` the service wants a bearer token on both of its routes and both
+roles send it. Its egress is left open: where it reaches is the graded metrics'
+model, which the chart cannot name. The model's name and revision are pinned
+into every card measured with one, so changing them — or `adapters`, or the
+image — is publishing those cards again. The chart refuses it with
+`execution.store: none`, where nothing would ever ask it.
 
 ### Splitting the API from the worker
 
@@ -895,7 +926,9 @@ so a panel change does not rebuild the Rust binary and neither rebuilds the PHP.
 engines are targets of the same `deploy/Dockerfile.query` — `docker build -f
 deploy/Dockerfile.query --target datafusion .`, or `--target duckdb` — and the
 release workflow publishes all three: `aiwatcher-flow`,
-`aiwatcher-query-datafusion` and `aiwatcher-query-duckdb`.
+`aiwatcher-query-datafusion` and `aiwatcher-query-duckdb`. The scorer service is
+`deploy/Dockerfile.scorers`, built with `--scorers` and published as
+`aiwatcher-scorers`; set `scorers.image.repository` to it.
 
 The panel's nginx config is not in its image — it comes from a ConfigMap in the
 chart, because it has to name the server's Service, which is a deployment-time

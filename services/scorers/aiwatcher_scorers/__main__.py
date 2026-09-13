@@ -28,6 +28,7 @@ def main() -> None:
     ]
     model = ModelSettings.from_env()
     adapters = load(names, model)
+    token = os.environ.get("AIWATCHER_SCORERS_TOKEN") or None
     host = os.environ.get("AIWATCHER_SCORERS_HOST", "127.0.0.1")
     port = int(os.environ.get("AIWATCHER_SCORERS_PORT", "8083"))
     log.info(
@@ -37,10 +38,12 @@ def main() -> None:
         port,
         f"ask {model.name} {model.revision} at {model.url}" if model else "are not offered",
     )
-    log.warning(
-        "unauthenticated and sent the cases it scores: bind it where only aiwatcher reaches"
-    )
-    uvicorn.run(create_app(adapters), host=host, port=port, log_level="warning")
+    if token is None:
+        log.warning(
+            "unauthenticated (AIWATCHER_SCORERS_TOKEN is unset) and sent the cases it scores: "
+            "bind it where only aiwatcher reaches"
+        )
+    uvicorn.run(create_app(adapters, token), host=host, port=port, log_level="warning")
 
 
 if __name__ == "__main__":

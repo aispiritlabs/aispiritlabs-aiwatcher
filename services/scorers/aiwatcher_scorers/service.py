@@ -9,12 +9,17 @@ problem at once, and then each case, in order.
 
 A framework's metric blocks while it asks its model, so each case runs in a
 worker thread and the catalog stays answerable while a batch is scored.
+
+Given a token, both routes want it as a bearer credential — the one aiwatcher's
+work role sends as ``AIWATCHER_SCORER_TOKEN``. ``/health`` never does: a probe
+carries no credential, and it answers nothing but which adapters loaded.
 """
 
 from __future__ import annotations
 
+import hmac
 import json
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
@@ -93,7 +98,34 @@ def _with(model: object) -> str:
     return f" grading with {name} {version}" if name else ""
 
 
-def create_app(adapters: Sequence[Adapter]) -> Starlette:
+type Handler = Callable[[Request], Awaitable[JSONResponse]]
+
+
+def guarded(token: str | None, handler: Handler) -> Handler:
+    """The handler, behind the bearer token when this service was given one."""
+    if token is None:
+        return handler
+    expected = f"Bearer {token}".encode()
+
+    async def checked(request: Request) -> JSONResponse:
+        presented = request.headers.get("authorization", "").encode()
+        # Compared in constant time: the difference between a wrong first byte and a wrong
+        # last one is not something to hand whoever is guessing.
+        if not hmac.compare_digest(presented, expected):
+            return JSONResponse(
+                {
+                    "message": "this scorer service wants its bearer token "
+                    "(AIWATCHER_SCORER_TOKEN, on aiwatcher's work role)"
+                },
+                status_code=401,
+                headers={"www-authenticate": "Bearer"},
+            )
+        return await handler(request)
+
+    return checked
+
+
+def create_app(adapters: Sequence[Adapter], token: str | None = None) -> Starlette:
     async def health(_: Request) -> JSONResponse:
         return JSONResponse({"status": "ok", "adapters": [held.name for held in adapters]})
 
@@ -114,7 +146,7 @@ def create_app(adapters: Sequence[Adapter]) -> Starlette:
     return Starlette(
         routes=[
             Route("/health", health),
-            Route("/scorers/catalog", read_catalog),
-            Route("/scorers/score", score_cases, methods=["POST"]),
+            Route("/scorers/catalog", guarded(token, read_catalog)),
+            Route("/scorers/score", guarded(token, score_cases), methods=["POST"]),
         ]
     )

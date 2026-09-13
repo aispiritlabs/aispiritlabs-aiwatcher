@@ -4,6 +4,7 @@
 #
 #   ./build-images.sh                          aiwatcher:dev, -panel:dev, -flow:dev
 #   ./build-images.sh --no-flow                skip the optional query service
+#   ./build-images.sh --scorers                also the optional scorer service
 #   REGISTRY=ghcr.io/me TAG=v0.1.0 ./build-images.sh --push
 #
 # Three images rather than one: a panel change should not rebuild the Rust
@@ -31,12 +32,16 @@ TAG="${TAG:-dev}"
 FEATURES="${FEATURES:-aiwatcher-server/postgres,aiwatcher-server/laser,aiwatcher-server/kube}"
 push=false
 flow=true
+# Off unless asked: both scorer frameworks are most of a gigabyte of wheels,
+# and the chart leaves the service off (`scorers.enabled`).
+scorers=false
 platform="${PLATFORM:-}"
 
 while (($#)); do
   case "$1" in
     --push) push=true; shift ;;
     --no-flow) flow=false; shift ;;
+    --scorers) scorers=true; shift ;;
     --platform) platform="$2"; shift 2 ;;
     -h|--help) awk 'NR > 2 && !/^#/ { exit } NR > 2 { sub(/^# ?/, ""); print }' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) printf 'Unknown option: %s\n' "$1" >&2; exit 2 ;;
@@ -51,6 +56,7 @@ fi
 server_image="${prefix}aiwatcher:${TAG}"
 panel_image="${prefix}aiwatcher-panel:${TAG}"
 flow_image="${prefix}aiwatcher-flow:${TAG}"
+scorers_image="${prefix}aiwatcher-scorers:${TAG}"
 
 args=()
 if [[ -n $platform ]]; then
@@ -79,16 +85,26 @@ if $flow; then
     "$ROOT"
 fi
 
+if $scorers; then
+  printf '\n▶ %s\n' "$scorers_image"
+  docker build "${args[@]+"${args[@]}"}" \
+    --file "$ROOT/deploy/Dockerfile.scorers" \
+    --tag "$scorers_image" \
+    "$ROOT"
+fi
+
 if $push; then
   [[ -n $REGISTRY ]] || { printf '✗ --push needs REGISTRY set.\n' >&2; exit 1; }
   printf '\n▶ pushing\n'
   docker push "$server_image"
   docker push "$panel_image"
   if $flow; then docker push "$flow_image"; fi
+  if $scorers; then docker push "$scorers_image"; fi
 fi
 
 printf '\n✓ built\n  %s\n  %s\n' "$server_image" "$panel_image"
 if $flow; then printf '  %s\n' "$flow_image"; fi
+if $scorers; then printf '  %s\n' "$scorers_image"; fi
 printf '\nInstall with them:\n  AIWATCHER_IMAGE=%saiwatcher AIWATCHER_PANEL_IMAGE=%saiwatcher-panel \\\n    AIWATCHER_QUERY_IMAGE=%saiwatcher-flow AIWATCHER_IMAGE_TAG=%s \\\n    deploy/scripts/install.sh\n' \
   "$prefix" "$prefix" "$prefix" "$TAG"
 if $flow; then

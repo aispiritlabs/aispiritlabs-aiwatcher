@@ -153,3 +153,27 @@ def test_the_catalog_and_health_name_what_this_process_loaded() -> None:
         "length",
     ]
     assert client().get("/health").json() == {"status": "ok", "adapters": ["stub"]}
+
+
+def test_given_a_token_the_routes_want_it_and_the_probe_does_not() -> None:
+    guarded = TestClient(create_app([Stub()], token="s3cret"))
+    assert guarded.get("/health").status_code == 200
+
+    refused = guarded.get("/scorers/catalog")
+    assert refused.status_code == 401
+    assert "AIWATCHER_SCORER_TOKEN" in refused.json()["message"]
+    assert refused.headers["www-authenticate"] == "Bearer"
+    assert (
+        guarded.get("/scorers/catalog", headers={"authorization": "Bearer wrong"}).status_code
+        == 401
+    )
+    assert (
+        guarded.post(
+            "/scorers/score", json={}, headers={"authorization": "Bearer wrong"}
+        ).status_code
+        == 401
+    ), "refused before the request is read"
+
+    admitted = guarded.get("/scorers/catalog", headers={"authorization": "Bearer s3cret"})
+    assert admitted.status_code == 200
+    assert admitted.json()["adapters"][0]["name"] == "stub"

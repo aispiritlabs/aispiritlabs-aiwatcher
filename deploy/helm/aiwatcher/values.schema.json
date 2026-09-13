@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema#",
   "title": "aiwatcher chart values",
-  "description": "Deliberately partial. It pins the fields where a typo produces a plausible-looking deployment that quietly does the wrong thing \u2014 the three-way modes, the bus, the log format \u2014 and leaves the rest to the templates, which fail with their own messages.",
+  "description": "Deliberately partial. It pins the fields where a typo produces a plausible-looking deployment that quietly does the wrong thing — the three-way modes, the bus, the log format — and leaves the rest to the templates, which fail with their own messages.",
   "type": "object",
   "definitions": {
     "quantities": {
@@ -203,6 +203,64 @@
         }
       }
     },
+    "scorers": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "adapters": {
+          "description": "Which scorer adapters load; the catalog they make is what every card with a framework metric pins.",
+          "type": "string"
+        },
+        "model": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "string"
+            },
+            "profile": {
+              "enum": [
+                "openai",
+                "llamacpp"
+              ]
+            },
+            "tokenSecret": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "key": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "tokenSecret": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "key": {
+              "type": "string"
+            }
+          }
+        },
+        "replicas": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
     "promptStore": {
       "type": "object",
       "properties": {
@@ -335,6 +393,10 @@
               }
             }
           }
+        },
+        "scorerUrl": {
+          "description": "Where a scorecard's framework metrics are measured when the scorer service runs outside this release. Empty with scorers.enabled is this release's own.",
+          "type": "string"
         }
       }
     },

@@ -306,6 +306,67 @@ query:
   tolerations: []
   affinity: {}
 
+# ── The scorer service ───────────────────────────────────────────────────────
+#
+# services/scorers: DeepEval's and Opik's metrics behind the two-route contract
+# an `external_evaluation` step speaks (ADR_0030, amended 2026-09-13). Off by
+# default, and only managed execution calls it: the role holding the reactors
+# records its catalog and asks it about each case.
+#
+# It is sent the cases it scores — over a conversation cohort, the archive's
+# words — so its Service is ClusterIP with no ingress path, with
+# networkPolicy.enabled the server and the worker are the only pods let in, and
+# with tokenSecret both sides hold a bearer token. Where it may reach is the
+# graded metrics' model, which this chart cannot name, so its egress is open.
+scorers:
+  enabled: false
+
+  image:
+    repository: ghcr.io/example/aiwatcher-scorers
+    # Empty means .Chart.AppVersion.
+    tag: ""
+    pullPolicy: IfNotPresent
+
+  # Which adapters load (AIWATCHER_SCORERS_ADAPTERS). The catalog they make is
+  # what every card with a framework metric pins, so changing this is
+  # publishing those cards again.
+  adapters: "deepeval,opik"
+
+  # The one OpenAI-compatible model every graded metric asks: url (`…/v1`),
+  # name and revision together, or none — which offers no graded metric. The
+  # name and revision are pinned into every card measured with one. `llamacpp`
+  # asks a thinking model not to think.
+  model:
+    url: ""
+    name: ""
+    revision: ""
+    profile: openai
+    tokenSecret:
+      name: ""
+      key: token
+
+  # The bearer token the service wants on both routes and the work role sends
+  # (AIWATCHER_SCORERS_TOKEN and AIWATCHER_SCORER_TOKEN), read from a Secret
+  # this release does not create. Empty leaves the NetworkPolicy the only fence.
+  tokenSecret:
+    name: ""
+    key: token
+
+  # One: the work role asks at most AIWATCHER_SCORER_CONCURRENCY questions at
+  # once, and a graded metric's time is its model's, not this pod's.
+  replicas: 1
+
+  # Measured at 174 MiB resident with both frameworks imported and 280 MiB with
+  # their graded metrics' model clients loaded too (plan section 30). The
+  # limit is headroom for a batch of cases, whose model calls hold replies.
+  resources:
+    requests: { cpu: 100m, memory: 384Mi }
+    limits: { memory: 1Gi }
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
 # ── Managed execution ────────────────────────────────────────────────────────
 #
 # ADR_0025 and ADR_0026. A curation pipeline or a workflow started here is owned
@@ -409,6 +470,12 @@ execution:
     tokenSecret:
       name: ""
       key: token
+
+  # Where a scorecard's framework metrics are measured, when the scorer service
+  # runs somewhere this release does not install it. Empty with
+  # `scorers.enabled` is this release's own; empty without it asks none, and a
+  # run of such a card is refused at start with 501 scorers_disabled.
+  scorerUrl: ""
 
   # Steps that run in a pod of their own (ADR_0029). No templates is the
   # default and means none: a step naming one is refused when it is registered.

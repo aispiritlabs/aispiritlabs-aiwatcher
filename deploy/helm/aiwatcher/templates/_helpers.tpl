@@ -253,6 +253,18 @@ http://{{ include "aiwatcher.fullname" . }}-query:8081
 {{- end -}}
 
 {{/*
+Where the work role asks a scorecard's framework metrics: a URL named outright,
+or this release's own scorer service. Empty asks none.
+*/}}
+{{- define "aiwatcher.executionScorerUrl" -}}
+{{- if .Values.execution.scorerUrl -}}
+{{- .Values.execution.scorerUrl | trimSuffix "/" -}}
+{{- else if .Values.scorers.enabled -}}
+http://{{ include "aiwatcher.fullname" . }}-scorers:8083
+{{- end -}}
+{{- end -}}
+
+{{/*
 Everything both roles put in the environment.
 
 Section 27 splits this binary in two — `serve` holds the API and the read
@@ -427,6 +439,20 @@ later as "holds no object".
     secretKeyRef:
       name: {{ .tokenSecret.name }}
       key: {{ .tokenSecret.key }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- with include "aiwatcher.executionScorerUrl" . }}
+# Both roles: the work role asks it, and `serve` refuses to start a run of a
+# card with framework metrics where nothing would.
+- { name: AIWATCHER_SCORER_URL, value: {{ . | quote }} }
+{{- with $.Values.scorers.tokenSecret }}
+{{- if .name }}
+- name: AIWATCHER_SCORER_TOKEN
+  valueFrom:
+    secretKeyRef:
+      name: {{ .name }}
+      key: {{ .key }}
 {{- end }}
 {{- end }}
 {{- end }}

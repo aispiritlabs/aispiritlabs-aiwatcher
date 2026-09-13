@@ -147,6 +147,39 @@ spec:
         - { protocol: UDP, port: 53 }
         - { protocol: TCP, port: 53 }
 {{- end }}
+{{- if .Values.scorers.enabled }}
+---
+# The scorer service is sent the cases it scores, and only the role holding the
+# reactors asks it: the server in one process, the worker once split. No egress
+# rule — where it reaches is the graded metrics' model, which this chart cannot
+# name — so the fence is who may ask.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-scorers-ingress
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "aiwatcher.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: scorers
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "aiwatcher.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: server
+        {{- if .Values.execution.splitRoles }}
+        - podSelector:
+            matchLabels:
+              {{- include "aiwatcher.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: worker
+        {{- end }}
+      ports:
+        - { protocol: TCP, port: 8083 }
+{{- end }}
 {{- if eq .Values.promptStore.mode "install" }}
 ---
 # Narrow, unlike the server's rule above, and it can be: the object store has
