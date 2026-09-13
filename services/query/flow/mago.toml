@@ -13,7 +13,7 @@
 php-version = "8.3"
 
 [source]
-paths = ["src", "tests"]
+paths = ["src", "tests", "bin", "public"]
 includes = ["vendor"]
 
 [formatter]

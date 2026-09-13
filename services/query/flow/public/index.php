@@ -22,17 +22,17 @@ declare(strict_types=1);
  * this is.
  *
  * The last three are what managed execution needs, and all it needs. `execution_id` is
- * `<execution>/<step>/<attempt>`, and what the service remembers about it is that it ran and
- * what the result hashed to — never the rows. ADR 0014 refused this service an S3 client and
+ * `<execution>/<step>/<attempt>`, a query sent with one runs in a child process a cancel can
+ * kill (`bin/query.php`), and what the service remembers about it is that it ran and what the
+ * result hashed to — never the rows. ADR 0014 refused this service an S3 client and
  * that refusal stands: the rows go to the artifact the *reactor* uploads.
  */
 
-use Aiwatcher\Flow\Dataset\Catalog;
+use Aiwatcher\Flow\ChildQuery;
+use Aiwatcher\Flow\Configuration;
 use Aiwatcher\Flow\Dataset\CheckedClient;
-use Aiwatcher\Flow\Dataset\UpstreamFailed;
-use Aiwatcher\Flow\Dsl\ParseError;
 use Aiwatcher\Flow\ExecutionMemory;
-use Aiwatcher\Flow\QueryCancelled;
+use Aiwatcher\Flow\Failure;
 use Aiwatcher\Flow\Lint\MagoLinter;
 use Aiwatcher\Flow\QueryChecker;
 use Aiwatcher\Flow\QueryRunner;
@@ -41,26 +41,24 @@ use Symfony\Component\HttpClient\Psr18Client;
 
 require \dirname(__DIR__) . '/vendor/autoload.php';
 
-$aiwatcher = \rtrim((string) (\getenv('AIWATCHER_URL') ?: '') ?: 'http://127.0.0.1:8080', '/');
+$configuration = Configuration::fromEnvironment();
+$aiwatcher = $configuration->aiwatcher;
 
 // Wrapped, so an error from aiwatcher arrives as aiwatcher's own message and
 // its own status rather than as Flow failing to find `rows` in an error body.
 $client = new CheckedClient(new Psr18Client());
-// A corpus on disk, for `corpus_spans`. Unset — the default — the catalog is the
-// aiwatcher API and nothing else, as ADR_0008 has it; set, one more dataset
-// reads the part files under it. The benchmark in `benchmarks/curation` is what
-// sets it, beside a time limit sized for reading them.
-$corpus = \getenv('AIWATCHER_CORPUS_DIR') ?: null;
-$timeout = \filter_var(\getenv('AIWATCHER_QUERY_TIMEOUT_SECONDS'), \FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
 /** Which engine this is, in the words `/query/healthz` and `/query/datasets` carry. */
 $engine = ['engine' => 'flow', 'language' => 'flow-dsl'];
-$catalog = new Catalog($client, $aiwatcher, corpusRoot: $corpus);
+$catalog = $configuration->catalog($client);
 $linter = MagoLinter::fromVendor($catalog, \dirname(__DIR__));
+$memory = ExecutionMemory::default();
 $runner = new QueryRunner(
     $catalog,
     $aiwatcher,
-    ExecutionMemory::default(),
-    $timeout === false ? QueryRunner::TIMEOUT_SECONDS : $timeout,
+    $memory,
+    $configuration->timeoutSeconds,
+    // A managed query runs in a process a cancel can kill; an ad-hoc one stays here.
+    ChildQuery::fromRoot(\dirname(__DIR__), $memory, $configuration->timeoutSeconds),
 );
 $checker = new QueryChecker($catalog, $linter);
 
@@ -81,10 +79,9 @@ $pipeline = static fn(): ?string => \is_string($request['pipeline'] ?? null) ? $
  * Absent for every ad-hoc query, which is every query the panel sends: those are not
  * keyed, not resumed and not deduplicated, and nothing about them is remembered.
  */
-$executionId = static fn(): ?string => \is_string($request['execution_id'] ?? null)
-    && $request['execution_id'] !== ''
-        ? $request['execution_id']
-        : null;
+$executionId = static fn(): ?string => \is_string($request['execution_id'] ?? null) && $request['execution_id'] !== ''
+    ? $request['execution_id']
+    : null;
 
 /**
  * The exact bounds a managed plan pinned, when it pinned any.
@@ -116,7 +113,8 @@ $window = static function () use ($request): ?int {
     return \is_int($value) && $value > 0 ? $value : null;
 };
 
-$path = \parse_url($_SERVER['REQUEST_URI'] ?? '/', \PHP_URL_PATH) ?: '/';
+$requested = \parse_url($_SERVER['REQUEST_URI'] ?? '/', \PHP_URL_PATH);
+$path = \is_string($requested) && $requested !== '' ? $requested : '/';
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 
 /**
@@ -149,16 +147,13 @@ try {
             // an empty table can say which of the two is missing.
             'aiwatcher_reachable' => (static function () use ($aiwatcher, $client): bool {
                 try {
-                    return $client->sendRequest(new Request('GET', $aiwatcher . '/livez'))
-                        ->getStatusCode() < 400;
+                    return $client->sendRequest(new Request('GET', $aiwatcher . '/livez'))->getStatusCode() < 400;
                 } catch (\Throwable) {
                     return false;
                 }
             })(),
         ]),
-
         $route === '/datasets' => $send(200, [...$runner->datasets(), ...$engine]),
-
         $route === '/check' && $method === 'POST' => (static function () use ($send, $checker, $pipeline): void {
             $query = $pipeline();
 
@@ -172,7 +167,6 @@ try {
             // failed request. The editor reads `ok`.
             $send(200, $checker->check($query));
         })(),
-
         $route === '/query' && $method === 'POST' => (static function () use (
             $send,
             $runner,
@@ -189,15 +183,8 @@ try {
                 return;
             }
 
-            $send(200, $runner->run(
-                $query,
-                $window(),
-                QueryRunner::MAX_ROWS,
-                $executionId(),
-                $windowSpan(),
-            ));
+            $send(200, $runner->run($query, $window(), QueryRunner::MAX_ROWS, $executionId(), $windowSpan()));
         })(),
-
         // The lookup half. A reactor asks this after a timeout, before it runs the same
         // key again — a timeout says the caller stopped waiting and nothing about whether
         // this service stopped working. `absent` is the ordinary answer and the safe one.
@@ -206,13 +193,16 @@ try {
             200,
             $runner->cancel(\rawurldecode(\substr($route, \strlen('/executions/'), -\strlen('/cancel')))),
         ),
-
         \str_starts_with($route, '/executions/') && $method === 'GET' => $send(
             200,
             $runner->seen(\rawurldecode(\substr($route, \strlen('/executions/')))),
         ),
-
-        $route === '/simulate' && $method === 'POST' => (static function () use ($send, $runner, $pipeline, $window): void {
+        $route === '/simulate' && $method === 'POST' => (static function () use (
+            $send,
+            $runner,
+            $pipeline,
+            $window,
+        ): void {
             $query = $pipeline();
 
             if ($query === null) {
@@ -223,32 +213,11 @@ try {
 
             $send(200, $runner->run($query, $window(), QueryRunner::SIMULATION_ROWS));
         })(),
-
         default => $send(404, ['error' => ['message' => \sprintf('No route %s.', $path), 'column' => 0]]),
     };
-} catch (QueryCancelled $error) {
-    // Its own status: a query somebody stopped is neither the query's fault nor an outage.
-    $send(409, ['error' => ['message' => $error->getMessage(), 'column' => 0]]);
-} catch (ParseError $error) {
-    // 422, not 400: the request was well-formed, the query was not. The column
-    // is what lets the panel point at the character instead of the query.
-    $send(422, ['error' => $error->toArray()]);
-} catch (UpstreamFailed $error) {
-    // aiwatcher answered, and its answer decides this one. A 501 naming an
-    // unset variable is relayed as a 4xx so the caller reads it as permanent:
-    // a managed step classifies a 5xx from here as "nobody answered" and
-    // spends ten attempts over ten minutes discovering that a configuration
-    // flag is still off. Everything else stays 502, which is the honest
-    // reading of a store that may come back.
-    $send($error->isPermanent() ? 422 : 502, ['error' => [
-        'message' => \sprintf('The query could not be run: %s', $error->getMessage()),
-        'column' => 0,
-    ]]);
 } catch (\Throwable $error) {
-    // Anything else is aiwatcher being unreachable, or a bug here. Both are
-    // worth saying plainly rather than as an empty table.
-    $send(502, ['error' => [
-        'message' => \sprintf('The query could not be run: %s', $error->getMessage()),
-        'column' => 0,
-    ]]);
+    // Which status a failure is answered with is `Failure::of`'s, because a managed query's
+    // failure is decided in the process it ran in and relayed from there unchanged.
+    $failure = Failure::of($error);
+    $send($failure->status, ['error' => $failure->error]);
 }

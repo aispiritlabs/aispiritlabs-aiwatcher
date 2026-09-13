@@ -180,8 +180,18 @@ on running the query to its own ceiling. So the contract gains a seventh route,
 `POST /query/executions/{key}/cancel`, answered for a key the engine is running
 and as the lookup would for any other. A Python engine kills the query's child
 and answers the query 409; Flow, whose requests share no memory — and under
-FrankenPHP one pid — writes a marker beside the key's note and the query reads it
-between the batches it fetches, so a query blocked inside one long read or one
-final aggregation still runs to `set_time_limit`. An engine without the route
-answers 404 and is left to its ceiling, which is what every engine did before.
+FrankenPHP one pid — writes a marker beside the key's note. An engine without the
+route answers 404 and is left to its ceiling, which is what every engine did before.
+
+Flow's first reading of the marker was between the batches a query fetches, which
+left a query inside one long read or one final aggregation running to
+`set_time_limit` — the common case, since an aggregation's rows arrive in one batch
+at the end. So a query sent with an `execution_id` now runs in a child process
+(`bin/query.php`, started by `ChildQuery` with an argv and no shell): the request
+waits on it, reads the answer as it arrives, looks for the marker every 100 ms and
+kills the child on one, or past the limit on the wall clock. A failure is decided
+where it is raised (`Failure::of`) and relayed as that status. Measured in the image
+under a read-only root: a 33 s aggregation over 1.5 million rows cancelled after 4 s
+answered 409 at 4.08 s and left no process. The cost is one PHP start per managed
+query; an ad-hoc query, which nothing can cancel, still runs in the request.
 

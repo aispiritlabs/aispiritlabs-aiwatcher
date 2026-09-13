@@ -104,6 +104,7 @@ RUN composer install ${COMPOSER_DEV} --no-scripts --no-interaction --no-progress
 
 COPY services/query/flow/src ./src
 COPY services/query/flow/public ./public
+COPY services/query/flow/bin ./bin
 RUN composer dump-autoload ${COMPOSER_DEV} --optimize --no-interaction
 
 # ── Flow 4: what ships ───────────────────────────────────────────────────────
@@ -125,6 +126,7 @@ WORKDIR /app
 COPY --from=flow-vendor /src/vendor ./vendor
 COPY --from=flow-vendor /src/src ./src
 COPY --from=flow-vendor /src/public ./public
+COPY --from=flow-vendor /src/bin ./bin
 # The catalog every query engine serves (AW-3), where `CatalogFile::defaultPath`
 # looks for it: beside the service in the repository, at /contract here.
 COPY services/query/contract/catalog.json /contract/catalog.json

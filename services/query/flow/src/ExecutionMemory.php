@@ -92,9 +92,11 @@ final readonly class ExecutionMemory
      *
      * A marker beside the note rather than a signal: a request is a thread of FrankenPHP or
      * a worker of `php -S`, which share no memory and, under FrankenPHP, one pid — so the
-     * query cannot be killed, only told. It looks for the marker between the batches it
-     * reads (`QueryRunner::run`). Only a key noted as running is marked: any other gets
-     * what the lookup would, and leaves nothing to stop a later attempt under it.
+     * request holding the key is told, not killed. It waits on the child process the query
+     * runs in, looks for the marker every tenth of a second and kills the child on one
+     * (`ChildQuery`); a query read in process looks between batches. Only a key noted as
+     * running is marked: any other gets what the lookup would, and leaves nothing to stop a
+     * later attempt under it.
      *
      * @return array{state: string, digest?: string, rows?: int}
      */

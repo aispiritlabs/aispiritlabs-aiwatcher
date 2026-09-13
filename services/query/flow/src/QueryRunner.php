@@ -50,6 +50,13 @@ final readonly class QueryRunner
         private string $source,
         private ?ExecutionMemory $memory = null,
         private int $timeoutSeconds = self::TIMEOUT_SECONDS,
+        /**
+         * Where a managed query runs, when not in this process.
+         *
+         * Always set by the service; null in a test that reads rows in process, and in the
+         * child itself, which is handed no key.
+         */
+        private ?ChildQuery $child = null,
     ) {}
 
     /**
@@ -66,6 +73,15 @@ final readonly class QueryRunner
         ?string $executionId = null,
         ?array $windowSpan = null,
     ): array {
+        if ($executionId !== null && $this->child !== null) {
+            return $this->inChild($executionId, [
+                'pipeline' => $query,
+                'window_seconds' => $windowSeconds,
+                'max_rows' => $maxRows,
+                'window_span' => $windowSpan,
+            ]);
+        }
+
         // The span's end, when a managed plan pinned one. Its *width* still
         // comes from `window_seconds` or from the script's own `period:`, so a
         // query that pins both keeps the narrower of the two.
@@ -98,8 +114,8 @@ final readonly class QueryRunner
         try {
             // One more than the cap, so "there was more" is a fact rather than an
             // inference from a full page. Batch by batch rather than `fetch()`, so a managed
-            // query looks between them for a request to stop: it cannot be killed from
-            // another request, only told.
+            // query read in this process looks between them for a request to stop; the
+            // service runs one in a child instead, which a cancel kills (`ChildQuery`).
             $fetched = new Rows();
 
             foreach ($plan->frame->limit($maxRows + 1)->get() as $batch) {
@@ -154,6 +170,40 @@ final readonly class QueryRunner
             // `ExecutionMemory::digestOf`.
             'digest' => $digest,
         ];
+    }
+
+    /**
+     * A managed query, run by the child and noted here: the key belongs to this request,
+     * which is what a lookup and a cancel reach.
+     *
+     * @param array{pipeline: string, window_seconds: ?int, max_rows: int, window_span: ?array{int, int}} $request
+     *
+     * @return array<string, mixed>
+     */
+    private function inChild(string $executionId, array $request): array
+    {
+        $this->memory?->started($executionId);
+
+        try {
+            $result = $this->child?->run($executionId, $request) ?? [];
+        } catch (\Throwable $error) {
+            $this->memory?->failed($executionId);
+
+            throw $error;
+        }
+
+        $digest = $result['digest'] ?? null;
+        $rows = $result['row_count'] ?? null;
+
+        if (!\is_string($digest) || !\is_int($rows)) {
+            $this->memory?->failed($executionId);
+
+            return $result;
+        }
+
+        $this->memory?->finished($executionId, $digest, $rows);
+
+        return $result;
     }
 
     /**
