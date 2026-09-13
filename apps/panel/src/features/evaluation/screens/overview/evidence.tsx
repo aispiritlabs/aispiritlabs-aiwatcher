@@ -488,6 +488,11 @@ function TracesNote({ traces }: { traces: GenerationTrace }) {
           be seen executing it.
         </p>
       ) : null}
+      {traces.steps_unread ? (
+        <p>
+          {`${traces.steps_unread} runs took more node steps than a run's fold keeps, so the order of the rest was not read and they are not counted as executing the pinned workflow.`}
+        </p>
+      ) : null}
       {/* The application's telemetry is its own word; a serving host's run,
           published under another credential, is somebody else's. */}
       {traces.witnessed_model != null ? (

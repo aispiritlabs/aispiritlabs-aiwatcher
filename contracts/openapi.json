@@ -19460,6 +19460,11 @@
             },
             "description": "What providers said served the calls, compared with nothing: a provider's\nname for a model is an alias, a file or a dated snapshot."
           },
+          "steps_unread": {
+            "type": "integer",
+            "description": "Seen runs that took more node steps than the fold keeps, whose order\npast them was therefore not read.",
+            "minimum": 0
+          },
           "witnessed_model": {
             "type": [
               "integer",

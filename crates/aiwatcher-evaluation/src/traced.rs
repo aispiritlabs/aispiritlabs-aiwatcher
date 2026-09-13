@@ -66,6 +66,9 @@ pub struct TracedRun {
     pub nodes_run: Vec<String>,
     /// Each node step's start and end, in the order its log holds them.
     pub node_steps: Vec<StepSeen>,
+    /// It took more node steps than its log's fold keeps, so the order of the
+    /// rest was not read.
+    pub node_steps_dropped: bool,
     /// Calls other runs say they served for this one: a serving host's run
     /// naming it as the caller, each call with its own publisher.
     pub served_for_it: Vec<TracedCall>,
@@ -131,6 +134,10 @@ pub struct TracedAnswer {
     /// node of, so no run was seen executing it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub workflow_undeclared: bool,
+    /// The run took more node steps than the fold keeps, so the order of the
+    /// rest was not read and it is not seen executing the pinned workflow.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub workflow_steps_unread: bool,
 }
 
 fn is_zero(count: &usize) -> bool {
@@ -174,6 +181,10 @@ pub struct GenerationTrace {
     /// read, so no run can be seen executing it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub workflow_undeclared: bool,
+    /// Seen runs that took more node steps than the fold keeps, whose order
+    /// past them was therefore not read.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub steps_unread: usize,
     /// Seen runs whose call on the pinned model version a run published under
     /// another credential says it served; absent when the variant pins no model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -219,6 +230,7 @@ impl GenerationTrace {
             on_model: counted(|row| row.on_model),
             on_workflow: counted(|row| row.on_workflow),
             workflow_undeclared: rows.iter().any(|row| row.workflow_undeclared),
+            steps_unread: rows.iter().filter(|row| row.workflow_steps_unread).count(),
             witnessed_model: counted(|row| row.witnessed_model),
             witnessed_prompt: counted(|row| row.witnessed_prompt),
             self_witnessed: rows.iter().filter(|row| row.self_witnessed).count(),
@@ -284,6 +296,13 @@ impl GenerationTrace {
                     .to_owned(),
             );
         }
+        if self.steps_unread > 0 {
+            said.push(format!(
+                "{} seen runs took more node steps than a run's fold keeps, so the order of the \
+                 rest was not read",
+                self.steps_unread
+            ));
+        }
         for (what, on) in [
             ("call on the pinned prompt", self.on_prompt),
             ("call on the pinned model", self.on_model),
@@ -339,35 +358,96 @@ impl GenerationTrace {
     }
 }
 
-/// The nodes a run started before any node the declaration leads into them
-/// from had completed, each once, with those nodes.
+/// A node start the pinned declaration does not lead to.
+#[derive(Debug, PartialEq, Eq)]
+enum Misstep {
+    /// Its first start, before anything leading into it had completed.
+    Before { node: String, from: Vec<String> },
+    /// A later start, with no completion leading into it since the last one
+    /// it had used — a second pass nothing sent it on, or a loop the
+    /// declaration does not have.
+    Again { node: String, from: Vec<String> },
+}
+
+/// Each node's starts the declaration does not lead to, each node once.
 ///
-/// Any one completed predecessor admits a node: a declared branch runs one
-/// side, and a join after it is reached from whichever side ran. A node nothing
-/// leads into starts whenever it likes.
-fn out_of_order(shape: &Topology, steps: &[StepSeen]) -> Vec<(String, Vec<String>)> {
-    let mut completed = std::collections::BTreeSet::new();
-    let mut found: Vec<(String, Vec<String>)> = Vec::new();
+/// A completed node sends the run on along each edge out of it, once; a start
+/// uses one of those, and a failed start gives its back, so a retry needs no
+/// second completion. Where the run enters the shape — a node no edge leads
+/// into, or a cycle entered from nowhere else — admits one start. A node
+/// declared `repeats` needs only its first. So a branch runs one side, a join
+/// is reached from whichever side ran, a declared loop goes round as often as
+/// its nodes complete, and a node run twice for one completion, or again when
+/// nothing leads back into it, is named.
+fn out_of_order(shape: &Topology, steps: &[StepSeen]) -> Vec<Misstep> {
+    let entries = shape.entries();
+    let mut entered = vec![false; entries.len()];
+    let mut sent: BTreeMap<&str, u64> = BTreeMap::new();
+    let mut using: BTreeMap<&str, u64> = BTreeMap::new();
+    let mut started = std::collections::BTreeSet::new();
+    let mut found: Vec<Misstep> = Vec::new();
     for step in steps {
         match step {
             StepSeen::Started(node) => {
-                let before: Vec<String> = shape
+                let node = node.as_str();
+                let first = started.insert(node);
+                if shape.repeats.contains(node) && !first {
+                    continue;
+                }
+                let admitted = if let Some(waiting) = sent.get_mut(node).filter(|n| **n > 0) {
+                    *waiting -= 1;
+                    true
+                } else if let Some(at) = entries
+                    .iter()
+                    .position(|part| part.contains(node))
+                    .filter(|at| !entered[*at])
+                {
+                    entered[at] = true;
+                    true
+                } else {
+                    false
+                };
+                if admitted {
+                    *using.entry(node).or_default() += 1;
+                    continue;
+                }
+                let named = found.iter().any(|misstep| match misstep {
+                    Misstep::Before { node: named, .. } | Misstep::Again { node: named, .. } => {
+                        named == node
+                    }
+                });
+                if named {
+                    continue;
+                }
+                let from: Vec<String> = shape
                     .edges
                     .iter()
                     .filter(|(_, to)| to == node)
                     .map(|(from, _)| from.clone())
                     .collect();
-                if !before.is_empty()
-                    && !before.iter().any(|from| completed.contains(from))
-                    && !found.iter().any(|(named, _)| named == node)
-                {
-                    found.push((node.clone(), before));
-                }
+                let node = node.to_owned();
+                found.push(if first {
+                    Misstep::Before { node, from }
+                } else {
+                    Misstep::Again { node, from }
+                });
             }
             StepSeen::Completed(node) => {
-                completed.insert(node.clone());
+                if let Some(held) = using.get_mut(node.as_str()).filter(|n| **n > 0) {
+                    *held -= 1;
+                }
+                for (from, to) in &shape.edges {
+                    if from == node {
+                        *sent.entry(to.as_str()).or_default() += 1;
+                    }
+                }
             }
-            StepSeen::Failed(_) => {}
+            StepSeen::Failed(node) => {
+                if let Some(held) = using.get_mut(node.as_str()).filter(|n| **n > 0) {
+                    *held -= 1;
+                    *sent.entry(node.as_str()).or_default() += 1;
+                }
+            }
         }
     }
     found
@@ -413,6 +493,7 @@ pub fn trace_answers(
             served_models: Vec::new(),
             models: Vec::new(),
             workflow_undeclared: variant.workflow.is_some() && workflow.is_none(),
+            workflow_steps_unread: false,
         };
         if let (Some(run_id), Some(run)) = (&answer.run_id, traced) {
             let mut said = |sentence: String| {
@@ -575,14 +656,32 @@ pub fn trace_answers(
                             ));
                         }
                     }
-                    for (node, before) in out_of_order(shape, &run.node_steps) {
+                    for misstep in out_of_order(shape, &run.node_steps) {
                         on = false;
-                        said(format!(
-                            "the run started {node} before {} had completed, and the declaration \
-                             of {} the variant pins leads into it only from there",
-                            before.join(" or "),
-                            pinned.name
-                        ));
+                        said(match misstep {
+                            Misstep::Before { node, from } => format!(
+                                "the run started {node} before {} had completed, and the \
+                                 declaration of {} the variant pins leads into it only from there",
+                                from.join(" or "),
+                                pinned.name
+                            ),
+                            Misstep::Again { node, from } if from.is_empty() => format!(
+                                "the run started {node} again, and nothing in the declaration of \
+                                 {} the variant pins leads back into it",
+                                pinned.name
+                            ),
+                            Misstep::Again { node, from } => format!(
+                                "the run started {node} again with no completion of {} since, and \
+                                 the declaration of {} the variant pins leads into it only from \
+                                 there",
+                                from.join(" or "),
+                                pinned.name
+                            ),
+                        });
+                    }
+                    if run.node_steps_dropped {
+                        on = false;
+                        row.workflow_steps_unread = true;
                     }
                 }
                 row.on_workflow = Some(on);
@@ -714,6 +813,7 @@ mod tests {
                 on_model: Some(2),
                 on_workflow: None,
                 workflow_undeclared: false,
+                steps_unread: 0,
                 witnessed_model: Some(0),
                 witnessed_prompt: Some(0),
                 self_witnessed: 0,
@@ -1016,6 +1116,151 @@ mod tests {
         assert!(
             refused[0].contains("started answer before retrieve had completed"),
             "{refused:?}"
+        );
+    }
+
+    /// Steps written as `node:s`, `node:c` or `node:f` — started, completed,
+    /// failed.
+    fn stepped(steps: &[&str]) -> Vec<StepSeen> {
+        steps
+            .iter()
+            .map(|step| {
+                let (node, phase) = step.split_once(':').expect("node:phase");
+                match phase {
+                    "s" => StepSeen::Started(node.to_owned()),
+                    "c" => StepSeen::Completed(node.to_owned()),
+                    _ => StepSeen::Failed(node.to_owned()),
+                }
+            })
+            .collect()
+    }
+
+    fn traversed(pinned: &Topology, steps: &[&str]) -> Result<Vec<TracedAnswer>, Vec<String>> {
+        let nodes: Vec<&str> = pinned.nodes.iter().map(String::as_str).collect();
+        let runs = BTreeMap::from([(
+            "r".to_owned(),
+            TracedRun {
+                node_steps: stepped(steps),
+                ..workflow_run(pinned, &nodes)
+            },
+        )]);
+        trace_answers(
+            &workflow_variant(),
+            "variant",
+            "answers",
+            &[answer("c1", Some("r"))],
+            &runs,
+            Some(pinned),
+            &[],
+        )
+    }
+
+    #[test]
+    fn a_declared_loop_goes_round_as_its_nodes_complete_and_a_retry_needs_no_second_completion() {
+        let pinned = Topology::read(&serde_json::json!({
+            "nodes": ["plan", "act", "report"],
+            "edges": [["plan", "act"], ["act", "plan"], ["act", "report"]]
+        }))
+        .expect("a shape");
+
+        let rows = traversed(
+            &pinned,
+            &[
+                "plan:s", "plan:c", "act:s", "act:f", "act:s", "act:c", "plan:s", "plan:c",
+                "act:s", "act:c", "report:s", "report:c",
+            ],
+        )
+        .expect("round the loop twice, with a retry, then out");
+
+        assert_eq!(rows[0].on_workflow, Some(true));
+    }
+
+    #[test]
+    fn a_node_run_twice_for_one_completion_or_again_when_nothing_leads_back_is_refused() {
+        let pinned = shape(&[("retrieve", "answer")]);
+
+        let twice = traversed(
+            &pinned,
+            &["retrieve:s", "retrieve:c", "answer:s", "answer:s", "answer:c"],
+        )
+        .expect_err("one retrieval sends the run on to one answer");
+        assert_eq!(twice.len(), 1, "{twice:?}");
+        assert!(
+            twice[0].contains("started answer again with no completion of retrieve since"),
+            "{twice:?}"
+        );
+
+        let again = traversed(
+            &pinned,
+            &["retrieve:s", "retrieve:c", "answer:s", "answer:c", "retrieve:s"],
+        )
+        .expect_err("nothing leads back into retrieve");
+        assert!(
+            again[0].contains("started retrieve again, and nothing in the declaration"),
+            "{again:?}"
+        );
+
+        let failed_unadmitted = traversed(&pinned, &["answer:s", "answer:f", "answer:s"])
+            .expect_err("a failure gives back only what its start used");
+        assert_eq!(failed_unadmitted.len(), 1, "{failed_unadmitted:?}");
+        assert!(failed_unadmitted[0].contains("before retrieve had completed"));
+    }
+
+    #[test]
+    fn a_repeating_node_runs_as_often_as_it_likes_once_something_leads_into_it() {
+        let pinned = Topology::read(&serde_json::json!({
+            "nodes": ["retrieve", {"id": "answer", "repeats": true}],
+            "edges": [["retrieve", "answer"]]
+        }))
+        .expect("a shape");
+
+        let rows = traversed(
+            &pinned,
+            &[
+                "retrieve:s", "retrieve:c", "answer:s", "answer:s", "answer:c", "answer:c",
+                "answer:s", "answer:c",
+            ],
+        )
+        .expect("one per item, side by side");
+        assert_eq!(rows[0].on_workflow, Some(true));
+
+        let early = traversed(&pinned, &["answer:s", "retrieve:s"])
+            .expect_err("its first start still waits for what leads into it");
+        assert!(early[0].contains("before retrieve had completed"), "{early:?}");
+    }
+
+    #[test]
+    fn a_run_whose_steps_outgrew_its_fold_is_not_seen_on_the_workflow_and_says_why() {
+        let pinned = shape(&[("retrieve", "answer")]);
+        let runs = BTreeMap::from([(
+            "long".to_owned(),
+            TracedRun {
+                node_steps: stepped(&["retrieve:s", "retrieve:c"]),
+                node_steps_dropped: true,
+                ..workflow_run(&pinned, &["retrieve", "answer"])
+            },
+        )]);
+
+        let rows = trace_answers(
+            &workflow_variant(),
+            "variant",
+            "answers",
+            &[answer("c1", Some("long"))],
+            &runs,
+            Some(&pinned),
+            &[],
+        )
+        .expect("what was read is in order, and the rest is counted");
+        let trace = GenerationTrace::of(&rows);
+
+        assert_eq!((rows[0].on_workflow, trace.steps_unread), (Some(false), 1));
+        assert!(
+            trace
+                .shortfall()
+                .iter()
+                .any(|said| said.contains("more node steps than a run's fold keeps")),
+            "{:?}",
+            trace.shortfall()
         );
     }
 

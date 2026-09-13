@@ -836,6 +836,7 @@ impl TracesExecutor {
                             aiwatcher_projector::NodeStep::Failed(node) => StepSeen::Failed(node),
                         })
                         .collect(),
+                    node_steps_dropped: summary.node_steps_dropped,
                     served_for_it,
                 },
             );

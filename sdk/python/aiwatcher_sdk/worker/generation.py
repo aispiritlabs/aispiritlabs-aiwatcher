@@ -107,8 +107,13 @@ class Generation:
         ``flow.node(…)`` is a step of that run — which is what the answer is
         held to beside the prompt and the model: a run declaring the pinned
         workflow in another shape, or stepping through a node the pinned
-        declaration does not have, is not the variant's. Name the run on the
-        answer as with :meth:`traced` (``run_id=flow.correlation.run_id``).
+        declaration does not have, is not the variant's. So is one stepping in
+        an order the edges do not lead: a node starts once per completion of a
+        node leading into it (a retry after a failure needs none), so a
+        declared loop goes round as often as it completes and a node started
+        twice for one completion is refused — declare a node that runs once per
+        item as ``{"id": …, "repeats": True}``. Name the run on the answer as
+        with :meth:`traced` (``run_id=flow.correlation.run_id``).
         """
         with client.workflow(
             workflow_id,

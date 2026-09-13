@@ -111,6 +111,10 @@ pub struct RunSummary {
     /// the traces step and never listed — a runs page does not need it.
     #[serde(skip)]
     pub node_steps: Vec<NodeStep>,
+    /// Whether it took more node steps than it keeps, so the order of the rest
+    /// was never read.
+    #[serde(skip)]
+    pub node_steps_dropped: bool,
     #[serde(with = "time::serde::rfc3339")]
     pub started_at: OffsetDateTime,
     /// The newest event folded into this row, ended or not.
@@ -160,6 +164,7 @@ impl RunSummary {
             workflow_topology: None,
             nodes_run: Vec::new(),
             node_steps: Vec::new(),
+            node_steps_dropped: false,
             started_at: event.metadata.occurred_at,
             last_event_at: event.metadata.occurred_at,
             ended_at: None,
@@ -233,15 +238,20 @@ impl RunSummary {
             self.nodes_run.push(node.to_owned());
         }
         if subject == Subject::Step
-            && self.node_steps.len() < MAX_NODE_STEPS
             && let Some(node) = event.data_str("node")
         {
-            let node = node.to_owned();
-            match phase {
-                Some(Phase::Start) => self.node_steps.push(NodeStep::Started(node)),
-                Some(Phase::End { ok: true }) => self.node_steps.push(NodeStep::Completed(node)),
-                Some(Phase::End { ok: false }) => self.node_steps.push(NodeStep::Failed(node)),
-                _ => {}
+            let step = match phase {
+                Some(Phase::Start) => Some(NodeStep::Started(node.to_owned())),
+                Some(Phase::End { ok: true }) => Some(NodeStep::Completed(node.to_owned())),
+                Some(Phase::End { ok: false }) => Some(NodeStep::Failed(node.to_owned())),
+                _ => None,
+            };
+            if let Some(step) = step {
+                if self.node_steps.len() < MAX_NODE_STEPS {
+                    self.node_steps.push(step);
+                } else {
+                    self.node_steps_dropped = true;
+                }
             }
         }
 
@@ -937,6 +947,7 @@ mod tests {
             workflow_topology: None,
             nodes_run: Vec::new(),
             node_steps: Vec::new(),
+            node_steps_dropped: false,
             started_at: datetime!(2026-08-27 18:20:00 UTC),
             last_event_at: datetime!(2026-08-27 18:20:00 UTC),
             ended_at: None,

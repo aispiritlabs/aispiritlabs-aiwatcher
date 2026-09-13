@@ -3812,6 +3812,11 @@ export type GenerationTrace = {
      */
     served?: Array<GenerationServed>;
     /**
+     * Seen runs that took more node steps than the fold keeps, whose order
+     * past them was therefore not read.
+     */
+    steps_unread?: number;
+    /**
      * Seen runs whose call on the pinned model version a run published under
      * another credential says it served; absent when the variant pins no model.
      */

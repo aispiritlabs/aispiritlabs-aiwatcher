@@ -593,6 +593,7 @@ mod tests {
             workflow_topology: None,
             nodes_run: Vec::new(),
             node_steps: Vec::new(),
+            node_steps_dropped: false,
             started_at: started,
             last_event_at: started + time::Duration::seconds(2),
             ended_at: Some(started + time::Duration::seconds(2)),

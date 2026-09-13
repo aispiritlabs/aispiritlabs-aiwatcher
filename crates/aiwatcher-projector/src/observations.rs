@@ -488,6 +488,7 @@ mod tests {
             workflow_topology: None,
             nodes_run: Vec::new(),
             node_steps: Vec::new(),
+            node_steps_dropped: false,
             started_at: started,
             last_event_at: ended,
             ended_at: (status != RunStatus::Running).then_some(ended),

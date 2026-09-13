@@ -344,6 +344,7 @@ mod tests {
             workflow_topology: None,
             nodes_run: Vec::new(),
             node_steps: Vec::new(),
+            node_steps_dropped: false,
             started_at: started,
             last_event_at: started,
             ended_at: None,
