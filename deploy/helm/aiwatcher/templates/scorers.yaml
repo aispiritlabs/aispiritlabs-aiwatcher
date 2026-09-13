@@ -8,12 +8,37 @@
 {{- if and $graded (not (and $s.model.url $s.model.name $s.model.revision)) -}}
 {{- fail "scorers.model is url, name and revision together, or none: the name and the revision are pinned into every card a graded metric measured." -}}
 {{- end -}}
+{{- $model := include "aiwatcher.scorersModelEgress" . | fromYaml -}}
+{{- if and .Values.networkPolicy.enabled $model.outside (not $s.egress.rules) (not $s.egress.open) -}}
+{{- fail (printf "scorers.model.url names %s, a host outside this cluster, and a NetworkPolicy cannot name a hostname: list its addresses as egress rules in scorers.egress.rules, or set scorers.egress.open: true to leave the scorer pod's egress unrestricted." $model.outside) -}}
+{{- end -}}
+{{- $token := include "aiwatcher.scorersToken" . | fromYaml -}}
 # The scorer service (services/scorers): DeepEval's and Opik's metrics for a
 # scorecard's `external` scorers, asked by the role holding the reactors.
 #
 # ClusterIP and no ingress path. Nothing a person uses talks to it — a card is
 # published against the catalog the work role recorded — and it is sent the
 # cases it scores, so the only pods that reach it are aiwatcher's own roles.
+{{- if not $s.tokenSecret.name }}
+# The bearer token both routes want, generated once and kept: read back from the
+# cluster on an upgrade, so a rollout never leaves the service and its callers
+# holding two different ones. Named in `scorers.tokenSecret` instead, this is not
+# rendered.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $token.name }}
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+    app.kubernetes.io/component: scorers
+  annotations:
+    helm.sh/resource-policy: keep
+type: Opaque
+data:
+  {{- $existing := lookup "v1" "Secret" .Release.Namespace $token.name }}
+  token: {{ (and $existing (index $existing.data "token")) | default (randAlphaNum 48 | b64enc) | quote }}
+---
+{{- end }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -65,15 +90,11 @@ spec:
             - { name: http, containerPort: 8083, protocol: TCP }
           env:
             - { name: AIWATCHER_SCORERS_ADAPTERS, value: {{ $s.adapters | quote }} }
-            {{- with $s.tokenSecret }}
-            {{- if .name }}
             - name: AIWATCHER_SCORERS_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ .name }}
-                  key: {{ .key }}
-            {{- end }}
-            {{- end }}
+                  name: {{ $token.name }}
+                  key: {{ $token.key }}
             {{- if $graded }}
             - { name: AIWATCHER_SCORERS_MODEL_URL, value: {{ $s.model.url | trimSuffix "/" | quote }} }
             - { name: AIWATCHER_SCORERS_MODEL, value: {{ $s.model.name | quote }} }

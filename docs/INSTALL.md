@@ -289,17 +289,26 @@ scorers:
     name: gemma-4-e2b
     revision: ud-q4-k-xl
     profile: llamacpp
-  tokenSecret:              # created by you: kubectl create secret generic aiwatcher-scorers --from-literal=token=…
-    name: aiwatcher-scorers
-    key: token
+  tokenSecret:              # optional: generated in <release>-scorers-token when empty
+    name: ""
+  egress:                   # a model outside the cluster: its addresses, or open: true
+    rules: []
 ```
 
 It is sent the cases it scores — over a conversation cohort, the archive's
-words — so the Service is ClusterIP with no ingress path, with
-`networkPolicy.enabled` only the server and the worker are let in, and with
-`tokenSecret` the service wants a bearer token on both of its routes and both
-roles send it. Its egress is left open: where it reaches is the graded metrics'
-model, which the chart cannot name. The model's name and revision are pinned
+words — so the Service is ClusterIP with no ingress path, and the service wants
+a bearer token on both of its routes, which both roles send. The token is the
+Secret `tokenSecret` names, or one this release generates and keeps across
+upgrades; there is no setting without one, and the service refuses to bind off
+localhost without a token unless `AIWATCHER_SCORERS_UNAUTHENTICATED=true`.
+
+With `networkPolicy.enabled` only the server and the worker are let in, and the
+pod may reach DNS and its model and nothing else. The model is read off
+`model.url`: a Service in this cluster (`llama`, `llama.models.svc`) is admitted
+by its namespace and an address literal as itself. A NetworkPolicy names no
+hostnames, so a model outside the cluster — `https://api.openai.com/v1` — is
+refused at render until its addresses are listed in `egress.rules` or
+`egress.open: true` leaves egress unrestricted. The model's name and revision are pinned
 into every card measured with one, so changing them — or `adapters`, or the
 image — is publishing those cards again. The chart refuses it with
 `execution.store: none`, where nothing would ever ask it.

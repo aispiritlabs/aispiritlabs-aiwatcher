@@ -346,11 +346,25 @@ scorers:
       key: token
 
   # The bearer token the service wants on both routes and the work role sends
-  # (AIWATCHER_SCORERS_TOKEN and AIWATCHER_SCORER_TOKEN), read from a Secret
-  # this release does not create. Empty leaves the NetworkPolicy the only fence.
+  # (AIWATCHER_SCORERS_TOKEN and AIWATCHER_SCORER_TOKEN). Empty, this release
+  # generates one in `<release>-scorers-token` and keeps it across upgrades;
+  # named, it is read from that Secret instead. There is no setting without one.
   tokenSecret:
     name: ""
     key: token
+
+  # Where the pod may connect, with networkPolicy.enabled: DNS, and the model
+  # its graded metrics ask. A model URL naming a Service in this cluster (a bare
+  # name, or `name.namespace.svc…`) is admitted by its namespace, and an address
+  # literal as itself, with nothing here. A NetworkPolicy names no hostnames, so
+  # a model outside the cluster is refused at render until its addresses are
+  # listed as egress rules — or `open: true` leaves egress unrestricted.
+  egress:
+    # NetworkPolicy egress rules, verbatim:
+    #   - to: [{ ipBlock: { cidr: 203.0.113.10/32 } }]
+    #     ports: [{ protocol: TCP, port: 443 }]
+    rules: []
+    open: false
 
   # One: the work role asks at most AIWATCHER_SCORER_CONCURRENCY questions at
   # once, and a graded metric's time is its model's, not this pod's.

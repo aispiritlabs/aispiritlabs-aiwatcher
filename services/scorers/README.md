@@ -76,19 +76,22 @@ Then point aiwatcher's work role at it with `AIWATCHER_SCORER_URL=http://127.0.0
 | `AIWATCHER_SCORERS_MODEL_URL`, `…_MODEL`, `…_MODEL_REVISION` | The one OpenAI-compatible model every graded metric asks. All three or none; none offers no graded metric. |
 | `AIWATCHER_SCORERS_MODEL_PROFILE` | `openai`, or `llamacpp` to ask a thinking model not to think. |
 | `AIWATCHER_SCORERS_MODEL_TOKEN` | A bearer credential for that model. |
-| `AIWATCHER_SCORERS_TOKEN` | The bearer token both routes want; aiwatcher's work role sends it as `AIWATCHER_SCORER_TOKEN`. `/health` never wants it. Unset serves anyone who can reach the port. |
+| `AIWATCHER_SCORERS_TOKEN` | The bearer token both routes want; aiwatcher's work role sends it as `AIWATCHER_SCORER_TOKEN`. `/health` never wants it. Unset, the service refuses to bind anywhere but localhost. |
+| `AIWATCHER_SCORERS_UNAUTHENTICATED` | `true` lets it bind elsewhere without a token, where the network is the only fence. |
 | `AIWATCHER_SCORERS_HOST`, `…_PORT` | `127.0.0.1:8083`. |
 
 **Never expose it.** It is sent the cases it scores — over a conversation cohort,
 the archive's words. Given `AIWATCHER_SCORERS_TOKEN` it wants a bearer token;
-without one it serves whoever reaches the port, and says so when it starts. Both
+without one it binds to localhost or refuses to start, unless
+`AIWATCHER_SCORERS_UNAUTHENTICATED=true` says the network is the fence. Both
 frameworks phone home by default; `adapters.quiet()` turns DeepEval's telemetry,
 Opik's tracing and LiteLLM's price-table fetch off before either is imported.
 
 In a cluster it is `deploy/Dockerfile.scorers` and the chart's `scorers` block
 (`docs/INSTALL.md`, "Framework metrics"): ClusterIP, a NetworkPolicy that lets
-only aiwatcher's roles in, the token from a Secret, and a read-only root
-filesystem with `/tmp` as its home.
+only aiwatcher's roles in and lets it reach only DNS and its model, a token the
+release generates unless a Secret is named, and a read-only root filesystem with
+`/tmp` as its home.
 
 `just scorers-check` runs `ruff format --check`, `ruff check`, `mypy --strict`
 and `pytest` with both frameworks installed. Like the notebook runtime it is not

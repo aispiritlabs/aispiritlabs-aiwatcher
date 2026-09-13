@@ -258,6 +258,22 @@
         "replicas": {
           "type": "integer",
           "minimum": 1
+        },
+        "egress": {
+          "description": "Where the scorer pod may connect under networkPolicy.enabled, beyond DNS and a model derived from scorers.model.url.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "rules": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "open": {
+              "type": "boolean"
+            }
+          }
         }
       }
     },

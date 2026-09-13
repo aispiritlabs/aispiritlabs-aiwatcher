@@ -265,6 +265,62 @@ http://{{ include "aiwatcher.fullname" . }}-scorers:8083
 {{- end -}}
 
 {{/*
+The Secret holding the scorer service's bearer token, as `name` and `key`: the
+one `scorers.tokenSecret` names, or the one this release generates for its own
+scorer service. Empty for a service named by `execution.scorerUrl` without a
+Secret, whose credential is that service's business.
+*/}}
+{{- define "aiwatcher.scorersToken" -}}
+{{- if .Values.scorers.tokenSecret.name -}}
+name: {{ .Values.scorers.tokenSecret.name }}
+key: {{ .Values.scorers.tokenSecret.key }}
+{{- else if and .Values.scorers.enabled (not .Values.execution.scorerUrl) -}}
+name: {{ include "aiwatcher.fullname" . }}-scorers-token
+key: token
+{{- end -}}
+{{- end -}}
+
+{{/*
+Where the scorer service's graded metrics' model is, as a NetworkPolicy can
+admit it: `rule` is an egress rule, or empty with `outside` naming a host no
+policy can name. Read off `scorers.model.url` and nothing else.
+
+A Service in this cluster — a bare name, or `name.namespace.svc…` — is admitted
+by namespace and on no port: the URL's port is the Service's, and a policy is
+matched against the pod's port after the Service translated it. An address
+literal is admitted as itself on the URL's port. A hostname is neither.
+*/}}
+{{- define "aiwatcher.scorersModelEgress" -}}
+{{- $url := .Values.scorers.model.url -}}
+{{- if $url -}}
+{{- $parsed := urlParse $url -}}
+{{- $host := regexReplaceAll ":[0-9]+$" $parsed.host "" -}}
+{{- $port := trimPrefix ":" (regexFind ":[0-9]+$" $parsed.host) | default (ternary "443" "80" (eq $parsed.scheme "https")) -}}
+{{- if regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $host }}
+rule:
+  to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: {{ .Release.Namespace }}
+{{- else if regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?\\.svc(\\.cluster\\.local)?$" $host }}
+rule:
+  to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: {{ index (splitList "." $host) 1 }}
+{{- else if regexMatch "^[0-9]{1,3}(\\.[0-9]{1,3}){3}$" $host }}
+rule:
+  to:
+    - ipBlock: { cidr: {{ printf "%s/32" $host }} }
+  ports:
+    - { protocol: TCP, port: {{ $port }} }
+{{- else }}
+outside: {{ $host }}
+{{- end }}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Everything both roles put in the environment.
 
 Section 27 splits this binary in two — `serve` holds the API and the read
@@ -446,14 +502,12 @@ later as "holds no object".
 # Both roles: the work role asks it, and `serve` refuses to start a run of a
 # card with framework metrics where nothing would.
 - { name: AIWATCHER_SCORER_URL, value: {{ . | quote }} }
-{{- with $.Values.scorers.tokenSecret }}
-{{- if .name }}
+{{- with include "aiwatcher.scorersToken" $ | fromYaml }}
 - name: AIWATCHER_SCORER_TOKEN
   valueFrom:
     secretKeyRef:
       name: {{ .name }}
       key: {{ .key }}
-{{- end }}
 {{- end }}
 {{- end }}
 {{- if .Values.execution.pods.templates }}

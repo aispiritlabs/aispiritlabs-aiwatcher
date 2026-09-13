@@ -1902,7 +1902,9 @@ the review.
   `external_calibration`, and the result carries `external`: how often the two
   verdicts matched over every item, with the Wilson interval, as a judge's
   agreement is counted. The service turns every framework's phoning home off
-  before importing it, and given a token wants it on both routes.
+  before importing it, wants a bearer token on both routes — off localhost it
+  refuses to start without one — and in a cluster the chart generates that
+  token and lets the pod reach DNS and its model alone.
 - **Never publish a case that answered some of the metrics.** A scored case
   carries every declared metric or it is a failure with a reason and none of
   them: a case in three averages out of four gives each metric its own

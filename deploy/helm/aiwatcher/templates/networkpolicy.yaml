@@ -150,9 +150,7 @@ spec:
 {{- if .Values.scorers.enabled }}
 ---
 # The scorer service is sent the cases it scores, and only the role holding the
-# reactors asks it: the server in one process, the worker once split. No egress
-# rule — where it reaches is the graded metrics' model, which this chart cannot
-# name — so the fence is who may ask.
+# reactors asks it: the server in one process, the worker once split.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -179,6 +177,37 @@ spec:
         {{- end }}
       ports:
         - { protocol: TCP, port: 8083 }
+{{- if not .Values.scorers.egress.open }}
+---
+# And where it may send them: DNS, and the model its graded metrics ask, read off
+# `scorers.model.url` (`aiwatcher.scorersModelEgress`) or listed in
+# `scorers.egress.rules`. Every framework's phoning home is turned off inside the
+# service; this is what holds when a release of one turns something back on.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $fullname }}-scorers-egress
+  labels:
+    {{- include "aiwatcher.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "aiwatcher.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: scorers
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    {{- with (include "aiwatcher.scorersModelEgress" . | fromYaml).rule }}
+    - {{ toYaml . | nindent 6 | trim }}
+    {{- end }}
+    {{- with .Values.scorers.egress.rules }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}
 {{- end }}
 {{- if eq .Values.promptStore.mode "install" }}
 ---

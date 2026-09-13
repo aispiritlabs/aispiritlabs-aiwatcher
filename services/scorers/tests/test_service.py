@@ -6,6 +6,7 @@ from collections.abc import Mapping
 
 from starlette.testclient import TestClient
 
+from aiwatcher_scorers.__main__ import refusal
 from aiwatcher_scorers.adapter import Implemented
 from aiwatcher_scorers.contract import Case, JsonValue, Metric, ModelReference, Parameter
 from aiwatcher_scorers.service import create_app
@@ -177,3 +178,13 @@ def test_given_a_token_the_routes_want_it_and_the_probe_does_not() -> None:
     admitted = guarded.get("/scorers/catalog", headers={"authorization": "Bearer s3cret"})
     assert admitted.status_code == 200
     assert admitted.json()["adapters"][0]["name"] == "stub"
+
+
+def test_without_a_token_it_serves_only_this_machine_unless_told_the_network_is_the_fence() -> None:
+    assert refusal(None, "127.0.0.1", unauthenticated=False) is None
+    assert refusal("secret", "0.0.0.0", unauthenticated=False) is None
+    assert refusal(None, "0.0.0.0", unauthenticated=True) is None
+    refused = refusal(None, "0.0.0.0", unauthenticated=False)
+    assert refused is not None
+    assert "AIWATCHER_SCORERS_TOKEN" in refused
+    assert "AIWATCHER_SCORERS_UNAUTHENTICATED" in refused
