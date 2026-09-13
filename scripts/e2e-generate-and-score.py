@@ -92,12 +92,28 @@ What it checks:
     exchange, and a gate requiring witnessed answers says why;
 21. a request naming the pinned prompt whose text does not hold its template
     fails at the traces step on the gateway's word, and publishes nothing;
-22. the server stops with runs still in a period it has not written, starts
+22. an application that renders the pinned prompt with the country it cut out
+    of the case's question, and says in which steps, has every exchange
+    witnessed: the gateway cut it out the same way;
+23. an application that asks the deployment's atlas through the gateway which
+    country the question is about, and renders the prompt with the country it
+    took out of the atlas's answer, has every exchange witnessed: the atlas's
+    word, relayed and digested by the gateway, for arguments that were the
+    case's own question;
+24. an application whose model answers with a label, and which takes the
+    capital the label stands for, has every exchange witnessed where the
+    variant's generation config pins that way of taking it — and none, with a
+    gate saying why, where it does not;
+25. an application that answers with the capital and the country from two
+    witnessed calls, in the shape the variant's response schema pins, has every
+    exchange witnessed part by part;
+26. the server stops with runs still in a period it has not written, starts
     again on the same data and replays its log over the period fold's saved
     state: the window counts every run once — the three before the restart
     from their written period, the two after from the period the fold still
     holds open. (A restart that does not replay, as on Laser, is the projector's
-    own test.)
+    own test.) And the journal of what that fold reads has paged the log beside
+    it, keeping no word said in a run.
 
 The server runs behind a stand-in authenticating proxy: a person's requests
 carry its headers, and the application, the gateway and the worker each publish
@@ -201,7 +217,24 @@ CAPITALS = (
 PROMPTS = {
     "baseline": "Answer this question helpfully: {{ question }}",
     "candidate": "Answer this question in one word: {{ question }}",
+    # The country cut out of the question, or out of the atlas's answer.
+    "cut": "Name the capital of {{ country }} in one word.",
+    "labelled": "Answer this question in one word: {{ question }}",
+    "labelled-loose": "Answer this question in one word: {{ question }}",
+    "composed": "Answer this question in one word: {{ question }}",
 }
+
+#: The label a model answers each capital with, and the way the labelled
+#: variants take the capital back out — which only "labelled" pins.
+LABELS = {f"L{at}": capital for at, (_, capital) in enumerate(CAPITALS, start=1)}
+TAKING_LABELS: dict[str, Any] = {"steps": [{"strip": "."}, {"map": LABELS}]}
+#: The shape of the composed variant's answer.
+RESPONSE_SCHEMA = json.dumps(
+    {
+        "type": "object",
+        "properties": {"capital": {"type": "string"}, "country": {"type": "string"}},
+    }
+).encode()
 
 #: What the worker was handed, to check nothing it expected reached it.
 HANDED: list[dict[str, Any]] = []
@@ -226,6 +259,10 @@ class Provider(BaseHTTPRequestHandler):
         system, question = (message["content"] for message in body["messages"][:2])
         country = question.removeprefix("What is the capital of ").removesuffix("?")
         said = application(system, country, dict(CAPITALS)[country])
+        if body.get("user") == "label":
+            said = next(label for label, capital in LABELS.items() if capital == said) + "."
+        if body.get("user") == "country":
+            said = country
         if body.get("user") == "explain":
             said = (
                 f"It is where the government of {country} sits.\n"
@@ -242,6 +279,23 @@ class Provider(BaseHTTPRequestHandler):
                 },
             }
         ).encode()
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+
+class Atlas(BaseHTTPRequestHandler):
+    """A tool the deployment runs: which country a question is about."""
+
+    def log_message(self, format: str, *args: Any) -> None:
+        del format, args
+
+    def do_POST(self) -> None:
+        asked = json.loads(self.rfile.read(int(self.headers["content-length"])))
+        country = str(asked["question"]).removeprefix("What is the capital of ").removesuffix("?")
+        payload = json.dumps({"country": country}).encode()
         self.send_response(200)
         self.send_header("content-type", "application/json")
         self.send_header("content-length", str(len(payload)))
@@ -294,13 +348,20 @@ def code_of(which: str) -> bytes:
 
 
 def generation_of(which: str) -> bytes:
-    return json.dumps({"temperature": 0, "variant": which}).encode()
+    config: dict[str, Any] = {"temperature": 0, "variant": which}
+    if which == "labelled":
+        config["answer_from"] = TAKING_LABELS
+    return json.dumps(config).encode()
 
 
 def holding(run: Generation) -> GeneratedWith:
     """What this worker was built with for the variant it is asked about."""
     which = str(run.variant["experiment_id"])
-    return GeneratedWith.of(code=code_of(which), generation_config=generation_of(which))
+    return GeneratedWith.of(
+        code=code_of(which),
+        generation_config=generation_of(which),
+        response_schema=RESPONSE_SCHEMA if which == "composed" else None,
+    )
 
 
 @generation_task("e2e.capitals.answer", version="1", generated_with=holding)
@@ -332,6 +393,7 @@ def answer(case: Case, run: Generation) -> JsonValue | Generated | Declined:
         # calling the pinned model through a gateway that reports its own runs
         # — with the prompt rendered, unless the run was told to drift from it.
         steps = ["retrieve", "answer"]
+        composed: JsonValue | None = None
         if run.params.get("stray"):
             steps.append("improvise")
         if run.params.get("reorder"):
@@ -356,9 +418,26 @@ def answer(case: Case, run: Generation) -> JsonValue | Generated | Declined:
                         model=str(model["name"]), prompt=(str(prompt["name"]), rendered)
                     ) as llm,
                 ):
+                    cut_from = {"between": ["capital of ", "?"]}
+                    found = ""
+                    if run.params.get("atlas"):
+                        # Which country, from the deployment's atlas, asked
+                        # through the gateway with the case's own question.
+                        atlas = urllib.request.Request(  # noqa: S310 — the e2e's own gateway
+                            GATEWAYS["witness"] + "/tools/atlas",
+                            data=json.dumps({"question": question}).encode(),
+                            method="POST",
+                        )
+                        for name, value in llm.caller_headers().items():
+                            atlas.add_header(name, value)
+                        with urllib.request.urlopen(atlas, timeout=15) as response:  # noqa: S310
+                            found = response.read().decode()
+                    named = extracted(found, {"json_pointer": "/country"}) if found else country
                     system = (
                         "Answer in one word."
                         if run.params.get("drift")
+                        else version.render(country=named)
+                        if run.params.get("cut") or run.params.get("atlas")
                         else version.render(question=question)
                     )
                     if run.params.get("around"):
@@ -383,10 +462,31 @@ def answer(case: Case, run: Generation) -> JsonValue | Generated | Declined:
                         if run.params.get("drift")
                         else llm.caller_body(
                             question=question,
-                            answer_from=taking if run.params.get("explain") else None,
+                            country=named,
+                            found=found,
+                            derived={
+                                "country": {"from": "found", "take": {"json_pointer": "/country"}}
+                            },
+                        )
+                        if run.params.get("atlas")
+                        else llm.caller_body(
+                            question=question,
+                            country=named,
+                            derived={"country": {"from": "question", "take": cut_from}},
+                        )
+                        if run.params.get("cut")
+                        else llm.caller_body(
+                            question=question,
+                            answer_from=taking
+                            if run.params.get("explain")
+                            else TAKING_LABELS
+                            if run.params.get("label")
+                            else None,
                             **({"hint": hint} if run.params.get("hint") else {}),
                         )
                     )
+                    if run.params.get("label"):
+                        told["user"] = "label"
                     if run.params.get("explain"):
                         told["user"] = "explain"
                     if run.params.get("hint"):
@@ -416,11 +516,31 @@ def answer(case: Case, run: Generation) -> JsonValue | Generated | Declined:
                     said = str(reply["choices"][0]["message"]["content"])
                     if run.params.get("explain"):
                         said = extracted(said, taking) or ""
+                    if run.params.get("label"):
+                        said = extracted(said, TAKING_LABELS) or ""
                     llm.usage(
                         prompt_tokens=reply["usage"]["prompt_tokens"],
                         completion_tokens=reply["usage"]["completion_tokens"],
                         model_version=reply["model"],
                     )
+                    if run.params.get("composed"):
+                        # A second witnessed call in the same stage, for the
+                        # country, and an answer made of both replies.
+                        with agent.llm(
+                            model=str(model["name"]), prompt=(str(prompt["name"]), rendered)
+                        ) as country_call:
+                            second = country_call.caller_body(question=question)
+                            second["user"] = "country"
+                            answered = through_gateway(
+                                "witness", country_call.caller_headers(), system, question, second
+                            )
+                            country_call.usage(model_version=answered["model"])
+                        composed = {
+                            "capital": said,
+                            "country": str(answered["choices"][0]["message"]["content"]),
+                        }
+        if composed is not None:
+            return Generated(composed, run_id=flow.correlation.run_id)
         return Generated(said, run_id=flow.correlation.run_id)
     with (
         run.traced(TELEMETRY[0], case) as traced,
@@ -502,6 +622,8 @@ def serve(home: Path) -> subprocess.Popen[bytes]:
         # Periods of five seconds, so one closes while this runs; and a price
         # for the stand-in model, read from a page on a day.
         "AIWATCHER_OBSERVATION_PERIOD_SECONDS": "5",
+        # A journal of what the period fold reads, which a gap is refilled from.
+        "AIWATCHER_OBSERVATION_JOURNAL_DAYS": "1",
         "AIWATCHER_MODEL_PRICES": str(prices(home)),
         # The one credential whose runs witness a generated answer.
         "AIWATCHER_WITNESSES": "serving",
@@ -678,6 +800,9 @@ def declare(
         "settings": {"timeout_seconds": 300},
     }
     staged = [("application.py", code), ("generation.json", generation)]
+    if which == "composed":
+        run["variant"]["response_schema"] = artifact("response.json", RESPONSE_SCHEMA)
+        staged.append(("response.json", RESPONSE_SCHEMA))
     if served:
         run["variant"]["model"] = MODEL
         run["variant"]["workflow"] = {
@@ -734,7 +859,9 @@ def main() -> int:
     )
     provider = ThreadingHTTPServer(("127.0.0.1", 0), Provider)
     threading.Thread(target=provider.serve_forever, daemon=True).start()
-    gateways = []
+    atlas = ThreadingHTTPServer(("127.0.0.1", 0), Atlas)
+    threading.Thread(target=atlas.serve_forever, daemon=True).start()
+    gateways = [atlas]
     for which, secret in (("witness", SERVING_SECRET), ("shared", APPLICATION_SECRET)):
         relay = Gateway(
             f"http://127.0.0.1:{provider.server_address[1]}",
@@ -742,6 +869,7 @@ def main() -> int:
             prompts=PromptRegistry(BASE, token=secret),
             upstream_token="provider-key",  # noqa: S106 — the stand-in provider's
             credential=secret,
+            tools={"atlas": f"http://127.0.0.1:{atlas.server_address[1]}/atlas"},
         )
         gateway = relay.server(port=0)
         threading.Thread(target=gateway.serve_forever, daemon=True).start()
@@ -1449,6 +1577,100 @@ def main() -> int:
             {"state": drifted["execution"]["state"]["state_type"]},
         )
 
+        # Values accounted for beyond the case's input and a reply: a country
+        # cut out of the question, one out of a tool's answer, a label's word the
+        # variant pins or does not, and an answer made of two replies.
+        accounted: dict[str, dict[str, Any]] = {}
+        for which, params, measurement in (
+            ("cut", {"cut": True}, "measurement-13"),
+            ("cut", {"atlas": True}, "measurement-14"),
+            ("labelled", {"label": True}, "measurement-15"),
+            ("labelled-loose", {"label": True}, "measurement-16"),
+            ("composed", {"composed": True}, "measurement-17"),
+        ):
+            declared = declare(
+                which,
+                dataset,
+                cohort,
+                card,
+                repetition=measurement,
+                params=params,
+                served=True,
+                suffix="-served",
+            )
+            ran = followed(
+                ok(
+                    *call("POST", f"/api/v1/evaluation-runs/{declared['declaration']['id']}/start")[
+                        :2
+                    ],
+                    f"starting the {which} run with {sorted(params)}",
+                )["execution"]["execution_id"]
+            )
+            result_id = declared["declaration"]["run"]["evaluation_id"]
+            accounted[f"{which}:{next(iter(params))}"] = {
+                "state": ran["execution"]["state"]["state_type"],
+                "traces": (call("GET", f"/api/v1/evaluation-results/{result_id}")[1] or {}).get(
+                    "traces"
+                )
+                or {},
+                "gate": (
+                    call(
+                        "POST",
+                        f"/api/v1/evaluation-results/{result_id}/gate",
+                        {"baseline": evaluation, "policy": {"require_witnessed_answer": True}},
+                    )[1]
+                    or {}
+                ),
+            }
+
+        def exchanged(key: str) -> int | None:
+            return accounted[key]["traces"].get("witnessed_exchange")
+
+        check(
+            22,
+            "a country the application cut out of the question in the steps it named is an "
+            "exchange on every answer",
+            accounted["cut:cut"]["state"] == "completed" and exchanged("cut:cut") == len(CAPITALS),
+            accounted["cut:cut"]["traces"],
+        )
+        check(
+            23,
+            "a country taken out of the answer of an atlas the gateway relayed, for the case's "
+            "own question, is an exchange on every answer",
+            accounted["cut:atlas"]["state"] == "completed"
+            and exchanged("cut:atlas") == len(CAPITALS),
+            accounted["cut:atlas"]["traces"],
+        )
+        loose = accounted["labelled-loose:label"]
+        check(
+            24,
+            "a label's capital is an exchange where the variant pins the way it is taken, and "
+            "neither the reply nor an exchange where it does not",
+            accounted["labelled:label"]["state"] == "completed"
+            and exchanged("labelled:label") == len(CAPITALS)
+            and loose["state"] == "completed"
+            and loose["traces"].get("witnessed_answer") == 0
+            and exchanged("labelled-loose:label") == 0
+            and loose["gate"].get("verdict") == "incomplete"
+            and any(
+                "a label's word the variant does not pin" in reason
+                for reason in loose["gate"].get("reasons", [])
+            ),
+            {
+                "pinned": accounted["labelled:label"]["traces"],
+                "loose": loose["traces"],
+                "gate": loose["gate"].get("reasons"),
+            },
+        )
+        check(
+            25,
+            "an answer made of two witnessed replies, in the pinned schema's shape, is an "
+            "exchange part by part",
+            accounted["composed:composed"]["state"] == "completed"
+            and exchanged("composed:composed") == len(CAPITALS),
+            accounted["composed:composed"]["traces"],
+        )
+
         # A restart with a period open: the fold's saved state carries it.
         before = AiwatcherClient(
             service="e2e-capitals", base_url=BASE, token=APPLICATION_SECRET, variant_id=variant_id
@@ -1494,12 +1716,27 @@ def main() -> int:
             ):
                 break
             time.sleep(1)
+        pages = sorted(
+            (home / "server" / ".data" / "prompts" / "variant-observations" / "journal").rglob(
+                "*.json"
+            )
+        )
+        paged = [json.loads(page.read_text()) for page in pages]
+        kept_words = any(
+            "What is the capital" in json.dumps(event) for page in paged for event in page["events"]
+        )
         check(
-            22,
-            "a restart that replays the log over the fold's saved state counts every run once",
+            26,
+            "a restart that replays the log over the fold's saved state counts every run once, "
+            "and the journal paged what the fold reads without a word said in a run",
             restarted.get("runs") == served + 5
-            and restarted.get("runs_from_periods") == served + 3,
-            {key: restarted.get(key) for key in ("runs", "runs_from_periods", "periods")},
+            and restarted.get("runs_from_periods") == served + 3
+            and any(page["events"] for page in paged)
+            and not kept_words,
+            {
+                **{key: restarted.get(key) for key in ("runs", "runs_from_periods", "periods")},
+                "journal_pages": len(pages),
+            },
         )
     finally:
         for relay in gateways:
