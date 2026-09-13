@@ -479,6 +479,13 @@ pub struct Config {
     /// which is a working state: nothing matches a hub result, so every one
     /// stays `unclear`. See `aiwatcher_annotations::sources`.
     pub dataset_sources: Option<String>,
+    /// A JSON table of what models' tokens cost, each price with the page it
+    /// was read from and the day (`aiwatcher_core::prices`). Absent, nothing is
+    /// priced: a cost with no source would read as one somebody checked.
+    pub model_prices: Option<String>,
+    /// How wide a period of what variants were observed doing is when it is
+    /// written down as it closes. An hour unless a deployment says otherwise.
+    pub observation_period: Duration,
     /// The operator's pod templates: a JSON file, one template per name, which
     /// no route writes (ADR_0029). Absent means none, and a step asking for a
     /// pod is refused at registration naming this variable.
@@ -696,6 +703,8 @@ impl Default for Config {
             // The same ten seconds the OTLP exporter and the object store use.
             workflow_runner_timeout: Duration::from_secs(10),
             dataset_sources: None,
+            model_prices: None,
+            observation_period: Duration::from_secs(3_600),
             pod_templates: None,
             pod_namespace: None,
             pod_api_url: None,
@@ -965,6 +974,19 @@ impl Config {
             config.workflow_runner_timeout = Duration::from_secs(seconds);
         }
         config.dataset_sources = var("AIWATCHER_DATASET_SOURCES");
+        config.model_prices = var("AIWATCHER_MODEL_PRICES");
+        if let Some(raw) = var("AIWATCHER_OBSERVATION_PERIOD_SECONDS") {
+            let seconds = raw
+                .parse::<u64>()
+                .ok()
+                .filter(|seconds| (1..=86_400).contains(seconds))
+                .ok_or(ConfigError::Invalid {
+                    name: "AIWATCHER_OBSERVATION_PERIOD_SECONDS",
+                    value: raw,
+                    expected: "how many seconds a written period spans, one to a day",
+                })?;
+            config.observation_period = Duration::from_secs(seconds);
+        }
         config.pod_templates = var("AIWATCHER_POD_TEMPLATES");
         config.pod_namespace = var("AIWATCHER_POD_NAMESPACE");
         config.pod_api_url = var("AIWATCHER_POD_API_URL");

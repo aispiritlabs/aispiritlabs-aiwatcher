@@ -322,6 +322,31 @@ fn build_workflow_runner(config: &Config) -> Result<Option<Arc<dyn WorkflowRunne
 /// A malformed file fails the start-up rather than being skipped: a catalogue
 /// that silently did not load answers every licence question with "unclear"
 /// while looking exactly like one that had.
+/// The deployment's price table, or `None` — nothing is priced without one.
+///
+/// Refused whole when any entry is not a price somebody could check: one
+/// without the page it was read from, or the day.
+fn build_model_prices(config: &Config) -> Result<Option<Arc<aiwatcher_core::prices::ModelPrices>>> {
+    let Some(path) = config.model_prices.as_deref() else {
+        tracing::info!(
+            "AIWATCHER_MODEL_PRICES is unset; nothing a variant was observed doing is priced"
+        );
+        return Ok(None);
+    };
+    let body =
+        std::fs::read(path).with_context(|| format!("reading the model price table at {path}"))?;
+    let table: aiwatcher_core::prices::ModelPrices = serde_json::from_slice(&body)
+        .with_context(|| format!("parsing the model price table at {path}"))?;
+    table.validate().map_err(|problems| {
+        anyhow::anyhow!(
+            "the model price table at {path} is refused: {}",
+            problems.join("; ")
+        )
+    })?;
+    tracing::info!(prices = table.prices.len(), currency = %table.currency, %path, "the model price table is loaded");
+    Ok(Some(Arc::new(table)))
+}
+
 fn build_dataset_sources(config: &Config) -> Result<Arc<SourceCatalog>> {
     let Some(path) = config.dataset_sources.as_deref() else {
         tracing::info!(
@@ -804,6 +829,11 @@ pub async fn build(config: Config) -> Result<Runtime> {
         training: registries.training,
         evaluations: registries.evaluations,
         evaluation_bundles: registries.evaluation_bundles,
+        observation_periods: registries
+            .objects
+            .clone()
+            .map(aiwatcher_projector::PeriodStore::new),
+        model_prices: build_model_prices(&config)?,
         runner: build_workflow_runner(&config)?,
         // Built in the `serve` role too, unlike an executor: opening a block's
         // editor is a person waiting on a request, not an attempt somebody

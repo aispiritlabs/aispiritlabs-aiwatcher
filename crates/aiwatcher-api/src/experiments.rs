@@ -9,7 +9,9 @@
 //!
 //! What each variant was observed doing is a third clock: the runs that named
 //! it on the log, served to somebody using the application rather than made
-//! for a measurement, over the window asked for.
+//! for a measurement, over the window asked for — from the read model, and,
+//! for a window reaching further back than it holds, from the periods written
+//! down as they closed.
 
 use aiwatcher_auth::Role;
 use aiwatcher_evaluation::{Experiment, ExperimentIndex};
@@ -77,7 +79,8 @@ struct ExperimentQuery {
     /// A result in this context every other row is compared with.
     baseline: Option<String>,
     /// How far back the observed runs reach, in seconds; absent or zero is
-    /// everything the log still holds.
+    /// everything the read model still holds. A window also reads every
+    /// written period lying wholly inside it.
     window_seconds: Option<i64>,
 }
 
@@ -142,9 +145,26 @@ async fn get_experiment(
             variants.push(&row.variant_id);
         }
     }
+    // Written periods only for a window: without one, the question is what the
+    // read model holds, and every period ever written is not that.
+    let periods = match (&state.observation_periods, query.window_seconds) {
+        (Some(store), Some(window)) if window > 0 => {
+            let until = now();
+            store
+                .read(&variants, until - window, until)
+                .await
+                .map_err(aiwatcher_evaluation::EvaluationError::Storage)?
+        }
+        _ => Vec::new(),
+    };
     let observed = state
         .read_model
-        .variant_observations(&variants, query.window_seconds)
+        .variant_observations(
+            &variants,
+            query.window_seconds,
+            &periods,
+            state.model_prices.as_deref(),
+        )
         .await;
     Ok(Json(ExperimentView {
         experiment,

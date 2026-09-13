@@ -56,7 +56,12 @@ What it checks:
     naming the call it served, is a second witness to that model's version on
     every one: the log records each run as published by the token that sent it;
 14. an application that steps through a node the pinned workflow does not
-    declare fails at the traces step naming the node, and publishes nothing.
+    declare fails at the traces step naming the node, and publishes nothing;
+15. what the candidate was observed serving is written down as each period
+    closes, and a window asked of the experiment reads those periods with the
+    live runs no written period holds: still five runs, not ten, each model
+    call timed, and priced at the deployment's table, which says where and
+    when the price was read.
 
 The server runs behind a stand-in authenticating proxy: a person's requests
 carry its headers, and the application, the model server and the worker each
@@ -266,6 +271,28 @@ def answer(case: Case, run: Generation) -> JsonValue | Generated | Declined:
 # ── The server. ──────────────────────────────────────────────────────────────
 
 
+def prices(home: Path) -> Path:
+    """The deployment's price table: the stand-in model, per million tokens."""
+    table = home / "prices.json"
+    table.write_text(
+        json.dumps(
+            {
+                "currency": "USD",
+                "prices": [
+                    {
+                        "model": "capitals-stand-in",
+                        "input_per_million": 1.0,
+                        "output_per_million": 2.0,
+                        "source": "https://example.com/capitals-stand-in/pricing",
+                        "as_of": "2026-09-13",
+                    }
+                ],
+            }
+        )
+    )
+    return table
+
+
 def serve(home: Path) -> subprocess.Popen[bytes]:
     """Start an aiwatcher of our own and wait for it."""
     global BASE
@@ -289,6 +316,10 @@ def serve(home: Path) -> subprocess.Popen[bytes]:
         "AIWATCHER_INGEST_ENABLED": "true",
         "AIWATCHER_SEED_FILE": "none",
         "AIWATCHER_LOG": "warn",
+        # Periods of five seconds, so one closes while this runs; and a price
+        # for the stand-in model, read from a page on a day.
+        "AIWATCHER_OBSERVATION_PERIOD_SECONDS": "5",
+        "AIWATCHER_MODEL_PRICES": str(prices(home)),
         "AIWATCHER_AUTH_MODE": "proxy",
         "AIWATCHER_AUTH_INGEST_TOKENS": ",".join(
             [
@@ -710,7 +741,10 @@ def main() -> int:
         )
 
         # The candidate, deployed: the same application serving somebody, each
-        # run naming the variant the result was published as.
+        # run naming the variant the result was published as — a period after
+        # the one the server's fold began in, which is the first it can vouch
+        # for holding whole.
+        time.sleep(6)
         variant_id = candidate.get("variant_id", "")
         production = AiwatcherClient(
             service="e2e-capitals",
@@ -729,6 +763,7 @@ def main() -> int:
                 llm.usage(prompt_tokens=6, completion_tokens=1)
         production.flush()
         TELEMETRY[0].flush()
+        served_at = time.time()
         observed: dict[str, Any] = {}
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
@@ -746,7 +781,7 @@ def main() -> int:
             "what the candidate was observed serving stands beside it, its measurement left out",
             seen.get("runs") == served
             and seen.get("failed") == 0
-            and (seen.get("duration_ms") or {}).get("runs") == served
+            and (seen.get("duration_ms") or {}).get("count") == served
             and seen.get("input_tokens") == 6 * served
             and seen.get("measured_runs", 0) >= len(CAPITALS)
             and baseline_seen.get("runs") == 0
@@ -895,6 +930,50 @@ def main() -> int:
             )[0]
             == 404,
             {"state": strayed["execution"]["state"]["state_type"]},
+        )
+
+        # The same runs, through a window: once the periods they ended in are
+        # written, they are counted from those — and only from those.
+        windowed: dict[str, Any] = {}
+        # A period closes a second after its five, and the writer looks every
+        # five: twelve seconds after the last run, its period is written.
+        time.sleep(max(0.0, served_at + 12 - time.time()))
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            watched = ok(
+                *call("GET", f"/api/v1/experiments/{context_id}?window_seconds=3600")[:2],
+                "reading what was observed over a window",
+            )
+            windowed = next(
+                (row for row in watched["observed"] if row["variant_id"] == variant_id), {}
+            )
+            if windowed.get("runs_from_periods") == served:
+                break
+            time.sleep(1)
+        cost = windowed.get("cost") or {}
+        check(
+            15,
+            "observations over a window read the written periods once, time each call, and price "
+            "them at a dated price",
+            windowed.get("runs") == served
+            and windowed.get("runs_from_periods") == served
+            and (windowed.get("duration_ms") or {}).get("bucketed") is True
+            and (windowed.get("call_ms") or {}).get("count") == served
+            and cost.get("priced_calls") == served
+            and abs(cost.get("amount", 0) - (6 * served * 1.0 + served * 2.0) / 1e6) < 1e-12
+            and [price.get("as_of") for price in cost.get("prices", [])] == ["2026-09-13"],
+            {
+                key: windowed.get(key)
+                for key in (
+                    "runs",
+                    "runs_from_periods",
+                    "periods",
+                    "incomplete_periods",
+                    "duration_ms",
+                    "call_ms",
+                    "cost",
+                )
+            },
         )
     finally:
         worker.stop()

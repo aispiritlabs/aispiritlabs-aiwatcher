@@ -8780,7 +8780,7 @@
           {
             "name": "window_seconds",
             "in": "query",
-            "description": "How far back the observed runs reach, in seconds; absent or zero is\neverything the log still holds.",
+            "description": "How far back the observed runs reach, in seconds; absent or zero is\neverything the read model still holds. A window also reads every\nwritten period lying wholly inside it.",
             "required": false,
             "schema": {
               "type": [
@@ -16210,15 +16210,24 @@
       },
       "DurationSummary": {
         "type": "object",
-        "description": "Finished runs' durations, by nearest rank, over this many runs.",
+        "description": "Durations, in milliseconds, over this many.",
         "required": [
-          "runs",
+          "count",
           "p50",
           "p90",
           "p99",
           "max"
         ],
         "properties": {
+          "bucketed": {
+            "type": "boolean",
+            "description": "The percentiles are a bucket's upper bound rather than a duration\nsomebody measured — at most an eighth of a doubling high — because a\nwritten period keeps buckets."
+          },
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
           "max": {
             "type": "integer",
             "format": "int64"
@@ -16234,10 +16243,6 @@
           "p99": {
             "type": "integer",
             "format": "int64"
-          },
-          "runs": {
-            "type": "integer",
-            "minimum": 0
           }
         }
       },
@@ -22293,6 +22298,84 @@
           "failed"
         ]
       },
+      "ObservedCost": {
+        "type": "object",
+        "description": "What calls cost at the deployment's prices, and what the figure rests on.",
+        "required": [
+          "currency",
+          "amount",
+          "priced_calls",
+          "unpriced_calls",
+          "prices"
+        ],
+        "properties": {
+          "amount": {
+            "type": "number",
+            "format": "double"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "priced_calls": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Calls whose model the table prices.",
+            "minimum": 0
+          },
+          "prices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PriceUsed"
+            },
+            "description": "Where each price used was read, and when."
+          },
+          "unpriced_calls": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Calls whose model it does not, which cost something nobody priced —\nnever nought.",
+            "minimum": 0
+          },
+          "unpriced_models": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ObservedModel": {
+        "type": "object",
+        "description": "Model calls that named one model, and what they reported using.",
+        "required": [
+          "model",
+          "calls",
+          "input_tokens",
+          "output_tokens",
+          "cached_tokens"
+        ],
+        "properties": {
+          "cached_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "calls": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "input_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "model": {
+            "type": "string"
+          },
+          "output_tokens": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "OnTimeout": {
         "oneOf": [
           {
@@ -23022,6 +23105,26 @@
           "chosen",
           "rejected"
         ]
+      },
+      "PriceUsed": {
+        "type": "object",
+        "description": "One price a cost used, with where and when it was read.",
+        "required": [
+          "model",
+          "source",
+          "as_of"
+        ],
+        "properties": {
+          "as_of": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        }
       },
       "ProfileInput": {
         "type": "object",
@@ -29149,9 +29252,34 @@
           "measured_runs",
           "llm_calls",
           "input_tokens",
-          "output_tokens"
+          "output_tokens",
+          "periods",
+          "runs_from_periods",
+          "incomplete_periods"
         ],
         "properties": {
+          "call_ms": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DurationSummary",
+                "description": "How long each model call took, from the spans of those runs — which the\nread model sheds before it sheds a run, so it may count fewer calls\nthan `llm_calls`."
+              }
+            ]
+          },
+          "cost": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ObservedCost",
+                "description": "What those calls cost at the deployment's price table. Absent when the\ndeployment loaded none."
+              }
+            ]
+          },
           "duration_ms": {
             "oneOf": [
               {
@@ -29159,7 +29287,7 @@
               },
               {
                 "$ref": "#/components/schemas/DurationSummary",
-                "description": "How long a finished run took, end to end, by nearest rank. A run is one\nrequest answered, so this stands beside a result's per-case latency —\non another clock, over other inputs. Absent when none finished."
+                "description": "How long a finished run took, end to end. A run is one request\nanswered, so this stands beside a result's per-case latency — on\nanother clock, over other inputs. Absent when none finished."
               }
             ]
           },
@@ -29174,6 +29302,11 @@
               "null"
             ],
             "format": "date-time"
+          },
+          "incomplete_periods": {
+            "type": "integer",
+            "description": "Of the periods, those whose fold could not vouch it held every run that\nended in them.",
+            "minimum": 0
           },
           "input_tokens": {
             "type": "integer",
@@ -29198,9 +29331,21 @@
             "description": "Runs naming it that answered a measurement's cases, left out of every\nother figure.",
             "minimum": 0
           },
+          "models": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ObservedModel"
+            },
+            "description": "The same calls by the model they named, from their spans."
+          },
           "output_tokens": {
             "type": "integer",
             "format": "int64"
+          },
+          "periods": {
+            "type": "integer",
+            "description": "Written periods these figures include. Nought when the window asked for\nnone, or reached no further back than what the read model holds.",
+            "minimum": 0
           },
           "running": {
             "type": "integer",
@@ -29213,10 +29358,27 @@
             "description": "Runs naming the variant that no measurement made.",
             "minimum": 0
           },
+          "runs_from_periods": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Of `runs`, those counted from written periods rather than from the read\nmodel — which leaves out every run that ended in one.",
+            "minimum": 0
+          },
           "succeeded": {
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          },
+          "time_to_first_token_ms": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DurationSummary",
+                "description": "Time to a call's first token, where the call reported one."
+              }
+            ]
           },
           "variant_id": {
             "type": "string"

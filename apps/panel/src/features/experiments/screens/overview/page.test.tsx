@@ -125,10 +125,36 @@ function serving() {
               failed: 1,
               running: 0,
               measured_runs: 4,
-              duration_ms: { runs: 20, p50: 800, p90: 2_000, p99: 4_000, max: 4_000 },
+              duration_ms: { count: 20, p50: 800, p90: 2_000, p99: 4_000, max: 4_000 },
+              call_ms: {
+                count: 20,
+                p50: 400,
+                p90: 900,
+                p99: 1_500,
+                max: 1_500,
+                bucketed: true,
+              },
+              time_to_first_token_ms: { count: 20, p50: 150, p90: 300, p99: 500, max: 500 },
               llm_calls: 20,
               input_tokens: 2_000,
               output_tokens: 300,
+              periods: 3,
+              runs_from_periods: 12,
+              incomplete_periods: 1,
+              cost: {
+                currency: 'USD',
+                amount: 0.008,
+                priced_calls: 18,
+                unpriced_calls: 2,
+                unpriced_models: ['local-llama'],
+                prices: [
+                  {
+                    model: 'gpt-4o',
+                    source: 'https://openai.com/api/pricing',
+                    as_of: '2026-09-01',
+                  },
+                ],
+              },
             },
             {
               variant_id: 'baseline-variant',
@@ -140,6 +166,9 @@ function serving() {
               llm_calls: 0,
               input_tokens: 0,
               output_tokens: 0,
+              periods: 0,
+              runs_from_periods: 0,
+              incomplete_periods: 0,
             },
           ],
         },
@@ -187,7 +216,15 @@ it('lists the contexts, and opens one as its variants beside the chosen baseline
   expect(screen.getByText('800 ms / 2.00 s / 4.00 s')).toBeTruthy();
   expect(
     screen.getByText(
-      /over 20 finished · 2,000 \/ 300 tokens in 20 calls · 4 measured runs left out/,
+      /over 20 finished · 2,000 \/ 300 tokens in 20 calls · 4 measured runs left out · 12 runs from 3 written periods, 1 incomplete/,
+    ),
+  ).toBeTruthy();
+  // Each call's time, bucketed where written periods are in it, and a cost
+  // that says which prices it rests on and what it could not price.
+  expect(screen.getByText('a call ≤ 400 ms / 900 ms / 1.50 s · first token 150 ms')).toBeTruthy();
+  expect(
+    screen.getByText(
+      /0\.008 USD for 18 priced calls, at gpt-4o as of 2026-09-01 · 2 calls unpriced \(local-llama\)/,
     ),
   ).toBeTruthy();
   expect(screen.getByText('no runs outside a measurement (4 measured)')).toBeTruthy();

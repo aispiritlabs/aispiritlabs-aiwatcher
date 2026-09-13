@@ -408,6 +408,11 @@ function Row({
  * The runs that named a variant outside a measurement. A count of nothing is
  * drawn as nothing observed rather than as zeros, and the measurement's own
  * runs are said to be left out, so a benchmark never reads as traffic.
+ *
+ * What the calls cost is the server's, at the deployment's price table, and it
+ * says when and where each price was read; calls no price covers are counted as
+ * unpriced rather than as free. Figures that include written periods are
+ * bucketed, and say so.
  */
 function Observed({ observed }: { observed: VariantObservations | undefined }) {
   if (!observed || observed.runs === 0) {
@@ -420,6 +425,11 @@ function Observed({ observed }: { observed: VariantObservations | undefined }) {
     );
   }
   const duration = observed.duration_ms;
+  const calls = observed.call_ms;
+  const first = observed.time_to_first_token_ms;
+  const cost = observed.cost;
+  const spread = (summary: { p50: number; p90: number; p99: number; bucketed?: boolean }) =>
+    `${summary.bucketed ? '≤ ' : ''}${ms(summary.p50)} / ${ms(summary.p90)} / ${ms(summary.p99)}`;
   return (
     <>
       <Link
@@ -429,18 +439,36 @@ function Observed({ observed }: { observed: VariantObservations | undefined }) {
       >
         {`${observed.runs} runs · ${observed.failed} failed`}
       </Link>
-      {duration ? (
-        <div>{`${ms(duration.p50)} / ${ms(duration.p90)} / ${ms(duration.p99)}`}</div>
+      {duration ? <div>{spread(duration)}</div> : null}
+      {calls ? (
+        <div>{`a call ${spread(calls)}${first ? ` · first token ${ms(first.p50)}` : ''}`}</div>
       ) : null}
       <div className="text-muted-foreground">
         {[
-          duration ? `over ${duration.runs} finished` : 'none finished',
+          duration ? `over ${duration.count} finished` : 'none finished',
           `${observed.input_tokens.toLocaleString()} / ${observed.output_tokens.toLocaleString()} tokens in ${observed.llm_calls} calls`,
           observed.measured_runs > 0 ? `${observed.measured_runs} measured runs left out` : null,
+          observed.periods > 0
+            ? `${observed.runs_from_periods} runs from ${observed.periods} written ${
+                observed.periods === 1 ? 'period' : 'periods'
+              }${observed.incomplete_periods > 0 ? `, ${observed.incomplete_periods} incomplete` : ''}`
+            : null,
         ]
           .filter(Boolean)
           .join(' · ')}
       </div>
+      {cost ? (
+        <div className="text-muted-foreground">
+          {cost.priced_calls > 0
+            ? `${cost.amount.toLocaleString(undefined, { maximumSignificantDigits: 3 })} ${cost.currency} for ${cost.priced_calls} priced calls, at ${cost.prices
+                .map((price) => `${price.model} as of ${price.as_of}`)
+                .join(', ')}`
+            : 'no call was priced'}
+          {cost.unpriced_calls > 0
+            ? ` · ${cost.unpriced_calls} calls unpriced (${(cost.unpriced_models ?? []).join(', ')})`
+            : ''}
+        </div>
+      ) : null}
     </>
   );
 }

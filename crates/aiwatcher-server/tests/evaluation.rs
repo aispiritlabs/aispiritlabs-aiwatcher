@@ -29,6 +29,9 @@ mod judge;
 #[path = "evaluation/experiments.rs"]
 mod experiments;
 
+#[path = "evaluation/observations.rs"]
+mod observations;
+
 #[path = "evaluation/gate.rs"]
 mod gate;
 

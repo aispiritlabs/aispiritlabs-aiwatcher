@@ -215,6 +215,13 @@ pub struct AppState {
     /// same shape as `prompts` — an empty listing would say somebody's upload
     /// had been accepted and lost.
     pub evaluation_bundles: Option<Arc<dyn aiwatcher_evaluation::ApprovalBundles>>,
+    /// Closed periods of what variants were observed doing, written as they
+    /// close, which a window reaching past the read model is answered from.
+    /// `None` without an object store: observations are then the read model's.
+    pub observation_periods: Option<aiwatcher_projector::PeriodStore>,
+    /// What models' tokens cost, as the deployment loaded it. `None` prices
+    /// nothing.
+    pub model_prices: Option<Arc<aiwatcher_core::prices::ModelPrices>>,
     /// `None` when no orchestrator is configured, which makes the rerun route
     /// answer 501 rather than 404 — the same reasoning as `prompts`, with a
     /// sharper edge. This is the only thing here that makes something happen

@@ -21,6 +21,7 @@ pub mod error;
 pub mod human_input;
 pub mod ids;
 pub mod ports;
+pub mod prices;
 pub mod prompts;
 pub mod storage;
 pub mod stream;

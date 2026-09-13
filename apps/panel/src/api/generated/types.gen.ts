@@ -2287,14 +2287,20 @@ export type DurablePage = {
 };
 
 /**
- * Finished runs' durations, by nearest rank, over this many runs.
+ * Durations, in milliseconds, over this many.
  */
 export type DurationSummary = {
+    /**
+     * The percentiles are a bucket's upper bound rather than a duration
+     * somebody measured — at most an eighth of a doubling high — because a
+     * written period keeps buckets.
+     */
+    bucketed?: boolean;
+    count: number;
     max: number;
     p50: number;
     p90: number;
     p99: number;
-    runs: number;
 };
 
 /**
@@ -5362,6 +5368,39 @@ export const NodeStatus = {
 export type NodeStatus = typeof NodeStatus[keyof typeof NodeStatus];
 
 /**
+ * What calls cost at the deployment's prices, and what the figure rests on.
+ */
+export type ObservedCost = {
+    amount: number;
+    currency: string;
+    /**
+     * Calls whose model the table prices.
+     */
+    priced_calls: number;
+    /**
+     * Where each price used was read, and when.
+     */
+    prices: Array<PriceUsed>;
+    /**
+     * Calls whose model it does not, which cost something nobody priced —
+     * never nought.
+     */
+    unpriced_calls: number;
+    unpriced_models?: Array<string>;
+};
+
+/**
+ * Model calls that named one model, and what they reported using.
+ */
+export type ObservedModel = {
+    cached_tokens: number;
+    calls: number;
+    input_tokens: number;
+    model: string;
+    output_tokens: number;
+};
+
+/**
  * What happens to a step whose question nobody answered in time.
  *
  * A deadline without one of these would be a clock with nothing behind it, so
@@ -5806,6 +5845,15 @@ export const PreferenceLabel = { CHOSEN: 'chosen', REJECTED: 'rejected' } as con
  * Which of two answers a reviewer preferred.
  */
 export type PreferenceLabel = typeof PreferenceLabel[keyof typeof PreferenceLabel];
+
+/**
+ * One price a cost used, with where and when it was read.
+ */
+export type PriceUsed = {
+    as_of: string;
+    model: string;
+    source: string;
+};
 
 export type ProfileInput = {
     summary: {
@@ -9131,9 +9179,16 @@ export type VariantManifest = {
  * One variant's runs in the window.
  */
 export type VariantObservations = {
+    call_ms?: null | DurationSummary;
+    cost?: null | ObservedCost;
     duration_ms?: null | DurationSummary;
     failed: number;
     first_seen_at?: string | null;
+    /**
+     * Of the periods, those whose fold could not vouch it held every run that
+     * ended in them.
+     */
+    incomplete_periods: number;
     /**
      * What the runs' model calls reported. A call that reported no usage
      * counts nothing, which the call count beside it lets a reader see.
@@ -9146,13 +9201,28 @@ export type VariantObservations = {
      * other figure.
      */
     measured_runs: number;
+    /**
+     * The same calls by the model they named, from their spans.
+     */
+    models?: Array<ObservedModel>;
     output_tokens: number;
+    /**
+     * Written periods these figures include. Nought when the window asked for
+     * none, or reached no further back than what the read model holds.
+     */
+    periods: number;
     running: number;
     /**
      * Runs naming the variant that no measurement made.
      */
     runs: number;
+    /**
+     * Of `runs`, those counted from written periods rather than from the read
+     * model — which leaves out every run that ended in one.
+     */
+    runs_from_periods: number;
     succeeded: number;
+    time_to_first_token_ms?: null | DurationSummary;
     variant_id: string;
 };
 
@@ -13100,7 +13170,8 @@ export type GetExperimentData = {
         baseline?: string | null;
         /**
          * How far back the observed runs reach, in seconds; absent or zero is
-         * everything the log still holds.
+         * everything the read model still holds. A window also reads every
+         * written period lying wholly inside it.
          */
         window_seconds?: number | null;
     };

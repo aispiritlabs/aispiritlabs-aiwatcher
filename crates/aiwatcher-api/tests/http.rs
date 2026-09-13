@@ -186,6 +186,8 @@ impl Fixture {
         let state = AppState {
             evaluations: None,
             evaluation_bundles: None,
+            observation_periods: None,
+            model_prices: None,
             answer_limits: Default::default(),
             query_engine: aiwatcher_datasets::QueryEngine::Flow,
             query_step_timeout_seconds: None,
