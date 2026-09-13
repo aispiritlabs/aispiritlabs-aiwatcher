@@ -42,6 +42,10 @@ use super::{Cluster, ClusterError, Created, Observed, Phase};
 /// Docker-compatible is a symlink away.
 const ENGINE: &str = "docker";
 
+/// The name a container calls this host by, and what an operator's
+/// `AIWATCHER_POD_API_URL` is expected to name.
+const HOST_ALIAS: &str = "host.docker.internal";
+
 /// The filter every container is found again by — the manifest's own label,
 /// written the way this engine takes one, so a selector that had drifted from
 /// the manifest would quietly watch nothing.
@@ -281,6 +285,10 @@ pub fn run_arguments(manifest: &Value, name: &str) -> Result<Vec<String>, String
         // one's key. `backoffLimit: 0`, in this engine's words.
         "--restart=no".to_owned(),
         format!("--pull={}", pull(container)),
+        // One name for the host on every engine. A desktop engine answers it
+        // already; a Docker Engine on Linux only when told, and without this a
+        // container there never reaches the API the template was given.
+        format!("--add-host={HOST_ALIAS}:host-gateway"),
     ];
     for written in [
         manifest::labels_of(manifest),
@@ -489,6 +497,30 @@ mod tests {
                 // the name the claim is held under.
                 && environment.contains(&&"AIWATCHER_WORKER_NAME=aiwatcher-abc".to_owned()),
             "{environment:?}"
+        );
+    }
+
+    #[test]
+    fn a_container_reaches_the_host_by_one_name_on_a_linux_engine_too() {
+        // OrbStack and Docker Desktop answer `host.docker.internal` on their
+        // own, which is why its absence went unseen: on a Docker Engine on
+        // Linux the claim never arrived.
+        let arguments = arguments(&manifest_for(None, json!({})));
+        assert!(
+            arguments.contains(&"--add-host=host.docker.internal:host-gateway".to_owned()),
+            "{arguments:?}"
+        );
+        // An engine flag, so before the image: after it, it is the step's
+        // command's first argument.
+        let image = arguments
+            .iter()
+            .position(|argument| argument == "aiwatcher-stage:e2e")
+            .expect("the step's image");
+        assert!(
+            arguments[..image]
+                .iter()
+                .any(|argument| argument.starts_with("--add-host=")),
+            "{arguments:?}"
         );
     }
 

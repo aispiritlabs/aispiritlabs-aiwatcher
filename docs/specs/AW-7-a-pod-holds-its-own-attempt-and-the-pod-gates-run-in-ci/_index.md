@@ -2,12 +2,12 @@
 id: AW-7
 title: A pod holds its own attempt, and the pod gates run in CI
 step: job
-status: todo
+status: doing
 branch: main
 repo: aiwatcher
 created: 2026-09-12
-updated: 2026-09-12
-tags: [spec/AW-7, step/job, branch/main, status/todo]
+updated: 2026-09-13
+tags: [spec/AW-7, step/job, branch/main, status/doing]
 ---
 <!-- spec-card -->
 
@@ -42,3 +42,4 @@ Three parts, cheapest first:
 
 ## Log
 - 2026-09-12 10:40 — spec opened on `main` after AW-4's 2.7; investigation, spec and job written together with ADR_0031 (proposed), at the owner's ask for "an ADR and a plan"; nothing built
+- 2026-09-13 — Part A+B built (7.1, 7.2) and CI written (7.3); both host gates green on OrbStack; the CI half waits on a push

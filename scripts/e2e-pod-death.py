@@ -134,11 +134,13 @@ def main() -> None:
                 f"refusing to run against {context!r}: it is not a known-local cluster"
             )
         print(f"· cluster {context}")
-    api_host = arguments.api_host or (steps.HOST_ALIAS if in_image else "127.0.0.1")
+    api_host = arguments.api_host or steps.api_host_for(arguments.runtime, context)
     if not arguments.no_build:
         steps.build_server(arguments.runtime)
         if in_image:
             steps.build_image()
+    if in_cluster:
+        steps.load_image(context)
 
     home = Path(tempfile.mkdtemp(prefix="aiwatcher-pod-death-"))
     server: subprocess.Popen[bytes] | None = None

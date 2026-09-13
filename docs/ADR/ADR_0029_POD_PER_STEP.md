@@ -418,6 +418,14 @@ reading of a manifest lives beside its writing, in `pods::manifest`, so the two
 backends that are not a cluster read one representation rather than being
 handed a second description of it.
 
+**One name for the host.** Every container is started with
+`--add-host=host.docker.internal:host-gateway`. A desktop engine answers that
+name without being told, and a Docker Engine on Linux answers it only when told,
+so without the flag the backend worked on a Mac and never on a server — a
+container's claim never arrived, and nothing ran the gate anywhere else to see
+it. It is not a setting, because every engine should answer one name, and it
+costs nothing where the name already resolves (AW-7).
+
 **Why `docker` drives the command line.** A machine with an engine has the
 client, the five calls used here are the stable half of its interface, and an
 HTTP client against a socket whose path and permissions differ per installation

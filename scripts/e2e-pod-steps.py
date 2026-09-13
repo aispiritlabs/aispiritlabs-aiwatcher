@@ -62,6 +62,11 @@ API on the *host*, at `host.docker.internal` by default: `--api-host` is the
 other name for it on a cluster that calls it something else (`host.k3d.internal`
 on k3d), and an unreachable one is refused by a probe pod before any stage runs
 rather than four attempts later.
+
+On **kind** it does two more things, which is what lets CI run it (AW-7): the
+image is loaded into the cluster's nodes, whose container runtime is not the
+engine it was built on, and on Linux the API host defaults to the `kind`
+network's gateway — this host's own address on that bridge.
 """
 
 from __future__ import annotations
@@ -94,8 +99,12 @@ LOCAL_CONTEXTS = ("orbstack", "docker-desktop", "minikube", "colima", "rancher-d
 LOCAL_PREFIXES = ("kind-", "k3d-", "k3s-")
 
 #: Where a pod reaches the host. OrbStack and Docker Desktop both answer to
-#: this one; k3d calls it `host.k3d.internal`.
+#: this one; k3d calls it `host.k3d.internal`. A container on any engine is
+#: told it, by the backend and by the probe below alike.
 HOST_ALIAS = "host.docker.internal"
+
+#: How a kind cluster's context is named, and what is left is the cluster's.
+KIND_PREFIX = "kind-"
 
 QUEUE = "pods"
 TEMPLATE = "e2e"
@@ -131,6 +140,59 @@ def local(context: str) -> bool:
 
 def current_context() -> str:
     return run("kubectl", "config", "current-context").strip()
+
+
+def kind_cluster(context: str) -> str | None:
+    """The kind cluster a context names, or `None` for any other cluster."""
+    return context.removeprefix(KIND_PREFIX) if context.startswith(KIND_PREFIX) else None
+
+
+def load_image(context: str) -> None:
+    """Put the image where a kind node's runtime looks for it.
+
+    OrbStack's and Docker Desktop's clusters run on the engine the image was
+    built on, so `IfNotPresent` finds it. A kind node is a container with a
+    containerd of its own that has never seen it, and every pod would wait in
+    `ErrImagePull` until its start allowance ended it. kind skips an image the
+    nodes already hold, so this is asked on every run, `--no-build` included.
+    """
+    cluster = kind_cluster(context)
+    if cluster is None:
+        return
+    print(f"· loading {IMAGE} into kind cluster {cluster}")
+    run("kind", "load", "docker-image", IMAGE, "--name", cluster)
+
+
+def api_host_for(runtime: str, context: str) -> str:
+    """Where a pod reaches the server this starts, when nobody said.
+
+    A process is already on this host. A container, and a pod on a desktop
+    engine's cluster, reach it by `HOST_ALIAS`. A kind node on Linux does not
+    answer that name, and the `kind` network's gateway is this host's own
+    address on the bridge the nodes sit on. On a desktop engine that gateway
+    is inside the engine's VM, which is why only Linux asks for it.
+    """
+    if runtime == "process":
+        return "127.0.0.1"
+    if runtime == "pods" and kind_cluster(context) is not None and sys.platform == "linux":
+        return kind_gateway()
+    return HOST_ALIAS
+
+
+def kind_gateway() -> str:
+    """The `kind` network's IPv4 gateway, as the engine reports it."""
+    said = run(
+        "docker",
+        "network",
+        "inspect",
+        "kind",
+        "--format",
+        "{{range .IPAM.Config}}{{.Gateway}} {{end}}",
+    )
+    for address in said.split():
+        if ":" not in address:
+            return address
+    raise SystemExit(f"the kind network has no IPv4 gateway ({said.strip()!r}): pass --api-host")
 
 
 def kubeconfig_for(context: str, home: Path) -> Path:
@@ -385,7 +447,20 @@ class Containers:
             f"print(urllib.request.urlopen('{api_url}/livez', timeout=10).status)"
         )
         outcome = subprocess.run(  # noqa: S603 — commands this script composes itself
-            ["docker", "run", "--rm", "--pull=missing", IMAGE, "python", "-c", script],
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--pull=missing",
+                # What the backend passes every container, so the probe asks
+                # the question the stages will: on a Linux engine the name
+                # resolves only when told.
+                f"--add-host={HOST_ALIAS}:host-gateway",
+                IMAGE,
+                "python",
+                "-c",
+                script,
+            ],
             capture_output=True,
             text=True,
             check=False,
@@ -1069,14 +1144,14 @@ def main() -> None:
         print("· this host's container engine, one container per attempt")
     else:
         print("· this host, one process per attempt")
-    # A container reaches the host by the same name a pod does; a process is
-    # already on it.
-    api_host = arguments.api_host or (HOST_ALIAS if in_image else "127.0.0.1")
+    api_host = arguments.api_host or api_host_for(arguments.runtime, context)
 
     if not arguments.no_build:
         build_server(arguments.runtime)
         if in_image:
             build_image()
+    if in_cluster:
+        load_image(context)
 
     home = Path(tempfile.mkdtemp(prefix="aiwatcher-pods-"))
     server: subprocess.Popen[bytes] | None = None

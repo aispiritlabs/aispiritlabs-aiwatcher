@@ -1,0 +1,65 @@
+name: Pod gate (cluster)
+
+# Four stages as four Jobs on a real cluster (AW-7). Not on every push: it needs
+# the server built with the `kube` feature — a second build beside the one CI
+# already makes — and a cluster. What it catches beyond the `pods` job in
+# `ci.yml` is the cluster client and the chart's Role, and a day's delay on
+# those is the trade. Run it by hand before merging a change to either.
+on:
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+  RUSTFLAGS: '-D warnings'
+
+jobs:
+  pods:
+    name: Pod gate (kind)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      # Where the gate keeps its server's log, for the upload below.
+      TMPDIR: ${{ runner.temp }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.98.0'
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          version: '0.12.7'
+          enable-cache: true
+          cache-dependency-glob: sdk/python/uv.lock
+      - uses: extractions/setup-just@v3
+      # The gate renders the chart's launcher Role and asks the cluster what it
+      # allows, so the grant is checked against a real API server.
+      - uses: azure/setup-helm@v5.0.1
+
+      # Its context is `kind-aiwatcher-pods`, which the gate's own local-context
+      # check accepts. On Linux the gate loads the worker image into the nodes
+      # and points the pods at the `kind` network's gateway.
+      - uses: helm/kind-action@v1.15.0
+        with:
+          cluster_name: aiwatcher-pods
+
+      - name: four stages as four pods
+        run: just e2e-pods
+
+      - name: the server's log
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pod-gate-cluster-server-log
+          path: ${{ runner.temp }}/aiwatcher-pods-*/server.log
+          if-no-files-found: ignore

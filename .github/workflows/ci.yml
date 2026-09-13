@@ -216,6 +216,53 @@ jobs:
       - name: the publication and collection protocol, against real conditional writes
         run: just test-evaluation-s3
 
+  # A step's pod as a process and as a container on this runner (AW-7): the
+  # same launcher, claim by key, watch, cancel and kept log a cluster gets, and
+  # for the container the image and the kernel's OOMKilled. A stand-in cluster
+  # opens no connection, so these are what caught two rustls providers
+  # panicking on the first real call in a build that was green everywhere
+  # else. A Linux engine is also the only place `--add-host` is proven: a
+  # desktop engine answers `host.docker.internal` without it. The cluster
+  # gate is `pods-cluster.yml`, nightly, because it needs a second build and
+  # a cluster.
+  pods:
+    name: Pod gates (process, docker)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # The gates keep their server's log under a temporary directory, and
+      # this is where the upload below looks for it.
+      TMPDIR: ${{ runner.temp }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.98.0'
+      - uses: Swatinem/rust-cache@v2
+      # The gate is a `uv run --script` against the SDK in this checkout.
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          version: '0.12.7'
+          enable-cache: true
+          cache-dependency-glob: sdk/python/uv.lock
+      - uses: extractions/setup-just@v3
+
+      # Builds the plain binary; the docker gate after it finds it current and
+      # builds only the worker image.
+      - name: four stages as four processes
+        run: just e2e-processes
+
+      - name: four stages as four containers
+        run: just e2e-docker
+
+      - name: the server's log
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pod-gates-server-log
+          path: ${{ runner.temp }}/aiwatcher-pods-*/server.log
+          if-no-files-found: ignore
+
   # One entry per engine a deployment may choose (AW-3): the engine's own checks,
   # then the conformance suite against it — the same four questions, Flow's rows.
   query:

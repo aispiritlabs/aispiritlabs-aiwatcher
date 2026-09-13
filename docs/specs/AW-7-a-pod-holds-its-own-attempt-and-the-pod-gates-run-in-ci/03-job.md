@@ -1,12 +1,12 @@
 ---
 id: AW-7
 step: job
-status: todo
+status: doing
 branch: main
 repo: aiwatcher
 created: 2026-09-12
-updated: 2026-09-12
-tags: [spec/AW-7, step/job, branch/main, status/todo]
+updated: 2026-09-13
+tags: [spec/AW-7, step/job, branch/main, status/doing]
 ---
 
 `#spec/AW-7` · `#step/job` · `#branch/main` · repo `aiwatcher`
@@ -95,17 +95,24 @@ Beyond what ADR_0031 decides:
 ## Tasks
 
 ### Part A+B — the host name, and the gates in CI
-- [ ] 7.1 **The host name.**
+- [x] 7.1 **The host name.**
   - `docker::run_arguments` passes `--add-host=host.docker.internal:host-gateway`.
   - A unit test asserts it.
   - One sentence goes into ADR_0029's backend amendment.
   - `just e2e-docker` passes on OrbStack.
-- [ ] 7.2 **The gate on kind.**
+  - Done. The gate's own probe container gets the flag too: it would otherwise
+    refuse a Linux engine before the backend was ever asked.
+- [x] 7.2 **The gate on kind.**
   - On a `kind-*` context, `e2e-pod-steps.py` runs
     `kind load docker-image <image> --name <cluster>` after building.
   - `--api-host` defaults to the `kind` Docker network's gateway, from
     `docker network inspect`. The probe pod still refuses an address that does
     not route before any stage runs.
+  - Done, with one difference: the gateway is the default **on Linux only**. On
+    a desktop engine the `kind` network's gateway is inside the engine's VM and
+    does not reach the Mac, so `host.docker.internal` stays the default there.
+    `e2e-pod-death.py` shares both helpers. Checked with a stubbed `run` here,
+    since `kind` is not installed on this machine; proven by `pods-cluster.yml`.
 - [ ] 7.3 **CI.**
   - `ci.yml` gains a `pods` job running `just e2e-processes` and
     `just e2e-docker`.
@@ -114,6 +121,8 @@ Beyond what ADR_0031 decides:
   - The runner answers `OOMKilled` on cgroup v2. If it does not, that phase is an
     *Issue* in `04-tests.md`, not a skipped assertion.
   - Green on a pushed branch before this part is called done.
+  - Written, and not done: both workflows wait on a push and a manual dispatch
+    of `pods-cluster.yml`.
 
 ### Part C1 — `aiwatcher-auth`
 - [ ] 7.4 **The credential.**
@@ -264,3 +273,4 @@ Beyond what ADR_0031 decides:
 
 ## Log
 - 2026-09-12 10:40 — job planned on `main`: A+B first (the host name, and the three gates in CI with kind for the cluster one), then C in six slices behind ADR_0031; ten further decisions made, the Docker argument list among them; nothing built
+- 2026-09-13 — 7.1 and 7.2 built: `--add-host=host.docker.internal:host-gateway` on every container and on the gate's probe; the gates load their image into kind and, on Linux, reach the runner by the `kind` network's gateway. `e2e-docker` (six phases, OOMKilled included) and `e2e-processes` pass on OrbStack. 7.3 written — a `pods` job in `ci.yml` and a nightly `pods-cluster.yml` on kind, both uploading the server log on failure — and waits on a push
