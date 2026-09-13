@@ -515,6 +515,13 @@ enum Misstep {
     Again { node: String, from: Vec<String> },
     /// A start past the number the declaration allows the node.
     Beyond { node: String, at_most: u64 },
+    /// A start that followed an edge more often than the declaration allows
+    /// the edge: a cycle gone round more times than its way back permits.
+    Followed {
+        from: String,
+        to: String,
+        at_most: u64,
+    },
 }
 
 /// Each node's starts the declaration does not lead to, each node once.
@@ -527,12 +534,29 @@ enum Misstep {
 /// is reached from whichever side ran, a declared loop goes round as often as
 /// its nodes complete, and a node run twice for one completion, or again when
 /// nothing leads back into it, is named — as is a start past the node's
-/// declared `at_most`, counting every start, retries included.
+/// declared `at_most`, counting every start, retries included, and a start
+/// that follows an edge past that edge's `at_most`, counting the turns it
+/// used and did not give back. A start uses an unbounded turn before a bounded
+/// one, and of bounded ones the edge with the most left, so an edge is counted
+/// only for a start nothing else led to.
 fn out_of_order(shape: &Topology, steps: &[StepSeen]) -> Vec<Misstep> {
+    type Edge<'a> = (&'a str, &'a str);
     let entries = shape.entries();
     let mut entered = vec![false; entries.len()];
+    let bound = |from: &str, to: &str| {
+        shape
+            .edges_at_most
+            .get(&(from.to_owned(), to.to_owned()))
+            .copied()
+    };
+    // Turns waiting at a node: along unbounded edges, and given back by a
+    // failed start nothing bounded led to.
     let mut sent: BTreeMap<&str, u64> = BTreeMap::new();
-    let mut using: BTreeMap<&str, u64> = BTreeMap::new();
+    // Turns waiting along each bounded edge, and how often each was followed.
+    let mut waiting: BTreeMap<Edge<'_>, u64> = BTreeMap::new();
+    let mut followed: BTreeMap<Edge<'_>, u64> = BTreeMap::new();
+    // What each start still running used, so a failure gives back that turn.
+    let mut using: BTreeMap<&str, Vec<Option<Edge<'_>>>> = BTreeMap::new();
     let mut started = std::collections::BTreeSet::new();
     let mut starts: BTreeMap<&str, u64> = BTreeMap::new();
     let mut found: Vec<Misstep> = Vec::new();
@@ -541,6 +565,7 @@ fn out_of_order(shape: &Topology, steps: &[StepSeen]) -> Vec<Misstep> {
             Misstep::Before { node: named, .. }
             | Misstep::Again { node: named, .. }
             | Misstep::Beyond { node: named, .. } => named == node,
+            Misstep::Followed { .. } => false,
         })
     };
     for step in steps {
@@ -561,21 +586,47 @@ fn out_of_order(shape: &Topology, steps: &[StepSeen]) -> Vec<Misstep> {
                 if shape.repeats.contains(node) && !first {
                     continue;
                 }
-                let admitted = if let Some(waiting) = sent.get_mut(node).filter(|n| **n > 0) {
-                    *waiting -= 1;
-                    true
+                let admitted = if let Some(turns) = sent.get_mut(node).filter(|n| **n > 0) {
+                    *turns -= 1;
+                    Some(None)
                 } else if let Some(at) = entries
                     .iter()
                     .position(|part| part.contains(node))
                     .filter(|at| !entered[*at])
                 {
                     entered[at] = true;
-                    true
+                    Some(None)
+                } else if let Some(edge) = waiting
+                    .iter()
+                    .filter(|((_, to), turns)| *to == node && **turns > 0)
+                    .max_by_key(|((from, to), _)| {
+                        bound(from, to)
+                            .unwrap_or(0)
+                            .saturating_sub(followed.get(&(*from, *to)).copied().unwrap_or(0))
+                    })
+                    .map(|(edge, _)| *edge)
+                {
+                    *waiting.entry(edge).or_default() -= 1;
+                    let times = followed.entry(edge).or_default();
+                    *times += 1;
+                    if let Some(at_most) = bound(edge.0, edge.1).filter(|at_most| *times > *at_most)
+                        && !found.iter().any(|misstep| {
+                            matches!(misstep, Misstep::Followed { from, to, .. }
+                                if from == edge.0 && to == edge.1)
+                        })
+                    {
+                        found.push(Misstep::Followed {
+                            from: edge.0.to_owned(),
+                            to: edge.1.to_owned(),
+                            at_most,
+                        });
+                    }
+                    Some(Some(edge))
                 } else {
-                    false
+                    None
                 };
-                if admitted {
-                    *using.entry(node).or_default() += 1;
+                if let Some(turn) = admitted {
+                    using.entry(node).or_default().push(turn);
                     continue;
                 }
                 if named(&found, node) {
@@ -595,21 +646,27 @@ fn out_of_order(shape: &Topology, steps: &[StepSeen]) -> Vec<Misstep> {
                 });
             }
             StepSeen::Completed(node) => {
-                if let Some(held) = using.get_mut(node.as_str()).filter(|n| **n > 0) {
-                    *held -= 1;
-                }
+                using.get_mut(node.as_str()).and_then(Vec::pop);
                 for (from, to) in &shape.edges {
                     if from == node {
-                        *sent.entry(to.as_str()).or_default() += 1;
+                        if bound(from, to).is_some() {
+                            *waiting.entry((from.as_str(), to.as_str())).or_default() += 1;
+                        } else {
+                            *sent.entry(to.as_str()).or_default() += 1;
+                        }
                     }
                 }
             }
-            StepSeen::Failed(node) => {
-                if let Some(held) = using.get_mut(node.as_str()).filter(|n| **n > 0) {
-                    *held -= 1;
-                    *sent.entry(node.as_str()).or_default() += 1;
+            StepSeen::Failed(node) => match using.get_mut(node.as_str()).and_then(Vec::pop) {
+                Some(Some(edge)) => {
+                    *waiting.entry(edge).or_default() += 1;
+                    if let Some(times) = followed.get_mut(&edge) {
+                        *times = times.saturating_sub(1);
+                    }
                 }
-            }
+                Some(None) => *sent.entry(node.as_str()).or_default() += 1,
+                None => {}
+            },
         }
     }
     found
@@ -873,6 +930,12 @@ pub fn trace_answers(
                             Misstep::Beyond { node, at_most } => format!(
                                 "the run started {node} more than {at_most} times, and the \
                                  declaration of {} the variant pins allows it at most that many",
+                                pinned.name
+                            ),
+                            Misstep::Followed { from, to, at_most } => format!(
+                                "the run went from {from} to {to} more than {at_most} times, and \
+                                 the declaration of {} the variant pins allows that edge at most \
+                                 that many",
                                 pinned.name
                             ),
                             Misstep::Again { node, from } => format!(
@@ -1528,6 +1591,64 @@ mod tests {
         .expect_err("a fourth item");
         assert_eq!(repeated.len(), 1, "{repeated:?}");
         assert!(repeated[0].contains("started summarise more than 3 times"));
+    }
+
+    #[test]
+    fn a_bound_on_the_way_back_holds_a_cycle_through_several_nodes_to_its_rounds() {
+        let pinned = Topology::read(&serde_json::json!({
+            "nodes": ["draft", "write", "review", "publish"],
+            "edges": [
+                ["draft", "write"],
+                ["write", "review"],
+                {"from": "review", "to": "write", "at_most": 2},
+                ["review", "publish"]
+            ]
+        }))
+        .expect("a shape");
+        let round = ["write:s", "write:c", "review:s", "review:c"];
+        let rounds = |times: usize, tail: &[&'static str]| {
+            let mut steps = vec!["draft:s", "draft:c"];
+            for _ in 0..times {
+                steps.extend(round);
+            }
+            steps.extend(tail);
+            steps
+        };
+
+        let rows = traversed(&pinned, &rounds(3, &["publish:s", "publish:c"]))
+            .expect("written once and sent back twice");
+        assert_eq!(rows[0].on_workflow, Some(true));
+        let retried = traversed(
+            &pinned,
+            &[
+                "draft:s",
+                "draft:c",
+                "write:s",
+                "write:c",
+                "review:s",
+                "review:c",
+                "write:s",
+                "write:f",
+                "write:s",
+                "write:c",
+                "review:s",
+                "review:c",
+                "write:s",
+                "write:c",
+                "review:s",
+                "review:c",
+                "publish:s",
+            ],
+        )
+        .expect("a failed start gives its turn back, so a retry is not another round");
+        assert_eq!(retried[0].on_workflow, Some(true));
+
+        let looped = traversed(&pinned, &rounds(4, &[])).expect_err("sent back a third time");
+        assert_eq!(looped.len(), 1, "{looped:?}");
+        assert!(
+            looped[0].contains("went from review to write more than 2 times"),
+            "{looped:?}"
+        );
     }
 
     #[test]

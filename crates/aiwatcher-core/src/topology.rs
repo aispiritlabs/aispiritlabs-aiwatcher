@@ -10,9 +10,11 @@
 //!
 //! A node may say it `repeats` — a stage run once per item, as many times as
 //! the run has items — and how many times at most it may start (`at_most`),
-//! which bounds a declared loop and a repeating node alike. Both change what a
-//! run may do on the shape, so both are part of the digest; a declaration
-//! without either digests as it always did.
+//! which bounds a declared loop and a repeating node alike. An edge may say how
+//! many times at most a run may follow it (`at_most` on the edge), which bounds
+//! the rounds of a cycle through several nodes by the edge that leads back.
+//! Each changes what a run may do on the shape, so each is part of the digest;
+//! a declaration without any digests as it always did.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -30,6 +32,10 @@ pub struct Topology {
     /// Nodes declared `"at_most": n`: how many times a run may start one,
     /// retries included.
     pub at_most: BTreeMap<String, u64>,
+    /// Edges declared `"at_most": n`: how many times a run may follow one — a
+    /// start of its target that the completion of its source led to, and that
+    /// did not fail and give its turn back.
+    pub edges_at_most: BTreeMap<(String, String), u64>,
 }
 
 impl Topology {
@@ -41,6 +47,7 @@ impl Topology {
     pub fn read(declaration: &Value) -> Option<Self> {
         let mut repeats = BTreeSet::new();
         let mut at_most = BTreeMap::new();
+        let mut edges_at_most = BTreeMap::new();
         let nodes: BTreeSet<String> = declaration
             .get("nodes")?
             .as_array()?
@@ -85,10 +92,20 @@ impl Topology {
                 };
                 match edge {
                     Value::Array(pair) => Some((text(pair.first())?, text(pair.get(1))?)),
-                    Value::Object(fields) => Some((
-                        text(fields.get("from").or_else(|| fields.get("source")))?,
-                        text(fields.get("to").or_else(|| fields.get("target")))?,
-                    )),
+                    Value::Object(fields) => {
+                        let edge = (
+                            text(fields.get("from").or_else(|| fields.get("source")))?,
+                            text(fields.get("to").or_else(|| fields.get("target")))?,
+                        );
+                        if let Some(bound) = fields
+                            .get("at_most")
+                            .and_then(Value::as_u64)
+                            .filter(|n| *n > 0)
+                        {
+                            edges_at_most.insert(edge.clone(), bound);
+                        }
+                        Some(edge)
+                    }
                     _ => None,
                 }
             })
@@ -98,12 +115,14 @@ impl Topology {
             edges,
             repeats,
             at_most,
+            edges_at_most,
         })
     }
 
     /// The sha256 of the shape: sorted node IDs and sorted edges — and the
-    /// repeating nodes and the bounds, where there are any — labelled so no
-    /// other digest in this system can be mistaken for it.
+    /// repeating nodes, the nodes' bounds and the edges' bounds, each where it
+    /// or one after it is declared — labelled so no other digest in this
+    /// system can be mistaken for it.
     #[must_use]
     pub fn digest(&self) -> String {
         let edges: Vec<[&str; 2]> = self
@@ -117,14 +136,23 @@ impl Topology {
             serde_json::json!(self.nodes),
             serde_json::json!(edges),
         ];
-        if !self.repeats.is_empty() || !self.at_most.is_empty() {
+        let edge_bounds = !self.edges_at_most.is_empty();
+        if !self.repeats.is_empty() || !self.at_most.is_empty() || edge_bounds {
             canonical.push(serde_json::json!(self.repeats));
         }
-        if !self.at_most.is_empty() {
+        if !self.at_most.is_empty() || edge_bounds {
             let bounds: Vec<(&str, u64)> = self
                 .at_most
                 .iter()
                 .map(|(node, bound)| (node.as_str(), *bound))
+                .collect();
+            canonical.push(serde_json::json!(bounds));
+        }
+        if edge_bounds {
+            let bounds: Vec<(&str, &str, u64)> = self
+                .edges_at_most
+                .iter()
+                .map(|((from, to), bound)| (from.as_str(), to.as_str(), *bound))
                 .collect();
             canonical.push(serde_json::json!(bounds));
         }
@@ -243,6 +271,28 @@ mod tests {
             bounded.digest(),
             repeating.digest(),
             "a bound is part of the shape"
+        );
+        let rounds = Topology::read(&json!({
+            "nodes": ["retrieve", "answer"],
+            "edges": [["retrieve", "answer"], {"from": "answer", "to": "retrieve", "at_most": 2}]
+        }))
+        .expect("a shape");
+        let unbounded = Topology::read(&json!({
+            "nodes": ["retrieve", "answer"],
+            "edges": [["retrieve", "answer"], ["answer", "retrieve"]]
+        }))
+        .expect("a shape");
+        assert_eq!(
+            rounds
+                .edges_at_most
+                .get(&("answer".to_owned(), "retrieve".to_owned())),
+            Some(&2)
+        );
+        assert_eq!(rounds.edges, unbounded.edges);
+        assert_ne!(
+            rounds.digest(),
+            unbounded.digest(),
+            "an edge's bound is part of the shape"
         );
     }
 

@@ -113,8 +113,11 @@ class Generation:
         declared loop goes round as often as it completes and a node started
         twice for one completion is refused — declare a node that runs once per
         item as ``{"id": …, "repeats": True}``, and bound how many times a node
-        may start, retries included, with ``"at_most": n``. Name the run on the
-        answer as with :meth:`traced` (``run_id=flow.correlation.run_id``).
+        may start, retries included, with ``"at_most": n`` — or how many times
+        the run may go round a cycle through several nodes by bounding the edge
+        that leads back, ``{"from": "review", "to": "write", "at_most": n}``,
+        which a retry does not count against. Name the run on the answer as with
+        :meth:`traced` (``run_id=flow.correlation.run_id``).
         """
         with client.workflow(
             workflow_id,
