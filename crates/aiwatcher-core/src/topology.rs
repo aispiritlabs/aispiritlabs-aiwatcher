@@ -12,7 +12,9 @@
 //! the run has items — and how many times at most it may start (`at_most`),
 //! which bounds a declared loop and a repeating node alike. An edge may say how
 //! many times at most a run may follow it (`at_most` on the edge), which bounds
-//! the rounds of a cycle through several nodes by the edge that leads back.
+//! the rounds of a cycle through several nodes by the edge that leads back —
+//! and several edges may share one bound (`bounds`), which is how a cycle with
+//! more than one way back is held to its rounds whichever way each one took.
 //! Each changes what a run may do on the shape, so each is part of the digest;
 //! a declaration without any digests as it always did.
 
@@ -36,6 +38,10 @@ pub struct Topology {
     /// start of its target that the completion of its source led to, and that
     /// did not fail and give its turn back.
     pub edges_at_most: BTreeMap<(String, String), u64>,
+    /// Edges declared together under one bound, `"bounds": [{"edges": [...],
+    /// "at_most": n}]`: how many times a run may follow any of them, counted
+    /// together. A bound of one edge is that edge's own `at_most`.
+    pub bounds: BTreeMap<BTreeSet<(String, String)>, u64>,
 }
 
 impl Topology {
@@ -78,51 +84,88 @@ impl Topology {
         if nodes.is_empty() {
             return None;
         }
-        let edges = declaration
+        let text = |value: Option<&Value>| {
+            value
+                .and_then(Value::as_str)
+                .filter(|text| !text.is_empty())
+                .map(ToOwned::to_owned)
+        };
+        let edge_of = |edge: &Value| match edge {
+            Value::Array(pair) => Some((text(pair.first())?, text(pair.get(1))?)),
+            Value::Object(fields) => Some((
+                text(fields.get("from").or_else(|| fields.get("source")))?,
+                text(fields.get("to").or_else(|| fields.get("target")))?,
+            )),
+            _ => None,
+        };
+        let edges: BTreeSet<(String, String)> = declaration
             .get("edges")
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
             .filter_map(|edge| {
-                let text = |value: Option<&Value>| {
-                    value
-                        .and_then(Value::as_str)
-                        .filter(|text| !text.is_empty())
-                        .map(ToOwned::to_owned)
-                };
-                match edge {
-                    Value::Array(pair) => Some((text(pair.first())?, text(pair.get(1))?)),
-                    Value::Object(fields) => {
-                        let edge = (
-                            text(fields.get("from").or_else(|| fields.get("source")))?,
-                            text(fields.get("to").or_else(|| fields.get("target")))?,
-                        );
-                        if let Some(bound) = fields
-                            .get("at_most")
-                            .and_then(Value::as_u64)
-                            .filter(|n| *n > 0)
-                        {
-                            edges_at_most.insert(edge.clone(), bound);
-                        }
-                        Some(edge)
-                    }
-                    _ => None,
+                let read = edge_of(edge)?;
+                if let Some(bound) = edge
+                    .get("at_most")
+                    .and_then(Value::as_u64)
+                    .filter(|n| *n > 0)
+                {
+                    edges_at_most.insert(read.clone(), bound);
                 }
+                Some(read)
             })
             .collect();
+        let mut bounds: BTreeMap<BTreeSet<(String, String)>, u64> = BTreeMap::new();
+        for bound in declaration
+            .get("bounds")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let Some(at_most) = bound
+                .get("at_most")
+                .and_then(Value::as_u64)
+                .filter(|n| *n > 0)
+            else {
+                continue;
+            };
+            // Only edges the declaration has: a bound on a way the shape does
+            // not lead holds nothing a run could do.
+            let shared: BTreeSet<(String, String)> = bound
+                .get("edges")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(edge_of)
+                .filter(|edge| edges.contains(edge))
+                .collect();
+            let mut single = shared.iter();
+            match (single.next(), single.next()) {
+                (None, _) => {}
+                (Some(edge), None) => {
+                    let held = edges_at_most.entry(edge.clone()).or_insert(at_most);
+                    *held = (*held).min(at_most);
+                }
+                (Some(_), Some(_)) => {
+                    let held = bounds.entry(shared).or_insert(at_most);
+                    *held = (*held).min(at_most);
+                }
+            }
+        }
         Some(Self {
             nodes,
             edges,
             repeats,
             at_most,
             edges_at_most,
+            bounds,
         })
     }
 
     /// The sha256 of the shape: sorted node IDs and sorted edges — and the
-    /// repeating nodes, the nodes' bounds and the edges' bounds, each where it
-    /// or one after it is declared — labelled so no other digest in this
-    /// system can be mistaken for it.
+    /// repeating nodes, the nodes' bounds, the edges' bounds and the bounds
+    /// several edges share, each where it or one after it is declared —
+    /// labelled so no other digest in this system can be mistaken for it.
     #[must_use]
     pub fn digest(&self) -> String {
         let edges: Vec<[&str; 2]> = self
@@ -136,7 +179,8 @@ impl Topology {
             serde_json::json!(self.nodes),
             serde_json::json!(edges),
         ];
-        let edge_bounds = !self.edges_at_most.is_empty();
+        let shared = !self.bounds.is_empty();
+        let edge_bounds = !self.edges_at_most.is_empty() || shared;
         if !self.repeats.is_empty() || !self.at_most.is_empty() || edge_bounds {
             canonical.push(serde_json::json!(self.repeats));
         }
@@ -153,6 +197,22 @@ impl Topology {
                 .edges_at_most
                 .iter()
                 .map(|((from, to), bound)| (from.as_str(), to.as_str(), *bound))
+                .collect();
+            canonical.push(serde_json::json!(bounds));
+        }
+        if shared {
+            let bounds: Vec<(Vec<[&str; 2]>, u64)> = self
+                .bounds
+                .iter()
+                .map(|(edges, bound)| {
+                    (
+                        edges
+                            .iter()
+                            .map(|(from, to)| [from.as_str(), to.as_str()])
+                            .collect(),
+                        *bound,
+                    )
+                })
                 .collect();
             canonical.push(serde_json::json!(bounds));
         }
@@ -293,6 +353,49 @@ mod tests {
             rounds.digest(),
             unbounded.digest(),
             "an edge's bound is part of the shape"
+        );
+        let two_ways_back = json!({
+            "nodes": ["write", "review", "fix"],
+            "edges": [["write", "review"], ["review", "write"], ["review", "fix"], ["fix", "review"]],
+        });
+        let before = Topology::read(&two_ways_back).expect("a shape").digest();
+        let mut shared = two_ways_back.clone();
+        shared["bounds"] = json!([
+            {"edges": [["review", "write"], {"from": "fix", "to": "review"}, ["nowhere", "write"]], "at_most": 3},
+            {"edges": [["review", "write"]], "at_most": 5},
+            {"edges": [], "at_most": 2},
+        ]);
+        let shared = Topology::read(&shared).expect("a shape");
+        assert_eq!(
+            shared.bounds,
+            BTreeMap::from([(
+                BTreeSet::from([
+                    ("fix".to_owned(), "review".to_owned()),
+                    ("review".to_owned(), "write".to_owned()),
+                ]),
+                3,
+            )]),
+            "an edge the shape lacks bounds nothing, and a bound of one edge is its own"
+        );
+        assert_eq!(
+            shared
+                .edges_at_most
+                .get(&("review".to_owned(), "write".to_owned())),
+            Some(&5)
+        );
+        assert_ne!(
+            shared.digest(),
+            before,
+            "a shared bound is part of the shape"
+        );
+        let mut spelled = two_ways_back;
+        spelled["edges"][1] = json!({"from": "review", "to": "write", "at_most": 5});
+        spelled["bounds"] =
+            json!([{"edges": [["fix", "review"], ["review", "write"]], "at_most": 3}]);
+        assert_eq!(
+            Topology::read(&spelled).expect("a shape").digest(),
+            shared.digest(),
+            "one bound, however it was spelled"
         );
     }
 

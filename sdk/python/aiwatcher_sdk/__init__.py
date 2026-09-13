@@ -594,6 +594,7 @@ class AiwatcherClient:
         *,
         nodes: list[str] | list[dict[str, Any]] | None = None,
         edges: list[tuple[str, str]] | list[dict[str, Any]] | None = None,
+        bounds: list[dict[str, Any]] | None = None,
         name: str | None = None,
         execution_id: str | None = None,
         run_id: str | None = None,
@@ -625,11 +626,25 @@ class AiwatcherClient:
         runs in one process. A stage-per-pod orchestrator must pass the same
         value from every pod — its own execution id is the obvious choice.
 
+        `bounds` lets several edges share one bound, counted together —
+        ``[{"edges": [("review", "write"), ("fix", "review")], "at_most": 3}]``
+        — which is how a cycle with more than one way back is held to its rounds.
+
         `variant_id` and `evaluation_id` mean what they mean on :meth:`run`: the
         variant answering, and the measurement a run answers a case for.
         """
         resolved_nodes = _normalize_nodes(nodes)
         resolved_edges = _normalize_edges(edges)
+        resolved_bounds = [
+            {
+                **bound,
+                "edges": [
+                    list(edge) if isinstance(edge, tuple) else edge
+                    for edge in bound.get("edges", [])
+                ],
+            }
+            for bound in bounds or []
+        ]
         context = Correlation(
             run_id=run_id or _new_id(),
             conversation_id=conversation_id,
@@ -646,9 +661,10 @@ class AiwatcherClient:
                 context,
                 {
                     "name": name or workflow_id,
-                    "version": _topology_version(resolved_nodes, resolved_edges),
+                    "version": _topology_version(resolved_nodes, resolved_edges, resolved_bounds),
                     "nodes": resolved_nodes,
                     "edges": resolved_edges,
+                    **({"bounds": resolved_bounds} if resolved_bounds else {}),
                 },
             )
         flow = WorkflowContext(self, context)
@@ -804,14 +820,21 @@ def _normalize_edges(
     return resolved
 
 
-def _topology_version(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> str:
+def _topology_version(
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+    bounds: list[dict[str, Any]] | None = None,
+) -> str:
     """A content hash of the shape, so re-declaring costs nothing.
 
     Over the *canonical* form, not the caller's dict order: a version that
     changed because somebody reordered a keyword argument would make every
     execution look like a new graph.
     """
-    canonical = json.dumps({"nodes": nodes, "edges": edges}, sort_keys=True, separators=(",", ":"))
+    shape: dict[str, Any] = {"nodes": nodes, "edges": edges}
+    if bounds:
+        shape["bounds"] = bounds
+    canonical = json.dumps(shape, sort_keys=True, separators=(",", ":"))
     return f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()[:16]}"
 
 

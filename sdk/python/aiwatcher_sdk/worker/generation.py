@@ -100,6 +100,7 @@ class Generation:
         *,
         nodes: list[str] | list[dict[str, Any]],
         edges: list[tuple[str, str]] | list[dict[str, Any]] | None = None,
+        bounds: list[dict[str, Any]] | None = None,
     ) -> Generator[WorkflowContext, None, None]:
         """The same run, as an execution of the workflow the variant pins.
 
@@ -116,13 +117,17 @@ class Generation:
         may start, retries included, with ``"at_most": n`` — or how many times
         the run may go round a cycle through several nodes by bounding the edge
         that leads back, ``{"from": "review", "to": "write", "at_most": n}``,
-        which a retry does not count against. Name the run on the answer as with
+        which a retry does not count against — and a cycle with more than one
+        way back by a bound its edges share, ``bounds=[{"edges": [("review",
+        "write"), ("fix", "review")], "at_most": n}]``, counted together. Name
+        the run on the answer as with
         :meth:`traced` (``run_id=flow.correlation.run_id``).
         """
         with client.workflow(
             workflow_id,
             nodes=nodes,
             edges=edges,
+            bounds=bounds,
             run_id=f"generate-{self.evaluation_id}-{case.case_id}-{uuid.uuid4().hex[:12]}",
             variant_id=self.variant_id or None,
             evaluation_id=self.evaluation_id,

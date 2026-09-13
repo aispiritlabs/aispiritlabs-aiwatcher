@@ -77,6 +77,24 @@ def test_the_version_is_a_hash_of_the_shape_not_of_the_call(
     assert len({event["data"]["version"] for event in transport.of_type("workflow.declared")}) == 2
 
 
+def test_edges_sharing_a_bound_are_declared_with_it_and_move_the_version(
+    client: AiwatcherClient, transport: RecordingTransport
+) -> None:
+    edges = [("write", "review"), ("review", "write"), ("review", "fix"), ("fix", "review")]
+    with client.workflow("revise", nodes=["write", "review", "fix"], edges=edges):
+        pass
+    bound = [{"edges": [("review", "write"), ("fix", "review")], "at_most": 3}]
+    with client.workflow("revise", nodes=["write", "review", "fix"], edges=edges, bounds=bound):
+        pass
+
+    plain, bounded = transport.of_type("workflow.declared")
+    assert "bounds" not in plain["data"], "a declaration without one sends what it always did"
+    assert bounded["data"]["bounds"] == [
+        {"edges": [["review", "write"], ["fix", "review"]], "at_most": 3}
+    ]
+    assert plain["data"]["version"] != bounded["data"]["version"]
+
+
 def test_a_workflow_in_one_process_sends_no_execution_id(
     client: AiwatcherClient, transport: RecordingTransport
 ) -> None:
