@@ -48,7 +48,7 @@ pub use observations::{
 };
 pub use periods::PeriodStore;
 pub use pipeline::{Projector, ProjectorConfig};
-pub use readmodel::{ReadModel, RunDetail, RunFilter, RunPage, RunStatus, RunSummary};
+pub use readmodel::{NodeStep, ReadModel, RunDetail, RunFilter, RunPage, RunStatus, RunSummary};
 pub use spans::{SpanFilter, SpanOutcome, SpanPage, SpanRow};
 pub use window::cutoff;
 pub use workflows::{

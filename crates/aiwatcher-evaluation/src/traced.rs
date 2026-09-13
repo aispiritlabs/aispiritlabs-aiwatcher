@@ -56,9 +56,19 @@ pub struct TracedRun {
     pub workflow_topology: Option<String>,
     /// The workflow nodes it started a step of.
     pub nodes_run: Vec<String>,
+    /// Each node step's start and end, in the order its log holds them.
+    pub node_steps: Vec<StepSeen>,
     /// Calls other runs say they served for this one: a serving host's run
     /// naming it as the caller, each call with its own publisher.
     pub served_for_it: Vec<TracedCall>,
+}
+
+/// One step of a workflow node, as a run's log holds it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StepSeen {
+    Started(String),
+    Completed(String),
+    Failed(String),
 }
 
 /// What the traces showed about one answer.
@@ -258,6 +268,40 @@ impl GenerationTrace {
     }
 }
 
+/// The nodes a run started before any node the declaration leads into them
+/// from had completed, each once, with those nodes.
+///
+/// Any one completed predecessor admits a node: a declared branch runs one
+/// side, and a join after it is reached from whichever side ran. A node nothing
+/// leads into starts whenever it likes.
+fn out_of_order(shape: &Topology, steps: &[StepSeen]) -> Vec<(String, Vec<String>)> {
+    let mut completed = std::collections::BTreeSet::new();
+    let mut found: Vec<(String, Vec<String>)> = Vec::new();
+    for step in steps {
+        match step {
+            StepSeen::Started(node) => {
+                let before: Vec<String> = shape
+                    .edges
+                    .iter()
+                    .filter(|(_, to)| to == node)
+                    .map(|(from, _)| from.clone())
+                    .collect();
+                if !before.is_empty()
+                    && !before.iter().any(|from| completed.contains(from))
+                    && !found.iter().any(|(named, _)| named == node)
+                {
+                    found.push((node.clone(), before));
+                }
+            }
+            StepSeen::Completed(node) => {
+                completed.insert(node.clone());
+            }
+            StepSeen::Failed(_) => {}
+        }
+    }
+    found
+}
+
 /// Hold each generated answer to the run it names.
 ///
 /// `runs` holds the runs the log had, ended and complete; a run an answer names
@@ -403,6 +447,15 @@ pub fn trace_answers(
                                 pinned.name
                             ));
                         }
+                    }
+                    for (node, before) in out_of_order(shape, &run.node_steps) {
+                        on = false;
+                        said(format!(
+                            "the run started {node} before {} had completed, and the declaration \
+                             of {} the variant pins leads into it only from there",
+                            before.join(" or "),
+                            pinned.name
+                        ));
                     }
                 }
                 row.on_workflow = Some(on);
@@ -735,6 +788,76 @@ mod tests {
 
         assert!(refused[0].contains("another shape"), "{refused:?}");
         assert!(refused[1].contains("improvise"), "{refused:?}");
+    }
+
+    #[test]
+    fn a_run_that_started_a_node_before_what_leads_into_it_completed_is_refused() {
+        let pinned = shape(&[("retrieve", "answer")]);
+        let steps = |order: &[(&str, bool)]| -> Vec<StepSeen> {
+            order
+                .iter()
+                .map(|(node, started)| {
+                    if *started {
+                        StepSeen::Started((*node).to_owned())
+                    } else {
+                        StepSeen::Completed((*node).to_owned())
+                    }
+                })
+                .collect()
+        };
+        let runs = BTreeMap::from([
+            (
+                "in-order".to_owned(),
+                TracedRun {
+                    node_steps: steps(&[
+                        ("retrieve", true),
+                        ("retrieve", false),
+                        ("answer", true),
+                        ("answer", false),
+                    ]),
+                    ..workflow_run(&pinned, &["retrieve", "answer"])
+                },
+            ),
+            (
+                "answered-first".to_owned(),
+                TracedRun {
+                    node_steps: steps(&[
+                        ("answer", true),
+                        ("retrieve", true),
+                        ("retrieve", false),
+                        ("answer", false),
+                        ("answer", true),
+                    ]),
+                    ..workflow_run(&pinned, &["answer", "retrieve"])
+                },
+            ),
+        ]);
+
+        let rows = trace_answers(
+            &workflow_variant(),
+            "variant",
+            "answers",
+            &[answer("c1", Some("in-order"))],
+            &runs,
+            Some(&pinned),
+        )
+        .expect("the order the declaration leads");
+        assert_eq!(rows[0].on_workflow, Some(true));
+
+        let refused = trace_answers(
+            &workflow_variant(),
+            "variant",
+            "answers",
+            &[answer("c2", Some("answered-first"))],
+            &runs,
+            Some(&pinned),
+        )
+        .expect_err("answer started before retrieve completed");
+        assert_eq!(refused.len(), 1, "named once: {refused:?}");
+        assert!(
+            refused[0].contains("started answer before retrieve had completed"),
+            "{refused:?}"
+        );
     }
 
     #[test]

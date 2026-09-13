@@ -160,6 +160,7 @@ mod tests {
             caller_run_id: None,
             workflow_topology: None,
             nodes_run: Vec::new(),
+            node_steps: Vec::new(),
             started_at: started,
             last_event_at: started,
             ended_at: None,

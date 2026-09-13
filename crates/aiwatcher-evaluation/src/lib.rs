@@ -54,7 +54,8 @@ pub use review::{
 };
 pub use store::EvidenceCipher;
 pub use traced::{
-    GENERATION_TRACES, GenerationTrace, TracedAnswer, TracedCall, TracedRun, trace_answers,
+    GENERATION_TRACES, GenerationServed, GenerationTrace, StepSeen, TracedAnswer, TracedCall,
+    TracedRun, trace_answers,
 };
 
 pub use context::{

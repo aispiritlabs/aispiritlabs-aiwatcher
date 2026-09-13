@@ -691,7 +691,7 @@ async fn a_serving_host_witnesses_the_model_and_a_run_off_the_pinned_workflow_is
     };
     for (run_id, events) in [
         application("run-served", &["retrieve", "answer"]),
-        application("run-self-served", &["answer"]),
+        application("run-self-served", &["retrieve", "answer"]),
     ] {
         folded_run(&read_model, run_id, "worker", Some("support-app"), events).await;
     }

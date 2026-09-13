@@ -29,8 +29,8 @@ use aiwatcher_evaluation::{
     DatasetKind, EvaluationError, EvidenceState, ExternalScorers, GENERATED_ANSWERS,
     GENERATED_WITH, GENERATION_TRACES, GeneratedWith, GenerationTrace, JudgeFailure, JudgeModel,
     Judged, PublishEvaluation, RecordedAnswer, Registry as Evaluations, ScorerFailure, StepOrigin,
-    TracedAnswer, TracedCall, TracedRun, VariantManifest, external_questions, external_replies,
-    questions, replies, score_with, trace_answers,
+    StepSeen, TracedAnswer, TracedCall, TracedRun, VariantManifest, external_questions,
+    external_replies, questions, replies, score_with, trace_answers,
 };
 use aiwatcher_execution::{
     ActivityCommand, ActivityContext, ActivityError, ActivityExecutor, ActivityResult,
@@ -804,6 +804,17 @@ impl TracesExecutor {
                     workflow: summary.workflow,
                     workflow_topology: summary.workflow_topology,
                     nodes_run: summary.nodes_run,
+                    node_steps: summary
+                        .node_steps
+                        .into_iter()
+                        .map(|step| match step {
+                            aiwatcher_projector::NodeStep::Started(node) => StepSeen::Started(node),
+                            aiwatcher_projector::NodeStep::Completed(node) => {
+                                StepSeen::Completed(node)
+                            }
+                            aiwatcher_projector::NodeStep::Failed(node) => StepSeen::Failed(node),
+                        })
+                        .collect(),
                     served_for_it,
                 },
             );

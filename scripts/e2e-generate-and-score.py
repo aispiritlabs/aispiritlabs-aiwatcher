@@ -56,7 +56,9 @@ What it checks:
     naming the call it served, is a second witness to that model's version on
     every one: the log records each run as published by the token that sent it;
 14. an application that steps through a node the pinned workflow does not
-    declare fails at the traces step naming the node, and publishes nothing;
+    declare fails at the traces step naming the node, and publishes nothing —
+    and so does one that starts `answer` before `retrieve`, which the pinned
+    declaration leads into it from, has completed;
 15. what the candidate was observed serving is written down as each period
     closes, and a window asked of the experiment reads those periods with the
     live runs no written period holds: still five runs, not ten, each model
@@ -130,7 +132,7 @@ PERSON = {
 }
 
 #: The pinned workflow's declaration, and the model a model server serves.
-WORKFLOW = json.dumps({"nodes": ["answer"], "edges": []}).encode()
+WORKFLOW = json.dumps({"nodes": ["retrieve", "answer"], "edges": [["retrieve", "answer"]]}).encode()
 WEIGHTS = b"the capitals model's weights\n"
 PACKAGE = json.dumps(
     {
@@ -235,8 +237,22 @@ def answer(case: Case, run: Generation) -> JsonValue | Generated | Declined:
     if isinstance(model, dict):
         # The application as an execution of the workflow the variant pins,
         # calling the pinned model on a server that reports its own runs.
-        with run.traced_workflow(TELEMETRY[0], case, "capitals-app", nodes=["answer"]) as flow:
-            for node in ("answer", "improvise") if run.params.get("stray") else ("answer",):
+        steps = ["retrieve", "answer"]
+        if run.params.get("stray"):
+            steps.append("improvise")
+        if run.params.get("reorder"):
+            steps.reverse()
+        with run.traced_workflow(
+            TELEMETRY[0],
+            case,
+            "capitals-app",
+            nodes=["retrieve", "answer"],
+            edges=[("retrieve", "answer")],
+        ) as flow:
+            for node in steps:
+                if node == "retrieve":
+                    with flow.node(node):
+                        continue
                 with (
                     flow.node(node) as stage,
                     stage.agent("capitals") as agent,
@@ -913,9 +929,28 @@ def main() -> int:
             )["execution"]["execution_id"]
         )
         told = json.dumps(strayed["execution"])
+        reordering = declare(
+            "candidate",
+            dataset,
+            cohort,
+            card,
+            repetition="measurement-5",
+            params={"reorder": True},
+            served=True,
+            suffix="-served",
+        )
+        reordered = followed(
+            ok(
+                *call("POST", f"/api/v1/evaluation-runs/{reordering['declaration']['id']}/start")[
+                    :2
+                ],
+                "starting the run whose application answers before it retrieves",
+            )["execution"]["execution_id"]
+        )
         check(
             14,
-            "answers whose run stepped through a node the pinned workflow lacks are never scored",
+            "answers whose run stepped off the pinned workflow, or out of its order, are never "
+            "scored",
             strayed["execution"]["state"]["state_type"] == "failed"
             and [
                 step["step_id"]
@@ -928,8 +963,14 @@ def main() -> int:
                 "GET",
                 f"/api/v1/evaluation-results/{straying['declaration']['run']['evaluation_id']}",
             )[0]
-            == 404,
-            {"state": strayed["execution"]["state"]["state_type"]},
+            == 404
+            and reordered["execution"]["state"]["state_type"] == "failed"
+            and "started answer before retrieve had completed"
+            in json.dumps(reordered["execution"]),
+            {
+                "stray": strayed["execution"]["state"]["state_type"],
+                "reordered": reordered["execution"]["state"]["state_type"],
+            },
         )
 
         # The same runs, through a window: once the periods they ended in are

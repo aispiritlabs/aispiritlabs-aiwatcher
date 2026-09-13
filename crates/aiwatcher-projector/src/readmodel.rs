@@ -44,6 +44,19 @@ pub enum RunStatus {
 /// stepped outside the one a variant pins.
 pub const MAX_NODES_RUN: usize = 64;
 
+/// How many step starts and ends of workflow nodes a run keeps, in log order —
+/// what the order of its traversal is read from.
+pub const MAX_NODE_STEPS: usize = 256;
+
+/// One step of a workflow node, as the run's log holds it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "phase", content = "node", rename_all = "snake_case")]
+pub enum NodeStep {
+    Started(String),
+    Completed(String),
+    Failed(String),
+}
+
 /// One row in the runs table.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct RunSummary {
@@ -93,6 +106,11 @@ pub struct RunSummary {
     /// most [`MAX_NODES_RUN`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub nodes_run: Vec<String>,
+    /// Each node step's start and end, in log order, at most
+    /// [`MAX_NODE_STEPS`]: the order a run went through its workflow. Kept for
+    /// the traces step and never listed — a runs page does not need it.
+    #[serde(skip)]
+    pub node_steps: Vec<NodeStep>,
     #[serde(with = "time::serde::rfc3339")]
     pub started_at: OffsetDateTime,
     /// The newest event folded into this row, ended or not.
@@ -141,6 +159,7 @@ impl RunSummary {
             caller_run_id: None,
             workflow_topology: None,
             nodes_run: Vec::new(),
+            node_steps: Vec::new(),
             started_at: event.metadata.occurred_at,
             last_event_at: event.metadata.occurred_at,
             ended_at: None,
@@ -212,6 +231,18 @@ impl RunSummary {
             && !self.nodes_run.iter().any(|known| known == node)
         {
             self.nodes_run.push(node.to_owned());
+        }
+        if subject == Subject::Step
+            && self.node_steps.len() < MAX_NODE_STEPS
+            && let Some(node) = event.data_str("node")
+        {
+            let node = node.to_owned();
+            match phase {
+                Some(Phase::Start) => self.node_steps.push(NodeStep::Started(node)),
+                Some(Phase::End { ok: true }) => self.node_steps.push(NodeStep::Completed(node)),
+                Some(Phase::End { ok: false }) => self.node_steps.push(NodeStep::Failed(node)),
+                _ => {}
+            }
         }
 
         if subject == Subject::Llm && phase == Some(Phase::Start) {
@@ -952,6 +983,7 @@ mod tests {
             caller_run_id: None,
             workflow_topology: None,
             nodes_run: Vec::new(),
+            node_steps: Vec::new(),
             started_at: datetime!(2026-08-27 18:20:00 UTC),
             last_event_at: datetime!(2026-08-27 18:20:00 UTC),
             ended_at: None,
@@ -1286,6 +1318,14 @@ mod tests {
             .map(|shape| shape.digest())
         );
         assert_eq!(answer.nodes_run, ["retrieve", "answer"]);
+        assert_eq!(
+            answer.node_steps,
+            [
+                NodeStep::Started("retrieve".to_owned()),
+                NodeStep::Started("answer".to_owned()),
+                NodeStep::Started("answer".to_owned()),
+            ]
+        );
 
         let serving = model
             .serving(&std::collections::BTreeSet::from(["answer"]))
